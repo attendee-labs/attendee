@@ -44,6 +44,11 @@ from .serializers import (
 )
 from .tasks import run_bot
 
+# Set up the logging configuration
+logging.basicConfig(format="%(name)s - %(levelname)s - %(message)s", level=logging.INFO)
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
 TokenHeaderParameter = [
     OpenApiParameter(
         name="Authorization",
@@ -135,6 +140,66 @@ def launch_bot(bot):
         # Default to launching bot via celery
         run_bot.delay(bot.id)
 
+class RecordingCreateView(APIView):
+    authentication_classes = [ApiKeyAuthentication]
+
+    def post(self, request):
+        logger.info(f"Received request: {request.data}")
+        # Validate the request data
+        serializer = CreateBotSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        # Name of the file to be created
+        file_name = serializer.validated_data["file_name"]
+
+        # Access the bot through the api key
+        project = request.auth.project
+
+        meeting_url = serializer.validated_data["meeting_url"]
+
+        if "meet.google.com" in meeting_url:
+            if not meeting_url.startswith("https://meet.google.com/"):
+                return Response(
+                    {"error": "Google Meet URL must start with https://meet.google.com/"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        bot_name = serializer.validated_data["bot_name"]
+        transcription_settings = serializer.validated_data["transcription_settings"]
+        rtmp_settings = serializer.validated_data["rtmp_settings"]
+        recording_settings = serializer.validated_data["recording_settings"]
+        debug_settings = serializer.validated_data["debug_settings"]
+
+        settings = {
+            "transcription_settings": transcription_settings,
+            "rtmp_settings": rtmp_settings,
+            "recording_settings": recording_settings,
+            "debug_settings": debug_settings,
+        }
+
+        bot = Bot.objects.create(
+            project=project,
+            meeting_url=meeting_url,
+            name=bot_name,
+            settings=settings,
+        )
+
+        Recording.objects.create(
+            bot=bot,
+            recording_type=RecordingTypes.AUDIO_AND_VIDEO,
+            transcription_type=TranscriptionTypes.NON_REALTIME,
+            transcription_provider=TranscriptionProviders.DEEPGRAM,
+            is_default_recording=True,
+            file_name=file_name
+        )
+
+        # Try to transition the state from READY to JOINING
+        BotEventManager.create_event(bot, BotEventTypes.JOIN_REQUESTED)
+
+        launch_bot(bot)
+
+        return Response(BotSerializer(bot).data, status=status.HTTP_201_CREATED)
 
 def create_bot_media_request_for_image(bot, image):
     content_type = image["type"]

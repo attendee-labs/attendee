@@ -193,6 +193,7 @@ class MetadataJSONField(serializers.JSONField):
 class CreateBotSerializer(serializers.Serializer):
     meeting_url = serializers.CharField(help_text="The URL of the meeting to join, e.g. https://zoom.us/j/123?pwd=456")
     bot_name = serializers.CharField(help_text="The name of the bot to create, e.g. 'My Bot'")
+    file_name = serializers.CharField(help_text="The name of the file to create, e.g. 'example_file_name' will create 'example_file_name.mp4'", default=None)
     bot_image = BotImageSerializer(help_text="The image for the bot", required=False, default=None)
     metadata = MetadataJSONField(help_text="JSON object containing metadata to associate with the bot", required=False, default=None)
 
@@ -236,6 +237,21 @@ class CreateBotSerializer(serializers.Serializer):
         meeting_type = meeting_type_from_url(value)
         if meeting_type is None:
             raise serializers.ValidationError({"meeting_url": "Invalid meeting URL"})
+
+        return value
+
+    def validate_file_name(self, value):
+        # None is legal but redundant because default value is also None
+        if value is None:
+            return value
+
+        # File name must be a string
+        if not isinstance(value, str):
+            raise serializers.ValidationError({"file_name": "File name must be a string"})
+
+        # File name must be less than 255 characters
+        if len(value) > 255:
+            raise serializers.ValidationError({"file_name": "File name must be less than 255 characters"})
 
         return value
 

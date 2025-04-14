@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import json
 import math
 import random
@@ -20,7 +21,10 @@ from accounts.models import Organization
 from bots.webhook_utils import trigger_webhook
 
 # Create your models here.
-
+# Set up the logging configuration
+logging.basicConfig(format="%(name)s - %(levelname)s - %(message)s", level=logging.INFO)
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 class Project(models.Model):
     name = models.CharField(max_length=255)
@@ -774,11 +778,15 @@ class RecordingStorage(S3Boto3Storage):
 class Recording(models.Model):
     bot = models.ForeignKey(Bot, on_delete=models.CASCADE, related_name="recordings")
 
+    # The format of the recording (AUDIO_AND_VIDEO or AUDIO_ONLY), see RecordingTypes class
     recording_type = models.IntegerField(choices=RecordingTypes.choices, null=False)
 
     transcription_type = models.IntegerField(choices=TranscriptionTypes.choices, null=False)
 
     is_default_recording = models.BooleanField(default=False)
+
+    # This is the name of the file that will be uploaded to AWS S3
+    file_name = models.CharField(max_length=255, null=False, blank=False)
 
     state = models.IntegerField(choices=RecordingStates.choices, default=RecordingStates.NOT_STARTED, null=False)
 

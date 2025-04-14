@@ -166,7 +166,12 @@ class BotController:
 
     def get_recording_filename(self):
         recording = Recording.objects.get(bot=self.bot_in_db, is_default_recording=True)
-        return f"{recording.object_id}.{self.bot_in_db.recording_format()}"
+
+        # If the recording has a file name, use it; otherwise, use the object ID
+        if recording.file_name:
+            return f"{recording.file_name}.{self.bot_in_db.recording_format()}"
+        else:
+            return f"{recording.object_id}.{self.bot_in_db.recording_format()}"
 
     def on_rtmp_connection_failed(self):
         logger.info("RTMP connection failed")
@@ -232,6 +237,7 @@ class BotController:
 
         if self.get_recording_file_location():
             logger.info("Telling file uploader to upload recording file...")
+            logger.info("file_name: %s", self.get_recording_filename())
             file_uploader = FileUploader(
                 os.environ.get("AWS_RECORDING_STORAGE_BUCKET_NAME"),
                 self.get_recording_filename(),
