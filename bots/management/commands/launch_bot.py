@@ -15,7 +15,10 @@ from bots.models import (
 )
 from bots.tasks import run_bot  # Import your task
 
+# Set up the logging configuration
+logging.basicConfig(format="%(name)s - %(levelname)s - %(message)s", level=logging.DEBUG)
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 
 class Command(BaseCommand):

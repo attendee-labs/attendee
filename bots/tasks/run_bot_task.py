@@ -8,12 +8,17 @@ from celery.signals import worker_shutting_down
 from bots.bot_controller import BotController
 
 logger = logging.getLogger(__name__)
+# Set up the logging configuration
+logging.basicConfig(format="%(name)s - %(levelname)s - %(message)s", level=logging.DEBUG)
 
 
 @shared_task(bind=True, soft_time_limit=3600)
 def run_bot(self, bot_id):
     logger.info(f"Running bot {bot_id}")
+    logger.debug(f"Initializing BotController...")
     bot_controller = BotController(bot_id)
+    logger.debug("Bot Controller initialized.")
+    logger.debug(f"Starting bot...")
     bot_controller.run()
 
 

@@ -6,7 +6,10 @@ import time
 
 from gi.repository import GLib, Gst
 
+# Set up the logging configuration
+logging.basicConfig(format="%(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 
 class GstreamerPipeline:
@@ -150,6 +153,7 @@ class GstreamerPipeline:
         self.appsrc.set_property("stream-type", 0)  # GST_APP_STREAM_TYPE_STREAM
         self.appsrc.set_property("block", True)  # This helps with synchronization
 
+        logger.info("Configuring audio appsrc...")
         audio_caps = Gst.Caps.from_string(self.audio_format)  # e.g. "audio/x-raw,rate=48000,channels=2,format=S16LE"
         self.audio_appsrcs = []
         for i in range(self.num_audio_sources):
@@ -238,6 +242,7 @@ class GstreamerPipeline:
     def on_mixed_audio_raw_data_received_callback(self, data, timestamp=None, audio_appsrc_idx=0):
         audio_appsrc = self.audio_appsrcs[audio_appsrc_idx]
 
+        # Check if audio recording is active and we have an audio source
         if not self.audio_recording_active or not audio_appsrc or not self.recording_active or not self.appsrc:
             return
 
