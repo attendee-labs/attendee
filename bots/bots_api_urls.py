@@ -3,7 +3,7 @@ from django.urls import path
 from . import bots_api_views
 
 urlpatterns = [
-    path('record/', bots_api_views.RecordingCreateView.as_view(), name='record-create'),
+    path('record', bots_api_views.RecordingCreateView.as_view(), name='record-create'),
     path("bots", bots_api_views.BotCreateView.as_view(), name="bot-create"),
     path(
         "bots/<str:object_id>",
