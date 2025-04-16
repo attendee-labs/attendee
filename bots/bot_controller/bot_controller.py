@@ -11,6 +11,7 @@ import redis
 from django.core.files.base import ContentFile
 from django.utils import timezone
 
+import transcript_services.v1.api_service as transcript_api_service
 from bots.bot_adapter import BotAdapter
 from bots.models import (
     Bot,
@@ -46,12 +47,17 @@ from .screen_and_audio_recorder import ScreenAndAudioRecorder
 gi.require_version("GLib", "2.0")
 from gi.repository import GLib
 
+# Set up the logging configuration
+logging.basicConfig(format="%(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 
 class BotController:
     def get_google_meet_bot_adapter(self):
         from bots.google_meet_bot_adapter import GoogleMeetBotAdapter
+
+        logger.info("Create debug recording set to %s", self.bot_in_db.create_debug_recording())
 
         return GoogleMeetBotAdapter(
             display_name=self.bot_in_db.name,
@@ -245,6 +251,16 @@ class BotController:
             file_uploader.upload_file(self.get_recording_file_location())
             file_uploader.wait_for_upload()
             logger.info("File uploader finished uploading file")
+
+            # After successful upload, call the Transcript API to transcribe the file
+            transcript_id = self.get_recording_filename().split(".")[0]
+            logger.info("Transcript ID: %s", transcript_id)
+            try:
+                logger.info("Sending transcription request...")
+                transcript_api_service.start_transcription(transcript_id)
+            except Exception as e:
+                logger.error(e)
+
             file_uploader.delete_file(self.get_recording_file_location())
             logger.info("File uploader deleted file from local filesystem")
             self.recording_file_saved(file_uploader.key)
@@ -258,6 +274,8 @@ class BotController:
         normal_quitting_process_worked = True
 
     def __init__(self, bot_id):
+        logger.info("Initializing controller...")
+
         self.bot_in_db = Bot.objects.get(id=bot_id)
         self.cleanup_called = False
         self.run_called = False
@@ -268,6 +286,7 @@ class BotController:
 
         self.automatic_leave_configuration = AutomaticLeaveConfiguration()
 
+        # Check if RTMP streaming is enabled
         if self.bot_in_db.rtmp_destination_url():
             self.pipeline_configuration = PipelineConfiguration.rtmp_streaming_bot()
         else:
@@ -322,6 +341,7 @@ class BotController:
         logger.info(f"Redis connection established for bot {self.bot_in_db.id}")
 
     def run(self):
+        logger.debug("Called run() method.")
         if self.run_called:
             raise Exception("Run already called, exiting")
         self.run_called = True
