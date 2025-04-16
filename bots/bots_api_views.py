@@ -141,6 +141,10 @@ def launch_bot(bot):
         run_bot.delay(bot.id)
 
 class RecordingCreateView(APIView):
+    """
+    RecordingCreateView is a view that handles the creation of a bot and its associated recording analogue to the
+    BotCreateView but with special implementation details for Transcript.
+    """
     authentication_classes = [ApiKeyAuthentication]
 
     def post(self, request):
