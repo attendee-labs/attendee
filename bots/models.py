@@ -219,11 +219,16 @@ class Bot(models.Model):
         return recording_settings.get("view", RecordingViews.SPEAKER_VIEW)
 
     def create_debug_recording(self):
+        """
+        Determines if a debug recording should be created based on the settings and origin of the meeting.
+
+        :return: bool
+        """
         from bots.utils import meeting_type_from_url
 
         # Temporarily enabling this for all google meet meetings
-        if meeting_type_from_url(self.meeting_url) == MeetingTypes.GOOGLE_MEET:
-            return True
+        # if meeting_type_from_url(self.meeting_url) == MeetingTypes.GOOGLE_MEET:
+        #    return True
 
         debug_settings = self.settings.get("debug_settings", {})
         if debug_settings is None:
