@@ -79,6 +79,8 @@ class BotController:
     def get_teams_bot_adapter(self):
         from bots.teams_bot_adapter import TeamsBotAdapter
 
+        logger.info("Create debug recording set to %s", self.bot_in_db.create_debug_recording())
+
         return TeamsBotAdapter(
             display_name=self.bot_in_db.name,
             send_message_callback=self.on_message_from_adapter,
