@@ -1,3 +1,5 @@
+import numpy as np
+
 from bots.google_meet_bot_adapter.google_meet_ui_methods import (
     GoogleMeetUIMethods,
 )
@@ -20,23 +22,19 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
     def get_websocket_port(self):
         return 8765
 
-    def get_first_buffer_timestamp_ms(self):
-        if self.media_sending_enable_timestamp_ms is None:
-            return None
-        # Doing a manual offset for now to correct for the screen recorder delay. This seems to work reliably.
-        return self.media_sending_enable_timestamp_ms
+    def send_raw_audio(self, bytes, sample_rate):
+        """
+        Sends raw audio bytes to the Google Meet call.
 
-    def send_raw_image(self, image_bytes):
-        # If we have a memoryview, convert it to bytes
-        if isinstance(image_bytes, memoryview):
-            image_bytes = image_bytes.tobytes()
+        :param bytes: Raw audio bytes in PCM format
+        :param sample_rate: Sample rate of the audio in Hz
+        """
+        if not self.driver:
+            print("Cannot send audio - driver not initialized")
+            return
 
-        # Pass the raw bytes directly to JavaScript
-        # The JavaScript side can convert it to appropriate format
-        self.driver.execute_script(
-            """
-            const bytes = new Uint8Array(arguments[0]);
-            window.botOutputManager.displayImage(bytes);
-        """,
-            list(image_bytes),
-        )
+        # Convert bytes to Int16Array for JavaScript
+        audio_data = np.frombuffer(bytes, dtype=np.int16).tolist()
+
+        # Call the JavaScript function to enqueue the PCM chunk
+        self.driver.execute_script(f"window.botOutputManager.playPCMAudio({audio_data}, {sample_rate})")

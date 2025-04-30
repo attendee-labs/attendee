@@ -40,6 +40,11 @@ urlpatterns = [
         bots_api_views.SpeechView.as_view(),
         name="bot-speech",
     ),
+    path(
+        "bots/<str:object_id>/delete_data",
+        bots_api_views.DeleteDataView.as_view(),
+        name="bot-delete-data",
+    ),
 ]
 
 # catch any other paths and return a 404 json response - must be last

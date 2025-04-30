@@ -15,13 +15,15 @@ from .models import (
     BotEventTypes,
     BotStates,
     MediaBlob,
+    MeetingTypes,
     Recording,
     RecordingFormats,
     RecordingStates,
     RecordingTranscriptionStates,
     RecordingViews,
+    TranscriptionProviders,
 )
-from .utils import is_valid_png, meeting_type_from_url
+from .utils import is_valid_png, meeting_type_from_url, transcription_provider_from_meeting_url_and_transcription_settings
 
 # Define the schema once
 BOT_IMAGE_SCHEMA = {
@@ -100,6 +102,17 @@ class BotImageSerializer(serializers.Serializer):
                     },
                 },
             },
+            "gladia": {
+                "type": "object",
+                "properties": {
+                    "code_switching_languages": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "The languages to transcribe the meeting in when using code switching. See here for available languages: https://docs.gladia.io/chapters/limits-and-specifications/languages",
+                    },
+                    "enable_code_switching": {"type": "boolean", "description": "Whether to use code switching to transcribe the meeting in multiple languages."},
+                },
+            },
             "meeting_closed_captions": {
                 "type": "object",
                 "properties": {
@@ -108,6 +121,22 @@ class BotImageSerializer(serializers.Serializer):
                         "description": "The language code for Google Meet closed captions (e.g. 'en-US'). See here for available languages and codes: https://docs.google.com/spreadsheets/d/1MN44lRrEBaosmVI9rtTzKMii86zGgDwEwg4LSj-SjiE",
                     },
                 },
+            },
+            "openai": {
+                "type": "object",
+                "properties": {
+                    "model": {
+                        "type": "string",
+                        "enum": ["gpt-4o-transcribe", "gpt-4o-mini-transcribe"],
+                        "description": "The OpenAI model to use for transcription",
+                    },
+                    "prompt": {
+                        "type": "string",
+                        "description": "Optional prompt to use for the OpenAI transcription",
+                    },
+                },
+                "required": ["model"],
+                "additionalProperties": False,
             },
         },
         "required": [],
@@ -200,7 +229,7 @@ class CreateBotSerializer(serializers.Serializer):
     transcription_settings = TranscriptionSettingsJSONField(
         help_text="The transcription settings for the bot, e.g. {'deepgram': {'language': 'en'}}",
         required=False,
-        default={"deepgram": {"language": "en"}},
+        default=None,
     )
 
     TRANSCRIPTION_SETTINGS_SCHEMA = {
@@ -218,6 +247,31 @@ class CreateBotSerializer(serializers.Serializer):
                     {"required": ["language"]},
                     {"required": ["detect_language"]},
                 ],
+                "additionalProperties": False,
+            },
+            "gladia": {
+                "type": "object",
+                "properties": {
+                    "code_switching_languages": {"type": "array", "items": {"type": "string"}},
+                    "enable_code_switching": {"type": "boolean"},
+                },
+                "required": [],
+                "additionalProperties": False,
+            },
+            "openai": {
+                "type": "object",
+                "properties": {
+                    "model": {
+                        "type": "string",
+                        "enum": ["gpt-4o-transcribe", "gpt-4o-mini-transcribe"],
+                        "description": "The OpenAI model to use for transcription",
+                    },
+                    "prompt": {
+                        "type": "string",
+                        "description": "Optional prompt to use for the OpenAI transcription",
+                    },
+                },
+                "required": ["model"],
                 "additionalProperties": False,
             },
             "meeting_closed_captions": {
@@ -256,13 +310,31 @@ class CreateBotSerializer(serializers.Serializer):
         return value
 
     def validate_transcription_settings(self, value):
+        meeting_url = self.initial_data.get("meeting_url")
+        meeting_type = meeting_type_from_url(meeting_url)
+
         if value is None:
-            return value
+            if meeting_type == MeetingTypes.ZOOM:
+                value = {"deepgram": {"language": "en"}}
+            elif meeting_type == MeetingTypes.GOOGLE_MEET:
+                value = {"meeting_closed_captions": {}}
+            elif meeting_type == MeetingTypes.TEAMS:
+                value = {"meeting_closed_captions": {}}
+            else:
+                raise serializers.ValidationError({"transcription_settings": "Invalid meeting type"})
 
         try:
             jsonschema.validate(instance=value, schema=self.TRANSCRIPTION_SETTINGS_SCHEMA)
         except jsonschema.exceptions.ValidationError as e:
             raise serializers.ValidationError(e.message)
+
+        if meeting_type == MeetingTypes.TEAMS:
+            if transcription_provider_from_meeting_url_and_transcription_settings(meeting_url, value) != TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM:
+                raise serializers.ValidationError({"transcription_settings": "API-based transcription is not supported for Teams. Please use Meeting Closed Captions to transcribe Teams meetings."})
+
+        if meeting_type == MeetingTypes.ZOOM:
+            if transcription_provider_from_meeting_url_and_transcription_settings(meeting_url, value) == TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM:
+                raise serializers.ValidationError({"transcription_settings": "Closed caption based transcription is not supported for Zoom. Please use Deepgram to transcribe Zoom meetings."})
 
         return value
 

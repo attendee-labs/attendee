@@ -146,6 +146,16 @@ class CreateCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 
                 if not all(credentials_data.values()):
                     return HttpResponse("Missing required credentials data", status=400)
+            elif credential_type == Credentials.CredentialTypes.GLADIA:
+                credentials_data = {"api_key": request.POST.get("api_key")}
+
+                if not all(credentials_data.values()):
+                    return HttpResponse("Missing required credentials data", status=400)
+            elif credential_type == Credentials.CredentialTypes.OPENAI:
+                credentials_data = {"api_key": request.POST.get("api_key")}
+
+                if not all(credentials_data.values()):
+                    return HttpResponse("Missing required credentials data", status=400)
             elif credential_type == Credentials.CredentialTypes.GOOGLE_TTS:
                 credentials_data = {"service_account_json": request.POST.get("service_account_json")}
 
@@ -165,6 +175,10 @@ class CreateCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
                 return render(request, "projects/partials/zoom_credentials.html", context)
             elif credential.credential_type == Credentials.CredentialTypes.DEEPGRAM:
                 return render(request, "projects/partials/deepgram_credentials.html", context)
+            elif credential.credential_type == Credentials.CredentialTypes.GLADIA:
+                return render(request, "projects/partials/gladia_credentials.html", context)
+            elif credential.credential_type == Credentials.CredentialTypes.OPENAI:
+                return render(request, "projects/partials/openai_credentials.html", context)
             elif credential.credential_type == Credentials.CredentialTypes.GOOGLE_TTS:
                 return render(request, "projects/partials/google_tts_credentials.html", context)
             else:
@@ -183,6 +197,10 @@ class ProjectCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 
         deepgram_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.DEEPGRAM).first()
 
+        gladia_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.GLADIA).first()
+
+        openai_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.OPENAI).first()
+
         google_tts_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.GOOGLE_TTS).first()
 
         context = self.get_project_context(object_id, project)
@@ -194,6 +212,10 @@ class ProjectCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
                 "deepgram_credential_type": Credentials.CredentialTypes.DEEPGRAM,
                 "google_tts_credentials": google_tts_credentials.get_credentials() if google_tts_credentials else None,
                 "google_tts_credential_type": Credentials.CredentialTypes.GOOGLE_TTS,
+                "gladia_credentials": gladia_credentials.get_credentials() if gladia_credentials else None,
+                "gladia_credential_type": Credentials.CredentialTypes.GLADIA,
+                "openai_credentials": openai_credentials.get_credentials() if openai_credentials else None,
+                "openai_credential_type": Credentials.CredentialTypes.OPENAI,
             }
         )
 

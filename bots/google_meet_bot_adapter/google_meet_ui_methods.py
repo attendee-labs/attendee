@@ -383,13 +383,22 @@ class GoogleMeetUIMethods:
 
     def click_leave_button(self):
         logger.info("Waiting for the leave button")
-        leave_button = WebDriverWait(self.driver, 6).until(
-            EC.presence_of_element_located(
-                (
-                    By.CSS_SELECTOR,
-                    'button[jsname="CQylAd"][aria-label="Leave call"]',
+        num_attempts = 5
+        for attempt_index in range(num_attempts):
+            leave_button = WebDriverWait(self.driver, 16).until(
+                EC.presence_of_element_located(
+                    (
+                        By.CSS_SELECTOR,
+                        'button[jsname="CQylAd"][aria-label="Leave call"]',
+                    )
                 )
             )
-        )
-        logger.info("Clicking the leave button")
-        leave_button.click()
+            logger.info("Clicking the leave button")
+            try:
+                leave_button.click()
+                return
+            except Exception as e:
+                last_attempt = attempt_index == num_attempts - 1
+                if last_attempt:
+                    raise e
+                logger.info("Error clicking leave button. Retrying...")

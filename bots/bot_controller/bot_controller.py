@@ -30,6 +30,7 @@ from bots.models import (
     RecordingFormats,
     RecordingManager,
     RecordingStates,
+    TranscriptionProviders,
     Utterance,
 )
 from bots.utils import meeting_type_from_url
@@ -47,10 +48,7 @@ from .screen_and_audio_recorder import ScreenAndAudioRecorder
 gi.require_version("GLib", "2.0")
 from gi.repository import GLib
 
-# Set up the logging configuration
-logging.basicConfig(format="%(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
 
 
 class BotController:
@@ -59,9 +57,15 @@ class BotController:
 
         logger.info("Create debug recording set to %s", self.bot_in_db.create_debug_recording())
 
+        if self.get_recording_transcription_provider() == TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM:
+            add_audio_chunk_callback = None
+        else:
+            add_audio_chunk_callback = self.individual_audio_input_manager.add_chunk
+
         return GoogleMeetBotAdapter(
             display_name=self.bot_in_db.name,
             send_message_callback=self.on_message_from_adapter,
+            add_audio_chunk_callback=add_audio_chunk_callback,
             meeting_url=self.bot_in_db.meeting_url,
             add_video_frame_callback=None,
             wants_any_video_frames_callback=None,
@@ -84,17 +88,18 @@ class BotController:
         return TeamsBotAdapter(
             display_name=self.bot_in_db.name,
             send_message_callback=self.on_message_from_adapter,
+            add_audio_chunk_callback=None,
             meeting_url=self.bot_in_db.meeting_url,
-            add_video_frame_callback=self.gstreamer_pipeline.on_new_video_frame,
-            wants_any_video_frames_callback=self.gstreamer_pipeline.wants_any_video_frames,
-            add_mixed_audio_chunk_callback=self.gstreamer_pipeline.on_mixed_audio_raw_data_received_callback,
+            add_video_frame_callback=None,
+            wants_any_video_frames_callback=None,
+            add_mixed_audio_chunk_callback=None,
             upsert_caption_callback=self.closed_caption_manager.upsert_caption,
             automatic_leave_configuration=self.automatic_leave_configuration,
             add_encoded_mp4_chunk_callback=None,
             recording_view=self.bot_in_db.recording_view(),
             should_create_debug_recording=self.bot_in_db.create_debug_recording(),
-            start_recording_screen_callback=None,
-            stop_recording_screen_callback=None,
+            start_recording_screen_callback=self.screen_and_audio_recorder.start_recording,
+            stop_recording_screen_callback=self.screen_and_audio_recorder.stop_recording,
         )
 
     def get_zoom_bot_adapter(self):
@@ -130,6 +135,15 @@ class BotController:
             raise Exception(f"Could not determine meeting type for meeting url {self.bot_in_db.meeting_url}")
         return meeting_type
 
+    def get_per_participant_audio_sample_rate(self):
+        meeting_type = self.get_meeting_type()
+        if meeting_type == MeetingTypes.ZOOM:
+            return 32000
+        elif meeting_type == MeetingTypes.GOOGLE_MEET:
+            return 48000
+        elif meeting_type == MeetingTypes.TEAMS:
+            return 48000
+
     def get_audio_format(self):
         meeting_type = self.get_meeting_type()
         if meeting_type == MeetingTypes.ZOOM:
@@ -138,6 +152,12 @@ class BotController:
             return GstreamerPipeline.AUDIO_FORMAT_FLOAT
         elif meeting_type == MeetingTypes.TEAMS:
             return GstreamerPipeline.AUDIO_FORMAT_FLOAT
+
+    def get_sleep_time_between_audio_output_chunks_seconds(self):
+        meeting_type = self.get_meeting_type()
+        if meeting_type == MeetingTypes.ZOOM:
+            return 0.9
+        return 0.1
 
     def get_num_audio_sources(self):
         meeting_type = self.get_meeting_type()
@@ -171,6 +191,10 @@ class BotController:
         recording.file = s3_storage_key
         recording.first_buffer_timestamp_ms = self.get_first_buffer_timestamp_ms()
         recording.save()
+
+    def get_recording_transcription_provider(self):
+        recording = Recording.objects.get(bot=self.bot_in_db, is_default_recording=True)
+        return recording.transcription_provider
 
     def get_recording_filename(self):
         recording = Recording.objects.get(bot=self.bot_in_db, is_default_recording=True)
@@ -212,7 +236,7 @@ class BotController:
         def terminate_worker():
             import time
 
-            time.sleep(20)
+            time.sleep(600)
             if normal_quitting_process_worked:
                 logger.info("Normal quitting process worked, not force terminating worker")
                 return
@@ -316,7 +340,7 @@ class BotController:
             return os.path.join("/tmp", self.get_recording_filename())
 
     def should_create_gstreamer_pipeline(self):
-        # For google meet, we're doing a media recorder based recording technique that does the video processing in the browser
+        # For google meet / teams, we're doing a media recorder based recording technique that does the video processing in the browser
         # so we don't need to create a gstreamer pipeline here
         meeting_type = self.get_meeting_type()
         if meeting_type == MeetingTypes.ZOOM:
@@ -324,7 +348,7 @@ class BotController:
         elif meeting_type == MeetingTypes.GOOGLE_MEET:
             return False
         elif meeting_type == MeetingTypes.TEAMS:
-            return True
+            return False
 
     def should_create_screen_and_audio_recorder(self):
         return not self.should_create_gstreamer_pipeline()
@@ -355,6 +379,7 @@ class BotController:
         self.individual_audio_input_manager = IndividualAudioInputManager(
             save_utterance_callback=self.save_individual_audio_utterance,
             get_participant_callback=self.get_participant,
+            sample_rate=self.get_per_participant_audio_sample_rate(),
         )
 
         # Only used for adapters that can provide closed captions
@@ -392,6 +417,7 @@ class BotController:
         self.audio_output_manager = AudioOutputManager(
             currently_playing_audio_media_request_finished_callback=self.currently_playing_audio_media_request_finished,
             play_raw_audio_callback=self.adapter.send_raw_audio,
+            sleep_time_between_chunks_seconds=self.get_sleep_time_between_audio_output_chunks_seconds(),
         )
 
         # Create GLib main loop

@@ -1,3 +1,5 @@
+import datetime
+import json
 import os
 import threading
 import time
@@ -16,6 +18,7 @@ from bots.models import (
     BotEventSubTypes,
     BotEventTypes,
     BotStates,
+    Credentials,
     CreditTransaction,
     Organization,
     Project,
@@ -92,11 +95,216 @@ class TestGoogleMeetBot(TransactionTestCase):
         # Try to transition the state from READY to JOINING
         BotEventManager.create_event(self.bot, BotEventTypes.JOIN_REQUESTED)
 
+        self.deepgram_credentials = Credentials.objects.create(project=self.project, credential_type=Credentials.CredentialTypes.DEEPGRAM)
+        self.deepgram_credentials.set_credentials({"api_key": "test_api_key"})
+
         # Configure Celery to run tasks eagerly (synchronously)
         from django.conf import settings
 
         settings.CELERY_TASK_ALWAYS_EAGER = True
         settings.CELERY_TASK_EAGER_PROPAGATES = True
+
+    @patch("bots.models.Bot.create_debug_recording", return_value=False)
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.check_if_meeting_is_found", return_value=None)
+    @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.wait_for_host_if_needed", return_value=None)
+    @patch("deepgram.DeepgramClient")
+    @patch("time.time")
+    def test_bot_can_join_meeting_and_record_audio_with_deepgram_transcription(
+        self,
+        mock_time,
+        MockDeepgramClient,
+        mock_wait_for_host_if_needed,
+        mock_check_if_meeting_is_found,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+        mock_create_debug_recording,
+    ):
+        # Set initial time
+        current_time = 1000.0
+        mock_time.return_value = current_time
+
+        # Use Deepgram for transcription instead of closed captions
+        self.recording.transcription_provider = TranscriptionProviders.DEEPGRAM
+        self.recording.save()
+
+        # Configure the mock deepgram client
+        mock_deepgram = MagicMock()
+        mock_response = MagicMock()
+
+        # Create a mock transcription result that Deepgram would return
+        mock_result = MagicMock()
+        mock_result.to_json.return_value = json.dumps({"transcript": "This is a test transcription from Deepgram", "confidence": 0.95, "words": [{"word": "This", "start": 0.0, "end": 0.2}, {"word": "is", "start": 0.2, "end": 0.3}]})
+
+        # Set up the mock response structure
+        mock_response.results.channels = [MagicMock()]
+        mock_response.results.channels[0].alternatives = [mock_result]
+
+        # Make the deepgram client return our mock response
+        mock_deepgram.listen.rest.v.return_value.transcribe_file.return_value = mock_response
+        MockDeepgramClient.return_value = mock_deepgram
+
+        # Configure the mock uploader
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        # Mock the Chrome driver
+        mock_driver = create_mock_google_meet_driver()
+        MockChromeDriver.return_value = mock_driver
+
+        # Mock virtual display
+        mock_display = MagicMock()
+        MockDisplay.return_value = mock_display
+
+        # Create bot controller
+        controller = BotController(self.bot.id)
+
+        # Run the bot in a separate thread since it has an event loop
+        bot_thread = threading.Thread(target=controller.run)
+        bot_thread.daemon = True
+        bot_thread.start()
+
+        def simulate_join_flow():
+            nonlocal current_time
+            # Sleep to allow initialization
+            time.sleep(2)
+
+            # Add participants - simulate websocket message processing
+            controller.adapter.participants_info["user1"] = {"deviceId": "user1", "fullName": "Test User", "active": True}
+
+            # Simulate receiving audio by updating the last audio message processed time
+            controller.adapter.last_audio_message_processed_time = current_time
+
+            # Simulate audio frame from participant
+            sample_rate = 48000  # 48kHz sample rate
+            duration_ms = 10  # 10 milliseconds
+            num_samples = int(sample_rate * duration_ms / 1000)  # Calculate number of samples
+
+            # Create buffer with the right number of samples
+            audio_data = np.zeros(num_samples, dtype=np.float32)
+
+            # Generate a sine wave (440Hz = A note) for 10ms
+            t = np.arange(0, duration_ms / 1000, 1 / sample_rate)
+            sine_wave = 0.5 * np.sin(2 * np.pi * 440 * t)
+
+            # Place the sine wave in the buffer
+            audio_data[: len(sine_wave)] = sine_wave
+
+            # Convert float to PCM int16
+            pcm_data = (audio_data * 32768.0).astype(np.int16).tobytes()
+
+            # Send audio chunk as if it came from the participant
+            controller.individual_audio_input_manager.add_chunk("user1", datetime.datetime.utcnow(), pcm_data)
+
+            # Process the chunks
+            controller.individual_audio_input_manager.process_chunks()
+
+            # Sleep to allow audio processing
+            time.sleep(3)
+
+            # Trigger only one participant in meeting auto leave
+            controller.adapter.only_one_participant_in_meeting_at = time.time() - 10000000000
+            time.sleep(4)
+
+            # Clean up connections in thread
+            connection.close()
+
+        # Run join flow simulation after a short delay
+        threading.Timer(2, simulate_join_flow).start()
+
+        # Give the bot some time to process
+        bot_thread.join(timeout=10)
+
+        # Refresh the bot from the database
+        self.bot.refresh_from_db()
+
+        # Assert that the heartbeat timestamp was set
+        self.assertIsNotNone(self.bot.first_heartbeat_timestamp)
+        self.assertIsNotNone(self.bot.last_heartbeat_timestamp)
+
+        # Assert that joined at is not none
+        self.assertIsNotNone(controller.adapter.joined_at)
+
+        # Assert that the bot is in the ENDED state
+        self.assertEqual(self.bot.state, BotStates.ENDED)
+
+        # Verify bot events in sequence
+        bot_events = self.bot.bot_events.all()
+        self.assertEqual(len(bot_events), 6)  # We expect 6 events in total
+
+        # Verify join_requested_event (Event 1)
+        join_requested_event = bot_events[0]
+        self.assertEqual(join_requested_event.event_type, BotEventTypes.JOIN_REQUESTED)
+        self.assertEqual(join_requested_event.old_state, BotStates.READY)
+        self.assertEqual(join_requested_event.new_state, BotStates.JOINING)
+
+        # Verify bot_joined_meeting_event (Event 2)
+        bot_joined_meeting_event = bot_events[1]
+        self.assertEqual(bot_joined_meeting_event.event_type, BotEventTypes.BOT_JOINED_MEETING)
+        self.assertEqual(bot_joined_meeting_event.old_state, BotStates.JOINING)
+        self.assertEqual(bot_joined_meeting_event.new_state, BotStates.JOINED_NOT_RECORDING)
+
+        # Verify recording_permission_granted_event (Event 3)
+        recording_permission_granted_event = bot_events[2]
+        self.assertEqual(
+            recording_permission_granted_event.event_type,
+            BotEventTypes.BOT_RECORDING_PERMISSION_GRANTED,
+        )
+        self.assertEqual(recording_permission_granted_event.old_state, BotStates.JOINED_NOT_RECORDING)
+        self.assertEqual(recording_permission_granted_event.new_state, BotStates.JOINED_RECORDING)
+
+        # Verify bot requested to leave meeting (Event 4)
+        bot_requested_to_leave_meeting_event = bot_events[3]
+        self.assertEqual(bot_requested_to_leave_meeting_event.event_type, BotEventTypes.LEAVE_REQUESTED)
+        self.assertEqual(bot_requested_to_leave_meeting_event.old_state, BotStates.JOINED_RECORDING)
+        self.assertEqual(bot_requested_to_leave_meeting_event.new_state, BotStates.LEAVING)
+
+        # Verify bot left meeting (Event 5)
+        bot_left_meeting_event = bot_events[4]
+        self.assertEqual(bot_left_meeting_event.event_type, BotEventTypes.BOT_LEFT_MEETING)
+        self.assertEqual(bot_left_meeting_event.old_state, BotStates.LEAVING)
+        self.assertEqual(bot_left_meeting_event.new_state, BotStates.POST_PROCESSING)
+
+        # Verify post_processing_completed_event (Event 6)
+        post_processing_completed_event = bot_events[5]
+        self.assertEqual(post_processing_completed_event.event_type, BotEventTypes.POST_PROCESSING_COMPLETED)
+        self.assertEqual(post_processing_completed_event.old_state, BotStates.POST_PROCESSING)
+        self.assertEqual(post_processing_completed_event.new_state, BotStates.ENDED)
+
+        # Verify that the recording was finished
+        self.recording.refresh_from_db()
+        self.assertEqual(self.recording.state, RecordingStates.COMPLETE)
+
+        # Verify Deepgram was called to transcribe the audio
+        mock_deepgram.listen.rest.v.return_value.transcribe_file.assert_called()
+
+        # Verify utterances were processed
+        utterances = Utterance.objects.filter(recording=self.recording)
+        self.assertGreater(utterances.count(), 0)
+
+        # Verify an audio utterance exists with the correct transcription
+        audio_utterance = utterances.filter(source=Utterance.Sources.PER_PARTICIPANT_AUDIO).first()
+        self.assertIsNotNone(audio_utterance)
+        self.assertEqual(audio_utterance.transcription.get("transcript"), "This is a test transcription from Deepgram")
+
+        # Verify WebSocket media sending was enabled and performance.timeOrigin was queried
+        mock_driver.execute_script.assert_has_calls([call("window.ws?.enableMediaSending();"), call("return performance.timeOrigin;")])
+
+        # Verify file uploader was used
+        mock_uploader.upload_file.assert_called_once()
+        self.assertGreater(mock_uploader.upload_file.call_count, 0)
+        mock_uploader.wait_for_upload.assert_called_once()
+        mock_uploader.delete_file.assert_called_once()
+
+        # Cleanup
+        controller.cleanup()
+        bot_thread.join(timeout=5)
+
+        # Close the database connection since we're in a thread
+        connection.close()
 
     @patch("bots.models.Bot.create_debug_recording", return_value=False)
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
@@ -387,9 +595,6 @@ class TestGoogleMeetBot(TransactionTestCase):
 
         # Verify WebSocket media sending was enabled and performance.timeOrigin was queried
         mock_driver.execute_script.assert_has_calls([call("window.ws?.enableMediaSending();"), call("return performance.timeOrigin;")])
-
-        # Verify first_buffer_timestamp_ms_offset was set correctly
-        self.assertEqual(controller.adapter.get_first_buffer_timestamp_ms_offset(), 12345)
 
         # Verify that no charge was created (since the env var is not set in this test suite)
         credit_transaction = CreditTransaction.objects.filter(bot=self.bot).first()

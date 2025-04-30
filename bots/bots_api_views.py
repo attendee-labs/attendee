@@ -30,7 +30,6 @@ from .models import (
     MediaBlob,
     Recording,
     RecordingTypes,
-    TranscriptionProviders,
     TranscriptionTypes,
     Utterance,
 )
@@ -43,6 +42,7 @@ from .serializers import (
     TranscriptUtteranceSerializer,
 )
 from .tasks import run_bot
+from .utils import transcription_provider_from_meeting_url_and_transcription_settings
 
 # Set up the logging configuration
 logging.basicConfig(format="%(name)s - %(levelname)s - %(message)s", level=logging.INFO)
@@ -299,7 +299,7 @@ class BotCreateView(APIView):
                 bot=bot,
                 recording_type=RecordingTypes.AUDIO_AND_VIDEO,
                 transcription_type=TranscriptionTypes.NON_REALTIME,
-                transcription_provider=TranscriptionProviders.DEEPGRAM,
+                transcription_provider=transcription_provider_from_meeting_url_and_transcription_settings(meeting_url, transcription_settings),
                 is_default_recording=True,
             )
 
@@ -402,7 +402,6 @@ class OutputAudioView(APIView):
                     },
                     "data": {
                         "type": "string",
-                        "format": "binary",
                         "description": "Base64 encoded audio data",
                     },
                 },
@@ -537,6 +536,50 @@ class OutputImageView(APIView):
 
         except Bot.DoesNotExist:
             return Response({"error": "Bot not found"}, status=status.HTTP_404_NOT_FOUND)
+
+
+class DeleteDataView(APIView):
+    authentication_classes = [ApiKeyAuthentication]
+
+    @extend_schema(
+        operation_id="Delete Bot Data",
+        summary="Delete bot data",
+        description="Permanently deletes all data associated with this bot, including recordings, transcripts, and participant information. Metadata is not deleted. This cannot be undone.",
+        responses={
+            200: OpenApiResponse(
+                response=BotSerializer,
+                description="Data successfully deleted",
+            ),
+            400: OpenApiResponse(description="Bot is not in a valid state for data deletion"),
+            404: OpenApiResponse(description="Bot not found"),
+        },
+        parameters=[
+            *TokenHeaderParameter,
+            OpenApiParameter(
+                name="object_id",
+                type=str,
+                location=OpenApiParameter.PATH,
+                description="Bot ID",
+                examples=[OpenApiExample("Bot ID Example", value="bot_xxxxxxxxxxx")],
+            ),
+        ],
+        tags=["Bots"],
+    )
+    def post(self, request, object_id):
+        try:
+            bot = Bot.objects.get(object_id=object_id, project=request.auth.project)
+            logging.info(f"Deleting data for bot {bot.object_id}")
+            bot.delete_data()
+            logging.info(f"Data deleted for bot {bot.object_id}")
+            return Response(BotSerializer(bot).data, status=status.HTTP_200_OK)
+        except Bot.DoesNotExist:
+            return Response({"error": "Bot not found"}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            logging.error(f"Error deleting bot data: {str(e)} (bot_id={object_id})")
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
 
 class BotLeaveView(APIView):

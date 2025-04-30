@@ -12,6 +12,10 @@
         {
           "path": "docs/webhooks.md",
           "type": "page"
+        },
+        {
+          "path": "docs/faq.md",
+          "type": "page"
         }
       ]
     }

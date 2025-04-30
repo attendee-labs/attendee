@@ -16,14 +16,14 @@ def calculate_normalized_rms(audio_bytes):
 
 
 class IndividualAudioInputManager:
-    def __init__(self, *, save_utterance_callback, get_participant_callback):
+    def __init__(self, *, save_utterance_callback, get_participant_callback, sample_rate):
         self.queue = queue.Queue()
 
         self.save_utterance_callback = save_utterance_callback
         self.get_participant_callback = get_participant_callback
 
         self.utterances = {}
-        self.sample_rate = 32000
+        self.sample_rate = sample_rate
 
         self.first_nonsilent_audio_time = {}
         self.last_nonsilent_audio_time = {}
@@ -104,6 +104,8 @@ class IndividualAudioInputManager:
                         "sample_rate": self.sample_rate,
                     }
                 )
+            else:
+                logger.warning(f"Participant {speaker_id} not found")
             # Clear the buffer
             self.utterances[speaker_id] = bytearray()
             del self.first_nonsilent_audio_time[speaker_id]

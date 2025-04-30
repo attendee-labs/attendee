@@ -2,14 +2,13 @@ class StyleManager {
     constructor() {
         this.videoTrackIdToSSRC = new Map();
         this.videoElementToCaptureCanvasElements = new Map();
-        this.captureCanvasVisible = true; // Track visibility state
         this.mainElement = null;
-        this.misMatchTracker = new Map();
 
         this.audioContext = null;
         this.audioTracks = [];
         this.silenceThreshold = 0.0;
         this.silenceCheckInterval = null;
+        this.memoryUsageCheckInterval = null;
     }
 
     addAudioTrack(audioTrack) {
@@ -36,6 +35,18 @@ class StyleManager {
                 isSilent: false
             });
         }
+    }
+
+    checkMemoryUsage() {
+        // Useful for debugging memory usage
+        window.ws.sendJson({
+            type: 'MemoryUsage',
+            memoryUsage: {
+                jsHeapSizeLimit: performance.memory?.jsHeapSizeLimit,
+                totalJSHeapSize: performance.memory?.totalJSHeapSize,
+                usedJSHeapSize: performance.memory?.usedJSHeapSize
+            }
+        });
     }
 
     startSilenceDetection() {
@@ -71,1134 +82,223 @@ class StyleManager {
         if (this.silenceCheckInterval) {
             clearInterval(this.silenceCheckInterval);
         }
+
+        if (this.memoryUsageCheckInterval) {
+            clearInterval(this.memoryUsageCheckInterval);
+        }
                 
         // Check for audio activity every second
         this.silenceCheckInterval = setInterval(() => {
             this.checkAudioActivity();
         }, 1000);
+
+        // Check for memory usage every 60 seconds
+        this.memoryUsageCheckInterval = setInterval(() => {
+            this.checkMemoryUsage();
+        }, 60000);
     }
+    
 
     stop() {
-        this.toggleCaptureCanvasVisibility();
+        this.showAllOfGMeetUI();
     }
 
-    start() {
-        // Find the main element that contains all the video elements
-        this.mainElement = document.querySelector('main');
-        if (!this.mainElement) {
-            console.error('No <main> element found in the DOM');
+    hideBotVideoElement() {
+        const deviceIdOfBot = window.userManager.getUserByFullName(window.initialData.botName)?.deviceId;
+        console.log('deviceIdOfBot', deviceIdOfBot);
+        if (!deviceIdOfBot)
+            return;
+        const botVideoElement = document.querySelector(`[data-participant-id="${deviceIdOfBot}"]`);
+        console.log('botVideoElement', botVideoElement);
+        if (!botVideoElement)
+            return;
+        const botOtherOptionsButton = botVideoElement.querySelector('.VfPpkd-kBDsod');
+        console.log('botOtherOptionsButton', botOtherOptionsButton);
+        if (!botOtherOptionsButton)
+            return;
+
+        botOtherOptionsButton.click();
+        setTimeout(() => {
+            const botMinimizeButton = document.querySelector('li[aria-label="Minimize"]');            
+            console.log('botMinimizeButton', botMinimizeButton);
+            if (!botMinimizeButton)
+                return;
+            botMinimizeButton.click();
+            setTimeout(() => {
+                const botMinimizedElement = document.querySelector('div[jsname="Qiayqc"]');
+                console.log('botMinimizedElement', botMinimizedElement);
+                if (!botMinimizedElement)
+                    return;
+                botMinimizedElement.style.display = 'none';
+            }, 200);            
+        }, 200);
+    }
+
+    showAllOfGMeetUI() {
+        // Restore all elements that were hidden by onlyShowSubsetofGMeetUI
+        document.querySelectorAll('body *').forEach(element => {
+            if (element.style.display === 'none') {
+                // Only reset display property if we set it to 'none'
+                // We can check if the element is a direct child of body or not in main/ancestors
+                const isInMainTree = this.mainElement && 
+                    (this.mainElement === element || 
+                     this.mainElement.contains(element) || 
+                     element.contains(this.mainElement));
+                
+                if (!isInMainTree) {
+                    // Reset the display property to its default or empty string
+                    // This will restore the element's original display value
+                    element.style.display = '';
+                }
+            }
+        });
+        
+        console.log('Restored all hidden elements to their original display values');
+    }
+
+    onlyShowSubsetofGMeetUI() {
+        try {
+            // Find the main element that contains all the video elements
+            this.mainElement = document.querySelector('main');
+            if (!this.mainElement) {
+                console.error('No <main> element found in the DOM');
+                window.ws.sendJson({
+                    type: 'Error',
+                    message: 'No <main> element found in the DOM'
+                });
+                return;
+            }
+
+            const ancestors = [];
+            let parent = this.mainElement.parentElement;
+            while (parent) {
+                ancestors.push(parent);
+                parent = parent.parentElement;
+            }
+            
+            // Hide all elements except main, its ancestors, and its descendants
+            document.querySelectorAll('body *').forEach(element => {
+                if (element !== this.mainElement && 
+                    !ancestors.includes(element) && 
+                    !this.mainElement.contains(element)) {
+                    element.style.display = 'none';
+                }
+            });
+
+            // this.hideBotVideoElement();
+        } catch (error) {
+            console.error('Error in onlyShowSubsetofGMeetUI:', error);
+            window.ws.sendJson({
+                type: 'Error',
+                message: 'Error in onlyShowSubsetofGMeetUI: ' + error.message
+            });
+        }
+    }
+
+    unpinPinnedVideos() {
+        const participantList = document.querySelector('div[aria-label="Participants"][role="list"]');
+        // console.log('participantList', participantList);
+        if (!participantList) {
             return;
         }
 
-        this.hideAllNonCaptureCanvasElements();
-        this.captureCanvas = this.createCaptureCanvas();
-
-        // Using the contents of the main element, compute the layout of the frame we want to render
-        let frameLayout = this.computeFrameLayout(this.mainElement);
-
-        // Set up a timer to update the frame layout every 250ms
-        this.layoutUpdateInterval = setInterval(() => {
-            try {
-                frameLayout = this.computeFrameLayout(this.mainElement);
-                this.syncCaptureCanvasElements(frameLayout);
+        const participantListItems = participantList.querySelectorAll('div[role="listitem"]');
+        // console.log('participantListItems', participantListItems);
+        for (const participantListItem of participantListItems) {
+            // Look for the pinned icon directly using aria-hidden and checking text content in one step
+            const pinnedElements = Array.from(participantListItem.querySelectorAll('i[aria-hidden="true"]'))
+                .filter(el => el.textContent === 'keep');
+            
+            if (pinnedElements.length === 0) {
+                continue;
             }
-            catch (error) {
-                console.error('Error updating frame layout', error);
-            }
-        }, 500);
 
-        const outerThis = this;
+            const actionsButton = participantListItem.querySelector('button[aria-label="More actions"]');
+            // console.log('actionsButton', actionsButton);
+            if (!actionsButton) {
+                continue;
+            }
 
-        function beforeFrameRenders() {
-            try {
-                outerThis.makeSureElementsAreInSync(frameLayout);
-            }
-            catch (error) {
-                console.error('Error making sure elements are in sync', error);
-            }
-            // Request the next frame
-            requestAnimationFrame(beforeFrameRenders);
+            actionsButton.click();
+            setTimeout(() => {
+                // Updated selector to find the unpin menu item by looking for the aria-label containing "Unpin"
+                const unpinButton = document.querySelector('li[aria-label*="Unpin"][role="menuitem"]');
+                // console.log('unpinButton', unpinButton);
+                if (!unpinButton) {
+                    return;
+                }
+                // Add the missing click action
+                unpinButton.click();
+            }, 200);
         }
+    }
+
+    async openParticipantList() {
+        const peopleButton = document.querySelector('button[aria-label="People"]');
+        if (peopleButton) {
+            // Initially the participant list element does not exist. Clicking this button opens it up.
+            peopleButton.click();
+
+            const numAttempts = 30;
+            for (let i = 0; i < numAttempts; i++) {
+                // Sleep for 250 milliseconds
+                await new Promise(resolve => setTimeout(resolve, 100));
+                const participantList = document.querySelector('div[aria-label="Participants"][role="list"]');
+                if (participantList) {
+                    break;
+                }
+                const wasLastAttempt = i === numAttempts - 1;
+                if (wasLastAttempt) {
+                    console.log('Failed to find participant list after', numAttempts, 'attempts');
+                    window.ws.sendJson({
+                        type: 'Error',
+                        message: 'Failed to open participant list in openParticipantList'
+                    });
+                }
+            }
+
+            // We need to click this again so that the participant list is minimized.
+            peopleButton.click();
+        }
+    }
+
+    async start() {
+        if (window.initialData.recordingView === 'gallery_view')
+        {
+            await this.openParticipantList();
+        }
+
+        this.onlyShowSubsetofGMeetUI();
         
-        // Start the animation loop
-        requestAnimationFrame(beforeFrameRenders);
+
+        if (window.initialData.recordingView === 'gallery_view')
+        {
+            this.unpinInterval = setInterval(() => {
+                this.unpinPinnedVideos();
+            }, 1000);
+        }
 
         // Add keyboard listener for toggling canvas visibility
-        document.addEventListener('keydown', this.handleKeyDown.bind(this));
+        //document.addEventListener('keydown', this.handleKeyDown.bind(this));
 
         this.startSilenceDetection();
 
         console.log('Started StyleManager');
     }
 
-    makeSureElementsAreInSync(frameLayout) {
-        frameLayout.forEach(({ element, ssrc, videoWidth }) => {
-            let captureCanvasElements = this.videoElementToCaptureCanvasElements.get(element);
-            if (!captureCanvasElements) {
-                return;
-            }
-
-            let misMatch = false;
-            if (ssrc && ssrc !== this.getSSRCFromVideoElement(element)) {
-                misMatch = true;
-            }
-            if (videoWidth && videoWidth !== element.videoWidth) {
-                misMatch = true;
-            }
-            if (!element.checkVisibility()) {
-                misMatch = true;
-            }
-            if (misMatch) {
-                if (captureCanvasElements.captureCanvasVideoElement.style.display !== 'none') {
-                    // use getclientrects to get the width and height of the container and the canvas
-                    const containerRect = captureCanvasElements.captureCanvasContainerElement.getBoundingClientRect();
-                    const canvasRect = captureCanvasElements.captureCanvasCanvasElement.getBoundingClientRect();
-                    
-                    // Set canvas dimensions to match container
-                    captureCanvasElements.captureCanvasCanvasElement.width = containerRect.width;
-                    captureCanvasElements.captureCanvasCanvasElement.height = containerRect.height;
-                    
-                    const ctx = captureCanvasElements.captureCanvasCanvasElement.getContext("2d");
-                    
-                    // Calculate dimensions to maintain aspect ratio (objectFit: 'contain')
-                    const videoElement = captureCanvasElements.captureCanvasVideoElement;
-                    const videoAspect = videoElement.videoWidth / videoElement.videoHeight;
-                    const containerAspect = containerRect.width / containerRect.height;
-                    
-                    let drawWidth, drawHeight, drawX, drawY;
-                    
-                    if (videoAspect > containerAspect) {
-                        // Video is wider - fit to width
-                        drawWidth = containerRect.width;
-                        drawHeight = containerRect.width / videoAspect;
-                        drawX = 0;
-                        drawY = (containerRect.height - drawHeight) / 2;
-                    } else {
-                        // Video is taller - fit to height
-                        drawHeight = containerRect.height;
-                        drawWidth = containerRect.height * videoAspect;
-                        drawX = (containerRect.width - drawWidth) / 2;
-                        drawY = 0;
-                    }
-                    
-                    // Clear canvas and draw with proper dimensions
-                    ctx.fillStyle = 'black';
-                    ctx.fillRect(0, 0, containerRect.width, containerRect.height);
-                    ctx.drawImage(videoElement, drawX, drawY, drawWidth, drawHeight);
-                    
-                    captureCanvasElements.captureCanvasCanvasElement.style.display = '';
-                }
-                captureCanvasElements.captureCanvasVideoElement.style.display = 'none';
-            }
-            else {
-                if (captureCanvasElements.captureCanvasVideoElement.style.display !== '') {
-                    captureCanvasElements.captureCanvasCanvasElement.style.display = 'none';
-               }
-                captureCanvasElements.captureCanvasVideoElement.style.display = '';
-            }
-        });            
-    }
-
+    /*
     handleKeyDown(event) {
         // Toggle canvas visibility when 's' key is pressed
         if (event.key === 's') {
-            this.toggleCaptureCanvasVisibility();
         }
-    }
+    }*/
 
-    toggleCaptureCanvasVisibility() {
-        if (this.captureCanvasVisible) {
-            this.showAllNonCaptureCanvasElementsAndHideCaptureCanvas();
-            this.captureCanvasVisible = false;
-            console.log('Capture canvas hidden');
-        } else {
-            try {
-                this.hideAllNonCaptureCanvasElements();
-                this.captureCanvasVisible = true;
-                console.log('Capture canvas shown');
-            }
-            catch (error) {
-                console.error('Error showing capture canvas', error);
-            }
-        }
-    }
-
-    syncCaptureCanvasElements(frameLayout) {
-        frameLayout.forEach(({ element, dst_rect, label }) => {
-            let captureCanvasElements = this.videoElementToCaptureCanvasElements.get(element);
-            if (!captureCanvasElements) {
-                let captureCanvasContainerElement = document.createElement('div');
-                captureCanvasContainerElement.style.position = 'absolute';
-                captureCanvasContainerElement.style.padding = '0';
-                captureCanvasContainerElement.style.margin = '0';
-                captureCanvasContainerElement.style.border = 'none';
-                captureCanvasContainerElement.style.outline = 'none';
-                captureCanvasContainerElement.style.boxShadow = 'none';
-                captureCanvasContainerElement.style.background = 'none';
-                
-
-                let captureCanvasVideoElement = document.createElement('video');
-                captureCanvasVideoElement.srcObject = element.srcObject;
-                captureCanvasVideoElement.autoplay = true;
-                captureCanvasVideoElement.style.width = '100%';
-                captureCanvasVideoElement.style.height = '100%';
-                captureCanvasVideoElement.style.objectFit = 'contain';
-                captureCanvasVideoElement.style.position = 'absolute';
-                captureCanvasVideoElement.style.top = '0';
-                captureCanvasVideoElement.style.left = '0';
-
-                captureCanvasContainerElement.appendChild(captureCanvasVideoElement);
-
-                let captureCanvasLabelElement = document.createElement('div');
-                captureCanvasLabelElement.style.backgroundColor = 'rgba(0, 0, 0, 0.35)';
-                captureCanvasLabelElement.style.color = 'white';
-                captureCanvasLabelElement.style.fontSize = '14px';
-                captureCanvasLabelElement.style.textAlign = 'left';
-                captureCanvasLabelElement.style.lineHeight = '1.2';
-                captureCanvasLabelElement.style.padding = '3px 5px';
-                captureCanvasLabelElement.style.display = 'inline-block';
-                captureCanvasLabelElement.style.position = 'absolute';
-                captureCanvasLabelElement.style.bottom = '3px';
-                captureCanvasLabelElement.style.left = '5px';
-                captureCanvasLabelElement.style.zIndex = '10'; // Add this line to ensure label is above other elements
-                captureCanvasLabelElement.textContent = label;
-                captureCanvasContainerElement.appendChild(captureCanvasLabelElement);    
-                
-                let captureCanvasCanvasElement = document.createElement('canvas');
-                captureCanvasCanvasElement.style.width = '100%';
-                captureCanvasCanvasElement.style.height = '100%';
-                captureCanvasCanvasElement.style.position = 'absolute';
-                captureCanvasCanvasElement.style.top = '0';
-                captureCanvasCanvasElement.style.left = '0';
-                captureCanvasCanvasElement.style.border = 'none';
-                captureCanvasCanvasElement.style.display = 'none';                
-                captureCanvasContainerElement.appendChild(captureCanvasCanvasElement);
-
-                this.captureCanvas.appendChild(captureCanvasContainerElement);
-                captureCanvasElements = {
-                    captureCanvasVideoElement,
-                    captureCanvasLabelElement,
-                    captureCanvasContainerElement,
-                    captureCanvasCanvasElement
-                }
-                this.videoElementToCaptureCanvasElements.set(element, captureCanvasElements);
-            }
-
-            if (captureCanvasElements.captureCanvasVideoElement.srcObject !== element.srcObject) {
-                captureCanvasElements.captureCanvasVideoElement.srcObject = element.srcObject;
-            }
-
-            captureCanvasElements.captureCanvasContainerElement.style.left = `${Math.round(dst_rect.left)}px`;
-            captureCanvasElements.captureCanvasContainerElement.style.top = `${Math.round(dst_rect.top)}px`;
-            captureCanvasElements.captureCanvasContainerElement.style.width = `${Math.round(dst_rect.width)}px`;
-            captureCanvasElements.captureCanvasContainerElement.style.height = `${Math.round(dst_rect.height)}px`;
-        });
-
-        // For each element in videoElementToCaptureCanvasElements that was not in the frameLayout, remove it
-        this.videoElementToCaptureCanvasElements.forEach((captureCanvasElements, videoElement) => {
-            if (!frameLayout.some(frameLayoutElement => frameLayoutElement.element === videoElement)) {
-                // remove after a 16 ms timeout to eliminate flicker
-                setTimeout(() => {
-                    this.captureCanvas.removeChild(captureCanvasElements.captureCanvasContainerElement);
-                    this.videoElementToCaptureCanvasElements.delete(videoElement);
-                }, 16);                
-            }
-        });
-    }
-    
-    addVideoTrack(trackEvent) {
-        const firstStreamId = trackEvent.streams[0]?.id;
-        const trackId = trackEvent.track?.id;
-
-        this.videoTrackIdToSSRC.set(trackId, firstStreamId);
-    }
-
-    createCaptureCanvas() {
-        const canvas = document.createElement('div');
-        canvas.classList.add('captureCanvas');
-        canvas.style.width = '1920px';
-        canvas.style.height = '1080px';
-        canvas.style.backgroundColor = 'black';
-        canvas.style.position = 'fixed';
-        canvas.style.top = '0';
-        canvas.style.left = '0';
-        //canvas.style.zIndex = '9999';
-        document.body.appendChild(canvas);
-        return canvas;
-    }
-
-    hideAllNonCaptureCanvasElements() {
-        if (this.captureCanvas) {
-            this.captureCanvas.style.visibility = 'visible';
-        }
-
-        const style = document.createElement('style');
-        style.textContent = `
-        /* First, hide everything */
-        body * {
-          visibility: hidden !important;
-        }
-        
-        /* Then, show only elements with captureCanvas class */
-        body .captureCanvas,
-        body .captureCanvas * {
-          visibility: visible !important;
-        }
-        
-        /* Make sure parent containers of captureCanvas elements are visible too */
-        body .captureCanvas,
-        body .captureCanvas *,
-        body .captureCanvas:hover,
-        body .captureCanvas:focus {
-          visibility: visible !important;
-          opacity: 1 !important;
-        }
-        `;
-        document.head.appendChild(style);
-        this.currentStyleElement = style;
-    }
-    
-    showAllNonCaptureCanvasElementsAndHideCaptureCanvas() {
-        if (this.currentStyleElement) {
-            document.head.removeChild(this.currentStyleElement);
-        }
-
-        // Hide the capture canvas
-        this.captureCanvas.style.visibility = 'hidden';
-    }
-
-    getActiveSpeakerElementsWithInfo(mainElement) {
-        const activeSpeakerElements = mainElement.querySelectorAll('div.tC2Wod.kssMZb');
-
-        return Array.from(activeSpeakerElements).map(element => {
-            const participantElement = element.closest('[data-participant-id]');
-            const participantId = participantElement ? participantElement.getAttribute('data-participant-id') : null;
-            
-            return {
-                element: element,
-                bounding_rect: element.getBoundingClientRect(),
-                participant_id: participantId
-            };
-        }).filter(element => element.bounding_rect.width > 0 && element.bounding_rect.height > 0 && element.participant_id);
-    }
-
-    getSSRCFromVideoElement(videoElement) {
-        const track_id = videoElement.srcObject?.getTracks().find(track => track.kind === 'video')?.id;
-        return this.videoTrackIdToSSRC.get(track_id);
-    }
-
-    getVideoElementsWithInfo(mainElement, activeSpeakerElementsWithInfo) {
-        const videoElements = mainElement.querySelectorAll('video');
-        const results = Array.from(videoElements).map(video => {
-            // Get the parent element to extract SSRC
-            const containerElement = video.closest('.LBDzPb');
-            const bounding_rect = video.getBoundingClientRect();
-            const container_bounding_rect = containerElement.getBoundingClientRect();
-            const clip_rect = {
-                top: container_bounding_rect.top - bounding_rect.top,
-                left: container_bounding_rect.left - bounding_rect.left,
-                right: container_bounding_rect.right - bounding_rect.top,
-                bottom: container_bounding_rect.bottom - bounding_rect.left,
-                width: container_bounding_rect.width,
-                height: container_bounding_rect.height,
-            }
-            const ssrc = this.getSSRCFromVideoElement(video);
-            const user = window.userManager.getUserByStreamId(ssrc);
-            return {
-                element: video,
-                bounding_rect: bounding_rect,
-                container_bounding_rect: container_bounding_rect,
-                clip_rect: clip_rect,
-                ssrc: ssrc,
-                user: user,
-                is_screen_share: Boolean(user?.parentDeviceId),
-                is_active_speaker: activeSpeakerElementsWithInfo?.[0]?.participant_id === user?.deviceId,
-            };
-        }).filter(video => video.ssrc && video.user && !video.paused && video.bounding_rect.width > 0 && video.bounding_rect.height > 0);
-        const largestContainerBoundingRectArea = results.reduce((max, video) => {
-            return Math.max(max, video.container_bounding_rect.width * video.container_bounding_rect.height);
-        }, 0);
-        return results.map(video => {
-            return {
-                ...video,
-                is_largest: video.container_bounding_rect.width * video.container_bounding_rect.height === largestContainerBoundingRectArea,
-            };
-        });
-    }
-
-    computeFrameLayout(mainElement) {
-        const activeSpeakerElementsWithInfo = this.getActiveSpeakerElementsWithInfo(mainElement);
-        const videoElementsWithInfo = this.getVideoElementsWithInfo(mainElement, activeSpeakerElementsWithInfo);
-
-        const layoutElements = [];
-
-        if (window.initialData.recordingView === 'speaker_view') {
-            const screenShareVideo = videoElementsWithInfo.find(video => video.is_screen_share);
-            if (screenShareVideo) {
-                layoutElements.push({
-                    element: screenShareVideo.element,
-                    dst_rect: screenShareVideo.bounding_rect,
-                    ssrc: screenShareVideo.ssrc,
-                });
-                const activeSpeakerVideo = videoElementsWithInfo.find(video => video.is_active_speaker);
-                if (activeSpeakerVideo) {                    
-                    // Calculate position in upper right corner of screen share
-                    const x = screenShareVideo.bounding_rect.right - activeSpeakerVideo.bounding_rect.width;
-                    const y = screenShareVideo.bounding_rect.top;
-                    
-                    layoutElements.push({
-                        element: activeSpeakerVideo.element,
-                        dst_rect: {
-                            left: x,
-                            top: y,
-                            width: activeSpeakerVideo.bounding_rect.width,
-                            height: activeSpeakerVideo.bounding_rect.height
-                        },
-                        label: activeSpeakerVideo.user?.fullName || activeSpeakerVideo.user?.displayName,
-                        ssrc: activeSpeakerVideo.ssrc,
-                    });
-                }
-            }
-            else
-            {
-                const mainParticipantVideo = videoElementsWithInfo.find(video => video.is_largest) || videoElementsWithInfo[0];
-                this.lastMainParticipantVideoSsrc = mainParticipantVideo?.ssrc;
-                if (mainParticipantVideo) {                   
-                    layoutElements.push({
-                        element: mainParticipantVideo.element,
-                        dst_rect: mainParticipantVideo.bounding_rect,
-                        label: mainParticipantVideo.user?.fullName || mainParticipantVideo.user?.displayName,
-                        ssrc: mainParticipantVideo.ssrc,
-                    });
-                }
-            }
-
-            return this.scaleLayoutToCanvasWithLetterBoxing(layoutElements);
-        }
-
-        if (window.initialData.recordingView === 'gallery_view') {
-            const videoElementsFiltered = videoElementsWithInfo.filter(video => !video.is_screen_share);
-
-            const ssrcsInCurrentFrame = videoElementsFiltered.map(video => video.ssrc);
-            const ssrcsInCurrentFrameSet = new Set(ssrcsInCurrentFrame);
-            this.ssrcsInLastFrame = this.ssrcsInLastFrame || [];
-            this.ssrcsOrder = this.ssrcsOrder || [];
-
-            // Remove ssrcs that are not in the current frame
-            this.ssrcsOrder = this.ssrcsOrder.filter(ssrc => ssrcsInCurrentFrameSet.has(ssrc));
-            // Add ssrcs that are in the current frame but are not in ssrcsOrder
-            const ssrcsOrderSet = new Set(this.ssrcsOrder);
-            this.ssrcsOrder.push(...ssrcsInCurrentFrame.filter(ssrc => !ssrcsOrderSet.has(ssrc)));
-
-            const numCols = Math.ceil(Math.sqrt(this.ssrcsOrder.length));
-            const cellWidth = 1920 / numCols;
-            const cellHeight = 1080 / numCols;
-
-            const ssrcToVideoElement = new Map(videoElementsFiltered.map(video => [video.ssrc, video]));
-                       
-            let galleryLayoutElements = [];
-            this.ssrcsOrder.forEach((ssrc, index) => {
-                const video = ssrcToVideoElement.get(ssrc);
-                if (!video) {
-                    console.error('Video element not found for ssrc', ssrc);
-                    return;
-                }
-
-                const videoWidth = video.element.videoWidth;
-                const videoHeight = video.element.videoHeight;
-                const videoAspect = videoWidth / videoHeight;
-                const cellAspect = (cellWidth - 10) / (cellHeight - 10);
-                
-                let cropX, cropY, cropWidth, cropHeight;
-                
-                // Determine crop dimensions to match cell aspect ratio
-                if (videoAspect > cellAspect) {
-                    // Video is wider than cell - crop width
-                    cropHeight = videoHeight;
-                    cropWidth = videoHeight * cellAspect;
-                } else {
-                    // Video is taller than cell - crop height
-                    cropWidth = videoWidth;
-                    cropHeight = videoWidth / cellAspect;
-                }
-
-                cropX = (videoWidth - cropWidth) / 2;
-                cropY = (videoHeight - cropHeight) / 2;
-
-                galleryLayoutElements.push({
-                    element: video.element,
-                    src_rect: {
-                        left: cropX,
-                        top: cropY,
-                        width: cropWidth,
-                        height: cropHeight
-                    },
-                    dst_rect: {
-                        left: (index % numCols) * cellWidth + 5,
-                        top: Math.floor(index / numCols) * cellHeight + 5,
-                        width: cellWidth - 10,
-                        height: cellHeight - 10
-                    },
-                    label: video.user?.fullName || video.user?.displayName,
-                    videoWidth: videoWidth,
-                    ssrc: video.ssrc,
-                });
-            });
-
-            this.ssrcsInLastFrame = ssrcsInCurrentFrame;
-
-            return this.scaleLayoutToCanvasWithLetterBoxing(galleryLayoutElements);
-        }
-
-        return layoutElements;
-    }
-
-    scaleLayoutToCanvasWithLetterBoxing(layoutElements) {
-        if (layoutElements.length === 0) {
-            return layoutElements;
-        }
-
-        const canvasWidth = 1920;
-        const canvasHeight = 1080;
-        let minX = Infinity;
-        let minY = Infinity;
-        let maxX = 0;
-        let maxY = 0;
-
-        // Find active videos and determine the bounding box
-        layoutElements.forEach(({ element, dst_rect }) => {
-            if (element.videoWidth > 0 && element.videoHeight > 0) {
-                minX = Math.min(minX, dst_rect.left);
-                minY = Math.min(minY, dst_rect.top);
-                maxX = Math.max(maxX, dst_rect.left + dst_rect.width);
-                maxY = Math.max(maxY, dst_rect.top + dst_rect.height);
-            }
-        });
-
-        const boundingWidth = maxX - minX;
-        const boundingHeight = maxY - minY;
-
-        // Calculate aspect ratios
-        const inputAspect = boundingWidth / boundingHeight;
-        const outputAspect = canvasWidth / canvasHeight;
-        let scaledWidth, scaledHeight, offsetX, offsetY;
-
-        if (Math.abs(inputAspect - outputAspect) < 1e-2) {
-            // Same aspect ratio, use full canvas
-            scaledWidth = canvasWidth;
-            scaledHeight = canvasHeight;
-            offsetX = 0;
-            offsetY = 0;
-        } else if (inputAspect > outputAspect) {
-            // Input is wider, fit to width with letterboxing
-            scaledWidth = canvasWidth;
-            scaledHeight = canvasWidth / inputAspect;
-            offsetX = 0;
-            offsetY = (canvasHeight - scaledHeight) / 2;
-        } else {
-            // Input is taller, fit to height with pillarboxing
-            scaledHeight = canvasHeight;
-            scaledWidth = canvasHeight * inputAspect;
-            offsetX = (canvasWidth - scaledWidth) / 2;
-            offsetY = 0;
-        }
-
-        return layoutElements.map(layoutElement => {
-            const dst_rect = layoutElement.dst_rect;
-            const relativeX = (dst_rect.left - minX) / boundingWidth;
-            const relativeY = (dst_rect.top - minY) / boundingHeight;
-            const relativeWidth = dst_rect.width / boundingWidth;
-            const relativeHeight = dst_rect.height / boundingHeight;
-
-            const dst_rect_transformed = {
-                left: offsetX + relativeX * scaledWidth,
-                top: offsetY + relativeY * scaledHeight,
-                width: relativeWidth * scaledWidth,
-                height: relativeHeight * scaledHeight,
-            }
-
-            return {
-                ...layoutElement,
-                dst_rect: dst_rect_transformed,
-            };
-        });
-    }
-}
-
-class FullCaptureManager {
-    constructor() {
-        this.videoTrack = null;
-        this.audioSources = [];
-        this.mixedAudioTrack = null;
-        this.canvasStream = null;
-        this.finalStream = null;
-        this.mediaRecorder = null;
-        this.audioContext = null;
-        this.observer = null;
-        this.audioTracks = [];
-        this.layoutUpdateInterval = null;
-
-        this.silenceThreshold = 0.0;
-        this.silenceCheckInterval = null;
-
-        this.videoTrackIdToSSRC = new Map();
-    }
 
     addVideoTrack(trackEvent) {
         const firstStreamId = trackEvent.streams[0]?.id;
         const trackId = trackEvent.track?.id;
 
         this.videoTrackIdToSSRC.set(trackId, firstStreamId);
-    }
-
-    addAudioTrack(audioTrack) {
-        this.audioTracks.push(audioTrack);
-    }
-
-    getActiveSpeakerElementsWithInfo(mainElement) {
-        const activeSpeakerElements = mainElement.querySelectorAll('div.tC2Wod.kssMZb');
-
-        return Array.from(activeSpeakerElements).map(element => {
-            const participantElement = element.closest('[data-participant-id]');
-            const participantId = participantElement ? participantElement.getAttribute('data-participant-id') : null;
-            
-            return {
-                element: element,
-                bounding_rect: element.getBoundingClientRect(),
-                participant_id: participantId
-            };
-        }).filter(element => element.bounding_rect.width > 0 && element.bounding_rect.height > 0 && element.participant_id);
-    }
-
-    getSSRCFromVideoElement(videoElement) {
-        const track_id = videoElement.srcObject?.getTracks().find(track => track.kind === 'video')?.id;
-        return this.videoTrackIdToSSRC.get(track_id);
-    }
-
-    getVideoElementsWithInfo(mainElement, activeSpeakerElementsWithInfo) {
-        const videoElements = mainElement.querySelectorAll('video');
-        return Array.from(videoElements).map(video => {
-            // Get the parent element to extract SSRC
-            const containerElement = video.closest('.LBDzPb');
-            const bounding_rect = video.getBoundingClientRect();
-            const container_bounding_rect = containerElement.getBoundingClientRect();
-            const clip_rect = {
-                top: container_bounding_rect.top - bounding_rect.top,
-                left: container_bounding_rect.left - bounding_rect.left,
-                right: container_bounding_rect.right - bounding_rect.top,
-                bottom: container_bounding_rect.bottom - bounding_rect.left,
-                width: container_bounding_rect.width,
-                height: container_bounding_rect.height,
-            }
-            const ssrc = this.getSSRCFromVideoElement(video);
-            const user = window.userManager.getUserByStreamId(ssrc);
-            return {
-                element: video,
-                bounding_rect: bounding_rect,
-                container_bounding_rect: container_bounding_rect,
-                clip_rect: clip_rect,
-                ssrc: ssrc,
-                user: user,
-                is_screen_share: Boolean(user?.parentDeviceId),
-                is_active_speaker: activeSpeakerElementsWithInfo?.[0]?.participant_id === user?.deviceId,
-            };
-        }).filter(video => video.ssrc && video.user && !video.paused && video.bounding_rect.width > 0 && video.bounding_rect.height > 0);
-    }
-
-    computeFrameLayout(mainElement) {
-        const activeSpeakerElementsWithInfo = this.getActiveSpeakerElementsWithInfo(mainElement);
-        const videoElementsWithInfo = this.getVideoElementsWithInfo(mainElement, activeSpeakerElementsWithInfo);
-
-        const layoutElements = [];
-
-        if (window.initialData.recordingView === 'speaker_view') {
-            const screenShareVideo = videoElementsWithInfo.find(video => video.is_screen_share);
-            if (screenShareVideo) {
-                layoutElements.push({
-                    element: screenShareVideo.element,
-                    dst_rect: screenShareVideo.bounding_rect,
-                    ssrc: screenShareVideo.ssrc,
-                });
-                const activeSpeakerVideo = videoElementsWithInfo.find(video => video.is_active_speaker);
-                if (activeSpeakerVideo) {                    
-                    // Calculate position in upper right corner of screen share
-                    const x = screenShareVideo.bounding_rect.right - activeSpeakerVideo.bounding_rect.width;
-                    const y = screenShareVideo.bounding_rect.top;
-                    
-                    layoutElements.push({
-                        element: activeSpeakerVideo.element,
-                        dst_rect: {
-                            left: x,
-                            top: y,
-                            width: activeSpeakerVideo.bounding_rect.width,
-                            height: activeSpeakerVideo.bounding_rect.height
-                        },
-                        label: activeSpeakerVideo.user?.fullName || activeSpeakerVideo.user?.displayName,
-                        ssrc: activeSpeakerVideo.ssrc,
-                    });
-                }
-            }
-            else
-            {
-                const mainParticipantVideo = videoElementsWithInfo.find(video => video.is_active_speaker) || videoElementsWithInfo.find(video => video.ssrc === this.lastMainParticipantVideoSsrc) || videoElementsWithInfo[0];
-                this.lastMainParticipantVideoSsrc = mainParticipantVideo?.ssrc;
-                if (mainParticipantVideo) {                   
-                    layoutElements.push({
-                        element: mainParticipantVideo.element,
-                        dst_rect: mainParticipantVideo.bounding_rect,
-                        label: mainParticipantVideo.user?.fullName || mainParticipantVideo.user?.displayName,
-                        ssrc: mainParticipantVideo.ssrc,
-                    });
-                }
-            }
-
-            return this.scaleLayoutToCanvasWithLetterBoxing(layoutElements);
-        }
-
-        if (window.initialData.recordingView === 'gallery_view') {
-            const videoElementsFiltered = videoElementsWithInfo.filter(video => !video.is_screen_share);
-
-            const ssrcsInCurrentFrame = videoElementsFiltered.map(video => video.ssrc);
-            const ssrcsInCurrentFrameSet = new Set(ssrcsInCurrentFrame);
-            this.ssrcsInLastFrame = this.ssrcsInLastFrame || [];
-            this.ssrcsOrder = this.ssrcsOrder || [];
-
-            // Remove ssrcs that are not in the current frame
-            this.ssrcsOrder = this.ssrcsOrder.filter(ssrc => ssrcsInCurrentFrameSet.has(ssrc));
-            // Add ssrcs that are in the current frame but are not in ssrcsOrder
-            const ssrcsOrderSet = new Set(this.ssrcsOrder);
-            this.ssrcsOrder.push(...ssrcsInCurrentFrame.filter(ssrc => !ssrcsOrderSet.has(ssrc)));
-
-            const numCols = Math.ceil(Math.sqrt(this.ssrcsOrder.length));
-            const cellWidth = 1920 / numCols;
-            const cellHeight = 1080 / numCols;
-
-            const ssrcToVideoElement = new Map(videoElementsFiltered.map(video => [video.ssrc, video]));
-                       
-            let galleryLayoutElements = [];
-            this.ssrcsOrder.forEach((ssrc, index) => {
-                const video = ssrcToVideoElement.get(ssrc);
-                if (!video) {
-                    console.error('Video element not found for ssrc', ssrc);
-                    return;
-                }
-
-                const videoWidth = video.element.videoWidth;
-                const videoHeight = video.element.videoHeight;
-                const videoAspect = videoWidth / videoHeight;
-                const cellAspect = (cellWidth - 10) / (cellHeight - 10);
-                
-                let cropX, cropY, cropWidth, cropHeight;
-                
-                // Determine crop dimensions to match cell aspect ratio
-                if (videoAspect > cellAspect) {
-                    // Video is wider than cell - crop width
-                    cropHeight = videoHeight;
-                    cropWidth = videoHeight * cellAspect;
-                } else {
-                    // Video is taller than cell - crop height
-                    cropWidth = videoWidth;
-                    cropHeight = videoWidth / cellAspect;
-                }
-
-                cropX = (videoWidth - cropWidth) / 2;
-                cropY = (videoHeight - cropHeight) / 2;
-
-                galleryLayoutElements.push({
-                    element: video.element,
-                    src_rect: {
-                        left: cropX,
-                        top: cropY,
-                        width: cropWidth,
-                        height: cropHeight
-                    },
-                    dst_rect: {
-                        left: (index % numCols) * cellWidth + 5,
-                        top: Math.floor(index / numCols) * cellHeight + 5,
-                        width: cellWidth - 10,
-                        height: cellHeight - 10
-                    },
-                    label: video.user?.fullName || video.user?.displayName,
-                    videoWidth: videoWidth,
-                    ssrc: video.ssrc,
-                });
-            });
-
-            this.ssrcsInLastFrame = ssrcsInCurrentFrame;
-
-            return this.scaleLayoutToCanvasWithLetterBoxing(galleryLayoutElements);
-        }
-
-        return layoutElements;
-    }
-
-    scaleLayoutToCanvasWithLetterBoxing(layoutElements) {
-        if (layoutElements.length === 0) {
-            return layoutElements;
-        }
-
-        const canvasWidth = 1920;
-        const canvasHeight = 1080;
-        let minX = Infinity;
-        let minY = Infinity;
-        let maxX = 0;
-        let maxY = 0;
-
-        // Find active videos and determine the bounding box
-        layoutElements.forEach(({ element, dst_rect }) => {
-            if (element.videoWidth > 0 && element.videoHeight > 0) {
-                minX = Math.min(minX, dst_rect.left);
-                minY = Math.min(minY, dst_rect.top);
-                maxX = Math.max(maxX, dst_rect.left + dst_rect.width);
-                maxY = Math.max(maxY, dst_rect.top + dst_rect.height);
-            }
-        });
-
-        const boundingWidth = maxX - minX;
-        const boundingHeight = maxY - minY;
-
-        // Calculate aspect ratios
-        const inputAspect = boundingWidth / boundingHeight;
-        const outputAspect = canvasWidth / canvasHeight;
-        let scaledWidth, scaledHeight, offsetX, offsetY;
-
-        if (Math.abs(inputAspect - outputAspect) < 1e-2) {
-            // Same aspect ratio, use full canvas
-            scaledWidth = canvasWidth;
-            scaledHeight = canvasHeight;
-            offsetX = 0;
-            offsetY = 0;
-        } else if (inputAspect > outputAspect) {
-            // Input is wider, fit to width with letterboxing
-            scaledWidth = canvasWidth;
-            scaledHeight = canvasWidth / inputAspect;
-            offsetX = 0;
-            offsetY = (canvasHeight - scaledHeight) / 2;
-        } else {
-            // Input is taller, fit to height with pillarboxing
-            scaledHeight = canvasHeight;
-            scaledWidth = canvasHeight * inputAspect;
-            offsetX = (canvasWidth - scaledWidth) / 2;
-            offsetY = 0;
-        }
-
-        return layoutElements.map(layoutElement => {
-            const dst_rect = layoutElement.dst_rect;
-            const relativeX = (dst_rect.left - minX) / boundingWidth;
-            const relativeY = (dst_rect.top - minY) / boundingHeight;
-            const relativeWidth = dst_rect.width / boundingWidth;
-            const relativeHeight = dst_rect.height / boundingHeight;
-
-            const dst_rect_transformed = {
-                left: offsetX + relativeX * scaledWidth,
-                top: offsetY + relativeY * scaledHeight,
-                width: relativeWidth * scaledWidth,
-                height: relativeHeight * scaledHeight,
-            }
-
-            return {
-                ...layoutElement,
-                dst_rect: dst_rect_transformed,
-            };
-        });
-    }
-
-    async start() {
-        // Find the main element that contains all the video elements
-        const mainElement = document.querySelector('main');
-        if (!mainElement) {
-            console.error('No <main> element found in the DOM');
-            return;
-        }
-
-        // Create a canvas element with dimensions of rendered frame
-        const canvas = document.createElement('canvas');
-        canvas.width = 1920;
-        canvas.height = 1080;
-        document.body.appendChild(canvas);
-
-        const debugCanvas = false;
-        if (debugCanvas) {
-            canvas.style.position = 'fixed';
-            canvas.style.top = '0';
-            canvas.style.left = '0';
-            canvas.style.zIndex = '9999';
-            canvas.style.border = '2px solid red';
-            canvas.style.opacity = '1.0';
-    
-            
-            // Create toggle button for canvas visibility
-            const toggleButton = document.createElement('button');
-            toggleButton.textContent = 'Show Canvas';
-            toggleButton.style.position = 'fixed';
-            toggleButton.style.bottom = '20px';
-            toggleButton.style.right = '20px';
-            toggleButton.style.zIndex = '10000';
-            toggleButton.style.padding = '8px 12px';
-            toggleButton.style.backgroundColor = '#4285f4';
-            toggleButton.style.color = 'white';
-            toggleButton.style.border = 'none';
-            toggleButton.style.borderRadius = '4px';
-            toggleButton.style.cursor = 'pointer';
-            toggleButton.style.fontFamily = 'Arial, sans-serif';
-            
-            // Toggle canvas visibility function
-            toggleButton.addEventListener('click', () => {
-                if (canvas.style.opacity === '0') {
-                    canvas.style.opacity = '1.0';
-                    toggleButton.textContent = 'Hide Canvas';
-                } else {
-                    canvas.style.opacity = '0';
-                    toggleButton.textContent = 'Show Canvas';
-                }
-            });
-            
-            document.body.appendChild(toggleButton);
-            this.toggleButton = toggleButton; // Store reference for cleanup
-        }
-        
-
-        // Set up the canvas context for drawing
-        const canvasContext = canvas.getContext('2d');
-
-        // Using the contents of the main element, compute the layout of the frame we want to render
-        let frameLayout = this.computeFrameLayout(mainElement);
-
-        // Create a MutationObserver to watch for changes to the DOM
-        this.observer = new MutationObserver((mutations) => {
-            // Update the frame layout when DOM changes
-            frameLayout = this.computeFrameLayout(mainElement);
-        });
-
-        // Commented out mutation observer because we don't need it anymore
-        // Just recomputing the layout every 500ms works good
-        // Start observing the main element for changes which will trigger a recomputation of the frame layout
-        // TODO: This observer fires whenever someone speaks. We should try to see if we can filter those out so it fires less often
-        // because the computeFrameLayout is a relatively expensive operation
-        /*
-        this.observer.observe(mainElement, { 
-            childList: true,      // Watch for added/removed nodes
-            subtree: true,        // Watch all descendants
-            attributes: false,    // Don't need to watch attributes
-            characterData: false  // Don't need to watch text content
-        });*/
-
-        // Set up a timer to update the frame layout every 100
-        this.layoutUpdateInterval = setInterval(() => {
-            frameLayout = this.computeFrameLayout(mainElement);
-        }, 100);
-
-        // Create a drawing function that runs at 30fps
-        const drawFrameLayoutToCanvas = () => {  
-            try {
-                const hasMismatchOrInvisible = frameLayout.some(({ element, ssrc, videoWidth }) => 
-                    (ssrc && ssrc !== this.getSSRCFromVideoElement(element)) ||
-                    (videoWidth && videoWidth !== element.videoWidth) ||
-                    !element.checkVisibility()
-                );
-                
-                if (hasMismatchOrInvisible) {
-                    // Schedule the next frame and exit
-                    this.animationFrameId = requestAnimationFrame(drawFrameLayoutToCanvas);
-                    return;
-                }
-
-                // Clear the canvas with black background
-                canvasContext.fillStyle = 'black';
-                canvasContext.fillRect(0, 0, canvas.width, canvas.height);
-
-
-                frameLayout.forEach(({ element, dst_rect, src_rect, label }) => {
-
-                    if (src_rect) {
-                        canvasContext.drawImage(
-                            element,
-                            src_rect.left,
-                            src_rect.top,
-                            src_rect.width,
-                            src_rect.height,
-                            dst_rect.left,
-                            dst_rect.top,
-                            dst_rect.width,
-                            dst_rect.height
-                        );
-                    }
-                    else {
-                        canvasContext.drawImage(
-                            element,
-                            dst_rect.left,
-                            dst_rect.top,
-                            dst_rect.width,
-                            dst_rect.height
-                        );
-                    }
-
-                    if (label) {
-                        canvasContext.fillStyle = 'white';
-                        canvasContext.font = 'bold 16px Arial';
-                        canvasContext.fillText(label, dst_rect.left + 16, dst_rect.top + dst_rect.height - 16);
-                    }
-                });
-
-                // Schedule the next frame
-                this.animationFrameId = requestAnimationFrame(drawFrameLayoutToCanvas);
-            } catch (e) {
-                console.error('Error drawing frame layout to canvas', e);
-            }
-        };
-
-        // Start the drawing loop
-        drawFrameLayoutToCanvas();
-
-        // Capture the canvas stream at 30 fps
-        const canvasStream = canvas.captureStream(30);
-        const [videoTrack] = canvasStream.getVideoTracks();
-        this.videoTrack = videoTrack;
-        this.canvas = canvas; // Store canvas reference for cleanup
-
-        // Set up audio context and processing as before
-        this.audioContext = new AudioContext();
-
-        this.audioSources = this.audioTracks.map(track => {
-            const mediaStream = new MediaStream([track]);
-            return this.audioContext.createMediaStreamSource(mediaStream);
-        });
-
-        // Create a destination node
-        const destination = this.audioContext.createMediaStreamDestination();
-
-        // Connect all sources to the destination
-        this.audioSources.forEach(source => {
-            source.connect(destination);
-        });
-
-        // Create analyzer and connect it to the destination
-        this.analyser = this.audioContext.createAnalyser();
-        this.analyser.fftSize = 256;
-        const bufferLength = this.analyser.frequencyBinCount;
-        this.audioDataArray = new Uint8Array(bufferLength);
-
-        // Create a source from the destination's stream and connect it to the analyzer
-        const mixedSource = this.audioContext.createMediaStreamSource(destination.stream);
-        mixedSource.connect(this.analyser);
-
-        this.mixedAudioTrack = destination.stream.getAudioTracks()[0];
-
-        this.finalStream = new MediaStream([
-            this.videoTrack,
-            this.mixedAudioTrack
-        ]);
-
-        // Initialize MediaRecorder with the final stream
-        this.startRecording();
-
-        this.startSilenceDetection();
-    }
-
-    startSilenceDetection() {
-        // Clear any existing interval
-        if (this.silenceCheckInterval) {
-            clearInterval(this.silenceCheckInterval);
-        }
-                
-        // Check for audio activity every second
-        this.silenceCheckInterval = setInterval(() => {
-            this.checkAudioActivity();
-        }, 1000);
-    }
-
-    checkAudioActivity() {
-        // Get audio data
-        this.analyser.getByteTimeDomainData(this.audioDataArray);
-        
-        // Calculate deviation from the center value (128)
-        let sumDeviation = 0;
-        for (let i = 0; i < this.audioDataArray.length; i++) {
-            // Calculate how much each sample deviates from the center (128)
-            sumDeviation += Math.abs(this.audioDataArray[i] - 128);
-        }
-        
-        const averageDeviation = sumDeviation / this.audioDataArray.length;
-        
-        // If average deviation is above threshold, we have audio activity
-        if (averageDeviation > this.silenceThreshold) {
-            window.ws.sendJson({
-                type: 'SilenceStatus',
-                isSilent: false
-            });
-        }
-    }
-
-    startRecording() {
-        // Options for better quality
-        const options = { mimeType: 'video/mp4' };
-        this.mediaRecorder = new MediaRecorder(this.finalStream, options);
-
-        this.mediaRecorder.ondataavailable = (event) => {
-            if (event.data.size > 0) {
-                console.log('ondataavailable', event.data.size);
-                window.ws.sendEncodedMP4Chunk(event.data);
-            }
-        };
-
-        this.mediaRecorder.onstop = () => {
-            this.saveRecording();
-        };
-
-        // Start recording, collect data in chunks every 1 second
-        this.mediaRecorder.start(1000);
-        console.log("Recording started");
-    }
-
-    stopRecording() {
-        if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
-            this.mediaRecorder.stop();
-            console.log("Recording stopped");
-        }
-    }
-
-    stop() {
-        this.stopRecording();
-
-        // Clear silence detection interval
-        if (this.silenceCheckInterval) {
-            clearInterval(this.silenceCheckInterval);
-            this.silenceCheckInterval = null;
-        }
-
-        // Clear layout update interval
-        if (this.layoutUpdateInterval) {
-            clearInterval(this.layoutUpdateInterval);
-            this.layoutUpdateInterval = null;
-        }
-
-        // Cancel animation frame if it exists
-        if (this.animationFrameId) {
-            cancelAnimationFrame(this.animationFrameId);
-            this.animationFrameId = null;
-        }
-
-        // Disconnect the MutationObserver
-        if (this.observer) {
-            this.observer.disconnect();
-            this.observer = null;
-        }
-
-        // Remove canvas element if it exists
-        if (this.canvas) {
-            document.body.removeChild(this.canvas);
-            this.canvas = null;
-        }
-
-        // Stop all tracks
-        if (this.videoTrack) this.videoTrack.stop();
-        if (this.mixedAudioTrack) this.mixedAudioTrack.stop();
-
-        // Clean up
-        this.videoTrack = null;
-        this.mixedAudioTrack = null;
-        this.finalStream = null;
-        this.mediaRecorder = null;
     }
 }
 
@@ -1347,6 +447,10 @@ class UserManager {
         return this.allUsersMap.get(deviceId);
     }
 
+    getUserByFullName(fullName) {
+        return Array.from(this.allUsersMap.values()).find(user => user.fullName === fullName);
+    }
+
     // constants for meeting status
     MEETING_STATUS = {
         IN_MEETING: 1,
@@ -1439,6 +543,41 @@ class UserManager {
     }
 }
 
+class ReceiverManager {
+    constructor() {
+        this.receiverMap = new Map();
+    }
+
+    updateContributingSources(receiver, result) {
+        this.receiverMap.set(receiver, result);
+    }
+
+    getContributingSources(receiver) {
+        return this.receiverMap.get(receiver) || [];
+    }
+}
+
+class RTCRtpReceiverInterceptor {
+    constructor(onGetContributingSources) {
+        // Store the original getContributingSources method
+        const originalGetContributingSources = RTCRtpReceiver.prototype.getContributingSources;
+        
+        // Replace with our intercepted version
+        RTCRtpReceiver.prototype.getContributingSources = function() {
+            // Call the original method with proper this binding and arguments
+            const result = originalGetContributingSources.apply(this, arguments);
+            
+            // Call the callback with the receiver, arguments, and the result
+            if (onGetContributingSources) {
+                onGetContributingSources(this, result, ...arguments);
+            }
+            
+            // Return the original result
+            return result;
+        };
+    }
+}
+
 // Websocket client
 class WebSocketClient {
   // Message types
@@ -1446,7 +585,8 @@ class WebSocketClient {
       JSON: 1,
       VIDEO: 2,
       AUDIO: 3,
-      ENCODED_MP4_CHUNK: 4
+      ENCODED_MP4_CHUNK: 4,
+      PER_PARTICIPANT_AUDIO: 5
   };
 
   constructor() {
@@ -1537,10 +677,9 @@ class WebSocketClient {
   }
   */
 
-  enableMediaSending() {
+  async enableMediaSending() {
     this.mediaSendingEnabled = true;
-    window.styleManager.start();
-    //window.fullCaptureManager.start();
+    await window.styleManager.start();
 
     // No longer need this because we're not using MediaStreamTrackProcessor's
     //this.startFillerFrameTimer();
@@ -1548,7 +687,6 @@ class WebSocketClient {
 
   async disableMediaSending() {
     window.styleManager.stop();
-    //window.fullCaptureManager.stop();
     // Give the media recorder a bit of time to send the final data
     await new Promise(resolve => setTimeout(resolve, 2000));
     this.mediaSendingEnabled = false;
@@ -1637,7 +775,45 @@ class WebSocketClient {
     }
   }
 
-  sendAudio(timestamp, streamId, audioData) {
+  sendPerParticipantAudio(participantId, audioData) {
+    if (this.ws.readyState !== WebSocket.OPEN) {
+      console.error('WebSocket is not connected for per participant audio send', this.ws.readyState);
+      return;
+    }
+
+    if (!this.mediaSendingEnabled) {
+      return;
+    }
+
+    try {
+        // Convert participantId to UTF-8 bytes
+        const participantIdBytes = new TextEncoder().encode(participantId);
+        
+        // Create final message: type (4 bytes) + participantId length (1 byte) + 
+        // participantId bytes + audio data
+        const message = new Uint8Array(4 + 1 + participantIdBytes.length + audioData.buffer.byteLength);
+        const dataView = new DataView(message.buffer);
+        
+        // Set message type (5 for PER_PARTICIPANT_AUDIO)
+        dataView.setInt32(0, WebSocketClient.MESSAGE_TYPES.PER_PARTICIPANT_AUDIO, true);
+        
+        // Set participantId length as uint8 (1 byte)
+        dataView.setUint8(4, participantIdBytes.length);
+        
+        // Copy participantId bytes
+        message.set(participantIdBytes, 5);
+        
+        // Copy audio data after type, length and participantId
+        message.set(new Uint8Array(audioData.buffer), 5 + participantIdBytes.length);
+        
+        // Send the binary message
+        this.ws.send(message.buffer);
+    } catch (error) {
+        console.error('Error sending WebSocket audio message:', error);
+    }
+  }
+
+  sendMixedAudio(timestamp, streamId, audioData) {
       if (this.ws.readyState !== WebSocket.OPEN) {
           console.error('WebSocket is not connected for audio send', this.ws.readyState);
           return;
@@ -1970,13 +1146,19 @@ window.ws = ws;
 const userManager = new UserManager(ws);
 const captionManager = new CaptionManager(ws);
 const videoTrackManager = new VideoTrackManager(ws);
-const fullCaptureManager = new FullCaptureManager();
 const styleManager = new StyleManager();
+const receiverManager = new ReceiverManager();
+let rtpReceiverInterceptor = null;
+if (window.initialData.sendPerParticipantAudio) {
+    rtpReceiverInterceptor = new RTCRtpReceiverInterceptor((receiver, result, ...args) => {
+        receiverManager.updateContributingSources(receiver, result);
+    });
+}
 
 window.videoTrackManager = videoTrackManager;
 window.userManager = userManager;
-window.fullCaptureManager = fullCaptureManager;
 window.styleManager = styleManager;
+window.receiverManager = receiverManager;
 // Create decoders for all message types
 const messageDecoders = {};
 messageTypes.forEach(type => {
@@ -2190,6 +1372,8 @@ const handleAudioTrack = async (event) => {
 
     const firstStreamId = event.streams[0]?.id;
 
+    const receiver = event.receiver;
+
     // Transform stream to intercept frames
     const transformStream = new TransformStream({
         async transform(frame, controller) {
@@ -2256,15 +1440,23 @@ const handleAudioTrack = async (event) => {
                 }
 
                 // If the audioData buffer is all zeros, then we don't want to send it
-                // Removing this since we implemented 3 audio sources in gstreamer pipeline
-                // if (audioData.every(value => value === 0)) {
-                //    return;
-                // }
+                if (audioData.every(value => value === 0)) {
+                    return;
+                }
+
+                const contributingSources = receiverManager.getContributingSources(receiver);
+                const usersForContributingSources = contributingSources.map(source => userManager.getUserByStreamId(source.source.toString())).filter(x => x);
+                //console.log('contributingSources', contributingSources);
+                //console.log('deviceOutputMap', userManager.deviceOutputMap);
+                //console.log('usersForContributingSources', usersForContributingSources);
 
                 // Send audio data through websocket
-                const currentTimeMicros = BigInt(Math.floor(performance.now() * 1000));
-                ws.sendAudio(currentTimeMicros, firstStreamId, audioData);
-
+                if (usersForContributingSources.length === 1) {
+                    const firstUserId = usersForContributingSources[0]?.deviceId;
+                    if (firstUserId) {
+                        ws.sendPerParticipantAudio(firstUserId, audioData);
+                    }
+                }
                 // Pass through the original frame
                 controller.enqueue(frame);
             } catch (error) {
@@ -2325,6 +1517,9 @@ new RTCInterceptor({
             // but we don't need to do anything with the video tracks
             if (event.track.kind === 'audio') {
                 window.styleManager.addAudioTrack(event.track);
+                if (window.initialData.sendPerParticipantAudio) {
+                    handleAudioTrack(event);
+                }
             }
             if (event.track.kind === 'video') {
                 window.styleManager.addVideoTrack(event);
@@ -2398,7 +1593,7 @@ new RTCInterceptor({
         });
       }
 
-       if (dataChannel.label === 'captions') {
+       if (dataChannel.label === 'captions' && window.initialData.collectCaptions) {
             dataChannel.addEventListener("message", (captionEvent) => {
                 handleCaptionEvent(captionEvent);
             });
@@ -2460,14 +1655,53 @@ function clickLanguageOption(languageCode) {
     }
 }
 
-function turnOnCamera() {
+async function turnOnCamera() {
     // Click camera button to turn it on
-    const cameraButton = document.querySelector('button[aria-label="Turn on camera"]') || document.querySelector('div[aria-label="Turn on camera"]');
+    let cameraButton = null;
+    const numAttempts = 30;
+    for (let i = 0; i < numAttempts; i++) {
+        cameraButton = document.querySelector('button[aria-label="Turn on camera"]') || document.querySelector('div[aria-label="Turn on camera"]');
+        if (cameraButton) {
+            break;
+        }
+        window.ws.sendJson({
+            type: 'Error',
+            message: 'Camera button not found in turnOnCamera, but will try again'
+        });
+        await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    
     if (cameraButton) {
         console.log("Clicking the camera button to turn it on");
         cameraButton.click();
     } else {
         console.log("Camera button not found");
+        window.ws.sendJson({
+            type: 'Error',
+            message: 'Camera button not found in turnOnCamera'
+        });
+    }
+}
+
+function turnOnMic() {
+    // Click microphone button to turn it on
+    const microphoneButton = document.querySelector('button[aria-label="Turn on microphone"]');
+    if (microphoneButton) {
+        console.log("Clicking the microphone button to turn it on");
+        microphoneButton.click();
+    } else {
+        console.log("Microphone button not found");
+    }
+}
+
+function turnOffMic() {
+    // Click microphone button to turn it off
+    const microphoneButton = document.querySelector('button[aria-label="Turn off microphone"]');
+    if (microphoneButton) {
+        console.log("Clicking the microphone button to turn it off");
+        microphoneButton.click();
+    } else {
+        console.log("Microphone off button not found");
     }
 }
 
@@ -2536,7 +1770,7 @@ class BotOutputManager {
         try {
             // Wait for the image to be loaded onto the canvas
             return this.writeImageToBotOutputCanvas(imageBytes)
-                .then(() => {
+                .then(async () => {
                 // If the stream is already broadcasting, don't do anything
                 if (this.botOutputCanvasElementCaptureStream)
                 {
@@ -2546,7 +1780,7 @@ class BotOutputManager {
 
                 // Now that the image is loaded, capture the stream and turn on camera
                 this.botOutputCanvasElementCaptureStream = this.botOutputCanvasElement.captureStream(1);
-                turnOnCamera();
+                await turnOnCamera();
             })
             .catch(error => {
                 console.error('Error in botOutputManager.displayImage:', error);
@@ -2651,6 +1885,136 @@ class BotOutputManager {
             img.src = url;
         });
     }
+
+    initializeBotOutputAudioTrack() {
+        if (this.botOutputAudioTrack) {
+            return;
+        }
+
+        // Create AudioContext and nodes
+        this.audioContextForBotOutput = new AudioContext();
+        this.gainNode = this.audioContextForBotOutput.createGain();
+        this.destination = this.audioContextForBotOutput.createMediaStreamDestination();
+
+        // Set initial gain
+        this.gainNode.gain.value = 1.0;
+
+        // Connect gain node to both destinations
+        this.gainNode.connect(this.destination);
+        this.gainNode.connect(this.audioContextForBotOutput.destination);  // For local monitoring
+
+        this.botOutputAudioTrack = this.destination.stream.getAudioTracks()[0];
+        
+        // Initialize audio queue for continuous playback
+        this.audioQueue = [];
+        this.nextPlayTime = 0;
+        this.isPlaying = false;
+        this.sampleRate = 44100; // Default sample rate
+        this.numChannels = 1;    // Default channels
+        this.turnOffMicTimeout = null;
+    }
+
+    playPCMAudio(pcmData, sampleRate = 44100, numChannels = 1) {
+        turnOnMic();
+
+        // Make sure audio context is initialized
+        this.initializeBotOutputAudioTrack();
+        
+        // Update properties if they've changed
+        if (this.sampleRate !== sampleRate || this.numChannels !== numChannels) {
+            this.sampleRate = sampleRate;
+            this.numChannels = numChannels;
+        }
+        
+        // Convert Int16 PCM data to Float32 with proper scaling
+        let audioData;
+        if (pcmData instanceof Float32Array) {
+            audioData = pcmData;
+        } else {
+            // Create a Float32Array of the same length
+            audioData = new Float32Array(pcmData.length);
+            // Scale Int16 values (-32768 to 32767) to Float32 range (-1.0 to 1.0)
+            for (let i = 0; i < pcmData.length; i++) {
+                // Division by 32768.0 scales the range correctly
+                audioData[i] = pcmData[i] / 32768.0;
+            }
+        }
+        
+        // Add to queue with timing information
+        const chunk = {
+            data: audioData,
+            duration: audioData.length / (numChannels * sampleRate)
+        };
+        
+        this.audioQueue.push(chunk);
+        
+        // Start playing if not already
+        if (!this.isPlaying) {
+            this.processAudioQueue();
+        }
+    }
+    
+    processAudioQueue() {
+        if (this.audioQueue.length === 0) {
+            this.isPlaying = false;
+
+            if (this.turnOffMicTimeout) {
+                clearTimeout(this.turnOffMicTimeout);
+                this.turnOffMicTimeout = null;
+            }
+            
+            // Delay turning off the mic by 2 second and check if queue is still empty
+            this.turnOffMicTimeout = setTimeout(() => {
+                // Only turn off mic if the queue is still empty
+                if (this.audioQueue.length === 0)
+                    turnOffMic();
+            }, 2000);
+            
+            return;
+        }
+        
+        this.isPlaying = true;
+        
+        // Get current time and next play time
+        const currentTime = this.audioContextForBotOutput.currentTime;
+        this.nextPlayTime = Math.max(currentTime, this.nextPlayTime);
+        
+        // Get next chunk
+        const chunk = this.audioQueue.shift();
+        
+        // Create buffer for this chunk
+        const audioBuffer = this.audioContextForBotOutput.createBuffer(
+            this.numChannels,
+            chunk.data.length / this.numChannels,
+            this.sampleRate
+        );
+        
+        // Fill the buffer
+        if (this.numChannels === 1) {
+            const channelData = audioBuffer.getChannelData(0);
+            channelData.set(chunk.data);
+        } else {
+            for (let channel = 0; channel < this.numChannels; channel++) {
+                const channelData = audioBuffer.getChannelData(channel);
+                for (let i = 0; i < chunk.data.length / this.numChannels; i++) {
+                    channelData[i] = chunk.data[i * this.numChannels + channel];
+                }
+            }
+        }
+        
+        // Create source and schedule it
+        const source = this.audioContextForBotOutput.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(this.gainNode);
+        
+        // Schedule precisely
+        source.start(this.nextPlayTime);
+        this.nextPlayTime += chunk.duration;
+        
+        // Schedule the next chunk processing
+        const timeUntilNextProcess = (this.nextPlayTime - currentTime) * 1000 * 0.8;
+        setTimeout(() => this.processAudioQueue(), Math.max(0, timeUntilNextProcess));
+    }
 }
 
 const botOutputManager = new BotOutputManager();
@@ -2681,27 +2045,12 @@ navigator.mediaDevices.getUserMedia = function(constraints) {
         }
 
         // Audio sending not supported yet
-        /*
+        
         // If audio is requested, add our fake audio track
         if (constraints.audio) {  // Only create once
-            if (!audioContextForBotOutput) {
-                // Create AudioContext and nodes
-                audioContextForBotOutput = new AudioContext();
-                gainNode = audioContextForBotOutput.createGain();
-                destination = audioContextForBotOutput.createMediaStreamDestination();
-
-                // Set initial gain
-                gainNode.gain.value = 1.0;
-
-                // Connect gain node to both destinations
-                gainNode.connect(destination);
-                gainNode.connect(audioContextForBotOutput.destination);  // For local monitoring
-
-                botOutputAudioTrack = destination.stream.getAudioTracks()[0];
-            }
-            newStream.addTrack(botOutputAudioTrack);
-        }
-        */
+            botOutputManager.initializeBotOutputAudioTrack();
+            newStream.addTrack(botOutputManager.botOutputAudioTrack);
+        }  
 
         // Video sending not supported yet
         /*

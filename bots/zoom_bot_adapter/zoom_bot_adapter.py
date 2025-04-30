@@ -360,6 +360,10 @@ class ZoomBotAdapter(BotAdapter):
         self.audio_ctrl = self.meeting_service.GetMeetingAudioController()
         self.audio_ctrl_event = zoom.MeetingAudioCtrlEventCallbacks(onUserActiveAudioChangeCallback=self.on_user_active_audio_change_callback)
         self.audio_ctrl.SetEvent(self.audio_ctrl_event)
+        # Raw audio input got borked in the Zoom SDK after 6.3.5.
+        # This is work-around to get it to work again.
+        # See here for more details: https://devforum.zoom.us/t/cant-record-audio-with-linux-meetingsdk-after-6-3-5-6495-error-code-32/130689/5
+        self.audio_ctrl.JoinVoip()
 
         if self.use_raw_recording:
             self.recording_ctrl = self.meeting_service.GetMeetingRecordingController()
@@ -552,12 +556,11 @@ class ZoomBotAdapter(BotAdapter):
         param.meetingNumber = meeting_number
         param.userName = self.display_name
         param.psw = self.meeting_password if self.meeting_password is not None else ""
-        param.vanityID = ""
-        param.customer_key = ""
-        param.webinarToken = ""
-        param.onBehalfToken = ""
         param.isVideoOff = False
         param.isAudioOff = False
+        param.isAudioRawDataStereo = False
+        param.isMyVoiceInMix = False
+        param.eAudioRawdataSamplingRate = zoom.AudioRawdataSamplingRate.AudioRawdataSamplingRate_32K
 
         join_result = self.meeting_service.Join(join_param)
         logger.info(f"join_result = {join_result}")

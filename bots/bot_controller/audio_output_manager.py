@@ -13,6 +13,7 @@ class AudioOutputManager:
         self,
         currently_playing_audio_media_request_finished_callback,
         play_raw_audio_callback,
+        sleep_time_between_chunks_seconds,
     ):
         self.currently_playing_audio_media_request = None
         self.currently_playing_audio_media_request_started_at = None
@@ -22,6 +23,7 @@ class AudioOutputManager:
         self.currently_playing_audio_media_request_raw_audio_pcm_bytes = None
         self.audio_thread = None
         self.stop_audio_thread = False
+        self.sleep_time_between_chunks_seconds = sleep_time_between_chunks_seconds
 
     def _play_audio_chunks(self, audio_data, chunk_size):
         for i in range(0, len(audio_data), chunk_size):
@@ -29,7 +31,7 @@ class AudioOutputManager:
                 break
             chunk = audio_data[i : i + chunk_size]
             self.play_raw_audio_callback(bytes=chunk, sample_rate=self.SAMPLE_RATE)
-            time.sleep(0.9)  # the chunk size is a second's worth of audio so we'll sleep for almost that much
+            time.sleep(self.sleep_time_between_chunks_seconds)
 
     def _stop_audio_thread(self):
         """Stop the currently running audio thread if it exists."""

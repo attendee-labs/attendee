@@ -117,7 +117,7 @@ For more details, follow [this guide](https://developers.zoom.us/docs/meeting-sd
 
 ## Contribute 
 
-Attendee is open source. TThe best way to contribute is to open an issue or join the [Slack Community](https://join.slack.com/t/attendeecommu-rff8300/shared_invite/zt-2uhpam6p2-ZzLAoVrljbL2UEjqdSHrgQ) and let us know what you want to build.
+Attendee is open source. The best way to contribute is to open an issue or join the [Slack Community](https://join.slack.com/t/attendeecommu-rff8300/shared_invite/zt-2uhpam6p2-ZzLAoVrljbL2UEjqdSHrgQ) and let us know what you want to build.
 
 See CONTRIBUTING.md for detailed instructions on how to contribute to Attendee.
 

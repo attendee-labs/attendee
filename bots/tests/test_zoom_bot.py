@@ -41,6 +41,19 @@ from bots.utils import mp3_to_pcm, png_to_yuv420_frame, scale_i420
 from .mock_data import MockPCMAudioFrame, MockVideoFrame
 
 
+def mock_file_field_delete_sets_name_to_none(instance, save=True):
+    """
+    A side_effect function for mocking FieldFile.delete.
+    Sets the FieldFile's name to None and saves the parent model instance.
+    """
+    # 'instance' here is the FieldFile instance being deleted
+    instance.name = None
+    if save:
+        # instance.instance refers to the model instance (e.g., Recording)
+        # that owns this FieldFile.
+        instance.instance.save()
+
+
 def create_mock_file_uploader():
     mock_file_uploader = MagicMock(spec=FileUploader)
     mock_file_uploader.upload_file.return_value = None
@@ -706,8 +719,10 @@ class TestZoomBot(TransactionTestCase):
     @patch("bots.bot_controller.bot_controller.FileUploader")
     @patch("deepgram.DeepgramClient")
     @patch("google.cloud.texttospeech.TextToSpeechClient")
+    @patch("django.db.models.fields.files.FieldFile.delete", autospec=True)
     def test_bot_can_join_meeting_and_record_audio_and_video(
         self,
+        mock_delete_file_field,
         MockTextToSpeechClient,
         MockDeepgramClient,
         MockFileUploader,
@@ -715,6 +730,8 @@ class TestZoomBot(TransactionTestCase):
         mock_zoom_sdk_adapter,
         mock_zoom_sdk_video,
     ):
+        mock_delete_file_field.side_effect = mock_file_field_delete_sets_name_to_none
+
         self.bot.settings = {
             "recording_settings": {
                 "format": RecordingFormats.MP4,
@@ -1019,6 +1036,33 @@ class TestZoomBot(TransactionTestCase):
 
         # Close the database connection since we're in a thread
         connection.close()
+
+        # Verify that the bot has participants
+        self.assertEqual(self.bot.participants.count(), 1)
+
+        # Delete the bot data
+        self.bot.delete_data()
+
+        # Verify data was properly deleted
+        # Refresh bot from database to get latest state
+        self.bot.refresh_from_db()
+
+        # 1. Verify all participants were deleted
+        self.assertEqual(self.bot.participants.count(), 0, "Participants were not deleted")
+
+        # 2. Verify all utterances for all recordings were deleted
+        for recording in self.bot.recordings.all():
+            self.assertEqual(recording.utterances.count(), 0, f"Utterances for recording {recording.id} were not deleted")
+
+        # 3. Verify recording files were deleted (if they existed)
+        for recording in self.bot.recordings.all():
+            self.assertFalse(recording.file.name, f"Recording file for recording {recording.id} was not deleted")
+
+        # 4. Verify a DATA_DELETED event was created
+        self.assertTrue(self.bot.bot_events.filter(event_type=BotEventTypes.DATA_DELETED).exists(), "DATA_DELETED event was not created")
+
+        # 5. Verify that the bot is in the DATA_DELETED state
+        self.assertEqual(self.bot.state, BotStates.DATA_DELETED)
 
     @patch(
         "bots.zoom_bot_adapter.video_input_manager.zoom",
@@ -1752,6 +1796,10 @@ class TestZoomBot(TransactionTestCase):
             fatal_error_event.metadata,
             {"rtmp_destination_url": "rtmp://example.com/live/stream/1234"},
         )
+
+        # Verify that the bot did not incur charges
+        credit_transaction = CreditTransaction.objects.filter(bot=self.bot).first()
+        self.assertIsNone(credit_transaction, "A credit transaction was created for the bot")
 
     @patch(
         "bots.zoom_bot_adapter.video_input_manager.zoom",
