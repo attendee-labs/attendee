@@ -193,9 +193,9 @@ class RecordingCreateView(APIView):
             bot=bot,
             recording_type=RecordingTypes.AUDIO_AND_VIDEO,
             transcription_type=TranscriptionTypes.NON_REALTIME,
-            transcription_provider=TranscriptionProviders.DEEPGRAM,
+            transcription_provider=transcription_provider_from_meeting_url_and_transcription_settings(meeting_url,
+                                                                                                      transcription_settings),
             is_default_recording=True,
-            file_name=file_name
         )
 
         # Try to transition the state from READY to JOINING
