@@ -196,6 +196,7 @@ class RecordingCreateView(APIView):
             transcription_provider=transcription_provider_from_meeting_url_and_transcription_settings(meeting_url,
                                                                                                       transcription_settings),
             is_default_recording=True,
+            file_name=file_name
         )
 
         # Try to transition the state from READY to JOINING
