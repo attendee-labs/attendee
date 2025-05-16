@@ -270,6 +270,16 @@ class BotController:
         if self.get_recording_file_location():
             logger.info("Telling file uploader to upload recording file...")
             logger.info("file_name: %s", self.get_recording_filename())
+
+            # Get the transcript ID from the recording filename
+            transcript_id = self.get_recording_filename().split(".")[0]
+
+            # Check if the file exists and is not empty
+            if os.path.getsize(self.get_recording_file_location()) == 0:
+                logger.info("Recording file is empty, not uploading")
+                transcript_api_service.could_not_record(transcript_id)
+                return
+
             file_uploader = FileUploader(
                 os.environ.get("AWS_RECORDING_STORAGE_BUCKET_NAME"),
                 self.get_recording_filename(),
@@ -279,7 +289,6 @@ class BotController:
             logger.info("File uploader finished uploading file")
 
             # After successful upload, call the Transcript API to transcribe the file
-            transcript_id = self.get_recording_filename().split(".")[0]
             logger.info("Transcript ID: %s", transcript_id)
             try:
                 logger.info("Sending transcription request...")
