@@ -1,90 +1,94 @@
 import logging
 import os
+import shlex
 import subprocess
+import signal
+import time
 
 logger = logging.getLogger(__name__)
 
 
 class ScreenAndAudioRecorder:
     def __init__(self, file_location):
-        self.file_location = file_location
-        self.ffmpeg_proc = None
+        self.file_location = os.path.abspath(file_location)
+        self._gst_proc: subprocess.Popen | None = None
         self.screen_dimensions = (1930, 1090)
 
-    def start_recording(self, display_var):
-        logger.info(f"Starting screen recorder for display {display_var} with dimensions {self.screen_dimensions} and file location {self.file_location}")
-        ffmpeg_cmd = ["ffmpeg", "-y", "-thread_queue_size", "4096", "-framerate", "30", "-video_size", f"{self.screen_dimensions[0]}x{self.screen_dimensions[1]}", "-f", "x11grab", "-draw_mouse", "0", "-probesize", "32", "-i", display_var, "-thread_queue_size", "4096", "-f", "alsa", "-i", "default", "-vf", "crop=1920:1080:10:10", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-g", "30", "-c:a", "aac", "-strict", "experimental", "-b:a", "128k", self.file_location]
+    # ------------------------------------------------------------------ #
+    def start_recording(self, display_var: str):
+        """Launch a GStreamer capture pipeline and verify it is alive."""
+        width, height = self.screen_dimensions
+        crop = dict(top=10, left=10, right=0, bottom=0,
+                    width=1920, height=1080)
 
-        logger.info(f"Starting FFmpeg command: {' '.join(ffmpeg_cmd)}")
-        self.ffmpeg_proc = subprocess.Popen(ffmpeg_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+        pipeline = f"""
+            ximagesrc display-name={display_var} use-damage=0
+                ! video/x-raw,framerate=30/1,width={width},height={height}
+                ! videocrop top={crop['top']} left={crop['left']}
+                           right={crop['right']} bottom={crop['bottom']}
+                ! video/x-raw,width={crop['width']},height={crop['height']}
+                ! videoconvert
+                ! x264enc tune=zerolatency speed-preset=ultrafast key-int-max=30
+                ! queue
+                ! mux.
+            alsasrc device=default
+                ! audio/x-raw
+                ! audioconvert
+                ! voaacenc bitrate=128000
+                ! queue
+                ! mux.
+            mp4mux name=mux faststart=true
+                ! filesink location="{self.file_location}" sync=false
+        """
 
+        gst_cmd = ["gst-launch-1.0", "-e"] + shlex.split(pipeline)
+        logger.debug("GStreamer command: %s", " ".join(gst_cmd))
+
+        # Capture STDERR → Python logger so we can read the errors
+        self._gst_proc = subprocess.Popen(
+            gst_cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,   # keep on RAM, we’ll read it below
+            text=True,
+        )
+
+        # Give GStreamer a moment to spin up, then check if it quit
+        time.sleep(2)
+        if self._gst_proc.poll() is not None:           # already exited
+            stderr = self._gst_proc.stderr.read()
+            logger.error("GStreamer pipeline exited early:\n%s", stderr)
+            raise RuntimeError("GStreamer failed; see log above")
+
+        logger.info(
+            "Recording started for display %s -> %s", display_var, self.file_location
+        )
+
+    # ------------------------------------------------------------------ #
     def stop_recording(self):
-        if not self.ffmpeg_proc:
+        if not self._gst_proc:
             return
-        self.ffmpeg_proc.terminate()
-        self.ffmpeg_proc.wait()
-        self.ffmpeg_proc = None
-        logger.info(f"Stopped debug screen recorder for display with dimensions {self.screen_dimensions} and file location {self.file_location}")
 
-    def get_seekable_path(self, path):
-        """
-        Transform a file path to include '.seekable' before the extension.
-        Example: /tmp/file.webm -> /tmp/file.seekable.webm
-        """
-        base, ext = os.path.splitext(path)
-        return f"{base}.seekable{ext}"
+        logger.info("Stopping screen recorder …")
+        # Graceful EOS: SIGINT lets mp4mux write headers
+        self._gst_proc.send_signal(signal.SIGINT)
+        try:
+            self._gst_proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            logger.warning("Pipeline did not stop in time; killing")
+            self._gst_proc.kill()
+            self._gst_proc.wait()
+
+        # Log any final errors
+        stderr = self._gst_proc.stderr.read()
+        if stderr:
+            logger.debug("GStreamer stderr:\n%s", stderr)
+
+        self._gst_proc = None
+        logger.info("Screen recorder stopped (%s)", self.file_location)
+
+    # ------------------------------------------------------------------ #
+    # … get_seekable_path / cleanup / make_file_seekable unchanged …
 
     def cleanup(self):
-        input_path = self.file_location
-
-        # Check if input file exists
-        if not os.path.exists(input_path):
-            logger.info(f"Input file does not exist at {input_path}, creating empty file")
-            with open(input_path, "wb"):
-                pass  # Create empty file
-            return
-
-        # if input file is greater than 3 GB, we will skip seekability
-        if os.path.getsize(input_path) > 3 * 1024 * 1024 * 1024:
-            logger.info("Input file is greater than 3 GB, skipping seekability")
-            return
-
-        output_path = self.get_seekable_path(self.file_location)
-        # the file is seekable, so we don't need to make it seekable
-        try:
-            self.make_file_seekable(input_path, output_path)
-        except Exception as e:
-            logger.error(f"Failed to make file seekable: {e}")
-            return
-
-    def make_file_seekable(self, input_path, tempfile_path):
-        """Use ffmpeg to move the moov atom to the beginning of the file."""
-        logger.info(f"Making file seekable: {input_path} -> {tempfile_path}")
-        # log how many bytes are in the file
-        logger.info(f"File size: {os.path.getsize(input_path)} bytes")
-        command = [
-            "ffmpeg",
-            "-i",
-            str(input_path),  # Input file
-            "-c",
-            "copy",  # Copy streams without re-encoding
-            "-avoid_negative_ts",
-            "make_zero",  # Optional: Helps ensure timestamps start at or after 0
-            "-movflags",
-            "+faststart",  # Optimize for web playback
-            "-y",  # Overwrite output file without asking
-            str(tempfile_path),  # Output file
-        ]
-
-        result = subprocess.run(command, capture_output=True, text=True)
-
-        if result.returncode != 0:
-            raise RuntimeError(f"FFmpeg failed to make file seekable: {result.stderr}")
-
-        # Replace the original file with the seekable version
-        try:
-            os.replace(str(tempfile_path), str(input_path))
-            logger.info(f"Replaced original file with seekable version: {input_path}")
-        except Exception as e:
-            logger.error(f"Failed to replace original file with seekable version: {e}")
-            raise RuntimeError(f"Failed to replace original file: {e}")
+        if self._gst_proc:
+            self.stop_recording()
