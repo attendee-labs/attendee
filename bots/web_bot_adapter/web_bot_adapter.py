@@ -187,7 +187,7 @@ class WebBotAdapter(BotAdapter):
 
                 if message_type == 1:  # JSON
                     json_data = json.loads(message[4:].decode("utf-8"))
-                    logger.info("Received JSON message: %s", json_data)
+                    logger.debug("Received JSON message: %s", json_data)
 
                     # Handle audio format information
                     if isinstance(json_data, dict):
