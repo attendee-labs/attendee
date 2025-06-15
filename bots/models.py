@@ -98,6 +98,8 @@ class BotStates(models.IntegerChoices):
     WAITING_ROOM = 8, "Waiting Room"
     ENDED = 9, "Ended"
     DATA_DELETED = 10, "Data Deleted"
+    SCHEDULED = 11, "Scheduled"
+    STAGED = 12, "Staged"
 
     @classmethod
     def state_to_api_code(cls, value):
@@ -113,6 +115,8 @@ class BotStates(models.IntegerChoices):
             cls.WAITING_ROOM: "waiting_room",
             cls.ENDED: "ended",
             cls.DATA_DELETED: "data_deleted",
+            cls.SCHEDULED: "scheduled",
+            cls.STAGED: "staged",
         }
         return mapping.get(value)
 
@@ -150,6 +154,8 @@ class Bot(models.Model):
 
     first_heartbeat_timestamp = models.IntegerField(null=True, blank=True)
     last_heartbeat_timestamp = models.IntegerField(null=True, blank=True)
+
+    join_at = models.DateTimeField(null=True, blank=True, help_text="The time the bot should join the meeting")
 
     def delete_data(self):
         # Check if bot is in a state where the data deleted event can be created
@@ -381,6 +387,13 @@ class Bot(models.Model):
     def automatic_leave_settings(self):
         return self.settings.get("automatic_leave_settings", {})
 
+    class Meta:
+        # We'll have to do a periodic query to find bots that have a join_at that is within 5 minutes of now.
+        # The partial index will exclude bots without a join_at which should speed up the query and reduce the space used by the index.
+        indexes = [
+            models.Index(fields=["join_at"], name="bot_join_at_idx", condition=models.Q(join_at__isnull=False)),
+        ]
+
 
 class CreditTransaction(models.Model):
     organization = models.ForeignKey(Organization, on_delete=models.PROTECT, null=False, related_name="credit_transactions")
@@ -482,6 +495,7 @@ class BotEventTypes(models.IntegerChoices):
     COULD_NOT_JOIN = 9, "Bot could not join meeting"
     POST_PROCESSING_COMPLETED = 10, "Post Processing Completed"
     DATA_DELETED = 11, "Data Deleted"
+    STAGED = 12, "Bot staged"
 
     @classmethod
     def type_to_api_code(cls, value):
@@ -498,6 +512,7 @@ class BotEventTypes(models.IntegerChoices):
             cls.COULD_NOT_JOIN: "could_not_join_meeting",
             cls.POST_PROCESSING_COMPLETED: "post_processing_completed",
             cls.DATA_DELETED: "data_deleted",
+            cls.STAGED: "staged",
         }
         return mapping.get(value)
 
@@ -625,8 +640,12 @@ class BotEventManager:
     # Define valid state transitions for each event type
     VALID_TRANSITIONS = {
         BotEventTypes.JOIN_REQUESTED: {
-            "from": BotStates.READY,
+            "from": [BotStates.READY, BotStates.STAGED],
             "to": BotStates.JOINING,
+        },
+        BotEventTypes.STAGED: {
+            "from": BotStates.SCHEDULED,
+            "to": BotStates.STAGED,
         },
         BotEventTypes.COULD_NOT_JOIN: {
             "from": [BotStates.JOINING, BotStates.WAITING_ROOM],
@@ -640,6 +659,8 @@ class BotEventManager:
                 BotStates.WAITING_ROOM,
                 BotStates.LEAVING,
                 BotStates.POST_PROCESSING,
+                BotStates.STAGED,
+                BotStates.SCHEDULED,
             ],
             "to": BotStates.FATAL_ERROR,
         },
@@ -697,7 +718,7 @@ class BotEventManager:
         event_type = {
             BotStates.JOINING: BotEventTypes.JOIN_REQUESTED,
             BotStates.LEAVING: BotEventTypes.LEAVE_REQUESTED,
-        }[bot.state]
+        }.get(bot.state)
 
         if event_type is None:
             raise ValueError(f"Bot {bot.object_id} is in state {bot.state}. This is not a valid state to initiate a bot request.")
@@ -745,6 +766,13 @@ class BotEventManager:
             raise ValidationError(f"Expected exactly one pending recording for bot {bot.object_id} in state {BotStates.state_to_api_code(new_state)}, but found {pending_recordings.count()}")
         pending_recording = pending_recordings.first()
         RecordingManager.set_recording_in_progress(pending_recording)
+
+    @classmethod
+    def after_new_state_is_staged(cls, bot: Bot, new_state: BotStates, event_metadata: dict):
+        if "join_at" not in event_metadata:
+            raise ValidationError(f"join_at is required in event_metadata for bot {bot.object_id} for transition to state {BotStates.state_to_api_code(new_state)}")
+        if bot.join_at.isoformat() != event_metadata["join_at"]:
+            raise ValidationError(f"join_at in event_metadata for bot {bot.object_id} for transition to state {BotStates.state_to_api_code(new_state)} is different from the join_at in the database for bot {bot.object_id}")
 
     # This method handles sets the state for recordings and credits for when the bot transitions to a post meeting state
     # It returns a dictionary of additional event metadata that should be added to the event
@@ -840,7 +868,9 @@ class BotEventManager:
                     if bot.state != new_state:
                         raise ValidationError(f"Bot state was modified by another thread to be '{BotStates.state_to_api_code(bot.state)}' instead of '{BotStates.state_to_api_code(new_state)}'.")
 
-                    # These two blocks below are hooks for things that need to happen when the bot state changes
+                    # These three blocks below are hooks for things that need to happen when the bot state changes
+                    if new_state == BotStates.STAGED:
+                        cls.after_new_state_is_staged(bot=bot, new_state=new_state, event_metadata=event_metadata)
 
                     # If we moved to the recording state
                     if new_state == BotStates.JOINED_RECORDING:

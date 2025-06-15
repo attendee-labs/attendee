@@ -13,8 +13,8 @@ from pyvirtualdisplay import Display
 from selenium import webdriver
 from websockets.sync.server import serve
 
+from bots.automatic_leave_configuration import AutomaticLeaveConfiguration
 from bots.bot_adapter import BotAdapter
-from bots.bot_controller.automatic_leave_configuration import AutomaticLeaveConfiguration
 from bots.models import RecordingViews
 from bots.utils import half_ceil, scale_i420
 
@@ -652,3 +652,6 @@ class WebBotAdapter(BotAdapter):
 
     def send_chat_message(self, text):
         logger.info("send_chat_message not supported in web bots")
+
+    def get_staged_bot_join_delay_seconds(self):
+        return 30

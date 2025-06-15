@@ -10,7 +10,7 @@ from drf_spectacular.utils import (
 )
 from rest_framework import serializers
 
-from .bot_controller.automatic_leave_configuration import AutomaticLeaveConfiguration
+from .automatic_leave_configuration import AutomaticLeaveConfiguration
 from .models import (
     Bot,
     BotChatMessageToOptions,
@@ -357,6 +357,7 @@ class CreateBotSerializer(serializers.Serializer):
     bot_image = BotImageSerializer(help_text="The image for the bot", required=False, default=None)
     metadata = MetadataJSONField(help_text="JSON object containing metadata to associate with the bot", required=False, default=None)
     bot_chat_message = BotChatMessageRequestSerializer(help_text="The chat message the bot sends after it joins the meeting", required=False, default=None)
+    join_at = serializers.DateTimeField(help_text="The time the bot should join the meeting. ISO 8601 format, e.g. 2025-06-13T12:00:00Z", required=False, default=None)
 
     transcription_settings = TranscriptionSettingsJSONField(
         help_text="The transcription settings for the bot, e.g. {'deepgram': {'language': 'en'}}",
@@ -653,6 +654,7 @@ class BotSerializer(serializers.ModelSerializer):
     events = serializers.SerializerMethodField()
     transcription_state = serializers.SerializerMethodField()
     recording_state = serializers.SerializerMethodField()
+    join_at = serializers.DateTimeField()
 
     @extend_schema_field(
         {
@@ -728,6 +730,7 @@ class BotSerializer(serializers.ModelSerializer):
             "events",
             "transcription_state",
             "recording_state",
+            "join_at",
         ]
         read_only_fields = fields
 

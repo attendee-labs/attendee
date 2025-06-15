@@ -12,7 +12,9 @@ import redis
 from django.core.files.base import ContentFile
 from django.utils import timezone
 
+from bots.automatic_leave_configuration import AutomaticLeaveConfiguration
 from bots.bot_adapter import BotAdapter
+from bots.bots_api_utils import BotCreationSource
 from bots.models import (
     Bot,
     BotChatMessageRequestManager,
@@ -43,7 +45,6 @@ from bots.utils import meeting_type_from_url
 from bots.webhook_utils import trigger_webhook
 
 from .audio_output_manager import AudioOutputManager
-from .automatic_leave_configuration import AutomaticLeaveConfiguration
 from .closed_caption_manager import ClosedCaptionManager
 from .file_uploader import FileUploader
 from .gstreamer_pipeline import GstreamerPipeline
@@ -520,6 +521,22 @@ class BotController:
             logger.info("take_action_based_on_bot_in_db - LEAVING")
             BotEventManager.set_requested_bot_action_taken_at(self.bot_in_db)
             self.adapter.leave()
+        if self.bot_in_db.state == BotStates.STAGED:
+            logger.info("take_action_based_on_bot_in_db - STAGED. For now, this is a no-op.")
+
+    def join_if_staged_and_time_to_join(self):
+        if self.bot_in_db.state != BotStates.STAGED:
+            return
+        if self.bot_in_db.join_at > timezone.now() + timedelta(seconds=self.adapter.get_staged_bot_join_delay_seconds()):
+            return
+
+        # Transition to JOINING
+        BotEventManager.create_event(
+            bot=self.bot_in_db,
+            event_type=BotEventTypes.JOIN_REQUESTED,
+            event_metadata={"source": BotCreationSource.SCHEDULER},
+        )
+        self.take_action_based_on_bot_in_db()
 
     def get_participant(self, participant_id):
         return self.adapter.get_participant(participant_id)
@@ -671,6 +688,9 @@ class BotController:
 
             # Process video output
             self.video_output_manager.monitor_currently_playing_video_media_request()
+
+            # For staged bots, check if its time to join
+            self.join_if_staged_and_time_to_join()
             return True
 
         except Exception as e:

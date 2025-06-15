@@ -19,7 +19,7 @@ import logging
 
 from gi.repository import GLib
 
-from bots.bot_controller.automatic_leave_configuration import AutomaticLeaveConfiguration
+from bots.automatic_leave_configuration import AutomaticLeaveConfiguration
 
 logger = logging.getLogger(__name__)
 
@@ -757,3 +757,6 @@ class ZoomBotAdapter(BotAdapter):
     def send_video(self, video_url):
         logger.info(f"send_video called with video_url = {video_url}. This is not supported for zoom")
         return
+
+    def get_staged_bot_join_delay_seconds(self):
+        return 0
