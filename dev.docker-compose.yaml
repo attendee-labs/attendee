@@ -10,6 +10,8 @@ services:
       - REDIS_URL=redis://redis:6379/5
       - DJANGO_SETTINGS_MODULE=attendee.settings.development
     command: ["/bin/bash", "-c", "/opt/bin/entrypoint.sh && celery -A attendee worker -l INFO"]
+    mem_limit: 14g
+    memswap_limit: 14g
 
   attendee-scheduler-local:
     build: ./

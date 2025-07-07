@@ -2,8 +2,9 @@ import os
 
 from .base import *
 
-DEBUG = True
-ALLOWED_HOSTS = ["tendee-stripe-hooks.ngrok.io", "localhost"]
+DEBUG = False
+ALLOWED_HOSTS = ["*"]
+CSRF_TRUSTED_ORIGINS = ["https://attendee.teamcubation.com"]
 
 DATABASES = {
     "default": {
