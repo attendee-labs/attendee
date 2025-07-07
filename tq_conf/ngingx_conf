@@ -1,0 +1,45 @@
+# this file should go into /etc/nginx/sites-available/default
+# certbot certificate should be setup for https
+
+server {
+	listen 80 default_server;
+	listen [::]:80 default_server;
+
+	root /var/www/html;
+
+	server_name _;
+
+	location / {
+		try_files $uri $uri/ =404;
+	}
+}
+
+server {
+	root /var/www/html;
+
+	index index.html index.htm index.nginx-debian.html;
+    server_name attendee.teamcubation.com; # managed by Certbot
+
+	location / {
+		proxy_pass  http://127.0.0.1:8000;
+	}
+
+    listen 443 ssl; # managed by Certbot
+    listen [::]:443 ssl ipv6only=on; # managed by Certbot
+    ssl_certificate /etc/letsencrypt/live/attendee.teamcubation.com/fullchain.pem; # managed by Certbot
+    ssl_certificate_key /etc/letsencrypt/live/attendee.teamcubation.com/privkey.pem; # managed by Certbot
+    include /etc/letsencrypt/options-ssl-nginx.conf; # managed by Certbot
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem; # managed by Certbot
+
+}
+server {
+    if ($host = attendee.teamcubation.com) {
+        return 301 https://$host$request_uri;
+    } # managed by Certbot
+
+
+	listen 80 ;
+	listen [::]:80 ;
+    server_name attendee.teamcubation.com;
+    return 404; # managed by Certbot
+}
