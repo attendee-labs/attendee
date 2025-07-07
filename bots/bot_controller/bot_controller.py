@@ -281,7 +281,7 @@ class BotController:
                 return
 
             file_uploader = FileUploader(
-                os.environ.get("AWS_RECORDING_STORAGE_BUCKET_NAME"),
+                os.environ.get("INFOMANIAK_RECORDING_BUCKET_NAME"),
                 self.get_recording_filename(),
             )
             file_uploader.upload_file(self.get_recording_file_location())

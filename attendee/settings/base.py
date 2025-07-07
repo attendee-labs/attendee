@@ -198,17 +198,13 @@ SPECTACULAR_SETTINGS = {
 
 STORAGES = {
     "default": {
-        "BACKEND": "storages.backends.s3.S3Storage",
-        "OPTIONS": {
-            "endpoint_url": os.getenv("AWS_ENDPOINT_URL"),
-            "access_key": os.getenv("AWS_ACCESS_KEY_ID"),
-            "secret_key": os.getenv("AWS_SECRET_ACCESS_KEY"),
-        },
+        "BACKEND": "bots.storage.InfomaniakSwiftStorage",
+        "OPTIONS": {},
     },
     "staticfiles": {
         "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
     },
 }
-AWS_S3_SIGNATURE_VERSION = "s3v4"
-AWS_RECORDING_STORAGE_BUCKET_NAME = os.getenv("AWS_RECORDING_STORAGE_BUCKET_NAME")
+# Keep signature version setting for compatibility
+INFOMANIAK_RECORDING_BUCKET_NAME = os.getenv("INFOMANIAK_RECORDING_BUCKET_NAME")
 CHARGE_CREDITS_FOR_BOTS = os.getenv("CHARGE_CREDITS_FOR_BOTS", "false") == "true"

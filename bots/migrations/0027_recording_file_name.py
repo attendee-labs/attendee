@@ -6,7 +6,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('bots', '0019_remove_botevent_valid_event_type_event_sub_type_combinations_and_more'),
+        ('bots', '0026_alter_bot_state_alter_botevent_event_type_and_more'),
     ]
 
     operations = [

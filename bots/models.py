@@ -2,6 +2,7 @@ import hashlib
 import logging
 import json
 import math
+import os
 import random
 import secrets
 import string
@@ -25,6 +26,9 @@ from bots.webhook_utils import trigger_webhook
 logging.basicConfig(format="%(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+
+from bots.storage import InfomaniakSwiftStorage, delete_file_from_swift, generate_presigned_url
+
 
 class Project(models.Model):
     name = models.CharField(max_length=255)
@@ -832,11 +836,11 @@ class TranscriptionProviders(models.IntegerChoices):
     OPENAI = 4, "OpenAI"
 
 
-from storages.backends.s3boto3 import S3Boto3Storage
+from bots.storage import InfomaniakSwiftStorage
 
 
-class RecordingStorage(S3Boto3Storage):
-    bucket_name = settings.AWS_RECORDING_STORAGE_BUCKET_NAME
+class RecordingStorage(InfomaniakSwiftStorage):
+    pass
 
 
 class Recording(models.Model):
@@ -849,7 +853,7 @@ class Recording(models.Model):
 
     is_default_recording = models.BooleanField(default=False)
 
-    # This is the name of the file that will be uploaded to AWS S3
+    # This is the name of the file that will be uploaded to Infomaniak Swift
     file_name = models.CharField(max_length=255, null=False, blank=False)
 
     state = models.IntegerField(choices=RecordingStates.choices, default=RecordingStates.NOT_STARTED, null=False)
@@ -879,11 +883,8 @@ class Recording(models.Model):
         if not self.file.name:
             return None
         # Generate a temporary signed URL that expires in 30 minutes (1800 seconds)
-        return self.file.storage.bucket.meta.client.generate_presigned_url(
-            "get_object",
-            Params={"Bucket": self.file.storage.bucket_name, "Key": self.file.name},
-            ExpiresIn=1800,
-        )
+        # Use Infomaniak Swift
+        return generate_presigned_url(self.file.name, expiry_seconds=1800)
 
     OBJECT_ID_PREFIX = "rec_"
     object_id = models.CharField(max_length=32, unique=True, editable=False)
@@ -1239,8 +1240,8 @@ class BotMediaRequestManager:
         media_request.save()
 
 
-class BotDebugScreenshotStorage(S3Boto3Storage):
-    bucket_name = settings.AWS_RECORDING_STORAGE_BUCKET_NAME
+class BotDebugScreenshotStorage(InfomaniakSwiftStorage):
+    pass
 
 
 class BotDebugScreenshot(models.Model):
@@ -1266,11 +1267,8 @@ class BotDebugScreenshot(models.Model):
         if not self.file.name:
             return None
         # Generate a temporary signed URL that expires in 30 minutes (1800 seconds)
-        return self.file.storage.bucket.meta.client.generate_presigned_url(
-            "get_object",
-            Params={"Bucket": self.file.storage.bucket_name, "Key": self.file.name},
-            ExpiresIn=1800,
-        )
+        # Use Infomaniak Swift
+        return generate_presigned_url(self.file.name, expiry_seconds=1800)
 
     def __str__(self):
         return f"Debug Screenshot {self.object_id} for event {self.bot_event}"
