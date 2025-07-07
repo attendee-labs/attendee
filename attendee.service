@@ -1,0 +1,31 @@
+[Unit]
+Description=Attendee
+Requires=snap.docker.dockerd.service
+After=snap.docker.dockerd.service
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/home/ubuntu/attendee
+ExecStart=/usr/local/bin/start-attendee.sh
+ExecStop=/snap/bin/docker compose -f dev.docker-compose.yaml down
+TimeoutStartSec=60
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+
+# this file should go into /etc/systemd/system/attendee.service (for Ubuntu)
+# commands:
+# install:
+#      sudo systemctl enable attendee.service
+#      sudo systemctl daemon-reload
+# start:
+#      sudo systemctl start attendee.service
+# stop:
+#      sudo systemctl stop attendee.service
+# status:
+#      sudo systemctl status attendee.service
