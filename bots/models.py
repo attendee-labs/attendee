@@ -265,13 +265,12 @@ class Bot(models.Model):
         from bots.utils import meeting_type_from_url
 
         # Temporarily enabling this for all google meet meetings
-        # if meeting_type_from_url(self.meeting_url) == MeetingTypes.GOOGLE_MEET:
-        #    return True
-
+        if meeting_type_from_url(self.meeting_url) == MeetingTypes.GOOGLE_MEET:
+           return True
 
         # Temporarily enabling this for all Teams meetings
-        if meeting_type_from_url(self.meeting_url) == MeetingTypes.TEAMS:
-            return True
+        # if meeting_type_from_url(self.meeting_url) == MeetingTypes.TEAMS:
+        #     return True
 
         debug_settings = self.settings.get("debug_settings", {})
         if debug_settings is None:

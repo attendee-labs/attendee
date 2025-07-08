@@ -55,7 +55,6 @@ class BotController:
     def get_google_meet_bot_adapter(self):
         from bots.google_meet_bot_adapter import GoogleMeetBotAdapter
 
-        logger.info("Create debug recording set to %s", self.bot_in_db.create_debug_recording())
 
         if self.get_recording_transcription_provider() == TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM:
             add_audio_chunk_callback = None
@@ -83,7 +82,6 @@ class BotController:
     def get_teams_bot_adapter(self):
         from bots.teams_bot_adapter import TeamsBotAdapter
 
-        logger.info("Create debug recording set to %s", self.bot_in_db.create_debug_recording())
 
         return TeamsBotAdapter(
             display_name=self.bot_in_db.name,
