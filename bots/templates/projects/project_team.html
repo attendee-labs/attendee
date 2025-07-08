@@ -1,0 +1,213 @@
+{% extends 'projects/sidebar.html' %} {% load bot_filters %} {% block content %}
+
+<div class="container mt-4">
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <h2>Team</h2>
+    <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#inviteUserModal">
+      <i class="fas fa-plus me-2"></i>Invite User
+    </button>
+  </div>
+
+  <!-- Success Alert -->
+  <div id="successAlert" class="alert alert-success alert-dismissible fade show d-none" role="alert">
+    <i class="fas fa-check-circle me-2"></i>
+    <span id="successMessage"></span>
+    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+  </div>
+
+  <!-- Error Alert -->
+  <div id="errorAlert" class="alert alert-danger alert-dismissible fade show d-none" role="alert">
+    <i class="fas fa-exclamation-circle me-2"></i>
+    <span id="errorMessage"></span>
+    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <h5 class="card-title mb-0">Members</h5>
+    </div>
+    <div class="card-body">
+      {% if users %}
+        <div class="table-responsive">
+          <table class="table table-hover">
+            <thead>
+              <tr>
+                <th>Email</th>
+                <th>Date Joined</th>
+                <th>Status</th>
+                <th>Invited By</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for user in users %}
+                <tr>
+                  <td>{{ user.email }}</td>
+                  <td>{{ user.date_joined|date:"M d, Y" }}</td>
+                  <td>
+                    {% if not user.is_active %}
+                      <span class="badge bg-danger">Disabled</span>
+                    {% elif user.last_login %}
+                      <span class="badge bg-success">Active</span>
+                    {% else %}
+                      <span class="badge bg-warning">Pending</span>
+                    {% endif %}
+                  </td>
+                  <td>
+                    {% if user.invited_by %}
+                      {{ user.invited_by.email }}
+                    {% else %}
+                      -
+                    {% endif %}
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="text-center py-4">
+          <i class="fas fa-users fa-3x text-muted mb-3"></i>
+          <p class="text-muted">No team members found.</p>
+        </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<!-- Invite User Modal -->
+<div class="modal fade" id="inviteUserModal" tabindex="-1" aria-labelledby="inviteUserModalLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="inviteUserModalLabel">Invite User</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <form id="inviteUserForm" action="{% url 'projects:invite-user' project.object_id %}" method="post">
+        {% csrf_token %}
+        <div class="modal-body">
+          <div class="mb-3">
+            <label for="inviteEmail" class="form-label">Email Address</label>
+            <input type="email" class="form-control" id="inviteEmail" name="email" required placeholder="Enter email address">
+            <div class="form-text">This user will have access to all the projects in your account.</div>
+          </div>
+          <div id="inviteError" class="alert alert-danger d-none" role="alert"></div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="inviteSubmitBtn">
+            <span class="spinner-border spinner-border-sm d-none" role="status" aria-hidden="true"></span>
+            Send Invitation
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<script>
+    function initializeInviteForm() {
+    const inviteForm = document.getElementById('inviteUserForm');
+    const submitBtn = document.getElementById('inviteSubmitBtn');
+    const spinner = submitBtn.querySelector('.spinner-border');
+    const inviteError = document.getElementById('inviteError');
+    const successAlert = document.getElementById('successAlert');
+    const errorAlert = document.getElementById('errorAlert');
+    
+    function showAlert(type, message) {
+        const alert = type === 'success' ? successAlert : errorAlert;
+        const messageElement = type === 'success' ? 
+        document.getElementById('successMessage') : 
+        document.getElementById('errorMessage');
+        
+        messageElement.textContent = message;
+        alert.classList.remove('d-none');
+        
+        // Scroll to top to show alert
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+    
+    function hideInlineError() {
+        inviteError.classList.add('d-none');
+    }
+    
+    function showInlineError(message) {
+        inviteError.textContent = message;
+        inviteError.classList.remove('d-none');
+    }
+    
+    function setLoading(loading) {
+        if (loading) {
+        submitBtn.disabled = true;
+        spinner.classList.remove('d-none');
+        } else {
+        submitBtn.disabled = false;
+        spinner.classList.add('d-none');
+        }
+    }
+    
+    inviteForm.addEventListener('submit', function(e) {
+        e.preventDefault();
+        
+        hideInlineError();
+        setLoading(true);
+        
+        const formData = new FormData(inviteForm);
+        
+        fetch(inviteForm.action, {
+        method: 'POST',
+        body: formData,
+        headers: {
+            'X-CSRFToken': formData.get('csrfmiddlewaretoken'),
+        }
+        })
+        .then(response => {
+        if (response.ok) {
+            return response.text().then(text => ({ success: true, message: text }));
+        } else {
+            return response.text().then(text => ({ success: false, message: text }));
+        }
+        })
+        .then(result => {
+        setLoading(false);
+        
+        if (result.success) {
+            // Close modal
+            const modal = bootstrap.Modal.getInstance(document.getElementById('inviteUserModal'));
+            modal.hide();
+            
+            // Reset form
+            inviteForm.reset();
+            
+            // Show success alert
+            showAlert('success', result.message);
+            
+            // Refresh page after short delay to show updated team list
+            setTimeout(() => {
+            window.location.reload();
+            }, 2000);
+        } else {
+            // Show error in modal
+            showInlineError(result.message);
+        }
+        })
+        .catch(error => {
+        setLoading(false);
+        console.error('Error:', error);
+        showInlineError('An unexpected error occurred. Please try again.');
+        });
+    });
+    
+    // Hide alerts when modal is opened
+    document.getElementById('inviteUserModal').addEventListener('show.bs.modal', function() {
+        successAlert.classList.add('d-none');
+        errorAlert.classList.add('d-none');
+        hideInlineError();
+    });
+    };
+
+    // Call when HTMX content is loaded
+    document.addEventListener('htmx:afterSwap', initializeInviteForm);
+    document.addEventListener('DOMContentLoaded', initializeInviteForm);
+</script>
+
+{% endblock %}

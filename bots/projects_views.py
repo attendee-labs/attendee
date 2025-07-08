@@ -3,17 +3,21 @@ import json
 import logging
 import math
 import os
+import uuid
 
 import stripe
+from allauth.account.utils import send_email_confirmation
 from django.conf import settings
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.exceptions import ValidationError
-from django.db import models
+from django.db import models, transaction
 from django.http import HttpResponse, QueryDict
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.views import View
 from django.views.generic import ListView
+
+from accounts.models import User
 
 from .bots_api_utils import BotCreationSource, create_bot, create_webhook_subscription
 from .launch_bot_utils import launch_bot
@@ -404,11 +408,56 @@ class ProjectWebhooksView(LoginRequiredMixin, ProjectUrlContextMixin, View):
         return render(request, "projects/project_webhooks.html", context)
 
 
-class ProjectProjectAndTeamView(LoginRequiredMixin, ProjectUrlContextMixin, View):
+class ProjectProjectView(LoginRequiredMixin, ProjectUrlContextMixin, View):
     def get(self, request, object_id):
         project = get_object_or_404(Project, object_id=object_id, organization=request.user.organization)
         context = self.get_project_context(object_id, project)
-        return render(request, "projects/project_project_and_team.html", context)
+        return render(request, "projects/project_project.html", context)
+
+
+class ProjectTeamView(LoginRequiredMixin, ProjectUrlContextMixin, View):
+    def get(self, request, object_id):
+        project = get_object_or_404(Project, object_id=object_id, organization=request.user.organization)
+
+        # Get all users in the organization with invited_by data
+        users = request.user.organization.users.select_related("invited_by").all()
+
+        context = self.get_project_context(object_id, project)
+        context["users"] = users
+        return render(request, "projects/project_team.html", context)
+
+
+class InviteUserView(LoginRequiredMixin, ProjectUrlContextMixin, View):
+    def get(self, request, object_id):
+        project = get_object_or_404(Project, object_id=object_id, organization=request.user.organization)
+        context = self.get_project_context(object_id, project)
+        return render(request, "projects/project_team.html", context)
+
+    def post(self, request, object_id):
+        get_object_or_404(Project, object_id=object_id, organization=request.user.organization)
+        email = request.POST.get("email")
+
+        if not email:
+            return HttpResponse("Email is required", status=400)
+
+        # Check if user already exists
+        if User.objects.filter(email=email).exists():
+            return HttpResponse("A user with this email already exists", status=400)
+
+        try:
+            with transaction.atomic():
+                # Create the user
+                user = User.objects.create_user(email=email, username=str(uuid.uuid4()), organization=request.user.organization, invited_by=request.user, is_active=True)
+
+                # Send verification email
+                send_email_confirmation(request, user, email=email)
+
+                # Return success response
+                return HttpResponse("Invitation sent successfully", status=200)
+
+        except Exception as e:
+            logger.error(f"Error creating invited user: {str(e)}")
+            return HttpResponse("An error occurred while sending the invitation", status=500)
 
 
 class CreateWebhookView(LoginRequiredMixin, ProjectUrlContextMixin, View):

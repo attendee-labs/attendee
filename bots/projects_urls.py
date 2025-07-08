@@ -36,9 +36,9 @@ urlpatterns = [
         name="project-credentials",
     ),
     path(
-        "<str:object_id>/project-and-team",
-        projects_views.ProjectProjectAndTeamView.as_view(),
-        name="project-project-and-team",
+        "<str:object_id>/project",
+        projects_views.ProjectProjectView.as_view(),
+        name="project-project",
     ),
     path(
         "<str:object_id>/edit",
@@ -94,6 +94,16 @@ urlpatterns = [
         "<str:object_id>/billing/checkout/success/",
         projects_views.CheckoutSuccessView.as_view(),
         name="checkout-success",
+    ),
+    path(
+        "<str:object_id>/team/",
+        projects_views.ProjectTeamView.as_view(),
+        name="project-team",
+    ),
+    path(
+        "<str:object_id>/team/invite/",
+        projects_views.InviteUserView.as_view(),
+        name="invite-user",
     ),
     # Don't put anything after this, it will redirect to the dashboard
     path(

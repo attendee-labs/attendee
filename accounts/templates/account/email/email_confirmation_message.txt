@@ -1,0 +1,9 @@
+{% extends "account/email/base_message.txt" %}
+{% load account %}
+{% load i18n %}
+
+{% block content %}{% autoescape off %}{% user_display user as user_display %}{% if user.invited_by %}{% blocktranslate with inviter_identifier=user.invited_by.identifier site_domain=current_site.domain %}You're receiving this email because {{ inviter_identifier }} has invited you to join them on Attendee.{% endblocktranslate %}{% else %}{% blocktranslate with site_name=current_site.name site_domain=current_site.domain %}You're receiving this email because user {{ user_display }} has given your email address to register an account on {{ site_domain }}.{% endblocktranslate %}{% endif %}
+
+{% if code %}{% blocktranslate %}Your email verification code is listed below. Please enter it in your open browser window.{% endblocktranslate %}
+
+{{ code }}{% else %}{% if user.invited_by %}{% blocktranslate %}To accept your invitation, go to {{ activate_url }}{% endblocktranslate %}{% else %}{% blocktranslate %}To confirm this is correct, go to {{ activate_url }}{% endblocktranslate %}{% endif %}{% endif %}{% endautoescape %}{% endblock content %}

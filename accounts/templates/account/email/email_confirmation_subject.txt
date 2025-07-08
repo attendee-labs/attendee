@@ -1,0 +1,8 @@
+{% load i18n %}
+{% autoescape off %}
+{% if user.invited_by %}
+{% blocktrans with inviter_identifier=user.invited_by.identifier %}Join {{ inviter_identifier }} on Attendee{% endblocktrans %}
+{% else %}
+{% blocktrans %}Please Confirm Your Email Address{% endblocktrans %}
+{% endif %}
+{% endautoescape %}

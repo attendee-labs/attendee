@@ -100,25 +100,14 @@
                             </a>
                             {% endif %}
                             <a class="nav-link ps-4" 
-                               hx-get="{% url 'projects:project-project-and-team' project.object_id %}" 
+                               hx-get="{% url 'projects:project-project' project.object_id %}" 
                                hx-select="#content"
                                hx-target="#content"
                                hx-swap="outerHTML"
                                hx-push-url="true"
                                onclick="setActiveLink(this)">
-                                <i class="bi bi-people"></i> Project & Team
+                                <i class="bi bi-card-text"></i> Project
                             </a>
-                            {% if charge_credits_for_bots_setting %}
-                            <a class="nav-link ps-4"
-                               hx-get="{% url 'projects:project-billing' project.object_id %}"
-                               hx-select="#content"
-                               hx-target="#content"
-                               hx-swap="outerHTML"
-                               hx-push-url="true"
-                               onclick="setActiveLink(this)">
-                                <i class="bi bi-credit-card"></i> Billing
-                            </a>
-                            {% endif %}
                         </div>
                     </div>
 
@@ -135,7 +124,45 @@
                 
                 <!-- Added logout link at bottom -->
                 <div class="mt-auto">
+
                     <hr>
+
+                    <!-- Account dropdown menu -->
+                    <div class="account-dropdown">
+                        <a class="nav-link" href="#" 
+                           onclick="toggleAccountMenu(event)">
+                            <i class="bi bi-x-diamond-fill"></i> Account <span style="margin-left: 1px;" class="account-caret-container">
+                              <svg width="21" height="21" viewBox="0 0 14 14" fill="none" class="account-caret">
+                                <path d="M4.3225 5.0108L7 7.68247L9.6775 5.0108L10.5 5.8333L7 9.3333L3.5 5.8333L4.3225 5.0108Z" fill="currentcolor"></path>
+                              </svg>
+                            </span>
+                        </a>
+                        <div class="account-submenu" style="display: none;">
+                            <a class="nav-link ps-4" 
+                               hx-get="{% url 'projects:project-team' project.object_id %}" 
+                               hx-select="#content"
+                               hx-target="#content"
+                               hx-swap="outerHTML"
+                               hx-push-url="true"
+                               onclick="setActiveLink(this)">
+                                <i class="bi bi-people"></i> Team
+                            </a>
+                            {% if charge_credits_for_bots_setting %}
+                            <a class="nav-link ps-4"
+                               hx-get="{% url 'projects:project-billing' project.object_id %}"
+                               hx-select="#content"
+                               hx-target="#content"
+                               hx-swap="outerHTML"
+                               hx-push-url="true"
+                               onclick="setActiveLink(this)">
+                                <i class="bi bi-credit-card"></i> Billing
+                            </a>
+                            {% endif %}
+                        </div>
+                    </div>
+
+                    <hr>
+
                     <form method="post" action="{% url 'account_logout' %}" class="m-0">
                         {% csrf_token %}
                         <button type="submit" class="nav-link border-0 bg-transparent w-100 text-start">
@@ -186,6 +213,11 @@
                 if (link.closest('.settings-submenu')) {
                     toggleSettingsMenu();
                 }
+                
+                // Check if this is an account submenu item
+                if (link.closest('.account-submenu')) {
+                    toggleAccountMenu();
+                }
             }
         });
     });
@@ -195,6 +227,21 @@
         event?.preventDefault();
         const submenu = document.querySelector('.settings-submenu');
         const caret = document.querySelector('.settings-caret');
+        
+        if (submenu.style.display === 'none') {
+            submenu.style.display = 'block';
+            caret.style.transform = 'rotate(180deg)';
+        } else {
+            submenu.style.display = 'none';
+            caret.style.transform = 'rotate(0deg)';
+        }
+    }
+    
+    // Toggle account dropdown menu
+    function toggleAccountMenu(event) {
+        event?.preventDefault();
+        const submenu = document.querySelector('.account-submenu');
+        const caret = document.querySelector('.account-caret');
         
         if (submenu.style.display === 'none') {
             submenu.style.display = 'block';
@@ -263,6 +310,28 @@
     }
     
     .settings-caret-container {
+        display: inline-flex;
+        align-items: center;
+        transform: translateY(5px);
+    }
+    
+    .account-dropdown {
+        position: relative;
+    }
+    
+    .account-submenu {
+        transition: all 0.3s ease;
+    }
+    
+    .account-submenu .nav-link {
+        font-size: 0.95em;
+    }
+    
+    .account-caret {
+        transform: rotate(0deg);
+    }
+    
+    .account-caret-container {
         display: inline-flex;
         align-items: center;
         transform: translateY(5px);

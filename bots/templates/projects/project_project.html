@@ -1,0 +1,43 @@
+{% extends 'projects/sidebar.html' %} {% load bot_filters %} {% block content %}
+
+<div class="container mt-4">
+  <h2>Project</h2>
+  
+  <div class="mt-4 card-body">
+    <form id="edit-project-form" 
+          hx-put="{% url 'projects:project-edit' project.object_id %}"
+          hx-trigger="submit"
+          hx-swap="none"
+          hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+          hx-indicator="#form-indicator"
+          hx-disabled-elt="#submitButton"
+          hx-on::after-request="window.location.reload()">
+      {% csrf_token %}
+      <div class="mb-3">
+        <label for="projectName" class="form-label">Name</label>
+        <input
+          type="text"
+          class="form-control"
+          id="projectName"
+          name="name"
+          value="{{ project.name }}"
+          maxlength="100"
+          required
+        />
+      </div>
+      <button type="submit" id="submitButton" class="btn btn-primary">
+        Save
+      </button>
+    </form>
+  </div>
+  
+  <!-- New info panel for team members -->
+  <div class="card mt-4 bg-info-subtle text-dark">
+    <div class="card-body">
+      <h5 class="card-title">Need to add team members? 👥</h5>
+      <p class="card-text">Go to the <a href="{% url 'projects:project-team' project.object_id %}">Team</a> page to add team members. They will have access to all the projects in your account.</p>
+    </div>
+  </div>
+</div>
+
+{% endblock %}

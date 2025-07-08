@@ -26,9 +26,25 @@ class Organization(models.Model):
 
 class User(AbstractUser):
     organization = models.ForeignKey(Organization, on_delete=models.PROTECT, null=False, related_name="users")
+    invited_by = models.ForeignKey("self", on_delete=models.PROTECT, null=True, blank=True, related_name="invited_users")
 
     def __str__(self):
         return self.email
+
+    def identifier(self):
+        # If they have a name, use that
+        if self.first_name and self.last_name:
+            return f"{self.first_name} {self.last_name}"
+        if self.first_name:
+            return self.first_name
+        if self.last_name:
+            return self.last_name
+        # If they have an email, use that
+        elif self.email:
+            return self.email
+        # Otherwise, use their username
+        else:
+            return self.username
 
 
 # Only added this to create an org for the admin user
