@@ -18,7 +18,7 @@ def get_swift_client():
 
 
 def get_container_name():
-    return os.getenv('INFOMANIAK_RECORDING_BUCKET_NAME', 'audios')
+    return os.getenv('INFOMANIAK_CONTAINER_NAME', 'audios')
 
 
 def upload_file_to_swift(file_content_or_path, object_name):

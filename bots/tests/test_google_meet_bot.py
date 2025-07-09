@@ -68,7 +68,7 @@ class TestGoogleMeetBot(TransactionTestCase):
         super().setUpClass()
 
         # Set required environment variables
-        os.environ["INFOMANIAK_RECORDING_BUCKET_NAME"] = "test-bucket"
+        os.environ["INFOMANIAK_CONTAINER_NAME"] = "test-bucket"
         os.environ["CHARGE_CREDITS_FOR_BOTS"] = "false"
 
     def setUp(self):

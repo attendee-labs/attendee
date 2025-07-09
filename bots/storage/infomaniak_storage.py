@@ -17,8 +17,7 @@ class InfomaniakSwiftStorage(Storage):
         self.app_cred_id = os.getenv('OS_APPLICATION_CREDENTIAL_ID')
         self.app_cred_secret = os.getenv('OS_APPLICATION_CREDENTIAL_SECRET')
         self.region = os.getenv('OS_REGION_NAME')
-        self.container_name = os.getenv('INFOMANIAK_RECORDING_BUCKET_NAME', 'audios')
-        self.endpoint_url = os.getenv('INFOMANIAK_ENDPOINT_URL')
+        self.container_name = os.getenv('INFOMANIAK_CONTAINER_NAME', 'audios')
         self._connection = None
     
     @property
@@ -104,8 +103,7 @@ class InfomaniakSwiftStorage(Storage):
             raise
     
     def url(self, name):
-        if self.endpoint_url:
-            return urljoin(self.endpoint_url.rstrip('/') + '/', f"v1/AUTH_{self.connection.get_auth()[1].split('/')[-1]}/{self.container_name}/{name}")
+        # Return a Swift URL format since we don't use S3-compatible endpoint
         return f"swift://{self.container_name}/{name}"
     
     def get_accessed_time(self, name):

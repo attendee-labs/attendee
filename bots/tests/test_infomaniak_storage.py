@@ -32,11 +32,11 @@ class InfomaniakStorageBackendTest(TestCase):
         self.assertIsInstance(default_storage, InfomaniakSwiftStorage)
         self.assertEqual(default_storage.__class__.__name__, 'InfomaniakSwiftStorage')
     
-    @override_settings(INFOMANIAK_RECORDING_BUCKET_NAME="test-bucket")
+    @override_settings(INFOMANIAK_CONTAINER_NAME="test-bucket")
     def test_storage_settings(self):
         """Test that storage settings are properly configured"""
         from django.conf import settings
-        self.assertEqual(settings.INFOMANIAK_RECORDING_BUCKET_NAME, "test-bucket")
+        self.assertEqual(settings.INFOMANIAK_CONTAINER_NAME, "test-bucket")
         
         # Test that STORAGES setting uses our backend
         storages_config = getattr(settings, 'STORAGES', {})

@@ -206,5 +206,5 @@ STORAGES = {
     },
 }
 # Keep signature version setting for compatibility
-INFOMANIAK_RECORDING_BUCKET_NAME = os.getenv("INFOMANIAK_RECORDING_BUCKET_NAME")
+INFOMANIAK_CONTAINER_NAME = os.getenv("INFOMANIAK_CONTAINER_NAME")
 CHARGE_CREDITS_FOR_BOTS = os.getenv("CHARGE_CREDITS_FOR_BOTS", "false") == "true"

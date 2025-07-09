@@ -16,11 +16,7 @@ def main():
 
     print(f"CREDENTIALS_ENCRYPTION_KEY={credentials_key}")
     print(f"DJANGO_SECRET_KEY={django_key}")
-    print("INFOMANIAK_ENDPOINT_URL=https://s3.pub1.infomaniak.cloud")
-    print("INFOMANIAK_REGION=sbg")
-    print("INFOMANIAK_ACCESS_KEY_ID=")
-    print("INFOMANIAK_SECRET_ACCESS_KEY=")
-    print("INFOMANIAK_RECORDING_BUCKET_NAME=")
+    print("INFOMANIAK_CONTAINER_NAME=audios")
 
 
 if __name__ == "__main__":

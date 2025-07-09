@@ -318,12 +318,12 @@ class TestZoomBot(TransactionTestCase):
         super().setUpClass()
 
         # Instead of setting environment variables directly:
-        # os.environ["INFOMANIAK_RECORDING_BUCKET_NAME"] = "test-bucket"
+        # os.environ["INFOMANIAK_CONTAINER_NAME"] = "test-bucket"
         # os.environ["CHARGE_CREDITS_FOR_BOTS"] = "true"
 
         # The settings have already been loaded, so we need to override them
         # These will be applied to all tests in this class
-        cls.settings_override = override_settings(INFOMANIAK_RECORDING_BUCKET_NAME="test-bucket", CHARGE_CREDITS_FOR_BOTS=True)
+        cls.settings_override = override_settings(INFOMANIAK_CONTAINER_NAME="test-bucket", CHARGE_CREDITS_FOR_BOTS=True)
         cls.settings_override.enable()
 
     @classmethod
