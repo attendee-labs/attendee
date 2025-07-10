@@ -112,12 +112,16 @@ class BotController:
     def get_teams_bot_adapter(self):
         from bots.teams_bot_adapter import TeamsBotAdapter
 
+        if self.get_recording_transcription_provider() == TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM:
+            add_audio_chunk_callback = None
+        else:
+            add_audio_chunk_callback = self.per_participant_audio_input_manager().add_chunk
         teams_bot_login_credentials = self.bot_in_db.project.credentials.filter(credential_type=Credentials.CredentialTypes.TEAMS_BOT_LOGIN).first()
 
         return TeamsBotAdapter(
             display_name=self.bot_in_db.name,
             send_message_callback=self.on_message_from_adapter,
-            add_audio_chunk_callback=None,
+            add_audio_chunk_callback=add_audio_chunk_callback,
             meeting_url=self.bot_in_db.meeting_url,
             add_video_frame_callback=None,
             wants_any_video_frames_callback=None,
