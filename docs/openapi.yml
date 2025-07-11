@@ -1092,6 +1092,12 @@ components:
           format: date-time
           description: The time the bot should join the meeting. ISO 8601 format,
             e.g. 2025-06-13T12:00:00Z
+        deduplication_key:
+          type: string
+          minLength: 1
+          description: Optional key for deduplicating bots. If a bot with this key
+            already exists in a non-terminal state, the new bot will not be created
+            and an error will be returned.
         webhooks:
           type: array
           items:
@@ -1117,6 +1123,22 @@ components:
             additionalProperties: false
           description: List of webhook subscriptions to create for this bot. Each
             item should have 'url' and 'triggers' fields.
+        callback_settings:
+          type: object
+          properties:
+            zoom_tokens_url:
+              type: string
+              description: 'URL of an endpoint on your server that returns Zoom authentication
+                tokens the bot will use when it joins the meeting. Our server will
+                make a POST request to this URL with information about the bot and
+                expects a JSON response with the format: {"zak_token": "<zak_token>",
+                "join_token": "<join_token>", "app_privilege_token": "<app_privilege_token>"}.
+                Not every token needs to be provided, i.e. you can reply with {"zak_token":
+                "<zak_token>"}.'
+          required: []
+          additionalProperties: false
+          description: Callback urls for the bot to call when it needs to fetch certain
+            data.
         transcription_settings:
           type: object
           properties:

@@ -554,6 +554,20 @@ class WebBotAdapter(BotAdapter):
 
                 num_retries += 1
 
+            except Exception as e:
+                if num_retries >= max_retries:
+                    logger.exception(f"Failed to join meeting and the unexpected {e.__class__.__name__} exception with message {e.__str__()} is retryable but the number of retries exceeded the limit, so returning.")
+                    self.send_debug_screenshot_message(step="unknown", exception=e, inner_exception=None)
+                    return
+
+                if self.left_meeting or self.cleaned_up:
+                    logger.exception(f"Failed to join meeting and the unexpected {e.__class__.__name__} exception with message {e.__str__()} is retryable but the bot has left the meeting or cleaned up, so returning.")
+                    return
+
+                logger.exception(f"Failed to join meeting and the unexpected {e.__class__.__name__} exception with message {e.__str__()} is retryable so retrying")
+
+                num_retries += 1
+
             sleep(1)
 
         self.send_message_callback({"message": self.Messages.BOT_JOINED_MEETING})

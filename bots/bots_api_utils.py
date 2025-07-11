@@ -5,7 +5,7 @@ from enum import Enum
 
 import redis
 from django.core.exceptions import ValidationError
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.urls import reverse
 
 from .models import (
@@ -138,7 +138,9 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
     metadata = serializer.validated_data["metadata"]
     websocket_settings = serializer.validated_data["websocket_settings"]
     join_at = serializer.validated_data["join_at"]
+    deduplication_key = serializer.validated_data["deduplication_key"]
     webhook_subscriptions = serializer.validated_data["webhooks"]
+    callback_settings = serializer.validated_data["callback_settings"]
     initial_state = BotStates.SCHEDULED if join_at else BotStates.READY
 
     settings = {
@@ -149,6 +151,7 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
         "automatic_leave_settings": automatic_leave_settings,
         "teams_settings": teams_settings,
         "websocket_settings": websocket_settings,
+        "callback_settings": callback_settings,
     }
 
     try:
@@ -160,6 +163,7 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
                 settings=settings,
                 metadata=metadata,
                 join_at=join_at,
+                deduplication_key=deduplication_key,
                 state=initial_state,
             )
 
@@ -191,6 +195,10 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
         logger.error(f"ValidationError creating bot: {e}")
         return None, {"error": e.messages[0]}
     except Exception as e:
+        if isinstance(e, IntegrityError) and "unique_bot_deduplication_key" in str(e):
+            logger.error(f"IntegrityError due to unique_bot_deduplication_key constraint violation creating bot: {e}")
+            return None, {"error": "Deduplication key already in use. A bot in a non-terminal state with this deduplication key already exists. Please use a different deduplication key or wait for that bot to terminate."}
+
         logger.error(f"Error creating bot: {e}")
         return None, {"error": str(e)}
 

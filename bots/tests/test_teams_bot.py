@@ -6,7 +6,7 @@ from django.db import connection
 from django.test import TransactionTestCase
 
 from bots.bot_controller.bot_controller import BotController
-from bots.models import Bot, BotEventManager, BotEventTypes, BotStates, Organization, Project, Recording, RecordingTypes, TranscriptionProviders, TranscriptionTypes
+from bots.models import Bot, BotEventManager, BotEventSubTypes, BotEventTypes, BotStates, Organization, Project, Recording, RecordingTypes, TranscriptionProviders, TranscriptionTypes
 from bots.teams_bot_adapter.teams_ui_methods import UiTeamsBlockingUsException
 
 
@@ -110,3 +110,68 @@ class TestTeamsBot(TransactionTestCase):
 
             # Close the database connection since we're in a thread
             connection.close()
+
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.FileUploader")
+    def test_handle_unexpected_exception_on_join(
+        self,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+    ):
+        # Configure the mock uploader
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        # Mock the Chrome driver
+        mock_driver = create_mock_teams_driver()
+        MockChromeDriver.return_value = mock_driver
+
+        # Mock virtual display
+        mock_display = MagicMock()
+        MockDisplay.return_value = mock_display
+
+        # Create bot controller
+        controller = BotController(self.bot.id)
+
+        # Set up a side effect that raises an exception on first attempt, then succeeds on second attempt
+        with patch("bots.teams_bot_adapter.teams_ui_methods.TeamsUIMethods.attempt_to_join_meeting") as mock_attempt_to_join:
+            mock_attempt_to_join.side_effect = Exception("random exception")
+
+            def save_screenshot_mock(path):
+                with open(path, "w"):
+                    pass
+
+            mock_driver.save_screenshot.side_effect = save_screenshot_mock
+
+            # Run the bot in a separate thread since it has an event loop
+            bot_thread = threading.Thread(target=controller.run)
+            bot_thread.daemon = True
+            bot_thread.start()
+
+            # Allow time for the retry logic to run
+            time.sleep(10)
+
+            # Verify the attempt_to_join_meeting method was called four times
+            self.assertEqual(mock_attempt_to_join.call_count, 4, "attempt_to_join_meeting should be called four times")
+
+            # Now wait for the thread to finish naturally
+            bot_thread.join(timeout=5)  # Give it time to clean up
+
+            # If thread is still running after timeout, that's a problem to report
+            if bot_thread.is_alive():
+                print("WARNING: Bot thread did not terminate properly after cleanup")
+
+            # Close the database connection since we're in a thread
+            connection.close()
+
+            # Test that the last bot event is a FATAL_ERROR
+            self.bot.refresh_from_db()
+            last_bot_event = self.bot.bot_events.last()
+            self.assertEqual(last_bot_event.event_type, BotEventTypes.FATAL_ERROR)
+            self.assertEqual(last_bot_event.event_sub_type, BotEventSubTypes.FATAL_ERROR_UI_ELEMENT_NOT_FOUND)
+            self.assertEqual(last_bot_event.metadata.get("step"), "unknown")
+            self.assertEqual(last_bot_event.metadata.get("exception_type"), "Exception")
+            self.assertEqual(self.bot.state, BotStates.FATAL_ERROR)
+            print("last_bot_event", last_bot_event.__dict__)

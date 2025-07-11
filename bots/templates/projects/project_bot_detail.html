@@ -123,6 +123,9 @@
             {% if credits_consumed %}
                 <p><strong>Credits used:</strong> {{ credits_consumed|floatformat:2|default:"0.00" }}</p>
             {% endif %}
+            {% if bot.deduplication_key %}
+                <p><strong>Deduplication Key:</strong> {{ bot.deduplication_key }}</p>
+            {% endif %}
         </div>
     </div>
 
@@ -166,6 +169,14 @@
             <button class="nav-link" id="participants-tab" data-bs-toggle="tab" 
                     data-bs-target="#participants" type="button" role="tab">
                 Participants
+            </button>
+        </li>
+        {% endif %}
+        {% if resource_snapshots %}
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="resource-tab" data-bs-toggle="tab" 
+                    data-bs-target="#resource" type="button" role="tab">
+                Resource Usage
             </button>
         </li>
         {% endif %}
@@ -550,6 +561,36 @@
                         </div>
                     </div>
                 {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Resource Usage Tab -->
+        {% if resource_snapshots %}
+        <div class="tab-pane fade" id="resource" role="tabpanel">
+            <div class="mb-3">
+                <p><strong>Maximum RAM Usage:</strong> {{ max_ram_usage }} MB</p>
+                <p><strong>Maximum CPU Usage:</strong> {{ max_cpu_usage }} millicores</p>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-striped">
+                    <thead>
+                        <tr>
+                            <th>Timestamp</th>
+                            <th>RAM Usage (MB)</th>
+                            <th>CPU Usage (millicores)</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for snapshot in resource_snapshots %}
+                            <tr>
+                                <td>{{ snapshot.created_at|date:"M d, Y H:i:s" }}</td>
+                                <td>{{ snapshot.data.ram_usage_megabytes|default:"-" }}</td>
+                                <td>{{ snapshot.data.cpu_usage_millicores|default:"-" }}</td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
             </div>
         </div>
         {% endif %}

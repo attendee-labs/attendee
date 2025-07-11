@@ -75,7 +75,7 @@ class BotAdmin(admin.ModelAdmin):
 
     # Optional: if you want to organize the fields in the detail view
     fieldsets = (
-        ("Basic Information", {"fields": ("object_id", "name", "project", "join_at")}),
+        ("Basic Information", {"fields": ("object_id", "name", "project", "join_at", "deduplication_key")}),
         ("Meeting Details", {"fields": ("meeting_url", "meeting_uuid")}),
         ("Status", {"fields": ("state", "view_logs_link")}),
         ("Settings", {"fields": ("settings",)}),

@@ -470,6 +470,23 @@ class WebsocketSettingsJSONField(serializers.JSONField):
     pass
 
 
+@extend_schema_field(
+    {
+        "type": "object",
+        "properties": {
+            "zoom_tokens_url": {
+                "type": "string",
+                "description": 'URL of an endpoint on your server that returns Zoom authentication tokens the bot will use when it joins the meeting. Our server will make a POST request to this URL with information about the bot and expects a JSON response with the format: {"zak_token": "<zak_token>", "join_token": "<join_token>", "app_privilege_token": "<app_privilege_token>"}. Not every token needs to be provided, i.e. you can reply with {"zak_token": "<zak_token>"}.',
+            },
+        },
+        "required": [],
+        "additionalProperties": False,
+    }
+)
+class CallbackSettingsJSONField(serializers.JSONField):
+    pass
+
+
 @extend_schema_serializer(
     examples=[
         OpenApiExample(
@@ -489,8 +506,15 @@ class CreateBotSerializer(serializers.Serializer):
     metadata = MetadataJSONField(help_text="JSON object containing metadata to associate with the bot", required=False, default=None)
     bot_chat_message = BotChatMessageRequestSerializer(help_text="The chat message the bot sends after it joins the meeting", required=False, default=None)
     join_at = serializers.DateTimeField(help_text="The time the bot should join the meeting. ISO 8601 format, e.g. 2025-06-13T12:00:00Z", required=False, default=None)
+    deduplication_key = serializers.CharField(help_text="Optional key for deduplicating bots. If a bot with this key already exists in a non-terminal state, the new bot will not be created and an error will be returned.", required=False, default=None)
     webhooks = WebhooksJSONField(
         help_text="List of webhook subscriptions to create for this bot. Each item should have 'url' and 'triggers' fields.",
+        required=False,
+        default=None,
+    )
+
+    callback_settings = CallbackSettingsJSONField(
+        help_text="Callback urls for the bot to call when it needs to fetch certain data.",
         required=False,
         default=None,
     )
@@ -527,6 +551,34 @@ class CreateBotSerializer(serializers.Serializer):
             jsonschema.validate(instance=value, schema=self.WEBHOOKS_SCHEMA)
         except jsonschema.exceptions.ValidationError as e:
             raise serializers.ValidationError(e.message)
+
+        return value
+
+    CALLBACK_SETTINGS_SCHEMA = {
+        "type": "object",
+        "properties": {
+            "zoom_tokens_url": {
+                "type": "string",
+                "pattern": "^https://.*",
+            },
+        },
+        "required": [],
+        "additionalProperties": False,
+    }
+
+    def validate_callback_settings(self, value):
+        if value is None:
+            return value
+
+        try:
+            jsonschema.validate(instance=value, schema=self.CALLBACK_SETTINGS_SCHEMA)
+        except jsonschema.exceptions.ValidationError as e:
+            raise serializers.ValidationError(e.message)
+
+        # Validate that zoom_tokens_url is a proper HTTPS URL
+        zoom_tokens_url = value.get("zoom_tokens_url")
+        if zoom_tokens_url and not zoom_tokens_url.lower().startswith("https://"):
+            raise serializers.ValidationError({"zoom_tokens_url": "URL must start with https://"})
 
         return value
 

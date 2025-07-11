@@ -49,7 +49,7 @@ def get_transcription(utterance, recording):
     soft_time_limit=3600,
     autoretry_for=(Exception,),
     retry_backoff=True,  # Enable exponential backoff
-    max_retries=5,
+    max_retries=6,
 )
 def process_utterance(self, utterance_id):
     utterance = Utterance.objects.get(id=utterance_id)
@@ -283,7 +283,7 @@ def get_transcription_via_openai(utterance):
         return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "status_code": response.status_code, "response_text": response.text}
 
     result = response.json()
-    logger.info(f"OpenAI transcription completed successfully for utterance {utterance.id}. Last 3 digits of API key: {openai_credentials['api_key'][-3:]}")
+    logger.info(f"OpenAI transcription completed successfully for utterance {utterance.id}.")
 
     # Format the response to match our expected schema
     transcription = {"transcript": result.get("text", "")}

@@ -17,6 +17,7 @@ from bots.automatic_leave_configuration import AutomaticLeaveConfiguration
 from bots.bot_adapter import BotAdapter
 from bots.bot_controller.bot_websocket_client import BotWebsocketClient
 from bots.bots_api_utils import BotCreationSource
+from bots.external_callback_utils import get_zoom_tokens
 from bots.models import (
     Bot,
     BotChatMessageRequestManager,
@@ -51,6 +52,7 @@ from bots.webhook_utils import trigger_webhook
 from bots.websocket_payloads import mixed_audio_websocket_payload
 
 from .audio_output_manager import AudioOutputManager
+from .bot_resource_snapshot_taker import BotResourceSnapshotTaker
 from .closed_caption_manager import ClosedCaptionManager
 from .file_uploader import FileUploader
 from .grouped_closed_caption_manager import GroupedClosedCaptionManager
@@ -148,6 +150,10 @@ class BotController:
 
         add_audio_chunk_callback = self.per_participant_audio_input_manager().add_chunk
 
+        zoom_tokens = {}
+        if self.bot_in_db.zoom_tokens_callback_url():
+            zoom_tokens = get_zoom_tokens(self.bot_in_db)
+
         return ZoomBotAdapter(
             use_one_way_audio=self.pipeline_configuration.transcribe_audio,
             use_mixed_audio=self.pipeline_configuration.record_audio or self.pipeline_configuration.rtmp_stream_audio or self.pipeline_configuration.websocket_stream_audio,
@@ -165,6 +171,7 @@ class BotController:
             add_participant_event_callback=self.add_participant_event,
             automatic_leave_configuration=self.automatic_leave_configuration,
             video_frame_size=self.bot_in_db.recording_dimensions(),
+            zoom_tokens=zoom_tokens,
         )
 
     def add_mixed_audio_chunk_callback(self, chunk: bytes):
@@ -556,6 +563,8 @@ class BotController:
             play_video_callback=self.adapter.send_video,
         )
 
+        self.bot_resource_snapshot_taker = BotResourceSnapshotTaker(self.bot_in_db)
+
         # Create GLib main loop
         self.main_loop = GLib.MainLoop()
 
@@ -829,6 +838,10 @@ class BotController:
 
             # For staged bots, check if its time to join
             self.join_if_staged_and_time_to_join()
+
+            # Take a resource snapshot if needed
+            self.bot_resource_snapshot_taker.save_snapshot_if_needed()
+
             return True
 
         except Exception as e:
@@ -1068,6 +1081,16 @@ class BotController:
                 bot=self.bot_in_db,
                 event_type=BotEventTypes.COULD_NOT_JOIN,
                 event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_REQUEST_TO_JOIN_DENIED,
+            )
+            self.cleanup()
+            return
+
+        if message.get("message") == BotAdapter.Messages.COULD_NOT_CONNECT_TO_MEETING:
+            logger.info("Received message that could not connect to meeting")
+            BotEventManager.create_event(
+                bot=self.bot_in_db,
+                event_type=BotEventTypes.COULD_NOT_JOIN,
+                event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_UNABLE_TO_CONNECT_TO_MEETING,
             )
             self.cleanup()
             return
