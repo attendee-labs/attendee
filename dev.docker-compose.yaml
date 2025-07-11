@@ -1,5 +1,5 @@
 services:
-  attendee-worker-local:
+  attendee-worker-local-1:
     build: ./
     volumes:
      - .:/attendee
@@ -9,9 +9,79 @@ services:
       - POSTGRES_HOST=postgres
       - REDIS_URL=redis://redis:6379/5
       - DJANGO_SETTINGS_MODULE=attendee.settings.development
-    command: ["/bin/bash", "-c", "/opt/bin/entrypoint.sh && celery -A attendee worker -l INFO"]
-    mem_limit: 14g
-    memswap_limit: 14g
+    command: ["/bin/bash", "-c", "/opt/bin/entrypoint.sh && celery -A attendee worker -l INFO --concurrency=1"]
+    mem_limit: 2g
+    memswap_limit: 2g
+
+  attendee-worker-local-2:
+    build: ./
+    volumes:
+     - .:/attendee
+    networks:
+      - attendee_network
+    environment:
+      - POSTGRES_HOST=postgres
+      - REDIS_URL=redis://redis:6379/5
+      - DJANGO_SETTINGS_MODULE=attendee.settings.development
+    command: ["/bin/bash", "-c", "/opt/bin/entrypoint.sh && celery -A attendee worker -l INFO --concurrency=1"]
+    mem_limit: 2g
+    memswap_limit: 2g
+
+  attendee-worker-local-3:
+    build: ./
+    volumes:
+     - .:/attendee
+    networks:
+      - attendee_network
+    environment:
+      - POSTGRES_HOST=postgres
+      - REDIS_URL=redis://redis:6379/5
+      - DJANGO_SETTINGS_MODULE=attendee.settings.development
+    command: ["/bin/bash", "-c", "/opt/bin/entrypoint.sh && celery -A attendee worker -l INFO --concurrency=1"]
+    mem_limit: 2g
+    memswap_limit: 2g
+
+  attendee-worker-local-4:
+    build: ./
+    volumes:
+     - .:/attendee
+    networks:
+      - attendee_network
+    environment:
+      - POSTGRES_HOST=postgres
+      - REDIS_URL=redis://redis:6379/5
+      - DJANGO_SETTINGS_MODULE=attendee.settings.development
+    command: ["/bin/bash", "-c", "/opt/bin/entrypoint.sh && celery -A attendee worker -l INFO --concurrency=1"]
+    mem_limit: 2g
+    memswap_limit: 2g
+
+  attendee-worker-local-5:
+    build: ./
+    volumes:
+     - .:/attendee
+    networks:
+      - attendee_network
+    environment:
+      - POSTGRES_HOST=postgres
+      - REDIS_URL=redis://redis:6379/5
+      - DJANGO_SETTINGS_MODULE=attendee.settings.development
+    command: ["/bin/bash", "-c", "/opt/bin/entrypoint.sh && celery -A attendee worker -l INFO --concurrency=1"]
+    mem_limit: 2g
+    memswap_limit: 2g
+
+  attendee-worker-local-6:
+    build: ./
+    volumes:
+     - .:/attendee
+    networks:
+      - attendee_network
+    environment:
+      - POSTGRES_HOST=postgres
+      - REDIS_URL=redis://redis:6379/5
+      - DJANGO_SETTINGS_MODULE=attendee.settings.development
+    command: ["/bin/bash", "-c", "/opt/bin/entrypoint.sh && celery -A attendee worker -l INFO --concurrency=1"]
+    mem_limit: 2g
+    memswap_limit: 2g
 
   attendee-scheduler-local:
     build: ./
