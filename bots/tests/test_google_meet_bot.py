@@ -70,6 +70,8 @@ class TestGoogleMeetBot(TransactionTestCase):
         # Set required environment variables
         os.environ["INFOMANIAK_CONTAINER_NAME"] = "test-bucket"
         os.environ["CHARGE_CREDITS_FOR_BOTS"] = "false"
+        os.environ["TRANSCRIPT_API_KEY"] = "test-api-key"
+        os.environ["TRANSCRIPT_API_URL"] = "https://test-api.example.com"
 
     def setUp(self):
         # Recreate organization and project for each test
@@ -105,9 +107,11 @@ class TestGoogleMeetBot(TransactionTestCase):
         settings.CELERY_TASK_EAGER_PROPAGATES = True
 
     @patch("bots.models.Bot.create_debug_recording", return_value=False)
+    @patch("transcript_services.v1.api_service.could_not_record")
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
     @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
     @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.bot_controller.screen_and_audio_recorder.ScreenAndAudioRecorder")
     @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.check_if_meeting_is_found", return_value=None)
     @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.wait_for_host_if_needed", return_value=None)
     @patch("deepgram.DeepgramClient")
@@ -118,10 +122,12 @@ class TestGoogleMeetBot(TransactionTestCase):
         MockDeepgramClient,
         mock_wait_for_host_if_needed,
         mock_check_if_meeting_is_found,
+        MockScreenRecorder,
         MockFileUploader,
         MockChromeDriver,
         MockDisplay,
         mock_create_debug_recording,
+        mock_transcript_api,
     ):
         # Set initial time
         current_time = 1000.0
@@ -151,6 +157,10 @@ class TestGoogleMeetBot(TransactionTestCase):
         mock_uploader = create_mock_file_uploader()
         MockFileUploader.return_value = mock_uploader
 
+        # Mock the screen recorder
+        mock_screen_recorder = MagicMock()
+        MockScreenRecorder.return_value = mock_screen_recorder
+
         # Mock the Chrome driver
         mock_driver = create_mock_google_meet_driver()
         MockChromeDriver.return_value = mock_driver
@@ -169,8 +179,9 @@ class TestGoogleMeetBot(TransactionTestCase):
 
         def simulate_join_flow():
             nonlocal current_time
-            # Sleep to allow initialization
-            time.sleep(2)
+            # Wait for adapter to be initialized
+            if not self.wait_for_adapter_ready(controller, timeout=15):
+                raise Exception("Controller adapter not ready within timeout")
 
             # Add participants - simulate websocket message processing
             controller.adapter.participants_info["user1"] = {"deviceId": "user1", "fullName": "Test User", "active": True}
@@ -349,8 +360,9 @@ class TestGoogleMeetBot(TransactionTestCase):
 
         def simulate_join_flow():
             nonlocal current_time
-            # Sleep to allow initialization
-            time.sleep(2)
+            # Wait for adapter to be initialized
+            if not self.wait_for_adapter_ready(controller, timeout=15):
+                raise Exception("Controller adapter not ready within timeout")
 
             # Add participants - simulate websocket message processing
             controller.adapter.participants_info["user1"] = {"deviceId": "user1", "fullName": "Test User", "active": True}
@@ -495,8 +507,9 @@ class TestGoogleMeetBot(TransactionTestCase):
         bot_thread.start()
 
         def simulate_join_flow():
-            # Sleep to allow initialization
-            time.sleep(2)
+            # Wait for adapter to be initialized
+            if not self.wait_for_adapter_ready(controller, timeout=15):
+                raise Exception("Controller adapter not ready within timeout")
 
             # Add participants - simulate websocket message processing
             controller.adapter.participants_info["user1"] = {"deviceId": "user1", "fullName": "Test User", "active": True}
@@ -720,6 +733,10 @@ class TestGoogleMeetBot(TransactionTestCase):
             bot_thread.daemon = True
             bot_thread.start()
 
+            # Wait for adapter to be initialized before accessing it
+            if not self.wait_for_adapter_ready(controller, timeout=15):
+                raise Exception("Controller adapter not ready within timeout")
+
             # Allow time for the retry logic to run
             time.sleep(5)
 
@@ -809,6 +826,15 @@ class TestGoogleMeetBot(TransactionTestCase):
         # Verify that no FATAL_ERROR event was created for a bot that never launched
         fatal_error_event = self.bot.bot_events.filter(event_type=BotEventTypes.FATAL_ERROR, event_sub_type=BotEventSubTypes.FATAL_ERROR_BOT_NOT_LAUNCHED).first()
         self.assertIsNone(fatal_error_event)
+
+    def wait_for_adapter_ready(self, controller, timeout=10):
+        """Wait for the controller's adapter to be initialized"""
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            if hasattr(controller, 'adapter') and controller.adapter is not None:
+                return True
+            time.sleep(0.1)
+        return False
 
 
 # Simulate video data arrival

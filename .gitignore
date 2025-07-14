@@ -90,6 +90,7 @@ target/
 *.pyc
 __pycache__/
 local_settings.py
+.pytest_cache/
 
 .env
 db.sqlite3

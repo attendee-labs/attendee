@@ -2,26 +2,33 @@ services:
   attendee-worker-local:
     build: ./
     volumes:
-     - .:/attendee
+      - .:/attendee
     networks:
       - attendee_network
+    env_file:
+      - .env
     environment:
       - POSTGRES_HOST=postgres
-      - REDIS_URL=redis://redis:6379/5
       - DJANGO_SETTINGS_MODULE=attendee.settings.development
-    command: ["/bin/bash", "-c", "/opt/bin/entrypoint.sh && celery -A attendee worker -l INFO"]
+    command:
+      [
+        "/bin/bash",
+        "-c",
+        "/opt/bin/entrypoint.sh && celery -A attendee worker -l INFO",
+      ]
 
   attendee-app-local:
     build: ./
     volumes:
-     - .:/attendee
+      - .:/attendee
     networks:
       - attendee_network
     ports:
       - "8000:8000"
+    env_file:
+      - .env
     environment:
       - POSTGRES_HOST=postgres
-      - REDIS_URL=redis://redis:6379/5
       - DJANGO_SETTINGS_MODULE=attendee.settings.development
     command: python manage.py runserver 0.0.0.0:8000
 
@@ -33,11 +40,10 @@ services:
       POSTGRES_PASSWORD: attendee_development_user
       PGDATA: /data/postgres
     volumes:
-       - postgres:/data/postgres
+      - postgres:/data/postgres
     networks:
       - attendee_network
     restart: unless-stopped
-
 
   redis:
     image: redis:7-alpine
