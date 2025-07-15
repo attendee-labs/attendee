@@ -279,7 +279,7 @@ class BotController:
                 return
 
             file_uploader = FileUploader(
-                os.environ.get("INFOMANIAK_CONTAINER_NAME"),
+                os.environ.get("SWIFT_CONTAINER_MEETS"),
                 self.get_recording_filename(),
             )
             file_uploader.upload_file(self.get_recording_file_location())

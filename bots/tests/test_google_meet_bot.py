@@ -68,7 +68,7 @@ class TestGoogleMeetBot(TransactionTestCase):
         super().setUpClass()
 
         # Set required environment variables
-        os.environ["INFOMANIAK_CONTAINER_NAME"] = "test-bucket"
+        os.environ["SWIFT_CONTAINER_MEETS"] = "test-bucket"
         os.environ["CHARGE_CREDITS_FOR_BOTS"] = "false"
         os.environ["TRANSCRIPT_API_KEY"] = "test-api-key"
         os.environ["TRANSCRIPT_API_URL"] = "https://test-api.example.com"

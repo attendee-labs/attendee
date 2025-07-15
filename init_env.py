@@ -16,7 +16,8 @@ def main():
 
     print(f"CREDENTIALS_ENCRYPTION_KEY={credentials_key}")
     print(f"DJANGO_SECRET_KEY={django_key}")
-    print("INFOMANIAK_CONTAINER_NAME=audios")
+    print("SWIFT_CONTAINER_AUDIO=transcript-audio")
+    print("SWIFT_CONTAINER_MEETS=transcript-meets")
 
 
 if __name__ == "__main__":
