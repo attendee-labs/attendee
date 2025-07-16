@@ -16,5 +16,5 @@ For Zoom to work locally, you need to rebuild the docker image. You can do this 
 
 ## Application emits errors when uploading files.
 
-This may happen if the INFOMANIAK_REGION is not set correctly. It currently defaults to `dc3-a`.  
+This may happen if the INFOMANIAK_REGION is not set correctly. It currently defaults to `dc4-a`.  
 You can set this in the .env file.
