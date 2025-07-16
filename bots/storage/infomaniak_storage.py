@@ -1,9 +1,7 @@
 import os
-import tempfile
-from urllib.parse import urljoin
 
-from django.core.files.storage import Storage
 from django.core.files.base import ContentFile
+from django.core.files.storage import Storage
 from django.utils.deconstruct import deconstructible
 from swiftclient import client
 from swiftclient.exceptions import ClientException
@@ -115,7 +113,7 @@ class InfomaniakSwiftStorage(Storage):
     
     def get_modified_time(self, name):
         try:
-            headers = self.connection.head_object(self.container_name, name)
+            self.connection.head_object(self.container_name, name)
             return None
         except ClientException as e:
             if e.http_status == 404:

@@ -1,10 +1,7 @@
 import logging
-import os
-import threading
 from io import BytesIO
-from queue import Queue
 
-from bots.storage import get_swift_client, get_container_name
+from bots.storage import get_container_name, get_swift_client
 
 logger = logging.getLogger(__name__)
 

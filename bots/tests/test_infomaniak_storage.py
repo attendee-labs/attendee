@@ -3,20 +3,21 @@ Tests for the Infomaniak Swift storage backend and utilities.
 Tests the migration from AWS S3 to Infomaniak Swift storage.
 """
 
-import unittest
-from unittest.mock import patch, MagicMock
-from django.test import TestCase, TransactionTestCase, override_settings
+from unittest.mock import MagicMock, patch
+
 from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage
+from django.test import TestCase, TransactionTestCase, override_settings
+
+from bots.models import Bot, BotStates, Organization, Project, Recording, RecordingStates
 from bots.storage import InfomaniakSwiftStorage
 from bots.storage.infomaniak_swift_utils import (
-    upload_file_to_swift,
-    download_file_from_swift,
     delete_file_from_swift,
+    download_file_from_swift,
     list_objects_in_container,
     object_exists,
+    upload_file_to_swift,
 )
-from bots.models import Organization, Project, Bot, Recording, RecordingStates, BotStates
 
 
 class InfomaniakStorageBackendTest(TestCase):
@@ -180,14 +181,14 @@ class StorageIntegrationTest(TransactionTestCase):
         from bots.storage import InfomaniakSwiftStorage
         from bots.storage.infomaniak_storage import InfomaniakSwiftStorage as DirectImport
         from bots.storage.infomaniak_swift_utils import (
-            upload_file_to_swift,
-            download_file_from_swift,
             delete_file_from_swift,
+            download_file_from_swift,
+            generate_presigned_url,
+            get_container_name,
+            get_swift_client,
             list_objects_in_container,
             object_exists,
-            get_swift_client,
-            get_container_name,
-            generate_presigned_url,
+            upload_file_to_swift,
         )
         
         # Verify imports are the same

@@ -1,4 +1,5 @@
 import os
+
 from swiftclient import client
 from swiftclient.exceptions import ClientException
 

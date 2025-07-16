@@ -1,9 +1,8 @@
 import logging
-import os
 import threading
 from pathlib import Path
 
-from bots.storage import upload_file_to_swift, get_swift_client, get_container_name
+from bots.storage import get_container_name, get_swift_client, upload_file_to_swift
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)

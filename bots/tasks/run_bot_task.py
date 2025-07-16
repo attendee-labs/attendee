@@ -15,10 +15,10 @@ logging.basicConfig(format="%(name)s - %(levelname)s - %(message)s", level=loggi
 @shared_task(bind=True, soft_time_limit=3600)
 def run_bot(self, bot_id):
     logger.info(f"Running bot {bot_id}")
-    logger.debug(f"Initializing BotController...")
+    logger.debug("Initializing BotController...")
     bot_controller = BotController(bot_id)
     logger.debug("Bot Controller initialized.")
-    logger.debug(f"Starting bot...")
+    logger.debug("Starting bot...")
     bot_controller.run()
 
 

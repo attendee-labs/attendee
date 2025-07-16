@@ -1,8 +1,7 @@
 import hashlib
-import logging
 import json
+import logging
 import math
-import os
 import random
 import secrets
 import string
@@ -27,7 +26,7 @@ logging.basicConfig(format="%(name)s - %(levelname)s - %(message)s", level=loggi
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-from bots.storage import InfomaniakSwiftStorage, delete_file_from_swift, generate_presigned_url
+from bots.storage import InfomaniakSwiftStorage, generate_presigned_url
 
 
 class Project(models.Model):
@@ -835,7 +834,6 @@ class TranscriptionProviders(models.IntegerChoices):
     OPENAI = 4, "OpenAI"
 
 
-from bots.storage import InfomaniakSwiftStorage
 
 
 class RecordingStorage(InfomaniakSwiftStorage):
