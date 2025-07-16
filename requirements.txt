@@ -22,7 +22,7 @@ django-storages==1.14.4
 djangorestframework==3.15.2
 drf-spectacular==0.27.2
 gunicorn==23.0.0
-h11==0.14.0
+h11==0.16.0
 idna==3.10
 inflection==0.5.1
 jmespath==1.0.1
