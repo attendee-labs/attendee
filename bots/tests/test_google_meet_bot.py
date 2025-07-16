@@ -831,7 +831,7 @@ class TestGoogleMeetBot(TransactionTestCase):
         """Wait for the controller's adapter to be initialized"""
         start_time = time.time()
         while time.time() - start_time < timeout:
-            if hasattr(controller, 'adapter') and controller.adapter is not None:
+            if hasattr(controller, "adapter") and controller.adapter is not None:
                 return True
             time.sleep(0.1)
         return False

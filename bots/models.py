@@ -265,7 +265,7 @@ class Bot(models.Model):
 
         # Temporarily enabling this for all google meet meetings
         if meeting_type_from_url(self.meeting_url) == MeetingTypes.GOOGLE_MEET:
-           return True
+            return True
 
         # Temporarily enabling this for all Teams meetings
         # if meeting_type_from_url(self.meeting_url) == MeetingTypes.TEAMS:
@@ -832,8 +832,6 @@ class TranscriptionProviders(models.IntegerChoices):
     CLOSED_CAPTION_FROM_PLATFORM = 2, "Closed Caption From Platform"
     GLADIA = 3, "Gladia"
     OPENAI = 4, "OpenAI"
-
-
 
 
 class RecordingStorage(InfomaniakSwiftStorage):

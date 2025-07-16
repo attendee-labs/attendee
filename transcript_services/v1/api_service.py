@@ -31,9 +31,7 @@ def start_transcription(transcript_uuid):
     }
 
     # Request parameters
-    params = {
-        "transcript_id": transcript_uuid
-    }
+    params = {"transcript_id": transcript_uuid}
 
     # Send POST request
     response = requests.post(url, headers=headers, params=params)
@@ -67,9 +65,7 @@ def could_not_record(transcript_id):
     }
 
     # Request parameters
-    params = {
-        "transcript_id": transcript_id
-    }
+    params = {"transcript_id": transcript_id}
 
     # Send POST request
     response = requests.post(url, headers=headers, params=params)

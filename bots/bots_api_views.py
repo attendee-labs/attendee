@@ -140,11 +140,13 @@ def launch_bot(bot):
         # Default to launching bot via celery
         run_bot.delay(bot.id)
 
+
 class RecordingCreateView(APIView):
     """
     RecordingCreateView is a view that handles the creation of a bot and its associated recording analogue to the
     BotCreateView but with special implementation details for Transcript.
     """
+
     authentication_classes = [ApiKeyAuthentication]
 
     def post(self, request):
@@ -189,15 +191,7 @@ class RecordingCreateView(APIView):
             settings=settings,
         )
 
-        Recording.objects.create(
-            bot=bot,
-            recording_type=RecordingTypes.AUDIO_AND_VIDEO,
-            transcription_type=TranscriptionTypes.NON_REALTIME,
-            transcription_provider=transcription_provider_from_meeting_url_and_transcription_settings(meeting_url,
-                                                                                                      transcription_settings),
-            is_default_recording=True,
-            file_name=file_name
-        )
+        Recording.objects.create(bot=bot, recording_type=RecordingTypes.AUDIO_AND_VIDEO, transcription_type=TranscriptionTypes.NON_REALTIME, transcription_provider=transcription_provider_from_meeting_url_and_transcription_settings(meeting_url, transcription_settings), is_default_recording=True, file_name=file_name)
 
         # Try to transition the state from READY to JOINING
         BotEventManager.create_event(bot, BotEventTypes.JOIN_REQUESTED)
@@ -205,6 +199,7 @@ class RecordingCreateView(APIView):
         launch_bot(bot)
 
         return Response(BotSerializer(bot).data, status=status.HTTP_201_CREATED)
+
 
 def create_bot_media_request_for_image(bot, image):
     content_type = image["type"]

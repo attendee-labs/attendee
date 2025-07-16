@@ -14,7 +14,7 @@ class StreamingUploader:
         self.chunk_size = chunk_size
         self.buffer = BytesIO()
         self.upload_started = False
-        
+
         # For Swift, we'll accumulate all data and upload at the end
         # Swift doesn't have the same multipart upload mechanism as S3
 
@@ -28,18 +28,14 @@ class StreamingUploader:
             # Get all buffered data
             self.buffer.seek(0)
             data = self.buffer.getvalue()
-            
+
             if data:
                 # Upload to Swift
-                self.swift_client.put_object(
-                    self.container,
-                    self.key,
-                    contents=data
-                )
+                self.swift_client.put_object(self.container, self.key, contents=data)
                 logger.info(f"Successfully uploaded {len(data)} bytes to swift://{self.container}/{self.key}")
             else:
                 logger.warning("No data to upload")
-                
+
         except Exception as e:
             logger.error(f"Swift upload error: {e}")
             raise
