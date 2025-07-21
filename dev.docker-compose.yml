@@ -1,34 +1,37 @@
 services:
-  attendee-worker-local:
+  recorder-worker:
+    container_name: recorder-worker
+    #build: ./transcript-meeting-recorder
     build: ./
-    volumes:
-      - .:/attendee
-    networks:
-      - attendee_network
     env_file:
       - .env
+    volumes:
+    # - .:/transcript-meeting-recorder/attendee
+    - .:/attendee
+    networks:
+      - recorder_network
     environment:
       - POSTGRES_HOST=postgres
+      - REDIS_URL=redis://redis:6379/5
       - DJANGO_SETTINGS_MODULE=attendee.settings.development
-    command:
-      [
-        "/bin/bash",
-        "-c",
-        "/opt/bin/entrypoint.sh && celery -A attendee worker -l INFO",
-      ]
+    command: ["/bin/bash", "-c", "/opt/bin/entrypoint.sh && celery -A attendee worker -l INFO"]
 
-  attendee-app-local:
+  recorder-api:
+    container_name: recorder-api
+    #build: ./transcript-meeting-recorder
     build: ./
-    volumes:
-      - .:/attendee
-    networks:
-      - attendee_network
-    ports:
-      - "8000:8000"
     env_file:
       - .env
+    volumes:
+    # - .:/transcript-meeting-recorder/attendee
+    - .:/attendee
+    networks:
+      - recorder_network
+    ports:
+      - "8001:8000" # Expose port 8000 of the container to port 8001 on the host
     environment:
       - POSTGRES_HOST=postgres
+      - REDIS_URL=redis://redis:6379/5
       - DJANGO_SETTINGS_MODULE=attendee.settings.development
     command: python manage.py runserver 0.0.0.0:8000
 
@@ -40,21 +43,21 @@ services:
       POSTGRES_PASSWORD: attendee_development_user
       PGDATA: /data/postgres
     volumes:
-      - postgres:/data/postgres
+       - postgres:/data/postgres
     networks:
-      - attendee_network
+      - recorder_network
     restart: unless-stopped
 
   redis:
     image: redis:7-alpine
     networks:
-      - attendee_network
+      - recorder_network
     restart: unless-stopped
     volumes:
       - redis:/data/redis
 
 networks:
-  attendee_network:
+  recorder_network:
     driver: bridge
 
 volumes:

@@ -8,18 +8,18 @@ Thank you for your interest in contributing to Attendee! This document provides 
 2. Set up the development environment:
    ```bash
    # Build the Docker image (takes ~5 minutes)
-   docker compose -f dev.docker-compose.yaml build
+   docker compose -f dev.docker-compose.yml build
    
    # Create local environment variables
-   docker compose -f dev.docker-compose.yaml run --rm attendee-app-local python init_env.py > .env
+   docker compose -f dev.docker-compose.yml run --rm attendee-app-local python init_env.py > .env
    
    # Edit .env and add your AWS credentials
    
    # Start all services
-   docker compose -f dev.docker-compose.yaml up
+   docker compose -f dev.docker-compose.yml up
    
    # In a separate terminal, run migrations
-   docker compose -f dev.docker-compose.yaml exec attendee-app-local python manage.py migrate
+   docker compose -f dev.docker-compose.yml exec attendee-app-local python manage.py migrate
    ```
 
 3. Create a new branch for your changes:
