@@ -1,0 +1,68 @@
+$kubectl_current_text = 'arn:aws:eks:us-east-1:856539741521:cluster/hilarious-dubstep-dolphin'
+current_kubectl_context = `kubectl config current-context`&.strip
+if current_kubectl_context != $kubectl_current_text
+    puts("switching kubectl context to #{$kubectl_current_text}")
+    `kubectl config use-context #{$kubectl_current_text}`
+end
+current_kubectl_context = `kubectl config current-context`&.strip
+if current_kubectl_context != $kubectl_current_text
+    raise "Currently selected Kubernetes cluster is not set to the expected value: #{$kubectl_current_text}"
+end
+
+def aws_secret(secret_name)
+    return `aws secretsmanager get-secret-value --secret-id "#{secret_name}" --query SecretString --output text`&.strip
+end
+
+# Create RBAC resources for pod creation
+puts("Creating RBAC resources for pod creation...")
+`kubectl create role pod-creator --verb=create,get,list,delete,watch --resource=pods --namespace=attendee --dry-run=client -o yaml | kubectl apply -f -`
+`kubectl create rolebinding pod-creator-binding --role=pod-creator --serviceaccount=attendee:default --namespace=attendee --dry-run=client -o yaml | kubectl apply -f -`
+
+# Give a name to your app
+app 'attendee'
+
+# Get the code from this Git repository
+repo '../../../attendee'
+
+# Build the Docker image automatically (or provide a Dockerfile)
+dockerfile 'Dockerfile'
+
+# Publish the Docker image in a registry
+image 'chrisdadev/attendee-aws'
+
+# Connect to this Kubernetes cluster
+kubeconfig '/Users/mac/.kube/config'
+
+health 'http://web-service.attendee.svc.cluster.local/health/'
+
+lb 'service.beta.kubernetes.io/aws-load-balancer-backend-protocol', 'http'
+lb 'service.beta.kubernetes.io/aws-load-balancer-scheme', 'internet-facing'
+lb 'service.beta.kubernetes.io/aws-load-balancer-type', 'nlb'
+lb 'service.beta.kubernetes.io/aws-load-balancer-nlb-target-type', 'instance'
+# lb 'service.beta.kubernetes.io/aws-load-balancer-ssl-cert', 'arn:aws:acm:us-east-2:000410248254:certificate/26b78525-f9bb-4b6b-acef-da44ffc116f9'
+# lb 'service.beta.kubernetes.io/aws-load-balancer-ssl-ports', 'https'
+
+env 'DJANGO_SETTINGS_MODULE', 'attendee.settings.staging-gke'
+env 'DJANGO_SECRET_KEY', aws_secret('DJANGO_SECRET_KEY'), secret: true
+env 'CREDENTIALS_ENCRYPTION_KEY', aws_secret('CREDENTIALS_ENCRYPTION_KEY'), secret: true
+env 'DATABASE_URL', aws_secret('DATABASE_URL'), secret: true
+env 'REDIS_URL', aws_secret('REDIS_URL'), secret: true
+#env 'STRIPE_SECRET_KEY', aws_secret('STRIPE_SECRET_KEY'), secret: true
+#env 'STRIPE_WEBHOOK_SECRET', aws_secret('STRIPE_WEBHOOK_SECRET'), secret: true
+env 'AWS_RECORDING_STORAGE_BUCKET_NAME', aws_secret('AWS_RECORDING_STORAGE_BUCKET_NAME'), secret: true
+env 'AWS_ACCESS_KEY_ID', aws_secret('AWS_ACCESS_KEY_ID'), secret: true
+env 'AWS_SECRET_ACCESS_KEY', aws_secret('AWS_SECRET_ACCESS_KEY'), secret: true
+env 'ERROR_REPORTS_RECEIVER_EMAIL_ADDRESS', 'noah+awsstaging@attendee.dev'
+env 'LAUNCH_BOT_METHOD', 'kubernetes'
+#env 'CLOUD_LOGS_LINK_FORMATTING_STR', "https://console.cloud.google.com/logs/query;query=resource.type%3D%22k8s_container%22%0Aresource.labels.pod_name%3D%22{pod_name}%22;project=attendee-staging"
+#env 'CHARGE_CREDITS_FOR_BOTS', 'true'
+
+# Run and scale any command on Kubernetes
+proc :web, 'sh -c "python manage.py collectstatic --no-input && gunicorn attendee.wsgi"', cpu: 1, ram: 1
+proc :worker, 'celery -A attendee worker -l info', cpu: 1, ram: 1
+
+# Migrate command
+#migrate 'python manage.py migrate'
+
+# Cronjob to clean up completed pods
+#cron :cleanupbotpods, '0 * * * *', 'python manage.py clean_up_completed_bot_pods'
