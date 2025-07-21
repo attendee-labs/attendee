@@ -19,8 +19,8 @@ def get_swift_client():
 
 
 def get_container_name():
-    # Use SWIFT_CONTAINER_AUDIO as the default container for audio files
-    return os.getenv("SWIFT_CONTAINER_AUDIO", "transcript-audio")
+    # Use SWIFT_CONTAINER_MEETS as the default container for video files
+    return os.getenv("SWIFT_CONTAINER_MEETS", "transcript-meets")
 
 
 def upload_file_to_swift(file_content_or_path, object_name):

@@ -14,8 +14,8 @@ class InfomaniakSwiftStorage(Storage):
         self.app_cred_id = os.getenv("OS_APPLICATION_CREDENTIAL_ID")
         self.app_cred_secret = os.getenv("OS_APPLICATION_CREDENTIAL_SECRET")
         self.region = os.getenv("OS_REGION_NAME")
-        # Use SWIFT_CONTAINER_AUDIO as the default container for Django file storage
-        self.container_name = os.getenv("SWIFT_CONTAINER_AUDIO", "transcript-audio")
+        # Use SWIFT_CONTAINER_MEETS as the default container for Django file storage
+        self.container_name = os.getenv("SWIFT_CONTAINER_MEETS", "transcript-meets")
         self._connection = None
 
     @property

@@ -208,6 +208,5 @@ STORAGES = {
     },
 }
 # Swift container configuration
-SWIFT_CONTAINER_AUDIO = os.getenv("SWIFT_CONTAINER_AUDIO")
 SWIFT_CONTAINER_MEETS = os.getenv("SWIFT_CONTAINER_MEETS")
 CHARGE_CREDITS_FOR_BOTS = os.getenv("CHARGE_CREDITS_FOR_BOTS", "false") == "true"

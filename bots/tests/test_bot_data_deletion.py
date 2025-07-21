@@ -37,7 +37,7 @@ class TestBotDataDeletion(TransactionTestCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        cls.settings_override = override_settings(SWIFT_CONTAINER_AUDIO="test-bucket")
+        cls.settings_override = override_settings(SWIFT_CONTAINER_MEETS="test-bucket")
         cls.settings_override.enable()
 
     def setUp(self):
