@@ -6,7 +6,7 @@ from django.utils import timezone
 
 from accounts.models import Organization
 from bots.bots_api_utils import BotCreationSource, create_bot, create_webhook_subscription, validate_meeting_url_and_credentials
-from bots.models import Bot, BotEventTypes, BotStates, Project, WebhookSubscription, WebhookTriggerTypes
+from bots.models import Bot, BotEventTypes, BotStates, Credentials, Project, TranscriptionProviders, WebhookSubscription, WebhookTriggerTypes
 
 
 class TestValidateMeetingUrlAndCredentials(TestCase):
@@ -44,6 +44,44 @@ class TestCreateBot(TestCase):
         self.assertIsNotNone(bot)
         self.assertIsNotNone(bot.recordings.first())
         self.assertIsNone(error)
+
+    def test_create_zoom_bot_with_default_settings(self):
+        Credentials.objects.create(project=self.project, credential_type=Credentials.CredentialTypes.ZOOM_OAUTH)
+        bot, error = create_bot(data={"meeting_url": "https://zoom.us/j/123456789", "bot_name": "Test Bot"}, source=BotCreationSource.API, project=self.project)
+        print("error", error)
+        self.assertIsNotNone(bot)
+        self.assertIsNotNone(bot.recordings.first())
+        self.assertIsNone(error)
+        self.assertEqual(bot.recordings.first().transcription_provider, TranscriptionProviders.DEEPGRAM)
+        self.assertEqual(bot.use_zoom_web_adapter(), False)
+
+    def test_create_zoom_bot_with_default_settings_and_web_adapter(self):
+        Credentials.objects.create(project=self.project, credential_type=Credentials.CredentialTypes.ZOOM_OAUTH)
+        bot, error = create_bot(data={"meeting_url": "https://zoom.us/j/123456789", "bot_name": "Test Bot", "zoom_settings": {"sdk": "web"}}, source=BotCreationSource.API, project=self.project)
+        self.assertIsNotNone(bot)
+        self.assertIsNotNone(bot.recordings.first())
+        self.assertIsNone(error)
+        self.assertEqual(bot.recordings.first().transcription_provider, TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM)
+        self.assertEqual(bot.use_zoom_web_adapter(), True)
+
+    def test_create_bot_with_explicit_transcription_settings(self):
+        """Test creating bots with explicit transcription settings for different providers and meeting types"""
+
+        # Test Google Meet bot with Assembly AI transcription settings
+        bot, error = create_bot(data={"meeting_url": "https://meet.google.com/abc-defg-hij", "bot_name": "Test Bot", "transcription_settings": {"assembly_ai": {"language_code": "en", "speech_model": "best"}}}, source=BotCreationSource.API, project=self.project)
+        self.assertIsNotNone(bot)
+        self.assertIsNotNone(bot.recordings.first())
+        self.assertIsNone(error)
+        self.assertEqual(bot.recordings.first().transcription_provider, TranscriptionProviders.ASSEMBLY_AI)
+
+        # Test Zoom bot with explicit closed captions (requires credentials and web SDK)
+        Credentials.objects.create(project=self.project, credential_type=Credentials.CredentialTypes.ZOOM_OAUTH)
+        bot2, error2 = create_bot(data={"meeting_url": "https://zoom.us/j/987654321", "bot_name": "Zoom CC Test Bot", "zoom_settings": {"sdk": "web"}, "transcription_settings": {"meeting_closed_captions": {"zoom_language": "Spanish"}}}, source=BotCreationSource.API, project=self.project)
+        self.assertIsNotNone(bot2)
+        self.assertIsNotNone(bot2.recordings.first())
+        self.assertIsNone(error2)
+        self.assertEqual(bot2.recordings.first().transcription_provider, TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM)
+        self.assertEqual(bot2.use_zoom_web_adapter(), True)
 
     def test_create_bot_with_image(self):
         bot, error = create_bot(data={"meeting_url": "https://teams.microsoft.com/meeting/123", "bot_name": "Test Bot", "bot_image": {"type": "image/png", "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="}}, source=BotCreationSource.API, project=self.project)
@@ -131,6 +169,7 @@ class TestCreateBot(TestCase):
         )
         self.assertIsNotNone(bot1)
         self.assertIsNone(error1)
+        self.assertEqual(bot1.recordings.first().transcription_provider, TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM)
 
         # Second bot creation with the same key should fail
         bot2, error2 = create_bot(

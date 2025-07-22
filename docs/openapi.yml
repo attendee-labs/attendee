@@ -1212,6 +1212,46 @@ components:
                     ''en-us''). This will change the closed captions language for
                     everyone in the meeting, not just the bot. See here for available
                     languages and codes: https://docs.google.com/spreadsheets/d/1F-1iLJ_4btUZJkZcD2m5sF3loqGbB0vTzgOubwQTb5o/edit?usp=sharing'
+                zoom_language:
+                  type: string
+                  enum:
+                  - Arabic
+                  - Cantonese
+                  - Chinese (Simplified)
+                  - Czech
+                  - Danish
+                  - Dutch
+                  - English
+                  - Estonian
+                  - Finnish
+                  - French
+                  - French (Canada)
+                  - German
+                  - Hebrew
+                  - Hindi
+                  - Hungarian
+                  - Indonesian
+                  - Italian
+                  - Japanese
+                  - Korean
+                  - Malay
+                  - Persian
+                  - Polish
+                  - Portuguese
+                  - Romanian
+                  - Russian
+                  - Spanish
+                  - Swedish
+                  - Tagalog
+                  - Tamil
+                  - Telugu
+                  - Thai
+                  - Turkish
+                  - Ukrainian
+                  - Vietnamese
+                  description: The language to use for Zoom closed captions. (e.g.
+                    'Spanish'). This will change the closed captions language for
+                    everyone in the meeting, not just the bot.
                 merge_consecutive_captions:
                   type: boolean
                   description: The captions from Google Meet can end in the middle
@@ -1379,6 +1419,22 @@ components:
           default:
             use_login: false
           description: The Microsoft Teams-specific settings for the bot.
+        zoom_settings:
+          type: object
+          properties:
+            sdk:
+              type: string
+              enum:
+              - web
+              - native
+              description: The Zoom SDK to use for the bot. Use 'web' when you need
+                closed caption based transcription.
+              default: native
+          required: []
+          additionalProperties: false
+          default:
+            sdk: native
+          description: The Zoom-specific settings for the bot.
         debug_settings:
           type: object
           properties:

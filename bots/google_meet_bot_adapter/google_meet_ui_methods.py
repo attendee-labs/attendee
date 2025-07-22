@@ -314,7 +314,7 @@ class GoogleMeetUIMethods:
         logger.info("Waiting for the 'Change layout' list item...")
         change_layout_list_item = self.locate_element(
             step="change_layout_item",
-            condition=EC.presence_of_element_located((By.XPATH, '//li[.//span[text()="Change layout"]]')),
+            condition=EC.presence_of_element_located((By.XPATH, '//li[.//span[text()="Change layout" or text()="Adjust view"] or @jsname="WZerud"]')),
             wait_time_seconds=6,
         )
         logger.info("Clicking the 'Change layout' list item....")

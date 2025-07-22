@@ -10,7 +10,7 @@ jobs:
   test:
     name: Run test suite
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
 
     # Add service containers
     services:
@@ -70,7 +70,7 @@ jobs:
           -e POSTGRES_HOST \
           -e REDIS_URL \
           -e DJANGO_SETTINGS_MODULE \
-          attendee-test:latest bash -c "python init_env.py > .env && python manage.py test --keepdb bots.tests"
+          attendee-test:latest bash -c "python init_env.py > .env && python manage.py test --keepdb --tag zoom_tests && python manage.py test --keepdb --exclude-tag zoom_tests"
 
   lint:
     name: Run linting

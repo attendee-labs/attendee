@@ -42,7 +42,7 @@ def get_openai_model_enum():
     return default_models
 
 
-from .utils import is_valid_png, meeting_type_from_url, transcription_provider_from_meeting_url_and_transcription_settings
+from .utils import is_valid_png, meeting_type_from_url, transcription_provider_from_bot_creation_data
 
 # Define the schema once
 BOT_IMAGE_SCHEMA = {
@@ -163,6 +163,7 @@ class BotImageSerializer(serializers.Serializer):
                         "type": "string",
                         "description": "The language code for Teams closed captions (e.g. 'en-us'). This will change the closed captions language for everyone in the meeting, not just the bot. See here for available languages and codes: https://docs.google.com/spreadsheets/d/1F-1iLJ_4btUZJkZcD2m5sF3loqGbB0vTzgOubwQTb5o/edit?usp=sharing",
                     },
+                    "zoom_language": {"type": "string", "enum": ["Arabic", "Cantonese", "Chinese (Simplified)", "Czech", "Danish", "Dutch", "English", "Estonian", "Finnish", "French", "French (Canada)", "German", "Hebrew", "Hindi", "Hungarian", "Indonesian", "Italian", "Japanese", "Korean", "Malay", "Persian", "Polish", "Portuguese", "Romanian", "Russian", "Spanish", "Swedish", "Tagalog", "Tamil", "Telugu", "Thai", "Turkish", "Ukrainian", "Vietnamese"], "description": "The language to use for Zoom closed captions. (e.g. 'Spanish'). This will change the closed captions language for everyone in the meeting, not just the bot."},
                     "merge_consecutive_captions": {"type": "boolean", "description": "The captions from Google Meet can end in the middle of a sentence, which is not ideal. This setting deals with that by merging consecutive captions for a given speaker that occur close together in time. Turned off by default."},
                 },
                 "additionalProperties": False,
@@ -303,6 +304,25 @@ class MetadataJSONField(serializers.JSONField):
     }
 )
 class TeamsSettingsJSONField(serializers.JSONField):
+    pass
+
+
+@extend_schema_field(
+    {
+        "type": "object",
+        "properties": {
+            "sdk": {
+                "type": "string",
+                "enum": ["web", "native"],
+                "description": "The Zoom SDK to use for the bot. Use 'web' when you need closed caption based transcription.",
+                "default": "native",
+            },
+        },
+        "required": [],
+        "additionalProperties": False,
+    }
+)
+class ZoomSettingsJSONField(serializers.JSONField):
     pass
 
 
@@ -648,10 +668,14 @@ class CreateBotSerializer(serializers.Serializer):
             "meeting_closed_captions": {
                 "type": "object",
                 "properties": {
-                    "google_meet_language": {"type": "string"},
+                    "google_meet_language": {"type": "string", "enum": ["af-ZA", "sq-AL", "am-ET", "ar-EG", "ar-x-LEVANT", "ar-x-MAGHREBI", "ar-x-GULF", "ar-AE", "hy-AM", "az-AZ", "eu-ES", "bn-BD", "bg-BG", "my-MM", "ca-ES", "cmn-Hans-CN", "cmn-Hant-TW", "cs-CZ", "nl-NL", "en-US", "en-AU", "en-IN", "en-PH", "en-GB", "et-EE", "fil-PH", "fi-FI", "fr-FR", "fr-CA", "gl-ES", "ka-GE", "de-DE", "el-GR", "gu-IN", "iw-IL", "hi-IN", "hu-HU", "is-IS", "id-ID", "it-IT", "ja-JP", "jv-ID", "kn-IN", "kk-KZ", "km-KH", "rw-RW", "ko-KR", "lo-LA", "lv-LV", "lt-LT", "mk-MK", "ms-MY", "ml-IN", "mr-IN", "mn-MN", "ne-NP", "nso-ZA", "nb-NO", "fa-IR", "pl-PL", "pt-BR", "pt-PT", "ro-RO", "ru-RU", "sr-RS", "st-ZA", "si-LK", "sk-SK", "sl-SI", "es-MX", "es-ES", "su-ID", "sw", "ss-latn-ZA", "sv-SE", "ta-IN", "te-IN", "th-TH", "ve-ZA", "tn-latn-ZA", "tr-TR", "uk-UA", "ur-PK", "uz-UZ", "vi-VN", "xh-ZA", "ts-ZA", "zu-ZA"]},
                     "teams_language": {
                         "type": "string",
                         "enum": ["ar-sa", "ar-ae", "bg-bg", "ca-es", "zh-cn", "zh-hk", "zh-tw", "hr-hr", "cs-cz", "da-dk", "nl-be", "nl-nl", "en-au", "en-ca", "en-in", "en-nz", "en-gb", "en-us", "et-ee", "fi-fi", "fr-ca", "fr-fr", "de-de", "de-ch", "el-gr", "he-il", "hi-in", "hu-hu", "id-id", "it-it", "ja-jp", "ko-kr", "lv-lv", "lt-lt", "nb-no", "pl-pl", "pt-br", "pt-pt", "ro-ro", "ru-ru", "sr-rs", "sk-sk", "sl-si", "es-mx", "es-es", "sv-se", "th-th", "tr-tr", "uk-ua", "vi-vn", "cy-gb"],
+                    },
+                    "zoom_language": {
+                        "type": "string",
+                        "enum": ["Arabic", "Cantonese", "Chinese (Simplified)", "Czech", "Danish", "Dutch", "English", "Estonian", "Finnish", "French", "French (Canada)", "German", "Hebrew", "Hindi", "Hungarian", "Indonesian", "Italian", "Japanese", "Korean", "Malay", "Persian", "Polish", "Portuguese", "Romanian", "Russian", "Spanish", "Swedish", "Tagalog", "Tamil", "Telugu", "Thai", "Turkish", "Ukrainian", "Vietnamese"],
                     },
                     "merge_consecutive_captions": {"type": "boolean", "description": "The captions from Google Meet can end in the middle of a sentence, which is not ideal. This setting deals with that by merging consecutive captions for a given speaker that occur close together in time. Turned off by default."},
                 },
@@ -694,10 +718,15 @@ class CreateBotSerializer(serializers.Serializer):
     def validate_transcription_settings(self, value):
         meeting_url = self.initial_data.get("meeting_url")
         meeting_type = meeting_type_from_url(meeting_url)
+        use_zoom_web_adapter = self.initial_data.get("zoom_settings", {}).get("sdk", "native") == "web"
 
+        # Set a default transcription_settings value if nothing given
         if value is None:
             if meeting_type == MeetingTypes.ZOOM:
-                value = {"deepgram": {"language": "multi"}}
+                if use_zoom_web_adapter:
+                    value = {"meeting_closed_captions": {}}
+                else:
+                    value = {"deepgram": {"language": "multi"}}
             elif meeting_type == MeetingTypes.GOOGLE_MEET:
                 value = {"meeting_closed_captions": {}}
             elif meeting_type == MeetingTypes.TEAMS:
@@ -714,13 +743,19 @@ class CreateBotSerializer(serializers.Serializer):
         if "deepgram" in value and ("language" not in value["deepgram"] or value["deepgram"]["language"] is None):
             value["deepgram"]["language"] = "multi"
 
+        initial_data_with_value = {**self.initial_data, "transcription_settings": value}
+
         if meeting_type == MeetingTypes.TEAMS:
-            if transcription_provider_from_meeting_url_and_transcription_settings(meeting_url, value) != TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM:
+            if transcription_provider_from_bot_creation_data(initial_data_with_value) != TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM:
                 raise serializers.ValidationError({"transcription_settings": "API-based transcription is not supported for Teams. Please use Meeting Closed Captions to transcribe Teams meetings."})
 
-        if meeting_type == MeetingTypes.ZOOM:
-            if transcription_provider_from_meeting_url_and_transcription_settings(meeting_url, value) == TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM:
-                raise serializers.ValidationError({"transcription_settings": "Closed caption based transcription is not supported for Zoom. Please use Deepgram to transcribe Zoom meetings."})
+        if meeting_type == MeetingTypes.ZOOM and use_zoom_web_adapter:
+            if transcription_provider_from_bot_creation_data(initial_data_with_value) != TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM:
+                raise serializers.ValidationError({"transcription_settings": "API-based transcription is not supported for Zoom when using the web SDK. Please set 'zoom_settings.sdk' to 'native' in the bot creation request."})
+
+        if meeting_type == MeetingTypes.ZOOM and not use_zoom_web_adapter:
+            if transcription_provider_from_bot_creation_data(initial_data_with_value) == TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM:
+                raise serializers.ValidationError({"transcription_settings": "Closed caption based transcription is not supported for Zoom when using the native SDK. Please set 'zoom_settings.sdk' to 'web' in the bot creation request."})
 
         if value.get("deepgram", {}).get("callback") and value.get("deepgram", {}).get("detect_language"):
             raise serializers.ValidationError({"transcription_settings": "Language detection is not supported for streaming transcription. Please pass language='multi' instead of detect_language=true."})
@@ -890,6 +925,41 @@ class CreateBotSerializer(serializers.Serializer):
 
         return value
 
+    zoom_settings = ZoomSettingsJSONField(
+        help_text="The Zoom-specific settings for the bot.",
+        required=False,
+        default={"sdk": "native"},
+    )
+
+    ZOOM_SETTINGS_SCHEMA = {
+        "type": "object",
+        "properties": {
+            "sdk": {"type": "string", "enum": ["web", "native"]},
+        },
+        "required": [],
+        "additionalProperties": False,
+    }
+
+    def validate_zoom_settings(self, value):
+        if value is None:
+            return value
+
+        # Define defaults
+        defaults = {"sdk": "native"}
+
+        try:
+            jsonschema.validate(instance=value, schema=self.ZOOM_SETTINGS_SCHEMA)
+        except jsonschema.exceptions.ValidationError as e:
+            raise serializers.ValidationError(e.message)
+
+        # If at least one attribute is provided, apply defaults for any missing attributes
+        if value:
+            for key, default_value in defaults.items():
+                if key not in value:
+                    value[key] = default_value
+
+        return value
+
     debug_settings = DebugSettingsJSONField(
         help_text="The debug settings for the bot, e.g. {'create_debug_recording': True}.",
         required=False,
@@ -981,6 +1051,22 @@ class CreateBotSerializer(serializers.Serializer):
             raise serializers.ValidationError("join_at cannot be in the past")
 
         return value
+
+    def validate(self, data):
+        """Validate that no unexpected fields are provided."""
+        # Get all the field names defined in this serializer
+        expected_fields = set(self.fields.keys())
+
+        # Get all the fields provided in the input data
+        provided_fields = set(self.initial_data.keys())
+
+        # Check for unexpected fields
+        unexpected_fields = provided_fields - expected_fields
+
+        if unexpected_fields:
+            raise serializers.ValidationError(f"Unexpected field(s): {', '.join(sorted(unexpected_fields))}. Allowed fields are: {', '.join(sorted(expected_fields))}")
+
+        return data
 
 
 class BotSerializer(serializers.ModelSerializer):

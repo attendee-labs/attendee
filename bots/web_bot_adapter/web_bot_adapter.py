@@ -19,7 +19,7 @@ from bots.models import ParticipantEventTypes, RecordingViews
 from bots.utils import half_ceil, scale_i420
 
 from .debug_screen_recorder import DebugScreenRecorder
-from .ui_methods import UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableException, UiRetryableExpectedException
+from .ui_methods import UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiIncorrectPasswordException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableException, UiRetryableExpectedException
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +92,7 @@ class WebBotAdapter(BotAdapter):
 
         self.silence_detection_activated = False
         self.joined_at = None
+        self.recording_permission_granted_at = None
 
         self.ready_to_send_chat_messages = False
 
@@ -229,6 +230,10 @@ class WebBotAdapter(BotAdapter):
         self.left_meeting = True
         self.send_message_callback({"message": self.Messages.MEETING_ENDED})
 
+    def handle_failed_to_join(self, reason):
+        logger.info(f"failed to join meeting with reason {reason}")
+        self.subclass_specific_handle_failed_to_join(reason)
+
     def handle_caption_update(self, json_data):
         if self.recording_paused:
             return
@@ -303,6 +308,12 @@ class WebBotAdapter(BotAdapter):
                                 self.handle_removed_from_meeting()
                             if json_data.get("change") == "meeting_ended":
                                 self.handle_meeting_ended()
+                            if json_data.get("change") == "failed_to_join":
+                                self.handle_failed_to_join(json_data.get("reason"))
+
+                        elif json_data.get("type") == "RecordingPermissionChange":
+                            if json_data.get("change") == "granted":
+                                self.after_bot_can_record_meeting()
 
                 elif message_type == 2:  # VIDEO
                     self.process_video_frame(message)
@@ -358,6 +369,9 @@ class WebBotAdapter(BotAdapter):
 
     def send_login_attempt_failed_message(self):
         self.send_message_callback({"message": self.Messages.LOGIN_ATTEMPT_FAILED})
+
+    def send_incorrect_password_message(self):
+        self.send_message_callback({"message": self.Messages.COULD_NOT_CONNECT_TO_MEETING})
 
     def send_debug_screenshot_message(self, step, exception, inner_exception):
         current_time = datetime.datetime.now()
@@ -456,6 +470,7 @@ class WebBotAdapter(BotAdapter):
         # Combine them ensuring libraries load first
         combined_code = f"""
             {initial_data_code}
+            {self.subclass_specific_initial_data_code()}
             {libraries_code}
             {payload_code}
         """
@@ -524,6 +539,10 @@ class WebBotAdapter(BotAdapter):
                 self.send_meeting_not_found_message()
                 return
 
+            except UiIncorrectPasswordException:
+                self.send_incorrect_password_message()
+                return
+
             except UiRetryableExpectedException as e:
                 if num_retries >= max_retries:
                     logger.info(f"Failed to join meeting and the {e.__class__.__name__} exception is retryable but the number of retries exceeded the limit and there were {num_expected_exceptions} expected exceptions, so returning")
@@ -570,14 +589,23 @@ class WebBotAdapter(BotAdapter):
 
             sleep(1)
 
-        self.send_message_callback({"message": self.Messages.BOT_JOINED_MEETING})
-        self.send_message_callback({"message": self.Messages.BOT_RECORDING_PERMISSION_GRANTED})
+        self.after_bot_joined_meeting()
+        self.subclass_specific_after_bot_joined_meeting()
 
+    def after_bot_joined_meeting(self):
+        self.send_message_callback({"message": self.Messages.BOT_JOINED_MEETING})
+        self.joined_at = time.time()
+        self.update_only_one_participant_in_meeting_at()
+
+    def after_bot_can_record_meeting(self):
+        if self.recording_permission_granted_at is not None:
+            return
+
+        self.recording_permission_granted_at = time.time()
+        self.send_message_callback({"message": self.Messages.BOT_RECORDING_PERMISSION_GRANTED})
         self.send_frames = True
         self.driver.execute_script("window.ws?.enableMediaSending();")
         self.first_buffer_timestamp_ms_offset = self.driver.execute_script("return performance.timeOrigin;")
-        self.joined_at = time.time()
-        self.update_only_one_participant_in_meeting_at()
 
         if self.start_recording_screen_callback:
             sleep(2)
@@ -729,3 +757,15 @@ class WebBotAdapter(BotAdapter):
 
     def send_chat_message(self, text):
         logger.info("send_chat_message not supported in web bots")
+
+    # Sub-classes can override this to add class-specific initial data code
+    def subclass_specific_initial_data_code(self):
+        return ""
+
+    # Sub-classes can override this to add class-specific after bot joined meeting code
+    def subclass_specific_after_bot_joined_meeting(self):
+        pass
+
+    # Sub-classes can override this to handle class-specific failed to join issues
+    def subclass_specific_handle_failed_to_join(self, reason):
+        pass

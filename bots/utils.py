@@ -440,7 +440,11 @@ def meeting_type_from_url(url):
         return None
 
 
-def transcription_provider_from_meeting_url_and_transcription_settings(url, settings):
+def transcription_provider_from_bot_creation_data(data):
+    url = data.get("meeting_url")
+    settings = data.get("transcription_settings", {})
+    use_zoom_web_adapter = data.get("zoom_settings", {}).get("sdk") == "web"
+
     if "deepgram" in settings:
         return TranscriptionProviders.DEEPGRAM
     elif "gladia" in settings:
@@ -455,7 +459,7 @@ def transcription_provider_from_meeting_url_and_transcription_settings(url, sett
         return TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM
 
     # Return default provider. Which is deepgram for Zoom, and meeting_closed_captions for Google Meet / Teams
-    if meeting_type_from_url(url) == MeetingTypes.ZOOM:
+    if meeting_type_from_url(url) == MeetingTypes.ZOOM and not use_zoom_web_adapter:
         return TranscriptionProviders.DEEPGRAM
     return TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM
 

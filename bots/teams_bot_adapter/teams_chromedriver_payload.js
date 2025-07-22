@@ -1449,46 +1449,86 @@ const processDominantSpeakerHistoryMessage = (item) => {
     realConsole?.log('newDominantSpeakerParticipant', dominantSpeakerManager.getDominantSpeaker());
 }
 
+class UtteranceIdGenerator {
+    constructor(generate = () => crypto.randomUUID()) {
+      this._activeIds = new Map();  // Map<speakerKey, utteranceId>
+      this._generate = generate;    // Injectable for tests
+    }
+  
+    /**
+     * @param {string} speakerKey  – any stable identifier for the speaker
+     * @param {boolean} isFinal    – true only on the last chunk of an utterance
+     * @returns {string}           – the utteranceId to attach to this chunk
+     */
+    next(speakerKey = 'default', isFinal = false) {
+      // Reuse or create
+      let id = this._activeIds.get(speakerKey);
+      if (!id) {
+        id = this._generate();
+        // Only keep it around if more chunks are expected
+        if (!isFinal) this._activeIds.set(speakerKey, id);
+      } else if (isFinal) {
+        // Utterance ends: remove from the map after returning the same ID
+        this._activeIds.delete(speakerKey);
+      }
+  
+      return id;
+    }
+  
+    /** Optional: free all state (e.g., when a call ends) */
+    dispose() {
+      this._activeIds.clear();
+    }
+}
+
+const utteranceIdGenerator = new UtteranceIdGenerator();
+
 const processClosedCaptionData = (item) => {
     realConsole?.log('processClosedCaptionData', item);
     if (!window.ws) {
         return;
     }
 
-    const captionId = item.id.split("/")[0] + ":" + item.timestampAudioSent.toString();
-
     const itemConverted = {
         deviceId: item.userId,
-        captionId: captionId,
+        captionId: utteranceIdGenerator.next(item.userId, item.isFinal),
         text: item.text,
         audioTimestamp: item.timestampAudioSent,
         isFinal: item.isFinal
     };
-
+    
     window.ws.sendClosedCaptionUpdate(itemConverted);
 }
 
-const handleMainChannelEvent = (event) => {
-    //realConsole?.log('handleMainChannelEvent', event);
-    const decodedData = new Uint8Array(event.data);
-
-    const jsonRawString = new TextDecoder().decode(decodedData);
-    //realConsole?.log('handleMainChannelEvent jsonRawString', jsonRawString);
-    
-    // Find the start of the JSON data (looking for '[' or '{' character)
-    let jsonStart = 0;
+const decodeMainChannelData = (data) => {
+    const decodedData = new Uint8Array(data);
     for (let i = 0; i < decodedData.length; i++) {
         if (decodedData[i] === 91 || decodedData[i] === 123) { // ASCII code for '[' or '{'
-            jsonStart = i;
-            break;
+            const candidateJsonString = new TextDecoder().decode(decodedData.slice(i));
+            try {
+                return JSON.parse(candidateJsonString);
+            }
+            catch(e) {
+                if (e instanceof SyntaxError) {
+                    // If JSON parsing fails, continue looking for the next '[' or '{' character
+                    // as binary data may contain bytes that coincidentally match these character codes
+                    continue;
+                }
+                realConsole?.error('Failed to parse main channel data:', e);
+                return;            
+            }        
         }
     }
-    
-    // Extract and parse the JSON portion
-    const jsonString = new TextDecoder().decode(decodedData.slice(jsonStart));
+}
+
+const handleMainChannelEvent = (event) => {
     try {
-        const parsedData = JSON.parse(jsonString);
-        //realConsole?.log('handleMainChannelEvent parsedData', parsedData);
+        const parsedData = decodeMainChannelData(event.data);
+        if (!parsedData) {
+            realConsole?.error('handleMainChannelEvent: Failed to parse main channel data, returning, data:', event.data);
+            return;
+        }
+        realConsole?.log('handleMainChannelEvent parsedData', parsedData);
         // When you see this parsedData [{"history":[1053,2331],"type":"dsh"}]
         // it corresponds to active speaker
         if (Array.isArray(parsedData)) {
@@ -1508,7 +1548,7 @@ const handleMainChannelEvent = (event) => {
             }
         }
     } catch (e) {
-        realConsole?.error('Failed to parse main channel data:', e);
+        realConsole?.error('handleMainChannelEvent: Failed to parse main channel data:', e);
     }
 }
 
@@ -1524,23 +1564,13 @@ const processSourceRequest = (item) => {
 }
 
 const handleMainChannelSend = (data) => {
-    const decodedData = new Uint8Array(data);
 
-    const jsonRawString = new TextDecoder().decode(decodedData);
-    
-    // Find the start of the JSON data (looking for '[' or '{' character)
-    let jsonStart = 0;
-    for (let i = 0; i < decodedData.length; i++) {
-        if (decodedData[i] === 91 || decodedData[i] === 123) { // ASCII code for '[' or '{'
-            jsonStart = i;
-            break;
-        }
-    }
-    
-    // Extract and parse the JSON portion
-    const jsonString = new TextDecoder().decode(decodedData.slice(jsonStart));
     try {
-        const parsedData = JSON.parse(jsonString);
+        const parsedData = decodeMainChannelData(data);
+        if (!parsedData) {
+            realConsole?.error('handleMainChannelSend: Failed to parse main channel data, returning, data:', data);
+            return;
+        }
         realConsole?.log('handleMainChannelSend parsedData', parsedData);  
         // if it is an array
         if (Array.isArray(parsedData)) {
@@ -1553,7 +1583,7 @@ const handleMainChannelSend = (data) => {
             }
         }
     } catch (e) {
-        realConsole?.error('Failed to parse main channel data:', e);
+        realConsole?.error('handleMainChannelSend: Failed to parse main channel data:', e);
     }
 }
 

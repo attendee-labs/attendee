@@ -29,7 +29,7 @@ from .models import (
 from .serializers import (
     CreateBotSerializer,
 )
-from .utils import meeting_type_from_url, transcription_provider_from_meeting_url_and_transcription_settings
+from .utils import meeting_type_from_url, transcription_provider_from_bot_creation_data
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +133,7 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
     debug_settings = serializer.validated_data["debug_settings"]
     automatic_leave_settings = serializer.validated_data["automatic_leave_settings"]
     teams_settings = serializer.validated_data["teams_settings"]
+    zoom_settings = serializer.validated_data["zoom_settings"]
     bot_image = serializer.validated_data["bot_image"]
     bot_chat_message = serializer.validated_data["bot_chat_message"]
     metadata = serializer.validated_data["metadata"]
@@ -150,6 +151,7 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
         "debug_settings": debug_settings,
         "automatic_leave_settings": automatic_leave_settings,
         "teams_settings": teams_settings,
+        "zoom_settings": zoom_settings,
         "websocket_settings": websocket_settings,
         "callback_settings": callback_settings,
     }
@@ -171,7 +173,7 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
                 bot=bot,
                 recording_type=bot.recording_type(),
                 transcription_type=TranscriptionTypes.NON_REALTIME,
-                transcription_provider=transcription_provider_from_meeting_url_and_transcription_settings(meeting_url, transcription_settings),
+                transcription_provider=transcription_provider_from_bot_creation_data(serializer.validated_data),
                 is_default_recording=True,
             )
 

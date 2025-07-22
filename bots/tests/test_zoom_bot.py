@@ -6,7 +6,7 @@ from unittest.mock import ANY, MagicMock, call, patch
 
 import zoom_meeting_sdk as zoom
 from django.db import connection
-from django.test import override_settings
+from django.test import override_settings, tag
 from django.test.testcases import TransactionTestCase
 
 from bots.automatic_leave_configuration import AutomaticLeaveConfiguration
@@ -320,6 +320,7 @@ def create_mock_deepgram():
     return mock_deepgram
 
 
+@tag("zoom_tests")
 class TestZoomBot(TransactionTestCase):
     @classmethod
     def setUpClass(cls):

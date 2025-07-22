@@ -51,3 +51,6 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
 
     def get_staged_bot_join_delay_seconds(self):
         return 10
+
+    def subclass_specific_after_bot_joined_meeting(self):
+        self.after_bot_can_record_meeting()

@@ -39,3 +39,6 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
 
     def get_staged_bot_join_delay_seconds(self):
         return 5
+
+    def subclass_specific_after_bot_joined_meeting(self):
+        self.after_bot_can_record_meeting()

@@ -259,6 +259,13 @@ def get_transcription_via_openai(utterance):
     if not openai_credentials:
         return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND}
 
+    # If the audio blob is less than 80ms in duration, just return an empty transcription
+    # Audio clips this short are almost never generated, it almost certainly didn't have any speech
+    # and if we send it to the openai api, it will fail with a corrupted file error
+    if utterance.duration_ms < 80:
+        logger.info(f"OpenAI transcription skipped for utterance {utterance.id} because it's less than 80ms in duration")
+        return {"transcript": ""}, None
+
     # Convert PCM audio to MP3
     payload_mp3 = pcm_to_mp3(utterance.audio_blob.tobytes(), sample_rate=utterance.sample_rate)
 
