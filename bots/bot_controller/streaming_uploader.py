@@ -1,98 +1,46 @@
 import logging
-import os
-import threading
 from io import BytesIO
-from queue import Queue
 
-import boto3
+from bots.storage import get_container_name, get_swift_client
 
 logger = logging.getLogger(__name__)
 
 
 class StreamingUploader:
     def __init__(self, bucket, key, chunk_size=5242880):  # 5MB chunks
-        self.s3_client = boto3.client("s3", endpoint_url=os.getenv("AWS_ENDPOINT_URL"))
-        self.bucket = bucket
+        self.swift_client = get_swift_client()
+        self.container = get_container_name()  # Use the configured container name
         self.key = key
         self.chunk_size = chunk_size
         self.buffer = BytesIO()
-        self.upload_id = None
-        self.parts = []
-        self.part_number = 1
+        self.upload_started = False
 
-        # Add upload queue and worker thread
-        self.upload_queue = Queue()
-        self.upload_thread = threading.Thread(target=self._upload_worker, daemon=True)
-        self.upload_thread.start()
-
-    def _upload_worker(self):
-        """Background thread to handle uploads"""
-        while True:
-            try:
-                chunk, part_num = self.upload_queue.get()
-                if chunk is None:  # Sentinel value to stop the thread
-                    break
-
-                response = self.s3_client.upload_part(
-                    Bucket=self.bucket,
-                    Key=self.key,
-                    PartNumber=part_num,
-                    UploadId=self.upload_id,
-                    Body=chunk,
-                )
-
-                self.parts.append({"PartNumber": part_num, "ETag": response["ETag"]})
-            except Exception as e:
-                logging.error(f"Upload error: {e}")
-            finally:
-                self.upload_queue.task_done()
+        # For Swift, we'll accumulate all data and upload at the end
+        # Swift doesn't have the same multipart upload mechanism as S3
 
     def upload_part(self, data):
+        """Add data to the buffer"""
         self.buffer.write(data)
 
-        # Upload complete chunks
-        while self.buffer.tell() >= self.chunk_size:
-            self.buffer.seek(0)
-            chunk = self.buffer.read(self.chunk_size)
-
-            # Queue the chunk for upload instead of uploading directly
-            self.upload_queue.put((chunk, self.part_number))
-            self.part_number += 1
-
-            # Keep remaining data
-            remaining = self.buffer.read()
-            self.buffer = BytesIO()
-            self.buffer.write(remaining)
-
     def complete_upload(self):
-        # If we never started a multipart upload (len(self.parts) == 0), do a regular upload
-        if len(self.parts) == 0:
+        """Upload the complete file to Swift"""
+        try:
+            # Get all buffered data
             self.buffer.seek(0)
             data = self.buffer.getvalue()
-            self.s3_client.put_object(Bucket=self.bucket, Key=self.key, Body=data)
-            logger.info("len(self.parts) == 0, so did a regular upload")
-            return
 
-        # Upload final part if any data remains
-        if self.buffer.tell() > 0:
-            self.buffer.seek(0)
-            final_chunk = self.buffer.getvalue()
-            self.upload_queue.put((final_chunk, self.part_number))
+            if data:
+                # Upload to Swift
+                self.swift_client.put_object(self.container, self.key, contents=data)
+                logger.info(f"Successfully uploaded {len(data)} bytes to swift://{self.container}/{self.key}")
+            else:
+                logger.warning("No data to upload")
 
-        # Wait for all uploads to complete
-        self.upload_queue.join()
-        self.upload_queue.put((None, None))  # Stop the worker thread
-        self.upload_thread.join()
-
-        # Complete multipart upload
-        self.s3_client.complete_multipart_upload(
-            Bucket=self.bucket,
-            Key=self.key,
-            UploadId=self.upload_id,
-            MultipartUpload={"Parts": sorted(self.parts, key=lambda x: x["PartNumber"])},
-        )
+        except Exception as e:
+            logger.error(f"Swift upload error: {e}")
+            raise
 
     def start_upload(self):
-        """Initialize the multipart upload and get the upload ID"""
-        response = self.s3_client.create_multipart_upload(Bucket=self.bucket, Key=self.key)
-        self.upload_id = response["UploadId"]
+        """Initialize the upload (no-op for Swift since we upload everything at once)"""
+        self.upload_started = True
+        logger.info(f"Initialized streaming upload for {self.key}")

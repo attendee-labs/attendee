@@ -6,16 +6,15 @@ The Zoom app is provided by you, the developer, not by Attendee. When you input 
 
 This means you’ll need to go through Zoom’s app approval process.
 
-## Why can't I join a Zoom meeting when running the app locally? 
+## Why can't I join a Zoom meeting when running the app locally?
 
-For Zoom to work locally, you need to rebuild the docker image. You can do this in one of two ways: 
+For Zoom to work locally, you need to rebuild the docker image. You can do this in one of two ways:
 
 1. Use the Docker command: `docker compose -f dev.docker-compose.yaml build`
 
 2. Use the Makefile command: `make build`
 
-## Application emits errors when uploading files. 
+## Application emits errors when uploading files.
 
-This may happen if the AWS_REGION is not set correctly. It currently defaults to `us-east-1`.  
+This may happen if the INFOMANIAK_REGION is not set correctly. It currently defaults to `dc4-a`.  
 You can set this in the .env file.
-

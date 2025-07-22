@@ -1,9 +1,8 @@
 import logging
-import os
 import threading
 from pathlib import Path
 
-import boto3
+from bots.storage import get_container_name, get_swift_client, upload_file_to_swift
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -11,19 +10,19 @@ logger.setLevel(logging.INFO)
 
 class FileUploader:
     def __init__(self, bucket, key):
-        """Initialize the FileUploader with an S3 bucket name.
+        """Initialize the FileUploader with a Swift container name.
 
         Args:
-            bucket (str): The name of the S3 bucket to upload to
+            bucket (str): The name of the Swift container (kept for compatibility)
             key (str): The name of the to be stored file
         """
-        self.s3_client = boto3.client("s3", endpoint_url=os.getenv("AWS_ENDPOINT_URL"))
-        self.bucket = bucket
+        self.swift_client = get_swift_client()
+        self.container = get_container_name()  # Use the configured container name
         self.key = key
         self._upload_thread = None
 
     def upload_file(self, file_path: str, callback=None):
-        """Start an asynchronous upload of a file to S3.
+        """Start an asynchronous upload of a file to Swift.
 
         Args:
             file_path (str): Path to the local file to upload
@@ -44,10 +43,10 @@ class FileUploader:
             if not file_path.exists():
                 raise FileNotFoundError(f"File not found: {file_path}")
 
-            # Upload the file using S3's multipart upload functionality
-            self.s3_client.upload_file(str(file_path), self.bucket, self.key)
+            # Upload the file using Swift
+            upload_file_to_swift(str(file_path), self.key)
 
-            logger.info(f"Successfully uploaded {file_path} to s3://{self.bucket}/{self.key}")
+            logger.info(f"Successfully uploaded {file_path} to swift://{self.container}/{self.key}")
 
             if callback:
                 callback(True)

@@ -11,19 +11,21 @@ https://docs.djangoproject.com/en/5.1/ref/settings/
 """
 
 import os
-import sentry_sdk
 from pathlib import Path
 
+import sentry_sdk
 from dotenv import load_dotenv
 
 load_dotenv()
 
-sentry_sdk.init(
-    dsn="https://e5ee0d0547fdf60f20e5e5ad057f4339@o4508857791217664.ingest.de.sentry.io/4509202365218896",
-    # Add data like request headers and IP for users,
-    # see https://docs.sentry.io/platforms/python/data-management/data-collected/ for more info
-    send_default_pii=True,
-)
+# Only initialize Sentry in production (not on localhost/development)
+if os.getenv("DISABLE_SENTRY") != "true" and os.getenv("DJANGO_SETTINGS_MODULE") != "attendee.settings.development":
+    sentry_sdk.init(
+        dsn="https://e5ee0d0547fdf60f20e5e5ad057f4339@o4508857791217664.ingest.de.sentry.io/4509202365218896",
+        # Add data like request headers and IP for users,
+        # see https://docs.sentry.io/platforms/python/data-management/data-collected/ for more info
+        send_default_pii=True,
+    )
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -198,17 +200,13 @@ SPECTACULAR_SETTINGS = {
 
 STORAGES = {
     "default": {
-        "BACKEND": "storages.backends.s3.S3Storage",
-        "OPTIONS": {
-            "endpoint_url": os.getenv("AWS_ENDPOINT_URL"),
-            "access_key": os.getenv("AWS_ACCESS_KEY_ID"),
-            "secret_key": os.getenv("AWS_SECRET_ACCESS_KEY"),
-        },
+        "BACKEND": "bots.storage.InfomaniakSwiftStorage",
+        "OPTIONS": {},
     },
     "staticfiles": {
         "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
     },
 }
-AWS_S3_SIGNATURE_VERSION = "s3v4"
-AWS_RECORDING_STORAGE_BUCKET_NAME = os.getenv("AWS_RECORDING_STORAGE_BUCKET_NAME")
+# Swift container configuration
+SWIFT_CONTAINER_MEETS = os.getenv("SWIFT_CONTAINER_MEETS")
 CHARGE_CREDITS_FOR_BOTS = os.getenv("CHARGE_CREDITS_FOR_BOTS", "false") == "true"

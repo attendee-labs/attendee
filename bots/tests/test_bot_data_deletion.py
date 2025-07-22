@@ -1,4 +1,4 @@
-from unittest.mock import PropertyMock, patch
+from unittest.mock import patch
 
 from django.core.files.base import ContentFile
 from django.test import TransactionTestCase
@@ -37,19 +37,20 @@ class TestBotDataDeletion(TransactionTestCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        cls.settings_override = override_settings(AWS_RECORDING_STORAGE_BUCKET_NAME="test-bucket")
+        cls.settings_override = override_settings(SWIFT_CONTAINER_MEETS="test-bucket")
         cls.settings_override.enable()
 
     def setUp(self):
-        # Setup patches
-        self.bucket_mock_patch = patch("storages.backends.s3boto3.S3Boto3Storage.bucket", new_callable=PropertyMock)
+        # Setup patches for file operations
         self.delete_patch = patch("django.db.models.fields.files.FieldFile.delete", autospec=True)
         self.save_patch = patch("django.db.models.fields.files.FieldFile.save", autospec=True)
+        # Mock webhook functionality to avoid JSON field issues with SQLite
+        self.webhook_patch = patch("bots.models.trigger_webhook")
 
         # Start patches
-        self.bucket_mock = self.bucket_mock_patch.start()
         self.delete_mock = self.delete_patch.start()
         self.save_mock = self.save_patch.start()
+        self.webhook_mock = self.webhook_patch.start()
 
         # Set side effects
         self.delete_mock.side_effect = mock_file_field_delete_sets_name_to_none
@@ -89,7 +90,7 @@ class TestBotDataDeletion(TransactionTestCase):
         # Stop all patches
         self.save_patch.stop()
         self.delete_patch.stop()
-        self.bucket_mock_patch.stop()
+        self.webhook_patch.stop()
 
     def test_delete_data_deletes_specific_bot_data_only(self):
         """Test that deleting data for one bot doesn't affect other bots"""
