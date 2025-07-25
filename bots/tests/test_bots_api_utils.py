@@ -94,6 +94,89 @@ class TestCreateBot(TestCase):
         self.assertEqual(events.first().metadata["source"], BotCreationSource.API)
         self.assertEqual(events.first().event_type, BotEventTypes.JOIN_REQUESTED)
 
+    def test_create_bot_with_valid_redaction_settings(self):
+        """Test creating a bot with valid redaction settings."""
+        # Test with single redaction type
+        bot, error = create_bot(data={"meeting_url": "https://meet.google.com/abc-defg-hij", "bot_name": "Test Bot with PII Redaction", "transcription_settings": {"deepgram": {"redact": ["pii"]}}}, source=BotCreationSource.API, project=self.project)
+        self.assertIsNotNone(bot)
+        self.assertIsNone(error)
+        self.assertEqual(bot.deepgram_redaction_settings(), ["pii"])
+
+        # Test with multiple redaction types
+        bot2, error2 = create_bot(data={"meeting_url": "https://meet.google.com/xyz-uvw-rst", "bot_name": "Test Bot with Multiple Redaction", "transcription_settings": {"deepgram": {"redact": ["pii", "pci", "numbers"]}}}, source=BotCreationSource.API, project=self.project)
+        self.assertIsNotNone(bot2)
+        self.assertIsNone(error2)
+        self.assertEqual(bot2.deepgram_redaction_settings(), ["pii", "pci", "numbers"])
+
+    def test_create_bot_with_empty_redaction_settings(self):
+        """Test creating a bot with empty redaction settings."""
+        bot, error = create_bot(data={"meeting_url": "https://meet.google.com/empty-redact-test", "bot_name": "Test Bot with Empty Redaction", "transcription_settings": {"deepgram": {"redact": []}}}, source=BotCreationSource.API, project=self.project)
+        self.assertIsNotNone(bot)
+        self.assertIsNone(error)
+        self.assertEqual(bot.deepgram_redaction_settings(), [])
+
+    def test_create_bot_with_invalid_redaction_type_returns_error(self):
+        """Test that creating a bot with invalid redaction type returns validation error."""
+        bot, error = create_bot(data={"meeting_url": "https://meet.google.com/invalid-redact-test", "bot_name": "Test Bot with Invalid Redaction", "transcription_settings": {"deepgram": {"redact": ["invalid_redaction_type"]}}}, source=BotCreationSource.API, project=self.project)
+        self.assertIsNone(bot)
+        self.assertIsNotNone(error)
+        self.assertIn("transcription_settings", error)
+
+    def test_create_bot_with_duplicate_redaction_types_returns_error(self):
+        """Test that creating a bot with duplicate redaction types returns validation error."""
+        bot, error = create_bot(
+            data={
+                "meeting_url": "https://meet.google.com/duplicate-redact-test",
+                "bot_name": "Test Bot with Duplicate Redaction",
+                "transcription_settings": {
+                    "deepgram": {
+                        "redact": ["pii", "pci", "pii"]  # Duplicate "pii"
+                    }
+                },
+            },
+            source=BotCreationSource.API,
+            project=self.project,
+        )
+        self.assertIsNone(bot)
+        self.assertIsNotNone(error)
+        self.assertIn("transcription_settings", error)
+
+    def test_create_bot_with_null_redaction_settings_handled_correctly(self):
+        """Test that creating a bot with null redaction settings is handled correctly."""
+        bot, error = create_bot(
+            data={
+                "meeting_url": "https://meet.google.com/null-redact-test",
+                "bot_name": "Test Bot with Null Redaction",
+                "transcription_settings": {
+                    "deepgram": {
+                        "language": "en-US",
+                        "model": "nova-3",
+                        # No redact property
+                    }
+                },
+            },
+            source=BotCreationSource.API,
+            project=self.project,
+        )
+        self.assertIsNotNone(bot)
+        self.assertIsNone(error)
+        self.assertEqual(bot.deepgram_redaction_settings(), [])
+
+    def test_create_bot_redaction_settings_combined_with_other_deepgram_settings(self):
+        """Test creating a bot with redaction settings combined with other Deepgram settings."""
+        bot, error = create_bot(data={"meeting_url": "https://meet.google.com/combined-settings-test", "bot_name": "Test Bot with Combined Settings", "transcription_settings": {"deepgram": {"language": "en-US", "model": "nova-2", "redact": ["pii", "numbers"], "keywords": ["meeting", "agenda"]}}}, source=BotCreationSource.API, project=self.project)
+        self.assertIsNotNone(bot)
+        self.assertIsNone(error)
+
+        # Verify redaction settings
+        self.assertEqual(bot.deepgram_redaction_settings(), ["pii", "numbers"])
+
+        # Verify other settings are preserved
+        deepgram_settings = bot.settings["transcription_settings"]["deepgram"]
+        self.assertEqual(deepgram_settings["language"], "en-US")
+        self.assertEqual(deepgram_settings["model"], "nova-2")
+        self.assertEqual(deepgram_settings["keywords"], ["meeting", "agenda"])
+
     def test_create_bot_with_google_meet_url_with_http(self):
         bot, error = create_bot(data={"meeting_url": "http://meet.google.com/abc-defg-hij", "bot_name": "Test Bot"}, source=BotCreationSource.DASHBOARD, project=self.project)
         self.assertIsNone(bot)
