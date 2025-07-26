@@ -98,31 +98,374 @@ class ProcessUtteranceTaskTest(TransactionTestCase):
         self.assertEqual(self.utterance.transcription_attempt_count, 1)
         self.assertIsNone(self.utterance.failure_data)
 
+
+class BotModelRedactionSettingsTest(TransactionTestCase):
+    """Unit tests for Bot model deepgram_redaction_settings method."""
+
+    def setUp(self):
+        self.organization = Organization.objects.create(name="Test Org")
+        self.project = Project.objects.create(name="Test Project", organization=self.organization)
+
+    def _create_bot_with_settings(self, settings):
+        """Helper to create a bot with specific settings."""
+        return Bot.objects.create(project=self.project, meeting_url="https://zoom.us/j/test", settings=settings)
+
+    def test_deepgram_redaction_settings_returns_correct_list_with_single_type(self):
+        """Test that deepgram_redaction_settings returns correct redaction list with single type."""
+        bot = self._create_bot_with_settings({"transcription_settings": {"deepgram": {"redact": ["pii"]}}})
+
+        result = bot.deepgram_redaction_settings()
+        self.assertEqual(result, ["pii"])
+
+    def test_deepgram_redaction_settings_returns_correct_list_with_multiple_types(self):
+        """Test that deepgram_redaction_settings returns correct redaction list with multiple types."""
+        bot = self._create_bot_with_settings({"transcription_settings": {"deepgram": {"redact": ["pii", "pci", "numbers"]}}})
+
+        result = bot.deepgram_redaction_settings()
+        self.assertEqual(result, ["pii", "pci", "numbers"])
+
+    def test_deepgram_redaction_settings_returns_empty_list_when_no_redaction_configured(self):
+        """Test that deepgram_redaction_settings returns empty list when no redaction is configured."""
+        bot = self._create_bot_with_settings({"transcription_settings": {"deepgram": {"language": "en-US", "model": "nova-3"}}})
+
+        result = bot.deepgram_redaction_settings()
+        self.assertEqual(result, [])
+
+    def test_deepgram_redaction_settings_returns_empty_list_when_no_deepgram_settings(self):
+        """Test that deepgram_redaction_settings returns empty list when no deepgram settings exist."""
+        bot = self._create_bot_with_settings({"transcription_settings": {"openai": {"model": "gpt-4o-transcribe"}}})
+
+        result = bot.deepgram_redaction_settings()
+        self.assertEqual(result, [])
+
+    def test_deepgram_redaction_settings_returns_empty_list_when_no_transcription_settings(self):
+        """Test that deepgram_redaction_settings returns empty list when no transcription settings exist."""
+        bot = self._create_bot_with_settings({"recording_settings": {"format": "mp4"}})
+
+        result = bot.deepgram_redaction_settings()
+        self.assertEqual(result, [])
+
+    def test_deepgram_redaction_settings_returns_empty_list_when_settings_is_empty(self):
+        """Test that deepgram_redaction_settings returns empty list when settings is empty."""
+        bot = self._create_bot_with_settings({})
+
+        result = bot.deepgram_redaction_settings()
+        self.assertEqual(result, [])
+
+    def test_deepgram_redaction_settings_backward_compatibility_with_no_settings(self):
+        """Test backward compatibility with bots that have no settings at all."""
+        # Create bot without any settings (simulating old bots)
+        bot = Bot.objects.create(
+            project=self.project,
+            meeting_url="https://zoom.us/j/test",
+            # No settings field set
+        )
+
+        result = bot.deepgram_redaction_settings()
+        self.assertEqual(result, [])
+
+    def test_deepgram_redaction_settings_with_empty_redaction_array(self):
+        """Test that deepgram_redaction_settings handles empty redaction array correctly."""
+        bot = self._create_bot_with_settings({"transcription_settings": {"deepgram": {"redact": []}}})
+
+        result = bot.deepgram_redaction_settings()
+        self.assertEqual(result, [])
+
+    def test_deepgram_redaction_settings_preserves_order(self):
+        """Test that deepgram_redaction_settings preserves the order of redaction types."""
+        bot = self._create_bot_with_settings({"transcription_settings": {"deepgram": {"redact": ["numbers", "pii", "pci"]}}})
+
+        result = bot.deepgram_redaction_settings()
+        self.assertEqual(result, ["numbers", "pii", "pci"])
+
+    def test_deepgram_redaction_settings_with_other_deepgram_settings(self):
+        """Test that deepgram_redaction_settings works correctly when combined with other deepgram settings."""
+        bot = self._create_bot_with_settings({"transcription_settings": {"deepgram": {"language": "en-US", "model": "nova-2", "redact": ["pci", "numbers"], "keywords": ["meeting", "agenda"]}}})
+
+        result = bot.deepgram_redaction_settings()
+        self.assertEqual(result, ["pci", "numbers"])
+
+    def test_deepgram_redaction_settings_method_consistency_across_calls(self):
+        """Test that deepgram_redaction_settings method returns consistent results across multiple calls."""
+        bot = self._create_bot_with_settings({"transcription_settings": {"deepgram": {"redact": ["pii", "pci"]}}})
+
+        # Call the method multiple times
+        result1 = bot.deepgram_redaction_settings()
+        result2 = bot.deepgram_redaction_settings()
+        result3 = bot.deepgram_redaction_settings()
+
+        # All results should be identical
+        self.assertEqual(result1, result2)
+        self.assertEqual(result2, result3)
+        self.assertEqual(result1, ["pii", "pci"])
+
+
+class DeepgramPrerecordedTranscriptionRedactionTest(TransactionTestCase):
+    """Unit tests for pre-recorded transcription redaction integration."""
+
+    def setUp(self):
+        self.organization = Organization.objects.create(name="Test Org")
+        self.project = Project.objects.create(name="Test Project", organization=self.organization)
+
+        # Create Deepgram credentials
+        self.deepgram_credentials = Credentials.objects.create(project=self.project, credential_type=Credentials.CredentialTypes.DEEPGRAM)
+
+        # Mock the credentials
+        self.credentials_patcher = mock.patch.object(Credentials, "get_credentials", return_value={"api_key": "test_deepgram_key"})
+        self.credentials_patcher.start()
+        self.addCleanup(self.credentials_patcher.stop)
+
+    def _create_bot_with_redaction_settings(self, redaction_settings=None):
+        """Helper to create a bot with specific redaction settings."""
+        settings = {}
+        if redaction_settings is not None:
+            settings = {"transcription_settings": {"deepgram": {"redact": redaction_settings}}}
+
+        return Bot.objects.create(project=self.project, meeting_url="https://zoom.us/j/test", settings=settings)
+
+    def _create_utterance_for_bot(self, bot):
+        """Helper to create an utterance for testing."""
+        recording = Recording.objects.create(
+            bot=bot,
+            recording_type=1,
+            transcription_type=1,
+            state=RecordingStates.COMPLETE,
+            transcription_state=RecordingTranscriptionStates.IN_PROGRESS,
+            transcription_provider=1,  # Deepgram
+        )
+
+        participant = Participant.objects.create(bot=bot, uuid=str(uuid.uuid4()))
+        import numpy as np
+
+        # Create a proper audio blob as numpy array
+        audio_data = np.array([0.1, 0.2, 0.3, 0.4], dtype=np.float32)
+        utterance = Utterance.objects.create(recording=recording, participant=participant, audio_blob=audio_data, timestamp_ms=0, duration_ms=1000, sample_rate=16000)
+        return utterance
+
+    @mock.patch("deepgram.PrerecordedOptions")
+    @mock.patch("deepgram.DeepgramClient")
+    def test_prerecorded_options_created_with_redaction_parameters(self, mock_deepgram_client, mock_prerecorded_options):
+        """Test that PrerecordedOptions is created with correct redaction parameters."""
+        # Create bot with redaction settings
+        bot = self._create_bot_with_redaction_settings(["pii", "pci", "numbers"])
+        utterance = self._create_utterance_for_bot(bot)
+
+        # Mock successful transcription response
+        mock_response = mock.Mock()
+        mock_response.results.channels = [mock.Mock()]
+        mock_response.results.channels[0].alternatives = [mock.Mock()]
+        mock_response.results.channels[0].alternatives[0].to_json.return_value = '{"transcript": "test transcript"}'
+
+        mock_client_instance = mock.Mock()
+        mock_client_instance.listen.rest.v.return_value.transcribe_file.return_value = mock_response
+        mock_deepgram_client.return_value = mock_client_instance
+
+        # Call the transcription function
+        transcription, failure = get_transcription_via_deepgram(utterance)
+
+        # Verify PrerecordedOptions was called with redaction parameters
+        mock_prerecorded_options.assert_called_once()
+        call_kwargs = mock_prerecorded_options.call_args.kwargs
+
+        # Verify redaction parameter is correctly passed
+        self.assertEqual(call_kwargs["redact"], ["pii", "pci", "numbers"])
+
+        # Verify other expected parameters are also present
+        expected_params = {"model": bot.deepgram_model(), "smart_format": True, "language": bot.deepgram_language(), "detect_language": bot.deepgram_detect_language(), "keyterm": bot.deepgram_keyterms(), "keywords": bot.deepgram_keywords(), "encoding": "linear16", "sample_rate": utterance.sample_rate, "redact": ["pii", "pci", "numbers"]}
+
+        for param, expected_value in expected_params.items():
+            self.assertIn(param, call_kwargs)
+            self.assertEqual(call_kwargs[param], expected_value)
+
+    @mock.patch("deepgram.DeepgramClient")
+    @mock.patch("deepgram.PrerecordedOptions")
+    def test_prerecorded_options_created_with_empty_redaction_when_none_configured(self, mock_prerecorded_options, mock_deepgram_client):
+        """Test that PrerecordedOptions is created with empty redaction list when none configured."""
+        # Create bot without redaction settings
+        bot = self._create_bot_with_redaction_settings(None)
+        utterance = self._create_utterance_for_bot(bot)
+
+        # Mock successful transcription response
+        mock_response = mock.Mock()
+        mock_response.results.channels = [mock.Mock()]
+        mock_response.results.channels[0].alternatives = [mock.Mock()]
+        mock_response.results.channels[0].alternatives[0].to_json.return_value = '{"transcript": "test transcript"}'
+
+        mock_client_instance = mock.Mock()
+        mock_client_instance.listen.rest.v.return_value.transcribe_file.return_value = mock_response
+        mock_deepgram_client.return_value = mock_client_instance
+
+        # Call the transcription function
+        transcription, failure = get_transcription_via_deepgram(utterance)
+
+        # Verify PrerecordedOptions was called with empty redaction list
+        mock_prerecorded_options.assert_called_once()
+        call_kwargs = mock_prerecorded_options.call_args.kwargs
+
+        # Verify redaction parameter defaults to empty list
+        self.assertEqual(call_kwargs["redact"], [])
+
+    @mock.patch("deepgram.DeepgramClient")
+    @mock.patch("deepgram.PrerecordedOptions")
+    def test_prerecorded_options_created_with_single_redaction_type(self, mock_prerecorded_options, mock_deepgram_client):
+        """Test that PrerecordedOptions is created correctly with single redaction type."""
+        # Create bot with single redaction setting
+        bot = self._create_bot_with_redaction_settings(["pii"])
+        utterance = self._create_utterance_for_bot(bot)
+
+        # Mock successful transcription response
+        mock_response = mock.Mock()
+        mock_response.results.channels = [mock.Mock()]
+        mock_response.results.channels[0].alternatives = [mock.Mock()]
+        mock_response.results.channels[0].alternatives[0].to_json.return_value = '{"transcript": "test transcript"}'
+
+        mock_client_instance = mock.Mock()
+        mock_client_instance.listen.rest.v.return_value.transcribe_file.return_value = mock_response
+        mock_deepgram_client.return_value = mock_client_instance
+
+        # Call the transcription function
+        transcription, failure = get_transcription_via_deepgram(utterance)
+
+        # Verify PrerecordedOptions was called with single redaction type
+        mock_prerecorded_options.assert_called_once()
+        call_kwargs = mock_prerecorded_options.call_args.kwargs
+
+        # Verify redaction parameter contains single type
+        self.assertEqual(call_kwargs["redact"], ["pii"])
+
+    @mock.patch("deepgram.DeepgramClient")
+    @mock.patch("deepgram.PrerecordedOptions")
+    def test_redaction_settings_passed_directly_to_prerecorded_options(self, mock_prerecorded_options, mock_deepgram_client):
+        """Test that redaction settings are passed directly to PrerecordedOptions without validation."""
+        # Create bot with redaction settings (validation happens at serializer level)
+        bot = self._create_bot_with_redaction_settings(["pii", "pci"])
+        utterance = self._create_utterance_for_bot(bot)
+
+        # Mock successful transcription response
+        mock_response = mock.Mock()
+        mock_response.results.channels = [mock.Mock()]
+        mock_response.results.channels[0].alternatives = [mock.Mock()]
+        mock_response.results.channels[0].alternatives[0].to_json.return_value = '{"transcript": "test transcript"}'
+
+        mock_client_instance = mock.Mock()
+        mock_client_instance.listen.rest.v.return_value.transcribe_file.return_value = mock_response
+        mock_deepgram_client.return_value = mock_client_instance
+
+        # Call the transcription function
+        transcription, failure = get_transcription_via_deepgram(utterance)
+
+        # Verify PrerecordedOptions was called with settings passed directly (no validation)
+        mock_prerecorded_options.assert_called_once()
+        call_kwargs = mock_prerecorded_options.call_args.kwargs
+        self.assertEqual(call_kwargs["redact"], ["pii", "pci"])
+
+    @mock.patch("deepgram.DeepgramClient")
+    @mock.patch("deepgram.PrerecordedOptions")
+    def test_multiple_redaction_types_properly_formatted_and_passed(self, mock_prerecorded_options, mock_deepgram_client):
+        """Test that multiple redaction types are properly formatted and passed to PrerecordedOptions."""
+        # Create bot with multiple redaction settings in specific order
+        redaction_settings = ["numbers", "pii", "pci"]
+        bot = self._create_bot_with_redaction_settings(redaction_settings)
+        utterance = self._create_utterance_for_bot(bot)
+
+        # Mock successful transcription response
+        mock_response = mock.Mock()
+        mock_response.results.channels = [mock.Mock()]
+        mock_response.results.channels[0].alternatives = [mock.Mock()]
+        mock_response.results.channels[0].alternatives[0].to_json.return_value = '{"transcript": "test transcript"}'
+
+        mock_client_instance = mock.Mock()
+        mock_client_instance.listen.rest.v.return_value.transcribe_file.return_value = mock_response
+        mock_deepgram_client.return_value = mock_client_instance
+
+        # Call the transcription function
+        transcription, failure = get_transcription_via_deepgram(utterance)
+
+        # Verify PrerecordedOptions was called with all redaction types in correct order
+        mock_prerecorded_options.assert_called_once()
+        call_kwargs = mock_prerecorded_options.call_args.kwargs
+
+        # Verify redaction parameter contains all types in correct order
+        self.assertEqual(call_kwargs["redact"], ["numbers", "pii", "pci"])
+        self.assertEqual(len(call_kwargs["redact"]), 3)
+
+    @mock.patch("deepgram.DeepgramClient")
+    @mock.patch("deepgram.PrerecordedOptions")
+    def test_redaction_settings_integration_with_other_deepgram_options(self, mock_prerecorded_options, mock_deepgram_client):
+        """Test that redaction settings work correctly when combined with other Deepgram options."""
+        # Create bot with redaction and other deepgram settings
+        bot = Bot.objects.create(project=self.project, meeting_url="https://zoom.us/j/test", settings={"transcription_settings": {"deepgram": {"language": "en-US", "model": "nova-2", "redact": ["pii", "numbers"], "keywords": ["meeting", "agenda"]}}})
+        utterance = self._create_utterance_for_bot(bot)
+
+        # Mock successful transcription response
+        mock_response = mock.Mock()
+        mock_response.results.channels = [mock.Mock()]
+        mock_response.results.channels[0].alternatives = [mock.Mock()]
+        mock_response.results.channels[0].alternatives[0].to_json.return_value = '{"transcript": "test transcript"}'
+
+        mock_client_instance = mock.Mock()
+        mock_client_instance.listen.rest.v.return_value.transcribe_file.return_value = mock_response
+        mock_deepgram_client.return_value = mock_client_instance
+
+        # Call the transcription function
+        transcription, failure = get_transcription_via_deepgram(utterance)
+
+        # Verify PrerecordedOptions was called with all settings including redaction
+        mock_prerecorded_options.assert_called_once()
+        call_kwargs = mock_prerecorded_options.call_args.kwargs
+
+        # Verify all parameters are correctly set
+        self.assertEqual(call_kwargs["redact"], ["pii", "numbers"])
+        self.assertEqual(call_kwargs["language"], "en-US")
+        self.assertEqual(call_kwargs["model"], "nova-2")
+        self.assertEqual(call_kwargs["keywords"], ["meeting", "agenda"])
+        self.assertEqual(call_kwargs["smart_format"], True)
+        self.assertEqual(call_kwargs["encoding"], "linear16")
+        self.assertEqual(call_kwargs["sample_rate"], utterance.sample_rate)
+
+    def _run_task(self):
+        """Invoke the Celery task with the test utterance id (synchronously)."""
+        from bots.tasks.process_utterance_task import process_utterance
+
+        process_utterance.apply(args=[self.utterance.id])
+
     # ------------------------------------------------------------------
 
     @mock.patch("bots.tasks.process_utterance_task.is_retryable_failure", return_value=False)
     @mock.patch("bots.tasks.process_utterance_task.get_transcription")
     def test_non_retryable_failure_sets_failure_data(self, mock_get_transcription, mock_is_retryable):
         """Non‑retryable failure → no exception, failure_data stored."""
+        # Create utterance for this test
+        bot = self._create_bot_with_redaction_settings(None)
+        utterance = self._create_utterance_for_bot(bot)
+
         failure = {"reason": TranscriptionFailureReasons.CREDENTIALS_INVALID}
         mock_get_transcription.return_value = (None, failure)
 
         # Should NOT raise
-        self._run_task()
-        self.utterance.refresh_from_db()
+        from bots.tasks.process_utterance_task import process_utterance
 
-        self.assertEqual(self.utterance.transcription_attempt_count, 1)
-        self.assertEqual(self.utterance.failure_data, failure)
+        process_utterance.apply(args=[utterance.id])
+        utterance.refresh_from_db()
+
+        self.assertEqual(utterance.transcription_attempt_count, 1)
+        self.assertEqual(utterance.failure_data, failure)
 
     # ------------------------------------------------------------------
 
     @mock.patch("bots.tasks.process_utterance_task.get_transcription")
     def test_existing_failure_data_short_circuits_task(self, mock_get_transcription):
         """If utterance already failed, task should exit early and not call provider."""
-        self.utterance.failure_data = {"reason": TranscriptionFailureReasons.INTERNAL_ERROR}
-        self.utterance.save(update_fields=["failure_data"])
+        # Create utterance for this test
+        bot = self._create_bot_with_redaction_settings(None)
+        utterance = self._create_utterance_for_bot(bot)
 
-        self._run_task()
+        utterance.failure_data = {"reason": TranscriptionFailureReasons.INTERNAL_ERROR}
+        utterance.save(update_fields=["failure_data"])
+
+        from bots.tasks.process_utterance_task import process_utterance
+
+        process_utterance.apply(args=[utterance.id])
 
         # Provider function never invoked
         mock_get_transcription.assert_not_called()

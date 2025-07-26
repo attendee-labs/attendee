@@ -66,6 +66,7 @@ class PerParticipantStreamingAudioInputManager:
                 callback=self.bot.deepgram_callback(),
                 sample_rate=self.sample_rate,
                 metadata=metadata_list,
+                redaction_settings=self.bot.deepgram_redaction_settings(),
             )
         else:
             raise Exception(f"Unsupported transcription provider: {self.transcription_provider}")

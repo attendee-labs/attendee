@@ -331,6 +331,9 @@ class Bot(models.Model):
 
         return deepgram_model
 
+    def deepgram_redaction_settings(self):
+        return self.settings.get("transcription_settings", {}).get("deepgram", {}).get("redact", [])
+
     def google_meet_closed_captions_language(self):
         return self.settings.get("transcription_settings", {}).get("meeting_closed_captions", {}).get("google_meet_language", None)
 

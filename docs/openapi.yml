@@ -1183,6 +1183,16 @@ components:
                   description: 'The model to use for transcription. Defaults to ''nova-3''
                     if not specified, which is the recommended model for most use
                     cases. See here for details: https://developers.deepgram.com/docs/models-languages-overview'
+                redact:
+                  type: array
+                  items:
+                    type: string
+                    enum:
+                      - pci
+                      - pii
+                      - numbers
+                  uniqueItems: true
+                  description: "Array of redaction types to apply to transcription. Automatically removes or masks sensitive information like PII, PCI data, and numbers from transcripts. See here for details: https://developers.deepgram.com/docs/redaction"
               additionalProperties: false
             gladia:
               type: object
