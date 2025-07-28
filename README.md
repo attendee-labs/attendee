@@ -16,6 +16,12 @@ The meeting recorder is a clone of the open source repository 'attendee' by Noah
 - Paste the link into your browser to confirm your account.
 - You should now be able to log in, input your credentials and obtain an API key. API calls should be directed to http://localhost:8000.
 
+## Deployment
+
+- Build the Docker image: `docker compose -f dev.docker-compose.yml build --platform=linux/amd64` (Takes about 5 minutes)
+- Tag the image: `docker tag vanyabrucker/transcript:transcript-meeting-recorder_1.0.1_staging`
+
+
 ## Calling the API
 
 Join a meeting with a POST request to `/bots`:
