@@ -339,6 +339,36 @@ class BotController:
         else:
             raise Exception("No rtmp client found")
 
+    def upload_recording_to_external_media_storage_if_enabled(self):
+        if not self.bot_in_db.external_media_storage_bucket_name():
+            return
+
+        external_media_storage_credentials_record = self.bot_in_db.project.credentials.filter(credential_type=Credentials.CredentialTypes.EXTERNAL_MEDIA_STORAGE).first()
+        if not external_media_storage_credentials_record:
+            logger.error(f"No external media storage credentials found for bot {self.bot_in_db.id}")
+            return
+
+        external_media_storage_credentials = external_media_storage_credentials_record.get_credentials()
+        if not external_media_storage_credentials:
+            logger.error(f"External media storage credentials data not found for bot {self.bot_in_db.id}")
+            return
+
+        try:
+            logger.info(f"Uploading recording to external media storage bucket {self.bot_in_db.external_media_storage_bucket_name()}")
+            file_uploader = FileUploader(
+                bucket=self.bot_in_db.external_media_storage_bucket_name(),
+                key=self.bot_in_db.external_media_storage_recording_file_name() or self.get_recording_filename(),
+                endpoint_url=external_media_storage_credentials.get("endpoint_url"),
+                region_name=external_media_storage_credentials.get("region_name"),
+                access_key_id=external_media_storage_credentials.get("access_key_id"),
+                access_key_secret=external_media_storage_credentials.get("access_key_secret"),
+            )
+            file_uploader.upload_file(self.get_recording_file_location())
+            file_uploader.wait_for_upload()
+            logger.info(f"File uploader finished uploading file to external media storage bucket {self.bot_in_db.external_media_storage_bucket_name()}")
+        except Exception as e:
+            logger.exception(f"Error uploading recording to external media storage bucket {self.bot_in_db.external_media_storage_bucket_name()}: {e}")
+
     def cleanup(self):
         if self.cleanup_called:
             logger.info("Cleanup already called, exiting")
@@ -391,10 +421,13 @@ class BotController:
             self.websocket_audio_client.cleanup()
 
         if self.get_recording_file_location():
+            self.upload_recording_to_external_media_storage_if_enabled()
+
             logger.info("Telling file uploader to upload recording file...")
             file_uploader = FileUploader(
-                os.environ.get("AWS_RECORDING_STORAGE_BUCKET_NAME"),
-                self.get_recording_filename(),
+                bucket=os.environ.get("AWS_RECORDING_STORAGE_BUCKET_NAME"),
+                key=self.get_recording_filename(),
+                endpoint_url=os.environ.get("AWS_ENDPOINT_URL"),
             )
             file_uploader.upload_file(self.get_recording_file_location())
             file_uploader.wait_for_upload()

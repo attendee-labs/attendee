@@ -508,6 +508,27 @@ class CallbackSettingsJSONField(serializers.JSONField):
     pass
 
 
+@extend_schema_field(
+    {
+        "type": "object",
+        "properties": {
+            "bucket_name": {
+                "type": "string",
+                "description": "The name of the external storage bucket to use for media files",
+            },
+            "recording_file_name": {
+                "type": "string",
+                "description": "Optional custom name for the recording file",
+            },
+        },
+        "required": ["bucket_name"],
+        "additionalProperties": False,
+    }
+)
+class ExternalMediaStorageSettingsJSONField(serializers.JSONField):
+    pass
+
+
 @extend_schema_serializer(
     examples=[
         OpenApiExample(
@@ -536,6 +557,12 @@ class CreateBotSerializer(serializers.Serializer):
 
     callback_settings = CallbackSettingsJSONField(
         help_text="Callback urls for the bot to call when it needs to fetch certain data.",
+        required=False,
+        default=None,
+    )
+
+    external_media_storage_settings = ExternalMediaStorageSettingsJSONField(
+        help_text="Settings for Attendee to upload the recording to an external storage bucket.",
         required=False,
         default=None,
     )
@@ -600,6 +627,31 @@ class CreateBotSerializer(serializers.Serializer):
         zoom_tokens_url = value.get("zoom_tokens_url")
         if zoom_tokens_url and not zoom_tokens_url.lower().startswith("https://"):
             raise serializers.ValidationError({"zoom_tokens_url": "URL must start with https://"})
+
+        return value
+
+    EXTERNAL_MEDIA_STORAGE_SETTINGS_SCHEMA = {
+        "type": "object",
+        "properties": {
+            "bucket_name": {
+                "type": "string",
+            },
+            "recording_file_name": {
+                "type": "string",
+            },
+        },
+        "required": ["bucket_name"],
+        "additionalProperties": False,
+    }
+
+    def validate_external_media_storage_settings(self, value):
+        if value is None:
+            return value
+
+        try:
+            jsonschema.validate(instance=value, schema=self.EXTERNAL_MEDIA_STORAGE_SETTINGS_SCHEMA)
+        except jsonschema.exceptions.ValidationError as e:
+            raise serializers.ValidationError(e.message)
 
         return value
 

@@ -1,5 +1,4 @@
 import logging
-import os
 import threading
 from pathlib import Path
 
@@ -10,14 +9,14 @@ logger.setLevel(logging.INFO)
 
 
 class FileUploader:
-    def __init__(self, bucket, key):
+    def __init__(self, bucket, key, endpoint_url=None, region_name=None, access_key_id=None, access_key_secret=None):
         """Initialize the FileUploader with an S3 bucket name.
 
         Args:
             bucket (str): The name of the S3 bucket to upload to
             key (str): The name of the to be stored file
         """
-        self.s3_client = boto3.client("s3", endpoint_url=os.getenv("AWS_ENDPOINT_URL"))
+        self.s3_client = boto3.client("s3", endpoint_url=endpoint_url, region_name=region_name, aws_access_key_id=access_key_id, aws_secret_access_key=access_key_secret)
         self.bucket = bucket
         self.key = key
         self._upload_thread = None

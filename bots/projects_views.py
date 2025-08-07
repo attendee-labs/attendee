@@ -233,6 +233,11 @@ class CreateCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 
                 if not all(credentials_data.values()):
                     return HttpResponse("Missing required credentials data", status=400)
+            elif credential_type == Credentials.CredentialTypes.EXTERNAL_MEDIA_STORAGE:
+                credentials_data = {"access_key_id": request.POST.get("access_key_id"), "access_key_secret": request.POST.get("access_key_secret"), "endpoint_url": request.POST.get("endpoint_url"), "region_name": request.POST.get("region_name")}
+
+                if not credentials_data.get("access_key_id") or not credentials_data.get("access_key_secret") or (not credentials_data.get("endpoint_url") and not credentials_data.get("region_name")):
+                    return HttpResponse("Missing required credentials data", status=400)
             else:
                 return HttpResponse("Unsupported credential type", status=400)
 
@@ -259,6 +264,8 @@ class CreateCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
                 return render(request, "projects/partials/google_tts_credentials.html", context)
             elif credential.credential_type == Credentials.CredentialTypes.TEAMS_BOT_LOGIN:
                 return render(request, "projects/partials/teams_bot_login_credentials.html", context)
+            elif credential.credential_type == Credentials.CredentialTypes.EXTERNAL_MEDIA_STORAGE:
+                return render(request, "projects/partials/external_media_storage_credentials.html", context)
             else:
                 return HttpResponse("Cannot render the partial for this credential type", status=400)
 
@@ -287,6 +294,8 @@ class ProjectCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 
         teams_bot_login_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.TEAMS_BOT_LOGIN).first()
 
+        external_media_storage_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.EXTERNAL_MEDIA_STORAGE).first()
+
         context = self.get_project_context(object_id, project)
         context.update(
             {
@@ -306,6 +315,8 @@ class ProjectCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
                 "sarvam_credential_type": Credentials.CredentialTypes.SARVAM,
                 "teams_bot_login_credentials": teams_bot_login_credentials.get_credentials() if teams_bot_login_credentials else None,
                 "teams_bot_login_credential_type": Credentials.CredentialTypes.TEAMS_BOT_LOGIN,
+                "external_media_storage_credentials": external_media_storage_credentials.get_credentials() if external_media_storage_credentials else None,
+                "external_media_storage_credential_type": Credentials.CredentialTypes.EXTERNAL_MEDIA_STORAGE,
             }
         )
 
