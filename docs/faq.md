@@ -21,3 +21,7 @@ You may need to rebuild the docker image. You can do this in one of two ways:
 This may happen if the AWS_REGION is not set correctly. It currently defaults to `us-east-1`.  
 You can set this in the .env file.
 
+## Bot cannot join Google Meet
+
+One reason this can happen is that the bot is being sent to a Google Meet session that only signed in users can join. We currently do not support this scenario where the bot needs to sign in. 
+
