@@ -406,7 +406,7 @@ class WebhookDeliveryTest(TransactionTestCase):
 
         # Trigger webhook - should only use bot-level webhook
         test_payload = {"test": "bot_priority_data"}
-        num_attempts = trigger_webhook(WebhookTriggerTypes.BOT_STATE_CHANGE, self.bot, test_payload)
+        num_attempts = trigger_webhook(webhook_trigger_type=WebhookTriggerTypes.BOT_STATE_CHANGE, bot=self.bot, payload=test_payload)
 
         # Should only create 1 delivery attempt (for bot-level webhook only)
         self.assertEqual(num_attempts, 1)
@@ -425,7 +425,7 @@ class WebhookDeliveryTest(TransactionTestCase):
         self.assertEqual(delivery_attempt.status, WebhookDeliveryAttemptStatus.SUCCESS)
 
         # Test that triggering a webhook for a transcript update does not go through at all, since there is no bot-level webhook for it
-        num_attempts = trigger_webhook(WebhookTriggerTypes.TRANSCRIPT_UPDATE, self.bot, test_payload)
+        num_attempts = trigger_webhook(webhook_trigger_type=WebhookTriggerTypes.TRANSCRIPT_UPDATE, bot=self.bot, payload=test_payload)
         self.assertEqual(num_attempts, 0)
 
         # Test fallback behavior - delete bot-level webhook and verify project-level webhook is used
@@ -433,7 +433,7 @@ class WebhookDeliveryTest(TransactionTestCase):
         WebhookDeliveryAttempt.objects.all().delete()
 
         # Trigger webhook again - should now use project-level webhook
-        num_attempts = trigger_webhook(WebhookTriggerTypes.BOT_STATE_CHANGE, self.bot, test_payload)
+        num_attempts = trigger_webhook(webhook_trigger_type=WebhookTriggerTypes.BOT_STATE_CHANGE, bot=self.bot, payload=test_payload)
 
         # Should create 1 delivery attempt for project-level webhook
         self.assertEqual(num_attempts, 1)
@@ -451,5 +451,5 @@ class WebhookDeliveryTest(TransactionTestCase):
         self.assertEqual(delivery_attempt.status, WebhookDeliveryAttemptStatus.SUCCESS)
 
         # Test that triggering a webhook for a transcript update does go through, since it uses the project-level webhook
-        num_attempts = trigger_webhook(WebhookTriggerTypes.TRANSCRIPT_UPDATE, self.bot, test_payload)
+        num_attempts = trigger_webhook(webhook_trigger_type=WebhookTriggerTypes.TRANSCRIPT_UPDATE, bot=self.bot, payload=test_payload)
         self.assertEqual(num_attempts, 1)

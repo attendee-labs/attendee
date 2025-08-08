@@ -4,10 +4,12 @@ import time
 
 from django.core.management.base import BaseCommand
 from django.db import connection, transaction
+from django.db.models import Q
 from django.utils import timezone
 
-from bots.models import Bot, BotStates
+from bots.models import Bot, BotStates, Calendar, CalendarStates
 from bots.tasks.launch_scheduled_bot_task import launch_scheduled_bot
+from bots.tasks.sync_calendar_task import enqueue_sync_calendar_task
 
 log = logging.getLogger(__name__)
 
@@ -42,6 +44,7 @@ class Command(BaseCommand):
             began = time.monotonic()
             try:
                 self._run_scheduled_bots()
+                self._run_periodic_calendar_syncs()
             except Exception:
                 log.exception("Scheduler cycle failed")
             finally:
@@ -64,6 +67,26 @@ class Command(BaseCommand):
                 log.warning(f"Scheduler cycle took {elapsed}s, which is longer than the interval of {interval}s")
 
         log.info("Scheduler daemon exited")
+
+    def _run_periodic_calendar_syncs(self):
+        """
+        Run periodic calendar syncs.
+        Launch sync tasks for calendars that haven't had a sync task enqueued in the last 24 hours.
+        """
+        now = timezone.now()
+        cutoff_time = now - timezone.timedelta(hours=24)
+
+        # Find connected calendars that haven't had a sync task enqueued in the last 24 hours
+        calendars = Calendar.objects.filter(
+            state=CalendarStates.CONNECTED,
+        ).filter(Q(sync_task_enqueued_at__isnull=True) | Q(sync_task_enqueued_at__lte=cutoff_time))
+
+        for calendar in calendars:
+            last_enqueued = calendar.sync_task_enqueued_at.isoformat() if calendar.sync_task_enqueued_at else "never"
+            log.info("Launching calendar sync for calendar %s (last enqueued: %s)", calendar.object_id, last_enqueued)
+            enqueue_sync_calendar_task(calendar)
+
+        log.info("Launched %d calendar sync tasks", len(calendars))
 
     # -----------------------------------------------------------
     def _run_scheduled_bots(self):

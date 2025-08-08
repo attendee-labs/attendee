@@ -19,6 +19,10 @@ from .models import (
     BotEventSubTypes,
     BotEventTypes,
     BotStates,
+    Calendar,
+    CalendarEvent,
+    CalendarPlatform,
+    CalendarStates,
     ChatMessageToOptions,
     MediaBlob,
     MeetingTypes,
@@ -56,6 +60,31 @@ BOT_IMAGE_SCHEMA = {
     "required": ["type", "data"],
     "additionalProperties": False,
 }
+
+
+class BotValidationMixin:
+    """Mixin class providing meeting URL validation for serializers."""
+
+    def validate_meeting_url(self, value):
+        meeting_type = meeting_type_from_url(value)
+        if meeting_type is None:
+            raise serializers.ValidationError("Invalid meeting URL")
+
+        if meeting_type == MeetingTypes.GOOGLE_MEET:
+            if not value.startswith("https://meet.google.com/"):
+                raise serializers.ValidationError("Google Meet URL must start with https://meet.google.com/")
+
+        return value
+
+    def validate_join_at(self, value):
+        """Validate that join_at cannot be in the past."""
+        if value is None:
+            return value
+
+        if value < timezone.now():
+            raise serializers.ValidationError("join_at cannot be in the past")
+
+        return value
 
 
 @extend_schema_field(BOT_IMAGE_SCHEMA)
@@ -520,13 +549,14 @@ class CallbackSettingsJSONField(serializers.JSONField):
         )
     ]
 )
-class CreateBotSerializer(serializers.Serializer):
+class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
     meeting_url = serializers.CharField(help_text="The URL of the meeting to join, e.g. https://zoom.us/j/123?pwd=456")
     bot_name = serializers.CharField(help_text="The name of the bot to create, e.g. 'My Bot'")
     bot_image = BotImageSerializer(help_text="The image for the bot", required=False, default=None)
     metadata = MetadataJSONField(help_text="JSON object containing metadata to associate with the bot", required=False, default=None)
     bot_chat_message = BotChatMessageRequestSerializer(help_text="The chat message the bot sends after it joins the meeting", required=False, default=None)
     join_at = serializers.DateTimeField(help_text="The time the bot should join the meeting. ISO 8601 format, e.g. 2025-06-13T12:00:00Z", required=False, default=None)
+    calendar_event_id = serializers.CharField(help_text="The ID of the calendar event the bot should join.", required=False, default=None)
     deduplication_key = serializers.CharField(help_text="Optional key for deduplicating bots. If a bot with this key already exists in a non-terminal state, the new bot will not be created and an error will be returned.", required=False, default=None)
     webhooks = WebhooksJSONField(
         help_text="List of webhook subscriptions to create for this bot. Each item should have 'url' and 'triggers' fields.",
@@ -705,17 +735,6 @@ class CreateBotSerializer(serializers.Serializer):
         "required": [],
         "additionalProperties": False,
     }
-
-    def validate_meeting_url(self, value):
-        meeting_type = meeting_type_from_url(value)
-        if meeting_type is None:
-            raise serializers.ValidationError("Invalid meeting URL")
-
-        if meeting_type == MeetingTypes.GOOGLE_MEET:
-            if not value.startswith("https://meet.google.com/"):
-                raise serializers.ValidationError("Google Meet URL must start with https://meet.google.com/")
-
-        return value
 
     def validate_transcription_settings(self, value):
         meeting_url = self.initial_data.get("meeting_url")
@@ -1040,16 +1059,6 @@ class CreateBotSerializer(serializers.Serializer):
                 raise serializers.ValidationError("Bot name cannot contain emojis or rare script characters.")
         return value
 
-    def validate_join_at(self, value):
-        """Validate that join_at cannot be in the past."""
-        if value is None:
-            return value
-
-        if value < timezone.now():
-            raise serializers.ValidationError("join_at cannot be in the past")
-
-        return value
-
     def validate(self, data):
         """Validate that no unexpected fields are provided."""
         # Get all the field names defined in this serializer
@@ -1300,15 +1309,269 @@ class ParticipantEventSerializer(serializers.Serializer):
         )
     ]
 )
-class PatchBotSerializer(serializers.Serializer):
+class PatchBotSerializer(BotValidationMixin, serializers.Serializer):
     join_at = serializers.DateTimeField(help_text="The time the bot should join the meeting. ISO 8601 format, e.g. 2025-06-13T12:00:00Z", required=False)
+    meeting_url = serializers.CharField(help_text="The URL of the meeting to join, e.g. https://zoom.us/j/123?pwd=456", required=False)
 
-    def validate_join_at(self, value):
-        """Validate that join_at cannot be in the past."""
+
+@extend_schema_serializer(
+    examples=[
+        OpenApiExample(
+            "Create Google Calendar",
+            value={"client_id": "123456789-abcdefghijklmnopqrstuvwxyz.apps.googleusercontent.com", "client_secret": "GOCSPX-abcdefghijklmnopqrstuvwxyz", "refresh_token": "1//04abcdefghijklmnopqrstuvwxyz", "platform": "google", "metadata": {"department": "engineering", "team": "backend"}, "deduplication_key": "engineering-main-calendar"},
+            description="Example of creating a Google calendar connection",
+        ),
+        OpenApiExample(
+            "Create Microsoft Calendar",
+            value={
+                "client_id": "12345678-1234-1234-1234-123456789abc",
+                "client_secret": "abcdefghijklmnopqrstuvwxyz123456",
+                "refresh_token": "0.AXA1234567890abcdef",
+                "platform": "microsoft",
+                "metadata": {"department": "sales"},
+            },
+            description="Example of creating a Microsoft calendar connection",
+        ),
+    ]
+)
+class CreateCalendarSerializer(serializers.Serializer):
+    platform_uuid = serializers.CharField(help_text="The UUID of the calendar on the calendar platform. Specify only for non-primary calendars.", required=False, default=None)
+    client_id = serializers.CharField(help_text="The client ID for the calendar platform authentication")
+    client_secret = serializers.CharField(help_text="The client secret for the calendar platform authentication")
+    refresh_token = serializers.CharField(help_text="The refresh token for accessing the calendar platform")
+    platform = serializers.ChoiceField(choices=CalendarPlatform.choices, help_text="The calendar platform (google or microsoft)")
+    metadata = serializers.JSONField(help_text="JSON object containing metadata to associate with the calendar", required=False, default=None)
+    deduplication_key = serializers.CharField(help_text="Optional key for deduplicating calendars. If a calendar with this key already exists in the project, the new calendar will not be created and an error will be returned.", required=False, default=None)
+
+    def validate_metadata(self, value):
         if value is None:
             return value
 
-        if value < timezone.now():
-            raise serializers.ValidationError("join_at cannot be in the past")
+        # Check if it's a dict
+        if not isinstance(value, dict):
+            raise serializers.ValidationError("Metadata must be an object not an array or other type")
+
+        # Make sure there is at least one key
+        if not value:
+            raise serializers.ValidationError("Metadata must have at least one key")
+
+        # Check if all values are strings
+        for key, val in value.items():
+            if not isinstance(val, str):
+                raise serializers.ValidationError(f"Value for key '{key}' must be a string")
+
+        # Check if all keys are strings
+        for key in value.keys():
+            if not isinstance(key, str):
+                raise serializers.ValidationError("All keys in metadata must be strings")
+
+        # Make sure the total length of the stringified metadata is less than 1000 characters
+        if len(json.dumps(value)) > 1000:
+            raise serializers.ValidationError("Metadata must be less than 1000 characters")
 
         return value
+
+    def validate_deduplication_key(self, value):
+        if value is not None and len(value.strip()) == 0:
+            raise serializers.ValidationError("Deduplication key cannot be empty")
+        return value
+
+    def validate_client_id(self, value):
+        if not value or len(value.strip()) == 0:
+            raise serializers.ValidationError("Client ID cannot be empty")
+        return value.strip()
+
+    def validate_client_secret(self, value):
+        if not value or len(value.strip()) == 0:
+            raise serializers.ValidationError("Client secret cannot be empty")
+        return value.strip()
+
+    def validate_refresh_token(self, value):
+        if not value or len(value.strip()) == 0:
+            raise serializers.ValidationError("Refresh token cannot be empty")
+        return value.strip()
+
+    def validate(self, data):
+        """Validate that no unexpected fields are provided."""
+        # Get all the field names defined in this serializer
+        expected_fields = set(self.fields.keys())
+
+        # Get all the fields provided in the input data
+        provided_fields = set(self.initial_data.keys())
+
+        # Check for unexpected fields
+        unexpected_fields = provided_fields - expected_fields
+
+        if unexpected_fields:
+            raise serializers.ValidationError(f"Unexpected field(s): {', '.join(sorted(unexpected_fields))}. Allowed fields are: {', '.join(sorted(expected_fields))}")
+
+        return data
+
+
+class CalendarSerializer(serializers.ModelSerializer):
+    id = serializers.CharField(source="object_id")
+    state = serializers.SerializerMethodField()
+    metadata = serializers.SerializerMethodField()
+
+    @extend_schema_field(
+        {
+            "type": "string",
+            "enum": ["connected", "disconnected"],
+        }
+    )
+    def get_state(self, obj):
+        """Convert calendar state to API code"""
+        mapping = {
+            CalendarStates.CONNECTED: "connected",
+            CalendarStates.DISCONNECTED: "disconnected",
+        }
+        return mapping.get(obj.state)
+
+    @extend_schema_field({"type": "object", "description": "Metadata associated with the calendar"})
+    def get_metadata(self, obj):
+        return obj.metadata
+
+    class Meta:
+        model = Calendar
+        fields = [
+            "id",
+            "platform",
+            "client_id",
+            "platform_uuid",
+            "state",
+            "metadata",
+            "deduplication_key",
+            "connection_failure_data",
+            "created_at",
+            "updated_at",
+            "last_successful_sync_at",
+            "last_attempted_sync_at",
+        ]
+        read_only_fields = fields
+
+
+@extend_schema_serializer(
+    examples=[
+        OpenApiExample(
+            "Update credentials",
+            value={"client_secret": "GOCSPX-NewClientSecret123", "refresh_token": "1//05o3zfluegTFVCgYICGHGAUSNgF-L9Ir23dcclPCJW7KmzPhsQaNFcAzNwQkV6uM1gIGID8nBelYDPtbIr123"},
+            description="Example of updating calendar credentials",
+        ),
+        OpenApiExample(
+            "Update metadata only",
+            value={"metadata": {"department": "sales", "team": "frontend", "updated": "true"}},
+            description="Example of updating only the calendar metadata",
+        ),
+        OpenApiExample(
+            "Update refresh token only",
+            value={"refresh_token": "1//05NewRefreshTokenHere"},
+            description="Example of updating only the refresh token",
+        ),
+    ]
+)
+class PatchCalendarSerializer(serializers.Serializer):
+    client_secret = serializers.CharField(help_text="The client secret for the calendar platform authentication", required=False)
+    refresh_token = serializers.CharField(help_text="The refresh token for accessing the calendar platform", required=False)
+    metadata = serializers.JSONField(help_text="JSON object containing metadata to associate with the calendar", required=False)
+
+    def validate_client_secret(self, value):
+        if value is not None:
+            if not value or len(value.strip()) == 0:
+                raise serializers.ValidationError("Client secret cannot be empty")
+            return value.strip()
+        return value
+
+    def validate_refresh_token(self, value):
+        if value is not None:
+            if not value or len(value.strip()) == 0:
+                raise serializers.ValidationError("Refresh token cannot be empty")
+            return value.strip()
+        return value
+
+    def validate_metadata(self, value):
+        if value is None:
+            return value
+
+        # Check if it's a dict
+        if not isinstance(value, dict):
+            raise serializers.ValidationError("Metadata must be an object not an array or other type")
+
+        # Make sure there is at least one key
+        if not value:
+            raise serializers.ValidationError("Metadata must have at least one key")
+
+        # Check if all values are strings
+        for key, val in value.items():
+            if not isinstance(val, str):
+                raise serializers.ValidationError(f"Value for key '{key}' must be a string")
+
+        # Check if all keys are strings
+        for key in value.keys():
+            if not isinstance(key, str):
+                raise serializers.ValidationError("All keys in metadata must be strings")
+
+        # Make sure the total length of the stringified metadata is less than 1000 characters
+        if len(json.dumps(value)) > 1000:
+            raise serializers.ValidationError("Metadata must be less than 1000 characters")
+
+        return value
+
+    def validate(self, data):
+        """Validate that no unexpected fields are provided."""
+        # Get all the field names defined in this serializer
+        expected_fields = set(self.fields.keys())
+
+        # Get all the fields provided in the input data
+        provided_fields = set(self.initial_data.keys())
+
+        # Check for unexpected fields
+        unexpected_fields = provided_fields - expected_fields
+
+        if unexpected_fields:
+            raise serializers.ValidationError(f"Unexpected field(s): {', '.join(sorted(unexpected_fields))}. Allowed fields are: {', '.join(sorted(expected_fields))}")
+
+        return data
+
+
+@extend_schema_serializer(
+    examples=[
+        OpenApiExample(
+            "Calendar Event",
+            value={
+                "id": "evt_abcdef1234567890",
+                "calendar_id": "cal_abcdef1234567890",
+                "platform_uuid": "google_event_123456789",
+                "meeting_url": "https://meet.google.com/abc-defg-hij",
+                "start_time": "2025-01-15T14:00:00Z",
+                "end_time": "2025-01-15T15:00:00Z",
+                "is_deleted": False,
+                "attendees": [{"email": "user1@example.com", "name": "John Doe"}, {"email": "user2@example.com", "name": "Jane Smith"}],
+                "raw": {"google_event_data": "..."},
+                "created_at": "2025-01-13T10:30:00.123456Z",
+                "updated_at": "2025-01-13T10:30:00.123456Z",
+            },
+            description="Example of a calendar event",
+        )
+    ]
+)
+class CalendarEventSerializer(serializers.ModelSerializer):
+    id = serializers.CharField(source="object_id")
+    calendar_id = serializers.CharField(source="calendar.object_id")
+
+    class Meta:
+        model = CalendarEvent
+        fields = [
+            "id",
+            "calendar_id",
+            "platform_uuid",
+            "meeting_url",
+            "start_time",
+            "end_time",
+            "is_deleted",
+            "attendees",
+            "ical_uid",
+            "raw",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields

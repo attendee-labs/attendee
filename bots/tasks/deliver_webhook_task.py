@@ -41,11 +41,20 @@ def deliver_webhook(self, delivery_id):
         delivery.save()
         return
 
+    related_object_specific_webhook_data = {}
+
+    if delivery.bot:
+        related_object_specific_webhook_data["bot_id"] = delivery.bot.object_id
+        related_object_specific_webhook_data["bot_metadata"] = delivery.bot.metadata
+    elif delivery.calendar:
+        related_object_specific_webhook_data["calendar_id"] = delivery.calendar.object_id
+        related_object_specific_webhook_data["calendar_deduplication_key"] = delivery.calendar.deduplication_key
+        related_object_specific_webhook_data["calendar_metadata"] = delivery.calendar.metadata
+
     # Prepare the webhook payload
     webhook_data = {
         "idempotency_key": str(delivery.idempotency_key),
-        "bot_id": delivery.bot.object_id if delivery.bot else None,
-        "bot_metadata": delivery.bot.metadata if delivery.bot else None,
+        **related_object_specific_webhook_data,
         "trigger": WebhookTriggerTypes.trigger_type_to_api_code(delivery.webhook_trigger_type),
         "data": delivery.payload,
     }

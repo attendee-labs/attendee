@@ -8,19 +8,29 @@ import uuid
 logger = logging.getLogger(__name__)
 
 
-def trigger_webhook(webhook_trigger_type, bot, payload):
+def trigger_webhook(webhook_trigger_type, bot=None, calendar=None, payload=None):
     """
     Trigger a webhook for a given event.
     Prioritizes bot-level webhook subscriptions over project-level ones.
     """
     from bots.models import WebhookDeliveryAttempt
 
-    # If bot has any bot-level webhook subscriptions, use those exclusively
-    if bot.bot_webhook_subscriptions.exists():
+    if bot:
+        project = bot.project
+    elif calendar:
+        project = calendar.project
+    else:
+        raise ValueError("Either bot or calendar must be provided")
+
+    if not payload:
+        raise ValueError("Payload must be provided")
+
+    # If bot was provided and has any bot-level webhook subscriptions, use those exclusively
+    if bot and bot.bot_webhook_subscriptions.exists():
         subscriptions = bot.bot_webhook_subscriptions.filter(triggers__contains=[webhook_trigger_type], is_active=True)
     else:
         # Otherwise, fall back to project-level webhook subscriptions
-        subscriptions = bot.project.webhook_subscriptions.filter(
+        subscriptions = project.webhook_subscriptions.filter(
             bot__isnull=True,  # Only project-level (not bot-specific)
             triggers__contains=[webhook_trigger_type],
             is_active=True,
@@ -34,6 +44,7 @@ def trigger_webhook(webhook_trigger_type, bot, payload):
             webhook_trigger_type=webhook_trigger_type,
             idempotency_key=uuid.uuid4(),
             bot=bot,
+            calendar=calendar,
             payload=payload,
         )
         delivery_attempts.append(delivery_attempt)

@@ -47,6 +47,7 @@ urlpatterns += [
     path("external_webhooks/", include("bots.external_webhooks_urls")),
     path("", views.home, name="home"),
     path("projects/", include("bots.projects_urls", namespace="projects")),
+    path("api/v1/", include("bots.calendars_api_urls")),
     path("api/v1/", include("bots.bots_api_urls")),
 ]
 
