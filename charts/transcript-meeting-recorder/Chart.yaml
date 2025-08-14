@@ -1,0 +1,5 @@
+apiVersion: v2
+name: transcript-meeting-recorder-api
+description: A Helm chart for transcript-meeting-recorder-api
+version: 0.1.0
+appVersion: "1.0.11_staging"

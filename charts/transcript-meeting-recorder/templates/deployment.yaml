@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: transcript-meeting-recorder-api 
+  labels:
+    app: transcript-meeting-recorder-api
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: transcript-meeting-recorder-api 
+  template:
+    metadata:
+      labels:
+        app: transcript-meeting-recorder-api
+    spec:
+      initContainers:
+      - name: migrations
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        command: [ "python", "manage.py", "migrate" ]
+        envFrom:
+        - configMapRef:
+            name: {{ .Values.envFrom.configMapRef }}
+        - secretRef:
+            name: {{ .Values.envFrom.secretRef }}
+      containers:
+      - name: api
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        command: ["python", "manage.py", "runserver", "0.0.0.0:8000"]
+        ports:
+        - containerPort: {{ .Values.service.targetPort }}
+        env:
+        {{- range $key, $value := .Values.env }}
+        - name: {{ $key }}
+          value: {{ $value | quote }}
+        {{- end }}
+        envFrom:
+        - configMapRef:
+            name: {{ .Values.envFrom.configMapRef }}
+        - secretRef:
+            name: {{ .Values.envFrom.secretRef }}
+        resources:
+          requests:
+            memory: {{ .Values.resources.requests.memory }}
+            cpu: {{ .Values.resources.requests.cpu }}
+          limits:
+            memory: {{ .Values.resources.limits.memory }}
+            cpu: {{ .Values.resources.limits.cpu }}
+      imagePullSecrets:
+        {{- range .Values.image.pullSecrets }}
+        - name: {{ . }}
+        {{- end }}
