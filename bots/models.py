@@ -55,6 +55,111 @@ class Project(models.Model):
         return self.name
 
 
+class CalendarPlatform(models.TextChoices):
+    GOOGLE = "google"
+    MICROSOFT = "microsoft"
+
+
+class CalendarStates(models.IntegerChoices):
+    CONNECTED = 1
+    DISCONNECTED = 2
+
+
+class Calendar(models.Model):
+    OBJECT_ID_PREFIX = "cal_"
+
+    object_id = models.CharField(max_length=32, unique=True, editable=False)
+    project = models.ForeignKey(Project, on_delete=models.PROTECT, related_name="calendars")
+    platform = models.CharField(max_length=255, choices=CalendarPlatform.choices)
+    state = models.IntegerField(choices=CalendarStates.choices, default=CalendarStates.CONNECTED)
+    connection_failure_data = models.JSONField(null=True, default=None)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    version = IntegerVersionField()
+
+    metadata = models.JSONField(null=True, blank=True)
+    deduplication_key = models.CharField(max_length=1024, null=True, blank=True, help_text="Optional key for deduplicating calendars")
+
+    client_id = models.CharField(max_length=255)
+    platform_uuid = models.CharField(max_length=1024, null=True, blank=True)
+
+    last_attempted_sync_at = models.DateTimeField(null=True, blank=True)
+    last_successful_sync_at = models.DateTimeField(null=True, blank=True)
+    last_successful_sync_time_window_start = models.DateTimeField(null=True, blank=True)
+    last_successful_sync_time_window_end = models.DateTimeField(null=True, blank=True)
+    last_successful_sync_started_at = models.DateTimeField(null=True, blank=True)
+    sync_task_enqueued_at = models.DateTimeField(null=True, blank=True)
+
+    _encrypted_data = models.BinaryField(
+        null=True,
+        editable=False,  # Prevents editing through admin/forms
+    )
+
+    def set_credentials(self, credentials_dict):
+        """Encrypt and save credentials"""
+        f = Fernet(settings.CREDENTIALS_ENCRYPTION_KEY)
+        json_data = json.dumps(credentials_dict)
+        self._encrypted_data = f.encrypt(json_data.encode())
+        self.save()
+
+    def get_credentials(self):
+        """Decrypt and return credentials"""
+        if not self._encrypted_data:
+            return None
+        f = Fernet(settings.CREDENTIALS_ENCRYPTION_KEY)
+        decrypted_data = f.decrypt(bytes(self._encrypted_data))
+        return json.loads(decrypted_data.decode())
+
+    def save(self, *args, **kwargs):
+        if not self.object_id:
+            # Generate a random 16-character string
+            random_string = "".join(random.choices(string.ascii_letters + string.digits, k=16))
+            self.object_id = f"{self.OBJECT_ID_PREFIX}{random_string}"
+        super().save(*args, **kwargs)
+
+    class Meta:
+        # Within a project, we don't want to allow calendars in the same project with the same deduplication key
+        constraints = [
+            models.UniqueConstraint(fields=["project", "deduplication_key"], name="unique_calendar_deduplication_key"),
+        ]
+
+
+class CalendarEvent(models.Model):
+    OBJECT_ID_PREFIX = "evt_"
+
+    object_id = models.CharField(max_length=255, unique=True, editable=False)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    calendar = models.ForeignKey(Calendar, on_delete=models.CASCADE, related_name="events")
+
+    platform_uuid = models.CharField(max_length=1024)
+
+    meeting_url = models.CharField(max_length=511, null=True, blank=True)
+
+    start_time = models.DateTimeField()
+    end_time = models.DateTimeField()
+    is_deleted = models.BooleanField(default=False)
+    attendees = models.JSONField(null=True, blank=True)
+    ical_uid = models.CharField(max_length=1024, null=True, blank=True)
+
+    raw = models.JSONField()
+
+    def save(self, *args, **kwargs):
+        if not self.object_id:
+            # Generate a random 16-character string
+            random_string = "".join(random.choices(string.ascii_letters + string.digits, k=16))
+            self.object_id = f"{self.OBJECT_ID_PREFIX}{random_string}"
+        super().save(*args, **kwargs)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["calendar", "platform_uuid"], name="unique_calendar_event_platform_uuid"),
+        ]
+
+
 class ProjectAccess(models.Model):
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="project_accesses")
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="project_accesses")
@@ -181,6 +286,7 @@ class Bot(models.Model):
 
     join_at = models.DateTimeField(null=True, blank=True, help_text="The time the bot should join the meeting")
     deduplication_key = models.CharField(max_length=1024, null=True, blank=True, help_text="Optional key for deduplicating bots")
+    calendar_event = models.ForeignKey(CalendarEvent, on_delete=models.SET_NULL, null=True, blank=True, related_name="bots")
 
     def delete_data(self):
         # Check if bot is in a state where the data deleted event can be created
@@ -1810,6 +1916,8 @@ class WebhookTriggerTypes(models.IntegerChoices):
     TRANSCRIPT_UPDATE = 2, "Transcript Update"
     CHAT_MESSAGES_UPDATE = 3, "Chat Messages Update"
     PARTICIPANT_EVENTS_JOIN_LEAVE = 4, "Participant Join/Leave"
+    CALENDAR_EVENTS_UPDATE = 5, "Calendar Events Update"
+    CALENDAR_STATE_CHANGE = 6, "Calendar State Change"
     # add other event types here
 
     @classmethod
@@ -1820,6 +1928,8 @@ class WebhookTriggerTypes(models.IntegerChoices):
             cls.TRANSCRIPT_UPDATE: "transcript.update",
             cls.CHAT_MESSAGES_UPDATE: "chat_messages.update",
             cls.PARTICIPANT_EVENTS_JOIN_LEAVE: "participant_events.join_leave",
+            cls.CALENDAR_EVENTS_UPDATE: "calendar.events_update",
+            cls.CALENDAR_STATE_CHANGE: "calendar.state_change",
         }
 
     @classmethod
@@ -1869,6 +1979,7 @@ class WebhookDeliveryAttempt(models.Model):
     webhook_trigger_type = models.IntegerField(choices=WebhookTriggerTypes.choices, default=WebhookTriggerTypes.BOT_STATE_CHANGE, null=False)
     idempotency_key = models.UUIDField(unique=True, editable=False)
     bot = models.ForeignKey(Bot, on_delete=models.SET_NULL, null=True, related_name="webhook_delivery_attempts")
+    calendar = models.ForeignKey(Calendar, on_delete=models.SET_NULL, null=True, related_name="webhook_delivery_attempts")
     payload = models.JSONField(default=dict)
     status = models.IntegerField(choices=WebhookDeliveryAttemptStatus.choices, default=WebhookDeliveryAttemptStatus.PENDING, null=False)
     attempt_count = models.IntegerField(default=0)
