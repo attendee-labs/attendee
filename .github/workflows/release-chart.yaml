@@ -1,0 +1,39 @@
+name: Release Helm Chart to GHCR
+
+on:
+  push:
+    tags:
+      - "chart-*.*.*"     # tag like chart-0.1.0 to publish
+  workflow_dispatch:       # allow manual runs too
+
+permissions:
+  contents: read
+  packages: write          # needed to push to GHCR
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.14.4
+
+      - name: Package chart
+        working-directory: charts/transcript-meeting-recorder
+        run: |
+          helm package . --destination ../dist
+          ls -l ../dist
+
+      - name: Login to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Push to GHCR (OCI)
+        run: |
+          OWNER_LOWER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          CHART_TGZ=$(ls charts/dist/*.tgz)
+          OWNER=${{ github.repository_owner }}
+          helm push "$CHART_TGZ" oci://ghcr.io/$OWNER_LOWER/helm

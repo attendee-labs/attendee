@@ -1,0 +1,40 @@
+replicaCount: 1
+
+image:
+  repository: vanyabrucker/transcript-meeting-recorder
+  tag: "1.0.11_staging"
+  pullSecrets:
+    - docker-secrets
+
+resources:
+  requests:
+    memory: "512Mi"
+    cpu: "100m"
+  limits:
+    memory: "1Gi"
+    cpu: "500m"
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8000
+
+hpa:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 2
+  cpu:
+    averageUtilization: 80
+
+env:
+  LAUNCH_BOT_METHOD: "kubernetes"
+  K8S_CONFIG: transcript-config
+  K8S_SECRETS: transcript-secrets
+  K8S_DOCKER_SECRETS: docker-secrets
+  BOT_POD_IMAGE: vanyabrucker/transcript-meeting-recorder
+  CUBER_RELEASE_VERSION: "1.0.11_staging"
+  CUBER_NAMESPACE: "default"
+
+envFrom:
+  configMapRef: transcript-config
+  secretRef: transcript-secrets
