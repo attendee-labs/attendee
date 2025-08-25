@@ -135,3 +135,76 @@ class RunSchedulerCommandTestCase(TestCase):
         calendar_with_requested_sync.refresh_from_db()
         self.assertEqual(calendar_with_requested_sync.sync_task_enqueued_at, self.now)
         self.assertEqual(calendar_with_requested_sync.sync_task_requested_at, None)
+
+    def test_run_autopay_tasks_enqueues_eligible_organizations(self):
+        """Test that _run_autopay_tasks finds and enqueues autopay tasks for eligible organizations"""
+        # Create organization eligible for autopay
+        eligible_org = Organization.objects.create(
+            name="Eligible Autopay Org",
+            centicredits=500,  # 5 credits, below default threshold of 10
+            autopay_enabled=True,
+            autopay_threshold_centricredits=1000,  # 10 credits threshold
+            autopay_amount_to_purchase_cents=2000,  # $20
+            autopay_stripe_customer_id="cus_test123",
+            autopay_charge_failure_data=None,
+        )
+
+        # Create organization not eligible (autopay disabled)
+        Organization.objects.create(
+            name="Autopay Disabled Org",
+            centicredits=500,
+            autopay_enabled=False,
+            autopay_threshold_centricredits=1000,
+            autopay_stripe_customer_id="cus_test456",
+        )
+
+        # Create organization not eligible (above threshold)
+        Organization.objects.create(
+            name="Above Threshold Org",
+            centicredits=1500,  # 15 credits, above threshold
+            autopay_enabled=True,
+            autopay_threshold_centricredits=1000,
+            autopay_stripe_customer_id="cus_test789",
+        )
+
+        command = Command()
+
+        with patch("bots.tasks.autopay_charge_task.autopay_charge.delay") as mock_delay:
+            with patch("django.utils.timezone.now", return_value=self.now):
+                command._run_autopay_tasks()
+
+            # Verify only the eligible organization had an autopay task enqueued
+            mock_delay.assert_called_once_with(eligible_org.id)
+
+    def test_run_autopay_tasks_excludes_organizations_with_recent_charge_tasks(self):
+        """Test that _run_autopay_tasks excludes organizations that had charge tasks enqueued recently"""
+        # Create organization that would be eligible but had a charge task enqueued recently
+        recent_charge_time = self.now - django_timezone.timedelta(hours=12)  # 12 hours ago, within 24 hour window
+        Organization.objects.create(
+            name="Recent Charge Org",
+            centicredits=500,  # Below threshold
+            autopay_enabled=True,
+            autopay_threshold_centricredits=1000,
+            autopay_stripe_customer_id="cus_recent123",
+            autopay_charge_task_enqueued_at=recent_charge_time,
+        )
+
+        # Create organization eligible (charge task enqueued more than 24 hours ago)
+        old_charge_time = self.now - django_timezone.timedelta(days=2)  # 2 days ago, outside 24 hour window
+        old_charge_org = Organization.objects.create(
+            name="Old Charge Org",
+            centicredits=500,  # Below threshold
+            autopay_enabled=True,
+            autopay_threshold_centricredits=1000,
+            autopay_stripe_customer_id="cus_old456",
+            autopay_charge_task_enqueued_at=old_charge_time,
+        )
+
+        command = Command()
+
+        with patch("bots.tasks.autopay_charge_task.autopay_charge.delay") as mock_delay:
+            with patch("django.utils.timezone.now", return_value=self.now):
+                command._run_autopay_tasks()
+
+            # Verify only the organization with old charge task had an autopay task enqueued
+            mock_delay.assert_called_once_with(old_charge_org.id)

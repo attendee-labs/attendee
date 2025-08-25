@@ -3,11 +3,13 @@ import signal
 import time
 
 from django.core.management.base import BaseCommand
-from django.db import connection, transaction
+from django.db import connection, models, transaction
 from django.db.models import Q
 from django.utils import timezone
 
+from accounts.models import Organization
 from bots.models import Bot, BotStates, Calendar, CalendarStates
+from bots.tasks.autopay_charge_task import enqueue_autopay_charge_task
 from bots.tasks.launch_scheduled_bot_task import launch_scheduled_bot
 from bots.tasks.sync_calendar_task import enqueue_sync_calendar_task
 
@@ -45,6 +47,7 @@ class Command(BaseCommand):
             try:
                 self._run_scheduled_bots()
                 self._run_periodic_calendar_syncs()
+                self._run_autopay_tasks()
             except Exception:
                 log.exception("Scheduler cycle failed")
             finally:
@@ -110,3 +113,46 @@ class Command(BaseCommand):
                 launch_scheduled_bot.delay(bot.id, bot.join_at.isoformat())
 
             log.info("Launched %s bots", len(bots_to_launch))
+
+    def _run_autopay_tasks(self):
+        """
+        Run autopay tasks for organizations that meet all criteria:
+        - Autopay is enabled
+        - Has a Stripe customer ID
+        - Credit balance is below the threshold
+        - No autopay task has been enqueued in the last day
+        """
+        now = timezone.now()
+        cutoff_time = now - timezone.timedelta(days=1)
+
+        # Find organizations that meet all autopay criteria
+        organizations = Organization.objects.filter(
+            # Autopay must be enabled
+            autopay_enabled=True,
+            # Must have a Stripe customer ID
+            autopay_stripe_customer_id__isnull=False,
+            # Credit balance must be below threshold
+            centicredits__lt=models.F("autopay_threshold_centricredits"),
+            # No charge failure
+            autopay_charge_failure_data__isnull=True,
+        ).filter(
+            # No autopay task enqueued in the last day (or never enqueued)
+            Q(autopay_charge_task_enqueued_at__isnull=True) | Q(autopay_charge_task_enqueued_at__lte=cutoff_time)
+        )
+
+        for organization in organizations:
+            credits = organization.credits()
+            threshold = organization.autopay_threshold_credits()
+            last_enqueued = organization.autopay_charge_task_enqueued_at.isoformat() if organization.autopay_charge_task_enqueued_at else "never"
+
+            log.info(
+                "Enqueueing autopay task for organization %s (credits: %.2f, threshold: %.2f, last enqueued: %s)",
+                organization.id,
+                credits,
+                threshold,
+                last_enqueued,
+            )
+
+            enqueue_autopay_charge_task(organization)
+
+        log.info("Enqueued %d autopay tasks", len(organizations))

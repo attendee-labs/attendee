@@ -16,6 +16,19 @@ class Organization(models.Model):
     version = IntegerVersionField()
     is_webhooks_enabled = models.BooleanField(default=True)
 
+    autopay_enabled = models.BooleanField(default=False)
+    autopay_threshold_centricredits = models.IntegerField(default=1000)
+    autopay_amount_to_purchase_cents = models.IntegerField(default=5000)
+    autopay_charge_task_enqueued_at = models.DateTimeField(null=True, blank=True)
+    autopay_charge_failure_data = models.JSONField(null=True, blank=True)
+    autopay_stripe_customer_id = models.CharField(max_length=255, null=True, blank=True)
+
+    def autopay_amount_to_purchase_dollars(self):
+        return self.autopay_amount_to_purchase_cents / 100
+
+    def autopay_threshold_credits(self):
+        return self.autopay_threshold_centricredits / 100
+
     def __str__(self):
         return self.name
 

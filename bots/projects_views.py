@@ -1,7 +1,6 @@
 import base64
 import json
 import logging
-import math
 import os
 import uuid
 
@@ -50,7 +49,7 @@ from .models import (
     WebhookSubscription,
     WebhookTriggerTypes,
 )
-from .stripe_utils import process_checkout_session_completed
+from .stripe_utils import credit_amount_for_purchase_amount_dollars, process_checkout_session_completed
 from .utils import generate_recordings_json_for_bot_detail_view
 
 logger = logging.getLogger(__name__)
@@ -887,6 +886,23 @@ class ProjectBillingView(AdminRequiredMixin, ProjectUrlContextMixin, ListView):
         context = super().get_context_data(**kwargs)
         project = get_project_for_user(user=self.request.user, project_object_id=self.kwargs["object_id"])
         context.update(self.get_project_context(self.kwargs["object_id"], project))
+
+        # Check if organization has a valid payment method
+        has_payment_method = False
+        if project.organization.autopay_stripe_customer_id:
+            try:
+                # Retrieve the customer to check for default payment method
+                customer = stripe.Customer.retrieve(
+                    project.organization.autopay_stripe_customer_id,
+                    api_key=os.getenv("STRIPE_SECRET_KEY"),
+                )
+                # Check if customer has a default payment method
+                has_payment_method = customer.invoice_settings.default_payment_method is not None
+            except stripe.error.StripeError:
+                # If there's an error querying Stripe, assume no payment method
+                has_payment_method = False
+
+        context["has_payment_method"] = has_payment_method
         return context
 
 
@@ -917,23 +933,7 @@ class CreateCheckoutSessionView(LoginRequiredMixin, ProjectUrlContextMixin, View
         except (ValueError, TypeError):
             purchase_amount = 50.0  # Default fallback
 
-        # Calculate credits based on tiered pricing
-        if purchase_amount <= 200:
-            # Tier 1: $0.50 per credit
-            credit_amount = purchase_amount / 0.5
-        elif purchase_amount <= 1000:
-            # Tier 2: $0.40 per credit
-            credit_amount = purchase_amount / 0.4
-        else:
-            # Tier 3: $0.35 per credit
-            credit_amount = purchase_amount / 0.35
-
-        # Floor the credit amount to ensure whole credits
-        credit_amount = math.floor(credit_amount)
-
-        # Ensure at least 1 credit
-        if credit_amount < 1:
-            credit_amount = 1
+        credit_amount = credit_amount_for_purchase_amount_dollars(purchase_amount)
 
         # Convert purchase amount to cents for Stripe
         unit_amount = int(purchase_amount * 100)  # in cents
@@ -1031,3 +1031,109 @@ class EditProjectView(AdminRequiredMixin, View):
         project.save()
 
         return HttpResponse("ok", status=200)
+
+
+class ProjectAutopayStripePortalView(AdminRequiredMixin, View):
+    def post(self, request, object_id):
+        """Create or update Stripe customer and redirect to billing portal for payment method setup."""
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
+        organization = project.organization
+
+        try:
+            # Check if organization already has a Stripe customer
+            if not organization.autopay_stripe_customer_id:
+                # Create a new Stripe customer
+                customer = stripe.Customer.create(
+                    email=request.user.email,
+                    name=organization.name,
+                    metadata={
+                        "organization_id": str(organization.id),
+                        "user_id": str(request.user.id),
+                    },
+                    api_key=os.getenv("STRIPE_SECRET_KEY"),
+                )
+
+                # Save the customer ID to the organization
+                organization.autopay_stripe_customer_id = customer.id
+                organization.save()
+
+            # Check if customer already has a default payment method
+            customer = stripe.Customer.retrieve(
+                organization.autopay_stripe_customer_id,
+                api_key=os.getenv("STRIPE_SECRET_KEY"),
+            )
+            has_default_payment_method = customer.invoice_settings.default_payment_method is not None
+
+            # Create billing portal session with conditional flow_data
+            session_params = {
+                "customer": organization.autopay_stripe_customer_id,
+                "return_url": request.build_absolute_uri(reverse("projects:project-billing", args=[project.object_id])),
+                "api_key": os.getenv("STRIPE_SECRET_KEY"),
+            }
+
+            # Only add flow_data if customer doesn't have a default payment method
+            if not has_default_payment_method:
+                session_params["flow_data"] = {"type": "payment_method_update"}
+
+            session = stripe.billing_portal.Session.create(**session_params)
+
+            # Redirect to the billing portal
+            return redirect(session.url)
+
+        except stripe.error.StripeError as e:
+            error_id = str(uuid.uuid4())
+            logger.error(f"Error setting up payment method (error_id={error_id}): {e}")
+            return HttpResponse(f"Error setting up payment method. Error ID: {error_id}", status=400)
+        except Exception as e:
+            error_id = str(uuid.uuid4())
+            logger.error(f"An error occurred setting up payment method (error_id={error_id}): {e}")
+            return HttpResponse(f"An error occurred. Error ID: {error_id}", status=500)
+
+
+class ProjectAutopayView(AdminRequiredMixin, View):
+    def patch(self, request, object_id):
+        """Update autopay settings for the organization."""
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
+        organization = project.organization
+
+        try:
+            # Parse JSON body
+            data = json.loads(request.body)
+        except json.JSONDecodeError:
+            return HttpResponse("Invalid JSON", status=400)
+
+        # Validate and update autopay_enabled
+        if "autopay_enabled" in data:
+            autopay_enabled = data["autopay_enabled"]
+            if not isinstance(autopay_enabled, bool):
+                return HttpResponse("autopay_enabled must be a boolean", status=400)
+            organization.autopay_enabled = autopay_enabled
+
+        # Validate and update autopay_threshold_centricredits
+        if "autopay_threshold_credits" in data:
+            threshold_credits = data["autopay_threshold_credits"]
+            if not isinstance(threshold_credits, (int, float)) or threshold_credits <= 0:
+                return HttpResponse("autopay_threshold_credits must be a positive number", status=400)
+            if threshold_credits > 10000:
+                return HttpResponse("autopay_threshold_credits cannot exceed 10,000 credits", status=400)
+            # Convert credits to centicredits
+            organization.autopay_threshold_centricredits = int(threshold_credits * 100)
+
+        # Validate and update autopay_amount_to_purchase_cents
+        if "autopay_amount_dollars" in data:
+            amount_dollars = data["autopay_amount_dollars"]
+            if not isinstance(amount_dollars, (int, float)) or amount_dollars <= 0:
+                return HttpResponse("autopay_amount_dollars must be a positive number", status=400)
+            if amount_dollars < 1:
+                return HttpResponse("autopay_amount_dollars must be at least $1", status=400)
+            if amount_dollars > 10000:
+                return HttpResponse("autopay_amount_dollars cannot exceed $10,000", status=400)
+            # Convert dollars to cents
+            organization.autopay_amount_to_purchase_cents = int(amount_dollars * 100)
+
+        try:
+            organization.save()
+            return HttpResponse("Autopay settings updated successfully", status=200)
+        except Exception as e:
+            logger.error(f"Error saving autopay settings: {e}")
+            return HttpResponse("Error saving autopay settings", status=500)

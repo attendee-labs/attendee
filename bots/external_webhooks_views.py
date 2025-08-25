@@ -7,7 +7,7 @@ from django.utils.decorators import method_decorator
 from django.views import View
 from django.views.decorators.csrf import csrf_exempt
 
-from .stripe_utils import process_checkout_session_completed
+from .stripe_utils import process_checkout_session_completed, process_payment_intent_succeeded
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +40,9 @@ class ExternalWebhookStripeView(View):
             if event_type == "checkout.session.completed":
                 # Payment was successful
                 self._handle_checkout_session_completed(event_data)
+            elif event_type == "payment_intent.succeeded":
+                # Payment was successful
+                self._handle_payment_intent_succeeded(event_data)
             else:
                 logger.info(f"Received Stripe webhook event that we don't handle: {event_type}")
 
@@ -59,6 +62,11 @@ class ExternalWebhookStripeView(View):
             return HttpResponse(status=400)
 
     def _handle_checkout_session_completed(self, session):
-        logger.info(f"Received Stripe webhook event: {session}")
+        logger.info(f"Received Stripe webhook event for checkout session completed: {session}")
 
         process_checkout_session_completed(session)
+
+    def _handle_payment_intent_succeeded(self, payment_intent):
+        logger.info(f"Received Stripe webhook event for payment intent succeeded: {payment_intent}")
+
+        process_payment_intent_succeeded(payment_intent)
