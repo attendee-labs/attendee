@@ -1,5 +1,5 @@
 import io
-
+import re
 import cv2
 import numpy as np
 from pydub import AudioSegment
@@ -423,6 +423,25 @@ def domain_and_subdomain_from_url(url):
     return extract_from_url.subdomain + "." + extract_from_url.registered_domain
 
 
+def is_valid_teams_url(url: str) -> bool:
+
+    if not url:
+        return False
+
+    pattern = re.compile(
+        r"^https://teams\.microsoft\.com/l/meetup-join/19%3ameeting_([a-zA-Z0-9]{20,})@thread\.v2(/0\?context=%7b.*%7d)?$",
+        re.IGNORECASE
+    )
+    match = pattern.match(url)
+    if not match:
+        return False
+
+    meeting_id = match.group(1)
+    if meeting_id.lower() == "x" * len(meeting_id): 
+        return False
+
+    return True
+
 def meeting_type_from_url(url):
     if not url:
         return None
@@ -434,8 +453,9 @@ def meeting_type_from_url(url):
         return MeetingTypes.ZOOM
     elif domain_and_subdomain == "meet.google.com":
         return MeetingTypes.GOOGLE_MEET
-    elif domain_and_subdomain == "teams.microsoft.com" or domain_and_subdomain == "teams.live.com":
-        return MeetingTypes.TEAMS
+    elif domain_and_subdomain and domain_and_subdomain.lower() in ("teams.microsoft.com", "teams.live.com"):
+        if is_valid_teams_url(url):
+            return MeetingTypes.TEAMS
     else:
         return None
 
