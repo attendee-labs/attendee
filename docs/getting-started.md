@@ -92,7 +92,7 @@ Response:
 }
 ```
 
-When the endpoint returns a state of `ended`, it means the meeting has ended. When the `transcription_state` is `complete` it means the meeting recording has been transcribed.
+<scalar-callout type="info">When the endpoint returns a state of `ended`, it means the meeting has ended. When the `transcription_state` is `complete` it means the meeting recording has been transcribed.</scalar-callout>
 
 ### Get Your Transcript
 
@@ -120,26 +120,19 @@ You can also query this endpoint while the meeting is happening to retrieve part
 
 ## Next Steps
 
-- **Learn the basics**: Check out our [Basics guide](./basics) for detailed information about bot capabilities
-- **Set up webhooks**: Configure [webhooks](./webhooks) to get real-time updates about your bots
-- **Schedule bots**: Learn how to [schedule bots](./scheduled_bots) for recurring meetings
-- **Integrate with calendars**: Set up [calendar integration](./calendar_integration) for automatic meeting detection
-- **Explore the API**: View our complete [API documentation](/api-reference)
+- **Learn the basics**: Check out our [Basics guide](https://docs.attendee.dev/guides/basics-of-bots) for detailed information about bot capabilities
+- **Set up webhooks**: Configure <scalar-page-link filepath="docs/webhooks.md">webhooks</scalar-page-link> to get real-time updates about your bots
+- **Schedule bots**: Learn how to <scalar-page-link filepath="docs/scheduled_bots.md">schedule bots</scalar-page-link> for recurring meetings
+- **Integrate with calendars**: Set up <scalar-page-link filepath="docs/calendar_integration.md">calendar integration</scalar-page-link> for automatic meeting detection
+- **Explore the API**: View our complete <scalar-page-link filepath="docs/openapi.yml">API documentation</scalar-page-link>
 
 ## Self-Hosting
 
-Want to run Attendee on your own infrastructure? Attendee is designed for easy self-hosting and can reduce costs by 10x compared to closed-source alternatives. Check out our [self-hosting guide](../README.md#self-hosting) for instructions.
-
-## Need Help?
-
-- **Documentation**: Browse our comprehensive guides
-- **Community**: Join our [Slack community](https://join.slack.com/t/attendeecommu-rff8300/shared_invite/zt-2uhpam6p2-ZzLAoVrljbL2UEjqdSHrgQ)
-- **Support**: Schedule a call with our team at [calendly.com/noah-attendee/30min](https://calendly.com/noah-attendee/30min)
-- **Issues**: Report bugs or request features on [GitHub](https://github.com/attendee-labs/attendee)
+Want to run Attendee on your own infrastructure? Attendee is designed for easy self-hosting and can reduce costs by 10x compared to closed-source alternatives. Check out our <scalar-page-link filepath="docs/self-hosting.md">self-hosting guide</scalar-page-link> for instructions.
 
 ## Common Issues
 
-Having trouble? Check our [FAQ](./faq) for solutions to common problems, including:
+Having trouble? Check our <scalar-page-link filepath="docs/faq.md">FAQ</scalar-page-link> for solutions to common problems, including:
 - Setting up Zoom OAuth credentials
 - Troubleshooting bot joining issues
 - Resolving recording problems
