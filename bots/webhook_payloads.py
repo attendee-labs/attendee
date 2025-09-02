@@ -1,4 +1,4 @@
-from bots.serializers import ChatMessageSerializer, ParticipantEventSerializer
+from bots.serializers import CalendarSerializer, ChatMessageSerializer, ParticipantEventSerializer
 
 
 def chat_message_webhook_payload(chat_message):
@@ -18,3 +18,13 @@ def utterance_webhook_payload(utterance):
 
 def participant_event_webhook_payload(participant_event):
     return ParticipantEventSerializer(participant_event).data
+
+
+def calendar_webhook_payload(calendar):
+    serialized_calendar = CalendarSerializer(calendar).data
+    return {
+        "state": serialized_calendar["state"],
+        "connection_failure_data": serialized_calendar["connection_failure_data"],
+        "last_successful_sync_at": serialized_calendar["last_successful_sync_at"],
+        "last_attempted_sync_at": serialized_calendar["last_attempted_sync_at"],
+    }

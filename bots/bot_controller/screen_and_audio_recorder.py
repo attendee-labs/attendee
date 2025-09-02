@@ -100,6 +100,10 @@ class ScreenAndAudioRecorder:
     def cleanup(self):
         input_path = self.file_location
 
+        # If no input path at all, then we aren't trying to generate a file at all
+        if input_path is None:
+            return
+
         # Check if input file exists
         if not os.path.exists(input_path):
             logger.info(f"Input file does not exist at {input_path}, creating empty file")

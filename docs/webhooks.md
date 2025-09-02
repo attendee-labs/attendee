@@ -2,7 +2,7 @@
 
 Webhooks send your server real-time updates when something important happens in Attendee, so that you don't need to poll the API.
 
-They can alert your server when a bot joins a meeting, starts recording, when a recording is available, when a chat message is sent, when the transcript is updated, or when participants join or leave meetings.
+They can alert your server when a bot joins a meeting, starts recording, when a recording is available, when a chat message is sent, when the transcript is updated, when participants join or leave meetings, or when calendar events are updated.
 
 Attendee supports two types of webhooks:
 - **Project-level webhooks**: Apply to all bots in a project (created via UI)
@@ -15,7 +15,7 @@ To create a project-level webhook via the UI:
 1. Click on "Settings → Webhooks" in the sidebar
 2. Click "Create Webhook" 
 3. Provide an HTTPS URL that will receive webhook events
-4. Select the triggers you want to receive notifications for (we currently have four triggers: `bot.state_change`, `transcript.update`, `chat_messages.update` and `participant_events.join_leave`)
+4. Select the triggers you want to receive notifications for (we currently have six triggers: `bot.state_change`, `transcript.update`, `chat_messages.update`, `participant_events.join_leave`, `calendar.events_update`, and `calendar.state_change`)
 5. Click "Create" to save your subscription
 
 ## Creating Bot-Level Webhooks
@@ -47,6 +47,8 @@ Bot-level webhooks are created via the API when creating a bot. Include a `webho
 | `transcript.update` | Real-time transcript updates during meeting |
 | `chat_messages.update` | Chat message updates in the meeting |
 | `participant_events.join_leave` | A participant joins or leaves the meeting |
+| `calendar.events_update` | Calendar events have been synced and updated |
+| `calendar.state_change` | Calendar connection state has changed (connected/disconnected) |
 
 ## Webhook Delivery Priority
 
@@ -62,12 +64,27 @@ When a bot has both project-level and bot-level webhooks configured, the bot-lev
 
 When a webhook is delivered, Attendee will send an HTTP POST request to your webhook URL with the following structure:
 
+### For Bot-Related Events
+
 ```
 {
   "idempotency_key": < UUID that uniquely identifies this webhook delivery >,
   "bot_id": < Id of the bot associated with the webhook delivery >,
   "bot_metadata": < Any metadata associated with the bot >,
-  "trigger": < Trigger for the webhook. Currently, the four triggers are bot.state_change, which is fired whenever the bot changes its state, transcript.update which is fired when the transcript is updated, chat_messages.update which is fired when a chat message is sent and participant_events.join_leave which is fired when a participant joins or leaves the meeting. >,
+  "trigger": < Trigger for the webhook. Currently, the four bot-related triggers are bot.state_change, which is fired whenever the bot changes its state, transcript.update which is fired when the transcript is updated, chat_messages.update which is fired when a chat message is sent and participant_events.join_leave which is fired when a participant joins or leaves the meeting. >,
+  "data": < Trigger-specific data >
+}
+```
+
+### For Calendar-Related Events
+
+```
+{
+  "idempotency_key": < UUID that uniquely identifies this webhook delivery >,
+  "calendar_id": < Id of the calendar associated with the webhook delivery >,
+  "calendar_deduplication_key": < Deduplication key of the calendar (if set) >,
+  "calendar_metadata": < Any metadata associated with the calendar >,
+  "trigger": < Trigger for the webhook. Currently, the two calendar-related triggers are calendar.events_update which is fired when the calendar events have been updated and calendar.state_change which is fired when the calendar becomes disconnected. >,
   "data": < Trigger-specific data >
 }
 ```
@@ -151,6 +168,43 @@ For webhooks triggered by `participant_events.join_leave`, the `data` field cont
   "event_type": <The type of event that occurred. Either "join" or "leave">,
   "event_data": <Any additional data associated with the event. This is empty for join and leave events>,
   "timestamp_ms": <The timestamp of the event in milliseconds>,
+}
+```
+
+### Payload for `calendar.events_update` trigger
+
+For webhooks triggered by `calendar.events_update`, the `data` field contains calendar sync information:
+
+```
+{
+  "state": <The current state of the calendar connection ("connected" or "disconnected")>,
+  "connection_failure_data": <Any error data if the calendar is disconnected, null if connected>,
+  "last_successful_sync_at": <The timestamp of the last successful calendar sync>,
+  "last_attempted_sync_at": <The timestamp of the last sync attempt>,
+}
+```
+
+This webhook is triggered after each successful calendar sync operation, which occurs automatically to keep your calendar events up to date with the remote calendar (Google Calendar or Microsoft Calendar). After receiving this webhook, you can fetch the calendar events from the Attendee API to get the latest events.
+
+### Payload for `calendar.state_change` trigger
+
+For webhooks triggered by `calendar.state_change`, the `data` field contains the same structure as `calendar.events_update`:
+
+```
+{
+  "state": <The current state of the calendar connection ("connected" or "disconnected")>,
+  "connection_failure_data": <Error details when the calendar becomes disconnected>,
+  "last_successful_sync_at": <The timestamp of the last successful calendar sync>,
+  "last_attempted_sync_at": <The timestamp of the last sync attempt>,
+}
+```
+
+This webhook is triggered when a calendar's connection state changes, typically when authentication fails and the calendar becomes disconnected. The `connection_failure_data` field will contain error details such as:
+
+```json
+{
+  "error": "Google Authentication error: {'error': 'invalid_grant'}",
+  "timestamp": "2023-07-15T14:30:45.123456Z"
 }
 ```
 

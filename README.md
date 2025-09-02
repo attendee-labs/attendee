@@ -107,7 +107,9 @@ For more details, follow [this guide](https://developers.zoom.us/docs/meeting-sd
 ## Running in development mode
 
 - Build the Docker image: `docker compose -f dev.docker-compose.yaml build` (Takes about 5 minutes)
-- Create local environment variables: `docker compose -f dev.docker-compose.yaml run --rm attendee-app-local python init_env.py > .env`
+- Create local environment variables
+  - **Linux/Mac**: `docker compose -f dev.docker-compose.yaml run --rm attendee-app-local python init_env.py > .env`
+  - **Windows**: `docker compose -f dev.docker-compose.yaml run --rm attendee-app-local python init_env.py | Out-File -Encoding utf8 .env` 
 - Edit the `.env` file and enter your AWS information.
 - Start all the services: `docker compose -f dev.docker-compose.yaml up`
 - After the services have started, run migrations in a separate terminal tab: `docker compose -f dev.docker-compose.yaml exec attendee-app-local python manage.py migrate`
@@ -139,8 +141,9 @@ See CONTRIBUTING.md for detailed instructions on how to contribute to Attendee.
 - [x] Webhooks for state changes
 - [x] Scheduled meetings
 - [x] Audio input / output via websockets
-- [ ] Attendee-Managed Calendar Integration
+- [x] Attendee-Managed Calendar Integration
+- [x] [ZAK token](https://developers.zoom.us/docs/meeting-sdk/auth/#start-meetings-and-webinars-with-a-zoom-users-zak-token) and [Join token](https://developers.zoom.us/docs/api/meetings/#tag/meetings/GET/meetings/{meetingId}/jointoken/local_recording) support
 - [ ] Stream video and audio from arbitrary website into meeting
-- [ ] [ZAK token](https://developers.zoom.us/docs/meeting-sdk/auth/#start-meetings-and-webinars-with-a-zoom-users-zak-token) and [Join token](https://developers.zoom.us/docs/api/meetings/#tag/meetings/GET/meetings/{meetingId}/jointoken/local_recording) support
+- [ ] Webex Support
 
 Have suggestions for the roadmap? Join the [Slack Community](https://join.slack.com/t/attendeecommu-rff8300/shared_invite/zt-2uhpam6p2-ZzLAoVrljbL2UEjqdSHrgQ) or open an issue.

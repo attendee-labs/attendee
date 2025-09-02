@@ -239,6 +239,8 @@ class GoogleMeetUIMethods:
             return "sidebar"
         elif self.recording_view == RecordingViews.GALLERY_VIEW:
             return "tiled"
+        elif self.recording_view == RecordingViews.SPEAKER_VIEW_NO_SIDEBAR:
+            return "spotlight"
         else:
             return "sidebar"
 

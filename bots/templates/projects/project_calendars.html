@@ -1,0 +1,251 @@
+{% extends 'projects/sidebar.html' %}
+
+{% block content %}
+<style>
+    .platform-uuid {
+        max-width: 250px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        display: block;
+    }
+    
+    /* Updated styles for clickable rows */
+    .clickable-row {
+        cursor: pointer;
+        transition: background-color 0.15s ease-in-out;
+    }
+    /* Apply hover effect to td elements */
+    table tbody tr.clickable-row:hover td {
+        background-color: #f8f9fa;  /* Using Bootstrap's light gray */
+    }
+    
+    /* Filter styles */
+    .filter-container {
+        background-color: #f8f9fa;
+        padding: 15px;
+        border-radius: 5px;
+        margin-bottom: 20px;
+    }
+    .filter-item {
+        margin-bottom: 10px;
+    }
+    .state-checkboxes {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 5px;
+    }
+    .state-checkbox {
+        display: inline-flex;
+        align-items: center;
+        margin-right: 5px;
+    }
+    .platform-checkboxes {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 5px;
+    }
+    .platform-checkbox {
+        display: inline-flex;
+        align-items: center;
+        margin-right: 5px;
+    }
+</style>
+
+<div class="container mt-4">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h2>Calendars</h2>
+    </div>
+    <!-- Filters Collapsible Panel -->
+    {% if filter_params.start_date or filter_params.end_date or filter_params.states or filter_params.deduplication_key or calendars %}
+    <div class="filter-panel mb-3">
+        <div class="filter-header p-2 rounded d-flex align-items-center" 
+             style="background-color: #f8f9fa; cursor: pointer;" 
+             onclick="toggleFilterPanel(event)">
+            <i class="bi bi-funnel me-2"></i>
+            <span>Filters</span>
+            <span style="margin-left: 5px;" class="filter-caret-container ms-auto">
+                <svg width="21" height="21" viewBox="0 0 14 14" fill="none" class="filter-caret" 
+                     style="transform: {% if filter_params.start_date or filter_params.end_date or filter_params.states or filter_params.deduplication_key %}rotate(180deg){% else %}rotate(0deg){% endif %};">
+                    <path d="M4.3225 5.0108L7 7.68247L9.6775 5.0108L10.5 5.8333L7 9.3333L3.5 5.8333L4.3225 5.0108Z" fill="currentcolor"></path>
+                </svg>
+            </span>
+        </div>
+        <div class="filter-content" style="display: {% if filter_params.start_date or filter_params.end_date or filter_params.states or filter_params.deduplication_key %}block{% else %}none{% endif %};">
+            <div class="filter-container">
+                <form method="get" class="row g-3">
+                    <!-- Compact date filters in a single row -->
+                    <div class="col-md-10 d-flex filter-item">
+                        <div class="me-3" style="display: inline-flex; white-space: nowrap; align-items: center;">
+                            <label for="start_date" class="form-label me-2 mb-0" style="flex-shrink: 0;">Created</label>
+                            <input type="date" class="form-control form-control-sm" id="start_date" name="start_date" value="{{ filter_params.start_date }}">
+                        </div>
+                        
+                        <div style="display: inline-flex; white-space: nowrap; align-items: center;">
+                            <label for="end_date" class="form-label me-3 mb-1" style="flex-shrink: 0;">→</label>
+                            <input type="date" class="form-control form-control-sm" id="end_date" name="end_date" value="{{ filter_params.end_date }}">
+                        </div>
+                    </div>
+                    
+                    <div class="col-md-10 filter-item">
+                        <label class="form-label mb-2">State</label>
+                        <div class="state-checkboxes">
+                            {% for state_value, state_label in CalendarStates.choices %}
+                            <div class="state-checkbox">
+                                <input type="checkbox" class="btn-check" id="state_{{ state_value }}" name="states" value="{{ state_value }}"
+                                       {% if state_value|stringformat:"i" in filter_params.states %}checked{% endif %}>
+                                <label class="btn btn-outline-secondary btn-sm" for="state_{{ state_value }}">{{ state_label }}</label>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    
+                    <div class="col-md-10 filter-item">
+                        <label for="deduplication_key" class="form-label mb-2">Deduplication Key</label>
+                        <input type="text" class="form-control form-control-sm" 
+                               id="deduplication_key" name="deduplication_key" 
+                               value="{{ filter_params.deduplication_key }}"
+                               placeholder="Search by deduplication key...">
+                    </div>
+                    
+                    <div class="col-md-2 d-flex align-items-end filter-item">
+                        <button type="submit" class="btn btn-sm btn-primary me-2">Apply</button>
+                        <a href="{% url 'bots:project-calendars' project.object_id %}" class="btn btn-sm btn-outline-secondary">Clear</a>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+    <div class="table-responsive" id="calendarsTable">
+        {% if calendars %}
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Platform</th>
+                        <th>State</th>
+                        <th>Platform ID</th>
+                        <th>Deduplication Key</th>
+                        <th>Last Sync</th>
+                        <th>Created</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for calendar in calendars %}
+                    <tr class="clickable-row"
+                        hx-get="{% url 'bots:project-calendar-detail' object_id=project.object_id calendar_object_id=calendar.object_id %}"
+                        hx-select="#content"
+                        hx-target="#content"
+                        hx-swap="outerHTML"
+                        hx-push-url="true">
+                        <td><small>{{ calendar.object_id }}</small></td>
+                        <td>
+                            <span class="badge {% if calendar.platform == 'google' %}bg-primary{% elif calendar.platform == 'microsoft' %}bg-info{% else %}bg-secondary{% endif %}">
+                                {{ calendar.get_platform_display|title }}
+                            </span>
+                        </td>
+                        <td>
+                            <span class="badge {% if calendar.state == CalendarStates.CONNECTED %}bg-success{% else %}bg-warning{% endif %}">
+                                {{ calendar.get_state_display }}
+                            </span>
+                        </td>
+                        <td>
+                            <span class="platform-uuid" title="{{ calendar.platform_uuid }}">
+                                {% if calendar.platform_uuid %}
+                                    {{ calendar.platform_uuid|truncatechars:30 }}
+                                {% else %}
+                                    -
+                                {% endif %}
+                            </span>
+                        </td>
+                        <td>
+                            <small>
+                            {% if calendar.deduplication_key %}
+                                {{ calendar.deduplication_key|truncatechars:30 }}
+                            {% else %}
+                                -
+                            {% endif %}
+                            </small>
+                        </td>
+                        <td>
+                            <small>
+                            {% if calendar.last_successful_sync_at %}
+                                {{ calendar.last_successful_sync_at|date:"M d, Y H:i" }}
+                            {% else %}
+                                Never
+                            {% endif %}
+                            </small>
+                        </td>
+                        <td><small>{{ calendar.created_at|date:"M d, Y H:i" }}</small></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% else %}
+            <div class="alert alert-info" role="alert">
+                <i class="bi bi-info-circle me-2"></i>
+                {% if filter_params.start_date or filter_params.end_date or filter_params.states or filter_params.deduplication_key %}
+                    No calendars found matching the current filters.
+                {% else %}
+                    Calendars let your bots join calendar events automatically. See <a href="https://docs.attendee.dev/guides/calendar-integration" class="alert-link" target="_blank">the docs</a> for more information.
+                {% endif %}
+            </div>
+        {% endif %}
+    </div>
+
+    <!-- Pagination with filter parameters -->
+    {% if is_paginated %}
+    <nav aria-label="Calendar list pagination">
+        <ul class="pagination justify-content-center">
+            {% if page_obj.has_previous %}
+            <li class="page-item">
+                <a class="page-link" href="?page=1{% for key, value in filter_params.items %}{% if key != 'page' %}{% if key == 'states' %}{% for state in value %}&states={{ state }}{% endfor %}{% else %}&{{ key }}={{ value }}{% endif %}{% endif %}{% endfor %}">&laquo; First</a>
+            </li>
+            <li class="page-item">
+                <a class="page-link" href="?page={{ page_obj.previous_page_number }}{% for key, value in filter_params.items %}{% if key != 'page' %}{% if key == 'states' %}{% for state in value %}&states={{ state }}{% endfor %}{% else %}&{{ key }}={{ value }}{% endif %}{% endif %}{% endfor %}">Previous</a>
+            </li>
+            {% endif %}
+
+            {% for i in paginator.page_range %}
+                {% if page_obj.number == i %}
+                <li class="page-item active">
+                    <span class="page-link">{{ i }}</span>
+                </li>
+                {% elif i > page_obj.number|add:'-3' and i < page_obj.number|add:'3' %}
+                <li class="page-item">
+                    <a class="page-link" href="?page={{ i }}{% for key, value in filter_params.items %}{% if key != 'page' %}{% if key == 'states' %}{% for state in value %}&states={{ state }}{% endfor %}{% else %}&{{ key }}={{ value }}{% endif %}{% endif %}{% endfor %}">{{ i }}</a>
+                </li>
+                {% endif %}
+            {% endfor %}
+
+            {% if page_obj.has_next %}
+            <li class="page-item">
+                <a class="page-link" href="?page={{ page_obj.next_page_number }}{% for key, value in filter_params.items %}{% if key != 'page' %}{% if key == 'states' %}{% for state in value %}&states={{ state }}{% endfor %}{% else %}&{{ key }}={{ value }}{% endif %}{% endif %}{% endfor %}">Next</a>
+            </li>
+            <li class="page-item">
+                <a class="page-link" href="?page={{ paginator.num_pages }}{% for key, value in filter_params.items %}{% if key != 'page' %}{% if key == 'states' %}{% for state in value %}&states={{ state }}{% endfor %}{% else %}&{{ key }}={{ value }}{% endif %}{% endif %}{% endfor %}">Last &raquo;</a>
+            </li>
+            {% endif %}
+        </ul>
+    </nav>
+    {% endif %}
+</div>
+
+<script>
+    function toggleFilterPanel(event) {
+        event?.preventDefault();
+        const filterContent = document.querySelector('.filter-content');
+        const caret = document.querySelector('.filter-caret');
+        
+        if (filterContent.style.display === 'none') {
+            filterContent.style.display = 'block';
+            caret.style.transform = 'rotate(180deg)';
+        } else {
+            filterContent.style.display = 'none';
+            caret.style.transform = 'rotate(0deg)';
+        }
+    }
+</script>
+
+{% endblock %} 

@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import uuid
 from enum import Enum
 
 import redis
@@ -16,6 +17,7 @@ from .models import (
     BotMediaRequest,
     BotMediaRequestMediaTypes,
     BotStates,
+    CalendarEvent,
     Credentials,
     MediaBlob,
     MeetingTypes,
@@ -28,6 +30,7 @@ from .models import (
 )
 from .serializers import (
     CreateBotSerializer,
+    PatchBotSerializer,
 )
 from .utils import meeting_type_from_url, transcription_provider_from_bot_creation_data
 
@@ -103,6 +106,49 @@ def validate_meeting_url_and_credentials(meeting_url, project):
     return None
 
 
+def validate_bot_concurrency_limit(project):
+    active_bots_count = Bot.objects.filter(project=project).filter(BotEventManager.get_in_meeting_states_q_filter()).count()
+    concurrent_bots_limit = project.concurrent_bots_limit()
+    if active_bots_count >= concurrent_bots_limit:
+        logger.error(f"Project {project.object_id} has exceeded the maximum number of concurrent bots ({concurrent_bots_limit}).")
+        return {"error": f"You have exceeded the maximum number of concurrent bots ({concurrent_bots_limit}) for your account. Please reach out to customer support to increase the limit."}
+
+    return None
+
+
+# Returns a tuple of (calendar_event, error)
+# Side effect: sets the meeting_url and join_at in the data dictionary if the calendar event is found
+def initialize_bot_creation_data_from_calendar_event(data, project):
+    calendar_event = None
+    if data.get("calendar_event_id"):
+        try:
+            calendar_event = CalendarEvent.objects.get(object_id=data["calendar_event_id"], calendar__project=project)
+        except CalendarEvent.DoesNotExist:
+            return None, {"error": f"Calendar event with id {data['calendar_event_id']} does not exist in this project."}
+
+        if data.get("meeting_url"):
+            return None, {"error": "meeting_url should not be provided when calendar_event_id is specified. The meeting URL will be taken from the calendar event."}
+        data["meeting_url"] = calendar_event.meeting_url
+
+        if data.get("join_at"):
+            return None, {"error": "join_at should not be provided when calendar_event_id is specified. The join time will be taken from the calendar event."}
+        data["join_at"] = calendar_event.start_time
+
+    return calendar_event, None
+
+
+def validate_external_media_storage_settings(external_media_storage_settings, project):
+    if not external_media_storage_settings:
+        return None
+
+    if not project.credentials.filter(credential_type=Credentials.CredentialTypes.EXTERNAL_MEDIA_STORAGE).exists():
+        relative_url = reverse("bots:project-credentials", kwargs={"object_id": project.object_id})
+        settings_url = f"https://{os.getenv('SITE_DOMAIN', 'app.attendee.dev')}{relative_url}"
+        return {"error": f"External media storage credentials are required to upload recordings to an external storage bucket. Please add external media storage credentials at {settings_url}."}
+
+    return None
+
+
 class BotCreationSource(str, Enum):
     API = "api"
     DASHBOARD = "dashboard"
@@ -114,6 +160,11 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
     if project.organization.out_of_credits():
         logger.error(f"Organization {project.organization.id} has insufficient credits. Please add credits in the Account -> Billing page.")
         return None, {"error": "Organization has run out of credits. Please add more credits in the Account -> Billing page."}
+
+    # Do some initialization of the data if the calendar event id was provided
+    calendar_event, error = initialize_bot_creation_data_from_calendar_event(data, project)
+    if error:
+        return None, error
 
     serializer = CreateBotSerializer(data=data)
     if not serializer.is_valid():
@@ -142,7 +193,16 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
     deduplication_key = serializer.validated_data["deduplication_key"]
     webhook_subscriptions = serializer.validated_data["webhooks"]
     callback_settings = serializer.validated_data["callback_settings"]
+    external_media_storage_settings = serializer.validated_data["external_media_storage_settings"]
     initial_state = BotStates.SCHEDULED if join_at else BotStates.READY
+
+    error = validate_external_media_storage_settings(external_media_storage_settings, project)
+    if error:
+        return None, error
+
+    error = validate_bot_concurrency_limit(project)
+    if error:
+        return None, error
 
     settings = {
         "transcription_settings": transcription_settings,
@@ -154,6 +214,7 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
         "zoom_settings": zoom_settings,
         "websocket_settings": websocket_settings,
         "callback_settings": callback_settings,
+        "external_media_storage_settings": external_media_storage_settings,
     }
 
     try:
@@ -167,6 +228,7 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
                 join_at=join_at,
                 deduplication_key=deduplication_key,
                 state=initial_state,
+                calendar_event=calendar_event,
             )
 
             Recording.objects.create(
@@ -201,8 +263,76 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
             logger.error(f"IntegrityError due to unique_bot_deduplication_key constraint violation creating bot: {e}")
             return None, {"error": "Deduplication key already in use. A bot in a non-terminal state with this deduplication key already exists. Please use a different deduplication key or wait for that bot to terminate."}
 
-        logger.error(f"Error creating bot: {e}")
-        return None, {"error": str(e)}
+        error_id = str(uuid.uuid4())
+        logger.error(f"Error creating bot (error_id={error_id}): {e}")
+        return None, {"error": f"An error occurred while creating the bot. Error ID: {error_id}"}
+
+
+def patch_bot(bot: Bot, data: dict) -> tuple[Bot | None, dict | None]:
+    """
+    Updates a scheduled bot with the provided data.
+
+    Args:
+        bot: The Bot instance to update
+        data: Dictionary containing the fields to update
+
+    Returns:
+        tuple: (updated_bot, error) where one is None
+    """
+    # Check if bot is in scheduled state
+    if bot.state != BotStates.SCHEDULED:
+        return None, {"error": f"Bot is in state {BotStates.state_to_api_code(bot.state)} but can only be updated when in scheduled state"}
+
+    # Validate the request data
+    serializer = PatchBotSerializer(data=data)
+    if not serializer.is_valid():
+        return None, serializer.errors
+
+    validated_data = serializer.validated_data
+
+    try:
+        # Update the bot
+        bot.join_at = validated_data.get("join_at", bot.join_at)
+        bot.meeting_url = validated_data.get("meeting_url", bot.meeting_url)
+        bot.save()
+
+        return bot, None
+
+    except ValidationError as e:
+        logger.error(f"ValidationError patching bot: {e}")
+        return None, {"error": e.messages[0]}
+    except Exception as e:
+        error_id = str(uuid.uuid4())
+        logger.error(f"Error patching bot (error_id={error_id}): {e}")
+        return None, {"error": f"An error occurred while patching the bot. Error ID: {error_id}"}
+
+
+def delete_bot(bot: Bot) -> tuple[bool, dict | None]:
+    """
+    Deletes a scheduled bot.
+
+    Args:
+        bot: The Bot instance to delete
+
+    Returns:
+        tuple: (success, error) where success is True if deletion succeeded,
+               and error is None on success or error dict on failure
+    """
+    # Check if bot is in scheduled state
+    if bot.state != BotStates.SCHEDULED:
+        return False, {"error": f"Bot is in state {BotStates.state_to_api_code(bot.state)} but can only be deleted when in scheduled state"}
+
+    try:
+        bot.delete()
+        return True, None
+
+    except ValidationError as e:
+        logger.error(f"ValidationError deleting bot: {e}")
+        return False, {"error": e.messages[0]}
+    except Exception as e:
+        error_id = str(uuid.uuid4())
+        logger.error(f"Error deleting bot (error_id={error_id}): {e}")
+        return False, {"error": f"An error occurred while deleting the bot. Error ID: {error_id}"}
 
 
 def validate_webhook_data(url, triggers, project, bot=None):

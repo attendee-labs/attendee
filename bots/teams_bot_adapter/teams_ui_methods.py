@@ -86,6 +86,8 @@ class TeamsUIMethods:
                 name_input.send_keys(self.display_name)
                 return
             except TimeoutException as e:
+                self.look_for_microsoft_login_form_element("name_input")
+
                 last_check_timed_out = attempt_index == num_attempts - 1
                 if last_check_timed_out:
                     logger.info("Could not find name input. Timed out. Raising UiCouldNotLocateElementException")
@@ -166,6 +168,13 @@ class TeamsUIMethods:
             logger.info("Sign in required. Raising UiLoginRequiredException")
             raise UiLoginRequiredException("Sign in required", step)
 
+    def look_for_microsoft_login_form_element(self, step):
+        # Check for Microsoft login form (email input)
+        microsoft_login_element = self.find_element_by_selector(By.CSS_SELECTOR, 'input[name="loginfmt"][type="email"]')
+        if microsoft_login_element:
+            logger.info("Microsoft login form detected. Raising UiLoginRequiredException")
+            raise UiLoginRequiredException("Microsoft login form detected", step)
+
     def look_for_we_could_not_connect_you_element(self, step):
         we_could_not_connect_you_element = self.find_element_by_selector(By.XPATH, '//*[contains(text(), "we couldn\'t connect you")]')
         if we_could_not_connect_you_element:
@@ -209,6 +218,8 @@ class TeamsUIMethods:
             return "speaker"
         elif self.recording_view == RecordingViews.GALLERY_VIEW:
             return "gallery"
+        elif self.recording_view == RecordingViews.SPEAKER_VIEW_NO_SIDEBAR:
+            return "speaker"
         else:
             return "speaker"
 

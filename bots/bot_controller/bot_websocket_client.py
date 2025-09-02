@@ -37,7 +37,7 @@ class BotWebsocketClient:
         self.send_queue = SimpleQueue()
 
         self._max_retries = 30
-        self._retry_delay_s = 2
+        self._retry_delay_s = 10
         self.dropped_message_ticker = 0
         self._start_connection_lock = Lock()
 

@@ -37,7 +37,7 @@ class TestBotWebsocketClient(unittest.TestCase):
         self.assertIsNone(self.client.send_loop_thread)
         self.assertEqual(self.client.dropped_message_ticker, 0)
         self.assertEqual(self.client._max_retries, 30)
-        self.assertEqual(self.client._retry_delay_s, 2)
+        self.assertEqual(self.client._retry_delay_s, 10)
 
     def test_started_method(self):
         """Test the started() method returns correct values."""

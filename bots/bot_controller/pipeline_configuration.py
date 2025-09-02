@@ -28,6 +28,10 @@ class PipelineConfiguration:
                 frozenset({"record_audio", "record_video", "transcribe_audio", "websocket_stream_audio"}),
                 # Audio only recording configuration with websocket audio
                 frozenset({"record_audio", "transcribe_audio", "websocket_stream_audio"}),
+                # Pure transcription configuration
+                frozenset({"transcribe_audio"}),
+                # Pure transcription configuration with websocket audio
+                frozenset({"transcribe_audio", "websocket_stream_audio"}),
             }
         )
 
@@ -87,6 +91,28 @@ class PipelineConfiguration:
         return cls(
             record_video=False,
             record_audio=True,
+            transcribe_audio=True,
+            rtmp_stream_audio=False,
+            rtmp_stream_video=False,
+            websocket_stream_audio=True,
+        )
+
+    @classmethod
+    def pure_transcription_bot(cls) -> "PipelineConfiguration":
+        return cls(
+            record_video=False,
+            record_audio=False,
+            transcribe_audio=True,
+            rtmp_stream_audio=False,
+            rtmp_stream_video=False,
+            websocket_stream_audio=False,
+        )
+
+    @classmethod
+    def pure_transcription_bot_with_websocket_audio(cls) -> "PipelineConfiguration":
+        return cls(
+            record_video=False,
+            record_audio=False,
             transcribe_audio=True,
             rtmp_stream_audio=False,
             rtmp_stream_video=False,

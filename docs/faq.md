@@ -6,7 +6,13 @@ The Zoom app is provided by you, the developer, not by Attendee. When you input 
 
 ## Why can't my Zoom bot join external meetings?
 
-Zoom bots must be approved by Zoom to join external meetings. Unapproved Zoom bots can only join meetings that are hosted by the same Zoom account that owns the bot. See [here](https://developers.zoom.us/blog/prepare-meeting-sdk-app-for-review) for the official announcement from Zoom. Please reach out on Slack if you need help getting your bot approved, the process is straightforward.
+Zoom bots must be approved by Zoom to join external meetings. Unapproved Zoom bots can only join meetings that are hosted by the same Zoom account that owns the bot. See [here](https://developers.zoom.us/changelog/platform/meeting-sdk-policy-announcement/) for the official announcement from Zoom. Please reach out on Slack if you need help getting your bot approved, the process is straightforward.
+
+Two of our community members have created guides on getting your bot approved. See [here](https://docs.attendee.dev/guides/getting-your-attendee-powered-zoom-app-approved) and [here](https://www.notion.so/Zoom-App-Publishing-for-Attendee-24db06b6bbc68042926df934997ffe49).
+
+## Why is my Zoom bot stuck in the 'Joined - Not Recording' state?
+
+The user likely needs to enable external participant recording privileges in their Zoom account. See [here](https://support.zoom.com/hc/en/article?id=zm_kb&sysparm_article=KB0063640) for more information.
 
 ## Why is the bot having issues joining a Zoom meeting when running Attendee locally? 
 

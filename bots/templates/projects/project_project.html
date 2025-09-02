@@ -31,11 +31,51 @@
     </form>
   </div>
   
+  <!-- Users with access section -->
+  <div class="card mt-4">
+    <div class="card-header">
+      <h5 class="card-title mb-0">Team members with access</h5>
+    </div>
+    <div class="card-body">
+      {% if users_with_access %}
+        <div class="table-responsive">
+          <table class="table table-hover">
+            <thead>
+              <tr>
+                <th>Email</th>
+                <th>Role</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for user in users_with_access %}
+                <tr>
+                  <td>{{ user.email }}</td>
+                  <td>
+                    {% if user.role == 'admin' %}
+                      <span class="badge bg-primary">Administrator</span>
+                    {% else %}
+                      <span class="badge bg-secondary">Regular User</span>
+                    {% endif %}
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="text-center py-4">
+          <i class="fas fa-users fa-3x text-muted mb-3"></i>
+          <p class="text-muted">No team members have access to this project.</p>
+        </div>
+      {% endif %}
+    </div>
+  </div>
+
   <!-- New info panel for team members -->
   <div class="card mt-4 bg-info-subtle text-dark">
     <div class="card-body">
-      <h5 class="card-title">Need to add team members? 👥</h5>
-      <p class="card-text">Go to the <a href="{% url 'projects:project-team' project.object_id %}">Team</a> page to add team members. They will have access to all the projects in your account.</p>
+      <h5 class="card-title">Need to add or remove team members? 👥</h5>
+      <p class="card-text">Go to the <a href="{% url 'projects:project-team' project.object_id %}">Team</a> page.</p>
     </div>
   </div>
 </div>

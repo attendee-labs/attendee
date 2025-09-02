@@ -89,6 +89,7 @@ class ZoomBotAdapter(BotAdapter):
         automatic_leave_configuration: AutomaticLeaveConfiguration,
         video_frame_size: tuple[int, int],
         zoom_tokens: dict,
+        zoom_meeting_settings: dict,
     ):
         self.use_one_way_audio = use_one_way_audio
         self.use_mixed_audio = use_mixed_audio
@@ -102,6 +103,7 @@ class ZoomBotAdapter(BotAdapter):
         self.upsert_chat_message_callback = upsert_chat_message_callback
         self.add_participant_event_callback = add_participant_event_callback
         self.zoom_tokens = zoom_tokens
+        self.zoom_meeting_settings = zoom_meeting_settings
 
         self._jwt_token = generate_jwt(zoom_client_id, zoom_client_secret)
         self.meeting_id, self.meeting_password = parse_join_url(meeting_url)
@@ -185,6 +187,14 @@ class ZoomBotAdapter(BotAdapter):
         # https://devforum.zoom.us/t/linux-sdk-gets-stuck-in-meeting-status-connecting-when-the-provided-password-is-incorrect/130441
         self.stuck_in_connecting_state_timeout = 60
 
+        # Breakout room controller
+        self.breakout_room_ctrl = None
+        self.breakout_room_ctrl_event = None
+        self.is_joining_or_leaving_breakout_room = False
+
+        # Waiting room controller
+        self.waiting_room_ctrl = None
+
     def on_user_join_callback(self, joined_user_ids, _):
         logger.info(f"on_user_join_callback called. joined_user_ids = {joined_user_ids}")
         for joined_user_id in joined_user_ids:
@@ -225,6 +235,9 @@ class ZoomBotAdapter(BotAdapter):
             return
 
         if not self.recording_permission_granted:
+            return
+
+        if self.is_joining_or_leaving_breakout_room:
             return
 
         if not self.video_input_manager:
@@ -402,7 +415,62 @@ class ZoomBotAdapter(BotAdapter):
     def send_participant_event(self, participant_id, event_type, event_data={}):
         self.add_participant_event_callback({"participant_uuid": participant_id, "event_type": event_type, "event_data": event_data, "timestamp_ms": int(time.time() * 1000)})
 
+    def on_has_attendee_rights_notification(self, attendee):
+        logger.info(f"on_has_attendee_rights_notification called. attendee = {attendee}")
+        join_bo_result = attendee.JoinBo()
+        logger.info(f"join_bo_result = {join_bo_result}")
+
+    def admit_from_waiting_room(self):
+        logger.info("admit_from_waiting_room called")
+        admit_all_to_meeting_result = self.waiting_room_ctrl.AdmitAllToMeeting()
+        logger.info(f"admit_all_to_meeting_result = {admit_all_to_meeting_result}")
+
+    def apply_meeting_settings(self):
+        # Set various aspects of the meeting. Will only work if the bot has host privileges.
+
+        allow_participants_to_unmute_self = self.zoom_meeting_settings.get("allow_participants_to_unmute_self", None)
+        if allow_participants_to_unmute_self is not None:
+            allow_participants_to_unmute_self_result = self.participants_ctrl.AllowParticipantsToUnmuteSelf(allow_participants_to_unmute_self)
+            logger.info(f"AllowParticipantsToUnmuteSelf({allow_participants_to_unmute_self}) returned {allow_participants_to_unmute_self_result}")
+
+        allow_participants_to_share_whiteboard = self.zoom_meeting_settings.get("allow_participants_to_share_whiteboard", None)
+        if allow_participants_to_share_whiteboard is not None:
+            allow_participants_to_share_whiteboard_result = self.participants_ctrl.AllowParticipantsToShareWhiteBoard(allow_participants_to_share_whiteboard)
+            logger.info(f"AllowParticipantsToShareWhiteBoard({allow_participants_to_share_whiteboard}) returned {allow_participants_to_share_whiteboard_result}")
+
+        allow_participants_to_request_cloud_recording = self.zoom_meeting_settings.get("allow_participants_to_request_cloud_recording", None)
+        if allow_participants_to_request_cloud_recording is not None:
+            allow_participants_to_request_cloud_recording_result = self.participants_ctrl.AllowParticipantsToRequestCloudRecording(allow_participants_to_request_cloud_recording)
+            logger.info(f"AllowParticipantsToRequestCloudRecording({allow_participants_to_request_cloud_recording}) returned {allow_participants_to_request_cloud_recording_result}")
+
+        allow_participants_to_request_local_recording = self.zoom_meeting_settings.get("allow_participants_to_request_local_recording", None)
+        if allow_participants_to_request_local_recording is not None:
+            allow_participants_to_request_local_recording_result = self.participants_ctrl.AllowParticipantsToRequestLocalRecording(allow_participants_to_request_local_recording)
+            logger.info(f"AllowParticipantsToRequestLocalRecording({allow_participants_to_request_local_recording}) returned {allow_participants_to_request_local_recording_result}")
+
+        enable_focus_mode = self.zoom_meeting_settings.get("enable_focus_mode", None)
+        if enable_focus_mode is not None:
+            is_focus_mode_on = self.participants_ctrl.IsFocusModeOn()
+            logger.info(f"IsFocusModeOn() returned {is_focus_mode_on}")
+            is_focus_mode_enabled = self.participants_ctrl.IsFocusModeEnabled()
+            logger.info(f"IsFocusModeEnabled() returned {is_focus_mode_enabled}")
+            turn_focus_mode_on_result = self.participants_ctrl.TurnFocusModeOn(enable_focus_mode)
+            logger.info(f"TurnFocusModeOn({enable_focus_mode}) returned {turn_focus_mode_on_result}")
+
+        allow_participants_to_share_screen = self.zoom_meeting_settings.get("allow_participants_to_share_screen", None)
+        if allow_participants_to_share_screen is not None:
+            lock_share_result = self.meeting_sharing_controller.LockShare(allow_participants_to_share_screen)
+            logger.info(f"LockShare({allow_participants_to_share_screen}) returned {lock_share_result}")
+
+        allow_participants_to_chat = self.zoom_meeting_settings.get("allow_participants_to_chat", None)
+        if allow_participants_to_chat is not None:
+            allow_participants_to_chat_result = self.participants_ctrl.AllowParticipantsToChat(allow_participants_to_chat)
+            logger.info(f"AllowParticipantsToChat({allow_participants_to_chat}) returned {allow_participants_to_chat_result}")
+
     def on_join(self):
+        # Reset breakout room transition flag
+        self.is_joining_or_leaving_breakout_room = False
+
         # Meeting reminder controller
         self.joined_at = time.time()
         self.meeting_reminder_event = zoom.MeetingReminderEventCallbacks(onReminderNotifyCallback=self.on_reminder_notify)
@@ -424,6 +492,14 @@ class ZoomBotAdapter(BotAdapter):
         self.chat_ctrl_event = zoom.MeetingChatEventCallbacks(onChatMsgNotificationCallback=self.on_chat_msg_notification_callback)
         self.chat_ctrl.SetEvent(self.chat_ctrl_event)
         self.send_message_callback({"message": self.Messages.READY_TO_SEND_CHAT_MESSAGE})
+
+        # Breakout room controller
+        self.breakout_room_ctrl = self.meeting_service.GetMeetingBOController()
+        self.breakout_room_ctrl_event = zoom.MeetingBOEventCallbacks(onHasAttendeeRightsNotificationCallback=self.on_has_attendee_rights_notification)
+        self.breakout_room_ctrl.SetEvent(self.breakout_room_ctrl_event)
+
+        # Waiting room controller
+        self.waiting_room_ctrl = self.meeting_service.GetMeetingWaitingRoomController()
 
         # Meeting sharing controller
         self.meeting_sharing_controller = self.meeting_service.GetMeetingShareController()
@@ -453,6 +529,9 @@ class ZoomBotAdapter(BotAdapter):
             self.recording_ctrl.SetEvent(self.recording_event)
 
             self.start_raw_recording()
+
+        # Apply meeting settings
+        self.apply_meeting_settings()
 
         # Set up media streams
         GLib.timeout_add_seconds(1, self.set_up_bot_audio_input)
@@ -632,8 +711,9 @@ class ZoomBotAdapter(BotAdapter):
         audio_helper_subscribe_result = self.audio_helper.subscribe(self.audio_source, False)
         logger.info(f"audio_helper_subscribe_result = {audio_helper_subscribe_result}")
 
-        self.send_message_callback({"message": self.Messages.BOT_RECORDING_PERMISSION_GRANTED})
-        self.recording_permission_granted = True
+        if not self.recording_permission_granted:
+            self.send_message_callback({"message": self.Messages.BOT_RECORDING_PERMISSION_GRANTED})
+            self.recording_permission_granted = True
 
         GLib.timeout_add(100, self.set_up_video_input_manager)
 
@@ -726,6 +806,9 @@ class ZoomBotAdapter(BotAdapter):
         if self.meeting_status != zoom.MEETING_STATUS_CONNECTING:
             return
 
+        if self.is_joining_or_leaving_breakout_room:
+            return
+
         logger.info(f"We've been in the connecting state for more than {self.stuck_in_connecting_state_timeout} seconds, going to return could not connect to meeting message")
         self.send_message_callback({"message": self.Messages.COULD_NOT_CONNECT_TO_MEETING})
 
@@ -736,6 +819,14 @@ class ZoomBotAdapter(BotAdapter):
     def meeting_status_changed(self, status, iResult):
         logger.info(f"meeting_status_changed called. status = {status}, iResult={iResult}")
         self.meeting_status = status
+
+        if status == zoom.MEETING_STATUS_JOIN_BREAKOUT_ROOM:
+            self.is_joining_or_leaving_breakout_room = True
+            self.send_message_callback({"message": self.Messages.JOINING_BREAKOUT_ROOM})
+
+        if status == zoom.MEETING_STATUS_LEAVE_BREAKOUT_ROOM:
+            self.is_joining_or_leaving_breakout_room = True
+            self.send_message_callback({"message": self.Messages.LEAVING_BREAKOUT_ROOM})
 
         if status == zoom.MEETING_STATUS_CONNECTING:
             self.wait_to_get_out_of_connecting_state()

@@ -18,7 +18,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .authentication import ApiKeyAuthentication
-from .bots_api_utils import BotCreationSource, create_bot, create_bot_chat_message_request, create_bot_media_request_for_image, send_sync_command
+from .bots_api_utils import BotCreationSource, create_bot, create_bot_chat_message_request, create_bot_media_request_for_image, delete_bot, patch_bot, send_sync_command
 from .launch_bot_utils import launch_bot
 from .models import (
     Bot,
@@ -49,6 +49,7 @@ from .serializers import (
     SpeechSerializer,
     TranscriptUtteranceSerializer,
 )
+from .throttling import ProjectPostThrottle
 from .utils import meeting_type_from_url
 
 TokenHeaderParameter = [
@@ -122,8 +123,103 @@ class NotFoundView(APIView):
         return Response({"error": "Not found"}, status=status.HTTP_404_NOT_FOUND)
 
 
-class BotCreateView(APIView):
+class BotCursorPagination(CursorPagination):
+    ordering = "created_at"
+    page_size = 25
+
+
+class BotListCreateView(GenericAPIView):
     authentication_classes = [ApiKeyAuthentication]
+    pagination_class = BotCursorPagination
+    serializer_class = BotSerializer
+
+    throttle_classes = [ProjectPostThrottle]
+
+    @extend_schema(
+        operation_id="List Bots",
+        summary="List bots in a project",
+        description="Returns a list of bots for the authenticated project. Results are paginated using cursor pagination.",
+        responses={
+            200: OpenApiResponse(
+                response=BotSerializer(many=True),
+                description="List of bots",
+            )
+        },
+        parameters=[
+            *TokenHeaderParameter,
+            OpenApiParameter(
+                name="meeting_url",
+                type=str,
+                location=OpenApiParameter.QUERY,
+                description="Filter bots by meeting URL",
+                required=False,
+                examples=[OpenApiExample("Meeting URL Example", value="https://zoom.us/j/123456789")],
+            ),
+            OpenApiParameter(
+                name="deduplication_key",
+                type=str,
+                location=OpenApiParameter.QUERY,
+                description="Filter bots by deduplication key",
+                required=False,
+                examples=[OpenApiExample("Deduplication Key Example", value="my-unique-bot-key")],
+            ),
+            OpenApiParameter(
+                name="states",
+                type={"type": "array", "items": {"type": "string", "enum": list(BotStates._get_state_to_api_code_mapping().values())}},
+                location=OpenApiParameter.QUERY,
+                description="Filter bots by state. Can specify multiple states.",
+                required=False,
+            ),
+            OpenApiParameter(
+                name="cursor",
+                type=str,
+                location=OpenApiParameter.QUERY,
+                description="Cursor for pagination",
+                required=False,
+            ),
+        ],
+        tags=["Bots"],
+    )
+    def get(self, request):
+        # Start with all bots for the project
+        bots_query = Bot.objects.filter(project=request.auth.project)
+
+        # Filter by meeting_url if provided
+        meeting_url = request.query_params.get("meeting_url")
+        if meeting_url:
+            bots_query = bots_query.filter(meeting_url=meeting_url)
+
+        # Filter by deduplication_key if provided
+        deduplication_key = request.query_params.get("deduplication_key")
+        if deduplication_key:
+            bots_query = bots_query.filter(deduplication_key=deduplication_key)
+
+        # Filter by states if provided
+        states = request.query_params.getlist("states")
+        if states:
+            # Convert API code strings to state integer values
+            state_values = []
+            for state_api_code in states:
+                state_value = BotStates.api_code_to_state(state_api_code)
+                if state_value is not None:
+                    state_values.append(state_value)
+                else:
+                    return Response({"error": f"Invalid state: {state_api_code}. Valid states are: {', '.join(BotStates.state_to_api_code(state) for state in BotStates)}"}, status=status.HTTP_400_BAD_REQUEST)
+
+            if state_values:
+                bots_query = bots_query.filter(state__in=state_values)
+
+        # Apply ordering for cursor pagination
+        bots = bots_query.order_by("created_at")
+
+        # Let the pagination class handle the rest
+        page = self.paginate_queryset(bots)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+
+        serializer = self.get_serializer(bots, many=True)
+        return Response(serializer.data)
 
     @extend_schema(
         operation_id="Create Bot",
@@ -155,6 +251,7 @@ class BotCreateView(APIView):
 
 class SpeechView(APIView):
     authentication_classes = [ApiKeyAuthentication]
+    throttle_classes = [ProjectPostThrottle]
 
     @extend_schema(
         operation_id="Output speech",
@@ -223,6 +320,7 @@ class SpeechView(APIView):
 
 class OutputVideoView(APIView):
     authentication_classes = [ApiKeyAuthentication]
+    throttle_classes = [ProjectPostThrottle]
 
     @extend_schema(
         operation_id="Output video",
@@ -307,6 +405,7 @@ class OutputVideoView(APIView):
 
 class OutputAudioView(APIView):
     authentication_classes = [ApiKeyAuthentication]
+    throttle_classes = [ProjectPostThrottle]
 
     @extend_schema(
         operation_id="Output Audio",
@@ -406,6 +505,7 @@ class OutputAudioView(APIView):
 
 class OutputImageView(APIView):
     authentication_classes = [ApiKeyAuthentication]
+    throttle_classes = [ProjectPostThrottle]
 
     @extend_schema(
         operation_id="Output Image",
@@ -751,25 +851,12 @@ class BotDetailView(APIView):
         except Bot.DoesNotExist:
             return Response({"error": "Bot not found"}, status=status.HTTP_404_NOT_FOUND)
 
-        # Check if bot is in scheduled state
-        if bot.state != BotStates.SCHEDULED:
-            return Response(
-                {"error": f"Bot is in state {BotStates.state_to_api_code(bot.state)} but can only be updated when in scheduled state"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        # Use the utility function to patch the bot
+        updated_bot, error = patch_bot(bot, request.data)
+        if error:
+            return Response(error, status=status.HTTP_400_BAD_REQUEST)
 
-        # Validate the request data
-        serializer = PatchBotSerializer(data=request.data)
-        if not serializer.is_valid():
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-        validated_data = serializer.validated_data
-
-        bot.join_at = validated_data["join_at"]
-
-        bot.save()
-
-        return Response(BotSerializer(bot).data, status=status.HTTP_200_OK)
+        return Response(BotSerializer(updated_bot).data, status=status.HTTP_200_OK)
 
     @extend_schema(
         operation_id="Delete scheduled Bot",
@@ -794,15 +881,15 @@ class BotDetailView(APIView):
     def delete(self, request, object_id):
         try:
             bot = Bot.objects.get(object_id=object_id, project=request.auth.project)
-            if bot.state != BotStates.SCHEDULED:
-                return Response(
-                    {"error": f"Bot is in state {BotStates.state_to_api_code(bot.state)} but can only be deleted when in scheduled state"},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            bot.delete()
-            return Response(status=status.HTTP_200_OK)
         except Bot.DoesNotExist:
             return Response({"error": "Bot not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        # Use the utility function to delete the bot
+        success, error = delete_bot(bot)
+        if error:
+            return Response(error, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response(status=status.HTTP_200_OK)
 
 
 class ChatMessageCursorPagination(CursorPagination):
@@ -896,6 +983,7 @@ class ChatMessagesView(GenericAPIView):
 
 class SendChatMessageView(APIView):
     authentication_classes = [ApiKeyAuthentication]
+    throttle_classes = [ProjectPostThrottle]
 
     @extend_schema(
         operation_id="Send Chat Message",
@@ -957,8 +1045,45 @@ class SendChatMessageView(APIView):
             )
 
 
+class AdmitFromWaitingRoomView(APIView):
+    authentication_classes = [ApiKeyAuthentication]
+    throttle_classes = [ProjectPostThrottle]
+
+    def post(self, request, object_id):
+        try:
+            bot = Bot.objects.get(object_id=object_id, project=request.auth.project)
+
+            # This functionality is only supported for zoom bots
+            meeting_type = meeting_type_from_url(bot.meeting_url)
+            if meeting_type != MeetingTypes.ZOOM:
+                return Response({"error": "Admitting from waiting room is not supported for this meeting type"}, status=status.HTTP_400_BAD_REQUEST)
+
+            # Check if bot is in a state that allows admitting from waiting room
+            if not BotEventManager.is_state_that_can_admit_from_waiting_room(bot.state):
+                return Response(
+                    {"error": f"Bot is in state {BotStates.state_to_api_code(bot.state)} and cannot admit from waiting room"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # Call the utility method on the bot instance to admit from waiting room
+            try:
+                logging.info(f"Admitting from waiting room for bot {bot.object_id}")
+                send_sync_command(bot, "admit_from_waiting_room")
+                return Response(status=status.HTTP_200_OK)
+            except Exception as e:
+                logging.error(f"Error admitting from waiting room for bot {bot.object_id}: {str(e)}")
+                return Response(
+                    {"error": "Failed to admit from waiting room"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        except Bot.DoesNotExist:
+            return Response({"error": "Bot not found"}, status=status.HTTP_404_NOT_FOUND)
+
+
 class PauseRecordingView(APIView):
     authentication_classes = [ApiKeyAuthentication]
+    throttle_classes = [ProjectPostThrottle]
 
     @extend_schema(
         operation_id="Pause Recording",
@@ -1033,6 +1158,7 @@ class PauseRecordingView(APIView):
 
 class ResumeRecordingView(APIView):
     authentication_classes = [ApiKeyAuthentication]
+    throttle_classes = [ProjectPostThrottle]
 
     @extend_schema(
         operation_id="Resume Recording",

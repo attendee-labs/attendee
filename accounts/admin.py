@@ -11,6 +11,29 @@ from django.utils.html import format_html
 from .models import Organization, User
 
 
+class CreditsRangeListFilter(admin.SimpleListFilter):
+    title = "credits range"
+    parameter_name = "credits_range"
+
+    def lookups(self, request, model_admin):
+        return (
+            ("negative", "Negative credits (< 0)"),
+            ("low", "Low credits (0-5)"),
+            ("medium", "Medium credits (5-100)"),
+            ("high", "High credits (100+)"),
+        )
+
+    def queryset(self, request, queryset):
+        if self.value() == "negative":
+            return queryset.filter(centicredits__lt=0)
+        elif self.value() == "low":
+            return queryset.filter(centicredits__gte=0, centicredits__lt=500)
+        elif self.value() == "medium":
+            return queryset.filter(centicredits__gte=500, centicredits__lt=10000)
+        elif self.value() == "high":
+            return queryset.filter(centicredits__gte=10000)
+
+
 class UserInline(admin.TabularInline):
     model = User
     extra = 0
@@ -27,9 +50,9 @@ class CreditTransactionForm(forms.Form):
 @admin.register(Organization)
 class OrganizationAdmin(admin.ModelAdmin):
     list_display = ("name", "display_credits", "is_webhooks_enabled", "created_at", "updated_at")
-    list_filter = ("is_webhooks_enabled",)
+    list_filter = ("is_webhooks_enabled", "autopay_enabled", CreditsRangeListFilter)
     search_fields = ("name",)
-    readonly_fields = ("name", "centicredits", "is_webhooks_enabled", "created_at", "updated_at", "version", "add_credit_transaction_button")
+    readonly_fields = ("name", "centicredits", "is_webhooks_enabled", "autopay_enabled", "autopay_threshold_credits_display", "autopay_amount_to_purchase_display", "autopay_stripe_customer_id", "autopay_charge_task_enqueued_at", "autopay_charge_failure_data", "created_at", "updated_at", "version", "add_credit_transaction_button")
     inlines = [UserInline]
 
     def display_credits(self, obj):
@@ -43,8 +66,20 @@ class OrganizationAdmin(admin.ModelAdmin):
 
     add_credit_transaction_button.short_description = "Add Credits"
 
+    def autopay_threshold_credits_display(self, obj):
+        return f"{obj.autopay_threshold_credits():.2f}"
+
+    autopay_threshold_credits_display.short_description = "Autopay Threshold (Credits)"
+
+    def autopay_amount_to_purchase_display(self, obj):
+        return f"${obj.autopay_amount_to_purchase_dollars():.2f}"
+
+    autopay_amount_to_purchase_display.short_description = "Autopay Purchase Amount"
+
     fieldsets = (
         ("Organization Information", {"fields": ("name", "centicredits", "is_webhooks_enabled", "add_credit_transaction_button")}),
+        ("Autopay Configuration", {"fields": ("autopay_enabled", "autopay_threshold_credits_display", "autopay_amount_to_purchase_display", "autopay_stripe_customer_id")}),
+        ("Autopay Status", {"fields": ("autopay_charge_task_enqueued_at", "autopay_charge_failure_data")}),
         ("Metadata", {"fields": ("created_at", "updated_at", "version")}),
     )
 

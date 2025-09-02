@@ -5,8 +5,8 @@ from django.core import mail
 from django.test import Client, TransactionTestCase
 from django.urls import reverse
 
-from accounts.models import Organization, User
-from bots.models import Project
+from accounts.models import Organization, User, UserRole
+from bots.models import Project, ProjectAccess
 
 
 class InviteUserIntegrationTest(TransactionTestCase):
@@ -46,6 +46,7 @@ class InviteUserIntegrationTest(TransactionTestCase):
             invite_url,
             {
                 "email": self.invited_email,
+                "is_admin": "true",
             },
         )
 
@@ -135,6 +136,7 @@ class InviteUserIntegrationTest(TransactionTestCase):
             invite_url,
             {
                 "email": self.invited_email,
+                "is_admin": "true",
             },
         )
 
@@ -153,6 +155,7 @@ class InviteUserIntegrationTest(TransactionTestCase):
         response = self.client.post(
             invite_url,
             {
+                "is_admin": "true",
                 # No email provided
             },
         )
@@ -172,6 +175,7 @@ class InviteUserIntegrationTest(TransactionTestCase):
             invite_url,
             {
                 "email": self.invited_email,
+                "is_admin": "true",
             },
         )
 
@@ -199,11 +203,129 @@ class InviteUserIntegrationTest(TransactionTestCase):
             invite_url,
             {
                 "email": self.invited_email,
+                "is_admin": "true",
             },
         )
 
         # Should return 404 because get_object_or_404 filters by organization
         self.assertEqual(response.status_code, 404)
+
+        # No email should be sent
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_invite_user_roles_and_project_access(self):
+        """Test that user roles and project access are correctly set during invitation"""
+
+        # Create additional projects for testing
+        project2 = Project.objects.create(name="Test Project 2", organization=self.organization)
+        project3 = Project.objects.create(name="Test Project 3", organization=self.organization)
+
+        self.client.force_login(self.inviting_user)
+
+        # Test 1: Invite a regular user with access to specific projects
+        regular_user_email = "regular@example.com"
+        invite_url = reverse("projects:invite-user", kwargs={"object_id": self.project.object_id})
+        response = self.client.post(
+            invite_url,
+            {
+                "email": regular_user_email,
+                "is_admin": "false",
+                "project_access": [self.project.object_id, project2.object_id],
+            },
+        )
+
+        # Verify invite was successful
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Invitation sent successfully", response.content.decode())
+
+        # Verify regular user was created with correct role
+        regular_user = User.objects.get(email=regular_user_email)
+        self.assertEqual(regular_user.role, UserRole.REGULAR_USER)
+        self.assertEqual(regular_user.invited_by, self.inviting_user)
+        self.assertEqual(regular_user.organization, self.organization)
+        self.assertTrue(regular_user.is_active)
+
+        # Verify project access was created correctly
+        user_project_accesses = ProjectAccess.objects.filter(user=regular_user)
+        self.assertEqual(user_project_accesses.count(), 2)
+
+        # Check that the user has access to the correct projects
+        accessible_project_ids = set(user_project_accesses.values_list("project__object_id", flat=True))
+        expected_project_ids = {self.project.object_id, project2.object_id}
+        self.assertEqual(accessible_project_ids, expected_project_ids)
+
+        # Verify the user doesn't have access to project3
+        self.assertFalse(ProjectAccess.objects.filter(user=regular_user, project=project3).exists())
+
+        # Test 2: Invite an admin user
+        admin_user_email = "admin@example.com"
+        response = self.client.post(
+            invite_url,
+            {
+                "email": admin_user_email,
+                "is_admin": "true",
+                # Note: project_access should be ignored for admin users
+                "project_access": [self.project.object_id],
+            },
+        )
+
+        # Verify invite was successful
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Invitation sent successfully", response.content.decode())
+
+        # Verify admin user was created with correct role
+        admin_user = User.objects.get(email=admin_user_email)
+        self.assertEqual(admin_user.role, UserRole.ADMIN)
+        self.assertEqual(admin_user.invited_by, self.inviting_user)
+        self.assertEqual(admin_user.organization, self.organization)
+        self.assertTrue(admin_user.is_active)
+
+        # Verify admin user has no explicit project access entries (they have access to all)
+        admin_project_accesses = ProjectAccess.objects.filter(user=admin_user)
+        self.assertEqual(admin_project_accesses.count(), 0)
+
+        # Test 3: Verify project accessibility using the Project.accessible_to method
+        # Regular user should only see projects they have access to
+        regular_accessible_projects = Project.accessible_to(regular_user)
+        self.assertEqual(regular_accessible_projects.count(), 2)
+        regular_accessible_ids = set(regular_accessible_projects.values_list("object_id", flat=True))
+        self.assertEqual(regular_accessible_ids, expected_project_ids)
+
+        # Admin user should see all projects in the organization
+        admin_accessible_projects = Project.accessible_to(admin_user)
+        self.assertEqual(admin_accessible_projects.count(), 3)  # All 3 projects
+        admin_accessible_ids = set(admin_accessible_projects.values_list("object_id", flat=True))
+        all_project_ids = {self.project.object_id, project2.object_id, project3.object_id}
+        self.assertEqual(admin_accessible_ids, all_project_ids)
+
+        # Test 4: Verify email was sent for both invitations
+        self.assertEqual(len(mail.outbox), 2)
+
+        # Check that both emails were sent to the correct addresses
+        email_recipients = [email.to[0] for email in mail.outbox]
+        self.assertIn(regular_user_email, email_recipients)
+        self.assertIn(admin_user_email, email_recipients)
+
+    def test_invite_regular_user_without_project_access(self):
+        """Test that inviting a regular user without project access fails"""
+        self.client.force_login(self.inviting_user)
+
+        invite_url = reverse("projects:invite-user", kwargs={"object_id": self.project.object_id})
+        response = self.client.post(
+            invite_url,
+            {
+                "email": "noproject@example.com",
+                "is_admin": "false",
+                # No project_access provided
+            },
+        )
+
+        # Should fail with error
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Please select at least one project for regular users", response.content.decode())
+
+        # No user should be created
+        self.assertFalse(User.objects.filter(email="noproject@example.com").exists())
 
         # No email should be sent
         self.assertEqual(len(mail.outbox), 0)

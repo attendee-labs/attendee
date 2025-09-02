@@ -214,6 +214,10 @@ class WebBotAdapter(BotAdapter):
         if not self.joined_at:
             return
 
+        # If nobody other than the bot was ever in the meeting, then don't activate this. We only want to activate if someone else was in the meeting and left
+        if len(self.participants_info) <= 1:
+            return
+
         all_participants_in_meeting = [x for x in self.participants_info.values() if x["active"]]
         if len(all_participants_in_meeting) == 1 and all_participants_in_meeting[0]["fullName"] == self.display_name:
             if self.only_one_participant_in_meeting_at is None:

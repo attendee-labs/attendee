@@ -1,3 +1,5 @@
+import random
+import string
 import uuid
 
 from concurrency.fields import IntegerVersionField
@@ -14,6 +16,19 @@ class Organization(models.Model):
     version = IntegerVersionField()
     is_webhooks_enabled = models.BooleanField(default=True)
 
+    autopay_enabled = models.BooleanField(default=False)
+    autopay_threshold_centricredits = models.IntegerField(default=1000)
+    autopay_amount_to_purchase_cents = models.IntegerField(default=5000)
+    autopay_charge_task_enqueued_at = models.DateTimeField(null=True, blank=True)
+    autopay_charge_failure_data = models.JSONField(null=True, blank=True)
+    autopay_stripe_customer_id = models.CharField(max_length=255, null=True, blank=True)
+
+    def autopay_amount_to_purchase_dollars(self):
+        return self.autopay_amount_to_purchase_cents / 100
+
+    def autopay_threshold_credits(self):
+        return self.autopay_threshold_centricredits / 100
+
     def __str__(self):
         return self.name
 
@@ -24,9 +39,24 @@ class Organization(models.Model):
         return self.credits() < -1
 
 
+class UserRole(models.TextChoices):
+    ADMIN = "admin"
+    REGULAR_USER = "regular_user"
+
+
 class User(AbstractUser):
     organization = models.ForeignKey(Organization, on_delete=models.PROTECT, null=False, related_name="users")
     invited_by = models.ForeignKey("self", on_delete=models.PROTECT, null=True, blank=True, related_name="invited_users")
+    role = models.CharField(max_length=255, null=False, blank=False, default=UserRole.ADMIN, choices=UserRole.choices)
+
+    OBJECT_ID_PREFIX = "usr_"
+    object_id = models.CharField(max_length=32, unique=True, editable=False)
+
+    def save(self, *args, **kwargs):
+        if not self.object_id:
+            rand = "".join(random.choices(string.ascii_letters + string.digits, k=16))
+            self.object_id = f"{self.OBJECT_ID_PREFIX}{rand}"
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return self.email

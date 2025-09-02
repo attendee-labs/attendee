@@ -7,7 +7,7 @@ import stripe
 from django.test import Client, TestCase
 from django.urls import reverse
 
-from accounts.models import Organization, User
+from accounts.models import Organization, User, UserRole
 from bots.models import CreditTransaction, Project
 from bots.stripe_utils import process_checkout_session_completed
 
@@ -16,7 +16,8 @@ class StripeBillingTestCase(TestCase):
     def setUp(self):
         # Create test org and user
         self.org = Organization.objects.create(name="Test Org", centicredits=1000)
-        self.user = User.objects.create_user(username="testuser", email="test@example.com", password="testpass123", organization=self.org)
+        self.user = User.objects.create_user(username="testuser", email="test@example.com", password="testpass123", organization=self.org, role=UserRole.ADMIN)
+        self.regular_user = User.objects.create_user(username="regularuser", email="regular@example.com", password="testpass123", organization=self.org, role=UserRole.REGULAR_USER)
         self.project = Project.objects.create(name="Test Project", organization=self.org)
         self.client = Client()
         self.client.force_login(self.user)
@@ -170,7 +171,7 @@ class StripeBillingTestCase(TestCase):
         self.assertEqual(CreditTransaction.objects.count(), initial_transaction_count)
 
     @patch("stripe.Webhook.construct_event")
-    def test_stripe_webhook(self, mock_construct_event):
+    def test_stripe_checkout_session_completed_webhook(self, mock_construct_event):
         # Create a webhook client without CSRF protection
         webhook_client = Client(enforce_csrf_checks=False)
 
@@ -211,6 +212,108 @@ class StripeBillingTestCase(TestCase):
         self.assertEqual(transaction.centicredits_after, initial_credits + 10000, "After credits should be initial + 10000")
 
     @patch("stripe.Webhook.construct_event")
+    def test_stripe_payment_intent_succeeded_webhook(self, mock_construct_event):
+        """Test payment intent succeeded webhook for autopay charges"""
+        # Create a webhook client without CSRF protection
+        webhook_client = Client(enforce_csrf_checks=False)
+
+        # Create a proper MagicMock object for payment intent (autopay charge)
+        mock_payment_intent = MagicMock()
+        mock_payment_intent.id = "pi_test_autopay"
+        mock_payment_intent.amount = 5000  # $50.00 in cents
+        mock_payment_intent.metadata = {
+            "organization_id": str(self.org.id),
+            "credit_amount": "100",
+            "autopay": "true",  # This marks it as an autopay charge
+        }
+
+        # Mock the Stripe event
+        mock_event = {"type": "payment_intent.succeeded", "data": {"object": mock_payment_intent}}
+
+        mock_construct_event.return_value = mock_event
+
+        # Record initial credit balance
+        initial_credits = self.org.centicredits
+
+        # Test the webhook endpoint
+        response = webhook_client.post(
+            reverse("external-webhook-stripe"),
+            data=json.dumps({"type": "payment_intent.succeeded"}),  # Actual content not important due to mocking
+            content_type="application/json",
+            HTTP_STRIPE_SIGNATURE="test_signature",
+        )
+
+        # Check that the webhook processed successfully
+        self.assertEqual(response.status_code, 200)
+        mock_construct_event.assert_called_once()
+
+        # Check that a credit transaction was created with the correct values
+        self.org.refresh_from_db()
+        transaction = CreditTransaction.objects.filter(organization=self.org, stripe_payment_intent_id="pi_test_autopay").first()
+
+        self.assertIsNotNone(transaction, "Credit transaction should be created")
+        self.assertEqual(transaction.centicredits_delta, 10000, "Transaction should add 100 credits (10000 centicredits)")
+        self.assertEqual(transaction.centicredits_before, initial_credits, "Before credits should match initial balance")
+        self.assertEqual(transaction.centicredits_after, initial_credits + 10000, "After credits should be initial + 10000")
+
+        # Verify the description indicates this was an autopay charge
+        self.assertIn("Autopay", transaction.description)
+
+        # Verify autopay failure data was cleared
+        self.assertIsNone(self.org.autopay_charge_failure_data)
+
+    @patch("stripe.Webhook.construct_event")
+    def test_stripe_customer_updated_webhook_payment_method_changed(self, mock_construct_event):
+        """Test customer.updated webhook when payment method is changed"""
+        # Create a webhook client without CSRF protection
+        webhook_client = Client(enforce_csrf_checks=False)
+
+        # Set up organization with autopay failure data and task enqueued timestamp
+        from django.utils import timezone
+
+        self.org.autopay_stripe_customer_id = "cus_test123"
+        self.org.autopay_charge_failure_data = {"error": "card_declined", "attempts": 2}
+        self.org.autopay_charge_task_enqueued_at = timezone.now()
+        self.org.save()
+
+        # Create a mock customer with updated payment method
+        mock_customer = MagicMock()
+        mock_customer.id = "cus_test123"
+        mock_customer.metadata = {"organization_id": str(self.org.id)}
+
+        # Mock the Stripe event with previous_attributes indicating payment method change
+        mock_event = {
+            "type": "customer.updated",
+            "data": {
+                "object": mock_customer,
+                "previous_attributes": {
+                    "invoice_settings": {
+                        "default_payment_method": "pm_old123"  # This indicates payment method changed
+                    }
+                },
+            },
+        }
+
+        mock_construct_event.return_value = mock_event
+
+        # Test the webhook endpoint
+        response = webhook_client.post(
+            reverse("external-webhook-stripe"),
+            data=json.dumps({"type": "customer.updated"}),
+            content_type="application/json",
+            HTTP_STRIPE_SIGNATURE="test_signature",
+        )
+
+        # Check that the webhook processed successfully
+        self.assertEqual(response.status_code, 200)
+        mock_construct_event.assert_called_once()
+
+        # Verify that autopay failure data and task timestamp were cleared
+        self.org.refresh_from_db()
+        self.assertIsNone(self.org.autopay_charge_failure_data)
+        self.assertIsNone(self.org.autopay_charge_task_enqueued_at)
+
+    @patch("stripe.Webhook.construct_event")
     def test_stripe_webhook_error_handling(self, mock_construct_event):
         webhook_client = Client(enforce_csrf_checks=False)
 
@@ -228,3 +331,184 @@ class StripeBillingTestCase(TestCase):
         mock_construct_event.side_effect = ValueError("Invalid payload")
         response = webhook_client.post(reverse("external-webhook-stripe"), data="invalid json", content_type="application/json", HTTP_STRIPE_SIGNATURE="test_signature")
         self.assertEqual(response.status_code, 400)
+
+    # Tests for ProjectAutopayStripePortalView
+    @patch("stripe.Customer.create")
+    @patch("stripe.Customer.retrieve")
+    @patch("stripe.billing_portal.Session.create")
+    def test_stripe_portal_new_customer(self, mock_portal_create, mock_customer_retrieve, mock_customer_create):
+        """Test creating a Stripe customer and billing portal for organization without existing customer"""
+        # Mock Stripe customer creation
+        mock_customer = MagicMock()
+        mock_customer.id = "cus_test123"
+        mock_customer_create.return_value = mock_customer
+
+        # Mock customer retrieval (no default payment method)
+        mock_retrieved_customer = MagicMock()
+        mock_retrieved_customer.invoice_settings.default_payment_method = None
+        mock_customer_retrieve.return_value = mock_retrieved_customer
+
+        # Mock billing portal session creation
+        mock_session = MagicMock()
+        mock_session.url = "https://billing.stripe.com/test-session"
+        mock_portal_create.return_value = mock_session
+
+        # Make request
+        response = self.client.post(reverse("bots:project-autopay-stripe-portal", kwargs={"object_id": self.project.object_id}))
+
+        # Check that we got redirected to Stripe billing portal
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, "https://billing.stripe.com/test-session")
+
+        # Verify customer was created
+        mock_customer_create.assert_called_once()
+        call_kwargs = mock_customer_create.call_args.kwargs
+        self.assertEqual(call_kwargs["email"], self.user.email)
+        self.assertEqual(call_kwargs["name"], self.org.name)
+        self.assertEqual(call_kwargs["metadata"]["organization_id"], str(self.org.id))
+
+        # Verify organization was updated with customer ID
+        self.org.refresh_from_db()
+        self.assertEqual(self.org.autopay_stripe_customer_id, "cus_test123")
+
+        # Verify billing portal session was created with flow_data for new payment method
+        mock_portal_create.assert_called_once()
+        portal_kwargs = mock_portal_create.call_args.kwargs
+        self.assertEqual(portal_kwargs["customer"], "cus_test123")
+        self.assertEqual(portal_kwargs["flow_data"], {"type": "payment_method_update"})
+
+    @patch("stripe.Customer.retrieve")
+    @patch("stripe.billing_portal.Session.create")
+    def test_stripe_portal_existing_customer_with_payment_method(self, mock_portal_create, mock_customer_retrieve):
+        """Test billing portal for organization with existing customer that has payment method"""
+        # Set up organization with existing customer ID
+        self.org.autopay_stripe_customer_id = "cus_existing123"
+        self.org.save()
+
+        # Mock customer retrieval (has default payment method)
+        mock_retrieved_customer = MagicMock()
+        mock_retrieved_customer.invoice_settings.default_payment_method = "pm_test123"
+        mock_customer_retrieve.return_value = mock_retrieved_customer
+
+        # Mock billing portal session creation
+        mock_session = MagicMock()
+        mock_session.url = "https://billing.stripe.com/existing-session"
+        mock_portal_create.return_value = mock_session
+
+        # Make request
+        response = self.client.post(reverse("bots:project-autopay-stripe-portal", kwargs={"object_id": self.project.object_id}))
+
+        # Check that we got redirected to Stripe billing portal
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, "https://billing.stripe.com/existing-session")
+
+        # Verify billing portal session was created without flow_data (no need to add payment method)
+        mock_portal_create.assert_called_once()
+        portal_kwargs = mock_portal_create.call_args.kwargs
+        self.assertEqual(portal_kwargs["customer"], "cus_existing123")
+        self.assertNotIn("flow_data", portal_kwargs)
+
+    @patch("stripe.Customer.create")
+    def test_stripe_portal_stripe_error(self, mock_customer_create):
+        """Test error handling when Stripe API fails"""
+        # Mock Stripe error
+        mock_customer_create.side_effect = stripe.error.StripeError("Test Stripe error")
+
+        # Make request
+        response = self.client.post(reverse("bots:project-autopay-stripe-portal", kwargs={"object_id": self.project.object_id}))
+
+        # Check error response
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Error setting up payment method", response.content.decode())
+
+    def test_stripe_portal_regular_user_forbidden(self):
+        """Test that regular users cannot access the Stripe portal view"""
+        # Switch to regular user
+        self.client.force_login(self.regular_user)
+
+        # Make request
+        response = self.client.post(reverse("bots:project-autopay-stripe-portal", kwargs={"object_id": self.project.object_id}))
+
+        # Check that access is forbidden
+        self.assertEqual(response.status_code, 403)
+
+    # Tests for ProjectAutopayView
+    def test_autopay_update_all_settings(self):
+        """Test updating all autopay settings with valid data"""
+        data = {
+            "autopay_enabled": True,
+            "autopay_threshold_credits": 50.0,
+            "autopay_amount_dollars": 100.0,
+        }
+
+        response = self.client.patch(
+            reverse("bots:project-autopay", kwargs={"object_id": self.project.object_id}),
+            data=json.dumps(data),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content.decode(), "Autopay settings updated successfully")
+
+        # Verify organization was updated
+        self.org.refresh_from_db()
+        self.assertTrue(self.org.autopay_enabled)
+        self.assertEqual(self.org.autopay_threshold_centricredits, 5000)  # 50 credits * 100
+        self.assertEqual(self.org.autopay_amount_to_purchase_cents, 10000)  # $100 * 100
+
+    def test_autopay_invalid_threshold_credits(self):
+        """Test validation for autopay_threshold_credits field"""
+        # Test negative value
+        data = {"autopay_threshold_credits": -10}
+        response = self.client.patch(
+            reverse("bots:project-autopay", kwargs={"object_id": self.project.object_id}),
+            data=json.dumps(data),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.content.decode(), "Credit threshold must be a positive number")
+
+        # Test zero value
+        data = {"autopay_threshold_credits": 0}
+        response = self.client.patch(
+            reverse("bots:project-autopay", kwargs={"object_id": self.project.object_id}),
+            data=json.dumps(data),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.content.decode(), "Credit threshold must be a positive number")
+
+        # Test too high value
+        data = {"autopay_threshold_credits": 15000}
+        response = self.client.patch(
+            reverse("bots:project-autopay", kwargs={"object_id": self.project.object_id}),
+            data=json.dumps(data),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.content.decode(), "Credit threshold cannot exceed 10,000 credits")
+
+        # Test non-numeric value
+        data = {"autopay_threshold_credits": "not_a_number"}
+        response = self.client.patch(
+            reverse("bots:project-autopay", kwargs={"object_id": self.project.object_id}),
+            data=json.dumps(data),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.content.decode(), "Credit threshold must be a positive number")
+
+    def test_autopay_regular_user_forbidden(self):
+        """Test that regular users cannot access the autopay PATCH view"""
+        # Switch to regular user
+        self.client.force_login(self.regular_user)
+
+        data = {"autopay_enabled": True}
+        response = self.client.patch(
+            reverse("bots:project-autopay", kwargs={"object_id": self.project.object_id}),
+            data=json.dumps(data),
+            content_type="application/json",
+        )
+
+        # Check that access is forbidden
+        self.assertEqual(response.status_code, 403)

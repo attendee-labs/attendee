@@ -12,9 +12,58 @@
             </h3>
             <p class="text-muted small">1 credit = 1 hour of bot usage</p>
             
+            
+            {% if project.organization.autopay_enabled %}
+            <div class="d-flex align-items-start mb-3">
+                <div>
+                    {% if not has_payment_method %}
+                        <p class="text-danger small mb-2"><i class="bi bi-exclamation-triangle me-1"></i>Please add a payment method for Autopay.</p>
+                        <div class="d-flex gap-2">
+                            <form method="post" action="{% url 'projects:project-autopay-stripe-portal' project.object_id %}" class="d-inline">
+                                {% csrf_token %}
+                                <button type="submit" class="btn btn-sm btn-outline-secondary">
+                                    <i class="bi bi-credit-card me-1"></i>Add Payment Method
+                                </button>
+                            </form>
+                            <button type="button" class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#autopayModal">
+                                Configure Autopay
+                            </button>
+                        </div>
+                    {% elif project.organization.autopay_charge_failure_data %}
+                        <p class="text-danger small mb-2"><i class="bi bi-exclamation-triangle me-1"></i>Autopay failed. Please add a valid payment method.</p>
+                        <div class="d-flex gap-2">
+                            <form method="post" action="{% url 'projects:project-autopay-stripe-portal' project.object_id %}" class="d-inline">
+                                {% csrf_token %}
+                                <button type="submit" class="btn btn-sm btn-outline-secondary">
+                                    <i class="bi bi-credit-card me-1"></i>Edit Payment Method
+                                </button>
+                            </form>
+                            <button type="button" class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#autopayModal">
+                                Configure Autopay
+                            </button>
+                        </div>
+                    {% else %}
+                        <p class="text-success small mb-2"><i class="bi bi-check-circle me-1"></i>Autopay is enabled</p>
+                        <button type="button" class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#autopayModal">
+                            Configure Autopay
+                        </button>
+                        <form method="post" action="{% url 'projects:project-autopay-stripe-portal' project.object_id %}" class="d-inline">
+                            {% csrf_token %}
+                            <button type="submit" class="btn btn-sm btn-outline-secondary">
+                                <i class="bi bi-credit-card me-1"></i>Edit Payment Method
+                            </button>
+                        </form>
+                    {% endif %}
+                </div>
+            </div>
+            {% else %}
             <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#purchaseCreditsModal">
                 Purchase Credits
             </button>
+            <button type="button" class="btn btn-outline-secondary ms-2" data-bs-toggle="modal" data-bs-target="#autopayModal">
+                Enable Autopay
+            </button>
+            {% endif %}
             
             <div class="modal fade" id="purchaseCreditsModal" tabindex="-1" aria-labelledby="purchaseCreditsModalLabel" aria-hidden="true">
                 <div class="modal-dialog">
@@ -54,6 +103,65 @@
                         <div class="modal-footer">
                             <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
                             <button type="submit" form="purchaseCreditsForm" class="btn btn-primary">Proceed to Checkout</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Autopay Configuration Modal -->
+            <div class="modal fade" id="autopayModal" tabindex="-1" aria-labelledby="autopayModalLabel" aria-hidden="true">
+                <div class="modal-dialog">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title" id="autopayModalLabel">Autopay Configuration</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                        </div>
+                        <div class="modal-body">
+                            <form id="autopayForm">
+                                {% csrf_token %}
+                                <div class="mb-3">
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" id="autopayEnabled" 
+                                               {% if project.organization.autopay_enabled %}checked{% endif %}>
+                                        <label class="form-check-label" for="autopayEnabled">
+                                            Enable Autopay
+                                        </label>
+                                    </div>
+                                    <div class="form-text">
+                                        Automatically purchase credits to refill your balance
+                                    </div>
+                                </div>
+                                
+                                <div id="autopaySettings"{% if not project.organization.autopay_enabled %} style="display: none;"{% endif %}>
+                                    <!-- Hidden threshold field with fixed value of 10 credits -->
+                                    <input type="hidden" id="autopayThreshold" value="10">
+                                    
+                                    <div class="mb-3">
+                                        <label for="autopayAmount" class="form-label">Purchase Amount</label>
+                                        <div class="input-group">
+                                            <span class="input-group-text">$</span>
+                                            <input type="number" class="form-control" id="autopayAmount" 
+                                                   min="10" max="10000" step="1" 
+                                                   value="{{ project.organization.autopay_amount_to_purchase_dollars|floatformat:2 }}">
+                                        </div>
+                                        <div class="form-text">
+                                            Amount to purchase when autopay triggers
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="alert alert-info">
+                                        When your credit balance drops below <b>10 credits</b>, we'll automatically charge your payment method <b>$<span id="amountDisplay">{{ project.organization.autopay_amount_to_purchase_dollars|floatformat:2 }}</span></b> which will add <b><span id="autopayCalculatedCredits">0</span> credits</b> to your balance.
+                                    </div>
+                                </div>
+                            </form>
+                        </div>
+                        <div id="autopayErrorAlert" class="alert alert-danger d-none mx-3 mb-0" role="alert">
+                            <i class="bi bi-exclamation-triangle me-2"></i>
+                            <span id="autopayErrorMessage"></span>
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                            <button type="button" class="btn btn-primary" id="saveAutopayBtn">Save Changes</button>
                         </div>
                     </div>
                 </div>
@@ -144,6 +252,24 @@
 </div>
 
 <script>
+    // Function to calculate credits based on tiered pricing
+    function calculateCredits(amount) {
+        let credits = 0;
+        
+        if (amount <= 200) {
+            // Tier 1: $0.50 per credit
+            credits = amount / 0.5;
+        } else if (amount <= 1000) {
+            // Tier 2: $0.40 per credit
+            credits = amount / 0.4;
+        } else {
+            // Tier 3: $0.35 per credit
+            credits = amount / 0.35;
+        }
+        
+        return credits;
+    }
+
     // Function that contains all your billing logic
     function initializeBillingForm() {
         const purchaseAmountInput = document.getElementById('purchaseAmount');
@@ -151,24 +277,6 @@
         
         // Don't proceed if elements aren't found (prevents errors)
         if (!purchaseAmountInput || !calculatedCredits) return;
-        
-        // Function to calculate credits based on tiered pricing
-        function calculateCredits(amount) {
-            let credits = 0;
-            
-            if (amount <= 200) {
-                // Tier 1: $0.50 per credit
-                credits = amount / 0.5;
-            } else if (amount <= 1000) {
-                // Tier 2: $0.40 per credit
-                credits = amount / 0.4;
-            } else {
-                // Tier 3: $0.35 per credit
-                credits = amount / 0.35;
-            }
-            
-            return credits;
-        }
         
         // Function to update the credits based on purchase amount
         function updateCredits() {
@@ -184,11 +292,134 @@
         updateCredits();
     }
 
+    // Function to initialize autopay form
+    function initializeAutopayForm() {
+        const autopayEnabled = document.getElementById('autopayEnabled');
+        const autopaySettings = document.getElementById('autopaySettings');
+        const autopayThreshold = document.getElementById('autopayThreshold');
+        const autopayAmount = document.getElementById('autopayAmount');
+        const amountDisplay = document.getElementById('amountDisplay');
+        const autopayCalculatedCredits = document.getElementById('autopayCalculatedCredits');
+        const saveAutopayBtn = document.getElementById('saveAutopayBtn');
+        
+        // Don't proceed if elements aren't found
+        if (!autopayEnabled || !autopaySettings) return;
+        
+        // Toggle autopay settings visibility
+        function toggleAutopaySettings() {
+            if (autopayEnabled.checked) {
+                autopaySettings.style.display = 'block';
+            } else {
+                autopaySettings.style.display = 'none';
+            }
+        }
+        
+        // Update display values
+        function updateDisplayValues() {
+            if (amountDisplay && autopayAmount) {
+                amountDisplay.textContent = parseFloat(autopayAmount.value || 0).toFixed(2);
+            }
+            if (autopayCalculatedCredits && autopayAmount) {
+                const amount = parseFloat(autopayAmount.value || 0);
+                const credits = calculateCredits(amount);
+                autopayCalculatedCredits.textContent = Math.floor(credits);
+            }
+        }
+        
+        // Add event listeners
+        if (autopayEnabled) {
+            autopayEnabled.addEventListener('change', toggleAutopaySettings);
+        }
+        
+        if (autopayAmount) {
+            autopayAmount.addEventListener('input', updateDisplayValues);
+        }
+        
+        // Function to show/hide error alert
+        function showAutopayError(message) {
+            const errorAlert = document.getElementById('autopayErrorAlert');
+            const errorMessage = document.getElementById('autopayErrorMessage');
+            if (errorAlert && errorMessage) {
+                errorMessage.textContent = message;
+                errorAlert.classList.remove('d-none');
+            }
+        }
+        
+        function hideAutopayError() {
+            const errorAlert = document.getElementById('autopayErrorAlert');
+            if (errorAlert) {
+                errorAlert.classList.add('d-none');
+            }
+        }
+        
+        // Hide error when modal is opened
+        const autopayModal = document.getElementById('autopayModal');
+        if (autopayModal) {
+            autopayModal.addEventListener('shown.bs.modal', function() {
+                hideAutopayError();
+            });
+        }
+        
+        // Handle save button click
+        if (saveAutopayBtn) {
+            saveAutopayBtn.addEventListener('click', async function() {
+                // Hide any previous errors
+                hideAutopayError();
+                
+                const enabled = autopayEnabled.checked;
+                const threshold = 10; // Fixed threshold value
+                const amount = parseFloat(autopayAmount.value) || 0;
+                                
+                const data = {
+                    autopay_enabled: enabled
+                };
+                
+                if (enabled) {
+                    data.autopay_threshold_credits = threshold;
+                    data.autopay_amount_dollars = amount;
+                }
+                
+                try {
+                    const response = await fetch(`{% url 'projects:project-autopay' project.object_id %}`, {
+                        method: 'PATCH',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value
+                        },
+                        body: JSON.stringify(data)
+                    });
+                    
+                    if (response.ok) {
+                        // Close modal and reload page to show updated button
+                        const modal = bootstrap.Modal.getInstance(document.getElementById('autopayModal'));
+                        modal.hide();
+                        location.reload();
+                    } else {
+                        const errorText = await response.text();
+                        showAutopayError(errorText);
+                    }
+                } catch (error) {
+                    showAutopayError('Error saving autopay settings: ' + error.message);
+                }
+            });
+        }
+        
+        // Initialize display
+        toggleAutopaySettings();
+        updateDisplayValues();
+    }
+
     // Call on regular page load
-    document.addEventListener('DOMContentLoaded', initializeBillingForm);
+    document.addEventListener('DOMContentLoaded', function() {
+        initializeBillingForm();
+        initializeAutopayForm();
+    });
     
     // Call when HTMX content is loaded
-    document.addEventListener('htmx:afterSwap', initializeBillingForm);
+    document.addEventListener('htmx:afterSwap', function() {
+        initializeBillingForm();
+        initializeAutopayForm();
+    });
 </script>
 
 {% endblock %}

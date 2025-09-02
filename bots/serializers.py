@@ -4,6 +4,7 @@ import os
 from dataclasses import asdict
 
 import jsonschema
+from dateutil.relativedelta import relativedelta
 from django.utils import timezone
 from drf_spectacular.utils import (
     OpenApiExample,
@@ -19,6 +20,10 @@ from .models import (
     BotEventSubTypes,
     BotEventTypes,
     BotStates,
+    Calendar,
+    CalendarEvent,
+    CalendarPlatform,
+    CalendarStates,
     ChatMessageToOptions,
     MediaBlob,
     MeetingTypes,
@@ -56,6 +61,34 @@ BOT_IMAGE_SCHEMA = {
     "required": ["type", "data"],
     "additionalProperties": False,
 }
+
+
+class BotValidationMixin:
+    """Mixin class providing meeting URL validation for serializers."""
+
+    def validate_meeting_url(self, value):
+        meeting_type = meeting_type_from_url(value)
+        if meeting_type is None:
+            raise serializers.ValidationError("Invalid meeting URL")
+
+        if meeting_type == MeetingTypes.GOOGLE_MEET:
+            if not value.startswith("https://meet.google.com/"):
+                raise serializers.ValidationError("Google Meet URL must start with https://meet.google.com/")
+
+        return value
+
+    def validate_join_at(self, value):
+        """Validate that join_at cannot be in the past."""
+        if value is None:
+            return value
+
+        if value < timezone.now():
+            raise serializers.ValidationError("join_at cannot be in the past")
+
+        if value > timezone.now() + relativedelta(years=3):
+            raise serializers.ValidationError("join_at cannot be more than 3 years in the future")
+
+        return value
 
 
 @extend_schema_field(BOT_IMAGE_SCHEMA)
@@ -137,6 +170,7 @@ class BotImageSerializer(serializers.Serializer):
                         "type": "string",
                         "description": "The model to use for transcription. Defaults to 'nova-3' if not specified, which is the recommended model for most use cases. See here for details: https://developers.deepgram.com/docs/models-languages-overview",
                     },
+                    "redact": {"type": "array", "items": {"type": "string", "enum": ["pci", "pii", "numbers"]}, "uniqueItems": True, "description": "Array of redaction types to apply to transcription. Automatically removes or masks sensitive information like PII, PCI data, and numbers from transcripts. See here for details: https://developers.deepgram.com/docs/redaction"},
                 },
                 "additionalProperties": False,
             },
@@ -215,6 +249,19 @@ class BotImageSerializer(serializers.Serializer):
                 "required": [],
                 "additionalProperties": False,
             },
+            "elevenlabs": {
+                "type": "object",
+                "properties": {
+                    "model_id": {"type": "string", "description": "The ElevenLabs model to use for transcription", "enum": ["scribe_v1", "scribe_v1_experimental"]},
+                    "language_code": {
+                        "type": "string",
+                        "description": "An ISO-639-1 or ISO-639-3 language_code corresponding to the language of the audio file.",
+                    },
+                    "tag_audio_events": {"type": "boolean", "description": "Whether to tag audio events like 'laughter' in the transcription."},
+                },
+                "required": ["model_id"],
+                "additionalProperties": False,
+            },
         },
         "required": [],
     }
@@ -249,11 +296,11 @@ class RTMPSettingsJSONField(serializers.JSONField):
         "properties": {
             "format": {
                 "type": "string",
-                "description": "The format of the recording to save. The supported formats are 'mp4' and 'mp3'.",
+                "description": "The format of the recording to save. The supported formats are 'mp4', 'mp3' and 'none'.",
             },
             "view": {
                 "type": "string",
-                "description": "The view to use for the recording. The supported views are 'speaker_view' and 'gallery_view'.",
+                "description": "The view to use for the recording. The supported views are 'speaker_view', 'gallery_view' and 'speaker_view_no_sidebar'.",
             },
             "resolution": {
                 "type": "string",
@@ -317,6 +364,21 @@ class TeamsSettingsJSONField(serializers.JSONField):
                 "description": "The Zoom SDK to use for the bot. Use 'web' when you need closed caption based transcription.",
                 "default": "native",
             },
+            "meeting_settings": {
+                "type": "object",
+                "properties": {
+                    "allow_participants_to_unmute_self": {"type": "boolean"},
+                    "allow_participants_to_share_whiteboard": {"type": "boolean"},
+                    "allow_participants_to_request_cloud_recording": {"type": "boolean"},
+                    "allow_participants_to_request_local_recording": {"type": "boolean"},
+                    "allow_participants_to_share_screen": {"type": "boolean"},
+                    "allow_participants_to_chat": {"type": "boolean"},
+                    "enable_focus_mode": {"type": "boolean"},
+                },
+                "required": [],
+                "additionalProperties": False,
+                "description": "Settings for various aspects of the Zoom Meeting. To use these settings, the bot must have host privileges.",
+            },
         },
         "required": [],
         "additionalProperties": False,
@@ -342,7 +404,7 @@ class ZoomSettingsJSONField(serializers.JSONField):
             },
             "only_participant_in_meeting_timeout_seconds": {
                 "type": "integer",
-                "description": "Number of seconds to wait before leaving if bot is the only participant",
+                "description": "Number of seconds to wait before leaving if bot becomes the only participant in the meeting because everyone else left.",
                 "default": 60,
             },
             "wait_for_host_to_start_meeting_timeout_seconds": {
@@ -507,6 +569,27 @@ class CallbackSettingsJSONField(serializers.JSONField):
     pass
 
 
+@extend_schema_field(
+    {
+        "type": "object",
+        "properties": {
+            "bucket_name": {
+                "type": "string",
+                "description": "The name of the external storage bucket to use for media files.",
+            },
+            "recording_file_name": {
+                "type": "string",
+                "description": "Optional custom name for the recording file",
+            },
+        },
+        "required": ["bucket_name"],
+        "additionalProperties": False,
+    }
+)
+class ExternalMediaStorageSettingsJSONField(serializers.JSONField):
+    pass
+
+
 @extend_schema_serializer(
     examples=[
         OpenApiExample(
@@ -519,13 +602,14 @@ class CallbackSettingsJSONField(serializers.JSONField):
         )
     ]
 )
-class CreateBotSerializer(serializers.Serializer):
+class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
     meeting_url = serializers.CharField(help_text="The URL of the meeting to join, e.g. https://zoom.us/j/123?pwd=456")
     bot_name = serializers.CharField(help_text="The name of the bot to create, e.g. 'My Bot'")
     bot_image = BotImageSerializer(help_text="The image for the bot", required=False, default=None)
     metadata = MetadataJSONField(help_text="JSON object containing metadata to associate with the bot", required=False, default=None)
     bot_chat_message = BotChatMessageRequestSerializer(help_text="The chat message the bot sends after it joins the meeting", required=False, default=None)
     join_at = serializers.DateTimeField(help_text="The time the bot should join the meeting. ISO 8601 format, e.g. 2025-06-13T12:00:00Z", required=False, default=None)
+    calendar_event_id = serializers.CharField(help_text="The ID of the calendar event the bot should join.", required=False, default=None)
     deduplication_key = serializers.CharField(help_text="Optional key for deduplicating bots. If a bot with this key already exists in a non-terminal state, the new bot will not be created and an error will be returned.", required=False, default=None)
     webhooks = WebhooksJSONField(
         help_text="List of webhook subscriptions to create for this bot. Each item should have 'url' and 'triggers' fields.",
@@ -535,6 +619,12 @@ class CreateBotSerializer(serializers.Serializer):
 
     callback_settings = CallbackSettingsJSONField(
         help_text="Callback urls for the bot to call when it needs to fetch certain data.",
+        required=False,
+        default=None,
+    )
+
+    external_media_storage_settings = ExternalMediaStorageSettingsJSONField(
+        help_text="Settings that allow Attendee to upload the recording to an external storage bucket controlled by you. This relieves you from needing to download the recording from Attendee and then upload it to your own storage. To use this feature you must add credentials to your project that provide access to the external storage.",
         required=False,
         default=None,
     )
@@ -602,6 +692,31 @@ class CreateBotSerializer(serializers.Serializer):
 
         return value
 
+    EXTERNAL_MEDIA_STORAGE_SETTINGS_SCHEMA = {
+        "type": "object",
+        "properties": {
+            "bucket_name": {
+                "type": "string",
+            },
+            "recording_file_name": {
+                "type": "string",
+            },
+        },
+        "required": ["bucket_name"],
+        "additionalProperties": False,
+    }
+
+    def validate_external_media_storage_settings(self, value):
+        if value is None:
+            return value
+
+        try:
+            jsonschema.validate(instance=value, schema=self.EXTERNAL_MEDIA_STORAGE_SETTINGS_SCHEMA)
+        except jsonschema.exceptions.ValidationError as e:
+            raise serializers.ValidationError(e.message)
+
+        return value
+
     transcription_settings = TranscriptionSettingsJSONField(
         help_text="The transcription settings for the bot, e.g. {'deepgram': {'language': 'en'}}",
         required=False,
@@ -622,6 +737,7 @@ class CreateBotSerializer(serializers.Serializer):
                     "keyterms": {"type": "array", "items": {"type": "string"}},
                     "keywords": {"type": "array", "items": {"type": "string"}},
                     "model": {"type": "string"},
+                    "redact": {"type": "array", "items": {"type": "string", "enum": ["pci", "pii", "numbers"]}, "uniqueItems": True, "description": "Array of redaction types to apply to transcription. Automatically removes or masks sensitive information like PII, PCI data, and numbers from transcripts."},
                 },
                 "additionalProperties": False,
             },
@@ -699,21 +815,188 @@ class CreateBotSerializer(serializers.Serializer):
                 "required": [],
                 "additionalProperties": False,
             },
+            "elevenlabs": {
+                "type": "object",
+                "properties": {
+                    "model_id": {"type": "string", "description": "The ElevenLabs model to use for transcription", "enum": ["scribe_v1", "scribe_v1_experimental"]},
+                    "language_code": {
+                        "type": "string",
+                        "description": "An ISO-639-1 or ISO-639-3 language_code corresponding to the language of the audio file.",
+                        "enum": [
+                            "afr",
+                            "amh",
+                            "ara",
+                            "asm",
+                            "ast",
+                            "aze",
+                            "bak",
+                            "bas",
+                            "bel",
+                            "ben",
+                            "bhr",
+                            "bod",
+                            "bos",
+                            "bre",
+                            "bul",
+                            "cat",
+                            "ceb",
+                            "ces",
+                            "chv",
+                            "ckb",
+                            "cnh",
+                            "cre",
+                            "cym",
+                            "dan",
+                            "dav",
+                            "deu",
+                            "div",
+                            "dyu",
+                            "ell",
+                            "eng",
+                            "epo",
+                            "est",
+                            "eus",
+                            "fao",
+                            "fas",
+                            "fil",
+                            "fin",
+                            "fra",
+                            "fry",
+                            "ful",
+                            "gla",
+                            "gle",
+                            "glg",
+                            "guj",
+                            "hat",
+                            "hau",
+                            "heb",
+                            "hin",
+                            "hrv",
+                            "hsb",
+                            "hun",
+                            "hye",
+                            "ibo",
+                            "ina",
+                            "ind",
+                            "isl",
+                            "ita",
+                            "jav",
+                            "jpn",
+                            "kab",
+                            "kan",
+                            "kas",
+                            "kat",
+                            "kaz",
+                            "kea",
+                            "khm",
+                            "kin",
+                            "kir",
+                            "kln",
+                            "kmr",
+                            "kor",
+                            "kur",
+                            "lao",
+                            "lat",
+                            "lav",
+                            "lij",
+                            "lin",
+                            "lit",
+                            "ltg",
+                            "ltz",
+                            "lug",
+                            "luo",
+                            "mal",
+                            "mar",
+                            "mdf",
+                            "mhr",
+                            "mkd",
+                            "mlg",
+                            "mlt",
+                            "mon",
+                            "mri",
+                            "mrj",
+                            "msa",
+                            "mya",
+                            "myv",
+                            "nan",
+                            "nep",
+                            "nhi",
+                            "nld",
+                            "nor",
+                            "nso",
+                            "nya",
+                            "oci",
+                            "ori",
+                            "orm",
+                            "oss",
+                            "pan",
+                            "pol",
+                            "por",
+                            "pus",
+                            "quy",
+                            "roh",
+                            "ron",
+                            "rus",
+                            "sah",
+                            "san",
+                            "sat",
+                            "sin",
+                            "skr",
+                            "slk",
+                            "slv",
+                            "smo",
+                            "sna",
+                            "snd",
+                            "som",
+                            "sot",
+                            "spa",
+                            "sqi",
+                            "srd",
+                            "srp",
+                            "sun",
+                            "swa",
+                            "swe",
+                            "tam",
+                            "tat",
+                            "tel",
+                            "tgk",
+                            "tha",
+                            "tig",
+                            "tir",
+                            "tok",
+                            "ton",
+                            "tsn",
+                            "tuk",
+                            "tur",
+                            "twi",
+                            "uig",
+                            "ukr",
+                            "umb",
+                            "urd",
+                            "uzb",
+                            "vie",
+                            "vot",
+                            "vro",
+                            "wol",
+                            "xho",
+                            "yid",
+                            "yor",
+                            "yue",
+                            "zgh",
+                            "zho",
+                            "zul",
+                            "zza",
+                        ],
+                    },
+                    "tag_audio_events": {"type": "boolean", "description": "Whether to tag audio events like 'laughter' in the transcription."},
+                },
+                "required": ["model_id"],
+                "additionalProperties": False,
+            },
         },
         "required": [],
         "additionalProperties": False,
     }
-
-    def validate_meeting_url(self, value):
-        meeting_type = meeting_type_from_url(value)
-        if meeting_type is None:
-            raise serializers.ValidationError("Invalid meeting URL")
-
-        if meeting_type == MeetingTypes.GOOGLE_MEET:
-            if not value.startswith("https://meet.google.com/"):
-                raise serializers.ValidationError("Google Meet URL must start with https://meet.google.com/")
-
-        return value
 
     def validate_transcription_settings(self, value):
         meeting_url = self.initial_data.get("meeting_url")
@@ -744,10 +1027,6 @@ class CreateBotSerializer(serializers.Serializer):
             value["deepgram"]["language"] = "multi"
 
         initial_data_with_value = {**self.initial_data, "transcription_settings": value}
-
-        if meeting_type == MeetingTypes.TEAMS:
-            if transcription_provider_from_bot_creation_data(initial_data_with_value) != TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM:
-                raise serializers.ValidationError({"transcription_settings": "API-based transcription is not supported for Teams. Please use Meeting Closed Captions to transcribe Teams meetings."})
 
         if meeting_type == MeetingTypes.ZOOM and use_zoom_web_adapter:
             if transcription_provider_from_bot_creation_data(initial_data_with_value) != TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM:
@@ -842,7 +1121,7 @@ class CreateBotSerializer(serializers.Serializer):
         return value
 
     recording_settings = RecordingSettingsJSONField(
-        help_text="The settings for the bot's recording. Currently the only setting is 'view' which can be 'speaker_view' or 'gallery_view'.",
+        help_text="The settings for the bot's recording.",
         required=False,
         default={"format": RecordingFormats.MP4, "view": RecordingViews.SPEAKER_VIEW, "resolution": RecordingResolutions.HD_1080P},
     )
@@ -880,13 +1159,13 @@ class CreateBotSerializer(serializers.Serializer):
 
         # Validate format if provided
         format = value.get("format")
-        if format not in [RecordingFormats.MP4, RecordingFormats.MP3, None]:
-            raise serializers.ValidationError({"format": "Format must be mp4 or mp3"})
+        if format not in [RecordingFormats.MP4, RecordingFormats.MP3, RecordingFormats.NONE, None]:
+            raise serializers.ValidationError({"format": "Format must be mp4 or mp3 or 'none'"})
 
         # Validate view if provided
         view = value.get("view")
-        if view not in [RecordingViews.SPEAKER_VIEW, RecordingViews.GALLERY_VIEW, None]:
-            raise serializers.ValidationError({"view": "View must be speaker_view or gallery_view"})
+        if view not in [RecordingViews.SPEAKER_VIEW, RecordingViews.GALLERY_VIEW, RecordingViews.SPEAKER_VIEW_NO_SIDEBAR, None]:
+            raise serializers.ValidationError({"view": "View must be speaker_view or gallery_view or speaker_view_no_sidebar"})
 
         return value
 
@@ -935,6 +1214,20 @@ class CreateBotSerializer(serializers.Serializer):
         "type": "object",
         "properties": {
             "sdk": {"type": "string", "enum": ["web", "native"]},
+            "meeting_settings": {
+                "type": "object",
+                "properties": {
+                    "allow_participants_to_unmute_self": {"type": "boolean"},
+                    "allow_participants_to_share_whiteboard": {"type": "boolean"},
+                    "allow_participants_to_request_cloud_recording": {"type": "boolean"},
+                    "allow_participants_to_request_local_recording": {"type": "boolean"},
+                    "allow_participants_to_share_screen": {"type": "boolean"},
+                    "allow_participants_to_chat": {"type": "boolean"},
+                    "enable_focus_mode": {"type": "boolean"},
+                },
+                "required": [],
+                "additionalProperties": False,
+            },
         },
         "required": [],
         "additionalProperties": False,
@@ -1042,16 +1335,6 @@ class CreateBotSerializer(serializers.Serializer):
                 raise serializers.ValidationError("Bot name cannot contain emojis or rare script characters.")
         return value
 
-    def validate_join_at(self, value):
-        """Validate that join_at cannot be in the past."""
-        if value is None:
-            return value
-
-        if value < timezone.now():
-            raise serializers.ValidationError("join_at cannot be in the past")
-
-        return value
-
     def validate(self, data):
         """Validate that no unexpected fields are provided."""
         # Get all the field names defined in this serializer
@@ -1077,6 +1360,7 @@ class BotSerializer(serializers.ModelSerializer):
     transcription_state = serializers.SerializerMethodField()
     recording_state = serializers.SerializerMethodField()
     join_at = serializers.DateTimeField()
+    deduplication_key = serializers.CharField()
 
     @extend_schema_field(
         {
@@ -1153,6 +1437,7 @@ class BotSerializer(serializers.ModelSerializer):
             "transcription_state",
             "recording_state",
             "join_at",
+            "deduplication_key",
         ]
         read_only_fields = fields
 
@@ -1302,15 +1587,268 @@ class ParticipantEventSerializer(serializers.Serializer):
         )
     ]
 )
-class PatchBotSerializer(serializers.Serializer):
+class PatchBotSerializer(BotValidationMixin, serializers.Serializer):
     join_at = serializers.DateTimeField(help_text="The time the bot should join the meeting. ISO 8601 format, e.g. 2025-06-13T12:00:00Z", required=False)
+    meeting_url = serializers.CharField(help_text="The URL of the meeting to join, e.g. https://zoom.us/j/123?pwd=456", required=False)
 
-    def validate_join_at(self, value):
-        """Validate that join_at cannot be in the past."""
+
+@extend_schema_serializer(
+    examples=[
+        OpenApiExample(
+            "Create Google Calendar",
+            value={"client_id": "123456789-abcdefghijklmnopqrstuvwxyz.apps.googleusercontent.com", "client_secret": "GOCSPX-abcdefghijklmnopqrstuvwxyz", "refresh_token": "1//04abcdefghijklmnopqrstuvwxyz", "platform": "google", "metadata": {"tenant_id": "1234567890"}, "deduplication_key": "user-abcd"},
+            description="Example of creating a Google calendar connection",
+        ),
+    ]
+)
+class CreateCalendarSerializer(serializers.Serializer):
+    platform_uuid = serializers.CharField(help_text="The UUID of the calendar on the calendar platform. Specify only for non-primary calendars.", required=False, default=None)
+    client_id = serializers.CharField(help_text="The client ID for the calendar platform authentication")
+    client_secret = serializers.CharField(help_text="The client secret for the calendar platform authentication")
+    refresh_token = serializers.CharField(help_text="The refresh token for accessing the calendar platform")
+    platform = serializers.ChoiceField(choices=CalendarPlatform.choices, help_text="The calendar platform (google or microsoft)")
+    metadata = serializers.JSONField(help_text="JSON object containing metadata to associate with the calendar", required=False, default=None)
+    deduplication_key = serializers.CharField(help_text="Optional key for deduplicating calendars. If a calendar with this key already exists in the project, the new calendar will not be created and an error will be returned.", required=False, default=None)
+
+    def validate_metadata(self, value):
         if value is None:
             return value
 
-        if value < timezone.now():
-            raise serializers.ValidationError("join_at cannot be in the past")
+        # Check if it's a dict
+        if not isinstance(value, dict):
+            raise serializers.ValidationError("Metadata must be an object not an array or other type")
+
+        # Make sure there is at least one key
+        if not value:
+            raise serializers.ValidationError("Metadata must have at least one key")
+
+        # Check if all values are strings
+        for key, val in value.items():
+            if not isinstance(val, str):
+                raise serializers.ValidationError(f"Value for key '{key}' must be a string")
+
+        # Check if all keys are strings
+        for key in value.keys():
+            if not isinstance(key, str):
+                raise serializers.ValidationError("All keys in metadata must be strings")
+
+        # Make sure the total length of the stringified metadata is less than 1000 characters
+        if len(json.dumps(value)) > 1000:
+            raise serializers.ValidationError("Metadata must be less than 1000 characters")
 
         return value
+
+    def validate_deduplication_key(self, value):
+        if value is not None and len(value.strip()) == 0:
+            raise serializers.ValidationError("Deduplication key cannot be empty")
+        return value
+
+    def validate_client_id(self, value):
+        if not value or len(value.strip()) == 0:
+            raise serializers.ValidationError("Client ID cannot be empty")
+        return value.strip()
+
+    def validate_client_secret(self, value):
+        if not value or len(value.strip()) == 0:
+            raise serializers.ValidationError("Client secret cannot be empty")
+        return value.strip()
+
+    def validate_refresh_token(self, value):
+        if not value or len(value.strip()) == 0:
+            raise serializers.ValidationError("Refresh token cannot be empty")
+        return value.strip()
+
+    def validate(self, data):
+        """Validate that no unexpected fields are provided."""
+        # Get all the field names defined in this serializer
+        expected_fields = set(self.fields.keys())
+
+        # Get all the fields provided in the input data
+        provided_fields = set(self.initial_data.keys())
+
+        # Check for unexpected fields
+        unexpected_fields = provided_fields - expected_fields
+
+        if unexpected_fields:
+            raise serializers.ValidationError(f"Unexpected field(s): {', '.join(sorted(unexpected_fields))}. Allowed fields are: {', '.join(sorted(expected_fields))}")
+
+        return data
+
+
+class CalendarSerializer(serializers.ModelSerializer):
+    id = serializers.CharField(source="object_id")
+    state = serializers.SerializerMethodField()
+    metadata = serializers.SerializerMethodField()
+
+    @extend_schema_field(
+        {
+            "type": "string",
+            "enum": ["connected", "disconnected"],
+        }
+    )
+    def get_state(self, obj):
+        """Convert calendar state to API code"""
+        mapping = {
+            CalendarStates.CONNECTED: "connected",
+            CalendarStates.DISCONNECTED: "disconnected",
+        }
+        return mapping.get(obj.state)
+
+    @extend_schema_field({"type": "object", "description": "Metadata associated with the calendar"})
+    def get_metadata(self, obj):
+        return obj.metadata
+
+    class Meta:
+        model = Calendar
+        fields = [
+            "id",
+            "platform",
+            "client_id",
+            "platform_uuid",
+            "state",
+            "metadata",
+            "deduplication_key",
+            "connection_failure_data",
+            "created_at",
+            "updated_at",
+            "last_successful_sync_at",
+            "last_attempted_sync_at",
+        ]
+        read_only_fields = fields
+
+
+@extend_schema_serializer(
+    examples=[
+        OpenApiExample(
+            "Update credentials",
+            value={"client_secret": "GOCSPX-NewClientSecret123", "refresh_token": "1//05o3zfluegTFVCgYICGHGAUSNgF-L9Ir23dcclPCJW7KmzPhsQaNFcAzNwQkV6uM1gIGID8nBelYDPtbIr123"},
+            description="Example of updating calendar credentials",
+        ),
+        OpenApiExample(
+            "Update metadata only",
+            value={"metadata": {"department": "sales", "team": "frontend", "updated": "true"}},
+            description="Example of updating only the calendar metadata",
+        ),
+        OpenApiExample(
+            "Update refresh token only",
+            value={"refresh_token": "1//05NewRefreshTokenHere"},
+            description="Example of updating only the refresh token",
+        ),
+    ]
+)
+class PatchCalendarSerializer(serializers.Serializer):
+    client_secret = serializers.CharField(help_text="The client secret for the calendar platform authentication", required=False)
+    refresh_token = serializers.CharField(help_text="The refresh token for accessing the calendar platform", required=False)
+    metadata = serializers.JSONField(help_text="JSON object containing metadata to associate with the calendar", required=False)
+
+    def validate_client_secret(self, value):
+        if value is not None:
+            if not value or len(value.strip()) == 0:
+                raise serializers.ValidationError("Client secret cannot be empty")
+            return value.strip()
+        return value
+
+    def validate_refresh_token(self, value):
+        if value is not None:
+            if not value or len(value.strip()) == 0:
+                raise serializers.ValidationError("Refresh token cannot be empty")
+            return value.strip()
+        return value
+
+    def validate_metadata(self, value):
+        if value is None:
+            return value
+
+        # Check if it's a dict
+        if not isinstance(value, dict):
+            raise serializers.ValidationError("Metadata must be an object not an array or other type")
+
+        # Make sure there is at least one key
+        if not value:
+            raise serializers.ValidationError("Metadata must have at least one key")
+
+        # Check if all values are strings
+        for key, val in value.items():
+            if not isinstance(val, str):
+                raise serializers.ValidationError(f"Value for key '{key}' must be a string")
+
+        # Check if all keys are strings
+        for key in value.keys():
+            if not isinstance(key, str):
+                raise serializers.ValidationError("All keys in metadata must be strings")
+
+        # Make sure the total length of the stringified metadata is less than 1000 characters
+        if len(json.dumps(value)) > 1000:
+            raise serializers.ValidationError("Metadata must be less than 1000 characters")
+
+        return value
+
+    def validate(self, data):
+        """Validate that no unexpected fields are provided."""
+        # Get all the field names defined in this serializer
+        expected_fields = set(self.fields.keys())
+
+        # Get all the fields provided in the input data
+        provided_fields = set(self.initial_data.keys())
+
+        # Check for unexpected fields
+        unexpected_fields = provided_fields - expected_fields
+
+        if unexpected_fields:
+            raise serializers.ValidationError(f"Unexpected field(s): {', '.join(sorted(unexpected_fields))}. Allowed fields are: {', '.join(sorted(expected_fields))}")
+
+        return data
+
+
+@extend_schema_serializer(
+    examples=[
+        OpenApiExample(
+            "Calendar Event",
+            value={
+                "id": "evt_abcdef1234567890",
+                "calendar_id": "cal_abcdef1234567890",
+                "platform_uuid": "google_event_123456789",
+                "meeting_url": "https://meet.google.com/abc-defg-hij",
+                "name": "Event Name",
+                "start_time": "2025-01-15T14:00:00Z",
+                "end_time": "2025-01-15T15:00:00Z",
+                "is_deleted": False,
+                "attendees": [{"email": "user1@example.com", "name": "John Doe"}, {"email": "user2@example.com", "name": "Jane Smith"}],
+                "raw": {"google_event_data": "..."},
+                "bots": [{"id": "bot_abcdef1234567890", "metadata": {"customer_id": "abc123"}, "meeting_url": "https://meet.google.com/abc-defg-hij", "state": "joined_recording", "events": [], "transcription_state": "complete", "recording_state": "complete", "join_at": "2025-01-15T14:00:00Z"}],
+                "created_at": "2025-01-13T10:30:00.123456Z",
+                "updated_at": "2025-01-13T10:30:00.123456Z",
+            },
+            description="Example of a calendar event with associated bots",
+        )
+    ]
+)
+class CalendarEventSerializer(serializers.ModelSerializer):
+    id = serializers.CharField(source="object_id")
+    calendar_id = serializers.CharField(source="calendar.object_id")
+    bots = serializers.SerializerMethodField()
+
+    @extend_schema_field(BotSerializer(many=True))
+    def get_bots(self, obj):
+        """Get associated bots for this calendar event"""
+        return BotSerializer(obj.bots.all(), many=True).data
+
+    class Meta:
+        model = CalendarEvent
+        fields = [
+            "id",
+            "calendar_id",
+            "platform_uuid",
+            "meeting_url",
+            "start_time",
+            "end_time",
+            "is_deleted",
+            "attendees",
+            "ical_uid",
+            "name",
+            "raw",
+            "bots",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields

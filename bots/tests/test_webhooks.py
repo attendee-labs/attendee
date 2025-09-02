@@ -46,10 +46,6 @@ class WebhookSubscriptionTest(TransactionTestCase):
         # Create webhook secret
         self.webhook_secret = WebhookSecret.objects.create(project=self.project)
 
-        self.get_webhooks_view = ProjectWebhooksView()
-        self.create_webhook_view = CreateWebhookView()
-        self.delete_webhook_view = DeleteWebhookView()
-
         # Configure Celery to run tasks eagerly (synchronously)
         from django.conf import settings
 
@@ -84,12 +80,19 @@ class WebhookSubscriptionTest(TransactionTestCase):
 
         return request
 
+    def _get_view_with_request(self, view_class, user=None, method="GET", post_data=None):
+        """Helper method to create a view instance with a request object"""
+        request = self._get_request(user=user, method=method, post_data=post_data)
+        view = view_class()
+        view.request = request
+        return view, request
+
     def test_project_webhooks_view(self):
         """Test that project webhooks view renders correctly"""
-        request = self._get_request(user=self.user)
+        get_webhooks_view, request = self._get_view_with_request(ProjectWebhooksView, user=self.user)
 
         # Call the view directly
-        response = self.get_webhooks_view.get(request, self.project.object_id)
+        response = get_webhooks_view.get(request, self.project.object_id)
 
         # Check response code
         self.assertEqual(response.status_code, 200)
@@ -101,7 +104,7 @@ class WebhookSubscriptionTest(TransactionTestCase):
         other_project = Project.objects.create(name="Other Project", organization=other_org)
 
         # Create request
-        request = self._get_request(user=self.user)
+        get_webhooks_view, request = self._get_view_with_request(ProjectWebhooksView, user=self.user)
 
         # Patch the get_object_or_404 function to simulate a 404
         with patch("django.shortcuts.get_object_or_404") as mock_get_object:
@@ -109,7 +112,7 @@ class WebhookSubscriptionTest(TransactionTestCase):
 
             # This should raise Http404
             with self.assertRaises(Http404):
-                self.get_webhooks_view.get(request, other_project.object_id)
+                get_webhooks_view.get(request, other_project.object_id)
 
     def test_create_webhook_subscription_success(self):
         # Clear the existing webhooks
@@ -124,11 +127,11 @@ class WebhookSubscriptionTest(TransactionTestCase):
             ],
         }
 
-        # Create a mock request
-        request = self._get_request(user=self.user, method="POST", post_data=webhook_data)
+        # Create a view with mock request
+        create_webhook_view, request = self._get_view_with_request(CreateWebhookView, user=self.user, method="POST", post_data=webhook_data)
 
         # Call the view directly
-        response = self.create_webhook_view.post(request, self.project.object_id)
+        response = create_webhook_view.post(request, self.project.object_id)
 
         # Check response status
         self.assertEqual(response.status_code, 200)
@@ -153,8 +156,8 @@ class WebhookSubscriptionTest(TransactionTestCase):
 
         webhook_data = {"url": "http://example.com/insecure", "triggers[]": [WebhookTriggerTypes.trigger_type_to_api_code(WebhookTriggerTypes.BOT_STATE_CHANGE)]}
 
-        request = self._get_request(user=self.user, method="POST", post_data=webhook_data)
-        response = self.create_webhook_view.post(request, self.project.object_id)
+        create_webhook_view, request = self._get_view_with_request(CreateWebhookView, user=self.user, method="POST", post_data=webhook_data)
+        response = create_webhook_view.post(request, self.project.object_id)
 
         # Check for error response
         self.assertEqual(response.status_code, 400)
@@ -176,8 +179,8 @@ class WebhookSubscriptionTest(TransactionTestCase):
             "triggers[]": [WebhookTriggerTypes.trigger_type_to_api_code(WebhookTriggerTypes.BOT_STATE_CHANGE)],
         }
 
-        request = self._get_request(user=self.user, method="POST", post_data=webhook_data)
-        response = self.create_webhook_view.post(request, self.project.object_id)
+        create_webhook_view, request = self._get_view_with_request(CreateWebhookView, user=self.user, method="POST", post_data=webhook_data)
+        response = create_webhook_view.post(request, self.project.object_id)
 
         # Check for error response
         self.assertEqual(response.status_code, 400)
@@ -193,8 +196,8 @@ class WebhookSubscriptionTest(TransactionTestCase):
             "triggers[]": [9999],  # Invalid event type integer
         }
 
-        request = self._get_request(user=self.user, method="POST", post_data=webhook_data)
-        response = self.create_webhook_view.post(request, self.project.object_id)
+        create_webhook_view, request = self._get_view_with_request(CreateWebhookView, user=self.user, method="POST", post_data=webhook_data)
+        response = create_webhook_view.post(request, self.project.object_id)
 
         # Check for error response
         self.assertEqual(response.status_code, 400)
@@ -202,8 +205,8 @@ class WebhookSubscriptionTest(TransactionTestCase):
 
     def test_delete_webhook(self):
         """Test webhook deletion"""
-        request = self._get_request(user=self.user, method="DELETE")
-        response = self.delete_webhook_view.delete(request, self.project.object_id, self.webhook_subscriptions[0].object_id)
+        delete_webhook_view, request = self._get_view_with_request(DeleteWebhookView, user=self.user, method="DELETE")
+        response = delete_webhook_view.delete(request, self.project.object_id, self.webhook_subscriptions[0].object_id)
 
         # Check response
         self.assertEqual(response.status_code, 200)
@@ -218,7 +221,7 @@ class WebhookSubscriptionTest(TransactionTestCase):
         other_project = Project.objects.create(name="Other Project", organization=other_org)
         other_webhook = WebhookSubscription.objects.create(project=other_project, url="https://example.com/other-webhook", triggers=[WebhookTriggerTypes.BOT_STATE_CHANGE])
 
-        request = self._get_request(user=self.user, method="DELETE")
+        delete_webhook_view, request = self._get_view_with_request(DeleteWebhookView, user=self.user, method="DELETE")
 
         # Patch the get_object_or_404 function to simulate a 404
         with patch("django.shortcuts.get_object_or_404") as mock_get_object:
@@ -226,7 +229,7 @@ class WebhookSubscriptionTest(TransactionTestCase):
 
             # This should raise Http404
             with self.assertRaises(Http404):
-                self.delete_webhook_view.delete(request, other_project.object_id, other_webhook.object_id)
+                delete_webhook_view.delete(request, other_project.object_id, other_webhook.object_id)
 
         # Webhook should still exist
         self.assertTrue(WebhookSubscription.objects.filter(object_id=other_webhook.object_id).exists())
@@ -240,15 +243,15 @@ class WebhookSubscriptionTest(TransactionTestCase):
                 WebhookTriggerTypes.trigger_type_to_api_code(WebhookTriggerTypes.BOT_STATE_CHANGE),
             ],
         }
-        request = self._get_request(user=self.user, method="POST", post_data=webhook_data)
-        self.create_webhook_view.post(request, self.project.object_id)
+        create_webhook_view, request = self._get_view_with_request(CreateWebhookView, user=self.user, method="POST", post_data=webhook_data)
+        create_webhook_view.post(request, self.project.object_id)
         first_secret = WebhookSecret.objects.get(project=self.project)
 
         # Create second subscription with different URL
         different_url_data = webhook_data.copy()
         different_url_data["url"] = "https://another-example.com/webhook"
-        request = self._get_request(user=self.user, method="POST", post_data=different_url_data)
-        self.create_webhook_view.post(request, self.project.object_id)
+        create_webhook_view, request = self._get_view_with_request(CreateWebhookView, user=self.user, method="POST", post_data=different_url_data)
+        create_webhook_view.post(request, self.project.object_id)
 
         # Verify same secret is used
         self.assertEqual(WebhookSecret.objects.filter(project=self.project).count(), 1)
@@ -403,7 +406,7 @@ class WebhookDeliveryTest(TransactionTestCase):
 
         # Trigger webhook - should only use bot-level webhook
         test_payload = {"test": "bot_priority_data"}
-        num_attempts = trigger_webhook(WebhookTriggerTypes.BOT_STATE_CHANGE, self.bot, test_payload)
+        num_attempts = trigger_webhook(webhook_trigger_type=WebhookTriggerTypes.BOT_STATE_CHANGE, bot=self.bot, payload=test_payload)
 
         # Should only create 1 delivery attempt (for bot-level webhook only)
         self.assertEqual(num_attempts, 1)
@@ -422,7 +425,7 @@ class WebhookDeliveryTest(TransactionTestCase):
         self.assertEqual(delivery_attempt.status, WebhookDeliveryAttemptStatus.SUCCESS)
 
         # Test that triggering a webhook for a transcript update does not go through at all, since there is no bot-level webhook for it
-        num_attempts = trigger_webhook(WebhookTriggerTypes.TRANSCRIPT_UPDATE, self.bot, test_payload)
+        num_attempts = trigger_webhook(webhook_trigger_type=WebhookTriggerTypes.TRANSCRIPT_UPDATE, bot=self.bot, payload=test_payload)
         self.assertEqual(num_attempts, 0)
 
         # Test fallback behavior - delete bot-level webhook and verify project-level webhook is used
@@ -430,7 +433,7 @@ class WebhookDeliveryTest(TransactionTestCase):
         WebhookDeliveryAttempt.objects.all().delete()
 
         # Trigger webhook again - should now use project-level webhook
-        num_attempts = trigger_webhook(WebhookTriggerTypes.BOT_STATE_CHANGE, self.bot, test_payload)
+        num_attempts = trigger_webhook(webhook_trigger_type=WebhookTriggerTypes.BOT_STATE_CHANGE, bot=self.bot, payload=test_payload)
 
         # Should create 1 delivery attempt for project-level webhook
         self.assertEqual(num_attempts, 1)
@@ -448,5 +451,5 @@ class WebhookDeliveryTest(TransactionTestCase):
         self.assertEqual(delivery_attempt.status, WebhookDeliveryAttemptStatus.SUCCESS)
 
         # Test that triggering a webhook for a transcript update does go through, since it uses the project-level webhook
-        num_attempts = trigger_webhook(WebhookTriggerTypes.TRANSCRIPT_UPDATE, self.bot, test_payload)
+        num_attempts = trigger_webhook(webhook_trigger_type=WebhookTriggerTypes.TRANSCRIPT_UPDATE, bot=self.bot, payload=test_payload)
         self.assertEqual(num_attempts, 1)

@@ -71,7 +71,7 @@ websocket-client==1.8.0
 websockets==14.1
 whitenoise==6.8.2
 wsproto==1.2.0
-zoom-meeting-sdk==0.0.20
+zoom-meeting-sdk==0.0.23
 cachetools==5.5.1
 google-api-core==2.24.1
 google-auth==2.38.0

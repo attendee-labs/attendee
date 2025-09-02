@@ -17,7 +17,7 @@ from django.db.utils import IntegrityError
 from django.utils import timezone
 from django.utils.crypto import get_random_string
 
-from accounts.models import Organization
+from accounts.models import Organization, User, UserRole
 from bots.webhook_utils import trigger_webhook
 
 # Create your models here.
@@ -33,6 +33,20 @@ class Project(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    @classmethod
+    def accessible_to(cls, user):
+        if not user.is_active:
+            return cls.objects.none()
+        if user.role == UserRole.ADMIN:
+            return cls.objects.filter(organization=user.organization)
+        return cls.objects.filter(organization=user.organization).filter(project_accesses__user=user)
+
+    def users_with_access(self):
+        return self.organization.users.filter(is_active=True).filter(Q(project_accesses__project=self) | Q(role=UserRole.ADMIN))
+
+    def concurrent_bots_limit(self):
+        return int(os.getenv("CONCURRENT_BOTS_LIMIT", 2500))
+
     def save(self, *args, **kwargs):
         if not self.object_id:
             # Generate a random 16-character string
@@ -42,6 +56,118 @@ class Project(models.Model):
 
     def __str__(self):
         return self.name
+
+
+class CalendarPlatform(models.TextChoices):
+    GOOGLE = "google"
+    MICROSOFT = "microsoft"
+
+
+class CalendarStates(models.IntegerChoices):
+    CONNECTED = 1
+    DISCONNECTED = 2
+
+
+class Calendar(models.Model):
+    OBJECT_ID_PREFIX = "cal_"
+
+    object_id = models.CharField(max_length=32, unique=True, editable=False)
+    project = models.ForeignKey(Project, on_delete=models.PROTECT, related_name="calendars")
+    platform = models.CharField(max_length=255, choices=CalendarPlatform.choices)
+    state = models.IntegerField(choices=CalendarStates.choices, default=CalendarStates.CONNECTED)
+    connection_failure_data = models.JSONField(null=True, default=None)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    version = IntegerVersionField()
+
+    metadata = models.JSONField(null=True, blank=True)
+    deduplication_key = models.CharField(max_length=1024, null=True, blank=True, help_text="Optional key for deduplicating calendars")
+
+    client_id = models.CharField(max_length=255)
+    platform_uuid = models.CharField(max_length=1024, null=True, blank=True)
+
+    last_attempted_sync_at = models.DateTimeField(null=True, blank=True)
+    last_successful_sync_at = models.DateTimeField(null=True, blank=True)
+    last_successful_sync_time_window_start = models.DateTimeField(null=True, blank=True)
+    last_successful_sync_time_window_end = models.DateTimeField(null=True, blank=True)
+    last_successful_sync_started_at = models.DateTimeField(null=True, blank=True)
+    sync_task_enqueued_at = models.DateTimeField(null=True, blank=True)
+    sync_task_requested_at = models.DateTimeField(null=True, blank=True)
+
+    _encrypted_data = models.BinaryField(
+        null=True,
+        editable=False,  # Prevents editing through admin/forms
+    )
+
+    def set_credentials(self, credentials_dict):
+        """Encrypt and save credentials"""
+        f = Fernet(settings.CREDENTIALS_ENCRYPTION_KEY)
+        json_data = json.dumps(credentials_dict)
+        self._encrypted_data = f.encrypt(json_data.encode())
+        self.save()
+
+    def get_credentials(self):
+        """Decrypt and return credentials"""
+        if not self._encrypted_data:
+            return None
+        f = Fernet(settings.CREDENTIALS_ENCRYPTION_KEY)
+        decrypted_data = f.decrypt(bytes(self._encrypted_data))
+        return json.loads(decrypted_data.decode())
+
+    def save(self, *args, **kwargs):
+        if not self.object_id:
+            # Generate a random 16-character string
+            random_string = "".join(random.choices(string.ascii_letters + string.digits, k=16))
+            self.object_id = f"{self.OBJECT_ID_PREFIX}{random_string}"
+        super().save(*args, **kwargs)
+
+    class Meta:
+        # Within a project, we don't want to allow calendars in the same project with the same deduplication key
+        constraints = [
+            models.UniqueConstraint(fields=["project", "deduplication_key"], name="unique_calendar_deduplication_key"),
+        ]
+
+
+class CalendarEvent(models.Model):
+    OBJECT_ID_PREFIX = "evt_"
+
+    object_id = models.CharField(max_length=255, unique=True, editable=False)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    calendar = models.ForeignKey(Calendar, on_delete=models.CASCADE, related_name="events")
+
+    platform_uuid = models.CharField(max_length=1024)
+
+    meeting_url = models.CharField(max_length=511, null=True, blank=True)
+
+    start_time = models.DateTimeField()
+    end_time = models.DateTimeField()
+    is_deleted = models.BooleanField(default=False)
+    attendees = models.JSONField(null=True, blank=True)
+    ical_uid = models.CharField(max_length=1024, null=True, blank=True)
+    name = models.CharField(max_length=1024, null=True, blank=True)
+
+    raw = models.JSONField()
+
+    def save(self, *args, **kwargs):
+        if not self.object_id:
+            # Generate a random 16-character string
+            random_string = "".join(random.choices(string.ascii_letters + string.digits, k=16))
+            self.object_id = f"{self.OBJECT_ID_PREFIX}{random_string}"
+        super().save(*args, **kwargs)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["calendar", "platform_uuid"], name="unique_calendar_event_platform_uuid"),
+        ]
+
+
+class ProjectAccess(models.Model):
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="project_accesses")
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="project_accesses")
 
 
 class ApiKey(models.Model):
@@ -101,11 +227,13 @@ class BotStates(models.IntegerChoices):
     SCHEDULED = 11, "Scheduled"
     STAGED = 12, "Staged"
     JOINED_RECORDING_PAUSED = 13, "Joined - Recording Paused"
+    JOINING_BREAKOUT_ROOM = 14, "Joining Breakout Room"
+    LEAVING_BREAKOUT_ROOM = 15, "Leaving Breakout Room"
 
     @classmethod
-    def state_to_api_code(cls, value):
-        """Returns the API code for a given state value"""
-        mapping = {
+    def _get_state_to_api_code_mapping(cls):
+        """Get the trigger type to API code mapping"""
+        return {
             cls.READY: "ready",
             cls.JOINING: "joining",
             cls.JOINED_NOT_RECORDING: "joined_not_recording",
@@ -119,23 +247,41 @@ class BotStates(models.IntegerChoices):
             cls.SCHEDULED: "scheduled",
             cls.STAGED: "staged",
             cls.JOINED_RECORDING_PAUSED: "joined_recording_paused",
+            cls.JOINING_BREAKOUT_ROOM: "joining_breakout_room",
+            cls.LEAVING_BREAKOUT_ROOM: "leaving_breakout_room",
         }
-        return mapping.get(value)
+
+    @classmethod
+    def state_to_api_code(cls, value):
+        """Returns the API code for a given state value"""
+        return cls._get_state_to_api_code_mapping().get(value)
+
+    @classmethod
+    def api_code_to_state(cls, api_code):
+        """Returns the state value for a given API code"""
+        reverse_mapping = {v: k for k, v in cls._get_state_to_api_code_mapping().items()}
+        return reverse_mapping.get(api_code)
 
     @classmethod
     def post_meeting_states(cls):
         return [cls.FATAL_ERROR, cls.ENDED, cls.DATA_DELETED]
+
+    @classmethod
+    def pre_meeting_states(cls):
+        return [cls.READY, cls.SCHEDULED, cls.STAGED]
 
 
 class RecordingFormats(models.TextChoices):
     MP4 = "mp4"
     WEBM = "webm"
     MP3 = "mp3"
+    NONE = "none"
 
 
 class RecordingViews(models.TextChoices):
     SPEAKER_VIEW = "speaker_view"
     GALLERY_VIEW = "gallery_view"
+    SPEAKER_VIEW_NO_SIDEBAR = "speaker_view_no_sidebar"
 
 
 class Bot(models.Model):
@@ -163,6 +309,7 @@ class Bot(models.Model):
 
     join_at = models.DateTimeField(null=True, blank=True, help_text="The time the bot should join the meeting")
     deduplication_key = models.CharField(max_length=1024, null=True, blank=True, help_text="Optional key for deduplicating bots")
+    calendar_event = models.ForeignKey(CalendarEvent, on_delete=models.SET_NULL, null=True, blank=True, related_name="bots")
 
     def delete_data(self):
         # Check if bot is in a state where the data deleted event can be created
@@ -252,6 +399,7 @@ class Bot(models.Model):
         recording_mode_env_var_substring = {
             RecordingTypes.AUDIO_AND_VIDEO: "AUDIO_AND_VIDEO",
             RecordingTypes.AUDIO_ONLY: "AUDIO_ONLY",
+            RecordingTypes.NO_RECORDING: "NO_RECORDING",
         }.get(self.recording_type(), "UNKNOWN")
 
         env_var_name = f"{meeting_type_env_var_substring}_{recording_mode_env_var_substring}_BOT_CPU_REQUEST"
@@ -296,6 +444,15 @@ class Bot(models.Model):
     def sarvam_model(self):
         return self.settings.get("transcription_settings", {}).get("sarvam", {}).get("model", None)
 
+    def elevenlabs_model_id(self):
+        return self.settings.get("transcription_settings", {}).get("elevenlabs", {}).get("model_id", "scribe_v1")
+
+    def elevenlabs_language_code(self):
+        return self.settings.get("transcription_settings", {}).get("elevenlabs", {}).get("language_code", None)
+
+    def elevenlabs_tag_audio_events(self):
+        return self.settings.get("transcription_settings", {}).get("elevenlabs", {}).get("tag_audio_events", None)
+
     def deepgram_language(self):
         return self.settings.get("transcription_settings", {}).get("deepgram", {}).get("language", None)
 
@@ -331,6 +488,9 @@ class Bot(models.Model):
 
         return deepgram_model
 
+    def deepgram_redaction_settings(self):
+        return self.settings.get("transcription_settings", {}).get("deepgram", {}).get("redact", [])
+
     def google_meet_closed_captions_language(self):
         return self.settings.get("transcription_settings", {}).get("meeting_closed_captions", {}).get("google_meet_language", None)
 
@@ -348,6 +508,9 @@ class Bot(models.Model):
 
     def use_zoom_web_adapter(self):
         return self.settings.get("zoom_settings", {}).get("sdk", "native") == "web"
+
+    def zoom_meeting_settings(self):
+        return self.settings.get("zoom_settings", {}).get("meeting_settings", {})
 
     def rtmp_destination_url(self):
         rtmp_settings = self.settings.get("rtmp_settings")
@@ -392,6 +555,8 @@ class Bot(models.Model):
             return RecordingTypes.AUDIO_AND_VIDEO
         elif recording_format == RecordingFormats.MP3:
             return RecordingTypes.AUDIO_ONLY
+        elif recording_format == RecordingFormats.NONE:
+            return RecordingTypes.NO_RECORDING
         else:
             raise ValueError(f"Invalid recording format: {recording_format}")
 
@@ -417,13 +582,25 @@ class Bot(models.Model):
 
         # Temporarily enabling this for all google meet meetings
         bot_meeting_type = meeting_type_from_url(self.meeting_url)
-        if (bot_meeting_type == MeetingTypes.GOOGLE_MEET or bot_meeting_type == MeetingTypes.TEAMS or (bot_meeting_type == MeetingTypes.ZOOM and self.use_zoom_web_adapter)) and not self.recording_type() == RecordingTypes.AUDIO_ONLY:
+        if (bot_meeting_type == MeetingTypes.GOOGLE_MEET or bot_meeting_type == MeetingTypes.TEAMS or (bot_meeting_type == MeetingTypes.ZOOM and self.use_zoom_web_adapter)) and self.recording_type() == RecordingTypes.AUDIO_AND_VIDEO:
             return True
 
         debug_settings = self.settings.get("debug_settings", {})
         if debug_settings is None:
             debug_settings = {}
         return debug_settings.get("create_debug_recording", False)
+
+    def external_media_storage_bucket_name(self):
+        external_media_storage_settings = self.settings.get("external_media_storage_settings", {})
+        if external_media_storage_settings is None:
+            external_media_storage_settings = {}
+        return external_media_storage_settings.get("bucket_name", None)
+
+    def external_media_storage_recording_file_name(self):
+        external_media_storage_settings = self.settings.get("external_media_storage_settings", {})
+        if external_media_storage_settings is None:
+            external_media_storage_settings = {}
+        return external_media_storage_settings.get("recording_file_name", None)
 
     def last_bot_event(self):
         return self.bot_events.order_by("-created_at").first()
@@ -560,6 +737,10 @@ class BotEventTypes(models.IntegerChoices):
     STAGED = 12, "Bot staged"
     RECORDING_PAUSED = 13, "Recording Paused"
     RECORDING_RESUMED = 14, "Recording Resumed"
+    BOT_JOINED_BREAKOUT_ROOM = 15, "Bot joined breakout room"
+    BOT_LEFT_BREAKOUT_ROOM = 16, "Bot left breakout room"
+    BOT_BEGAN_JOINING_BREAKOUT_ROOM = 17, "Bot began joining breakout room"
+    BOT_BEGAN_LEAVING_BREAKOUT_ROOM = 18, "Bot began leaving breakout room"
 
     @classmethod
     def type_to_api_code(cls, value):
@@ -579,6 +760,10 @@ class BotEventTypes(models.IntegerChoices):
             cls.STAGED: "staged",
             cls.RECORDING_PAUSED: "recording_paused",
             cls.RECORDING_RESUMED: "recording_resumed",
+            cls.BOT_JOINED_BREAKOUT_ROOM: "joined_breakout_room",
+            cls.BOT_LEFT_BREAKOUT_ROOM: "left_breakout_room",
+            cls.BOT_BEGAN_JOINING_BREAKOUT_ROOM: "began_joining_breakout_room",
+            cls.BOT_BEGAN_LEAVING_BREAKOUT_ROOM: "began_leaving_breakout_room",
         }
         return mapping.get(value)
 
@@ -613,7 +798,7 @@ class BotEventSubTypes(models.IntegerChoices):
     )
     COULD_NOT_JOIN_MEETING_UNPUBLISHED_ZOOM_APP = (
         5,
-        "Bot could not join meeting - Unpublished Zoom Apps cannot join external meetings. See https://developers.zoom.us/blog/prepare-meeting-sdk-app-for-review",
+        "Bot could not join meeting - Unpublished Zoom Apps cannot join external meetings. See https://developers.zoom.us/docs/distribute/sdk-feature-review-requirements/",
     )
     FATAL_ERROR_RTMP_CONNECTION_FAILED = 6, "Fatal error - RTMP Connection Failed"
     COULD_NOT_JOIN_MEETING_ZOOM_SDK_INTERNAL_ERROR = (
@@ -724,6 +909,19 @@ class BotEvent(models.Model):
         ]
 
 
+class BotEventTransitionFunctions:
+    @classmethod
+    def get_to_state_for_bot_breakout_room_event(cls, bot: Bot):
+        recording_in_progress = RecordingManager.get_recording_in_progress(bot)
+        if recording_in_progress is None:
+            return BotStates.JOINED_NOT_RECORDING
+        if recording_in_progress.state == RecordingStates.IN_PROGRESS:
+            return BotStates.JOINED_RECORDING
+        if recording_in_progress.state == RecordingStates.PAUSED:
+            return BotStates.JOINED_RECORDING_PAUSED
+        raise Exception(f"In get_to_state_for_bot_breakout_room_event unexpected recording state for recording in progress: {recording_in_progress.state}")
+
+
 class BotEventManager:
     # Define valid state transitions for each event type
     VALID_TRANSITIONS = {
@@ -750,6 +948,8 @@ class BotEventManager:
                 BotStates.POST_PROCESSING,
                 BotStates.STAGED,
                 BotStates.SCHEDULED,
+                BotStates.JOINING_BREAKOUT_ROOM,
+                BotStates.LEAVING_BREAKOUT_ROOM,
             ],
             "to": BotStates.FATAL_ERROR,
         },
@@ -773,6 +973,8 @@ class BotEventManager:
                 BotStates.WAITING_ROOM,
                 BotStates.JOINING,
                 BotStates.LEAVING,
+                BotStates.JOINING_BREAKOUT_ROOM,
+                BotStates.LEAVING_BREAKOUT_ROOM,
             ],
             "to": BotStates.POST_PROCESSING,
         },
@@ -783,6 +985,8 @@ class BotEventManager:
                 BotStates.JOINED_NOT_RECORDING,
                 BotStates.WAITING_ROOM,
                 BotStates.JOINING,
+                BotStates.JOINING_BREAKOUT_ROOM,
+                BotStates.LEAVING_BREAKOUT_ROOM,
             ],
             "to": BotStates.LEAVING,
         },
@@ -805,6 +1009,26 @@ class BotEventManager:
         BotEventTypes.RECORDING_RESUMED: {
             "from": BotStates.JOINED_RECORDING_PAUSED,
             "to": BotStates.JOINED_RECORDING,
+        },
+        BotEventTypes.BOT_JOINED_BREAKOUT_ROOM: {
+            "from": BotStates.JOINING_BREAKOUT_ROOM,
+            # This is a special case where the to state depends on the current recording's state, so we specify a function
+            # instead of a constant
+            "to": BotEventTransitionFunctions.get_to_state_for_bot_breakout_room_event,
+        },
+        BotEventTypes.BOT_LEFT_BREAKOUT_ROOM: {
+            "from": BotStates.LEAVING_BREAKOUT_ROOM,
+            # This is a special case where the to state depends on the current recording's state, so we specify a function
+            # instead of a constant
+            "to": BotEventTransitionFunctions.get_to_state_for_bot_breakout_room_event,
+        },
+        BotEventTypes.BOT_BEGAN_JOINING_BREAKOUT_ROOM: {
+            "from": [BotStates.JOINED_NOT_RECORDING, BotStates.JOINED_RECORDING, BotStates.JOINED_RECORDING_PAUSED],
+            "to": BotStates.JOINING_BREAKOUT_ROOM,
+        },
+        BotEventTypes.BOT_BEGAN_LEAVING_BREAKOUT_ROOM: {
+            "from": [BotStates.JOINED_NOT_RECORDING, BotStates.JOINED_RECORDING, BotStates.JOINED_RECORDING_PAUSED],
+            "to": BotStates.LEAVING_BREAKOUT_ROOM,
         },
     }
 
@@ -841,6 +1065,10 @@ class BotEventManager:
         return state == BotStates.JOINED_RECORDING or state == BotStates.JOINED_NOT_RECORDING or state == BotStates.JOINED_RECORDING_PAUSED
 
     @classmethod
+    def is_state_that_can_admit_from_waiting_room(cls, state: int):
+        return state == BotStates.JOINED_RECORDING or state == BotStates.JOINED_NOT_RECORDING or state == BotStates.JOINED_RECORDING_PAUSED
+
+    @classmethod
     def is_state_that_can_pause_recording(cls, state: int):
         valid_from_states = cls.VALID_TRANSITIONS[BotEventTypes.RECORDING_PAUSED]["from"]
         if not isinstance(valid_from_states, (list, tuple)):
@@ -873,9 +1101,29 @@ class BotEventManager:
         return q_filter
 
     @classmethod
-    def after_new_state_is_joined_recording(cls, bot: Bot, new_state: BotStates):
+    def get_pre_meeting_states_q_filter(cls):
+        """Returns a Q object to filter for pre meeting states"""
+        q_filter = models.Q()
+        for state in BotStates.pre_meeting_states():
+            q_filter |= models.Q(state=state)
+        return q_filter
+
+    @classmethod
+    def get_in_meeting_states_q_filter(cls):
+        """Returns a Q object to filter for in meeting states"""
+        # In meeting states are all states that are not pre-meeting or post-meeting
+        pre_meeting_q = cls.get_pre_meeting_states_q_filter()
+        post_meeting_q = cls.get_post_meeting_states_q_filter()
+        return ~(pre_meeting_q | post_meeting_q)
+
+    @classmethod
+    def after_new_state_is_joined_recording(cls, bot: Bot, event_type: BotEventTypes, new_state: BotStates):
         pending_recordings = bot.recordings.filter(state__in=[RecordingStates.NOT_STARTED, RecordingStates.PAUSED])
         if pending_recordings.count() != 1:
+            # If bot was joining or leaving a breakout room, we don't expect there to be a recording that is ready to be started
+            # so we just return, and don't raise an exception
+            if event_type == BotEventTypes.BOT_JOINED_BREAKOUT_ROOM or event_type == BotEventTypes.BOT_LEFT_BREAKOUT_ROOM:
+                return
             raise ValidationError(f"Expected exactly one pending recording for bot {bot.object_id} in state {BotStates.state_to_api_code(new_state)}, but found {pending_recordings.count()}")
         pending_recording = pending_recordings.first()
         RecordingManager.set_recording_in_progress(pending_recording)
@@ -979,7 +1227,12 @@ class BotEventManager:
                         raise ValidationError(f"Event {BotEventTypes.type_to_api_code(event_type)} not allowed when bot is in state {BotStates.state_to_api_code(old_state)}. It is only allowed in these states: {', '.join(valid_states_labels)}")
 
                     # Update bot state based on 'to' definition
-                    new_state = transition["to"]
+                    if callable(transition["to"]):
+                        # If 'to' is a function, call it with the bot to get the new state
+                        new_state = transition["to"](bot)
+                    else:
+                        # If 'to' is a constant, use it directly
+                        new_state = transition["to"]
                     bot.state = new_state
 
                     bot.save()  # This will raise RecordModifiedError if version mismatch
@@ -995,7 +1248,7 @@ class BotEventManager:
 
                     # If we moved to the recording state
                     if new_state == BotStates.JOINED_RECORDING:
-                        cls.after_new_state_is_joined_recording(bot=bot, new_state=new_state)
+                        cls.after_new_state_is_joined_recording(bot=bot, event_type=event_type, new_state=new_state)
 
                     if new_state == BotStates.JOINED_RECORDING_PAUSED:
                         cls.after_new_state_is_joined_recording_paused(bot=bot, new_state=new_state)
@@ -1146,6 +1399,7 @@ class RecordingTranscriptionStates(models.IntegerChoices):
 class RecordingTypes(models.IntegerChoices):
     AUDIO_AND_VIDEO = 1, "Audio and Video"
     AUDIO_ONLY = 2, "Audio Only"
+    NO_RECORDING = 3, "No Recording"
 
 
 class RecordingResolutions(models.TextChoices):
@@ -1175,6 +1429,7 @@ class TranscriptionProviders(models.IntegerChoices):
     OPENAI = 4, "OpenAI"
     ASSEMBLY_AI = 5, "Assembly AI"
     SARVAM = 6, "Sarvam"
+    ELEVENLABS = 7, "ElevenLabs"
 
 
 from storages.backends.s3boto3 import S3Boto3Storage
@@ -1248,8 +1503,8 @@ class RecordingManager:
     @classmethod
     def terminate_recording(cls, recording: Recording):
         if recording.state == RecordingStates.IN_PROGRESS or recording.state == RecordingStates.PAUSED:
-            # If we don't have a recording file, then it failed.
-            if recording.file:
+            # If we don't have a recording file AND we intended to generate one, then it failed.
+            if recording.file or recording.bot.recording_type() == RecordingTypes.NO_RECORDING:
                 RecordingManager.set_recording_complete(recording)
             else:
                 RecordingManager.set_recording_failed(recording)
@@ -1265,6 +1520,15 @@ class RecordingManager:
                 RecordingManager.set_recording_transcription_failed(recording, failure_data={"failure_reasons": failure_reasons})
             else:
                 RecordingManager.set_recording_transcription_complete(recording)
+
+    @classmethod
+    def get_recording_in_progress(cls, bot: Bot):
+        recordings_in_progress = Recording.objects.filter(bot=bot, state__in=[RecordingStates.IN_PROGRESS, RecordingStates.PAUSED])
+        if recordings_in_progress.count() == 0:
+            return None
+        if recordings_in_progress.count() > 1:
+            raise Exception(f"Expected at most one recording in progress for bot {bot.object_id}, but found {recordings_in_progress.count()}")
+        return recordings_in_progress.first()
 
     @classmethod
     def set_recording_in_progress(cls, recording: Recording):
@@ -1429,6 +1693,8 @@ class Credentials(models.Model):
         ASSEMBLY_AI = 6, "Assembly AI"
         SARVAM = 7, "Sarvam"
         TEAMS_BOT_LOGIN = 8, "Teams Bot Login"
+        EXTERNAL_MEDIA_STORAGE = 9, "External Media Storage"
+        ELEVENLABS = 10, "ElevenLabs"
 
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="credentials")
     credential_type = models.IntegerField(choices=CredentialTypes.choices, null=False)
@@ -1772,6 +2038,8 @@ class WebhookTriggerTypes(models.IntegerChoices):
     TRANSCRIPT_UPDATE = 2, "Transcript Update"
     CHAT_MESSAGES_UPDATE = 3, "Chat Messages Update"
     PARTICIPANT_EVENTS_JOIN_LEAVE = 4, "Participant Join/Leave"
+    CALENDAR_EVENTS_UPDATE = 5, "Calendar Events Update"
+    CALENDAR_STATE_CHANGE = 6, "Calendar State Change"
     # add other event types here
 
     @classmethod
@@ -1782,6 +2050,8 @@ class WebhookTriggerTypes(models.IntegerChoices):
             cls.TRANSCRIPT_UPDATE: "transcript.update",
             cls.CHAT_MESSAGES_UPDATE: "chat_messages.update",
             cls.PARTICIPANT_EVENTS_JOIN_LEAVE: "participant_events.join_leave",
+            cls.CALENDAR_EVENTS_UPDATE: "calendar.events_update",
+            cls.CALENDAR_STATE_CHANGE: "calendar.state_change",
         }
 
     @classmethod
@@ -1831,6 +2101,7 @@ class WebhookDeliveryAttempt(models.Model):
     webhook_trigger_type = models.IntegerField(choices=WebhookTriggerTypes.choices, default=WebhookTriggerTypes.BOT_STATE_CHANGE, null=False)
     idempotency_key = models.UUIDField(unique=True, editable=False)
     bot = models.ForeignKey(Bot, on_delete=models.SET_NULL, null=True, related_name="webhook_delivery_attempts")
+    calendar = models.ForeignKey(Calendar, on_delete=models.SET_NULL, null=True, related_name="webhook_delivery_attempts")
     payload = models.JSONField(default=dict)
     status = models.IntegerField(choices=WebhookDeliveryAttemptStatus.choices, default=WebhookDeliveryAttemptStatus.PENDING, null=False)
     attempt_count = models.IntegerField(default=0)

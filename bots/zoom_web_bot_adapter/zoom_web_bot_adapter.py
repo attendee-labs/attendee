@@ -85,12 +85,14 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
         zoom_client_id: str,
         zoom_client_secret: str,
         zoom_closed_captions_language: str | None,
+        should_ask_for_recording_permission: bool,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
         self.meeting_id, self.meeting_password = parse_join_url(self.meeting_url)
         self.sdk_signature = zoom_meeting_sdk_signature(self.meeting_id, 0, sdk_key=zoom_client_id, sdk_secret=zoom_client_secret)
         self.zoom_closed_captions_language = zoom_closed_captions_language
+        self.should_ask_for_recording_permission = should_ask_for_recording_permission
 
     def get_chromedriver_payload_file_name(self):
         return "zoom_web_bot_adapter/zoom_web_chromedriver_payload.js"
@@ -122,7 +124,10 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
         """
 
     def subclass_specific_after_bot_joined_meeting(self):
-        self.driver.execute_script("window?.askForMediaCapturePermission()")
+        if self.should_ask_for_recording_permission:
+            self.driver.execute_script("window?.askForMediaCapturePermission()")
+        else:
+            self.after_bot_can_record_meeting()
 
     def subclass_specific_handle_failed_to_join(self, reason):
         # Special case for removed from waiting room

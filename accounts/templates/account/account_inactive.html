@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block body_content %}
+<div class="container">
+    <div class="row min-vh-100 align-items-center justify-content-center">
+        <div class="col-sm-12 col-md-8 col-lg-6 col-xl-5">
+            <div class="card shadow-lg border-0 rounded-lg">
+                <div class="card-body p-5">
+
+                    <!-- Inactive Message -->
+                    <div class="text-center">
+                        <h4 class="mb-4">
+                            {% translate "This account is inactive." %}
+                        </h4>
+                        <p class="text-muted mb-4">
+                            Please contact your organization administrator if you believe this is an error.
+                        </p>
+                    </div>
+
+                    <!-- Return to Login -->
+                    <div class="text-center mt-4">
+                        <div class="d-grid">
+                            <a href="{% url 'account_login' %}" class="btn btn-primary btn-lg">
+                                Return to Login
+                            </a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

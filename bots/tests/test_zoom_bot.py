@@ -2903,3 +2903,162 @@ class TestZoomBot(TransactionTestCase):
         # Cleanup
         controller.cleanup()
         bot_thread.join(timeout=5)
+
+    @patch(
+        "bots.zoom_bot_adapter.video_input_manager.zoom",
+        new_callable=create_mock_zoom_sdk,
+    )
+    @patch("bots.zoom_bot_adapter.zoom_bot_adapter.zoom", new_callable=create_mock_zoom_sdk)
+    @patch("bots.zoom_bot_adapter.zoom_bot_adapter.jwt")
+    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("deepgram.DeepgramClient")
+    def test_bot_can_join_meeting_with_no_recording_format(
+        self,
+        MockDeepgramClient,
+        MockFileUploader,
+        mock_jwt,
+        mock_zoom_sdk_adapter,
+        mock_zoom_sdk_video,
+    ):
+        # Set recording format to "none"
+        self.bot.settings = {
+            "recording_settings": {
+                "format": RecordingFormats.NONE,
+            }
+        }
+        self.bot.save()
+
+        # Set up Deepgram mock
+        MockDeepgramClient.return_value = create_mock_deepgram()
+
+        # Configure the mock uploader
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        # Mock the JWT token generation
+        mock_jwt.encode.return_value = "fake_jwt_token"
+
+        # Create bot controller
+        controller = BotController(self.bot.id)
+
+        # Run the bot in a separate thread since it has an event loop
+        bot_thread = threading.Thread(target=controller.run)
+        bot_thread.daemon = True
+        bot_thread.start()
+
+        def simulate_join_flow():
+            adapter = controller.adapter
+            # Simulate successful auth
+            adapter.auth_event.onAuthenticationReturnCallback(mock_zoom_sdk_adapter.AUTHRET_SUCCESS)
+
+            # Simulate connecting
+            adapter.meeting_service_event.onMeetingStatusChangedCallback(
+                mock_zoom_sdk_adapter.MEETING_STATUS_CONNECTING,
+                mock_zoom_sdk_adapter.SDKERR_SUCCESS,
+            )
+
+            # Simulate successful join
+            adapter.meeting_service_event.onMeetingStatusChangedCallback(
+                mock_zoom_sdk_adapter.MEETING_STATUS_INMEETING,
+                mock_zoom_sdk_adapter.SDKERR_SUCCESS,
+            )
+
+            # Wait for setup
+            time.sleep(2)
+
+            # Simulate audio frame received
+            adapter.audio_source.onOneWayAudioRawDataReceivedCallback(
+                MockPCMAudioFrame(),
+                2,  # Simulated participant ID that's not the bot
+            )
+
+            # simulate audio mic initialized
+            adapter.virtual_audio_mic_event_passthrough.onMicInitializeCallback(MagicMock())
+
+            # simulate audio mic started
+            adapter.virtual_audio_mic_event_passthrough.onMicStartSendCallback()
+
+            # sleep a bit for the audio to be processed
+            time.sleep(3)
+
+            # Simulate meeting ended
+            adapter.meeting_service_event.onMeetingStatusChangedCallback(
+                mock_zoom_sdk_adapter.MEETING_STATUS_ENDED,
+                mock_zoom_sdk_adapter.SDKERR_SUCCESS,
+            )
+
+            connection.close()
+
+        # Run join flow simulation after a short delay
+        threading.Timer(3, simulate_join_flow).start()
+
+        # Give the bot some time to process
+        bot_thread.join(timeout=11)
+
+        # Verify that NO file was uploaded (recording format is "none")
+        mock_uploader.upload_file.assert_not_called()
+        mock_uploader.wait_for_upload.assert_not_called()
+        mock_uploader.delete_file.assert_not_called()
+
+        # Refresh the bot from the database
+        self.bot.refresh_from_db()
+
+        # Assert that the heartbeat timestamp was set
+        self.assertIsNotNone(self.bot.first_heartbeat_timestamp)
+        self.assertIsNotNone(self.bot.last_heartbeat_timestamp)
+
+        # Assert that the bot is in the ENDED state
+        self.assertEqual(self.bot.state, BotStates.ENDED)
+
+        # Verify all bot events in sequence
+        bot_events = self.bot.bot_events.all()
+        self.assertEqual(len(bot_events), 5)  # We expect 5 events in total
+
+        # Verify join_requested_event (Event 1)
+        join_requested_event = bot_events[0]
+        self.assertEqual(join_requested_event.event_type, BotEventTypes.JOIN_REQUESTED)
+
+        # Verify bot_joined_meeting_event (Event 2)
+        bot_joined_meeting_event = bot_events[1]
+        self.assertEqual(bot_joined_meeting_event.event_type, BotEventTypes.BOT_JOINED_MEETING)
+
+        # Verify recording_permission_granted_event (Event 3)
+        recording_permission_granted_event = bot_events[2]
+        self.assertEqual(
+            recording_permission_granted_event.event_type,
+            BotEventTypes.BOT_RECORDING_PERMISSION_GRANTED,
+        )
+
+        # Verify meeting_ended_event (Event 4)
+        meeting_ended_event = bot_events[3]
+        self.assertEqual(meeting_ended_event.event_type, BotEventTypes.MEETING_ENDED)
+
+        # Verify post_processing_completed_event (Event 5)
+        post_processing_completed_event = bot_events[4]
+        self.assertEqual(post_processing_completed_event.event_type, BotEventTypes.POST_PROCESSING_COMPLETED)
+
+        # Verify expected SDK calls
+        mock_zoom_sdk_adapter.InitSDK.assert_called_once()
+        mock_zoom_sdk_adapter.CreateMeetingService.assert_called_once()
+        mock_zoom_sdk_adapter.CreateAuthService.assert_called_once()
+        controller.adapter.meeting_service.Join.assert_called_once()
+
+        # Verify that the recording was finished even with no file upload
+        self.recording.refresh_from_db()
+        self.assertEqual(self.recording.state, RecordingStates.COMPLETE)
+        self.assertEqual(self.recording.transcription_state, RecordingTranscriptionStates.COMPLETE)
+
+        # Verify that the recording has an utterance (transcription still works)
+        utterance = self.recording.utterances.filter(failure_data__isnull=True).first()
+        self.assertEqual(self.recording.utterances.count(), 1)
+        self.assertIsNotNone(utterance.transcription)
+
+        # Verify that no recording file was created/saved
+        self.assertFalse(self.recording.file.name, "Recording file should not exist when format is 'none'")
+
+        # Cleanup
+        controller.cleanup()
+        bot_thread.join(timeout=5)
+
+        # Close the database connection since we're in a thread
+        connection.close()

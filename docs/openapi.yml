@@ -5,6 +5,83 @@ info:
   description: Meetings bots made easy
 paths:
   /api/v1/bots:
+    get:
+      operationId: List Bots
+      description: Returns a list of bots for the authenticated project. Results are
+        paginated using cursor pagination.
+      summary: List bots in a project
+      parameters:
+      - in: header
+        name: Authorization
+        schema:
+          type: string
+          default: Token YOUR_API_KEY_HERE
+        description: API key for authentication
+        required: true
+      - in: header
+        name: Content-Type
+        schema:
+          type: string
+          default: application/json
+        description: Should always be application/json
+        required: true
+      - in: query
+        name: cursor
+        schema:
+          type: string
+        description: Cursor for pagination
+      - in: query
+        name: deduplication_key
+        schema:
+          type: string
+        description: Filter bots by deduplication key
+        examples:
+          DeduplicationKeyExample:
+            value: my-unique-bot-key
+            summary: Deduplication Key Example
+      - in: query
+        name: meeting_url
+        schema:
+          type: string
+        description: Filter bots by meeting URL
+        examples:
+          MeetingURLExample:
+            value: https://zoom.us/j/123456789
+            summary: Meeting URL Example
+      - in: query
+        name: states
+        schema:
+          type: array
+          items:
+            type: string
+            enum:
+            - ready
+            - joining
+            - joined_not_recording
+            - joined_recording
+            - leaving
+            - post_processing
+            - fatal_error
+            - waiting_room
+            - ended
+            - data_deleted
+            - scheduled
+            - staged
+            - joined_recording_paused
+            - joining_breakout_room
+            - leaving_breakout_room
+        description: Filter bots by state. Can specify multiple states.
+      tags:
+      - Bots
+      security:
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedBotList'
+          description: List of bots
     post:
       operationId: Create Bot
       description: After being created, the bot will attempt to join the specified
@@ -214,6 +291,22 @@ paths:
           description: Scheduled bot deleted successfully
         '404':
           description: Bot not found
+  /api/v1/bots/{object_id}/admit_from_waiting_room:
+    post:
+      operationId: api_v1_bots_admit_from_waiting_room_create
+      parameters:
+      - in: path
+        name: object_id
+        schema:
+          type: string
+        required: true
+      tags:
+      - api
+      security:
+      - {}
+      responses:
+        '200':
+          description: No response body
   /api/v1/bots/{object_id}/chat_messages:
     get:
       operationId: Get Chat Messages
@@ -933,6 +1026,395 @@ paths:
           description: List of transcribed utterances
         '404':
           description: Bot not found
+  /api/v1/calendar_events:
+    get:
+      operationId: List Calendar Events
+      description: Returns a list of calendar events for the authenticated project.
+        Results are paginated using cursor pagination.
+      summary: List calendar events
+      parameters:
+      - in: header
+        name: Authorization
+        schema:
+          type: string
+          default: Token YOUR_API_KEY_HERE
+        description: API key for authentication
+        required: true
+      - in: header
+        name: Content-Type
+        schema:
+          type: string
+          default: application/json
+        description: Should always be application/json
+        required: true
+      - in: query
+        name: calendar_deduplication_key
+        schema:
+          type: string
+        description: Filter events by calendar deduplication key
+        examples:
+          DeduplicationKeyExample:
+            value: user-abcd
+            summary: Deduplication Key Example
+      - in: query
+        name: calendar_id
+        schema:
+          type: string
+        description: Filter events by calendar ID
+        examples:
+          CalendarIDExample:
+            value: cal_abcdef1234567890
+            summary: Calendar ID Example
+      - in: query
+        name: cursor
+        schema:
+          type: string
+        description: Cursor for pagination
+      - in: query
+        name: updated_after
+        schema:
+          type: string
+        description: Filter events updated after this timestamp (ISO 8601 format)
+        examples:
+          UpdatedAfterExample:
+            value: '2025-01-13T10:30:00Z'
+            summary: Updated After Example
+      tags:
+      - Calendars
+      security:
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedCalendarEventList'
+              examples:
+                CalendarEvent:
+                  value:
+                    next: http://api.example.org/accounts/?cursor=cD00ODY%3D"
+                    previous: http://api.example.org/accounts/?cursor=cj0xJnA9NDg3
+                    results:
+                    - id: evt_abcdef1234567890
+                      calendar_id: cal_abcdef1234567890
+                      platform_uuid: google_event_123456789
+                      meeting_url: https://meet.google.com/abc-defg-hij
+                      name: Event Name
+                      start_time: '2025-01-15T14:00:00Z'
+                      end_time: '2025-01-15T15:00:00Z'
+                      is_deleted: false
+                      attendees:
+                      - email: user1@example.com
+                        name: John Doe
+                      - email: user2@example.com
+                        name: Jane Smith
+                      raw:
+                        google_event_data: '...'
+                      bots:
+                      - id: bot_abcdef1234567890
+                        metadata:
+                          customer_id: abc123
+                        meeting_url: https://meet.google.com/abc-defg-hij
+                        state: joined_recording
+                        events: []
+                        transcription_state: complete
+                        recording_state: complete
+                        join_at: '2025-01-15T14:00:00Z'
+                      created_at: '2025-01-13T10:30:00.123456Z'
+                      updated_at: '2025-01-13T10:30:00.123456Z'
+                  summary: Calendar Event
+                  description: Example of a calendar event with associated bots
+          description: List of calendar events
+  /api/v1/calendars:
+    get:
+      operationId: List Calendars
+      description: Returns a list of calendars for the authenticated project. Results
+        are paginated using cursor pagination.
+      summary: List calendars
+      parameters:
+      - in: header
+        name: Authorization
+        schema:
+          type: string
+          default: Token YOUR_API_KEY_HERE
+        description: API key for authentication
+        required: true
+      - in: header
+        name: Content-Type
+        schema:
+          type: string
+          default: application/json
+        description: Should always be application/json
+        required: true
+      - in: query
+        name: cursor
+        schema:
+          type: string
+        description: Cursor for pagination
+      - in: query
+        name: deduplication_key
+        schema:
+          type: string
+        description: Filter calendars by deduplication key
+        examples:
+          DeduplicationKeyExample:
+            value: user-abcd
+            summary: Deduplication Key Example
+      tags:
+      - Calendars
+      security:
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedCalendarList'
+          description: List of calendars
+    post:
+      operationId: Create Calendar
+      description: After being created, the calendar will be connected to the specified
+        calendar platform.
+      summary: Create a new calendar
+      parameters:
+      - in: header
+        name: Authorization
+        schema:
+          type: string
+          default: Token YOUR_API_KEY_HERE
+        description: API key for authentication
+        required: true
+      - in: header
+        name: Content-Type
+        schema:
+          type: string
+          default: application/json
+        description: Should always be application/json
+        required: true
+      tags:
+      - Calendars
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCalendarRequest'
+            examples:
+              CreateGoogleCalendar:
+                value:
+                  client_id: 123456789-abcdefghijklmnopqrstuvwxyz.apps.googleusercontent.com
+                  client_secret: GOCSPX-abcdefghijklmnopqrstuvwxyz
+                  refresh_token: 1//04abcdefghijklmnopqrstuvwxyz
+                  platform: google
+                  metadata:
+                    tenant_id: '1234567890'
+                  deduplication_key: user-abcd
+                summary: Create Google Calendar
+                description: Example of creating a Google calendar connection
+        required: true
+      security:
+      - {}
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Calendar'
+              examples:
+                NewlyCreatedCalendar:
+                  value:
+                    id: cal_abcdef1234567890
+                    platform: google
+                    state: connected
+                    metadata:
+                      tenant_id: '1234567890'
+                    deduplication_key: user-abcd
+                    connection_failure_data: null
+                    created_at: '2025-01-13T10:30:00.123456Z'
+                    updated_at: '2025-01-13T10:30:00.123456Z'
+                  summary: Newly Created Calendar
+                  description: Example response when a calendar is successfully created
+          description: Calendar created successfully
+        '400':
+          description: Invalid input
+  /api/v1/calendars/{object_id}:
+    get:
+      operationId: Get Calendar
+      description: Returns the details of a specific calendar.
+      summary: Get calendar details
+      parameters:
+      - in: header
+        name: Authorization
+        schema:
+          type: string
+          default: Token YOUR_API_KEY_HERE
+        description: API key for authentication
+        required: true
+      - in: header
+        name: Content-Type
+        schema:
+          type: string
+          default: application/json
+        description: Should always be application/json
+        required: true
+      - in: path
+        name: object_id
+        schema:
+          type: string
+        description: Calendar ID
+        required: true
+        examples:
+          CalendarIDExample:
+            value: cal_abcdef1234567890
+            summary: Calendar ID Example
+      tags:
+      - Calendars
+      security:
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Calendar'
+              examples:
+                NewlyCreatedCalendar:
+                  value:
+                    id: cal_abcdef1234567890
+                    platform: google
+                    state: connected
+                    metadata:
+                      tenant_id: '1234567890'
+                    deduplication_key: user-abcd
+                    connection_failure_data: null
+                    created_at: '2025-01-13T10:30:00.123456Z'
+                    updated_at: '2025-01-13T10:30:00.123456Z'
+                  summary: Newly Created Calendar
+                  description: Example response when a calendar is successfully created
+          description: Calendar details
+        '404':
+          description: Calendar not found
+    patch:
+      operationId: Update Calendar
+      description: Updates calendar credentials (client_secret, refresh_token) or
+        metadata.
+      summary: Update calendar
+      parameters:
+      - in: header
+        name: Authorization
+        schema:
+          type: string
+          default: Token YOUR_API_KEY_HERE
+        description: API key for authentication
+        required: true
+      - in: header
+        name: Content-Type
+        schema:
+          type: string
+          default: application/json
+        description: Should always be application/json
+        required: true
+      - in: path
+        name: object_id
+        schema:
+          type: string
+        description: Calendar ID
+        required: true
+        examples:
+          CalendarIDExample:
+            value: cal_abcdef1234567890
+            summary: Calendar ID Example
+      tags:
+      - Calendars
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedPatchCalendarRequest'
+            examples:
+              UpdateCredentials:
+                value:
+                  client_secret: GOCSPX-NewClientSecret123
+                  refresh_token: 1//05o3zfluegTFVCgYICGHGAUSNgF-L9Ir23dcclPCJW7KmzPhsQaNFcAzNwQkV6uM1gIGID8nBelYDPtbIr123
+                summary: Update credentials
+                description: Example of updating calendar credentials
+              UpdateMetadataOnly:
+                value:
+                  metadata:
+                    department: sales
+                    team: frontend
+                    updated: 'true'
+                summary: Update metadata only
+                description: Example of updating only the calendar metadata
+              UpdateRefreshTokenOnly:
+                value:
+                  refresh_token: 1//05NewRefreshTokenHere
+                summary: Update refresh token only
+                description: Example of updating only the refresh token
+      security:
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Calendar'
+              examples:
+                NewlyCreatedCalendar:
+                  value:
+                    id: cal_abcdef1234567890
+                    platform: google
+                    state: connected
+                    metadata:
+                      tenant_id: '1234567890'
+                    deduplication_key: user-abcd
+                    connection_failure_data: null
+                    created_at: '2025-01-13T10:30:00.123456Z'
+                    updated_at: '2025-01-13T10:30:00.123456Z'
+                  summary: Newly Created Calendar
+                  description: Example response when a calendar is successfully created
+          description: Calendar updated successfully
+        '400':
+          description: Invalid input
+        '404':
+          description: Calendar not found
+    delete:
+      operationId: Delete Calendar
+      description: Permanently deletes a calendar and all associated data.
+      summary: Delete calendar
+      parameters:
+      - in: header
+        name: Authorization
+        schema:
+          type: string
+          default: Token YOUR_API_KEY_HERE
+        description: API key for authentication
+        required: true
+      - in: header
+        name: Content-Type
+        schema:
+          type: string
+          default: application/json
+        description: Should always be application/json
+        required: true
+      - in: path
+        name: object_id
+        schema:
+          type: string
+        description: Calendar ID
+        required: true
+        examples:
+          CalendarIDExample:
+            value: cal_abcdef1234567890
+            summary: Calendar ID Example
+      tags:
+      - Calendars
+      security:
+      - {}
+      responses:
+        '200':
+          description: Calendar deleted successfully
+        '404':
+          description: Calendar not found
 components:
   schemas:
     Bot:
@@ -949,7 +1431,7 @@ components:
           readOnly: true
         state:
           allOf:
-          - $ref: '#/components/schemas/StateEnum'
+          - $ref: '#/components/schemas/BotStateEnum'
           readOnly: true
         events:
           type: array
@@ -976,7 +1458,10 @@ components:
         join_at:
           type: string
           format: date-time
+        deduplication_key:
+          type: string
       required:
+      - deduplication_key
       - events
       - id
       - join_at
@@ -1028,6 +1513,158 @@ components:
       required:
       - data
       - type
+    BotStateEnum:
+      type: string
+      enum:
+      - ready
+      - joining
+      - joined_not_recording
+      - joined_recording
+      - leaving
+      - post_processing
+      - fatal_error
+      - waiting_room
+      - ended
+      - data_deleted
+      - scheduled
+      - staged
+      - joined_recording_paused
+      - joining_breakout_room
+      - leaving_breakout_room
+    Calendar:
+      type: object
+      properties:
+        id:
+          type: string
+        platform:
+          allOf:
+          - $ref: '#/components/schemas/PlatformEnum'
+          readOnly: true
+        client_id:
+          type: string
+          readOnly: true
+        platform_uuid:
+          type: string
+          readOnly: true
+          nullable: true
+        state:
+          allOf:
+          - $ref: '#/components/schemas/CalendarStateEnum'
+          readOnly: true
+        metadata:
+          type: object
+          description: Metadata associated with the calendar
+          readOnly: true
+        deduplication_key:
+          type: string
+          readOnly: true
+          nullable: true
+          description: Optional key for deduplicating calendars
+        connection_failure_data:
+          readOnly: true
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+        last_successful_sync_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        last_attempted_sync_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+      required:
+      - client_id
+      - connection_failure_data
+      - created_at
+      - deduplication_key
+      - id
+      - last_attempted_sync_at
+      - last_successful_sync_at
+      - metadata
+      - platform
+      - platform_uuid
+      - state
+      - updated_at
+    CalendarEvent:
+      type: object
+      properties:
+        id:
+          type: string
+        calendar_id:
+          type: string
+        platform_uuid:
+          type: string
+          readOnly: true
+        meeting_url:
+          type: string
+          readOnly: true
+          nullable: true
+        start_time:
+          type: string
+          format: date-time
+          readOnly: true
+        end_time:
+          type: string
+          format: date-time
+          readOnly: true
+        is_deleted:
+          type: boolean
+          readOnly: true
+        attendees:
+          readOnly: true
+          nullable: true
+        ical_uid:
+          type: string
+          readOnly: true
+          nullable: true
+        name:
+          type: string
+          readOnly: true
+          nullable: true
+        raw:
+          readOnly: true
+        bots:
+          type: array
+          items:
+            $ref: '#/components/schemas/Bot'
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - attendees
+      - bots
+      - calendar_id
+      - created_at
+      - end_time
+      - ical_uid
+      - id
+      - is_deleted
+      - meeting_url
+      - name
+      - platform_uuid
+      - raw
+      - start_time
+      - updated_at
+    CalendarStateEnum:
+      type: string
+      enum:
+      - connected
+      - disconnected
     ChatMessage:
       type: object
       properties:
@@ -1063,6 +1700,7 @@ components:
       - to
     CreateBotRequest:
       type: object
+      description: Mixin class providing meeting URL validation for serializers.
       properties:
         meeting_url:
           type: string
@@ -1092,6 +1730,10 @@ components:
           format: date-time
           description: The time the bot should join the meeting. ISO 8601 format,
             e.g. 2025-06-13T12:00:00Z
+        calendar_event_id:
+          type: string
+          minLength: 1
+          description: The ID of the calendar event the bot should join.
         deduplication_key:
           type: string
           minLength: 1
@@ -1115,6 +1757,8 @@ components:
                   - transcript.update
                   - chat_messages.update
                   - participant_events.join_leave
+                  - calendar.events_update
+                  - calendar.state_change
                 description: List of webhook trigger types
                 uniqueItems: true
             required:
@@ -1139,6 +1783,24 @@ components:
           additionalProperties: false
           description: Callback urls for the bot to call when it needs to fetch certain
             data.
+        external_media_storage_settings:
+          type: object
+          properties:
+            bucket_name:
+              type: string
+              description: The name of the external storage bucket to use for media
+                files.
+            recording_file_name:
+              type: string
+              description: Optional custom name for the recording file
+          required:
+          - bucket_name
+          additionalProperties: false
+          description: Settings that allow Attendee to upload the recording to an
+            external storage bucket controlled by you. This relieves you from needing
+            to download the recording from Attendee and then upload it to your own
+            storage. To use this feature you must add credentials to your project
+            that provide access to the external storage.
         transcription_settings:
           type: object
           properties:
@@ -1183,6 +1845,19 @@ components:
                   description: 'The model to use for transcription. Defaults to ''nova-3''
                     if not specified, which is the recommended model for most use
                     cases. See here for details: https://developers.deepgram.com/docs/models-languages-overview'
+                redact:
+                  type: array
+                  items:
+                    type: string
+                    enum:
+                    - pci
+                    - pii
+                    - numbers
+                  uniqueItems: true
+                  description: 'Array of redaction types to apply to transcription.
+                    Automatically removes or masks sensitive information like PII,
+                    PCI data, and numbers from transcripts. See here for details:
+                    https://developers.deepgram.com/docs/redaction'
               additionalProperties: false
             gladia:
               type: object
@@ -1334,6 +2009,26 @@ components:
                   description: The language code to use for transcription
               required: []
               additionalProperties: false
+            elevenlabs:
+              type: object
+              properties:
+                model_id:
+                  type: string
+                  description: The ElevenLabs model to use for transcription
+                  enum:
+                  - scribe_v1
+                  - scribe_v1_experimental
+                language_code:
+                  type: string
+                  description: An ISO-639-1 or ISO-639-3 language_code corresponding
+                    to the language of the audio file.
+                tag_audio_events:
+                  type: boolean
+                  description: Whether to tag audio events like 'laughter' in the
+                    transcription.
+              required:
+              - model_id
+              additionalProperties: false
           required: []
           description: 'The transcription settings for the bot, e.g. {''deepgram'':
             {''language'': ''en''}}'
@@ -1386,11 +2081,11 @@ components:
             format:
               type: string
               description: The format of the recording to save. The supported formats
-                are 'mp4' and 'mp3'.
+                are 'mp4', 'mp3' and 'none'.
             view:
               type: string
               description: The view to use for the recording. The supported views
-                are 'speaker_view' and 'gallery_view'.
+                are 'speaker_view', 'gallery_view' and 'speaker_view_no_sidebar'.
             resolution:
               type: string
               description: The resolution to use for the recording. The supported
@@ -1403,8 +2098,7 @@ components:
             format: mp4
             view: speaker_view
             resolution: 1080p
-          description: The settings for the bot's recording. Currently the only setting
-            is 'view' which can be 'speaker_view' or 'gallery_view'.
+          description: The settings for the bot's recording.
         teams_settings:
           type: object
           properties:
@@ -1430,6 +2124,27 @@ components:
               description: The Zoom SDK to use for the bot. Use 'web' when you need
                 closed caption based transcription.
               default: native
+            meeting_settings:
+              type: object
+              properties:
+                allow_participants_to_unmute_self:
+                  type: boolean
+                allow_participants_to_share_whiteboard:
+                  type: boolean
+                allow_participants_to_request_cloud_recording:
+                  type: boolean
+                allow_participants_to_request_local_recording:
+                  type: boolean
+                allow_participants_to_share_screen:
+                  type: boolean
+                allow_participants_to_chat:
+                  type: boolean
+                enable_focus_mode:
+                  type: boolean
+              required: []
+              additionalProperties: false
+              description: Settings for various aspects of the Zoom Meeting. To use
+                these settings, the bot must have host privileges.
           required: []
           additionalProperties: false
           default:
@@ -1462,8 +2177,8 @@ components:
               default: 1200
             only_participant_in_meeting_timeout_seconds:
               type: integer
-              description: Number of seconds to wait before leaving if bot is the
-                only participant
+              description: Number of seconds to wait before leaving if bot becomes
+                the only participant in the meeting because everyone else left.
               default: 60
             wait_for_host_to_start_meeting_timeout_seconds:
               type: integer
@@ -1484,6 +2199,104 @@ components:
       required:
       - bot_name
       - meeting_url
+    CreateCalendarRequest:
+      type: object
+      properties:
+        platform_uuid:
+          type: string
+          minLength: 1
+          description: The UUID of the calendar on the calendar platform. Specify
+            only for non-primary calendars.
+        client_id:
+          type: string
+          minLength: 1
+          description: The client ID for the calendar platform authentication
+        client_secret:
+          type: string
+          minLength: 1
+          description: The client secret for the calendar platform authentication
+        refresh_token:
+          type: string
+          minLength: 1
+          description: The refresh token for accessing the calendar platform
+        platform:
+          allOf:
+          - $ref: '#/components/schemas/PlatformEnum'
+          description: |-
+            The calendar platform (google or microsoft)
+
+            * `google` - Google
+            * `microsoft` - Microsoft
+        metadata:
+          description: JSON object containing metadata to associate with the calendar
+        deduplication_key:
+          type: string
+          minLength: 1
+          description: Optional key for deduplicating calendars. If a calendar with
+            this key already exists in the project, the new calendar will not be created
+            and an error will be returned.
+      required:
+      - client_id
+      - client_secret
+      - platform
+      - refresh_token
+    PaginatedBotList:
+      type: object
+      required:
+      - results
+      properties:
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?cursor=cD00ODY%3D"
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?cursor=cj0xJnA9NDg3
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/Bot'
+    PaginatedCalendarEventList:
+      type: object
+      required:
+      - results
+      properties:
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?cursor=cD00ODY%3D"
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?cursor=cj0xJnA9NDg3
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/CalendarEvent'
+    PaginatedCalendarList:
+      type: object
+      required:
+      - results
+      properties:
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?cursor=cD00ODY%3D"
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?cursor=cj0xJnA9NDg3
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/Calendar'
     PaginatedChatMessageList:
       type: object
       required:
@@ -1550,12 +2363,38 @@ components:
       - timestamp_ms
     PatchedPatchBotRequest:
       type: object
+      description: Mixin class providing meeting URL validation for serializers.
       properties:
         join_at:
           type: string
           format: date-time
           description: The time the bot should join the meeting. ISO 8601 format,
             e.g. 2025-06-13T12:00:00Z
+        meeting_url:
+          type: string
+          minLength: 1
+          description: The URL of the meeting to join, e.g. https://zoom.us/j/123?pwd=456
+    PatchedPatchCalendarRequest:
+      type: object
+      properties:
+        client_secret:
+          type: string
+          minLength: 1
+          description: The client secret for the calendar platform authentication
+        refresh_token:
+          type: string
+          minLength: 1
+          description: The refresh token for accessing the calendar platform
+        metadata:
+          description: JSON object containing metadata to associate with the calendar
+    PlatformEnum:
+      enum:
+      - google
+      - microsoft
+      type: string
+      description: |-
+        * `google` - Google
+        * `microsoft` - Microsoft
     Recording:
       type: object
       properties:
@@ -1599,22 +2438,6 @@ components:
       required:
       - text
       - text_to_speech_settings
-    StateEnum:
-      type: string
-      enum:
-      - ready
-      - joining
-      - joined_not_recording
-      - joined_recording
-      - leaving
-      - post_processing
-      - fatal_error
-      - waiting_room
-      - ended
-      - data_deleted
-      - scheduled
-      - staged
-      - joined_recording_paused
     ToEnum:
       enum:
       - everyone

@@ -185,6 +185,15 @@ function startMeeting(signature) {
     ZoomMtg.inMeetingServiceListener('onReceiveTranscriptionMsg', function (item) {
         console.log('onReceiveTranscriptionMsg', item);
 
+        if (!item.msgId) {
+            window.ws.sendJson({
+                type: 'TranscriptMessageError',
+                error: 'No msgId',
+                item: item
+            });
+            return;
+        }
+
         transcriptMessageFinalizationManager.addMessage(item);
     });
 

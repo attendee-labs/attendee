@@ -1,0 +1,171 @@
+{% extends 'projects/sidebar.html' %}
+
+{% load bot_filters %}
+
+{% block content %}
+<style>
+    .detail-card {
+        margin-bottom: 1.5rem;
+    }
+    .timeline-item {
+        padding: 1rem;
+        border-left: 2px solid #dee2e6;
+        margin-left: 1rem;
+        position: relative;
+    }
+    .timeline-item::before {
+        content: '';
+        position: absolute;
+        left: -0.5rem;
+        top: 1.5rem;
+        width: 1rem;
+        height: 1rem;
+        background: #fff;
+        border: 2px solid #007bff;
+        border-radius: 50%;
+    }
+    .timeline-container {
+        max-height: 700px;
+        overflow-y: auto;
+    }
+    /* Override Bootstrap tab colors */
+    .nav-tabs .nav-link {
+        color: #6c757d !important; /* Light grey for non-active tabs */
+        border-right: 1px solid #dee2e6 !important; /* Add vertical separator */
+        border-radius: 0 !important; /* Remove rounded corners for cleaner separation */
+    }
+    .nav-tabs .nav-link.active {
+        color: #2e2f31 !important; /* Keep blue for active tab */
+        border-right: 1px solid #dee2e6 !important; /* Keep separator on active tab too */
+    }
+    .nav-tabs .nav-item:last-child .nav-link {
+        border-right: none !important; /* Remove border from last tab */
+    }
+    .status-badge {
+        font-size: 0.875rem;
+    }
+    .event-info-card {
+        background-color: #f8f9fa;
+        border-radius: 0.375rem;
+        padding: 1rem;
+        margin-bottom: 1rem;
+    }
+    .truncated-field {
+        max-width: 250px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        display: inline-block;
+        vertical-align: top;
+    }
+</style>
+
+<div class="container mt-4">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h2 class="mb-0">Calendar Event Details</h2>
+        <a href="{% url 'bots:project-calendar-detail' project.object_id calendar.object_id %}" 
+           class="btn btn-outline-secondary">
+            <i class="bi bi-arrow-left"></i> Back to Calendar
+        </a>
+    </div>
+
+    <div class="row mb-4">
+        <div class="col-md-12">
+            <div class="event-info-card">
+                <div class="row">
+                    <div class="col-md-6">
+                        <p><strong>Name:</strong> 
+                            {% if calendar_event.name %}
+                                {{ calendar_event.name }}
+                            {% else %}
+                                <em class="text-muted">Untitled Event</em>
+                            {% endif %}
+                            {% if calendar_event.is_deleted %}
+                                &nbsp;<span class="badge bg-danger">Deleted</span>
+                            {% endif %}
+                        </p>
+                        <p><strong>ID:</strong> 
+                            <span class="truncated-field" title="{{ calendar_event.object_id }}">{{ calendar_event.object_id }}</span>
+                        </p>
+                        <p><strong>Platform UUID:</strong> 
+                            <span class="truncated-field" title="{{ calendar_event.platform_uuid }}">{{ calendar_event.platform_uuid }}</span>
+                        </p>
+                        {% if calendar_event.ical_uid %}
+                            <p><strong>iCal UID:</strong> 
+                                <span class="truncated-field" title="{{ calendar_event.ical_uid }}">{{ calendar_event.ical_uid }}</span>
+                            </p>
+                        {% endif %}                        
+                        {% if calendar_event.attendees %}
+                        <p><strong>Attendees:</strong> 
+                            {% for attendee in calendar_event.attendees %}{% if attendee.displayName %}{{ attendee.displayName }}{% elif attendee.email %}{{ attendee.email }}{% else %}Unknown{% endif %}{% if not forloop.last %}, {% endif %}{% endfor %}
+                        </p>
+                        {% endif %}
+                    </div>
+                    <div class="col-md-6">
+                        <p><strong>Platform:</strong> {{ calendar.get_platform_display }} Calendar</p>
+                        <p><strong>Created:</strong> {{ calendar_event.created_at|date:"M d, Y H:i" }}</p>
+                        <p><strong>Updated:</strong> {{ calendar_event.updated_at|date:"M d, Y H:i" }}</p>
+                        {% if calendar_event.meeting_url %}
+                            <p><strong>Meeting URL:</strong> 
+                                <a href="{{ calendar_event.meeting_url }}" target="_blank" class="text-decoration-none">
+                                    {{ calendar_event.meeting_url|truncatechars:40 }}
+                                    <i class="bi bi-box-arrow-up-right ms-1"></i>
+                                </a>
+                            </p>
+                        {% endif %}
+                        <p><strong>Start Time:</strong> {{ calendar_event.start_time|date:"M d, Y H:i" }}</p>
+                        <p><strong>End Time:</strong> {{ calendar_event.end_time|date:"M d, Y H:i" }}</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bots Section -->
+    {% if bots_for_event %}
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">
+                    <h6 class="mb-0">Associated Bots ({{ bots_for_event|length }})</h6>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        {% for bot in bots_for_event %}
+                        <div class="col-md-3 mb-2">
+                            <div class="d-flex justify-content-between align-items-center p-2 border rounded">
+                                <div>
+                                    <a href="{% url 'bots:project-bot-detail' project.object_id bot.object_id %}" class="text-decoration-none">
+                                        {{ bot.object_id }}
+                                    </a>
+                                </div>
+                                <span class="badge {% if bot.state == BotStates.ENDED %}bg-success{% elif bot.state == BotStates.FATAL_ERROR %}bg-danger{% else %}bg-primary{% endif %}">
+                                    {{ bot.get_state_display }}
+                                </span>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Raw Data Section -->
+    {% if calendar_event.raw %}
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">
+                    <h6 class="mb-0">Raw Data from API</h6>
+                </div>
+                <div class="card-body">
+                    <pre class="bg-light p-3 rounded" style="max-height: 400px; overflow-y: auto; font-size: 0.875rem; white-space: pre-wrap; word-wrap: break-word; overflow-wrap: break-word;">{{ calendar_event.raw|pprint }}</pre>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %} 

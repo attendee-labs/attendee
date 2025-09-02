@@ -1,0 +1,361 @@
+{% extends 'projects/sidebar.html' %}
+
+{% load bot_filters %}
+
+{% block content %}
+<style>
+    .detail-card {
+        margin-bottom: 1.5rem;
+    }
+    .timeline-item {
+        padding: 1rem;
+        border-left: 2px solid #dee2e6;
+        margin-left: 1rem;
+        position: relative;
+    }
+    .timeline-item::before {
+        content: '';
+        position: absolute;
+        left: -0.5rem;
+        top: 1.5rem;
+        width: 1rem;
+        height: 1rem;
+        background: #fff;
+        border: 2px solid #007bff;
+        border-radius: 50%;
+    }
+    .timeline-container {
+        max-height: 700px;
+        overflow-y: auto;
+    }
+    /* Override Bootstrap tab colors */
+    .nav-tabs .nav-link {
+        color: #6c757d !important; /* Light grey for non-active tabs */
+        border-right: 1px solid #dee2e6 !important; /* Add vertical separator */
+        border-radius: 0 !important; /* Remove rounded corners for cleaner separation */
+    }
+    .nav-tabs .nav-link.active {
+        color: #2e2f31 !important; /* Keep blue for active tab */
+        border-right: 1px solid #dee2e6 !important; /* Keep separator on active tab too */
+    }
+    .nav-tabs .nav-item:last-child .nav-link {
+        border-right: none !important; /* Remove border from last tab */
+    }
+    .status-badge {
+        font-size: 0.875rem;
+    }
+    .connection-detail {
+        margin-bottom: 0.75rem;
+    }
+    .sync-info {
+        background-color: #f8f9fa;
+        border-radius: 0.375rem;
+        padding: 1rem;
+        margin-bottom: 1rem;
+    }
+    
+    /* Clickable row styles for HTMX navigation */
+    .clickable-row {
+        cursor: pointer;
+        transition: background-color 0.15s ease-in-out;
+    }
+    /* Apply hover effect to td elements */
+    table tbody tr.clickable-row:hover td {
+        background-color: #f8f9fa;  /* Using Bootstrap's light gray */
+    }
+</style>
+
+<div class="container mt-4">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h2 class="mb-0">Calendar Details</h2>
+        <a href="{% url 'bots:project-calendars' project.object_id %}" 
+           class="btn btn-outline-secondary"
+           hx-get="{% url 'bots:project-calendars' project.object_id %}"
+           hx-select="#content"
+           hx-target="#content"
+           hx-swap="outerHTML"
+           hx-push-url="true">
+            <i class="bi bi-arrow-left"></i> Back to Calendars
+        </a>
+    </div>
+
+    <div class="row mb-4">
+        <div class="col-md-6">
+            <p><strong>ID:</strong> {{ calendar.object_id }}</p>
+            <p><strong>Platform:</strong> {{ calendar.get_platform_display }}</p>
+            {% if calendar.platform_uuid %}
+                <p><strong>Platform UUID:</strong> {{ calendar.platform_uuid }}</p>
+            {% endif %}
+            {% if calendar.deduplication_key %}
+                <p><strong>Deduplication Key:</strong> {{ calendar.deduplication_key }}</p>
+            {% endif %}
+        </div>
+        <div class="col-md-6">
+            <p><strong>Status:</strong> 
+                <span class="badge status-badge {% if calendar.state == CalendarStates.CONNECTED %}bg-success{% else %}bg-danger{% endif %}">
+                    {{ calendar.get_state_display }}
+                </span>
+            </p>
+            <p><strong>Created:</strong> {{ calendar.created_at|date:"M d, Y H:i" }}</p>
+            {% if calendar.last_successful_sync_at %}
+                <p><strong>Last Successful Sync:</strong> {{ calendar.last_successful_sync_at|date:"M d, Y H:i:s" }}</p>
+            {% endif %}
+            {% if calendar.last_attempted_sync_at %}
+                <p><strong>Last Attempted Sync:</strong> {{ calendar.last_attempted_sync_at|date:"M d, Y H:i:s" }}</p>
+            {% endif %}
+        </div>
+    </div>
+    {% if calendar.connection_failure_data %}
+        <div class="alert alert-warning">
+            <h6>Connection Failure Information</h6>
+            <pre class="mb-0">{{ calendar.connection_failure_data|pprint }}</pre>
+        </div>
+    {% endif %}
+
+    <ul class="nav nav-tabs mb-3" role="tablist">
+        <li class="nav-item" role="presentation">
+            <button class="nav-link active" id="events-tab" data-bs-toggle="tab" 
+                    data-bs-target="#events" type="button" role="tab">
+                Events
+            </button>
+        </li>
+        {% if webhook_delivery_attempts %}
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="webhooks-tab" data-bs-toggle="tab" 
+                    data-bs-target="#webhooks" type="button" role="tab">
+                Webhooks
+            </button>
+        </li>
+        {% endif %}
+        {% if calendar.metadata %}
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="metadata-tab" data-bs-toggle="tab" 
+                    data-bs-target="#metadata" type="button" role="tab">
+                Metadata
+            </button>
+        </li>
+        {% endif %}
+    </ul>
+
+    <div class="tab-content">
+        <!-- Calendar Events Tab -->
+        <div class="tab-pane fade show active" id="events" role="tabpanel">
+            {% if calendar_events %}
+                <div class="table-responsive">
+                    <table class="table table-striped">
+                        <thead>
+                            <tr>
+                                <th>Event Name</th>
+                                <th>Start Time</th>
+                                <th>Meeting URL</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for event in calendar_events %}
+                                <tr class="clickable-row"
+                                    hx-get="{% url 'bots:project-calendar-event-detail' project.object_id calendar.object_id event.object_id %}"
+                                    hx-select="#content"
+                                    hx-target="#content"
+                                    hx-swap="outerHTML"
+                                    hx-push-url="true">
+                                    <td>
+                                        {% if event.name %}
+                                            {{ event.name }}
+                                        {% else %}
+                                            <em class="text-muted">Untitled Event</em>
+                                        {% endif %}
+                                    </td>
+                                    <td>{{ event.start_time|date:"M d, Y H:i" }}</td>
+                                    <td>
+                                        {% if event.meeting_url %}
+                                            <a href="{{ event.meeting_url }}" target="_blank" class="text-decoration-none">
+                                                {{ event.meeting_url|truncatechars:50 }}
+                                                <i class="bi bi-box-arrow-up-right ms-1"></i>
+                                            </a>
+                                        {% else %}
+                                            <span class="text-muted">—</span>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Pagination -->
+                {% if is_paginated %}
+                    <nav aria-label="Events pagination">
+                        <ul class="pagination justify-content-center">
+                            {% if page_obj.has_previous %}
+                                <li class="page-item">
+                                    <a class="page-link" href="?page=1">&laquo; First</a>
+                                </li>
+                                <li class="page-item">
+                                    <a class="page-link" href="?page={{ page_obj.previous_page_number }}">Previous</a>
+                                </li>
+                            {% endif %}
+
+                            {% for i in paginator.page_range %}
+                                {% if page_obj.number == i %}
+                                <li class="page-item active">
+                                    <span class="page-link">{{ i }}</span>
+                                </li>
+                                {% elif i > page_obj.number|add:'-3' and i < page_obj.number|add:'3' %}
+                                <li class="page-item">
+                                    <a class="page-link" href="?page={{ i }}">{{ i }}</a>
+                                </li>
+                                {% endif %}
+                            {% endfor %}
+
+                            {% if page_obj.has_next %}
+                                <li class="page-item">
+                                    <a class="page-link" href="?page={{ page_obj.next_page_number }}">Next</a>
+                                </li>
+                                <li class="page-item">
+                                    <a class="page-link" href="?page={{ paginator.num_pages }}">Last &raquo;</a>
+                                </li>
+                            {% endif %}
+                        </ul>
+                    </nav>
+                {% endif %}
+            {% else %}
+                <div class="alert alert-info">No calendar events found for this calendar.</div>
+            {% endif %}
+        </div>
+
+        <!-- Webhooks Tab -->
+        {% if webhook_delivery_attempts %}
+        <div class="tab-pane fade" id="webhooks" role="tabpanel">
+            <div class="table-responsive">
+                <table class="table table-striped">
+                    <thead>
+                        <tr>
+                            <th>Webhook URL</th>
+                            <th>Trigger Type</th>
+                            <th>Status</th>
+                            <th>Attempts</th>
+                            <th>Last Attempt</th>
+                            <th>Succeeded At</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for attempt in webhook_delivery_attempts %}
+                            <tr>
+                                <td>{{ attempt.webhook_subscription.url }}</td>
+                                <td>{{ attempt.get_webhook_trigger_type_display }}</td>
+                                <td>
+                                    <span class="badge {% if attempt.status == WebhookDeliveryAttemptStatus.SUCCESS %}bg-success{% elif attempt.status == WebhookDeliveryAttemptStatus.FAILURE %}bg-danger{% else %}bg-warning{% endif %}">
+                                        {{ attempt.get_status_display }}
+                                    </span>
+                                </td>
+                                <td>{{ attempt.attempt_count }}</td>
+                                <td>{% if attempt.last_attempt_at %}{{ attempt.last_attempt_at|date:"M d, Y H:i:s" }}{% else %}Not attempted{% endif %}</td>
+                                <td>{% if attempt.succeeded_at %}{{ attempt.succeeded_at|date:"M d, Y H:i:s" }}{% else %}-{% endif %}</td>
+                            </tr>
+                            {% if attempt.response_body_list or attempt.payload %}
+                                <tr>
+                                    <td colspan="6">
+                                        <div class="accordion" id="responseAccordion{{ attempt.id }}">
+                                            <div class="accordion-item">
+                                                <h2 class="accordion-header" id="heading{{ attempt.id }}">
+                                                    <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapse{{ attempt.id }}" aria-expanded="false" aria-controls="collapse{{ attempt.id }}">
+                                                        Webhook Details
+                                                    </button>
+                                                </h2>
+                                                <div id="collapse{{ attempt.id }}" class="accordion-collapse collapse" aria-labelledby="heading{{ attempt.id }}" data-bs-parent="#responseAccordion{{ attempt.id }}">
+                                                    <div class="accordion-body">
+                                                        <ul class="nav nav-tabs mb-3" role="tablist">
+                                                            <li class="nav-item" role="presentation">
+                                                                <button class="nav-link active" 
+                                                                        id="payload-tab-{{ attempt.id }}" 
+                                                                        data-bs-toggle="tab" 
+                                                                        data-bs-target="#payload-{{ attempt.id }}" 
+                                                                        type="button" 
+                                                                        role="tab">
+                                                                    Payload
+                                                                </button>
+                                                            </li>
+                                                            <li class="nav-item" role="presentation">
+                                                                <button class="nav-link" 
+                                                                        id="responses-tab-{{ attempt.id }}" 
+                                                                        data-bs-toggle="tab" 
+                                                                        data-bs-target="#responses-{{ attempt.id }}" 
+                                                                        type="button" 
+                                                                        role="tab">
+                                                                    Responses
+                                                                </button>
+                                                            </li>
+                                                        </ul>
+                                                        <div class="tab-content">
+                                                            <div class="tab-pane fade show active" id="payload-{{ attempt.id }}" role="tabpanel">
+                                                                {% if attempt.payload %}
+                                                                    <pre class="small mb-0">{{ attempt.payload|pprint }}</pre>
+                                                                {% else %}
+                                                                    <div class="alert alert-info">No payload data available.</div>
+                                                                {% endif %}
+                                                            </div>
+                                                            <div class="tab-pane fade" id="responses-{{ attempt.id }}" role="tabpanel">
+                                                                {% if attempt.response_body_list %}
+                                                                    <ul class="list-group">
+                                                                        {% for response in attempt.response_body_list %}
+                                                                            <li class="list-group-item">
+                                                                                <pre class="small mb-0">{{ response|pprint }}</pre>
+                                                                            </li>
+                                                                        {% endfor %}
+                                                                    </ul>
+                                                                {% else %}
+                                                                    <div class="alert alert-info">No response data available.</div>
+                                                                {% endif %}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </td>
+                                </tr>
+                            {% endif %}
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Metadata Tab -->
+        {% if calendar.metadata %}
+        <div class="tab-pane fade" id="metadata" role="tabpanel">
+            <div class="table-responsive">
+                <table class="table table-striped">
+                    <thead>
+                        <tr>
+                            <th>Property</th>
+                            <th>Value</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for key, value in calendar.metadata.items %}
+                            <tr>
+                                <td>{{ key }}</td>
+                                <td>
+                                    {% if value|length > 100 %}
+                                        <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#metadata-{{ forloop.counter }}" aria-expanded="false">
+                                            Show Value ({{ value|length }} chars)
+                                        </button>
+                                        <div class="collapse mt-2" id="metadata-{{ forloop.counter }}">
+                                            <pre class="small">{{ value }}</pre>
+                                        </div>
+                                    {% else %}
+                                        {{ value }}
+                                    {% endif %}
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

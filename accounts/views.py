@@ -7,8 +7,8 @@ from bots.models import Project
 
 @login_required
 def home(request):
-    # Get the first bot for the user's organization
-    project = Project.objects.filter(organization=request.user.organization).first()
+    # Get the first bot for the user
+    project = Project.accessible_to(request.user).first()
     if not project:
         project = Project.objects.create(
             name=f"{request.user.email}'s project",

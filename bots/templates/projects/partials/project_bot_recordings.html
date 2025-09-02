@@ -1,0 +1,184 @@
+{% load bot_filters %}
+
+{% if recordings %}
+    {% for recording in recordings %}
+        <div class="recording-item">
+            {% if recording.state == RecordingStates.COMPLETE or recording.state == RecordingStates.IN_PROGRESS or recording.state == RecordingStates.PAUSED %}
+                <div class="recording-container">
+                    <div class="transcript-column">
+                        {% for utterance in recording.utterances %}
+                            <div class="utterance-item">
+                                <div class="speaker-bar" style="background-color: {{ utterance.participant.uuid|participant_color }}"></div>
+                                <div class="utterance-content">
+                                    <div class="utterance-timestamp" role="button" style="cursor: pointer" 
+                                            onclick="seekVideo(this, {{ utterance.relative_timestamp_ms }})">
+                                        {% if utterance.timestamp_display %}
+                                            {{ utterance.timestamp_display }} | 
+                                        {% endif %}
+                                        {{ utterance.participant.full_name }}
+                                    </div>
+                                    <div class="utterance-text">
+                                        {% if utterance.words %}
+                                            {% for word_data in utterance.words %}
+                                                <span class="{% if word_data.is_space %}word-space{% else %}word{% endif %}" 
+                                                        data-utterance-id="{{ word_data.utterance_id|md5 }}" 
+                                                        data-start="{{ word_data.start }}" 
+                                                        data-end="{{ word_data.end }}">{{ word_data.word }}
+                                                </span>
+                                            {% endfor %}
+                                        {% else %}
+                                            {{ utterance.transcript }}
+                                        {% endif %}
+                                    </div>
+                                </div>
+                            </div>
+                        {% empty %}
+                            {% if not recording.failed_utterances and recording.state == RecordingStates.COMPLETE %}
+                                <div class="alert alert-info">No transcripts available.</div>
+                            {% endif %}
+                        {% endfor %}
+
+                        {% if recording.transcription_state == RecordingTranscriptionStates.IN_PROGRESS or recording.transcription_state == RecordingTranscriptionStates.NOT_STARTED %}
+                            <div class="alert alert-info mt-3">
+                                Real-time transcription in progress. Refresh to see the latest updates.
+                            </div>
+                        {% endif %}
+
+                        {% if recording.failed_utterances %}
+                            <div class="failed-utterances-column">
+                                <h5>Transcription errors</h5>
+                                <div class="alert alert-danger" role="alert">
+                                    {% for failed_utterance in recording.failed_utterances %}
+                                        <dl class="row mb-0">
+                                        {% for key, value in failed_utterance.failure_data.items %}
+                                            <dt class="col-sm-3">{{ key }}</dt>
+                                            <dd class="col-sm-9"><code>{{ value }}</code></dd>
+                                        {% endfor %}
+                                        </dl>
+                                        {% if not forloop.last %}<hr>{% endif %}
+                                    {% endfor %}
+                                </div>
+                            </div>
+                        {% endif %}
+                    </div>
+                                                    
+                    {% if recording.recording_type != RecordingTypes.NO_RECORDING %}
+                        <div class="video-column">
+                            {% if recording.state == RecordingStates.COMPLETE %}
+                                <video preload="auto" width="100%" controls id="recording-video">
+                                    <source src="{{ recording.url }}">
+                                    Your browser does not support the video tag.
+                                </video>
+                            {% else %}
+                                <div class="d-flex align-items-center justify-content-center bg-light border rounded" style="height: 300px;">
+                                    <div class="text-center">
+                                        <span class="visually-hidden">Recording...</span>
+                                        <p class="text-muted mb-0">
+                                            {% if recording.state == RecordingStates.IN_PROGRESS %}
+                                                Recording in progress...
+                                            {% elif recording.state == RecordingStates.PAUSED %}
+                                                Recording paused...
+                                            {% endif %}
+                                        </p>
+                                        <small class="text-muted">Media will be available when the recording is finished.</small>
+                                    </div>
+                                </div>
+                            {% endif %}
+                        </div>
+                    {% endif %}
+                </div>
+            {% elif recording.state == RecordingStates.FAILED %}
+                <div class="alert alert-danger">
+                    The recording failed.
+                </div>
+            {% elif recording.state == RecordingStates.NOT_STARTED %}
+                {% if bot.state == BotStates.FATAL_ERROR or bot.state == BotStates.ENDED %}
+                    <div class="alert alert-info">
+                        The recording is unavailable.
+                    </div>
+                {% else %}
+                    <div class="alert alert-info">
+                        The recording has not started yet. Refresh the page to see the latest updates.
+                    </div>
+                {% endif %}
+            {% endif %}
+        </div>
+    {% endfor %}
+{% else %}
+<div class="alert alert-info">No recordings available.</div>
+{% endif %}
+<script>
+    function seekVideo(element, timestamp_ms) {
+        const container = element.closest('.recording-container');
+        const video = container.querySelector('video');
+        if (video) {
+            video.currentTime = timestamp_ms / 1000.0;
+            video.play();
+        }
+    }
+
+    // Add highlighting functionality
+    document.querySelectorAll('video').forEach(video => {
+        video.addEventListener('timeupdate', function() {
+            const container = this.closest('.recording-container');
+            const words = container.querySelectorAll('.word, .word-space');
+            let lastHighlightedUtteranceId = null;
+            
+            // Find utterance bounds
+            const utteranceBounds = {};
+            words.forEach(word => {
+                const utteranceId = word.dataset.utteranceId;
+                if (!utteranceBounds[utteranceId]) {
+                    utteranceBounds[utteranceId] = {
+                        start: Infinity,
+                        end: -Infinity
+                    };
+                }
+                utteranceBounds[utteranceId].start = Math.min(utteranceBounds[utteranceId].start, parseFloat(word.dataset.start) / 1000.0);
+                utteranceBounds[utteranceId].end = Math.max(utteranceBounds[utteranceId].end, parseFloat(word.dataset.end) / 1000.0);
+            });
+
+            // Find current utterance
+            for (const [utteranceId, utterance] of Object.entries(utteranceBounds)) {
+                if (this.currentTime >= utterance.start && this.currentTime <= utterance.end) {
+                    lastHighlightedUtteranceId = utteranceId;
+                    break;
+                }
+            }
+            
+            // Update highlighting
+            let firstWordAfterStart = null;
+            words.forEach(word => {
+                const start = parseFloat(word.dataset.start) / 1000.0;
+                if (this.currentTime <= start && firstWordAfterStart == null) {
+                    firstWordAfterStart = word;
+                }
+                if (this.currentTime > start && word.dataset.utteranceId === lastHighlightedUtteranceId) {
+                    word.classList.add('highlighted');
+                } else {
+                    word.classList.remove('highlighted');
+                }
+            });
+            firstWordAfterStart = firstWordAfterStart || words[words.length - 1];
+
+            // Auto-scroll to first word of highlighted utterance
+            if (firstWordAfterStart) {
+                const firstWord = firstWordAfterStart;
+                const transcriptColumn = container.querySelector('.transcript-column');
+                const wordRect = firstWord.getBoundingClientRect();
+                const containerRect = transcriptColumn.getBoundingClientRect();
+
+                if (wordRect.top < containerRect.top || wordRect.bottom > containerRect.bottom) {
+                    firstWord.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
+
+                // Bold the timestamp of the first word's utterance
+                const utteranceTimestamp = firstWord.closest('.utterance-item').querySelector('.utterance-timestamp');
+                document.querySelectorAll('.utterance-timestamp').forEach(timestamp => {
+                    timestamp.classList.remove('bold');
+                });
+                utteranceTimestamp.classList.add('bold');
+            }
+        });
+    });
+</script>

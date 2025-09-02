@@ -61,11 +61,17 @@ class BotPodCreator:
             "app": "bot-proc"
         }
 
+        annotations = {}
+        if os.getenv("USING_KARPENTER", "false").lower() == "true":
+            annotations["karpenter.sh/do-not-disrupt"] = "true"
+            annotations["karpenter.sh/do-not-evict"] = "true"
+
         pod = client.V1Pod(
             metadata=client.V1ObjectMeta(
                 name=bot_name,
                 namespace=self.namespace,
-                labels=labels
+                labels=labels,
+                annotations=annotations
             ),
             spec=client.V1PodSpec(
                 containers=[

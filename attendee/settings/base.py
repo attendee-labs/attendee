@@ -174,6 +174,9 @@ CELERY_RESULT_SERIALIZER = "json"
 REST_FRAMEWORK = {
     # YOUR SETTINGS
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    "DEFAULT_THROTTLE_RATES": {
+        "project_post": os.getenv("PROJECT_POST_THROTTLE_RATE", "3000/min"),
+    },
 }
 
 SPECTACULAR_SETTINGS = {

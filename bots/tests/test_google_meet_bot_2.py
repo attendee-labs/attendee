@@ -944,3 +944,420 @@ class TestGoogleMeetBot2(TransactionTestCase):
 
         # Close the database connection since we're in a thread
         connection.close()
+
+    @patch("bots.models.Bot.create_debug_recording", return_value=False)
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.check_if_meeting_is_found", return_value=None)
+    @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.wait_for_host_if_needed", return_value=None)
+    @patch("time.time")
+    @patch("bots.tasks.deliver_webhook_task.deliver_webhook")
+    def test_bot_can_join_meeting_with_no_recording_format_and_generate_transcription(
+        self,
+        mock_deliver_webhook,
+        mock_time,
+        mock_wait_for_host_if_needed,
+        mock_check_if_meeting_is_found,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+        mock_create_debug_recording,
+    ):
+        mock_deliver_webhook.return_value = None
+
+        # Set recording format to "none"
+        self.bot.settings = {
+            "recording_settings": {
+                "format": "none",
+            }
+        }
+        self.bot.save()
+
+        self.webhook_subscription = WebhookSubscription.objects.create(
+            project=self.project,
+            url="https://example.com/webhook",
+            triggers=[WebhookTriggerTypes.BOT_STATE_CHANGE, WebhookTriggerTypes.TRANSCRIPT_UPDATE, WebhookTriggerTypes.CHAT_MESSAGES_UPDATE, WebhookTriggerTypes.PARTICIPANT_EVENTS_JOIN_LEAVE],
+            is_active=True,
+        )
+
+        # Set initial time
+        current_time = 1000.0
+        mock_time.return_value = current_time
+
+        # Use closed captions for transcription
+        self.recording.transcription_provider = TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM
+        self.recording.save()
+
+        # Configure the mock uploader
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        # Mock the Chrome driver
+        mock_driver = create_mock_google_meet_driver()
+        MockChromeDriver.return_value = mock_driver
+
+        # Mock virtual display
+        mock_display = MagicMock()
+        MockDisplay.return_value = mock_display
+
+        # Create bot controller
+        controller = BotController(self.bot.id)
+
+        # Patch the controller's on_message_from_adapter method to add debugging
+        original_on_message_from_adapter = controller.on_message_from_adapter
+
+        def debug_on_message_from_adapter(message):
+            original_on_message_from_adapter(message)
+            if message.get("message") == BotAdapter.Messages.BOT_JOINED_MEETING:
+                simulate_caption_data_arrival()
+
+        controller.on_message_from_adapter = debug_on_message_from_adapter
+
+        # Run the bot in a separate thread since it has an event loop
+        bot_thread = threading.Thread(target=controller.run)
+        bot_thread.daemon = True
+        bot_thread.start()
+
+        def simulate_participants_joining():
+            # Simulate the bot joining the meeting
+            bot_participant_data = {"deviceId": "bot1", "fullName": "Test Bot", "active": True, "isCurrentUser": True}
+            controller.adapter.handle_participant_update(bot_participant_data)
+
+            # Simulate participant joining
+            participant_data = {"deviceId": "user1", "fullName": "Test User", "active": True, "isCurrentUser": False}
+            controller.adapter.handle_participant_update(participant_data)
+
+        def simulate_participants_leaving():
+            # Simulate participant leaving
+            participant_data = {"deviceId": "user1", "fullName": "Test User", "active": False, "isCurrentUser": False}
+            controller.adapter.handle_participant_update(participant_data)
+
+        def simulate_caption_data_arrival():
+            # Simulate caption data arrival
+            caption_data = {"captionId": "caption1", "deviceId": "user1", "text": "This is a test caption with no recording format", "isFinal": 1}
+            controller.closed_caption_manager.upsert_caption(caption_data)
+
+            # Force caption processing by flushing
+            controller.closed_caption_manager.flush_captions()
+
+            # Simulate chat message arrival
+            chat_message_data = {
+                "participant_uuid": "user1",
+                "message_uuid": "msg123",
+                "timestamp": int(current_time * 1000),  # Convert to milliseconds
+                "text": "Hello, this is a test chat message with no recording!",
+                "to_bot": False,
+                "additional_data": {"source": "test"},
+            }
+            controller.on_new_chat_message(chat_message_data)
+
+        def simulate_join_flow():
+            nonlocal current_time
+
+            simulate_participants_joining()
+
+            simulate_caption_data_arrival()
+
+            # Simulate receiving audio by updating the last audio message processed time
+            controller.adapter.last_audio_message_processed_time = current_time
+
+            # Sleep to allow caption processing
+            time.sleep(3)
+
+            simulate_participants_leaving()
+
+            # Trigger only one participant in meeting auto leave
+            controller.adapter.only_one_participant_in_meeting_at = time.time() - 10000000000
+            time.sleep(4)
+
+            # Clean up connections in thread
+            connection.close()
+
+        # Run join flow simulation after a short delay
+        threading.Timer(2, simulate_join_flow).start()
+
+        # Give the bot some time to process
+        bot_thread.join(timeout=10)
+
+        # Refresh the bot from the database
+        self.bot.refresh_from_db()
+
+        # Assert that the heartbeat timestamp was set
+        self.assertIsNotNone(self.bot.first_heartbeat_timestamp)
+        self.assertIsNotNone(self.bot.last_heartbeat_timestamp)
+
+        # Assert that joined at is not none
+        self.assertIsNotNone(controller.adapter.joined_at)
+
+        # Assert that the bot is in the ENDED state
+        self.assertEqual(self.bot.state, BotStates.ENDED)
+
+        # Verify bot events in sequence
+        bot_events = self.bot.bot_events.all()
+        self.assertEqual(len(bot_events), 6)  # We expect 6 events in total
+
+        # Verify join_requested_event (Event 1)
+        join_requested_event = bot_events[0]
+        self.assertEqual(join_requested_event.event_type, BotEventTypes.JOIN_REQUESTED)
+        self.assertEqual(join_requested_event.old_state, BotStates.READY)
+        self.assertEqual(join_requested_event.new_state, BotStates.JOINING)
+
+        # Verify bot_joined_meeting_event (Event 2)
+        bot_joined_meeting_event = bot_events[1]
+        self.assertEqual(bot_joined_meeting_event.event_type, BotEventTypes.BOT_JOINED_MEETING)
+        self.assertEqual(bot_joined_meeting_event.old_state, BotStates.JOINING)
+        self.assertEqual(bot_joined_meeting_event.new_state, BotStates.JOINED_NOT_RECORDING)
+
+        # Verify recording_permission_granted_event (Event 3)
+        recording_permission_granted_event = bot_events[2]
+        self.assertEqual(
+            recording_permission_granted_event.event_type,
+            BotEventTypes.BOT_RECORDING_PERMISSION_GRANTED,
+        )
+        self.assertEqual(recording_permission_granted_event.old_state, BotStates.JOINED_NOT_RECORDING)
+        self.assertEqual(recording_permission_granted_event.new_state, BotStates.JOINED_RECORDING)
+
+        # Verify bot requested to leave meeting (Event 4)
+        bot_requested_to_leave_meeting_event = bot_events[3]
+        self.assertEqual(bot_requested_to_leave_meeting_event.event_type, BotEventTypes.LEAVE_REQUESTED)
+        self.assertEqual(bot_requested_to_leave_meeting_event.old_state, BotStates.JOINED_RECORDING)
+        self.assertEqual(bot_requested_to_leave_meeting_event.new_state, BotStates.LEAVING)
+
+        # Verify bot left meeting (Event 5)
+        bot_left_meeting_event = bot_events[4]
+        self.assertEqual(bot_left_meeting_event.event_type, BotEventTypes.BOT_LEFT_MEETING)
+        self.assertEqual(bot_left_meeting_event.old_state, BotStates.LEAVING)
+        self.assertEqual(bot_left_meeting_event.new_state, BotStates.POST_PROCESSING)
+
+        # Verify post_processing_completed_event (Event 6)
+        post_processing_completed_event = bot_events[5]
+        self.assertEqual(post_processing_completed_event.event_type, BotEventTypes.POST_PROCESSING_COMPLETED)
+        self.assertEqual(post_processing_completed_event.old_state, BotStates.POST_PROCESSING)
+        self.assertEqual(post_processing_completed_event.new_state, BotStates.ENDED)
+
+        # Verify that the recording was finished even with no recording format
+        self.recording.refresh_from_db()
+        self.assertEqual(self.recording.state, RecordingStates.COMPLETE)
+
+        # Verify captions were processed as utterances
+        utterances = Utterance.objects.filter(recording=self.recording)
+        self.assertGreater(utterances.count(), 0)
+
+        # Verify a caption utterance exists with the correct text
+        caption_utterance = utterances.filter(source=Utterance.Sources.CLOSED_CAPTION_FROM_PLATFORM).first()
+        self.assertIsNotNone(caption_utterance)
+        self.assertEqual(caption_utterance.transcription.get("transcript"), "This is a test caption with no recording format")
+
+        # Verify webhook delivery attempts were created for transcript updates
+        webhook_delivery_attempts = WebhookDeliveryAttempt.objects.filter(bot=self.bot, webhook_trigger_type=WebhookTriggerTypes.TRANSCRIPT_UPDATE)
+        self.assertGreater(webhook_delivery_attempts.count(), 0, "Expected webhook delivery attempts for transcript updates")
+
+        # Verify the webhook payload contains the expected utterance data
+        webhook_attempt = webhook_delivery_attempts.first()
+        self.assertIsNotNone(webhook_attempt.payload)
+        self.assertIn("speaker_name", webhook_attempt.payload)
+        self.assertIn("speaker_uuid", webhook_attempt.payload)
+        self.assertIn("transcription", webhook_attempt.payload)
+        self.assertEqual(webhook_attempt.payload["speaker_name"], "Test User")
+        self.assertEqual(webhook_attempt.payload["speaker_uuid"], "user1")
+        self.assertIsNotNone(webhook_attempt.payload["transcription"])
+
+        # Verify chat message was created
+        chat_messages = ChatMessage.objects.filter(bot=self.bot)
+        self.assertGreater(chat_messages.count(), 0, "Expected at least one chat message to be created")
+
+        # Verify the chat message has the correct content
+        chat_message = chat_messages.first()
+        self.assertEqual(chat_message.text, "Hello, this is a test chat message with no recording!")
+        self.assertEqual(chat_message.participant.full_name, "Test User")
+        self.assertEqual(chat_message.participant.uuid, "user1")
+
+        # Verify webhook delivery attempts were created for chat messages
+        chat_webhook_delivery_attempts = WebhookDeliveryAttempt.objects.filter(bot=self.bot, webhook_trigger_type=WebhookTriggerTypes.CHAT_MESSAGES_UPDATE)
+        self.assertGreater(chat_webhook_delivery_attempts.count(), 0, "Expected webhook delivery attempts for chat messages")
+
+        # Verify the chat message webhook payload contains the expected data
+        chat_webhook_attempt = chat_webhook_delivery_attempts.first()
+        self.assertIsNotNone(chat_webhook_attempt.payload)
+        self.assertIn("text", chat_webhook_attempt.payload)
+        self.assertIn("sender_name", chat_webhook_attempt.payload)
+        self.assertEqual(chat_webhook_attempt.payload["text"], "Hello, this is a test chat message with no recording!")
+
+        # Verify Bot Participant was created
+        bot_participant = Participant.objects.filter(bot=self.bot, uuid="bot1").first()
+        self.assertIsNotNone(bot_participant)
+        self.assertEqual(bot_participant.full_name, "Test Bot")
+        self.assertEqual(bot_participant.uuid, "bot1")
+        self.assertTrue(bot_participant.is_the_bot)
+
+        # Verify User Participant was created
+        user_participant = Participant.objects.filter(bot=self.bot, uuid="user1").first()
+        self.assertIsNotNone(user_participant)
+        self.assertEqual(user_participant.full_name, "Test User")
+        self.assertEqual(user_participant.uuid, "user1")
+        self.assertFalse(user_participant.is_the_bot)
+
+        # Verify Bot ParticipantEvent was created
+        bot_participant_events = ParticipantEvent.objects.filter(participant__bot=self.bot, participant__uuid="bot1")
+        self.assertGreater(bot_participant_events.count(), 0, "Expected at least one participant event to be created")
+        join_event = bot_participant_events.filter(event_type=ParticipantEventTypes.JOIN).first()
+        self.assertIsNotNone(join_event)
+        self.assertEqual(join_event.participant.full_name, "Test Bot")
+
+        # Verify ParticipantEvent was created
+        participant_events = ParticipantEvent.objects.filter(participant__bot=self.bot, participant__uuid="user1")
+        self.assertGreater(participant_events.count(), 0, "Expected at least one participant event to be created")
+        join_event = participant_events.filter(event_type=ParticipantEventTypes.JOIN).first()
+        self.assertIsNotNone(join_event)
+        self.assertEqual(join_event.participant.full_name, "Test User")
+
+        leave_event = participant_events.filter(event_type=ParticipantEventTypes.LEAVE).first()
+        self.assertIsNotNone(leave_event)
+        self.assertEqual(leave_event.participant.full_name, "Test User")
+
+        # Verify webhook for participant event was created
+        participant_webhook_delivery_attempts = WebhookDeliveryAttempt.objects.filter(bot=self.bot, webhook_trigger_type=WebhookTriggerTypes.PARTICIPANT_EVENTS_JOIN_LEAVE)
+        self.assertGreater(participant_webhook_delivery_attempts.count(), 0, "Expected webhook delivery attempts for participant events")
+
+        participant_webhook_attempts = participant_webhook_delivery_attempts.filter(payload__event_type="join").all()
+        self.assertEqual(len(participant_webhook_attempts), 1)
+        participant_webhook_attempt = participant_webhook_attempts[0]
+        self.assertIsNotNone(participant_webhook_attempt.payload)
+        self.assertEqual(participant_webhook_attempt.payload["event_type"], "join")
+        self.assertEqual(participant_webhook_attempt.payload["participant_name"], "Test User")
+
+        leave_webhook_attempt = participant_webhook_delivery_attempts.filter(payload__event_type="leave").first()
+        self.assertIsNotNone(leave_webhook_attempt)
+        self.assertEqual(leave_webhook_attempt.payload["event_type"], "leave")
+        self.assertEqual(leave_webhook_attempt.payload["participant_name"], "Test User")
+
+        # Verify WebSocket media sending was enabled and performance.timeOrigin was queried
+        mock_driver.execute_script.assert_has_calls([call("window.ws?.enableMediaSending();"), call("return performance.timeOrigin;")])
+
+        # CRITICAL: Verify file uploader was NOT used since recording format is "none"
+        mock_uploader.upload_file.assert_not_called()
+        mock_uploader.wait_for_upload.assert_not_called()
+        mock_uploader.delete_file.assert_not_called()
+
+        # Cleanup
+        controller.cleanup()
+        bot_thread.join(timeout=5)
+
+        # Close the database connection since we're in a thread
+        connection.close()
+
+    @patch("bots.models.Bot.create_debug_recording", return_value=False)
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.check_if_meeting_is_found", return_value=None)
+    @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.wait_for_host_if_needed", return_value=None)
+    def test_bot_uploads_to_external_storage_when_credentials_available(
+        self,
+        mock_wait_for_host_if_needed,
+        mock_check_if_meeting_is_found,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+        mock_create_debug_recording,
+    ):
+        # Configure external media storage settings on the bot
+        self.bot.settings = {
+            "external_media_storage_settings": {
+                "bucket_name": "my-external-bucket",
+                "recording_file_name": "custom-recording-name.mp4",
+            }
+        }
+        self.bot.save()
+
+        # Create external media storage credentials
+        external_credentials = Credentials.objects.create(project=self.project, credential_type=Credentials.CredentialTypes.EXTERNAL_MEDIA_STORAGE)
+        external_credentials.set_credentials({"access_key_id": "test_access_key", "access_key_secret": "test_secret_key", "endpoint_url": "https://s3.amazonaws.com", "region_name": "us-east-1"})
+
+        # Configure the mock uploader for both regular and external storage
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        # Mock the Chrome driver
+        mock_driver = create_mock_google_meet_driver()
+        MockChromeDriver.return_value = mock_driver
+
+        # Mock virtual display
+        mock_display = MagicMock()
+        MockDisplay.return_value = mock_display
+
+        # Create bot controller
+        controller = BotController(self.bot.id)
+
+        # Run the bot in a separate thread since it has an event loop
+        bot_thread = threading.Thread(target=controller.run)
+        bot_thread.daemon = True
+        bot_thread.start()
+
+        def simulate_join_flow():
+            # Sleep to allow initialization
+            time.sleep(2)
+
+            # Add participants to keep the bot in the meeting
+            controller.adapter.participants_info["user1"] = {"deviceId": "user1", "fullName": "Test User", "active": True, "isCurrentUser": False}
+
+            # Let the bot run for a bit to "record"
+            time.sleep(3)
+
+            # Trigger auto-leave
+            controller.adapter.only_one_participant_in_meeting_at = time.time() - 10000000000
+            time.sleep(4)
+
+            # Clean up connections in thread
+            connection.close()
+
+        # Run join flow simulation after a short delay
+        threading.Timer(2, simulate_join_flow).start()
+
+        # Give the bot some time to process
+        bot_thread.join(timeout=10)
+
+        # Refresh the bot from the database
+        self.bot.refresh_from_db()
+
+        # Assert that the bot is in the ENDED state
+        self.assertEqual(self.bot.state, BotStates.ENDED)
+
+        # Verify that the recording was finished
+        self.recording.refresh_from_db()
+        self.assertEqual(self.recording.state, RecordingStates.COMPLETE)
+
+        # Verify file uploader was called multiple times - once for external storage and once for regular storage
+        # The external storage upload happens first, then the regular upload
+        self.assertEqual(mock_uploader.upload_file.call_count, 2, "FileUploader.upload_file should be called twice - once for external storage and once for regular storage")
+        self.assertEqual(mock_uploader.wait_for_upload.call_count, 2, "FileUploader.wait_for_upload should be called twice")
+
+        # Verify FileUploader was instantiated twice with different parameters
+        self.assertEqual(MockFileUploader.call_count, 2, "FileUploader should be instantiated twice")
+
+        # Check the first call (external storage)
+        external_call_args = MockFileUploader.call_args_list[0]
+        external_call_kwargs = external_call_args.kwargs
+        self.assertEqual(external_call_kwargs["bucket"], "my-external-bucket")
+        self.assertEqual(external_call_kwargs["key"], "custom-recording-name.mp4")
+        self.assertEqual(external_call_kwargs["endpoint_url"], "https://s3.amazonaws.com")
+        self.assertEqual(external_call_kwargs["region_name"], "us-east-1")
+        self.assertEqual(external_call_kwargs["access_key_id"], "test_access_key")
+        self.assertEqual(external_call_kwargs["access_key_secret"], "test_secret_key")
+
+        # Check the second call (regular storage) - should use environment variables
+        regular_call_args = MockFileUploader.call_args_list[1]
+        regular_call_kwargs = regular_call_args.kwargs
+        self.assertEqual(regular_call_kwargs["bucket"], "test-bucket")  # From environment variable set in setUpClass
+        self.assertIsNotNone(regular_call_kwargs["key"])  # Should have some recording filename
+
+        # Verify only one delete_file call (for the regular storage uploader)
+        mock_uploader.delete_file.assert_called_once()
+
+        # Cleanup
+        controller.cleanup()
+        bot_thread.join(timeout=5)
+
+        # Close the database connection since we're in a thread
+        connection.close()

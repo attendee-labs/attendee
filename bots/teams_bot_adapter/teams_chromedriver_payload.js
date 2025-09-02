@@ -355,6 +355,24 @@ class StyleManager {
 class DominantSpeakerManager {
     constructor() {
         this.dominantSpeakerStreamId = null;
+        this.captionAudioTimes = [];
+    }
+
+    getLastSpeakerIdForTimestampMs(timestampMs) {
+        // Find the caption audio times that are before timestampMs
+        const captionAudioTimesBeforeTimestampMs = this.captionAudioTimes.filter(captionAudioTime => captionAudioTime.timestampMs <= timestampMs);
+        if (captionAudioTimesBeforeTimestampMs.length === 0) {
+            return null;
+        }
+        // Return the caption audio time with the highest timestampMs
+        return captionAudioTimesBeforeTimestampMs.reduce((max, captionAudioTime) => captionAudioTime.timestampMs > max.timestampMs ? captionAudioTime : max).speakerId;
+    }
+
+    addCaptionAudioTime(timestampMs, speakerId) {
+        this.captionAudioTimes.push({
+            timestampMs: timestampMs,
+            speakerId: speakerId
+        });
     }
 
     setDominantSpeakerStreamId(dominantSpeakerStreamId) {
@@ -959,7 +977,9 @@ class WebSocketClient {
     static MESSAGE_TYPES = {
         JSON: 1,
         VIDEO: 2,  // Reserved for future use
-        AUDIO: 3   // Reserved for future use
+        AUDIO: 3,   // Reserved for future use
+        ENCODED_MP4_CHUNK: 4,
+        PER_PARTICIPANT_AUDIO: 5
     };
   
     constructor() {
@@ -1132,6 +1152,44 @@ class WebSocketClient {
         }
     }
   
+    sendPerParticipantAudio(participantId, audioData) {
+        if (this.ws.readyState !== originalWebSocket.OPEN) {
+            realConsole?.error('WebSocket is not connected for per participant audio send', this.ws.readyState);
+            return;
+        }
+    
+        if (!this.mediaSendingEnabled) {
+          return;
+        }
+    
+        try {
+            // Convert participantId to UTF-8 bytes
+            const participantIdBytes = new TextEncoder().encode(participantId);
+            
+            // Create final message: type (4 bytes) + participantId length (1 byte) + 
+            // participantId bytes + audio data
+            const message = new Uint8Array(4 + 1 + participantIdBytes.length + audioData.buffer.byteLength);
+            const dataView = new DataView(message.buffer);
+            
+            // Set message type (5 for PER_PARTICIPANT_AUDIO)
+            dataView.setInt32(0, WebSocketClient.MESSAGE_TYPES.PER_PARTICIPANT_AUDIO, true);
+            
+            // Set participantId length as uint8 (1 byte)
+            dataView.setUint8(4, participantIdBytes.length);
+            
+            // Copy participantId bytes
+            message.set(participantIdBytes, 5);
+            
+            // Copy audio data after type, length and participantId
+            message.set(new Uint8Array(audioData.buffer), 5 + participantIdBytes.length);
+            
+            // Send the binary message
+            this.ws.send(message.buffer);
+        } catch (error) {
+            realConsole?.error('Error sending WebSocket audio message:', error);
+        }
+      }
+
     sendAudio(timestamp, streamId, audioData) {
         if (this.ws.readyState !== originalWebSocket.OPEN) {
             realConsole?.error('WebSocket is not connected for audio send', this.ws.readyState);
@@ -1449,6 +1507,12 @@ const processDominantSpeakerHistoryMessage = (item) => {
     realConsole?.log('newDominantSpeakerParticipant', dominantSpeakerManager.getDominantSpeaker());
 }
 
+function convertTimestampAudioSentToUnixTimeMs(timestampAudioSent) {
+    const fractional_seconds_since_1900 = timestampAudioSent / 10000000;
+    const fractional_seconds_since_1970 = fractional_seconds_since_1900 - 2_208_988_800;
+    return Math.floor(fractional_seconds_since_1970 * 1000);
+}
+
 class UtteranceIdGenerator {
     constructor(generate = () => crypto.randomUUID()) {
       this._activeIds = new Map();  // Map<speakerKey, utteranceId>
@@ -1485,6 +1549,21 @@ const utteranceIdGenerator = new UtteranceIdGenerator();
 
 const processClosedCaptionData = (item) => {
     realConsole?.log('processClosedCaptionData', item);
+
+    // If we're collecting per participant audio, we actually need the caption data because it's the most accurate
+    // way to estimate when someone started speaking.
+    if (window.initialData.sendPerParticipantAudio)
+    {
+        const timeStampAudioSentUnixMs = convertTimestampAudioSentToUnixTimeMs(item.timestampAudioSent);
+        dominantSpeakerManager.addCaptionAudioTime(timeStampAudioSentUnixMs, item.userId);
+    }
+
+    // If we don't need the captions, we can leave.
+    if (!window.initialData.collectCaptions)
+    {
+        return;
+    }
+
     if (!window.ws) {
         return;
     }
@@ -1742,8 +1821,36 @@ const handleVideoTrack = async (event) => {
     }
   };
 
-const handleAudioTrack = async (event) => {
+
+  const handleAudioTrack = async (event) => {
     let lastAudioFormat = null;  // Track last seen format
+    const audioDataQueue = [];
+    const ACTIVE_SPEAKER_LATENCY_MS = 2000;
+    
+    // Start continuous background processing of the audio queue
+    const processAudioQueue = () => {
+        while (audioDataQueue.length > 0 && 
+            Date.now() - audioDataQueue[0].audioArrivalTime >= ACTIVE_SPEAKER_LATENCY_MS) {
+            const { audioData, audioArrivalTime } = audioDataQueue.shift();
+
+            // Get the dominant speaker and assume that's who the participant speaking is
+            const dominantSpeakerId = dominantSpeakerManager.getLastSpeakerIdForTimestampMs(audioArrivalTime);
+
+            // Send audio data through websocket
+            if (dominantSpeakerId) {
+                ws.sendPerParticipantAudio(dominantSpeakerId, audioData);
+            }
+        }
+    };
+
+    // Set up background processing every 100ms
+    const queueProcessingInterval = setInterval(processAudioQueue, 100);
+    
+    // Clean up interval when track ends
+    event.track.addEventListener('ended', () => {
+        clearInterval(queueProcessingInterval);
+        console.log('Audio track ended, cleared queue processing interval');
+    });
     
     try {
       // Create processor to get raw frames
@@ -1771,12 +1878,29 @@ const handleAudioTrack = async (event) => {
                   // Copy the audio data
                   const numChannels = frame.numberOfChannels;
                   const numSamples = frame.numberOfFrames;
-                  const audioData = new Float32Array(numChannels * numSamples);
+                  const audioData = new Float32Array(numSamples);
                   
                   // Copy data from each channel
-                  for (let channel = 0; channel < numChannels; channel++) {
-                      frame.copyTo(audioData.subarray(channel * numSamples, (channel + 1) * numSamples), 
-                                { planeIndex: channel });
+                  // If multi-channel, average all channels together
+                  if (numChannels > 1) {
+                      // Temporary buffer to hold each channel's data
+                      const channelData = new Float32Array(numSamples);
+                      
+                      // Sum all channels
+                      for (let channel = 0; channel < numChannels; channel++) {
+                          frame.copyTo(channelData, { planeIndex: channel });
+                          for (let i = 0; i < numSamples; i++) {
+                              audioData[i] += channelData[i];
+                          }
+                      }
+                      
+                      // Average by dividing by number of channels
+                      for (let i = 0; i < numSamples; i++) {
+                          audioData[i] /= numChannels;
+                      }
+                  } else {
+                      // If already mono, just copy the data
+                      frame.copyTo(audioData, { planeIndex: 0 });
                   }
   
                   // console.log('frame', frame)
@@ -1784,35 +1908,36 @@ const handleAudioTrack = async (event) => {
   
                   // Check if audio format has changed
                   const currentFormat = {
-                      numberOfChannels: frame.numberOfChannels,
+                      numberOfChannels: 1,
+                      originalNumberOfChannels: frame.numberOfChannels,
                       numberOfFrames: frame.numberOfFrames,
                       sampleRate: frame.sampleRate,
                       format: frame.format,
                       duration: frame.duration
                   };
-                  //realConsole?.log('currentFormat', currentFormat);
   
                   // If format is different from last seen format, send update
                   if (!lastAudioFormat || 
                       JSON.stringify(currentFormat) !== JSON.stringify(lastAudioFormat)) {
                       lastAudioFormat = currentFormat;
-                      realConsole?.log('sending audio format update');
                       ws.sendJson({
                           type: 'AudioFormatUpdate',
                           format: currentFormat
                       });
                   }
   
-                  // If the audioData buffer is all zeros, then we don't want to send it
-                  if (audioData.every(value => value === 0)) {
-                    //realConsole?.log('audioData is all zeros');
-                      return;
-                  }
-  
-                  // Send audio data through websocket
-                  const currentTimeMicros = BigInt(Math.floor(performance.now() * 1000));
-                  ws.sendAudio(currentTimeMicros, 0, audioData);
-  
+                  // If the audioData buffer is all zeros, we still want to send it. It's only one mixed audio stream.
+                  // It seems to help with the transcription.
+                  //if (audioData.every(value => value === 0)) {
+                  //    return;
+                  //}
+
+                  // Add to queue with timestamp - the background thread will process it
+                  audioDataQueue.push({
+                    audioArrivalTime: Date.now(),
+                    audioData: audioData
+                  });
+
                   // Pass through the original frame
                   controller.enqueue(frame);
               } catch (error) {
@@ -1822,6 +1947,8 @@ const handleAudioTrack = async (event) => {
           },
           flush() {
               console.log('Transform stream flush called');
+              // Clear the interval when the stream ends
+              clearInterval(queueProcessingInterval);
           }
       });
   
@@ -1839,16 +1966,23 @@ const handleAudioTrack = async (event) => {
                   if (error.name !== 'AbortError') {
                       console.error('Pipeline error:', error);
                   }
+                  // Clear the interval on error
+                  clearInterval(queueProcessingInterval);
               });
       } catch (error) {
           console.error('Stream pipeline error:', error);
           abortController.abort();
+          // Clear the interval on error
+          clearInterval(queueProcessingInterval);
       }
   
     } catch (error) {
         console.error('Error setting up audio interceptor:', error);
+        // Clear the interval on error
+        clearInterval(queueProcessingInterval);
     }
   };
+  
 
 // LOOK FOR https://api.flightproxy.skype.com/api/v2/cpconv
 
@@ -1878,6 +2012,9 @@ new RTCInterceptor({
             // but we don't need to do anything with the video tracks
             if (event.track.kind === 'audio') {
                 window.styleManager.addAudioTrack(event.track);
+                if (window.initialData.sendPerParticipantAudio) {
+                    handleAudioTrack(event);
+                }
             }
             if (event.track.kind === 'video') {
                 window.styleManager.addVideoTrack(event);
