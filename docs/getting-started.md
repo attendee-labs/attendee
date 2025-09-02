@@ -1,59 +1,49 @@
 # Getting Started with Attendee
 
-Welcome to Attendee! This guide will help you get up and running with meeting bots in minutes.
+Welcome to Attendee! This tutorial will help you get up and running with meeting bots in minutes, using our hosted instance of Attendee.
 
-## What is Attendee?
 
-Attendee is an open-source API that makes it easy to create and manage meeting bots for platforms like Zoom, Google Meet, and Microsoft Teams. With Attendee, you can:
-
-- **Record meetings** - Capture audio and video from virtual meetings
-- **Transcribe conversations** - Get real-time transcription with speaker identification
-- **Send chat messages** - Have your bot participate in meeting chats
-- **Speak into meetings** - Have your bot speak arbitrary audio into the meeting
-
-This tutorial will go through the following steps to get you started with Attendee:
-
-1. **Sign up** for free at [app.attendee.dev](https://app.attendee.dev/accounts/signup/)
-2. **Get your API key** from the "API Keys" section in your dashboard
-3. **Configure credentials** for Zoom, Google Meet, or Teams in the "Settings" section
-4. **Join a meeting** with a simple API call
-5. **Monitor your bot** and retrieve transcripts when the meeting ends
+<scalar-callout type="neutral">Interested in using Attendee at your company? Schedule a call [here](https://calendly.com/noah-attendee/30min). By self-hosting Attendee you can reduce costs by 10x compared to closed source vendors. You may also check out the guide for [running in development mode](docs/self-hosting) for a preview of self-hosting.</scalar-callout>
 
 ## Sign Up
 
-Start with our hosted instance at [app.attendee.dev](https://app.attendee.dev/accounts/signup/) - no credit card required!
+Start with our hosted instance at [app.attendee.dev](https://app.attendee.dev/accounts/signup/). Create an account, and follow the instructions on the **Quick start** section in the sidebar.
 
-## Get Your API Key
+## Create an API key
 
-1. Sign in to your Attendee account
-2. Navigate to the "API Keys" section in the sidebar
-3. Create a new API key for your application
+Sign in to your Attendee account and navigate to the "API Keys" section in the sidebar. Once there, you can create a new API key by giving it a name.
 
 ## Configure Your Credentials
 
-You'll need to set up credentials for the platforms you want to use:
+You'll need to set up credentials for the platforms you want to use. Enter these credentials in the "Settings" section of your Attendee dashboard.
 
 ### For Zoom Meetings:
-- **Zoom OAuth Credentials**: Needed to join Zoom meetings. These are the Zoom app client id and secret that uniquely identify your bot.
+- **Zoom OAuth Credentials**: You'll need these to join Zoom meetings. These are the Zoom app Client ID and secret that uniquely identify your bot.
     1. Navigate to [Zoom Marketplace](https://marketplace.zoom.us/) and register/log into your developer account.
     2. Click the "Develop" button at the top-right, then click 'Build App' and choose "General App".
     3. Copy the Client ID and Client Secret from the 'App Credentials' section
     4. Go to the Embed tab on the left navigation bar under Features, then select the Meeting SDK toggle.
-- **Deepgram API Key**: Needed for transcribing Zoom meetings. You can sign up for an account here, no credit card required and get 400 hours worth of free transcription. Sign up at [Deepgram](https://console.deepgram.com/signup) for transcription (400 free hours included)
+- **Deepgram API Key**: You'll need a Deepgram API key for transcribing Zoom meetings. You can sign up for an account here, no credit card required and get 400 hours worth of free transcription. Sign up at [Deepgram](https://console.deepgram.com/signup) for transcription (400 free hours included)
 
-For more details, follow [this guide](https://developers.zoom.us/docs/meeting-sdk/developer-accounts/) or watch [this video](https://www.loom.com/embed/7cbd3eab1bc4438fb1badcb3787996d6?sid=825a92b5-51ca-447c-86c1-c45f5294ec9d).
+For more details, follow [this guide from Zoom](https://developers.zoom.us/docs/meeting-sdk/developer-accounts/) or watch the video below.
+<scalar-embed
+  src="https://www.loom.com/embed/7cbd3eab1bc4438fb1badcb3787996d6?sid=825a92b5-51ca-447c-86c1-c45f5294ec9d"
+  caption="Setting Up API Calls for Attendee App"
+  alt="Interactive demonstration of getting started with Attendee">
+</scalar-embed>
 
-### For Google Meet:
+### For Google Meet / Microsoft Teams:
 - No additional credentials needed for basic functionality
-
-### For Microsoft Teams:
-- No additional credentials needed for basic functionality
-
-Enter these credentials in the "Settings" section of your Attendee dashboard.
 
 ## Join Your First Meeting
 
-Make a simple API call to join a meeting:
+<scalar-steps>
+<scalar-step id="step-0" title="Start a meeting">
+First, start a meeting in your preferred platform. We'll use Zoom for this example. Copy the meeting URL. You'll need this in the next step.
+</scalar-step>
+
+<scalar-step id="step-1" title="Create a bot to join your meeting">
+With your Attendee API key, send a POST request to join your current meeting:
 
 ```bash
 curl -X POST https://app.attendee.dev/api/v1/bots \
@@ -62,7 +52,7 @@ curl -X POST https://app.attendee.dev/api/v1/bots \
 -d '{"meeting_url": "https://us05web.zoom.us/j/84315220467?pwd=9M1SQg2Pu2l0cB078uz6AHeWelSK19.1", "bot_name": "My Bot"}'
 ```
 
-Response:
+The API will respond with an object that represents your bot's state in the meeting.:
 ```json
 {
   "id":"bot_3hfP0PXEsNinIZmh",
@@ -71,10 +61,14 @@ Response:
   "transcription_state":"not_started"
 }
 ```
+</scalar-step>
+</scalar-steps>
 
 ## Monitor Your Bot
 
-Check your bot's status:
+<scalar-steps>
+<scalar-step id="step-1" title="Get the bot's status">
+Send a GET request to poll the bot:
 
 ```bash
 curl -X GET https://app.attendee.dev/api/v1/bots/bot_3hfP0PXEsNinIZmh \
@@ -91,12 +85,10 @@ Response:
   "transcription_state":"complete"
 }
 ```
-
-When the endpoint returns a state of `ended`, it means the meeting has ended. When the `transcription_state` is `complete` it means the meeting recording has been transcribed.
-
-### Get Your Transcript
-
-Once the meeting has ended and the transcript is ready make a GET request to `/bots/<id>/transcript` to retrieve the meeting transcripts:
+<scalar-callout type="info">When the endpoint returns a state of `ended`, it means the meeting has ended. When the `transcription_state` is `complete` it means the meeting recording has been transcribed.</scalar-callout>
+</scalar-step>
+<scalar-step id="step-2" title="Retrieve the meeting transcripts">
+Once the meeting has ended and the transcript is ready, make a GET request to `/bots/<id>/transcript` to retrieve the meeting transcripts:
 
 ```bash
 curl -X GET https://app.attendee.dev/api/v1/bots/bot_3hfP0PXEsNinIZmh/transcript \
@@ -116,31 +108,25 @@ Response:
 },...]
 ```
 
-You can also query this endpoint while the meeting is happening to retrieve partial transcripts.
+<scalar-callout type="info">You can also query this endpoint while the meeting is happening to retrieve partial transcripts.
+</scalar-callout>
+
+</scalar-step>
+</scalar-steps>
+
+You can also watch this video below which demos the basic API requests.
+<scalar-embed
+  src="https://www.loom.com/embed/b738d02aabf84f489f0bfbadf71605e3?sid=ea605ea9-8961-4cc3-9ba9-10b7dbbb8034"
+  caption="API Requests Tutorial"
+  alt="Interactive demonstration of Attendee API">
+</scalar-embed>
 
 ## Next Steps
 
-- **Learn the basics**: Check out our [Basics guide](./basics) for detailed information about bot capabilities
-- **Set up webhooks**: Configure [webhooks](./webhooks) to get real-time updates about your bots
-- **Schedule bots**: Learn how to [schedule bots](./scheduled_bots) for recurring meetings
-- **Integrate with calendars**: Set up [calendar integration](./calendar_integration) for automatic meeting detection
-- **Explore the API**: View our complete [API documentation](/api-reference)
+<scalar-page-link filepath="docs/basics.md" title="Basics of Bots" description="Read the basics about bots, what they do, and the bot states">
+</scalar-page-link>
 
-## Self-Hosting
+<scalar-page-link filepath="docs/faq.md" title="FAQ" description="For troubleshooting, check out our FAQ page for solutions to common problems">
+</scalar-page-link>
 
-Want to run Attendee on your own infrastructure? Attendee is designed for easy self-hosting and can reduce costs by 10x compared to closed-source alternatives. Check out our [self-hosting guide](../README.md#self-hosting) for instructions.
-
-## Need Help?
-
-- **Documentation**: Browse our comprehensive guides
-- **Community**: Join our [Slack community](https://join.slack.com/t/attendeecommu-rff8300/shared_invite/zt-2uhpam6p2-ZzLAoVrljbL2UEjqdSHrgQ)
-- **Support**: Schedule a call with our team at [calendly.com/noah-attendee/30min](https://calendly.com/noah-attendee/30min)
-- **Issues**: Report bugs or request features on [GitHub](https://github.com/attendee-labs/attendee)
-
-## Common Issues
-
-Having trouble? Check our [FAQ](./faq) for solutions to common problems, including:
-- Setting up Zoom OAuth credentials
-- Troubleshooting bot joining issues
-- Resolving recording problems
-- Local development setup issues
+If you are interested in a self-hosted Attendee solution, try running Attendee in development mode in the next page of the guide.

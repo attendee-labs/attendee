@@ -6,53 +6,87 @@
       "name": "Guides",
       "sidebar": [
         {
-          "path": "docs/getting-started.md",
-          "type": "page"
+          "name": "Introduction",
+          "type": "folder",
+          "children": [
+            {
+              "path": "docs/getting-started.md",
+              "type": "page"
+            },
+            {
+              "path": "docs/self-hosting.md",
+              "type": "page"
+            },
+            {
+              "path": "docs/what_is_attendee.md",
+              "type": "page"
+            }
+          ]
         },
         {
-          "path": "docs/self-hosting.md",
-          "type": "page"
+          "name": "Concepts",
+          "type": "folder",
+          "children": [
+            {
+              "path": "docs/basics.md",
+              "type": "page"
+            },
+            {
+              "path": "docs/participant_events.md",
+              "type": "page"
+            },
+            {
+              "path": "docs/transcription.md",
+              "type": "page"
+            }
+          ]
+        },
+        {
+          "name": "Features",
+          "type": "folder",
+          "children": [
+            {
+              "path": "docs/webhooks.md",
+              "type": "page"
+            },
+            {
+              "path": "docs/scheduled_bots.md",
+              "type": "page"
+            },
+            {
+              "path": "docs/signed_in_bots.md",
+              "type": "page"
+            },
+            {
+              "path": "docs/realtime_audio.md",
+              "type": "page"
+            },
+            {
+              "path": "docs/calendar_integration.md",
+              "type": "page"
+            }
+          ]
+        },
+        {
+          "name": "Platforms & Integrations",
+          "type": "folder",
+          "children": [
+            {
+              "path": "docs/zoom_app_review.md",
+              "type": "page"
+            }
+          ]
+        },
+        {
+          "name": "Support",
+          "type": "folder",
+          "children": [
+            {
+              "path": "docs/faq.md",
+              "type": "page"
+            }
+          ]
         }
-        {
-          "path": "docs/basics.md",
-          "type": "page"
-        },
-        {
-          "path": "docs/webhooks.md",
-          "type": "page"
-        },
-        {
-          "path": "docs/transcription.md",
-          "type": "page"
-        },
-        {
-          "path": "docs/participant_events.md",
-          "type": "page"
-        },
-        {
-          "path": "docs/scheduled_bots.md",
-          "type": "page"
-        },
-        {
-          "path": "docs/signed_in_bots.md",
-          "type": "page"
-        },
-        {
-          "path": "docs/realtime_audio.md",
-          "type": "page"
-        },
-        {
-          "path": "docs/calendar_integration.md",
-          "type": "page"
-        },
-        {
-          "path": "docs/zoom_app_review.md",
-          "type": "page"
-        },
-        {
-          "path": "docs/faq.md",
-          "type": "page"
-        },
       ]
     }
   ],
