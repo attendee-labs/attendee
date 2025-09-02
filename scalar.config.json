@@ -6,6 +6,14 @@
       "name": "Guides",
       "sidebar": [
         {
+          "path": "docs/getting-started.md",
+          "type": "page"
+        },
+        {
+          "path": "docs/self-hosting.md",
+          "type": "page"
+        }
+        {
           "path": "docs/basics.md",
           "type": "page"
         },
@@ -44,7 +52,7 @@
         {
           "path": "docs/faq.md",
           "type": "page"
-        }
+        },
       ]
     }
   ],
