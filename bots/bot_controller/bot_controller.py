@@ -156,8 +156,8 @@ class BotController:
             recording_view=self.bot_in_db.recording_view(),
             teams_closed_captions_language=self.bot_in_db.transcription_settings.teams_closed_captions_language(),
             should_create_debug_recording=self.bot_in_db.create_debug_recording(),
-            start_recording_screen_callback=self.screen_and_audio_recorder.start_recording if self.screen_and_audio_recorder else None,
-            stop_recording_screen_callback=self.screen_and_audio_recorder.stop_recording if self.screen_and_audio_recorder else None,
+            start_recording_screen_callback=None,
+            stop_recording_screen_callback=None,
             video_frame_size=self.bot_in_db.recording_dimensions(),
             teams_bot_login_credentials=teams_bot_login_credentials.get_credentials() if teams_bot_login_credentials and self.bot_in_db.teams_use_bot_login() else None,
             record_chat_messages_when_paused=self.bot_in_db.record_chat_messages_when_paused(),
@@ -206,8 +206,8 @@ class BotController:
             add_encoded_mp4_chunk_callback=None,
             recording_view=self.bot_in_db.recording_view(),
             should_create_debug_recording=self.bot_in_db.create_debug_recording(),
-            start_recording_screen_callback=self.screen_and_audio_recorder.start_recording if self.screen_and_audio_recorder else None,
-            stop_recording_screen_callback=self.screen_and_audio_recorder.stop_recording if self.screen_and_audio_recorder else None,
+            start_recording_screen_callback=None,
+            stop_recording_screen_callback=None,
             video_frame_size=self.bot_in_db.recording_dimensions(),
             zoom_client_id=zoom_oauth_credentials["client_id"],
             zoom_client_secret=zoom_oauth_credentials["client_secret"],
@@ -689,19 +689,8 @@ class BotController:
             self.gstreamer_pipeline.setup()
 
         self.screen_and_audio_recorder = None
-        if self.should_create_screen_and_audio_recorder():
-            self.screen_and_audio_recorder = ScreenAndAudioRecorder(
-                file_location=self.get_recording_file_location(),
-                recording_dimensions=self.bot_in_db.recording_dimensions(),
-                audio_only=not (self.pipeline_configuration.record_video or self.pipeline_configuration.rtmp_stream_video),
-            )
 
         self.websocket_audio_client = None
-        if self.should_create_websocket_client():
-            self.websocket_audio_client = BotWebsocketClient(
-                url=self.bot_in_db.websocket_audio_url(),
-                on_message_callback=self.on_message_from_websocket_audio,
-            )
 
         self.adapter = self.get_bot_adapter()
 
@@ -1279,20 +1268,7 @@ class BotController:
             self.closed_caption_manager.flush_captions()
 
     def save_debug_recording(self):
-        # Only save if the file exists
-        if not os.path.exists(BotAdapter.DEBUG_RECORDING_FILE_PATH):
-            logger.info(f"Debug recording file at {BotAdapter.DEBUG_RECORDING_FILE_PATH} does not exist, not saving")
-            return
-
-        # Find the bot's last event
-        last_bot_event = self.bot_in_db.last_bot_event()
-        if last_bot_event:
-            debug_screenshot = BotDebugScreenshot.objects.create(bot_event=last_bot_event)
-
-            # Save the file directly from the file path
-            with open(BotAdapter.DEBUG_RECORDING_FILE_PATH, "rb") as f:
-                debug_screenshot.file.save(f"debug_screen_recording_{debug_screenshot.object_id}.mp4", f, save=True)
-            logger.info(f"Saved debug recording with ID {debug_screenshot.object_id}")
+        return
 
     def on_message_from_websocket_audio(self, message_json: str):
         try:
