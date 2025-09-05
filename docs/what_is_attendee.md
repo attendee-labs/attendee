@@ -1,84 +1,30 @@
 # What is Attendee?
 
-Attendee is an open-source API that makes it easy to create and manage meeting bots for platforms like Zoom, Google Meet, and Microsoft Teams. Think of it as a powerful toolkit that lets you build applications that can automatically join, record, transcribe, and interact with virtual meetings.
+Attendee is an open-source API that makes it easy to create and manage meeting bots for platforms like Zoom, Google Meet, and Microsoft Teams. Bring meeting transcripts and recordings into your product in days instead of months.
 
-## The Problem Attendee Solves
+## Key Capabilities
 
-Building meeting bots is incredibly complex. Each platform has different APIs, authentication methods, and technical requirements:
+**Recording & Transcription**: Automatically capture high-quality audio and video from meetings with real-time transcription supporting 50+ languages and automatic speaker identification.
 
-- **Zoom** has a powerful SDK but it's low-level and complex
-- **Google Meet** doesn't provide any official API support
-- **Microsoft Teams** has its own unique requirements
-- **Cross-platform** development requires months of work
+**Scheduled Bots**: Schedule bots to join meetings at specific times or integrate with Google and Microsoft calendars for automatic meeting detection.
 
-Attendee abstracts away all this complexity into a single, developer-friendly REST API.
+**Real-time Updates**: Receive instant notifications via webhooks when bots join meetings, transcripts are updated, participants join or leave, or chat messages are sent.
 
-## What Can Attendee Do?
+**Cross-Platform Support**: Same API works seamlessly across Zoom (with OAuth), Google Meet (browser-based), and Microsoft Teams.
 
-### 🎥 Record Meetings
-Automatically capture audio and video from virtual meetings with high quality and flexible storage options.
+## Why Attendee?
 
-### 📝 Transcribe Conversations
-Get real-time transcription with speaker identification, supporting 50+ languages with automatic detection.
+Building meeting bots from scratch requires months of work that can distract from building the application you want. Each platform has different APIs, authentication methods, and technical requirements. Zoom's SDK is low-level and complex, Google Meet has no official API support, and Microsoft Teams has unique requirements.
 
-### 🤖 Join Meetings Automatically
-Schedule bots to join meetings at specific times or integrate with calendar systems for automatic meeting detection.
+Attendee abstracts away all this complexity into a single, developer-friendly REST API. Instead of building meeting bot infrastructure from scratch, you can get started in minutes. And instead of paying for expensive options in the current meeting bot space, self-hosting Attendee reduces costs while giving you full control over your deployment and data.
 
-### 💬 Interact with Meetings
-Send chat messages, display custom avatars, and even have your bot speak into meetings.
+## Advantages Over Competitors
 
-### 🔔 Get Real-time Updates
-Receive instant notifications when bots join, leave, or when transcripts are updated via webhooks.
+**Complete Data Ownership**: Unlike closed-source solutions like Recall.ai, Attendee's open-source nature allows you to self-host the entire platform, ensuring all meeting data stays within your infrastructure. This eliminates third-party data access concerns and meets strict compliance requirements, such as those in the EU.
 
-## How It Works
+**Predictable Costs**: Self-hosting Attendee eliminates usage-based pricing models that can lead to unpredictable costs as you scale. You pay only for your infrastructure, not per meeting or per minute of recording.
 
-1. **Create a Bot** - Make a simple API call to create a bot
-2. **Join a Meeting** - Your bot automatically joins the specified meeting
-3. **Record & Transcribe** - Capture audio/video and get real-time transcription
-4. **Get Results** - Download recordings and transcripts when the meeting ends
+**Full Customization**: With access to the source code, you can modify Attendee to fit your specific needs, add custom features, and integrate with existing systems without waiting for vendor updates or approvals.
 
-## Supported Platforms
+**No Vendor Lock-in**: Maintain complete control over your meeting bot solution without dependency on a single vendor's roadmap or pricing changes.
 
-- **Zoom** - Full support with OAuth integration
-- **Google Meet** - Native browser-based integration  
-- **Microsoft Teams** - Complete Teams meeting support
-
-## Use Cases
-
-### Meeting Recording & Transcription
-Automatically record important meetings and get searchable transcripts for compliance, training, or analysis.
-
-### Meeting Analytics
-Track participation, engagement, and meeting patterns across your organization.
-
-### Customer Support
-Record support calls for quality assurance and training purposes.
-
-### Training & Coaching
-Capture training sessions and coaching calls for review and improvement.
-
-### Compliance
-Meet regulatory requirements for recording certain types of meetings.
-
-## Why Choose Attendee?
-
-### 🚀 Save Months of Development
-Instead of building meeting bot infrastructure from scratch, get started in minutes.
-
-### 💰 Reduce Costs by 10x
-Self-host Attendee to dramatically reduce costs compared to closed-source alternatives.
-
-### 🔧 Developer-Friendly
-Simple REST API with comprehensive documentation and examples.
-
-### 🌐 Cross-Platform
-Same API works across Zoom, Google Meet, and Microsoft Teams.
-
-### 🔒 Open Source
-Full control over your deployment and data with no vendor lock-in.
-
-## Getting Started
-
-Ready to try Attendee? Check out our <scalar-page-link filepath="docs/getting-started.md">Getting Started guide</scalar-page-link> for a quick setup, or explore our <scalar-page-link filepath="docs/openapi.yml">API documentation</scalar-page-link> for detailed technical information.
-
-For enterprise deployments, see our <scalar-page-link filepath="docs/self-hosting.md">Self-Hosting guide</scalar-page-link> for complete deployment instructions.
