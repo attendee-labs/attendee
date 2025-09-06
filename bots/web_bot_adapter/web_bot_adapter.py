@@ -45,6 +45,8 @@ class WebBotAdapter(BotAdapter):
         start_recording_screen_callback,
         stop_recording_screen_callback,
         video_frame_size: tuple[int, int],
+        voice_agent_url: str,
+        webpage_streamer_service_hostname: str,
     ):
         self.display_name = display_name
         self.send_message_callback = send_message_callback
@@ -97,6 +99,11 @@ class WebBotAdapter(BotAdapter):
         self.ready_to_send_chat_messages = False
 
         self.recording_paused = False
+
+        self.voice_agent_url = voice_agent_url
+        self.webpage_streamer_service_hostname = webpage_streamer_service_hostname
+
+        self.webpage_streamer_keepalive_task = None
 
     def pause_recording(self):
         self.recording_paused = True
@@ -254,10 +261,6 @@ class WebBotAdapter(BotAdapter):
 
     def handle_websocket(self, websocket):
         audio_format = None
-        output_dir = "frames"  # Add output directory
-
-        # Create frames directory if it doesn't exist
-        os.makedirs(output_dir, exist_ok=True)
 
         try:
             for message in websocket:
@@ -418,16 +421,21 @@ class WebBotAdapter(BotAdapter):
         options.add_argument("--use-fake-device-for-media-stream")
         options.add_argument("--use-fake-ui-for-media-stream")
         options.add_argument(f"--window-size={self.video_frame_size[0]},{self.video_frame_size[1]}")
-        options.add_argument("--no-sandbox")
         options.add_argument("--start-fullscreen")
         # options.add_argument('--headless=new')
         options.add_argument("--disable-gpu")
         options.add_argument("--disable-extensions")
         options.add_argument("--disable-application-cache")
-        options.add_argument("--disable-setuid-sandbox")
         options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--disable-blink-features=AutomationControlled")
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
+
+        if os.getenv("ENABLE_CHROME_SANDBOX", "false").lower() != "true":
+            options.add_argument("--no-sandbox")
+            options.add_argument("--disable-setuid-sandbox")
+            logger.info("Chrome sandboxing is disabled")
+        else:
+            logger.info("Chrome sandboxing is enabled")
 
         prefs = {
             "credentials_enable_service": False,
@@ -619,6 +627,8 @@ class WebBotAdapter(BotAdapter):
 
         self.media_sending_enable_timestamp_ms = time.time() * 1000
 
+        self.start_streaming_from_webpage()
+
     def leave(self):
         if self.left_meeting:
             return
@@ -687,6 +697,10 @@ class WebBotAdapter(BotAdapter):
             except Exception as e:
                 logger.info(f"Error shutting down websocket server: {e}")
 
+        # If we were sending the keepalive to the streaming service, send a shutdown request
+        if self.webpage_streamer_keepalive_task:
+            self.send_webpage_streamer_shutdown_request()
+
         self.cleaned_up = True
 
     def check_auto_leave_conditions(self) -> None:
@@ -717,6 +731,65 @@ class WebBotAdapter(BotAdapter):
                 logger.info(f"Auto-leaving meeting because bot has been running for more than {self.automatic_leave_configuration.max_uptime_seconds} seconds")
                 self.send_message_callback({"message": self.Messages.ADAPTER_REQUESTED_BOT_LEAVE_MEETING, "leave_reason": BotAdapter.LEAVE_REASON.AUTO_LEAVE_MAX_UPTIME})
                 return
+
+    def streaming_service_hostname(self):
+        # If we're running in k8s, the streaming service will be on another pod which is addressable using via a per-pod service
+        if os.getenv("LAUNCH_BOT_METHOD") == "kubernetes":
+            return f"{self.webpage_streamer_service_hostname}"
+        # Otherwise the streaming service will be running in a separate docker compose service, so we address it using the service name
+        return "attendee-webpage-streamer-local"
+
+    def send_webpage_streamer_keepalive_periodically(self):
+        """Send keepalive requests to the streaming service every 60 seconds."""
+        while not self.left_meeting and not self.cleaned_up:
+            try:
+                time.sleep(60)  # Wait 60 seconds between keepalive requests
+
+                if self.left_meeting or self.cleaned_up:
+                    break
+
+                response = requests.post(f"http://{self.streaming_service_hostname()}:8000/keepalive", json={})
+                logger.info(f"Webpage streamer keepalive response: {response.status_code}")
+
+            except Exception as e:
+                logger.info(f"Failed to send webpage streamer keepalive: {e}")
+                # Continue the loop even if a single keepalive fails
+
+        logger.info("Webpage streamer keepalive task stopped")
+
+    def send_webpage_streamer_shutdown_request(self):
+        try:
+            response = requests.post(f"http://{self.streaming_service_hostname()}:8000/shutdown", json={})
+            logger.info(f"Webpage streamer shutdown response: {response.json()}")
+        except Exception as e:
+            logger.info(f"Webpage streamer shutdown response: {e}")
+
+    def start_streaming_from_webpage(self):
+        if not self.voice_agent_url:
+            return
+
+        logger.info(f"Start streaming from webpage: {self.voice_agent_url}")
+        peerConnectionOffer = self.driver.execute_script("return window.botOutputManager.getBotOutputPeerConnectionOffer();")
+        logger.info(f"Peer connection offer: {peerConnectionOffer}")
+        if peerConnectionOffer.get("error"):
+            logger.error(f"Error getting peer connection offer: {peerConnectionOffer.get('error')}, returning")
+            return
+
+        offer_response = requests.post(f"http://{self.streaming_service_hostname()}:8000/offer", json={"sdp": peerConnectionOffer["sdp"], "type": peerConnectionOffer["type"]})
+        logger.info(f"Offer response: {offer_response.json()}")
+        self.driver.execute_script(f"window.botOutputManager.startBotOutputPeerConnection({json.dumps(offer_response.json())});")
+
+        start_streaming_response = requests.post(f"http://{self.streaming_service_hostname()}:8000/start_streaming", json={"url": self.voice_agent_url})
+        logger.info(f"Start streaming response: {start_streaming_response}")
+
+        if start_streaming_response.status_code != 200:
+            logger.info(f"Failed to start streaming, not starting webpage streamer keepalive task. Response: {start_streaming_response.status_code}")
+            return
+
+        # Start the keepalive task after successful streaming start
+        if self.webpage_streamer_keepalive_task is None or not self.webpage_streamer_keepalive_task.is_alive():
+            self.webpage_streamer_keepalive_task = threading.Thread(target=self.send_webpage_streamer_keepalive_periodically, daemon=True)
+            self.webpage_streamer_keepalive_task.start()
 
     def ready_to_show_bot_image(self):
         self.send_message_callback({"message": self.Messages.READY_TO_SHOW_BOT_IMAGE})

@@ -9,7 +9,10 @@ services:
       - POSTGRES_HOST=postgres
       - REDIS_URL=redis://redis:6379/5
       - DJANGO_SETTINGS_MODULE=attendee.settings.development
-    command: ["/bin/bash", "-c", "/opt/bin/entrypoint.sh && celery -A attendee worker -l INFO"]
+      - ENABLE_CHROME_SANDBOX=true
+    command: "celery -A attendee worker -l INFO"
+    security_opt:
+      - seccomp=./bots/web_bot_adapter/chrome_seccomp.json
 
   attendee-scheduler-local:
     build: ./
@@ -21,7 +24,7 @@ services:
       - POSTGRES_HOST=postgres
       - REDIS_URL=redis://redis:6379/5
       - DJANGO_SETTINGS_MODULE=attendee.settings.development
-    command: ["/bin/bash", "-c", "/opt/bin/entrypoint.sh && python manage.py run_scheduler"]
+    command: "python manage.py run_scheduler"
 
   attendee-app-local:
     build: ./
@@ -36,6 +39,22 @@ services:
       - REDIS_URL=redis://redis:6379/5
       - DJANGO_SETTINGS_MODULE=attendee.settings.development
     command: python manage.py runserver 0.0.0.0:8000
+
+  attendee-webpage-streamer-local:
+    build: ./
+    volumes:
+     - .:/attendee
+    networks:
+      - attendee_network
+    ports:
+      - "8001:8000"
+    environment:
+      - DJANGO_SETTINGS_MODULE=attendee.settings.development
+      - ENABLE_CHROME_SANDBOX=true
+    command: "python bots/webpage_streamer/run_webpage_streamer.py"
+    security_opt:
+      - seccomp=./bots/web_bot_adapter/chrome_seccomp.json
+
 
   postgres:
     image: postgres:15.3-alpine

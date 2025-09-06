@@ -7,6 +7,9 @@ class StyleManager {
         this.frameStyleElement = null;
         this.frameAdjustInterval = null;
         this.neededInteractionsInterval = null;
+
+        // Stream used which combines the audio tracks from the meeting. Does NOT include the bot's audio
+        this.meetingAudioStream = null;
     }
 
     addAudioTrack(audioTrack) {
@@ -130,6 +133,12 @@ class StyleManager {
         this.neededInteractionsInterval = setInterval(() => {
             this.checkNeededInteractions();
         }, 5000);
+
+        this.meetingAudioStream = destination.stream;
+    }
+    
+    getMeetingAudioStream() {
+        return this.meetingAudioStream;
     }
 
     async processMixedAudioTrack() {
@@ -2265,6 +2274,100 @@ class BotOutputManager {
         this.gainNode = null;
         this.destination = null;
         this.botOutputAudioTrack = null;
+
+        // For outputting a stream
+        this.botOutputMediaStream = null;
+        this.botOutputPeerConnection = null;
+    }
+
+    playMediaStream(stream) {
+        if (this.botOutputMediaStream) {
+            this.botOutputMediaStream.disconnect();
+        }
+        this.botOutputMediaStream = stream;
+
+        turnOffMicAndCamera();
+
+        // after 1000 ms
+        setTimeout(() => {
+            turnOnMicAndCamera();
+        }, 1000);
+    }
+
+    async getBotOutputPeerConnectionOffer() {
+        try
+        {
+            // 2) Create the RTCPeerConnection
+            this.botOutputPeerConnection = new RTCPeerConnection();
+
+            // 3) Receive the server's *video* and *audio*
+            const ms = new MediaStream();
+            this.botOutputPeerConnection.ontrack = (ev) => {
+                ms.addTrack(ev.track);
+                // If we've received both video and audio, play the stream
+                if (ms.getVideoTracks().length > 0 && ms.getAudioTracks().length > 0) {
+                    botOutputManager.playMediaStream(ms);
+                }
+            };
+
+            // We still want to receive the server's video
+            this.botOutputPeerConnection.addTransceiver('video', { direction: 'recvonly' });
+
+            // ❗ Instead of recvonly audio, we now **send** our mic upstream:
+            const meetingAudioStream = window.styleManager.getMeetingAudioStream();
+            for (const track of meetingAudioStream.getAudioTracks()) {
+                this.botOutputPeerConnection.addTrack(track, meetingAudioStream);
+            }
+
+            // Create/POST offer → set remote answer
+            const offer = await this.botOutputPeerConnection.createOffer();
+            await this.botOutputPeerConnection.setLocalDescription(offer);
+            return { sdp: this.botOutputPeerConnection.localDescription.sdp, type: this.botOutputPeerConnection.localDescription.type };
+        }
+        catch (e) {
+            return { error: e.message };
+        }
+    }
+
+    async startBotOutputPeerConnection(offerResponse) {
+        await this.botOutputPeerConnection.setRemoteDescription(offerResponse);
+
+        // Start latency measurement for the bot output peer connection
+        this.startLatencyMeter(this.botOutputPeerConnection, "bot-output");
+    }
+
+    startLatencyMeter(pc, label="rx") {
+        setInterval(async () => {
+            const stats = await pc.getStats();
+            let rtt_ms = 0, jb_a_ms = 0, jb_v_ms = 0, dec_v_ms = 0;
+
+            stats.forEach(r => {
+                if (r.type === 'candidate-pair' && r.state === 'succeeded' && r.nominated) {
+                    rtt_ms = (r.currentRoundTripTime || 0) * 1000;
+                }
+                if (r.type === 'inbound-rtp' && r.kind === 'audio') {
+                    const d = (r.jitterBufferDelay || 0);
+                    const n = (r.jitterBufferEmittedCount || 1);
+                    jb_a_ms = (d / n) * 1000;
+                }
+                if (r.type === 'inbound-rtp' && r.kind === 'video') {
+                    const d = (r.jitterBufferDelay || 0);
+                    const n = (r.jitterBufferEmittedCount || 1);
+                    jb_v_ms = (d / n) * 1000;
+                    dec_v_ms = ((r.totalDecodeTime || 0) / (r.framesDecoded || 1)) * 1000;
+                }
+            });
+
+            const est_audio_owd = (rtt_ms / 2) + jb_a_ms;
+            const est_video_owd = (rtt_ms / 2) + jb_v_ms + dec_v_ms;
+
+            const logStatement = `[${label}] est one-way: audio≈${est_audio_owd|0}ms, video≈${est_video_owd|0}ms  (rtt=${rtt_ms|0}, jb_a=${jb_a_ms|0}, jb_v=${jb_v_ms|0}, dec_v=${dec_v_ms|0})`;
+            console.log(logStatement);
+            window.ws.sendJson({
+                type: 'BOT_OUTPUT_PEER_CONNECTION_STATS',
+                logStatement: logStatement
+            });
+        }, 60000);
     }
 
     displayImage(imageBytes) {
@@ -2542,6 +2645,10 @@ navigator.mediaDevices.getUserMedia = function(constraints) {
             newStream.addTrack(botOutputVideoElementCaptureStream.getVideoTracks()[0]);
         }
         */
+        if (constraints.video && botOutputManager.botOutputMediaStream) {
+            console.log("Adding botOutputMediaStream", botOutputManager.botOutputMediaStream.getVideoTracks()[0]);
+            newStream.addTrack(botOutputManager.botOutputMediaStream.getVideoTracks()[0]);
+        }
 
         if (constraints.video && botOutputManager.botOutputCanvasElementCaptureStream) {
             realConsole?.log("Adding canvas track", botOutputManager.botOutputCanvasElementCaptureStream.getVideoTracks()[0]);
@@ -2553,6 +2660,16 @@ navigator.mediaDevices.getUserMedia = function(constraints) {
             newStream.addTrack(botOutputManager.botOutputAudioTrack);
         }  
   
+        if (botOutputManager.botOutputMediaStream) {
+            // connect the botOutputMediaStream stream to the audio context
+            if (botOutputManager.botOutputMediaStream.getAudioTracks().length > 0) {
+                botOutputManager.initializeBotOutputAudioTrack();
+                const botOutputMediaStreamSource = botOutputManager.audioContextForBotOutput.createMediaStreamSource(botOutputManager.botOutputMediaStream);
+                botOutputMediaStreamSource.connect(botOutputManager.gainNode);
+                console.log("Connected botOutputMediaStream audio track to audio context");
+            }
+        }
+
         return newStream;
       })
       .catch(err => {

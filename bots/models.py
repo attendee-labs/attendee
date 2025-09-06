@@ -536,6 +536,13 @@ class Bot(models.Model):
         websocket_audio_settings = websocket_settings.get("audio") or {}
         return websocket_audio_settings.get("sample_rate", 16000)
 
+    def voice_agent_url(self):
+        voice_agent_settings = self.settings.get("voice_agent_settings", {}) or {}
+        return voice_agent_settings.get("url", None)
+
+    def should_launch_webpage_streamer(self):
+        return bool(self.voice_agent_url())
+
     def zoom_tokens_callback_url(self):
         callback_settings = self.settings.get("callback_settings", {})
         if callback_settings is None:
@@ -617,6 +624,9 @@ class Bot(models.Model):
 
     def k8s_pod_name(self):
         return f"bot-pod-{self.id}-{self.object_id}".lower().replace("_", "-")
+
+    def k8s_webpage_streamer_service_hostname(self):
+        return self.k8s_pod_name() + "-webpage-streamer-service.attendee.svc.cluster.local"
 
     def automatic_leave_settings(self):
         return self.settings.get("automatic_leave_settings", {})

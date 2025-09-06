@@ -70,8 +70,12 @@ jobs:
           -e POSTGRES_HOST \
           -e REDIS_URL \
           -e DJANGO_SETTINGS_MODULE \
-          attendee-test:latest bash -c "python init_env.py > .env && python manage.py test --keepdb --tag zoom_tests && python manage.py test --keepdb --exclude-tag zoom_tests"
-
+          attendee-test:latest bash -lc '
+            set -e
+            python init_env.py > /tmp/.env
+            python -m dotenv -f /tmp/.env run -- python manage.py test --keepdb --tag zoom_tests
+            python -m dotenv -f /tmp/.env run -- python manage.py test --keepdb --exclude-tag zoom_tests
+          '
   lint:
     name: Run linting
     runs-on: ubuntu-latest

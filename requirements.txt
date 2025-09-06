@@ -89,3 +89,4 @@ durationpy==0.9
 kubernetes==32.0.0
 stripe==11.6.0
 tldextract==5.3.0
+aiortc==1.10.1
