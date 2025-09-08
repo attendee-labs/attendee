@@ -34,6 +34,21 @@ spec:
         - name: {{ $key }}
           value: {{ $value | quote }}
         {{- end }}
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: transcript-secrets
+              key: DB_RECORDER_USER
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: transcript-secrets
+              key: DB_RECORDER_PASS
+        - name: POSTGRES_DB
+          valueFrom:
+            configMapKeyRef:
+              name: transcript-config
+              key: DB_RECORDER_NAME
         envFrom:
         - configMapRef:
             name: {{ .Values.envFrom.configMapRef }}
