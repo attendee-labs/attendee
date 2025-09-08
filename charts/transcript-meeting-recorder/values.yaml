@@ -33,7 +33,7 @@ env:
   K8S_DOCKER_SECRETS: docker-secrets
   BOT_POD_IMAGE: vanyabrucker/transcript-meeting-recorder
   CUBER_RELEASE_VERSION: "1.0.11_staging"
-  CUBER_NAMESPACE: "default"
+  CUBER_NAMESPACE: "apps"
 
 envFrom:
   configMapRef: transcript-config
