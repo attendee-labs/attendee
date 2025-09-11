@@ -2,4 +2,4 @@ apiVersion: v2
 name: transcript-meeting-recorder-api
 description: A Helm chart for transcript-meeting-recorder-api
 version: 0.0.3
-appVersion: "1.0.11_staging"
+appVersion: "1.0.13_staging"
