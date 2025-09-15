@@ -418,7 +418,7 @@ class GoogleMeetUIMethods:
 
         self.set_layout(layout_to_select)
 
-        if False:
+        if True:
             self.disable_incoming_video()
 
         if self.google_meet_closed_captions_language:
