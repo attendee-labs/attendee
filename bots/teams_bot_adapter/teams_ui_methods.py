@@ -195,6 +195,17 @@ class TeamsUIMethods:
                 self.click_element(dismiss_button, "dismiss_button")
             raise UiRequestToJoinDeniedException("Someone in the call denied your request to join", step)
 
+    def turn_off_incoming_video(self):
+        logger.info("Waiting for the view button...")
+        view_button = self.locate_element(step="view_button", condition=EC.presence_of_element_located((By.CSS_SELECTOR, "#view-mode-button, #custom-view-button")), wait_time_seconds=60)
+        logger.info("Clicking the view button...")
+        self.click_element(view_button, "view_button")
+
+        logger.info("Waiting for the turn off incoming video button...")
+        turn_off_incoming_video_button = self.locate_element(step="turn_off_incoming_video_button", condition=EC.presence_of_element_located((By.CSS_SELECTOR, "[aria-label='Turn off incoming video']")), wait_time_seconds=10)
+        logger.info("Clicking the turn off incoming video button...")
+        self.click_element(turn_off_incoming_video_button, "turn_off_incoming_video_button")
+
     def set_layout(self, layout_to_select):
         logger.info("Waiting for the view button...")
         view_button = self.locate_element(step="view_button", condition=EC.presence_of_element_located((By.CSS_SELECTOR, "#view-mode-button, #custom-view-button")), wait_time_seconds=60)
@@ -259,6 +270,9 @@ class TeamsUIMethods:
         self.click_captions_button()
 
         self.set_layout(self.get_layout_to_select())
+
+        if True:
+            self.turn_off_incoming_video()
 
         self.ready_to_show_bot_image()
 
