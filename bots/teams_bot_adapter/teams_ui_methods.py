@@ -271,7 +271,7 @@ class TeamsUIMethods:
 
         self.set_layout(self.get_layout_to_select())
 
-        if True:
+        if False:
             self.turn_off_incoming_video()
 
         self.ready_to_show_bot_image()
