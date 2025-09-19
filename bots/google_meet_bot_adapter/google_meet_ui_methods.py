@@ -418,6 +418,9 @@ class GoogleMeetUIMethods:
 
         self.set_layout(layout_to_select)
 
+        if True:
+            self.disable_incoming_video()
+
         if self.google_meet_closed_captions_language:
             self.select_language(self.google_meet_closed_captions_language)
 
@@ -438,6 +441,58 @@ class GoogleMeetUIMethods:
                 step,
                 e,
             )
+
+    def disable_incoming_video(self):
+        logger.info("Disabling incoming video")
+        logger.info("Waiting for the more options button...")
+        MORE_OPTIONS_BUTTON_SELECTOR = 'button[jsname="NakZHc"][aria-label="More options"]'
+        more_options_button = self.locate_element(
+            step="more_options_button_for_language_selection",
+            condition=EC.presence_of_element_located((By.CSS_SELECTOR, MORE_OPTIONS_BUTTON_SELECTOR)),
+            wait_time_seconds=6,
+        )
+        logger.info("Clicking the more options button...")
+        self.click_element(more_options_button, "more_options_button")
+
+        logger.info("Waiting for the settings list item...")
+        settings_list_item = self.locate_element(
+            step="settings_list_item",
+            condition=EC.presence_of_element_located((By.XPATH, '//li[.//span[text()="Settings"]]')),
+            wait_time_seconds=6,
+        )
+        logger.info("Clicking the settings list item...")
+        self.click_element(settings_list_item, "settings_list_item")
+
+        logger.info("Waiting for the video button...")
+        video_button = self.locate_element(
+            step="video_button",
+            condition=EC.presence_of_element_located((By.CSS_SELECTOR, 'button[aria-label="Video"]')),
+            wait_time_seconds=6,
+        )
+        logger.info("Clicking the video button...")
+        self.click_element(video_button, "video_button")
+
+        # After clicking the video button, select "Audio only" option
+        logger.info("Waiting for the Audio only option...")
+        audio_only_option = self.locate_element(
+            step="audio_only_option",
+            condition=EC.presence_of_element_located((By.CSS_SELECTOR, 'li[aria-label="Audio only"]')),
+            wait_time_seconds=6,
+        )
+        logger.info("Clicking the Audio only option...")
+        # Click the option using javascript
+        self.driver.execute_script("arguments[0].click();", audio_only_option)
+
+        logger.info("Waiting for the close button")
+        close_button = self.locate_element(
+            step="close_button",
+            condition=EC.presence_of_element_located((By.CSS_SELECTOR, '[aria-modal="true"] button[aria-label="Close dialog"]')),
+            wait_time_seconds=6,
+        )
+        logger.info("Clicking the close button")
+        self.click_element(close_button, "close_button")
+
+        logger.info("Incoming video disabled")
 
     def select_language(self, language):
         logger.info(f"Selecting language: {language}")
