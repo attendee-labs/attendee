@@ -86,6 +86,18 @@ For example, if you want to use Deepgram with english and the nova-2 model, you 
 }
 ```
 
+Or if you want to use Groq with a custom prompt and language, you will set the `transcription_settings` to:
+
+```json
+{
+    "groq": {
+        "model": "whisper-large-v3-turbo",
+        "prompt": "This is a meeting about AI and machine learning",
+        "language": "en"
+    }
+}
+```
+
 ## Setting up webhooks for real time transcription
 
 You can set up webhooks for real time transcription in the dashboard. Go to the Settings > Webhooks page and click the 'Create Webhook' button.

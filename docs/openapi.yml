@@ -2034,6 +2034,24 @@ components:
               required:
               - model
               additionalProperties: false
+            groq:
+              type: object
+              properties:
+                model:
+                  type: string
+                  enum:
+                  - whisper-large-v3-turbo
+                  description: The Groq model to use for transcription. Defaults to whisper-large-v3-turbo if not specified.
+                prompt:
+                  type: string
+                  description: Optional prompt to use for the Groq transcription to provide context and improve accuracy
+                language:
+                  type: string
+                  description: 'The language to use for transcription. See here in
+                    the ''Set 1'' column for available language codes: https://en.wikipedia.org/wiki/List_of_ISO_639_language_codes.
+                    This parameter is optional but if you know the language in advance,
+                    setting it will improve accuracy.'
+              additionalProperties: false
             assembly_ai:
               type: object
               properties:
