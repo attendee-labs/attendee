@@ -422,6 +422,16 @@ class Bot(models.Model):
     def openai_transcription_language(self):
         return self.settings.get("transcription_settings", {}).get("openai", {}).get("language", None)
 
+    def groq_transcription_prompt(self):
+        return self.settings.get("transcription_settings", {}).get("groq", {}).get("prompt", None)
+
+    def groq_transcription_model(self):
+        default_model = "whisper-large-v3-turbo"
+        return self.settings.get("transcription_settings", {}).get("groq", {}).get("model", default_model)
+
+    def groq_transcription_language(self):
+        return self.settings.get("transcription_settings", {}).get("groq", {}).get("language", None)
+
     def gladia_code_switching_languages(self):
         return self.settings.get("transcription_settings", {}).get("gladia", {}).get("code_switching_languages", None)
 
@@ -1499,6 +1509,7 @@ class TranscriptionProviders(models.IntegerChoices):
     ASSEMBLY_AI = 5, "Assembly AI"
     SARVAM = 6, "Sarvam"
     ELEVENLABS = 7, "ElevenLabs"
+    GROQ = 8, "Groq"
 
 
 from storages.backends.s3boto3 import S3Boto3Storage
@@ -1764,6 +1775,7 @@ class Credentials(models.Model):
         TEAMS_BOT_LOGIN = 8, "Teams Bot Login"
         EXTERNAL_MEDIA_STORAGE = 9, "External Media Storage"
         ELEVENLABS = 10, "ElevenLabs"
+        GROQ = 11, "Groq"
 
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="credentials")
     credential_type = models.IntegerField(choices=CredentialTypes.choices, null=False)

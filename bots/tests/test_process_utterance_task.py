@@ -15,7 +15,7 @@ from bots.models import (
     TranscriptionFailureReasons,
     Utterance,
 )
-from bots.tasks.process_utterance_task import get_transcription_via_assemblyai, get_transcription_via_deepgram, get_transcription_via_elevenlabs, get_transcription_via_gladia, get_transcription_via_openai, get_transcription_via_sarvam, process_utterance
+from bots.tasks.process_utterance_task import get_transcription_via_assemblyai, get_transcription_via_deepgram, get_transcription_via_elevenlabs, get_transcription_via_gladia, get_transcription_via_groq, get_transcription_via_openai, get_transcription_via_sarvam, process_utterance
 
 
 class ProcessUtteranceTaskTest(TransactionTestCase):
@@ -1461,3 +1461,214 @@ class ElevenLabsProviderTest(TransactionTestCase):
             self.assertIsNone(transcript)
             self.assertEqual(failure["reason"], TranscriptionFailureReasons.INTERNAL_ERROR)
             self.assertIn("Network error", failure["error"])
+
+
+class GroqProviderTest(TransactionTestCase):
+    """Unit tests for get_transcription_via_groq"""
+
+    def setUp(self):
+        # Minimal DB fixtures
+        self.org = Organization.objects.create(name="Org")
+        self.project = Project.objects.create(name="Proj", organization=self.org)
+        self.bot = Bot.objects.create(project=self.project, meeting_url="https://zoom.us/j/xyz")
+
+        # Recording with Groq provider
+        self.recording = Recording.objects.create(
+            bot=self.bot,
+            recording_type=1,
+            transcription_type=1,
+            state=RecordingStates.COMPLETE,
+            transcription_state=RecordingTranscriptionStates.IN_PROGRESS,
+            transcription_provider=8,  # Groq
+        )
+
+        self.participant = Participant.objects.create(bot=self.bot, uuid=str(uuid.uuid4()))
+        self.utterance = Utterance.objects.create(
+            recording=self.recording,
+            participant=self.participant,
+            audio_blob=b"rawpcmbytes",
+            timestamp_ms=0,
+            duration_ms=500,
+            sample_rate=16_000,
+        )
+
+        # Groq credentials
+        self.cred = Credentials.objects.create(
+            project=self.project,
+            credential_type=Credentials.CredentialTypes.GROQ,
+        )
+
+    def _patch_creds(self):
+        """Helper to patch credentials for testing."""
+        return mock.patch.object(self.cred.__class__, "get_credentials", return_value={"api_key": "gsk_test_key"})
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3")
+    def test_success_path(self, mock_pcm, mock_post):
+        """Test successful Groq transcription."""
+        with self._patch_creds():
+            mock_response = mock.Mock(status_code=200)
+            mock_response.json.return_value = {"text": "hello world"}
+            mock_post.return_value = mock_response
+
+            transcript, failure = get_transcription_via_groq(self.utterance)
+
+            # Assertions
+            self.assertIsNone(failure)
+            self.assertEqual(transcript["transcript"], "hello world")
+
+            # Verify PCM to MP3 conversion was called
+            mock_pcm.assert_called_once_with(b"rawpcmbytes", sample_rate=16_000)
+
+            # Verify request was made correctly
+            mock_post.assert_called_once()
+            call_args = mock_post.call_args
+            self.assertEqual(call_args[0][0], "https://api.groq.com/openai/v1/audio/transcriptions")  # URL is first positional argument
+            self.assertEqual(call_args[1]["headers"]["Authorization"], "Bearer gsk_test_key")
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3")
+    def test_success_with_custom_settings(self, mock_pcm, mock_post):
+        """Test successful Groq transcription with custom model, prompt, and language."""
+        # Update bot settings to include custom Groq configuration
+        self.bot.settings = {"transcription_settings": {"groq": {"model": "whisper-large-v3-turbo", "prompt": "This is a meeting about AI", "language": "en"}}}
+        self.bot.save()
+
+        with self._patch_creds():
+            mock_response = mock.Mock(status_code=200)
+            mock_response.json.return_value = {"text": "custom transcript"}
+            mock_post.return_value = mock_response
+
+            transcript, failure = get_transcription_via_groq(self.utterance)
+
+            # Assertions
+            self.assertIsNone(failure)
+            self.assertEqual(transcript["transcript"], "custom transcript")
+
+            # Verify custom settings were passed in the request
+            call_args = mock_post.call_args
+            files = call_args[1]["files"]
+            self.assertEqual(files["model"], (None, "whisper-large-v3-turbo"))
+            self.assertEqual(files["prompt"], (None, "This is a meeting about AI"))
+            self.assertEqual(files["language"], (None, "en"))
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3")
+    def test_default_model_when_not_specified(self, mock_pcm, mock_post):
+        """Test that default model is used when not specified in settings."""
+        with self._patch_creds():
+            mock_response = mock.Mock(status_code=200)
+            mock_response.json.return_value = {"text": "default model transcript"}
+            mock_post.return_value = mock_response
+
+            transcript, failure = get_transcription_via_groq(self.utterance)
+
+            # Assertions
+            self.assertIsNone(failure)
+            self.assertEqual(transcript["transcript"], "default model transcript")
+
+            # Verify default model was used
+            call_args = mock_post.call_args
+            files = call_args[1]["files"]
+            self.assertEqual(files["model"], (None, "whisper-large-v3-turbo"))
+
+    def test_short_audio_skipped(self):
+        """Test that audio shorter than 80ms is skipped."""
+        # Create utterance with very short duration
+        short_utterance = Utterance.objects.create(
+            recording=self.recording,
+            participant=self.participant,
+            audio_blob=b"short",
+            timestamp_ms=0,
+            duration_ms=50,  # Less than 80ms
+            sample_rate=16_000,
+        )
+
+        with self._patch_creds():
+            transcript, failure = get_transcription_via_groq(short_utterance)
+
+            # Should return empty transcript without making API call
+            self.assertIsNone(failure)
+            self.assertEqual(transcript["transcript"], "")
+
+    def test_missing_credentials_row(self):
+        """No Credentials row → CREDENTIALS_NOT_FOUND."""
+        # Remove the credential row created in setUp
+        self.cred.delete()
+
+        transcript, failure = get_transcription_via_groq(self.utterance)
+
+        self.assertIsNone(transcript)
+        self.assertEqual(failure["reason"], TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND)
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3")
+    def test_invalid_credentials_401(self, mock_pcm, mock_post):
+        """Groq returns 401 → CREDENTIALS_INVALID."""
+        with self._patch_creds():
+            mock_response = mock.Mock(status_code=401)
+            mock_post.return_value = mock_response
+
+            transcript, failure = get_transcription_via_groq(self.utterance)
+
+            self.assertIsNone(transcript)
+            self.assertEqual(failure["reason"], TranscriptionFailureReasons.CREDENTIALS_INVALID)
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3")
+    def test_request_failure_500(self, mock_pcm, mock_post):
+        """Groq returns 500 → TRANSCRIPTION_REQUEST_FAILED."""
+        with self._patch_creds():
+            mock_response = mock.Mock(status_code=500)
+            mock_response.text = "Internal Server Error"
+            mock_post.return_value = mock_response
+
+            transcript, failure = get_transcription_via_groq(self.utterance)
+
+            self.assertIsNone(transcript)
+            self.assertEqual(failure["reason"], TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED)
+            self.assertEqual(failure["status_code"], 500)
+            self.assertEqual(failure["response_text"], "Internal Server Error")
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3")
+    def test_request_exception(self, mock_pcm, mock_post):
+        """Network request exception → INTERNAL_ERROR."""
+        with self._patch_creds():
+            mock_post.side_effect = Exception("Network error")
+
+            transcript, failure = get_transcription_via_groq(self.utterance)
+
+            self.assertIsNone(transcript)
+            self.assertEqual(failure["reason"], TranscriptionFailureReasons.INTERNAL_ERROR)
+            self.assertIn("Network error", failure["error"])
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3")
+    def test_malformed_response(self, mock_pcm, mock_post):
+        """Test handling of malformed JSON response."""
+        with self._patch_creds():
+            mock_response = mock.Mock(status_code=200)
+            mock_response.json.side_effect = ValueError("Invalid JSON")
+            mock_post.return_value = mock_response
+
+            transcript, failure = get_transcription_via_groq(self.utterance)
+
+            self.assertIsNone(transcript)
+            self.assertEqual(failure["reason"], TranscriptionFailureReasons.INTERNAL_ERROR)
+            self.assertIn("Invalid JSON", failure["error"])
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3")
+    def test_empty_response_text(self, mock_pcm, mock_post):
+        """Test handling of empty response text."""
+        with self._patch_creds():
+            mock_response = mock.Mock(status_code=200)
+            mock_response.json.return_value = {"text": ""}
+            mock_post.return_value = mock_response
+
+            transcript, failure = get_transcription_via_groq(self.utterance)
+
+            # Should still succeed but with empty transcript
+            self.assertIsNone(failure)
+            self.assertEqual(transcript["transcript"], "")

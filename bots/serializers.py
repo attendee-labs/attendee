@@ -268,6 +268,26 @@ class BotImageSerializer(serializers.Serializer):
                 "required": ["model_id"],
                 "additionalProperties": False,
             },
+            "groq": {
+                "type": "object",
+                "properties": {
+                    "model": {
+                        "type": "string",
+                        "enum": ["whisper-large-v3-turbo"],
+                        "description": "The Groq model to use for transcription. Currently only 'whisper-large-v3-turbo' is supported.",
+                    },
+                    "prompt": {
+                        "type": "string",
+                        "description": "Optional prompt to use for the Groq transcription to guide the model's style and format.",
+                    },
+                    "language": {
+                        "type": "string",
+                        "description": "The language to use for transcription. See here in the 'Set 1' column for available language codes: https://en.wikipedia.org/wiki/List_of_ISO_639_language_codes. This parameter is optional but if you know the language in advance, setting it will improve accuracy. Groq supports multilingual transcription.",
+                    },
+                },
+                "required": [],
+                "additionalProperties": False,
+            },
         },
         "required": [],
     }
@@ -1067,6 +1087,26 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
                     "tag_audio_events": {"type": "boolean", "description": "Whether to tag audio events like 'laughter' in the transcription."},
                 },
                 "required": ["model_id"],
+                "additionalProperties": False,
+            },
+            "groq": {
+                "type": "object",
+                "properties": {
+                    "model": {
+                        "type": "string",
+                        "enum": ["whisper-large-v3-turbo"],
+                        "description": "The Groq model to use for transcription. Currently only 'whisper-large-v3-turbo' is supported.",
+                    },
+                    "prompt": {
+                        "type": "string",
+                        "description": "Optional prompt to use for the Groq transcription to guide the model's style and format.",
+                    },
+                    "language": {
+                        "type": "string",
+                        "description": "The language to use for transcription. See here in the 'Set 1' column for available language codes: https://en.wikipedia.org/wiki/List_of_ISO_639_language_codes. This parameter is optional but if you know the language in advance, setting it will improve accuracy. Groq supports multilingual transcription.",
+                    },
+                },
+                "required": [],
                 "additionalProperties": False,
             },
         },

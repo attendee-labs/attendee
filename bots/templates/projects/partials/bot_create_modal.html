@@ -22,6 +22,23 @@
                         <div class="form-text">A friendly name for this bot</div>
                     </div>
                     
+                    <div class="mb-3">
+                        <label for="id_transcription_provider" class="form-label">Transcription Provider</label>
+                        <select class="form-select" id="id_transcription_provider" name="transcription_provider">
+                            {% for provider in available_transcription_providers %}
+                                <option value="{{ provider.value }}" {% if provider.value == "meeting_closed_captions" %}selected{% endif %}>
+                                    {{ provider.label }}
+                                </option>
+                            {% endfor %}
+                        </select>
+                        <div class="form-text">
+                            Choose the transcription provider for this bot. Only providers with configured credentials are shown.
+                            {% if available_transcription_providers|length == 1 %}
+                                <br><small class="text-muted">No additional transcription providers are configured. <a href="{% url 'projects:project-credentials' project.object_id %}">Configure credentials</a> to enable more options.</small>
+                            {% endif %}
+                        </div>
+                    </div>
+                    
                     <div id="formErrors" class="alert alert-danger d-none"></div>
                 </form>
                 
@@ -129,14 +146,24 @@
         // Get form fields
         const meetingUrlField = document.getElementById('id_meeting_url');
         const botNameField = document.getElementById('id_bot_name');
+        const transcriptionProviderField = document.getElementById('id_transcription_provider');
         const codeBlock = document.getElementById('apiCodeExample');
         
-        if (meetingUrlField && botNameField && codeBlock) {
+        if (meetingUrlField && botNameField && transcriptionProviderField && codeBlock) {
             // Function to update the curl command
             function updateCurlCommand() {
                 const meetingUrl = meetingUrlField.value || 'https://zoom.us/j/123?pwd=456';
                 const botName = botNameField.value || 'My Bot';
+                const transcriptionProvider = transcriptionProviderField.value || 'meeting_closed_captions';
                 const currentHost = window.location.origin;
+                
+                // Create transcription settings object
+                let transcriptionSettings = {};
+                if (transcriptionProvider !== 'meeting_closed_captions') {
+                    transcriptionSettings[transcriptionProvider] = {};
+                } else {
+                    transcriptionSettings[transcriptionProvider] = {};
+                }
                 
                 // Create properly formatted curl command  
                 const lines = [
@@ -146,7 +173,8 @@
                     `  --header 'Content-Type: application/json' \\`,
                     `  --data '{`,
                     `    "meeting_url": "${meetingUrl}",`,
-                    `    "bot_name": "${botName}"`,
+                    `    "bot_name": "${botName}",`,
+                    `    "transcription_settings": ${JSON.stringify(transcriptionSettings, null, 4).replace(/^/gm, '    ')}`,
                     `  }'`
                 ];
                 
@@ -159,6 +187,7 @@
             // Add event listeners to form fields
             meetingUrlField.addEventListener('input', updateCurlCommand);
             botNameField.addEventListener('input', updateCurlCommand);
+            transcriptionProviderField.addEventListener('change', updateCurlCommand);
             
             // Set initial value with proper formatting
             updateCurlCommand();

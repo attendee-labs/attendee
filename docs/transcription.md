@@ -21,6 +21,7 @@ Third-party-based transcription is generally of higher quality than closed capti
 - OpenAI
 - Gladia
 - Assembly AI
+- Groq
 
 See the [API reference](https://docs.attendee.dev/api-reference#tag/bots/POST/api/v1/bots) for supported parameters for configuring the transcription providers.
 
@@ -137,3 +138,25 @@ To use a custom OpenAI-compatible endpoint (such as a proxy server or alternativ
 - `OPENAI_MODEL_NAME`: The model name to use for transcription (default: `gpt-4o-transcribe`)
 
 Example: `OPENAI_BASE_URL=https://your-proxy.com/v1` and `OPENAI_MODEL_NAME=whisper-large-v3`
+
+### Groq
+
+Fast and cost-effective transcription provider with OpenAI-compatible API. Good quality and supports multiple languages.
+
+Can transcribe audio where the speaker is switching languages in the middle of a sentence.
+
+Free tier available with usage limits.
+
+## User Interface Improvements
+
+### Credential Management
+- Added "Delete Credentials" button to all credential types for better credential lifecycle management
+- Users can now easily remove credentials they no longer need
+- Improved credential management workflow with edit and delete functionality
+
+### Bot Creation
+- Added transcription provider dropdown in the create bot form
+- Only shows providers that have configured credentials
+- Provides better user experience by showing available options upfront
+- Includes helpful text when no additional providers are configured
+- Dynamic API code example updates based on selected transcription provider

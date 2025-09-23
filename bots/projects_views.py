@@ -249,6 +249,11 @@ class CreateCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 
                 if not all(credentials_data.values()):
                     return HttpResponse("Missing required credentials data", status=400)
+            elif credential_type == Credentials.CredentialTypes.GROQ:
+                credentials_data = {"api_key": request.POST.get("api_key")}
+
+                if not all(credentials_data.values()):
+                    return HttpResponse("Missing required credentials data", status=400)
             elif credential_type == Credentials.CredentialTypes.GOOGLE_TTS:
                 credentials_data = {"service_account_json": request.POST.get("service_account_json")}
 
@@ -288,11 +293,63 @@ class CreateCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
                 return render(request, "projects/partials/sarvam_credentials.html", context)
             elif credential.credential_type == Credentials.CredentialTypes.ELEVENLABS:
                 return render(request, "projects/partials/elevenlabs_credentials.html", context)
+            elif credential.credential_type == Credentials.CredentialTypes.GROQ:
+                return render(request, "projects/partials/groq_credentials.html", context)
             elif credential.credential_type == Credentials.CredentialTypes.GOOGLE_TTS:
                 return render(request, "projects/partials/google_tts_credentials.html", context)
             elif credential.credential_type == Credentials.CredentialTypes.TEAMS_BOT_LOGIN:
                 return render(request, "projects/partials/teams_bot_login_credentials.html", context)
             elif credential.credential_type == Credentials.CredentialTypes.EXTERNAL_MEDIA_STORAGE:
+                return render(request, "projects/partials/external_media_storage_credentials.html", context)
+            else:
+                return HttpResponse("Cannot render the partial for this credential type", status=400)
+
+        except Exception as e:
+            return HttpResponse(str(e), status=400)
+
+
+class DeleteCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
+    def post(self, request, object_id):
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
+
+        try:
+            credential_type = int(request.POST.get("credential_type"))
+            if credential_type not in [choice[0] for choice in Credentials.CredentialTypes.choices]:
+                return HttpResponse("Invalid credential type", status=400)
+
+            # Find and delete the credential
+            credential = Credentials.objects.filter(project=project, credential_type=credential_type).first()
+
+            if credential:
+                credential.delete()
+
+            # Return the updated partial for the specific credential type
+            context = self.get_project_context(object_id, project)
+            context["credentials"] = None
+            context["credential_type"] = credential_type
+
+            # Render the appropriate partial based on credential type
+            if credential_type == Credentials.CredentialTypes.ZOOM_OAUTH:
+                return render(request, "projects/partials/zoom_credentials.html", context)
+            elif credential_type == Credentials.CredentialTypes.DEEPGRAM:
+                return render(request, "projects/partials/deepgram_credentials.html", context)
+            elif credential_type == Credentials.CredentialTypes.GLADIA:
+                return render(request, "projects/partials/gladia_credentials.html", context)
+            elif credential_type == Credentials.CredentialTypes.OPENAI:
+                return render(request, "projects/partials/openai_credentials.html", context)
+            elif credential_type == Credentials.CredentialTypes.GOOGLE_TTS:
+                return render(request, "projects/partials/google_tts_credentials.html", context)
+            elif credential_type == Credentials.CredentialTypes.ASSEMBLY_AI:
+                return render(request, "projects/partials/assembly_ai_credentials.html", context)
+            elif credential_type == Credentials.CredentialTypes.SARVAM:
+                return render(request, "projects/partials/sarvam_credentials.html", context)
+            elif credential_type == Credentials.CredentialTypes.ELEVENLABS:
+                return render(request, "projects/partials/elevenlabs_credentials.html", context)
+            elif credential_type == Credentials.CredentialTypes.GROQ:
+                return render(request, "projects/partials/groq_credentials.html", context)
+            elif credential_type == Credentials.CredentialTypes.TEAMS_BOT_LOGIN:
+                return render(request, "projects/partials/teams_bot_login_credentials.html", context)
+            elif credential_type == Credentials.CredentialTypes.EXTERNAL_MEDIA_STORAGE:
                 return render(request, "projects/partials/external_media_storage_credentials.html", context)
             else:
                 return HttpResponse("Cannot render the partial for this credential type", status=400)
@@ -322,6 +379,8 @@ class ProjectCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 
         elevenlabs_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.ELEVENLABS).first()
 
+        groq_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.GROQ).first()
+
         teams_bot_login_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.TEAMS_BOT_LOGIN).first()
 
         external_media_storage_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.EXTERNAL_MEDIA_STORAGE).first()
@@ -345,6 +404,8 @@ class ProjectCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
                 "sarvam_credential_type": Credentials.CredentialTypes.SARVAM,
                 "elevenlabs_credentials": elevenlabs_credentials.get_credentials() if elevenlabs_credentials else None,
                 "elevenlabs_credential_type": Credentials.CredentialTypes.ELEVENLABS,
+                "groq_credentials": groq_credentials.get_credentials() if groq_credentials else None,
+                "groq_credential_type": Credentials.CredentialTypes.GROQ,
                 "teams_bot_login_credentials": teams_bot_login_credentials.get_credentials() if teams_bot_login_credentials else None,
                 "teams_bot_login_credential_type": Credentials.CredentialTypes.TEAMS_BOT_LOGIN,
                 "external_media_storage_credentials": external_media_storage_credentials.get_credentials() if external_media_storage_credentials else None,
@@ -434,6 +495,30 @@ class ProjectBotsView(LoginRequiredMixin, ProjectUrlContextMixin, ListView):
 
         # Check if any bots in the current page have a join_at value
         context["has_scheduled_bots"] = any(bot.join_at is not None for bot in context["bots"])
+
+        # Add available transcription providers based on configured credentials
+        available_providers = []
+
+        # Check which transcription providers have credentials configured
+        if Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.DEEPGRAM).exists():
+            available_providers.append({"value": "deepgram", "label": "Deepgram (Google Meet/Teams/Zoom Native SDK)"})
+        if Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.GLADIA).exists():
+            available_providers.append({"value": "gladia", "label": "Gladia (Google Meet/Teams/Zoom Native SDK)"})
+        if Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.OPENAI).exists():
+            available_providers.append({"value": "openai", "label": "OpenAI (Google Meet/Teams/Zoom Native SDK)"})
+        if Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.ASSEMBLY_AI).exists():
+            available_providers.append({"value": "assembly_ai", "label": "Assembly AI (Google Meet/Teams/Zoom Native SDK)"})
+        if Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.SARVAM).exists():
+            available_providers.append({"value": "sarvam", "label": "Sarvam (Google Meet/Teams/Zoom Native SDK)"})
+        if Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.ELEVENLABS).exists():
+            available_providers.append({"value": "elevenlabs", "label": "ElevenLabs (Google Meet/Teams/Zoom Native SDK)"})
+        if Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.GROQ).exists():
+            available_providers.append({"value": "groq", "label": "Groq (Google Meet/Teams/Zoom Native SDK)"})
+
+        # Always add closed captions as an option
+        available_providers.append({"value": "meeting_closed_captions", "label": "Meeting Closed Captions (Google Meet/Teams/Zoom Web SDK)"})
+
+        context["available_transcription_providers"] = available_providers
 
         return context
 
@@ -993,9 +1078,20 @@ class CreateBotView(LoginRequiredMixin, ProjectUrlContextMixin, View):
         try:
             project = get_project_for_user(user=request.user, project_object_id=object_id)
 
+            # Get transcription provider from form
+            transcription_provider = request.POST.get("transcription_provider", "meeting_closed_captions")
+
+            # Build transcription settings based on selected provider
+            transcription_settings = {}
+            if transcription_provider != "meeting_closed_captions":
+                transcription_settings[transcription_provider] = {}
+            else:
+                transcription_settings["meeting_closed_captions"] = {}
+
             data = {
                 "meeting_url": request.POST.get("meeting_url"),
                 "bot_name": request.POST.get("bot_name") or "Meeting Bot",
+                "transcription_settings": transcription_settings,
             }
 
             bot, error = create_bot(data=data, source=BotCreationSource.DASHBOARD, project=project)

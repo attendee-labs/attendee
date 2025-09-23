@@ -93,6 +93,25 @@ class TestCreateBot(TestCase):
         self.assertEqual(bot2.recordings.first().transcription_provider, TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM)
         self.assertEqual(bot2.use_zoom_web_adapter(), True)
 
+    def test_create_bot_with_groq_transcription_settings(self):
+        """Test creating bots with Groq transcription settings"""
+        # Create Groq credentials
+        Credentials.objects.create(project=self.project, credential_type=Credentials.CredentialTypes.GROQ)
+
+        # Test Google Meet bot with Groq transcription settings
+        bot, error = create_bot(data={"meeting_url": "https://meet.google.com/abc-defg-hij", "bot_name": "Groq Test Bot", "transcription_settings": {"groq": {"model": "whisper-large-v3-turbo", "prompt": "This is a meeting about AI", "language": "en"}}}, source=BotCreationSource.API, project=self.project)
+        if error:
+            print(f"Bot creation error: {error}")
+        self.assertIsNotNone(bot)
+        self.assertIsNotNone(bot.recordings.first())
+        self.assertIsNone(error)
+        self.assertEqual(bot.recordings.first().transcription_provider, TranscriptionProviders.GROQ)
+
+        # Verify Groq settings are accessible
+        self.assertEqual(bot.groq_transcription_model(), "whisper-large-v3-turbo")
+        self.assertEqual(bot.groq_transcription_prompt(), "This is a meeting about AI")
+        self.assertEqual(bot.groq_transcription_language(), "en")
+
     def test_create_bot_with_image(self):
         bot, error = create_bot(data={"meeting_url": "https://teams.microsoft.com/meet/123?p=123", "bot_name": "Test Bot", "bot_image": {"type": "image/png", "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="}}, source=BotCreationSource.API, project=self.project)
         self.assertIsNotNone(bot)

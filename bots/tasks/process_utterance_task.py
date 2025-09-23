@@ -38,6 +38,8 @@ def get_transcription(utterance, recording):
             transcription, failure_data = get_transcription_via_sarvam(utterance)
         elif recording.transcription_provider == TranscriptionProviders.ELEVENLABS:
             transcription, failure_data = get_transcription_via_elevenlabs(utterance)
+        elif recording.transcription_provider == TranscriptionProviders.GROQ:
+            transcription, failure_data = get_transcription_via_groq(utterance)
         else:
             raise Exception(f"Unknown transcription provider: {recording.transcription_provider}")
 
@@ -299,6 +301,62 @@ def get_transcription_via_openai(utterance):
     transcription = {"transcript": result.get("text", "")}
 
     return transcription, None
+
+
+def get_transcription_via_groq(utterance):
+    recording = utterance.recording
+    groq_credentials_record = recording.bot.project.credentials.filter(credential_type=Credentials.CredentialTypes.GROQ).first()
+    if not groq_credentials_record:
+        return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND}
+
+    groq_credentials = groq_credentials_record.get_credentials()
+    if not groq_credentials:
+        return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND}
+
+    # If the audio blob is less than 80ms in duration, just return an empty transcription
+    # Audio clips this short are almost never generated, it almost certainly didn't have any speech
+    # and if we send it to the groq api, it will fail with a corrupted file error
+    if utterance.duration_ms < 80:
+        logger.info(f"Groq transcription skipped for utterance {utterance.id} because it's less than 80ms in duration")
+        return {"transcript": ""}, None
+
+    # Convert PCM audio to MP3
+    audio_data = utterance.audio_blob.tobytes() if hasattr(utterance.audio_blob, "tobytes") else utterance.audio_blob
+    payload_mp3 = pcm_to_mp3(audio_data, sample_rate=utterance.sample_rate)
+
+    # Prepare the request for Groq's API (compatible with OpenAI format)
+    url = "https://api.groq.com/openai/v1/audio/transcriptions"
+    headers = {
+        "Authorization": f"Bearer {groq_credentials['api_key']}",
+    }
+    files = {"file": ("file.mp3", payload_mp3, "audio/mpeg"), "model": (None, recording.bot.groq_transcription_model())}
+
+    # Add optional parameters if configured
+    if recording.bot.groq_transcription_prompt():
+        files["prompt"] = (None, recording.bot.groq_transcription_prompt())
+    if recording.bot.groq_transcription_language():
+        files["language"] = (None, recording.bot.groq_transcription_language())
+
+    try:
+        response = requests.post(url, headers=headers, files=files)
+
+        if response.status_code == 401:
+            return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_INVALID}
+
+        if response.status_code != 200:
+            logger.error(f"Groq transcription failed with status code {response.status_code}: {response.text}")
+            return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "status_code": response.status_code, "response_text": response.text}
+
+        result = response.json()
+        logger.info(f"Groq transcription completed successfully for utterance {utterance.id}.")
+
+        # Format the response to match our expected schema
+        transcription = {"transcript": result.get("text", "")}
+
+        return transcription, None
+    except Exception as e:
+        logger.error(f"Groq transcription failed with exception: {str(e)}")
+        return None, {"reason": TranscriptionFailureReasons.INTERNAL_ERROR, "error": str(e)}
 
 
 def get_transcription_via_assemblyai(utterance):
