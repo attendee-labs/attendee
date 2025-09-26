@@ -99,5 +99,27 @@ if [[ "${PA_DEBUG:-0}" = "1" ]]; then
   echo "================"
 fi
 
+# Validate storage configuration
+STORAGE_MODE="${STORAGE_UPLOAD_MODE:-s3}"
+echo "[entrypoint] Storage upload mode: $STORAGE_MODE"
+
+case "$STORAGE_MODE" in
+  "s3")
+    [[ -n "${AWS_RECORDING_STORAGE_BUCKET_NAME:-}" ]] || echo "WARNING: AWS_RECORDING_STORAGE_BUCKET_NAME not set"
+    ;;
+  "azure")
+    [[ -n "${AZURE_STORAGE_ACCOUNT_NAME:-}" ]] || echo "WARNING: AZURE_STORAGE_ACCOUNT_NAME not set"
+    [[ -n "${AZURE_STORAGE_CONTAINER_NAME:-}" ]] || echo "WARNING: AZURE_STORAGE_CONTAINER_NAME not set"
+    ;;
+  "both")
+    [[ -n "${AWS_RECORDING_STORAGE_BUCKET_NAME:-}" ]] || echo "WARNING: AWS_RECORDING_STORAGE_BUCKET_NAME not set"
+    [[ -n "${AZURE_STORAGE_ACCOUNT_NAME:-}" ]] || echo "WARNING: AZURE_STORAGE_ACCOUNT_NAME not set"
+    [[ -n "${AZURE_STORAGE_CONTAINER_NAME:-}" ]] || echo "WARNING: AZURE_STORAGE_CONTAINER_NAME not set"
+    ;;
+  *)
+    echo "WARNING: Unknown STORAGE_UPLOAD_MODE: $STORAGE_MODE (expected: s3, azure, or both)"
+    ;;
+esac
+
 echo "[entrypoint] PulseAudio ready. Exec: $*"
 exec "$@"
