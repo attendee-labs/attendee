@@ -31,6 +31,7 @@ class MatchedSpeechStartEvent(SpeechStartEvent):
 @dataclass
 class DiarizedWord(Word):
     participant_id: int
+    original_word_index: int
 
 
 class DiarizationResult(TypedDict):
@@ -149,7 +150,7 @@ def compute_diarization_and_score_for_offset(words: List[AnnotatedWord], speaker
 
         # Assign all the words up until the next matched word to the matched speaker event
         for word_index in range(matched_speaker_event.matched_word_index, next_matched_word_index):
-            diarized_words.append(DiarizedWord(words[word_index].text, words[word_index].start, words[word_index].end, matched_speaker_event.participant_id))
+            diarized_words.append(DiarizedWord(words[word_index].text, words[word_index].start, words[word_index].end, matched_speaker_event.participant_id, word_index))
 
     return score, diarized_words
 
