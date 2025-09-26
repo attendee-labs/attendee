@@ -305,6 +305,7 @@ TRANSCRIPTION_SETTINGS_SCHEMA = {
                 "speaker_labels": {"type": "boolean", "description": "Whether to enable AssemblyAI's ML-based diarization. Only needed if multiple people are speaking into a single microphone. Defaults to false."},
                 "use_eu_server": {"type": "boolean", "description": "Whether to use the EU server for transcription. Defaults to false."},
                 "language_detection_options": {"type": "object", "properties": {"expected_languages": {"type": "array", "items": {"type": "string"}}, "fallback_language": {"type": "string"}}, "description": "Options for controlling the automatic language detection. See AssemblyAI docs for details.", "additionalProperties": False},
+                "use_mixed_audio_diarization": {"type": "boolean", "description": "Defaults to false", "default": False},
             },
             "required": [],
             "additionalProperties": False,

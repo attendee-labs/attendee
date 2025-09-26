@@ -21,26 +21,7 @@ from .authentication import ApiKeyAuthentication
 from .bots_api_utils import BotCreationSource, create_bot, create_bot_chat_message_request, create_bot_media_request_for_image, delete_bot, patch_bot, send_sync_command
 from .launch_bot_utils import launch_bot
 from .meeting_url_utils import meeting_type_from_url
-from .models import (
-    AsyncTranscription,
-    AsyncTranscriptionStates,
-    Bot,
-    BotEventManager,
-    BotEventSubTypes,
-    BotEventTypes,
-    BotMediaRequest,
-    BotMediaRequestMediaTypes,
-    BotMediaRequestStates,
-    BotStates,
-    ChatMessage,
-    Credentials,
-    MediaBlob,
-    MeetingTypes,
-    Participant,
-    ParticipantEvent,
-    Recording,
-    Utterance,
-)
+from .models import AsyncTranscription, AsyncTranscriptionStates, Bot, BotEventManager, BotEventSubTypes, BotEventTypes, BotMediaRequest, BotMediaRequestMediaTypes, BotMediaRequestStates, BotStates, ChatMessage, Credentials, MediaBlob, MeetingTypes, Participant, ParticipantEvent, Recording, TranscriptionSettings, Utterance
 from .serializers import (
     AsyncTranscriptionSerializer,
     BotChatMessageRequestSerializer,
@@ -809,12 +790,18 @@ class TranscriptView(APIView):
             if not bot.project.organization.is_async_transcription_enabled:
                 return Response({"error": "Async transcription is not enabled for your account."}, status=status.HTTP_400_BAD_REQUEST)
 
+            serializer = CreateAsyncTranscriptionSerializer(data={"transcription_settings": request.data.get("transcription_settings")})
+            if not serializer.is_valid():
+                return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+            transcription_settings_for_validation = TranscriptionSettings(serializer.validated_data["transcription_settings"])
+
             meeting_type = meeting_type_from_url(bot.meeting_url)
             if meeting_type == MeetingTypes.ZOOM:
                 if bot.use_zoom_web_adapter():
                     return Response({"error": "This feature is not supported for Zoom when using the web SDK."}, status=status.HTTP_400_BAD_REQUEST)
 
-            if not bot.record_async_transcription_audio_chunks():
+            if not bot.record_async_transcription_audio_chunks() and transcription_settings_for_validation.requires_audio_chunks():
                 return Response({"error": "Cannot generate async transcription because you did not enable recording_settings.record_async_transcription_audio_chunks when you created the bot."}, status=status.HTTP_400_BAD_REQUEST)
 
             if bot.state != BotStates.ENDED:
@@ -827,7 +814,7 @@ class TranscriptView(APIView):
                     status=status.HTTP_404_NOT_FOUND,
                 )
 
-            if not recording.audio_chunks.exclude(audio_blob=b"").exists():
+            if not recording.audio_chunks.exclude(audio_blob=b"").exists() and transcription_settings_for_validation.requires_audio_chunks():
                 return Response({"error": "Cannot create async transcription because the per-speaker audio data has been deleted or was never created."}, status=status.HTTP_400_BAD_REQUEST)
 
             existing_async_transcription_count = AsyncTranscription.objects.filter(
@@ -836,10 +823,6 @@ class TranscriptView(APIView):
             # We only allow a max of 4 async transcriptions per recording
             if existing_async_transcription_count >= 4:
                 return Response({"error": "You cannot have more than 4 async transcriptions per bot."}, status=status.HTTP_400_BAD_REQUEST)
-
-            serializer = CreateAsyncTranscriptionSerializer(data={"transcription_settings": request.data.get("transcription_settings")})
-            if not serializer.is_valid():
-                return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
             async_transcription = AsyncTranscription.objects.create(recording=recording, settings=serializer.validated_data)
 

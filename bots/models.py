@@ -338,6 +338,9 @@ class TranscriptionSettings:
             "fallback_language": language_detection_options.get("fallback_language", "auto"),
         }
 
+    def assemblyai_use_mixed_audio_diarization(self):
+        return self._settings.get("assembly_ai", {}).get("use_mixed_audio_diarization", False)
+
     def sarvam_language_code(self):
         return self._settings.get("sarvam", {}).get("language_code", None)
 
@@ -402,6 +405,11 @@ class TranscriptionSettings:
 
     def meeting_closed_captions_merge_consecutive_captions(self):
         return self._settings.get("meeting_closed_captions", {}).get("merge_consecutive_captions", False)
+
+    def requires_audio_chunks(self):
+        if self.assemblyai_use_mixed_audio_diarization():
+            return False
+        return True
 
 
 class Bot(models.Model):
@@ -1417,6 +1425,7 @@ class Participant(models.Model):
 class ParticipantEventTypes(models.IntegerChoices):
     JOIN = 1, "Join"
     LEAVE = 2, "Leave"
+    SPEECH_START = 3, "Speech Start"
 
     @classmethod
     def type_to_api_code(cls, value):
@@ -1424,6 +1433,7 @@ class ParticipantEventTypes(models.IntegerChoices):
         mapping = {
             cls.JOIN: "join",
             cls.LEAVE: "leave",
+            cls.SPEECH_START: "speech_start",
         }
         return mapping.get(value)
 
@@ -1883,6 +1893,7 @@ class Utterance(models.Model):
     class Sources(models.IntegerChoices):
         PER_PARTICIPANT_AUDIO = 1, "Per Participant Audio"
         CLOSED_CAPTION_FROM_PLATFORM = 2, "Closed Caption From Platform"
+        MIXED_AUDIO = 3, "Mixed Audio"
 
     class AudioFormat(models.IntegerChoices):
         PCM = 1, "PCM"

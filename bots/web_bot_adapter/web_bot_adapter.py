@@ -261,6 +261,9 @@ class WebBotAdapter(BotAdapter):
 
         self.upsert_chat_message_callback(json_data)
 
+    def handle_active_speaker_change(self, json_data):
+        self.add_participant_event_callback({"participant_uuid": json_data["participant_uuid"], "event_type": ParticipantEventTypes.SPEECH_START, "event_data": {}, "timestamp_ms": json_data["timestamp"]})
+
     def handle_websocket(self, websocket):
         audio_format = None
 
@@ -325,6 +328,9 @@ class WebBotAdapter(BotAdapter):
                                 self.after_bot_can_record_meeting()
                             elif json_data.get("change") == "denied":
                                 self.after_bot_recording_permission_denied()
+
+                        elif json_data.get("type") == "ActiveSpeakerChange":
+                            self.handle_active_speaker_change(json_data)
 
                 elif message_type == 2:  # VIDEO
                     self.process_video_frame(message)

@@ -1516,7 +1516,17 @@ const processDominantSpeakerHistoryMessage = (item) => {
     realConsole?.log('processDominantSpeakerHistoryMessage', item);
     const newDominantSpeakerAudioVirtualStreamId = item.history[0];
     dominantSpeakerManager.setDominantSpeakerStreamId(newDominantSpeakerAudioVirtualStreamId);
-    realConsole?.log('newDominantSpeakerParticipant', dominantSpeakerManager.getDominantSpeaker());
+    const dominantSpeakerParticipant = dominantSpeakerManager.getDominantSpeaker();
+    realConsole?.log('newDominantSpeakerParticipant', dominantSpeakerParticipant);
+
+    if (!dominantSpeakerParticipant || !dominantSpeakerParticipant.id)
+        return;
+
+    window.ws.sendJson({
+        type: 'ActiveSpeakerChange',
+        participant_uuid: dominantSpeakerParticipant.id,
+        timestamp: Date.now()
+    });
 }
 
 function convertTimestampAudioSentToUnixTimeMs(timestampAudioSent) {
