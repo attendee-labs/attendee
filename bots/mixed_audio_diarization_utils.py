@@ -42,7 +42,7 @@ class DiarizationResult(TypedDict):
 
 
 WORD_MERGE_DIST_MS = 100
-WORD_MATCH_DIST_MS = 1000
+WORD_MATCH_DIST_MS = 1500
 
 
 def create_annotated_words(words: List[Word]) -> List[AnnotatedWord]:
@@ -118,15 +118,19 @@ def compute_diarization_and_score_for_offset(words: List[AnnotatedWord], speaker
 
             # We expect a speaker change to coincide with an utterance start
             if possible_matched_word.is_utterance_start:
-                possible_matched_word_score = 1
+                prior_term = 0.75
             # A new sentence start is almost as expected
             elif possible_matched_word.is_start_of_new_sentence:
-                possible_matched_word_score = 0.5
+                prior_term = 0.5
             # It's less expected to coincide with a word in the middle of a sentence / utterance
-            # penalize based on how far away it is. If it coincides perfectly, it gets 0.25
             else:
-                normalized_distance = distance_between_speaker_event_and_possible_matched_word / WORD_MATCH_DIST_MS
-                possible_matched_word_score = 0.25 * (1 - normalized_distance)
+                prior_term = 0
+            
+            # Tiebreaker that penalizes based on how far away it is. If it coincides perfectly, it gets 0.25
+            normalized_distance = distance_between_speaker_event_and_possible_matched_word / WORD_MATCH_DIST_MS
+            distance_term = 0.249 * (1 - normalized_distance)
+
+            possible_matched_word_score = distance_term + prior_term
 
             if possible_matched_word_score > best_matched_word_score or best_matched_word_index is None:
                 best_matched_word_index = possible_matched_word_index
@@ -174,7 +178,7 @@ def diarize_words(words: List[Word], speech_start_events: List[SpeechStartEvent]
     annotated_words = create_annotated_words(words)
 
     # Sample offsets from -500 to 500 milliseconds in steps of 10 milliseconds
-    offsets_ms = list(range(-500, 501, 10))
+    offsets_ms = list(range(-1000, 1001, 100))
     # offsets_ms = list(range(-2000, 2000, 100))
     best_score = 0
     best_diarization = None
