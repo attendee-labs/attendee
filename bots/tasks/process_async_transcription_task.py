@@ -135,67 +135,14 @@ def transcribe_recording_via_assemblyai(async_transcription):
 
 
 def create_utterances_for_mixed_audio_based_transcription(async_transcription):
-    # transcription, failure_data = transcribe_recording_via_assemblyai(async_transcription)
-    # if failure_data:
-    #   AsyncTranscriptionManager.set_async_transcription_failed(async_transcription, failure_data={"reason": "bad"})
-    #   return
+    transcription_from_assembly, failure_data = transcribe_recording_via_assemblyai(async_transcription)
+    if failure_data:
+       AsyncTranscriptionManager.set_async_transcription_failed(async_transcription, failure_data={"reason": "bad"})
+       return
 
-    words = [
-        {"text": "Let's", "start": 480, "end": 760, "confidence": 0.81152344, "speaker": None},
-        {"text": "say", "start": 760, "end": 1040, "confidence": 0.70214844, "speaker": None},
-        {"text": "varnish.", "start": 6480, "end": 7200, "confidence": 0.8463542, "speaker": None},
-        {"text": "Orange.", "start": 8480, "end": 9120, "confidence": 0.9938965, "speaker": None},
-        {"text": "Then", "start": 28970, "end": 29130, "confidence": 0.8046875, "speaker": None},
-        {"text": "I'll", "start": 29130, "end": 29370, "confidence": 0.99934894, "speaker": None},
-        {"text": "take.", "start": 29370, "end": 29610, "confidence": 0.99121094, "speaker": None},
-        {"text": "Then", "start": 35050, "end": 35370, "confidence": 0.42895508, "speaker": None},
-        {"text": "I'll", "start": 35370, "end": 35730, "confidence": 0.9921875, "speaker": None},
-        {"text": "take.", "start": 35730, "end": 36010, "confidence": 0.99121094, "speaker": None},
-        {"text": "My", "start": 46650, "end": 46970, "confidence": 0.9980469, "speaker": None},
-        {"text": "name", "start": 46970, "end": 47210, "confidence": 0.9970703, "speaker": None},
-        {"text": "is", "start": 47210, "end": 47450, "confidence": 0.9482422, "speaker": None},
-        {"text": "John", "start": 47450, "end": 47770, "confidence": 0.92871094, "speaker": None},
-        {"text": "Pettigrew.", "start": 47770, "end": 48650, "confidence": 0.94677734, "speaker": None},
-        {"text": "I'm", "start": 50570, "end": 50930, "confidence": 0.9371745, "speaker": None},
-        {"text": "the", "start": 50930, "end": 51090, "confidence": 0.9995117, "speaker": None},
-        {"text": "other", "start": 51090, "end": 51330, "confidence": 0.96484375, "speaker": None},
-        {"text": "person.", "start": 51330, "end": 51690, "confidence": 0.9848633, "speaker": None},
-        {"text": "My", "start": 51770, "end": 52010, "confidence": 0.99902344, "speaker": None},
-        {"text": "name", "start": 52010, "end": 52130, "confidence": 0.9995117, "speaker": None},
-        {"text": "is", "start": 52130, "end": 52330, "confidence": 0.99902344, "speaker": None},
-        {"text": "yt.", "start": 52330, "end": 52890, "confidence": 0.89575195, "speaker": None},
-        {"text": "I'm", "start": 57210, "end": 57370, "confidence": 0.92285156, "speaker": None},
-        {"text": "the", "start": 57370, "end": 57490, "confidence": 0.99853516, "speaker": None},
-        {"text": "original", "start": 57490, "end": 57890, "confidence": 0.9250488, "speaker": None},
-        {"text": "guy.", "start": 57890, "end": 58290, "confidence": 0.99902344, "speaker": None},
-        {"text": "My", "start": 58290, "end": 58530, "confidence": 0.9995117, "speaker": None},
-        {"text": "name's", "start": 58530, "end": 58770, "confidence": 0.8175456, "speaker": None},
-        {"text": "Noah", "start": 58770, "end": 59090, "confidence": 0.9020996, "speaker": None},
-        {"text": "Duncan.", "start": 59090, "end": 59610, "confidence": 0.8338623, "speaker": None},
-        {"text": "I'm", "start": 60170, "end": 60530, "confidence": 0.9983724, "speaker": None},
-        {"text": "pretty", "start": 60530, "end": 60730, "confidence": 1.0, "speaker": None},
-        {"text": "cool.", "start": 60730, "end": 61050, "confidence": 0.99975586, "speaker": None},
-        {"text": "People", "start": 61930, "end": 62330, "confidence": 0.9980469, "speaker": None},
-        {"text": "call", "start": 62330, "end": 62610, "confidence": 0.99609375, "speaker": None},
-        {"text": "me", "start": 62610, "end": 62810, "confidence": 0.99902344, "speaker": None},
-        {"text": "Charles.", "start": 62810, "end": 63370, "confidence": 0.9880371, "speaker": None},
-        {"text": "My", "start": 66490, "end": 66770, "confidence": 0.9868164, "speaker": None},
-        {"text": "name's", "start": 66770, "end": 67210, "confidence": 0.82682294, "speaker": None},
-        {"text": "the", "start": 67850, "end": 68130, "confidence": 0.55908203, "speaker": None},
-        {"text": "other", "start": 68130, "end": 68330, "confidence": 0.98779297, "speaker": None},
-        {"text": "guy.", "start": 68330, "end": 68650, "confidence": 0.99975586, "speaker": None},
-        {"text": "I'm", "start": 68650, "end": 68930, "confidence": 0.8959961, "speaker": None},
-        {"text": "kind", "start": 68930, "end": 69129, "confidence": 1.0, "speaker": None},
-        {"text": "of", "start": 69129, "end": 69290, "confidence": 0.9951172, "speaker": None},
-        {"text": "weird.", "start": 69290, "end": 69610, "confidence": 0.87386066, "speaker": None},
-        {"text": "Most", "start": 70170, "end": 70530, "confidence": 0.86279297, "speaker": None},
-        {"text": "people", "start": 70530, "end": 70850, "confidence": 1.0, "speaker": None},
-        {"text": "like", "start": 70850, "end": 71130, "confidence": 0.99365234, "speaker": None},
-        {"text": "me", "start": 71130, "end": 71450, "confidence": 0.9995117, "speaker": None},
-        {"text": "well", "start": 71450, "end": 71730, "confidence": 0.92578125, "speaker": None},
-        {"text": "enough.", "start": 71730, "end": 72010, "confidence": 0.9897461, "speaker": None},
-        {"text": "It.", "start": 78820, "end": 79060, "confidence": 0.7402344, "speaker": None},
-    ]
+    words = transcription_from_assembly.get("words", [])
+
+    logger.info(f"Words: {words}")
 
     speech_start_events = ParticipantEvent.objects.filter(participant__bot=async_transcription.recording.bot).filter(event_type=ParticipantEventTypes.SPEECH_START).order_by("timestamp_ms").all()
     first_buffer_timestamp_ms = async_transcription.recording.first_buffer_timestamp_ms
@@ -242,8 +189,8 @@ def create_utterances_for_mixed_audio_based_transcription(async_transcription):
                 "words": [
                     {
                         "word": words[i]["text"],
-                        "start": words[i]["start"] - words[word_group["word_indices"][0]]["start"],
-                        "end": words[i]["end"] - words[word_group["word_indices"][0]]["start"],
+                        "start": (words[i]["start"] - words[word_group["word_indices"][0]]["start"]) / 1000.0,
+                        "end": (words[i]["end"] - words[word_group["word_indices"][0]]["start"]) / 1000.0,
                     }
                     for i in word_group["word_indices"]
                 ],
