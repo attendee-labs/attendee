@@ -983,6 +983,43 @@ class UserManager {
     }
 }
 var realConsole;
+
+class ReceiverManager {
+    constructor() {
+        this.receiverMap = new Map();
+    }
+
+    updateContributingSources(receiver, result) {
+        realConsole?.log('updateContributingSources', receiver, result);
+        this.receiverMap.set(receiver, result);
+    }
+
+    getContributingSources(receiver) {
+        return this.receiverMap.get(receiver) || [];
+    }
+}
+
+class RTCRtpReceiverInterceptor {
+    constructor(onGetContributingSources) {
+        // Store the original getContributingSources method
+        const originalGetContributingSources = RTCRtpReceiver.prototype.getContributingSources;
+        
+        // Replace with our intercepted version
+        RTCRtpReceiver.prototype.getContributingSources = function() {
+            // Call the original method with proper this binding and arguments
+            const result = originalGetContributingSources.apply(this, arguments);
+            
+            // Call the callback with the receiver, arguments, and the result
+            if (onGetContributingSources) {
+                onGetContributingSources(this, result, ...arguments);
+            }
+            
+            // Return the original result
+            return result;
+        };
+    }
+}
+
 // Websocket client
 class WebSocketClient {
     // Message types
@@ -1497,6 +1534,14 @@ const dominantSpeakerManager = new DominantSpeakerManager();
 
 const styleManager = new StyleManager();
 window.styleManager = styleManager;
+
+const receiverManager = new ReceiverManager();
+let rtpReceiverInterceptor = null;
+if (window.initialData.sendPerParticipantAudio) {
+    rtpReceiverInterceptor = new RTCRtpReceiverInterceptor((receiver, result, ...args) => {
+        receiverManager.updateContributingSources(receiver, result);
+    });
+}
 
 if (!realConsole) {
     if (document.readyState === 'complete') {
@@ -2694,6 +2739,9 @@ navigator.mediaDevices.getUserMedia = function(constraints) {
 (function () {
     const _bind = Function.prototype.bind;
     Function.prototype.bind = function (thisArg, ...args) {
+    if (this.name === 'subscribeToVoiceLevelChanges') {
+        realConsole?.log('subscribeToVoiceLevelChanges', thisArg, args);
+    }
       if (this.name === 'onMessageReceived') {
         const bound = _bind.apply(this, [thisArg, ...args]);
         return function (...callArgs) {

@@ -413,8 +413,58 @@
             {% endif %}
         </div>
 
+
+        <!-- Participants Events Flat Tab -->
+        {% if participant_events_flat %}
+        <div class="tab-pane fade" id="participants" role="tabpanel">
+            <div class="participants-events-flat-list">
+                <div class="mb-3">
+                    <h6>Participant Events Timeline</h6>
+                    <p class="text-muted small">All participant events in chronological order with timestamps relative to recording start</p>
+                </div>
+                
+                <div class="events-container" style="max-height: 600px; overflow-y: auto;">
+                    {% for event in participant_events_flat %}
+                        <div class="event-item d-flex align-items-start gap-3 py-2 border-bottom">
+                            <div class="speaker-bar" style="background-color: {{ event.participant_uuid|participant_color }}; width: 4px; height: 100%; min-height: 30px; border-radius: 2px; flex-shrink: 0;"></div>
+                            <div class="event-content flex-grow-1">
+                                <div class="d-flex justify-content-between align-items-start">
+                                    <div class="event-details">
+                                        <div class="event-timestamp-participant fw-semibold">
+                                            <span class="timestamp text-primary" style="cursor: pointer" onclick="seekVideo(this, {{ event.timestamp_ms }})">
+                                                {{ event.timestamp_display }}
+                                            </span>
+                                            | {{ event.participant_name }}
+                                        </div>
+                                        <div class="event-type text-muted small">
+                                            {% if event.event_type == ParticipantEventTypes.JOIN %}
+                                                <i class="bi bi-box-arrow-in-right text-success"></i> Joined
+                                            {% elif event.event_type == ParticipantEventTypes.LEAVE %}
+                                                <i class="bi bi-box-arrow-left text-danger"></i> Left
+                                            {% elif event.event_type == ParticipantEventTypes.SPEECH_START %}
+                                                <i class="bi bi-mic text-info"></i> Started Speaking
+                                            {% elif event.event_type == ParticipantEventTypes.SPEECH_END %}
+                                                <i class="bi bi-mic-mute text-secondary"></i> Stopped Speaking
+                                            {% else %}
+                                                <i class="bi bi-circle"></i> {{ event.event_type_display }}
+                                            {% endif %}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    {% empty %}
+                        <div class="alert alert-info">
+                            No participant events recorded for this bot.
+                        </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
         <!-- Participants Tab -->
-        {% if participants %}
+        {% if participants and False %}
         <div class="tab-pane fade" id="participants" role="tabpanel">
             <div class="participants-list">
                 {% for participant in participants %}

@@ -33,6 +33,7 @@ from .models import (
     CalendarStates,
     ChatMessage,
     Credentials,
+    ParticipantEvent,
     CreditTransaction,
     Participant,
     ParticipantEventTypes,
@@ -624,6 +625,37 @@ class ProjectBotDetailView(LoginRequiredMixin, ProjectUrlContextMixin, View):
         # Get participants and participant events for this bot
         participants = Participant.objects.filter(bot=bot, is_the_bot=False).prefetch_related("events").order_by("created_at")
 
+        # Get all participant events and format them with timestamp_display like utterances
+        participant_events_flat = ParticipantEvent.objects.filter(participant__bot=bot).order_by("timestamp_ms")
+        
+        # Convert to flat list with proper timestamp formatting
+        participant_events_data = []
+        first_recording = bot.recordings.first()
+        
+        if first_recording and first_recording.first_buffer_timestamp_ms:
+            for event in participant_events_flat:
+                relative_timestamp_ms = event.timestamp_ms - first_recording.first_buffer_timestamp_ms
+                
+                # Format timestamp_display like utterances (minutes:seconds)
+                if relative_timestamp_ms >= 0:
+                    seconds = relative_timestamp_ms // 1000
+                    timestamp_display = f"{seconds // 60}:{seconds % 60:02d}"
+                else:
+                    timestamp_display = "0:00"
+                
+                participant_events_data.append({
+                    "participant_name": event.participant.full_name,
+                    "event_type": event.event_type,
+                    "event_type_display": event.get_event_type_display(),
+                    "timestamp_ms": relative_timestamp_ms,
+                    "timestamp_display": timestamp_display,
+                    "participant_uuid": event.participant.uuid,
+                })
+        
+        participant_events_flat = participant_events_data
+
+        logger.info(f"Participant events flat: {participant_events_flat}")
+
         # Get resource snapshots for this bot
         resource_snapshots = bot.resource_snapshots.all().order_by("created_at")
 
@@ -649,6 +681,7 @@ class ProjectBotDetailView(LoginRequiredMixin, ProjectUrlContextMixin, View):
                 "webhook_delivery_attempts": webhook_delivery_attempts,
                 "chat_messages": chat_messages,
                 "participants": participants,
+                "participant_events_flat": participant_events_flat,
                 "ParticipantEventTypes": ParticipantEventTypes,
                 "WebhookDeliveryAttemptStatus": WebhookDeliveryAttemptStatus,
                 "credits_consumed": -sum([t.credits_delta() for t in bot.credit_transactions.all()]) if bot.credit_transactions.exists() else None,
