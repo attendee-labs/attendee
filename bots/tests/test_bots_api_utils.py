@@ -27,7 +27,7 @@ class TestValidateMeetingUrlAndCredentials(TestCase):
         """Test Zoom URL and credentials validation"""
         # Test Zoom URL without credentials
         error = validate_meeting_url_and_credentials("https://zoom.us/j/123456789", self.project)
-        self.assertEqual(error, {"error": f"Zoom App credentials are required to create a Zoom bot. Please add Zoom credentials at https://app.attendee.dev/projects/{self.project.object_id}/credentials"})
+        self.assertEqual(error, {"error": f"Zoom App credentials are required to create a Zoom bot. Please add Zoom credentials at http://localhost:8000/projects/{self.project.object_id}/credentials"})
 
     def test_validate_teams_url(self):
         """Test Teams URL validation"""
