@@ -349,14 +349,12 @@ POST /record
 The analysis reveals 6 major deviation categories with varying complexity levels. The most significant challenges are the Swift storage integration and deployment configuration alignment. However, all deviations have clear migration paths using upstream features, particularly the metadata system and external storage framework.
 
 **Key Success Factors**:
-- Fresh upstream start with "rebase" strategy instead of complex merge resolution
-- Early upstream contribution for Swift storage (no S3 compatibility layer needed)
-- Methodical re-implementation using upstream patterns and metadata system
-- Monthly sync process establishment with Linear automation
-- Comprehensive webhook testing for reliable transcription integration
+- Early upstream contribution for Swift storage
+- Comprehensive webhook testing
+- Staged deployment with rollback capability
+- Thorough integration testing
 
 **Expected Outcome**:
-- 60-70% reduction in custom code through upstream pattern adoption
-- Full upstream compatibility with monthly sync capability
-- Community contribution of Swift storage implementation
-- Elimination of merge conflict complexity through fresh start approach
+- 60-70% reduction in custom code
+- Full upstream compatibility
+- Monthly sync capability with <2 hour effort
