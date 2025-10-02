@@ -71,42 +71,12 @@ This document provides a detailed analysis of every deviation from the upstream 
 - **Fallback**: Maintain minimal fork with only Swift storage difference (no S3 compatibility layer)
 - **Approach**: "Rebase" strategy - fresh start with upstream, then re-implement custom features using upstream patterns
 
-### **Data Flow Diagram: Swift Storage + Transcription Integration**
-
-```mermaid
-graph TD
-    A[API Request with file_name] --> B[RecordingCreateView]
-    B --> C[Create Bot + Recording with file_name]
-    C --> D[Bot Controller starts recording]
-    D --> E[Recording completes]
-    E --> F[Extract transcript_id from file_name]
-    F --> G[Upload to Swift Storage]
-    G --> H{Upload Success?}
-    H -->|Yes| I[Call transcript_api_service.start_transcription]
-    H -->|No| J[Call transcript_api_service.could_not_record]
-    I --> K[External Transcription Service]
-    J --> L[Failure notification]
-    
-    style A fill:#e1f5fe
-    style G fill:#fff3e0
-    style K fill:#f3e5f5
-    style L fill:#ffebee
-```
-
-**Flow Explanation:**
-1. **API Entry**: Client sends recording request with custom `file_name` parameter
-2. **Bot Creation**: Custom view creates bot and recording with stored filename
-3. **Recording Process**: Bot controller handles meeting recording
-4. **File Upload**: Completed recording uploaded to Swift storage using custom backend
-5. **Transcription Trigger**: Direct API call to external transcription service
-6. **Error Handling**: Failure notifications sent via direct API calls
-
 ---
 
 ## **DEVIATION 2: Custom API Endpoint with file_name Parameter**
 
 ### **Code References**
-- **Custom View**: [`bots/bots_api_views.py`](./bots/bots_api_views.py) lines 144-200
+- **Custom View**: `bots/bots_api_views.py` lines 144-200
   ```python
   class RecordingCreateView(APIView):
       def post(self, request):
@@ -114,27 +84,20 @@ graph TD
           # Custom bot creation logic with file_name
   ```
 
-- **URL Routing**: [`bots/bots_api_urls.py`](./bots/bots_api_urls.py) line 6
+- **URL Routing**: `bots/bots_api_urls.py` line 6
   ```python
   path("record", bots_api_views.RecordingCreateView.as_view(), name="record-create"),
   ```
 
-- **Serializer Extension**: [`bots/serializers.py`](./bots/serializers.py) line 225
+- **Serializer Extension**: `bots/serializers.py` line 225
   ```python
   class CreateBotSerializer(serializers.Serializer):
       file_name = serializers.CharField(help_text="The name of the file to create")
   ```
 
-### **Dependencies & Environment Variables**
-| Dependency | Purpose | Environment Variable | Required |
-|------------|---------|---------------------|----------|
-| `Django REST Framework` | API view and serialization | - | Yes |
-| `ApiKeyAuthentication` | Custom authentication | - | Yes |
-| Database (Recording model) | Store file_name field | `DATABASE_URL` | Yes |
-
 ### **Database Schema Impact**
 - **Custom Field**: `Recording.file_name` field added to store filename
-- **Usage**: [`bots/bot_controller/bot_controller.py`](./bots/bot_controller/bot_controller.py) lines 195-202
+- **Usage**: `bots/bot_controller/bot_controller.py` lines 195-202
   ```python
   def get_recording_filename(self):
       recording = Recording.objects.get(bot=self.bot_in_db, is_default_recording=True)
@@ -175,7 +138,7 @@ POST /record
 ## **DEVIATION 3: Direct Transcription Service Integration**
 
 ### **Code References**
-- **Service Module**: [`transcript_services/v1/api_service.py`](./transcript_services/v1/api_service.py) (complete file)
+- **Service Module**: `transcript_services/v1/api_service.py` (complete file)
   ```python
   def start_transcription(transcript_uuid):
       # Direct API call to /v1/record/done
@@ -184,7 +147,7 @@ POST /record
       # Direct API call to /v1/record/failed
   ```
 
-- **Bot Controller Integration**: [`bots/bot_controller/bot_controller.py`](./bots/bot_controller/bot_controller.py) lines 14, 276, 291
+- **Bot Controller Integration**: `bots/bot_controller/bot_controller.py` lines 14, 276, 291
   ```python
   import transcript_services.v1.api_service as transcript_api_service
   
@@ -195,12 +158,9 @@ POST /record
   transcript_api_service.start_transcription(transcript_id)
   ```
 
-### **Dependencies & Environment Variables**
-| Dependency | Purpose | Environment Variable | Required |
-|------------|---------|---------------------|----------|
-| `requests` | HTTP client for API calls | - | Yes |
-| External Transcription API | Processing service | `TRANSCRIPT_API_KEY` | Yes |
-| External Transcription API | Service endpoint | `TRANSCRIPT_API_URL` | Yes |
+### **External Dependencies**
+- **Environment Variables**:
+  - `TRANSCRIPT_API_KEY` - API key for transcript service
   - `TRANSCRIPT_API_URL` - Base URL for transcript service
 
 - **Endpoint Dependencies**:
@@ -225,7 +185,7 @@ POST /record
 ## **DEVIATION 4: Custom Bot Controller Logic**
 
 ### **Code References**
-- **File Upload Logic**: [`bots/bot_controller/bot_controller.py`](./bots/bot_controller/bot_controller.py) lines 268-298
+- **File Upload Logic**: `bots/bot_controller/bot_controller.py` lines 268-298
   ```python
   def cleanup(self):
       # Custom filename generation
@@ -252,13 +212,6 @@ POST /record
           return f"{recording.object_id}.{self.bot_in_db.recording_format()}"
   ```
 
-### **Dependencies & Environment Variables**
-| Dependency | Purpose | Environment Variable | Required |
-|------------|---------|---------------------|----------|
-| Swift Storage Backend | File upload destination | `SWIFT_CONTAINER_MEETS` | Yes |
-| Transcription Service | Direct API integration | `TRANSCRIPT_API_KEY`, `TRANSCRIPT_API_URL` | Yes |
-| FileUploader class | Custom upload logic | - | Yes |
-
 ### **Custom Behavior**
 1. **Filename Priority**: Uses `file_name` field if available, falls back to object ID
 2. **Transcript ID Extraction**: Splits filename to extract transcript ID
@@ -276,14 +229,14 @@ POST /record
 ## **DEVIATION 5: Custom Deployment Configuration**
 
 ### **Code References**
-- **Helm Chart**: [`charts/transcript-meeting-recorder/Chart.yaml`](./charts/transcript-meeting-recorder/Chart.yaml)
+- **Helm Chart**: `charts/transcript-meeting-recorder/Chart.yaml`
   ```yaml
   name: transcript-meeting-recorder-api
   version: 0.0.3
   appVersion: "1.0.13_staging"
   ```
 
-- **Custom Image**: [`charts/transcript-meeting-recorder/values.yaml`](./charts/transcript-meeting-recorder/values.yaml) lines 3-5
+- **Custom Image**: `charts/transcript-meeting-recorder/values.yaml` lines 3-5
   ```yaml
   image:
     repository: vanyabrucker/transcript-meeting-recorder
@@ -302,21 +255,12 @@ POST /record
     CUBER_NAMESPACE: "apps"
   ```
 
-- **Config References**: Lines 39-40, [`templates/deployment.yaml`](./charts/transcript-meeting-recorder/templates/deployment.yaml)
+- **Config References**: Lines 39-40, templates/deployment.yaml
   ```yaml
   envFrom:
     configMapRef: transcript-config
     secretRef: transcript-secrets
   ```
-
-### **Dependencies & Environment Variables**
-| Dependency | Purpose | Environment/Config Variable | Required |
-|------------|---------|----------------------------|----------|
-| Helm | Kubernetes deployment tool | - | Yes |
-| Custom Docker Image | Application container | `BOT_POD_IMAGE` | Yes |
-| Kubernetes ConfigMap | Application config | `transcript-config` | Yes |
-| Kubernetes Secret | Sensitive credentials | `transcript-secrets` | Yes |
-| Docker Registry Access | Image pulling | `docker-secrets` | Yes |
 
 ### **Infrastructure Dependencies**
 - **ConfigMap**: `transcript-config` - Application configuration
@@ -343,20 +287,8 @@ POST /record
 ## **DEVIATION 6: Database Schema Extensions**
 
 ### **Code References**
-- **Recording Model**: [`bots/models.py`](./bots/models.py) line 852
-  ```python
-  class Recording(models.Model):
-      file_name = models.CharField(max_length=255, null=False, blank=False)
-  ```
+- **Recording Model**: Custom `file_name` field
 - **Storage Classes**: Custom storage backend references
-- **Migrations**: [`bots/migrations/`](./bots/migrations/) - Schema change migrations
-
-### **Dependencies & Environment Variables**
-| Dependency | Purpose | Environment Variable | Required |
-|------------|---------|---------------------|----------|
-| Django ORM | Database abstraction | `DATABASE_URL` | Yes |
-| PostgreSQL/MySQL | Database backend | `DB_HOST`, `DB_USER`, `DB_PASS` | Yes |
-| Django Migrations | Schema versioning | - | Yes |
 
 ### **Schema Differences**
 | Field | Current | Upstream |
@@ -368,41 +300,6 @@ POST /record
 1. **Data Migration**: Extract `file_name` to metadata
 2. **Schema Cleanup**: Remove custom fields
 3. **Reference Updates**: Update all file_name usage
-
----
-
-## **QUICK SETUP REFERENCE**
-
-### **Environment Variables Summary**
-```bash
-# Swift Storage
-OS_AUTH_URL=https://auth.cloud.ovh.net/v3
-OS_APPLICATION_CREDENTIAL_ID=your_credential_id
-OS_APPLICATION_CREDENTIAL_SECRET=your_credential_secret
-OS_REGION_NAME=your_region
-SWIFT_CONTAINER_MEETS=transcript-meets
-
-# Transcription Service  
-TRANSCRIPT_API_KEY=your_api_key
-TRANSCRIPT_API_URL=https://api.transcription-service.com
-
-# Database
-DATABASE_URL=postgresql://user:pass@host:port/dbname
-
-# Kubernetes Deployment
-LAUNCH_BOT_METHOD=kubernetes
-K8S_CONFIG=transcript-config
-K8S_SECRETS=transcript-secrets
-BOT_POD_IMAGE=vanyabrucker/transcript-meeting-recorder
-```
-
-### **Required Packages**
-```bash
-pip install python-swiftclient
-pip install requests
-pip install django
-pip install djangorestframework
-```
 
 ---
 

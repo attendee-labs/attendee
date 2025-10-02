@@ -225,7 +225,7 @@ POST /record
 ## **DEVIATION 4: Custom Bot Controller Logic**
 
 ### **Code References**
-- **File Upload Logic**: [`bots/bot_controller/bot_controller.py`](./bots/bot_controller/bot_controller.py) lines 268-298
+- **File Upload Logic**: `bots/bot_controller/bot_controller.py` lines 268-298
   ```python
   def cleanup(self):
       # Custom filename generation
@@ -252,13 +252,6 @@ POST /record
           return f"{recording.object_id}.{self.bot_in_db.recording_format()}"
   ```
 
-### **Dependencies & Environment Variables**
-| Dependency | Purpose | Environment Variable | Required |
-|------------|---------|---------------------|----------|
-| Swift Storage Backend | File upload destination | `SWIFT_CONTAINER_MEETS` | Yes |
-| Transcription Service | Direct API integration | `TRANSCRIPT_API_KEY`, `TRANSCRIPT_API_URL` | Yes |
-| FileUploader class | Custom upload logic | - | Yes |
-
 ### **Custom Behavior**
 1. **Filename Priority**: Uses `file_name` field if available, falls back to object ID
 2. **Transcript ID Extraction**: Splits filename to extract transcript ID
@@ -276,14 +269,14 @@ POST /record
 ## **DEVIATION 5: Custom Deployment Configuration**
 
 ### **Code References**
-- **Helm Chart**: [`charts/transcript-meeting-recorder/Chart.yaml`](./charts/transcript-meeting-recorder/Chart.yaml)
+- **Helm Chart**: `charts/transcript-meeting-recorder/Chart.yaml`
   ```yaml
   name: transcript-meeting-recorder-api
   version: 0.0.3
   appVersion: "1.0.13_staging"
   ```
 
-- **Custom Image**: [`charts/transcript-meeting-recorder/values.yaml`](./charts/transcript-meeting-recorder/values.yaml) lines 3-5
+- **Custom Image**: `charts/transcript-meeting-recorder/values.yaml` lines 3-5
   ```yaml
   image:
     repository: vanyabrucker/transcript-meeting-recorder
@@ -302,21 +295,12 @@ POST /record
     CUBER_NAMESPACE: "apps"
   ```
 
-- **Config References**: Lines 39-40, [`templates/deployment.yaml`](./charts/transcript-meeting-recorder/templates/deployment.yaml)
+- **Config References**: Lines 39-40, templates/deployment.yaml
   ```yaml
   envFrom:
     configMapRef: transcript-config
     secretRef: transcript-secrets
   ```
-
-### **Dependencies & Environment Variables**
-| Dependency | Purpose | Environment/Config Variable | Required |
-|------------|---------|----------------------------|----------|
-| Helm | Kubernetes deployment tool | - | Yes |
-| Custom Docker Image | Application container | `BOT_POD_IMAGE` | Yes |
-| Kubernetes ConfigMap | Application config | `transcript-config` | Yes |
-| Kubernetes Secret | Sensitive credentials | `transcript-secrets` | Yes |
-| Docker Registry Access | Image pulling | `docker-secrets` | Yes |
 
 ### **Infrastructure Dependencies**
 - **ConfigMap**: `transcript-config` - Application configuration
@@ -343,20 +327,8 @@ POST /record
 ## **DEVIATION 6: Database Schema Extensions**
 
 ### **Code References**
-- **Recording Model**: [`bots/models.py`](./bots/models.py) line 852
-  ```python
-  class Recording(models.Model):
-      file_name = models.CharField(max_length=255, null=False, blank=False)
-  ```
+- **Recording Model**: Custom `file_name` field
 - **Storage Classes**: Custom storage backend references
-- **Migrations**: [`bots/migrations/`](./bots/migrations/) - Schema change migrations
-
-### **Dependencies & Environment Variables**
-| Dependency | Purpose | Environment Variable | Required |
-|------------|---------|---------------------|----------|
-| Django ORM | Database abstraction | `DATABASE_URL` | Yes |
-| PostgreSQL/MySQL | Database backend | `DB_HOST`, `DB_USER`, `DB_PASS` | Yes |
-| Django Migrations | Schema versioning | - | Yes |
 
 ### **Schema Differences**
 | Field | Current | Upstream |
@@ -368,41 +340,6 @@ POST /record
 1. **Data Migration**: Extract `file_name` to metadata
 2. **Schema Cleanup**: Remove custom fields
 3. **Reference Updates**: Update all file_name usage
-
----
-
-## **QUICK SETUP REFERENCE**
-
-### **Environment Variables Summary**
-```bash
-# Swift Storage
-OS_AUTH_URL=https://auth.cloud.ovh.net/v3
-OS_APPLICATION_CREDENTIAL_ID=your_credential_id
-OS_APPLICATION_CREDENTIAL_SECRET=your_credential_secret
-OS_REGION_NAME=your_region
-SWIFT_CONTAINER_MEETS=transcript-meets
-
-# Transcription Service  
-TRANSCRIPT_API_KEY=your_api_key
-TRANSCRIPT_API_URL=https://api.transcription-service.com
-
-# Database
-DATABASE_URL=postgresql://user:pass@host:port/dbname
-
-# Kubernetes Deployment
-LAUNCH_BOT_METHOD=kubernetes
-K8S_CONFIG=transcript-config
-K8S_SECRETS=transcript-secrets
-BOT_POD_IMAGE=vanyabrucker/transcript-meeting-recorder
-```
-
-### **Required Packages**
-```bash
-pip install python-swiftclient
-pip install requests
-pip install django
-pip install djangorestframework
-```
 
 ---
 
