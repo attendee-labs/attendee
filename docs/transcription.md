@@ -56,6 +56,15 @@ Closed caption-based transcription is free.
 
 For third-party-based transcription, you need to add your API Key for a provider like Deepgram, OpenAI, Gladia, or Assembly AI in the Settings > Credentials page.
 
+### Managing credentials
+
+Once you've added credentials for a transcription provider, you can:
+
+- **Edit credentials**: Click the "Edit Credentials" button to update your API key or other credential information
+- **Delete credentials**: Click the "Delete Credentials" button to remove stored credentials for a provider. This will prevent bots from using that provider until new credentials are added.
+
+The delete credentials feature helps with credential lifecycle management, allowing you to easily remove old or compromised API keys and switch between different provider accounts.
+
 ## Transcription errors
 
 If you are using third-party-based transcription, you may encounter errors from the transcription provider. These errors are visible in the bot detail page in the dashboard, in the transcription section.
