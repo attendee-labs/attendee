@@ -8,6 +8,9 @@ from rest_framework import status
 from accounts.models import Organization
 from bots.models import (
     ApiKey,
+    AsyncTranscription,
+    AsyncTranscriptionStates,
+    AudioChunk,
     Bot,
     BotChatMessageRequest,
     BotChatMessageRequestStates,
@@ -37,8 +40,8 @@ class ApiObjectAccessIntegrationTest(TransactionTestCase):
         """Set up test environment with multiple organizations, projects, and API keys"""
 
         # Create two organizations
-        self.organization_a = Organization.objects.create(name="Organization A", centicredits=10000)
-        self.organization_b = Organization.objects.create(name="Organization B", centicredits=10000)
+        self.organization_a = Organization.objects.create(name="Organization A", centicredits=10000, is_async_transcription_enabled=True)
+        self.organization_b = Organization.objects.create(name="Organization B", centicredits=10000, is_async_transcription_enabled=True)
 
         # Create projects in each organization
         self.project_a = Project.objects.create(name="Project A", organization=self.organization_a)
@@ -70,8 +73,10 @@ class ApiObjectAccessIntegrationTest(TransactionTestCase):
         self.participant_b = Participant.objects.create(bot=self.bot_b, uuid="participant_b_uuid", full_name="Participant B")
 
         # Create utterances for transcript testing
-        self.utterance_a = Utterance.objects.create(recording=self.recording_a, participant=self.participant_a, audio_blob=b"dummy_audio_data", timestamp_ms=1000, duration_ms=2000, transcription={"transcript": "Hello from bot A"})
-        self.utterance_b = Utterance.objects.create(recording=self.recording_b, participant=self.participant_b, audio_blob=b"dummy_audio_data", timestamp_ms=1000, duration_ms=2000, transcription={"transcript": "Hello from bot B"})
+        self.audio_chunk_a = AudioChunk.objects.create(recording=self.recording_a, participant=self.participant_a, audio_blob=b"dummy_audio_data", timestamp_ms=1000, duration_ms=2000, sample_rate=16000)
+        self.audio_chunk_b = AudioChunk.objects.create(recording=self.recording_b, participant=self.participant_b, audio_blob=b"dummy_audio_data", timestamp_ms=1000, duration_ms=2000, sample_rate=16000)
+        self.utterance_a = Utterance.objects.create(recording=self.recording_a, participant=self.participant_a, audio_chunk=self.audio_chunk_a, timestamp_ms=1000, duration_ms=2000, transcription={"transcript": "Hello from bot A"})
+        self.utterance_b = Utterance.objects.create(recording=self.recording_b, participant=self.participant_b, audio_chunk=self.audio_chunk_b, timestamp_ms=1000, duration_ms=2000, transcription={"transcript": "Hello from bot B"})
 
         # Create chat messages
         self.chat_message_a = ChatMessage.objects.create(bot=self.bot_a, participant=self.participant_a, text="Chat message from bot A", to=ChatMessageToOptions.EVERYONE, timestamp=123456789)
@@ -93,6 +98,22 @@ class ApiObjectAccessIntegrationTest(TransactionTestCase):
         # Create chat message requests
         self.chat_request_a = BotChatMessageRequest.objects.create(bot=self.bot_a, to=BotChatMessageToOptions.EVERYONE, message="Test message A", state=BotChatMessageRequestStates.ENQUEUED)
         self.chat_request_b = BotChatMessageRequest.objects.create(bot=self.bot_b, to=BotChatMessageToOptions.EVERYONE, message="Test message B", state=BotChatMessageRequestStates.ENQUEUED)
+
+        # Create async transcriptions for access control testing
+        self.async_transcription_a = AsyncTranscription.objects.create(recording=self.recording_a, state=AsyncTranscriptionStates.COMPLETE)
+        self.async_transcription_b = AsyncTranscription.objects.create(recording=self.recording_b, state=AsyncTranscriptionStates.COMPLETE)
+
+        # Create ended bots for POST transcript testing (these need to be in ENDED state for async transcription creation)
+        self.ended_bot_a = Bot.objects.create(project=self.project_a, name="Ended Bot A", meeting_url="https://zoom.us/j/1111111111", state=BotStates.ENDED, settings={"recording_settings": {"record_async_transcription_audio_chunks": True}})
+        self.ended_bot_b = Bot.objects.create(project=self.project_b, name="Ended Bot B", meeting_url="https://zoom.us/j/2222222222", state=BotStates.ENDED, settings={"recording_settings": {"record_async_transcription_audio_chunks": True}})
+
+        # Create recordings for ended bots
+        self.ended_recording_a = Recording.objects.create(bot=self.ended_bot_a, recording_type=RecordingTypes.AUDIO_AND_VIDEO, transcription_type=TranscriptionTypes.NON_REALTIME, is_default_recording=True, state=RecordingStates.COMPLETE)
+        self.ended_recording_b = Recording.objects.create(bot=self.ended_bot_b, recording_type=RecordingTypes.AUDIO_AND_VIDEO, transcription_type=TranscriptionTypes.NON_REALTIME, is_default_recording=True, state=RecordingStates.COMPLETE)
+
+        # Create audio chunks for ended recordings
+        self.ended_audio_chunk_a = AudioChunk.objects.create(recording=self.ended_recording_a, participant=self.participant_a, audio_blob=b"dummy_audio_data", timestamp_ms=1000, duration_ms=2000, sample_rate=16000)
+        self.ended_audio_chunk_b = AudioChunk.objects.create(recording=self.ended_recording_b, participant=self.participant_b, audio_blob=b"dummy_audio_data", timestamp_ms=1000, duration_ms=2000, sample_rate=16000)
 
     def _make_authenticated_request(self, method, url, api_key, data=None):
         """Helper method to make authenticated API requests"""
@@ -193,6 +214,60 @@ class ApiObjectAccessIntegrationTest(TransactionTestCase):
         # API key A cannot access bot B's transcript
         response = self._make_authenticated_request("GET", f"/api/v1/bots/{self.bot_b.object_id}/transcript", self.api_key_a_plain)
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_transcript_async_transcription_access_control(self):
+        """Test that async transcription access respects project boundaries when using async_transcription_id parameter"""
+        # API key A can access bot A's transcript with bot A's async transcription
+        response = self._make_authenticated_request("GET", f"/api/v1/bots/{self.bot_a.object_id}/transcript?async_transcription_id={self.async_transcription_a.object_id}", self.api_key_a_plain)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        # API key A cannot access bot A's transcript with bot B's async transcription (should fail because async transcription belongs to different recording)
+        response = self._make_authenticated_request("GET", f"/api/v1/bots/{self.bot_a.object_id}/transcript?async_transcription_id={self.async_transcription_b.object_id}", self.api_key_a_plain)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertIn("Async Transcription not found", response.json().get("error", ""))
+
+        # API key A cannot access bot B's transcript with bot B's async transcription (should fail at bot level)
+        response = self._make_authenticated_request("GET", f"/api/v1/bots/{self.bot_b.object_id}/transcript?async_transcription_id={self.async_transcription_b.object_id}", self.api_key_a_plain)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(response.json()["error"], "Bot not found")
+
+        # API key B can access bot B's transcript with bot B's async transcription
+        response = self._make_authenticated_request("GET", f"/api/v1/bots/{self.bot_b.object_id}/transcript?async_transcription_id={self.async_transcription_b.object_id}", self.api_key_b_plain)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        # API key B cannot access bot B's transcript with bot A's async transcription (should fail because async transcription belongs to different recording)
+        response = self._make_authenticated_request("GET", f"/api/v1/bots/{self.bot_b.object_id}/transcript?async_transcription_id={self.async_transcription_a.object_id}", self.api_key_b_plain)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertIn("Async Transcription not found", response.json().get("error", ""))
+
+    def test_transcript_create_async_transcription_access_control(self):
+        """Test that async transcription creation (POST /api/bots/<object_id>/transcript) respects project boundaries"""
+        # API key A can create async transcription for bot A
+        transcription_settings_json = json.dumps({"transcription_settings": {"deepgram": {"language": "en-US", "model": "nova-3"}}})
+        response = self._make_authenticated_request("POST", f"/api/v1/bots/{self.ended_bot_a.object_id}/transcript", self.api_key_a_plain, transcription_settings_json)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        response_data = response.json()
+        self.assertIn("id", response_data)
+        self.assertTrue(response_data["id"].startswith("tran_"))
+        self.assertEqual(response_data["state"], "not_started")
+
+        # API key A cannot create async transcription for bot B (should fail at bot level)
+        response = self._make_authenticated_request("POST", f"/api/v1/bots/{self.ended_bot_b.object_id}/transcript", self.api_key_a_plain, transcription_settings_json)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(response.json()["error"], "Bot not found")
+
+        # API key B can create async transcription for bot B
+        response = self._make_authenticated_request("POST", f"/api/v1/bots/{self.ended_bot_b.object_id}/transcript", self.api_key_b_plain, transcription_settings_json)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        response_data = response.json()
+        self.assertIn("id", response_data)
+        self.assertTrue(response_data["id"].startswith("tran_"))
+        self.assertEqual(response_data["state"], "not_started")
+
+        # API key B cannot create async transcription for bot A (should fail at bot level)
+        response = self._make_authenticated_request("POST", f"/api/v1/bots/{self.ended_bot_a.object_id}/transcript", self.api_key_b_plain, transcription_settings_json)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(response.json()["error"], "Bot not found")
 
     # Tests for Recording View (GET /api/bots/<object_id>/recording)
     def test_recording_access_control(self):
@@ -355,6 +430,22 @@ class ApiObjectAccessIntegrationTest(TransactionTestCase):
         response = self._make_authenticated_request("GET", f"/api/v1/bots/{self.bot_b.object_id}/participant_events", self.api_key_a_plain)
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
+    # Tests for Participants View (GET /api/bots/<object_id>/participants)
+    def test_participants_access_control(self):
+        """Test that participants access respects project boundaries"""
+        # API key A can access bot A's participants
+        response = self._make_authenticated_request("GET", f"/api/v1/bots/{self.bot_a.object_id}/participants", self.api_key_a_plain)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        # Response should be paginated
+        results = response.json().get("results", response.json())
+        if isinstance(results, list):
+            self.assertEqual(len(results), 1)
+            self.assertEqual(results[0]["is_host"], False)
+
+        # API key A cannot access bot B's participants
+        response = self._make_authenticated_request("GET", f"/api/v1/bots/{self.bot_b.object_id}/participants", self.api_key_a_plain)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
     # Test for cross-project object access protection
     def test_cross_project_object_protection(self):
         """Test that objects from one project cannot be accessed via API key from another project"""
@@ -365,6 +456,7 @@ class ApiObjectAccessIntegrationTest(TransactionTestCase):
             ("GET", f"/api/v1/bots/{self.bot_b.object_id}/recording"),
             ("GET", f"/api/v1/bots/{self.bot_b.object_id}/chat_messages"),
             ("GET", f"/api/v1/bots/{self.bot_b.object_id}/participant_events"),
+            ("GET", f"/api/v1/bots/{self.bot_b.object_id}/participants"),
             ("POST", f"/api/v1/bots/{self.bot_b.object_id}/leave"),
             ("POST", f"/api/v1/bots/{self.bot_b.object_id}/send_chat_message"),
             ("POST", f"/api/v1/bots/{self.bot_b.object_id}/delete_data"),

@@ -64,7 +64,7 @@ class GoogleMeetUIMethods:
         try:
             element.click()
         except Exception as e:
-            logger.info(f"Error occurred when clicking element for step {step}, will retry")
+            logger.info(f"Error occurred when clicking element for step {step}, will retry. Exception class name was {e.__class__.__name__}")
             raise UiCouldNotClickElementException("Error occurred when clicking element", step, e)
 
     # If the meeting you're about to join is being recorded, gmeet makes you click an additional button after you're admitted to the meeting
@@ -182,6 +182,9 @@ class GoogleMeetUIMethods:
                 captions_button = WebDriverWait(self.driver, 1).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'button[aria-label="Turn on captions"]')))
                 logger.info("Captions button found")
                 self.click_element(captions_button, "click_captions_button")
+                logger.info("Waiting for captions to be enabled...")
+                WebDriverWait(self.driver, 5).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'button[aria-label="Turn off captions"]')))
+                logger.info("Confirmed captions were enabled")
                 return
             except UiCouldNotClickElementException as e:
                 self.click_this_meeting_is_being_recorded_join_now_button("click_captions_button")
@@ -289,6 +292,58 @@ class GoogleMeetUIMethods:
         )
         logger.info("Clicking the close button")
         self.click_element(close_button, "close_button")
+
+    def disable_incoming_video_in_ui(self):
+        logger.info("Disabling incoming video")
+        logger.info("Waiting for the more options button...")
+        MORE_OPTIONS_BUTTON_SELECTOR = 'button[jsname="NakZHc"][aria-label="More options"]'
+        more_options_button = self.locate_element(
+            step="more_options_button_for_language_selection",
+            condition=EC.presence_of_element_located((By.CSS_SELECTOR, MORE_OPTIONS_BUTTON_SELECTOR)),
+            wait_time_seconds=6,
+        )
+        logger.info("Clicking the more options button...")
+        self.click_element(more_options_button, "disable_incoming_video:more_options_button")
+
+        logger.info("Waiting for the settings list item...")
+        settings_list_item = self.locate_element(
+            step="settings_list_item",
+            condition=EC.presence_of_element_located((By.XPATH, '//li[.//span[text()="Settings"]]')),
+            wait_time_seconds=6,
+        )
+        logger.info("Clicking the settings list item...")
+        self.click_element(settings_list_item, "disable_incoming_video:settings_list_item")
+
+        logger.info("Waiting for the video button...")
+        video_button = self.locate_element(
+            step="video_button",
+            condition=EC.presence_of_element_located((By.CSS_SELECTOR, 'button[aria-label="Video"]')),
+            wait_time_seconds=6,
+        )
+        logger.info("Clicking the video button...")
+        self.click_element(video_button, "disable_incoming_video:video_button")
+
+        # After clicking the video button, select "Audio only" option
+        logger.info("Waiting for the Audio only option...")
+        audio_only_option = self.locate_element(
+            step="audio_only_option",
+            condition=EC.presence_of_element_located((By.CSS_SELECTOR, 'li[aria-label="Audio only"]')),
+            wait_time_seconds=6,
+        )
+        logger.info("Clicking the Audio only option...")
+        # Click the option using javascript
+        self.driver.execute_script("arguments[0].click();", audio_only_option)
+
+        logger.info("Waiting for the close button")
+        close_button = self.locate_element(
+            step="close_button",
+            condition=EC.presence_of_element_located((By.CSS_SELECTOR, '[aria-modal="true"] button[aria-label="Close dialog"]')),
+            wait_time_seconds=6,
+        )
+        logger.info("Clicking the close button")
+        self.click_element(close_button, "disable_incoming_video:close_button")
+
+        logger.info("Incoming video disabled")
 
     def set_layout(self, layout_to_select):
         num_attempts = 3
@@ -417,6 +472,9 @@ class GoogleMeetUIMethods:
         self.wait_for_host_if_needed()
 
         self.set_layout(layout_to_select)
+
+        if self.disable_incoming_video:
+            self.disable_incoming_video_in_ui()
 
         if self.google_meet_closed_captions_language:
             self.select_language(self.google_meet_closed_captions_language)

@@ -110,20 +110,20 @@ class TestCreateBot(TestCase):
         bot, error = create_bot(data={"meeting_url": "https://meet.google.com/abc-defg-hij", "bot_name": "Test Bot with PII Redaction", "transcription_settings": {"deepgram": {"redact": ["pii"]}}}, source=BotCreationSource.API, project=self.project)
         self.assertIsNotNone(bot)
         self.assertIsNone(error)
-        self.assertEqual(bot.deepgram_redaction_settings(), ["pii"])
+        self.assertEqual(bot.transcription_settings.deepgram_redaction_settings(), ["pii"])
 
         # Test with multiple redaction types
         bot2, error2 = create_bot(data={"meeting_url": "https://meet.google.com/xyz-uvw-rst", "bot_name": "Test Bot with Multiple Redaction", "transcription_settings": {"deepgram": {"redact": ["pii", "pci", "numbers"]}}}, source=BotCreationSource.API, project=self.project)
         self.assertIsNotNone(bot2)
         self.assertIsNone(error2)
-        self.assertEqual(bot2.deepgram_redaction_settings(), ["pii", "pci", "numbers"])
+        self.assertEqual(bot2.transcription_settings.deepgram_redaction_settings(), ["pii", "pci", "numbers"])
 
     def test_create_bot_with_empty_redaction_settings(self):
         """Test creating a bot with empty redaction settings."""
         bot, error = create_bot(data={"meeting_url": "https://meet.google.com/empty-redact-test", "bot_name": "Test Bot with Empty Redaction", "transcription_settings": {"deepgram": {"redact": []}}}, source=BotCreationSource.API, project=self.project)
         self.assertIsNotNone(bot)
         self.assertIsNone(error)
-        self.assertEqual(bot.deepgram_redaction_settings(), [])
+        self.assertEqual(bot.transcription_settings.deepgram_redaction_settings(), [])
 
     def test_create_bot_with_invalid_redaction_type_returns_error(self):
         """Test that creating a bot with invalid redaction type returns validation error."""
@@ -170,7 +170,7 @@ class TestCreateBot(TestCase):
         )
         self.assertIsNotNone(bot)
         self.assertIsNone(error)
-        self.assertEqual(bot.deepgram_redaction_settings(), [])
+        self.assertEqual(bot.transcription_settings.deepgram_redaction_settings(), [])
 
     def test_create_bot_redaction_settings_combined_with_other_deepgram_settings(self):
         """Test creating a bot with redaction settings combined with other Deepgram settings."""
@@ -179,7 +179,7 @@ class TestCreateBot(TestCase):
         self.assertIsNone(error)
 
         # Verify redaction settings
-        self.assertEqual(bot.deepgram_redaction_settings(), ["pii", "numbers"])
+        self.assertEqual(bot.transcription_settings.deepgram_redaction_settings(), ["pii", "numbers"])
 
         # Verify other settings are preserved
         deepgram_settings = bot.settings["transcription_settings"]["deepgram"]

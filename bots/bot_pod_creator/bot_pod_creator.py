@@ -3,6 +3,7 @@ import os
 import uuid
 from typing import Dict, Optional
 
+from django.conf import settings
 from kubernetes import client, config
 
 logger = logging.getLogger(__name__)
@@ -10,15 +11,15 @@ logger = logging.getLogger(__name__)
 # fmt: off
 
 class BotPodCreator:
-    def __init__(self, namespace: str = "attendee"):
+    def __init__(self):
         try:
             config.load_incluster_config()
         except config.ConfigException:
             config.load_kube_config()
         
         self.v1 = client.CoreV1Api()
-        self.namespace = namespace
-        self.webpage_streamer_namespace = namespace + "-webpage-streamer"
+        self.namespace = settings.BOT_POD_NAMESPACE
+        self.webpage_streamer_namespace = settings.WEBPAGE_STREAMER_POD_NAMESPACE
         
         # Get configuration from environment variables
         self.app_name = os.getenv('CUBER_APP_NAME', 'attendee')
@@ -145,12 +146,12 @@ class BotPodCreator:
                             # environment variables for the bot, pull from the same secrets the webserver can access
                             client.V1EnvFromSource(
                                 config_map_ref=client.V1ConfigMapEnvSource(
-                                    name="env"
+                                    name=os.getenv("BOT_POD_CONFIG_MAP_NAME", "env")
                                 )
                             ),
                             client.V1EnvFromSource(
                                 secret_ref=client.V1SecretEnvSource(
-                                    name="app-secrets"
+                                    name=os.getenv("BOT_POD_SECRETS_NAME", "app-secrets")
                                 )
                             )
                         ],
@@ -173,6 +174,16 @@ class BotPodCreator:
                         toleration_seconds=900  # Tolerate unreachable nodes for 15 minutes
                     )
                 ]
+
+    def get_pod_image_pull_secrets(self):
+        if os.getenv("DISABLE_BOT_POD_IMAGE_PULL_SECRET", "false").lower() == "true":
+            return []
+        
+        return [
+            client.V1LocalObjectReference(
+                name=os.getenv("BOT_POD_IMAGE_PULL_SECRET_NAME", "regcred")
+            )
+        ]
 
     def create_bot_pod(
         self,
@@ -206,6 +217,12 @@ class BotPodCreator:
             bot_pod_labels["network-role"] = "attendee-webpage-streamer-receiver"
 
         annotations = {}
+        
+        # Currently, experimenting with this flag to see if it helps with bot pod evictions
+        # It makes the pod take longer to be provisioned, so not enabling by default.
+        if os.getenv("USE_GKE_EXTENDED_DURATION_FOR_BOT_PODS", "false").lower() == "true":
+            annotations["cluster-autoscaler.kubernetes.io/safe-to-evict"] = "false"
+
         if os.getenv("USING_KARPENTER", "false").lower() == "true":
             annotations["karpenter.sh/do-not-disrupt"] = "true"
             annotations["karpenter.sh/do-not-evict"] = "true"
@@ -221,11 +238,7 @@ class BotPodCreator:
                 containers=[self.get_bot_container()],
                 service_account_name=os.getenv("BOT_POD_SERVICE_ACCOUNT_NAME", "default"),
                 restart_policy="Never",
-                image_pull_secrets=[
-                    client.V1LocalObjectReference(
-                        name="regcred"
-                    )
-                ],
+                image_pull_secrets=self.get_pod_image_pull_secrets(),
                 termination_grace_period_seconds=60,
                 tolerations= self.get_pod_tolerations()
             )
@@ -249,11 +262,7 @@ class BotPodCreator:
                     containers=[self.get_webpage_streamer_container()],
                     service_account_name=os.getenv("WEBPAGE_STREAMER_POD_SERVICE_ACCOUNT_NAME", "default"),
                     restart_policy="Never",
-                    image_pull_secrets=[
-                        client.V1LocalObjectReference(
-                            name="regcred"
-                        )
-                    ],
+                    image_pull_secrets=self.get_pod_image_pull_secrets(),
                     termination_grace_period_seconds=60,
                     tolerations=self.get_pod_tolerations(),
                     volumes=self.get_webpage_streamer_volumes(),

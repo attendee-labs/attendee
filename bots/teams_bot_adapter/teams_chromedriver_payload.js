@@ -900,7 +900,8 @@ class UserManager {
             profile: '',
             status: user.state,
             humanized_status: user.state === "active" ? "in_meeting" : "not_in_meeting",
-            isCurrentUser: (!!currentUserId) && (user.details.id === currentUserId)
+            isCurrentUser: (!!currentUserId) && (user.details.id === currentUserId),
+            isHost: user.meetingRole === "organizer"
         }
     }
 
@@ -938,7 +939,8 @@ class UserManager {
                 status: user.status,
                 humanized_status: user.humanized_status,
                 parentDeviceId: user.parentDeviceId,
-                isCurrentUser: user.isCurrentUser
+                isCurrentUser: user.isCurrentUser,
+                isHost: user.isHost
             });
         }
 
@@ -963,7 +965,8 @@ class UserManager {
                 status: user.status,
                 humanized_status: user.humanized_status,
                 parentDeviceId: user.parentDeviceId,
-                isCurrentUser: user.isCurrentUser
+                isCurrentUser: user.isCurrentUser,
+                isHost: user.isHost
             });
         }
 
@@ -2747,6 +2750,7 @@ class CallManager {
                 id: participant.id,
                 displayName: participant.displayName,
                 endpoints: participant.endpoints,
+                meetingRole: participant.meetingRole
             };
         }).filter(participant => participant.displayName);
 
@@ -2770,8 +2774,10 @@ class CallManager {
                 ]
             }).filter(endpoint => endpoint);
 
+            // Transform this funny format of a participant into Teams "standard" format
             const participantConverted = {
                 details: {id: participant.id, displayName: participant.displayName},
+                meetingRole: participant.meetingRole,
                 state: "active",
                 endpoints: Object.fromEntries(endpoints)
             };

@@ -1,6 +1,7 @@
 import logging
 import os
 
+from django.conf import settings
 from django.core.management.base import BaseCommand
 from django.db import models
 from django.utils import timezone
@@ -16,7 +17,7 @@ class Command(BaseCommand):
 
     def __init__(self):
         super().__init__()
-        self.namespace = "attendee"
+        self.namespace = settings.BOT_POD_NAMESPACE
 
     def terminate_bot(self, bot, event_sub_type):
         try:

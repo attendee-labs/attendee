@@ -16,10 +16,10 @@ def calculate_normalized_rms(audio_bytes):
 
 
 class PerParticipantNonStreamingAudioInputManager:
-    def __init__(self, *, save_utterance_callback, get_participant_callback, sample_rate, utterance_size_limit, silence_duration_limit):
+    def __init__(self, *, save_audio_chunk_callback, get_participant_callback, sample_rate, utterance_size_limit, silence_duration_limit):
         self.queue = queue.Queue()
 
-        self.save_utterance_callback = save_utterance_callback
+        self.save_audio_chunk_callback = save_audio_chunk_callback
         self.get_participant_callback = get_participant_callback
 
         self.utterances = {}
@@ -95,7 +95,7 @@ class PerParticipantNonStreamingAudioInputManager:
         if should_flush and len(self.utterances[speaker_id]) > 0:
             participant = self.get_participant_callback(speaker_id)
             if participant:
-                self.save_utterance_callback(
+                self.save_audio_chunk_callback(
                     {
                         **participant,
                         "audio_data": bytes(self.utterances[speaker_id]),

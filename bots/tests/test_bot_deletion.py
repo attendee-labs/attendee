@@ -4,7 +4,7 @@ from django.core.files.base import ContentFile
 from django.test import TransactionTestCase
 from django.test.utils import override_settings
 
-from bots.models import Bot, BotDebugScreenshot, BotEvent, BotEventTypes, BotStates, ChatMessage, ChatMessageToOptions, Organization, Participant, Project, Recording, RecordingStates, Utterance, WebhookSubscription, WebhookTriggerTypes
+from bots.models import AudioChunk, Bot, BotDebugScreenshot, BotEvent, BotEventTypes, BotStates, ChatMessage, ChatMessageToOptions, Organization, Participant, Project, Recording, RecordingStates, Utterance, WebhookSubscription, WebhookTriggerTypes
 
 
 def mock_file_field_delete_sets_name_to_none(instance, save=True):
@@ -87,9 +87,11 @@ class TestBotDeletion(TransactionTestCase):
         # Add a file to the recording
         self.recording2.file.save("test2.mp4", ContentFile(b"test content 2"))
 
-        # Create utterances for each recording
-        self.utterance1 = Utterance.objects.create(recording=self.recording1, participant=self.participant1, audio_blob=b"test audio 1", timestamp_ms=1000, duration_ms=500)
-        self.utterance2 = Utterance.objects.create(recording=self.recording2, participant=self.participant2, audio_blob=b"test audio 2", timestamp_ms=1000, duration_ms=500)
+        # Create audio chunks and utterances for each recording
+        self.audio_chunk1 = AudioChunk.objects.create(recording=self.recording1, participant=self.participant1, audio_blob=b"test audio 1", timestamp_ms=1000, duration_ms=500, sample_rate=16000)
+        self.audio_chunk2 = AudioChunk.objects.create(recording=self.recording2, participant=self.participant2, audio_blob=b"test audio 2", timestamp_ms=1000, duration_ms=500, sample_rate=16000)
+        self.utterance1 = Utterance.objects.create(recording=self.recording1, participant=self.participant1, audio_chunk=self.audio_chunk1, timestamp_ms=1000, duration_ms=500)
+        self.utterance2 = Utterance.objects.create(recording=self.recording2, participant=self.participant2, audio_chunk=self.audio_chunk2, timestamp_ms=1000, duration_ms=500)
 
         # Create chat messages for each bot
         self.chat_message1 = ChatMessage.objects.create(bot=self.bot1, to=ChatMessageToOptions.ONLY_BOT, participant=self.participant1, text="Hello, world!", timestamp=1000)
@@ -117,6 +119,7 @@ class TestBotDeletion(TransactionTestCase):
         from django.db.models import ProtectedError
 
         # Verify initial state - bot1 has utterances that reference participants
+        self.assertEqual(AudioChunk.objects.filter(recording__bot=self.bot1).count(), 1)
         self.assertEqual(Utterance.objects.filter(recording__bot=self.bot1).count(), 1)
         self.assertEqual(Utterance.objects.filter(participant__bot=self.bot1).count(), 1)
 
@@ -130,6 +133,7 @@ class TestBotDeletion(TransactionTestCase):
         # Verify all related data still exists
         self.assertEqual(Participant.objects.filter(bot=self.bot1).count(), 1)
         self.assertEqual(Recording.objects.filter(bot=self.bot1).count(), 1)
+        self.assertEqual(AudioChunk.objects.filter(recording__bot=self.bot1).count(), 1)
         self.assertEqual(Utterance.objects.filter(recording__bot=self.bot1).count(), 1)
         self.assertEqual(ChatMessage.objects.filter(bot=self.bot1).count(), 1)
         self.assertEqual(BotEvent.objects.filter(bot=self.bot1).count(), 1)

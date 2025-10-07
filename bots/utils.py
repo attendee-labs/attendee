@@ -342,7 +342,7 @@ class AggregatedUtterance:
 
 
 def generate_aggregated_utterances(recording):
-    utterances_sorted = sorted(recording.utterances.all(), key=lambda x: x.timestamp_ms)
+    utterances_sorted = sorted(recording.utterances.filter(async_transcription=None).all(), key=lambda x: x.timestamp_ms)
 
     aggregated_utterances = []
     current_aggregated_utterance = None
@@ -367,7 +367,7 @@ def generate_aggregated_utterances(recording):
 
 
 def generate_failed_utterance_json_for_bot_detail_view(recording):
-    failed_utterances = recording.utterances.filter(failure_data__isnull=False).order_by("timestamp_ms")[:10]
+    failed_utterances = recording.utterances.filter(async_transcription=None).filter(failure_data__isnull=False).order_by("timestamp_ms")[:10]
 
     failed_utterances_data = []
 

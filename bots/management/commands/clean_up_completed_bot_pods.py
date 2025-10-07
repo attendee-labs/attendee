@@ -1,6 +1,7 @@
 import logging
 from typing import List
 
+from django.conf import settings
 from django.core.management.base import BaseCommand
 from kubernetes import client, config
 
@@ -18,7 +19,7 @@ class Command(BaseCommand):
         except config.ConfigException:
             config.load_kube_config()
         self.v1 = client.CoreV1Api()
-        self.namespaces = ["attendee", "attendee-webpage-streamer"]
+        self.namespaces = [settings.BOT_POD_NAMESPACE, settings.WEBPAGE_STREAMER_POD_NAMESPACE]
         logger.info("initialized kubernetes client")
 
     def handle(self, *args, **options):

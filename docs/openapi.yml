@@ -70,6 +70,7 @@ paths:
             - joined_recording_paused
             - joining_breakout_room
             - leaving_breakout_room
+            - joined_recording_permission_denied
         description: Filter bots by state. Can specify multiple states.
       tags:
       - Bots
@@ -291,22 +292,6 @@ paths:
           description: Scheduled bot deleted successfully
         '404':
           description: Bot not found
-  /api/v1/bots/{object_id}/admit_from_waiting_room:
-    post:
-      operationId: api_v1_bots_admit_from_waiting_room_create
-      parameters:
-      - in: path
-        name: object_id
-        schema:
-          type: string
-        required: true
-      tags:
-      - api
-      security:
-      - {}
-      responses:
-        '200':
-          description: No response body
   /api/v1/bots/{object_id}/chat_messages:
     get:
       operationId: Get Chat Messages
@@ -709,6 +694,69 @@ paths:
               schema:
                 $ref: '#/components/schemas/PaginatedParticipantEventList'
           description: List of participant events
+        '404':
+          description: Bot not found
+  /api/v1/bots/{object_id}/participants:
+    get:
+      operationId: Get Participants
+      description: Returns the participants for a bot. Results are paginated using
+        cursor pagination.
+      summary: Get participants for a bot
+      parameters:
+      - in: header
+        name: Authorization
+        schema:
+          type: string
+          default: Token YOUR_API_KEY_HERE
+        description: API key for authentication
+        required: true
+      - in: header
+        name: Content-Type
+        schema:
+          type: string
+          default: application/json
+        description: Should always be application/json
+        required: true
+      - in: query
+        name: cursor
+        schema:
+          type: string
+        description: Cursor for pagination
+      - in: query
+        name: id
+        schema:
+          type: string
+        description: Filter participants by participant ID
+        examples:
+          ParticipantIDExample:
+            value: par_xxxxxxxxxxx
+            summary: Participant ID Example
+      - in: query
+        name: is_host
+        schema:
+          type: boolean
+        description: Filter participants by whether they are the meeting host
+      - in: path
+        name: object_id
+        schema:
+          type: string
+        description: Bot ID
+        required: true
+        examples:
+          BotIDExample:
+            value: bot_xxxxxxxxxxx
+            summary: Bot ID Example
+      tags:
+      - Bots
+      security:
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedParticipantList'
+          description: List of participants
         '404':
           description: Bot not found
   /api/v1/bots/{object_id}/pause_recording:
@@ -1531,6 +1579,7 @@ components:
       - joined_recording_paused
       - joining_breakout_room
       - leaving_breakout_room
+      - joined_recording_permission_denied
     Calendar:
       type: object
       properties:
@@ -1995,6 +2044,27 @@ components:
                   - universal
                   description: The speech model to use for transcription. See AssemblyAI
                     docs for details.
+                speaker_labels:
+                  type: boolean
+                  description: Whether to enable AssemblyAI's ML-based diarization.
+                    Only needed if multiple people are speaking into a single microphone.
+                    Defaults to false.
+                use_eu_server:
+                  type: boolean
+                  description: Whether to use the EU server for transcription. Defaults
+                    to false.
+                language_detection_options:
+                  type: object
+                  properties:
+                    expected_languages:
+                      type: array
+                      items:
+                        type: string
+                    fallback_language:
+                      type: string
+                  description: Options for controlling the automatic language detection.
+                    See AssemblyAI docs for details.
+                  additionalProperties: false
               additionalProperties: false
             sarvam:
               type: object
@@ -2112,6 +2182,7 @@ components:
               description: Whether to record chat messages even when the recording
                 is paused. Defaults to false.
               default: false
+          additionalProperties: false
           required: []
           default:
             format: mp4
@@ -2355,6 +2426,45 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ParticipantEvent'
+    PaginatedParticipantList:
+      type: object
+      required:
+      - results
+      properties:
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?cursor=cD00ODY%3D"
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?cursor=cj0xJnA9NDg3
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/Participant'
+    Participant:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        uuid:
+          type: string
+        user_uuid:
+          type: string
+          nullable: true
+        is_host:
+          type: boolean
+      required:
+      - id
+      - is_host
+      - name
+      - user_uuid
+      - uuid
     ParticipantEvent:
       type: object
       properties:
@@ -2367,6 +2477,8 @@ components:
         participant_user_uuid:
           type: string
           nullable: true
+        participant_is_host:
+          type: boolean
         event_type:
           type: string
           readOnly: true
@@ -2380,6 +2492,7 @@ components:
       - participant_name
       - participant_user_uuid
       - participant_uuid
+      - participant_is_host
       - timestamp_ms
     PatchedPatchBotRequest:
       type: object
@@ -2478,6 +2591,8 @@ components:
         speaker_user_uuid:
           type: string
           nullable: true
+        speaker_is_host:
+          type: boolean
         timestamp_ms:
           type: integer
         duration_ms:
@@ -2488,6 +2603,7 @@ components:
       - speaker_name
       - speaker_user_uuid
       - speaker_uuid
+      - speaker_is_host
       - timestamp_ms
       - transcription
     TranscriptionStateEnum:

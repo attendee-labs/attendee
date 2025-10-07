@@ -200,6 +200,9 @@ class ZoomBotAdapter(BotAdapter):
 
         # webcam is muted initially
         self.webcam_is_muted = True
+        # Raw bytes from the user
+        self.current_raw_image_to_send = None
+        # Scaled image to send to Zoom
         self.current_image_to_send = None
         self.recording_is_paused = False
 
@@ -400,6 +403,7 @@ class ZoomBotAdapter(BotAdapter):
                 "participant_user_uuid": speaker_object.GetPersistentId(),
                 "participant_full_name": speaker_object.GetUserName(),
                 "participant_is_the_bot": speaker_object.GetUserID() == self.my_participant_id,
+                "participant_is_host": speaker_object.IsHost(),
             }
             self._participant_cache[participant_id] = participant_info
             return participant_info
@@ -509,8 +513,8 @@ class ZoomBotAdapter(BotAdapter):
 
         allow_participants_to_share_screen = self.zoom_meeting_settings.get("allow_participants_to_share_screen", None)
         if allow_participants_to_share_screen is not None:
-            lock_share_result = self.meeting_sharing_controller.LockShare(allow_participants_to_share_screen)
-            logger.info(f"LockShare({allow_participants_to_share_screen}) returned {lock_share_result}")
+            lock_share_result = self.meeting_sharing_controller.LockShare(not allow_participants_to_share_screen)
+            logger.info(f"LockShare({not allow_participants_to_share_screen}) returned {lock_share_result}")
 
         allow_participants_to_chat = self.zoom_meeting_settings.get("allow_participants_to_chat", None)
         if allow_participants_to_chat is not None:
@@ -593,6 +597,13 @@ class ZoomBotAdapter(BotAdapter):
 
             can_start_recording_result = self.recording_ctrl.CanStartRawRecording()
             if can_start_recording_result != zoom.SDKERR_SUCCESS:
+                # Check for various reasons why it might be impossible to get the permission
+                is_support_request_local_recording_privilege_result = self.recording_ctrl.IsSupportRequestLocalRecordingPrivilege()
+                logger.info(f"is_support_request_local_recording_privilege_result = {is_support_request_local_recording_privilege_result}")
+                # This means the host is using a zoom client that is incapable of displaying the popup to allow recording (Only known client where this happens is Zoom Rooms)
+                if is_support_request_local_recording_privilege_result == zoom.SDKERR_MEETING_DONT_SUPPORT_FEATURE:
+                    self.handle_recording_permission_denied(reason=BotAdapter.BOT_RECORDING_PERMISSION_DENIED_REASON.HOST_CLIENT_CANNOT_GRANT_PERMISSION)
+
                 self.recording_ctrl.RequestLocalRecordingPrivilege()
                 logger.info("Requesting recording privilege.")
             else:
@@ -654,6 +665,20 @@ class ZoomBotAdapter(BotAdapter):
         self.webcam_is_muted = False
         return True
 
+    def compute_current_image_to_send(self):
+        if not self.current_raw_image_to_send:
+            logger.info("current_raw_image_to_send is None so cannot compute current image to send")
+            return None
+        if not self.suggested_video_cap:
+            logger.info("suggested_video_cap is None so cannot compute current image to send")
+            return None
+
+        yuv420_image_bytes, original_width, original_height = png_to_yuv420_frame(self.current_raw_image_to_send)
+        # We have to scale the image to the zoom video capability width and height for it to display properly
+        yuv420_image_bytes_scaled = scale_i420(yuv420_image_bytes, (original_width, original_height), (self.suggested_video_cap.width, self.suggested_video_cap.height))
+
+        return yuv420_image_bytes_scaled
+
     def send_raw_image(self, png_image_bytes):
         if not self.meeting_video_controller:
             logger.info("meeting_video_controller is None so cannot send raw image")
@@ -662,18 +687,16 @@ class ZoomBotAdapter(BotAdapter):
         if not self.unmute_webcam():
             return
 
-        yuv420_image_bytes, original_width, original_height = png_to_yuv420_frame(png_image_bytes)
-        # We have to scale the image to the zoom video capability width and height for it to display properly
-        yuv420_image_bytes_scaled = scale_i420(yuv420_image_bytes, (original_width, original_height), (self.suggested_video_cap.width, self.suggested_video_cap.height))
-
-        self.current_image_to_send = yuv420_image_bytes_scaled
+        self.current_raw_image_to_send = png_image_bytes
+        # We can't compute the scaled image immediately because the video caps may have not arrived yet. So set it to None, which indicates it needs to be recomputed.
+        self.current_image_to_send = None
 
         # Add a timeout to send the image every 500ms if one isn't already active
         if self.send_image_timeout_id is None:
             self.send_image_timeout_id = GLib.timeout_add(500, self.send_current_image_to_zoom)
 
     def send_current_image_to_zoom(self):
-        if self.requested_leave or self.cleaned_up or (not self.current_image_to_send):
+        if self.requested_leave or self.cleaned_up or (not self.current_raw_image_to_send):
             self.send_image_timeout_id = None
             return False
 
@@ -686,6 +709,14 @@ class ZoomBotAdapter(BotAdapter):
         if not self.suggested_video_cap:
             if self.cannot_send_video_error_ticker % 100 == 0:
                 logger.info("suggested_video_cap is None so cannot send raw image, but will retry later")
+            self.cannot_send_video_error_ticker += 1
+            return True
+
+        if not self.current_image_to_send:
+            self.current_image_to_send = self.compute_current_image_to_send()
+        if not self.current_image_to_send:
+            if self.cannot_send_video_error_ticker % 100 == 0:
+                logger.info("Failed to compute current image to send so cannot send raw image, but will retry later")
             self.cannot_send_video_error_ticker += 1
             return True
 
@@ -851,7 +882,7 @@ class ZoomBotAdapter(BotAdapter):
         param.meetingNumber = meeting_number
         param.userName = self.display_name
         param.psw = self.meeting_password if self.meeting_password is not None else ""
-        param.isVideoOff = False
+        param.isVideoOff = True
         param.isAudioOff = False
         param.isAudioRawDataStereo = False
         param.isMyVoiceInMix = False
@@ -1055,7 +1086,7 @@ class ZoomBotAdapter(BotAdapter):
             logger.info("No suggested video cap. Not sending video.")
             return
 
-        self.current_image_to_send = None
+        self.current_raw_image_to_send = None
 
         self.mp4_demuxer = MP4Demuxer(
             url=video_url,

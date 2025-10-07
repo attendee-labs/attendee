@@ -312,6 +312,8 @@ class GoogleCalendarSyncHandler(CalendarSyncHandler):
             raise CalendarAPIAuthenticationError(f"Google Authentication error: {e.response.json()}")
         if "ACCESS_TOKEN_SCOPE_INSUFFICIENT" in e.response.text:
             raise CalendarAPIAuthenticationError(f"Google Authentication error: {e.response.json()}")
+        if "PERMISSION_DENIED" in e.response.text:
+            raise CalendarAPIAuthenticationError(f"Google Authentication error: {e.response.json()}")
 
         return
 

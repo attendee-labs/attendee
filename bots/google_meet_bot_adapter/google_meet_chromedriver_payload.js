@@ -804,7 +804,8 @@ class UserManager {
             return {
                 ...userWithoutIsCurrentUserString,
                 humanized_status: userStatusMap[user.status] || "unknown",
-                isCurrentUser: user.deviceId === this.currentUserId
+                isCurrentUser: user.deviceId === this.currentUserId,
+                isHost: !!user.isHost
             }
         })
         // Get the current user IDs before updating
@@ -826,7 +827,8 @@ class UserManager {
                 status: user.status,
                 humanized_status: user.humanized_status,
                 parentDeviceId: user.parentDeviceId,
-                isCurrentUser: user.isCurrentUser
+                isCurrentUser: user.isCurrentUser,
+                isHost: user.isHost
             });
         }
 
@@ -847,7 +849,8 @@ class UserManager {
                 status: user.status,
                 humanized_status: user.humanized_status,
                 parentDeviceId: user.parentDeviceId,
-                isCurrentUser: user.isCurrentUser
+                isCurrentUser: user.isCurrentUser,
+                isHost: user.isHost
             });
         }
 
@@ -1361,7 +1364,8 @@ const messageTypes = [
             { name: 'status', fieldNumber: 4, type: 'varint' }, // in meeting = 1 vs not in meeting = 6. kicked out = 7?
             { name: 'isCurrentUserString', fieldNumber: 7, type: 'string' }, // Presence of this string indicates that this is the current user. The string itself seems to be a random uuid
             { name: 'displayName', fieldNumber: 29, type: 'string' },
-            { name: 'parentDeviceId', fieldNumber: 21, type: 'string' } // if this is present, then this is a screenshare device. The parentDevice is the person that is sharing
+            { name: 'parentDeviceId', fieldNumber: 21, type: 'string' }, // if this is present, then this is a screenshare device. The parentDevice is the person that is sharing
+            { name: 'isHost', fieldNumber: 34, type: 'varint' } // Presence of this varint indicates that this is the host
         ]
     },
     {

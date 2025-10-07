@@ -142,7 +142,7 @@ AUTH_PASSWORD_VALIDATORS = [
 
 LANGUAGE_CODE = "en-us"
 
-TIME_ZONE = "UTC"
+TIME_ZONE = os.getenv("TIME_ZONE", "UTC")
 
 USE_I18N = True
 
@@ -220,3 +220,8 @@ except ImportError:
     pass  # Azure settings not available
 
 CHARGE_CREDITS_FOR_BOTS = os.getenv("CHARGE_CREDITS_FOR_BOTS", "false") == "true"
+
+BOT_POD_NAMESPACE = os.getenv("BOT_POD_NAMESPACE", "attendee")
+WEBPAGE_STREAMER_POD_NAMESPACE = os.getenv("WEBPAGE_STREAMER_POD_NAMESPACE", "attendee-webpage-streamer")
+REQUIRE_HTTPS_WEBHOOKS = os.getenv("REQUIRE_HTTPS_WEBHOOKS", "true") == "true"
+MAX_METADATA_LENGTH = int(os.getenv("MAX_METADATA_LENGTH", 1000))

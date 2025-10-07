@@ -69,14 +69,13 @@ class TeamsUIMethods:
         else:
             logger.info("Camera button is already off, not clicking it")
 
-    def is_teams_live_meeting(self):
-        return "teams.live.com" in self.driver.current_url
+    def join_now_button_is_present(self):
+        join_button = self.find_element_by_selector(By.CSS_SELECTOR, '[data-tid="prejoin-join-button"]')
+        if join_button:
+            return True
+        return False
 
     def fill_out_name_input(self):
-        # Teams live meetings always have you fill out your name even if you're logged in
-        if self.teams_bot_login_credentials and not self.is_teams_live_meeting():
-            return
-
         num_attempts = 30
         logger.info("Waiting for the name input field...")
         for attempt_index in range(num_attempts):
@@ -87,6 +86,10 @@ class TeamsUIMethods:
                 return
             except TimeoutException as e:
                 self.look_for_microsoft_login_form_element("name_input")
+
+                if self.teams_bot_login_credentials and self.join_now_button_is_present():
+                    logger.info("Join now button is present. Assuming name input is not present because we don't need to fill it out, so returning.")
+                    return
 
                 last_check_timed_out = attempt_index == num_attempts - 1
                 if last_check_timed_out:
@@ -260,7 +263,40 @@ class TeamsUIMethods:
 
         self.set_layout(self.get_layout_to_select())
 
+        if self.disable_incoming_video:
+            self.disable_incoming_video_in_ui()
+
         self.ready_to_show_bot_image()
+
+    def disable_incoming_video_in_ui(self):
+        logger.info("Waiting for the view button...")
+        view_button = self.locate_element(step="view_button", condition=EC.presence_of_element_located((By.CSS_SELECTOR, "#view-mode-button, #custom-view-button")), wait_time_seconds=60)
+        logger.info("Clicking the view button...")
+        self.click_element(view_button, "disable_incoming_video:view_button")
+
+        # Try to click the turn off incoming video button
+        # If we can't find it, then look for the more options button and click it to reveal the turn off incoming video button
+        num_attempts = 10
+        logger.info("Waiting for the turn off incoming video button...")
+        for attempt_index in range(num_attempts):
+            try:
+                turn_off_incoming_video_button = WebDriverWait(self.driver, 1).until(EC.presence_of_element_located((By.CSS_SELECTOR, "[aria-label='Turn off incoming video'], #incoming-video-button")))
+                logger.info("Turn off incoming video button found")
+                turn_off_incoming_video_button.click()
+                return
+            except TimeoutException as e:
+                more_options_button = self.find_element_by_selector(By.CSS_SELECTOR, "#ViewModeMoreOptionsMenuControl-id")
+                if more_options_button:
+                    logger.info("Clicking the more options button...")
+                    self.click_element(more_options_button, "disable_incoming_video:more_options_button")
+
+                last_check_timed_out = attempt_index == num_attempts - 1
+                if last_check_timed_out:
+                    logger.info("Could not find turn off incoming video button. Timed out. Raising UiCouldNotLocateElementException")
+                    raise UiCouldNotLocateElementException("Could not find turn off incoming video button. Timed out.", "disable_incoming_video:turn_off_incoming_video_button", e)
+            except Exception as e:
+                logger.info(f"Could not click turn off incoming video button. Unknown error {e} of type {type(e)}. Raising UiCouldNotLocateElementException")
+                raise UiCouldNotLocateElementException("Could not click turn off incoming video button. Unknown error.", "disable_incoming_video:turn_off_incoming_video_button", e)
 
     def click_leave_button(self):
         logger.info("Waiting for the leave button")

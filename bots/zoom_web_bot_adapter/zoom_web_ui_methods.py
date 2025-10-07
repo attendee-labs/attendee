@@ -90,10 +90,24 @@ class ZoomWebUIMethods:
             # No modal appeared or OK button not found within 2 seconds, continue
             logger.info("No modal appeared or OK button not found within 2 seconds, continuing")
 
+        if self.disable_incoming_video:
+            self.disable_incoming_video_in_ui()
+
         self.ready_to_show_bot_image()
 
     def click_leave_button(self):
         self.driver.execute_script("leaveMeeting()")
+
+    def disable_incoming_video_in_ui(self):
+        logger.info("Waiting for more meeting control button to disable incoming video")
+        more_meeting_control_button = WebDriverWait(self.driver, 60).until(EC.presence_of_element_located((By.CSS_SELECTOR, "div[aria-label='More meeting control ']")))
+        logger.info("More meeting control button found, clicking")
+        self.driver.execute_script("arguments[0].click();", more_meeting_control_button)
+
+        logger.info("Waiting for turn off incoming video button to disable incoming video")
+        turn_off_incoming_video_button = WebDriverWait(self.driver, 60).until(EC.presence_of_element_located((By.CSS_SELECTOR, "[aria-label='Stop Incoming Video']")))
+        logger.info("Turn off incoming video button found, clicking")
+        self.driver.execute_script("arguments[0].click();", turn_off_incoming_video_button)
 
     def click_cancel_join_button(self):
         cancel_join_button = WebDriverWait(self.driver, 5).until(EC.presence_of_element_located((By.CSS_SELECTOR, "button.leave-btn")))

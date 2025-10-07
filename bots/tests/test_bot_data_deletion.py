@@ -5,7 +5,7 @@ from django.core.files.base import ContentFile
 from django.test import TransactionTestCase
 from django.test.utils import override_settings
 
-from bots.models import Bot, BotDebugScreenshot, BotEvent, BotEventTypes, BotStates, ChatMessage, ChatMessageToOptions, Organization, Participant, ParticipantEvent, ParticipantEventTypes, Project, Recording, RecordingStates, Utterance, WebhookDeliveryAttempt, WebhookSubscription, WebhookTriggerTypes
+from bots.models import AudioChunk, Bot, BotDebugScreenshot, BotEvent, BotEventTypes, BotStates, ChatMessage, ChatMessageToOptions, Organization, Participant, ParticipantEvent, ParticipantEventTypes, Project, Recording, RecordingStates, Utterance, WebhookDeliveryAttempt, WebhookSubscription, WebhookTriggerTypes
 
 
 def mock_file_field_delete_sets_name_to_none(instance, save=True):
@@ -103,10 +103,11 @@ class TestBotDataDeletion(TransactionTestCase):
         # Add a file to the recording
         self.recording2.file.save("test2.mp4", ContentFile(b"test content 2"))
 
-        # Create utterances for each recording
-        self.utterance1 = Utterance.objects.create(recording=self.recording1, participant=self.participant1, audio_blob=b"test audio 1", timestamp_ms=1000, duration_ms=500)
-
-        self.utterance2 = Utterance.objects.create(recording=self.recording2, participant=self.participant2, audio_blob=b"test audio 2", timestamp_ms=1000, duration_ms=500)
+        # Create audio chunks and utterances for each recording
+        self.audio_chunk1 = AudioChunk.objects.create(recording=self.recording1, participant=self.participant1, audio_blob=b"test audio 1", timestamp_ms=1000, duration_ms=500, sample_rate=16000)
+        self.audio_chunk2 = AudioChunk.objects.create(recording=self.recording2, participant=self.participant2, audio_blob=b"test audio 2", timestamp_ms=1000, duration_ms=500, sample_rate=16000)
+        self.utterance1 = Utterance.objects.create(recording=self.recording1, participant=self.participant1, audio_chunk=self.audio_chunk1, timestamp_ms=1000, duration_ms=500)
+        self.utterance2 = Utterance.objects.create(recording=self.recording2, participant=self.participant2, audio_chunk=self.audio_chunk2, timestamp_ms=1000, duration_ms=500)
 
         # Create chat messages for each bot
         self.chat_message1 = ChatMessage.objects.create(bot=self.bot1, to=ChatMessageToOptions.ONLY_BOT, participant=self.participant1, text="Hello, world!", timestamp=1000)
@@ -135,6 +136,7 @@ class TestBotDataDeletion(TransactionTestCase):
         self.assertEqual(Bot.objects.count(), 2)
         self.assertEqual(Participant.objects.count(), 2)
         self.assertEqual(Recording.objects.count(), 2)
+        self.assertEqual(AudioChunk.objects.count(), 2)
         self.assertEqual(Utterance.objects.count(), 2)
         self.assertEqual(BotDebugScreenshot.objects.count(), 2)
         self.assertEqual(WebhookSubscription.objects.count(), 3)
@@ -146,6 +148,7 @@ class TestBotDataDeletion(TransactionTestCase):
 
         # Verify bot1's data is deleted
         self.assertEqual(Participant.objects.filter(bot=self.bot1).count(), 0)
+        self.assertEqual(AudioChunk.objects.filter(recording__bot=self.bot1).count(), 0)
         self.assertEqual(Utterance.objects.filter(recording__bot=self.bot1).count(), 0)
         self.assertEqual(ChatMessage.objects.filter(bot=self.bot1).count(), 0)
         self.assertEqual(BotDebugScreenshot.objects.filter(bot_event__bot=self.bot1).count(), 0)
@@ -162,6 +165,7 @@ class TestBotDataDeletion(TransactionTestCase):
         # Verify bot2's data is still intact
         self.assertEqual(Participant.objects.filter(bot=self.bot2).count(), 1)
         self.assertEqual(Recording.objects.filter(bot=self.bot2).count(), 1)
+        self.assertEqual(AudioChunk.objects.filter(recording__bot=self.bot2).count(), 1)
         self.assertEqual(Utterance.objects.filter(recording__bot=self.bot2).count(), 1)
         self.assertEqual(ChatMessage.objects.filter(bot=self.bot2).count(), 1)
         self.assertEqual(BotDebugScreenshot.objects.filter(bot_event__bot=self.bot2).count(), 1)
@@ -196,6 +200,7 @@ class TestBotDataDeletion(TransactionTestCase):
 
         # Verify no data was deleted
         self.assertEqual(Participant.objects.filter(bot=self.bot1).count(), 1)
+        self.assertEqual(AudioChunk.objects.filter(recording__bot=self.bot1).count(), 1)
         self.assertEqual(Utterance.objects.filter(recording__bot=self.bot1).count(), 1)
 
     def test_delete_data_multiple_recordings(self):
@@ -205,17 +210,22 @@ class TestBotDataDeletion(TransactionTestCase):
         recording1b.file.save("test1b.mp4", ContentFile(b"test content 1b"))
 
         # Create utterance for the new recording
-        Utterance.objects.create(recording=recording1b, participant=self.participant1, audio_blob=b"test audio 1b", timestamp_ms=2000, duration_ms=500)
+        audio_chunk1b = AudioChunk.objects.create(recording=recording1b, participant=self.participant1, audio_blob=b"test audio 1b", timestamp_ms=2000, duration_ms=500, sample_rate=16000)
+        Utterance.objects.create(recording=recording1b, participant=self.participant1, audio_chunk=audio_chunk1b, timestamp_ms=2000, duration_ms=500)
 
         # Initial count
         self.assertEqual(Recording.objects.filter(bot=self.bot1).count(), 2)
+        self.assertEqual(AudioChunk.objects.filter(recording__bot=self.bot1).count(), 2)
         self.assertEqual(Utterance.objects.filter(recording__bot=self.bot1).count(), 2)
+        self.assertEqual(AudioChunk.objects.filter(participant__bot=self.bot1).count(), 2)
 
         # Delete data for bot1
         self.bot1.delete_data()
 
         # Verify all of bot1's data is deleted
+        self.assertEqual(AudioChunk.objects.filter(recording__bot=self.bot1).count(), 0)
         self.assertEqual(Utterance.objects.filter(recording__bot=self.bot1).count(), 0)
+        self.assertEqual(AudioChunk.objects.filter(participant__bot=self.bot1).count(), 0)
 
         # Verify recording files are deleted but records still exist
         self.bot1.refresh_from_db()

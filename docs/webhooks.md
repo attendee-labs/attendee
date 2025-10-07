@@ -128,6 +128,7 @@ For webhooks triggered by `transcript.update`, the `data` field contains a singl
   "speaker_name": <The name of the speaker>,
   "speaker_uuid": <The UUID of the speaker within the meeting>,
   "speaker_user_uuid": <The UUID of the speaker's user account within the meeting platform>,
+  "speaker_is_host": <Whether the speaker is the host of the meeting>,
   "timestamp_ms": <The timestamp of the utterance in milliseconds>,
   "duration_ms": <The duration of the utterance in milliseconds>,
   "transcription": {
@@ -165,6 +166,7 @@ For webhooks triggered by `participant_events.join_leave`, the `data` field cont
   "participant_name": <The name of the participant who joined or left the meeting>,
   "participant_uuid": <The UUID of the participant who joined or left the meeting>,
   "participant_user_uuid": <The UUID of the participant's user account within the meeting platform>,
+  "participant_is_host": <Whether the participant is the host of the meeting>,
   "event_type": <The type of event that occurred. Either "join" or "leave">,
   "event_data": <Any additional data associated with the event. This is empty for join and leave events>,
   "timestamp_ms": <The timestamp of the event in milliseconds>,

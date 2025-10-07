@@ -191,6 +191,7 @@ def create_mock_zoom_sdk():
     mock_recording_controller = MagicMock()
     mock_recording_controller.CanStartRawRecording.return_value = base_mock.SDKERR_SUCCESS
     mock_recording_controller.StartRawRecording.return_value = base_mock.SDKERR_SUCCESS
+    mock_recording_controller.StopRawRecording.return_value = base_mock.SDKERR_SUCCESS
     mock_meeting_service.GetMeetingRecordingController.return_value = mock_recording_controller
 
     mock_auth_service.SetEvent.return_value = base_mock.SDKERR_SUCCESS
@@ -285,6 +286,7 @@ def create_mock_zoom_sdk():
             self._user_id = user_id
             self._user_name = user_name
             self._persistent_id = persistent_id
+            self._is_host = False
 
         def GetUserID(self):
             return self._user_id
@@ -294,6 +296,9 @@ def create_mock_zoom_sdk():
 
         def GetPersistentId(self):
             return self._persistent_id
+
+        def IsHost(self):
+            return self._is_host
 
     # Create a mock participants controller
     mock_participants_controller = MagicMock()
@@ -1056,6 +1061,10 @@ class TestZoomBot(TransactionTestCase):
         utterance = self.recording.utterances.filter(failure_data__isnull=True).first()
         self.assertEqual(self.recording.utterances.count(), 1)
         self.assertIsNotNone(utterance.transcription)
+
+        # Verify that the recording has an audio chunk
+        self.assertEqual(self.recording.audio_chunks.count(), 1)
+        self.assertEqual(utterance.audio_chunk, self.recording.audio_chunks.first())
 
         # Verify chat message was processed
         chat_messages = ChatMessage.objects.filter(bot=self.bot)
@@ -3071,6 +3080,10 @@ class TestZoomBot(TransactionTestCase):
         self.assertEqual(self.recording.utterances.count(), 1)
         self.assertIsNotNone(utterance.transcription)
 
+        # Verify that the recording has an audio chunk
+        self.assertEqual(self.recording.audio_chunks.count(), 1)
+        self.assertEqual(utterance.audio_chunk, self.recording.audio_chunks.first())
+
         # Verify that no recording file was created/saved
         self.assertFalse(self.recording.file.name, "Recording file should not exist when format is 'none'")
 
@@ -3402,3 +3415,357 @@ class TestZoomBot(TransactionTestCase):
         bot_participant_events = ParticipantEvent.objects.filter(participant__bot=self.bot, participant__user_uuid="bot_persistent_id")
         self.assertEqual(bot_participant_events.count(), 1)
         self.assertEqual(bot_participant_events[0].event_type, ParticipantEventTypes.JOIN)
+
+    @patch(
+        "bots.zoom_bot_adapter.video_input_manager.zoom",
+        new_callable=create_mock_zoom_sdk,
+    )
+    @patch("bots.zoom_bot_adapter.zoom_bot_adapter.zoom", new_callable=create_mock_zoom_sdk)
+    @patch("bots.zoom_bot_adapter.zoom_bot_adapter.jwt")
+    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("deepgram.DeepgramClient")
+    def test_recording_permission_denied_by_host(
+        self,
+        MockDeepgramClient,
+        MockFileUploader,
+        mock_jwt,
+        mock_zoom_sdk_adapter,
+        mock_zoom_sdk_video,
+    ):
+        # Avoid any external calls
+        MockDeepgramClient.return_value = create_mock_deepgram()
+
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        mock_jwt.encode.return_value = "fake_jwt_token"
+
+        controller = BotController(self.bot.id)
+
+        bot_thread = threading.Thread(target=controller.run)
+        bot_thread.daemon = True
+        bot_thread.start()
+
+        def simulate_join_and_permission_denied():
+            from bots.bot_adapter import BotAdapter
+
+            adapter = controller.adapter
+
+            # Simulate successful auth
+            adapter.auth_event.onAuthenticationReturnCallback(mock_zoom_sdk_adapter.AUTHRET_SUCCESS)
+
+            # Enter connecting state
+            adapter.meeting_service_event.onMeetingStatusChangedCallback(
+                mock_zoom_sdk_adapter.MEETING_STATUS_CONNECTING,
+                mock_zoom_sdk_adapter.SDKERR_SUCCESS,
+            )
+
+            # Ensure CanStartRawRecording fails so we request permission instead of granting immediately
+            adapter.meeting_service.GetMeetingRecordingController.return_value.CanStartRawRecording.return_value = mock_zoom_sdk_adapter.SDKError.SDKERR_INTERNAL_ERROR
+
+            # Enter in-meeting state (triggers on_join and recording privilege request)
+            adapter.meeting_service_event.onMeetingStatusChangedCallback(
+                mock_zoom_sdk_adapter.MEETING_STATUS_INMEETING,
+                mock_zoom_sdk_adapter.SDKERR_SUCCESS,
+            )
+
+            # Give time for on_join setup
+            time.sleep(1)
+
+            # Simulate host denying local recording permission
+            adapter.handle_recording_permission_denied(BotAdapter.BOT_RECORDING_PERMISSION_DENIED_REASON.HOST_DENIED_PERMISSION)
+
+            # Allow message processing
+            time.sleep(1)
+
+            # Clean up connections in thread function if needed later
+            connection.close()
+
+        threading.Timer(2, simulate_join_and_permission_denied).start()
+
+        bot_thread.join(timeout=10)
+
+        # Verify adapter reflects paused state
+        self.assertTrue(controller.adapter.recording_is_paused)
+
+        # Verify bot state transitioned appropriately
+        self.bot.refresh_from_db()
+        self.assertEqual(self.bot.state, BotStates.JOINED_RECORDING_PERMISSION_DENIED)
+
+        # Verify the specific BOT_RECORDING_PERMISSION_DENIED event exists with expected subtype
+        denied_events = self.bot.bot_events.filter(
+            event_type=BotEventTypes.BOT_RECORDING_PERMISSION_DENIED,
+            event_sub_type=BotEventSubTypes.BOT_RECORDING_PERMISSION_DENIED_HOST_DENIED_PERMISSION,
+        )
+        self.assertTrue(denied_events.exists(), "Expected BOT_RECORDING_PERMISSION_DENIED event with HOST_DENIED_PERMISSION subtype")
+
+        # Finish: simulate meeting ended to allow cleanup to run and thread to exit cleanly
+        controller.adapter.meeting_service_event.onMeetingStatusChangedCallback(
+            mock_zoom_sdk_adapter.MEETING_STATUS_ENDED,
+            mock_zoom_sdk_adapter.SDKERR_SUCCESS,
+        )
+
+        controller.cleanup()
+        bot_thread.join(timeout=5)
+
+        # Verify Zoom SDK raw recording start/stop call counts:
+        mock_recording_controller = controller.adapter.meeting_service.GetMeetingRecordingController.return_value
+        self.assertEqual(mock_recording_controller.StartRawRecording.call_count, 0)
+        self.assertEqual(mock_recording_controller.StopRawRecording.call_count, 0)
+
+    @patch(
+        "bots.zoom_bot_adapter.video_input_manager.zoom",
+        new_callable=create_mock_zoom_sdk,
+    )
+    @patch("bots.zoom_bot_adapter.zoom_bot_adapter.zoom", new_callable=create_mock_zoom_sdk)
+    @patch("bots.zoom_bot_adapter.zoom_bot_adapter.jwt")
+    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("deepgram.DeepgramClient")
+    def test_recording_permission_granted_then_paused_then_revoked_then_granted_again(
+        self,
+        MockDeepgramClient,
+        MockFileUploader,
+        mock_jwt,
+        mock_zoom_sdk_adapter,
+        mock_zoom_sdk_video,
+    ):
+        # Avoid external calls
+        MockDeepgramClient.return_value = create_mock_deepgram()
+        MockFileUploader.return_value = create_mock_file_uploader()
+        mock_jwt.encode.return_value = "fake_jwt_token"
+
+        controller = BotController(self.bot.id)
+
+        bot_thread = threading.Thread(target=controller.run)
+        bot_thread.daemon = True
+        bot_thread.start()
+
+        def simulate_flow():
+            from bots.bot_adapter import BotAdapter
+
+            adapter = controller.adapter
+
+            # Successful auth
+            adapter.auth_event.onAuthenticationReturnCallback(mock_zoom_sdk_adapter.AUTHRET_SUCCESS)
+
+            # Connecting -> InMeeting
+            adapter.meeting_service_event.onMeetingStatusChangedCallback(
+                mock_zoom_sdk_adapter.MEETING_STATUS_CONNECTING,
+                mock_zoom_sdk_adapter.SDKERR_SUCCESS,
+            )
+            adapter.meeting_service_event.onMeetingStatusChangedCallback(
+                mock_zoom_sdk_adapter.MEETING_STATUS_INMEETING,
+                mock_zoom_sdk_adapter.SDKERR_SUCCESS,
+            )
+
+            # Allow on_join to run; default mock grants permission immediately
+            time.sleep(1)
+
+            # Pause recording via controller
+            send_sync_command(self.bot, "pause_recording")
+            time.sleep(0.5)
+
+            # Revoke permission from host
+            adapter.handle_recording_permission_denied(BotAdapter.BOT_RECORDING_PERMISSION_DENIED_REASON.HOST_DENIED_PERMISSION)
+            time.sleep(0.5)
+
+            # Grant permission again
+            adapter.handle_recording_permission_granted()
+            time.sleep(0.5)
+
+            # End meeting
+            adapter.meeting_service_event.onMeetingStatusChangedCallback(
+                mock_zoom_sdk_adapter.MEETING_STATUS_ENDED,
+                mock_zoom_sdk_adapter.SDKERR_SUCCESS,
+            )
+
+            connection.close()
+
+        threading.Timer(2, simulate_flow).start()
+
+        bot_thread.join(timeout=12)
+
+        # Validate adapter resumed recording
+        self.assertFalse(controller.adapter.recording_is_paused)
+
+        self.bot.refresh_from_db()
+
+        # Verify ordered event sequence and state transitions
+        events = list(self.bot.bot_events.order_by("created_at", "id"))
+        self.assertEqual(len(events), 8)
+
+        # 1) JOIN_REQUESTED: READY -> JOINING
+        self.assertEqual(events[0].event_type, BotEventTypes.JOIN_REQUESTED)
+        self.assertEqual(events[0].old_state, BotStates.READY)
+        self.assertEqual(events[0].new_state, BotStates.JOINING)
+
+        # 2) BOT_JOINED_MEETING: JOINING -> JOINED_NOT_RECORDING
+        self.assertEqual(events[1].event_type, BotEventTypes.BOT_JOINED_MEETING)
+        self.assertEqual(events[1].old_state, BotStates.JOINING)
+        self.assertEqual(events[1].new_state, BotStates.JOINED_NOT_RECORDING)
+
+        # 3) BOT_RECORDING_PERMISSION_GRANTED: JOINED_NOT_RECORDING -> JOINED_RECORDING
+        self.assertEqual(events[2].event_type, BotEventTypes.BOT_RECORDING_PERMISSION_GRANTED)
+        self.assertEqual(events[2].old_state, BotStates.JOINED_NOT_RECORDING)
+        self.assertEqual(events[2].new_state, BotStates.JOINED_RECORDING)
+
+        # 4) RECORDING_PAUSED: JOINED_RECORDING -> JOINED_RECORDING_PAUSED
+        self.assertEqual(events[3].event_type, BotEventTypes.RECORDING_PAUSED)
+        self.assertEqual(events[3].old_state, BotStates.JOINED_RECORDING)
+        self.assertEqual(events[3].new_state, BotStates.JOINED_RECORDING_PAUSED)
+
+        # 5) BOT_RECORDING_PERMISSION_DENIED: JOINED_RECORDING_PAUSED -> JOINED_RECORDING_PERMISSION_DENIED
+        self.assertEqual(events[4].event_type, BotEventTypes.BOT_RECORDING_PERMISSION_DENIED)
+        self.assertEqual(events[4].old_state, BotStates.JOINED_RECORDING_PAUSED)
+        self.assertEqual(events[4].new_state, BotStates.JOINED_RECORDING_PERMISSION_DENIED)
+        self.assertEqual(events[4].event_sub_type, BotEventSubTypes.BOT_RECORDING_PERMISSION_DENIED_HOST_DENIED_PERMISSION)
+
+        # 6) BOT_RECORDING_PERMISSION_GRANTED: JOINED_RECORDING_PERMISSION_DENIED -> JOINED_RECORDING
+        self.assertEqual(events[5].event_type, BotEventTypes.BOT_RECORDING_PERMISSION_GRANTED)
+        self.assertEqual(events[5].old_state, BotStates.JOINED_RECORDING_PERMISSION_DENIED)
+        self.assertEqual(events[5].new_state, BotStates.JOINED_RECORDING)
+
+        # 7) MEETING_ENDED: JOINED_RECORDING -> POST_PROCESSING
+        self.assertEqual(events[6].event_type, BotEventTypes.MEETING_ENDED)
+        self.assertEqual(events[6].old_state, BotStates.JOINED_RECORDING)
+        self.assertEqual(events[6].new_state, BotStates.POST_PROCESSING)
+
+        # 8) POST_PROCESSING_COMPLETED: POST_PROCESSING -> ENDED
+        self.assertEqual(events[7].event_type, BotEventTypes.POST_PROCESSING_COMPLETED)
+        self.assertEqual(events[7].old_state, BotStates.POST_PROCESSING)
+        self.assertEqual(events[7].new_state, BotStates.ENDED)
+
+        # Verify Zoom SDK raw recording start/stop call counts: Start twice (initial grant, re-grant), Stop once (pause)
+        mock_recording_controller = controller.adapter.meeting_service.GetMeetingRecordingController.return_value
+        self.assertEqual(mock_recording_controller.StartRawRecording.call_count, 2)
+        self.assertEqual(mock_recording_controller.StopRawRecording.call_count, 1)
+
+        controller.cleanup()
+        bot_thread.join(timeout=5)
+
+        # Close the database connection since we're in a thread
+        connection.close()
+
+    @patch(
+        "bots.zoom_bot_adapter.video_input_manager.zoom",
+        new_callable=create_mock_zoom_sdk,
+    )
+    @patch("bots.zoom_bot_adapter.zoom_bot_adapter.zoom", new_callable=create_mock_zoom_sdk)
+    @patch("bots.zoom_bot_adapter.zoom_bot_adapter.jwt")
+    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("deepgram.DeepgramClient")
+    def test_recording_permission_granted_then_revoked_then_granted_again(
+        self,
+        MockDeepgramClient,
+        MockFileUploader,
+        mock_jwt,
+        mock_zoom_sdk_adapter,
+        mock_zoom_sdk_video,
+    ):
+        # Avoid external calls
+        MockDeepgramClient.return_value = create_mock_deepgram()
+        MockFileUploader.return_value = create_mock_file_uploader()
+        mock_jwt.encode.return_value = "fake_jwt_token"
+
+        controller = BotController(self.bot.id)
+
+        bot_thread = threading.Thread(target=controller.run)
+        bot_thread.daemon = True
+        bot_thread.start()
+
+        def simulate_flow():
+            from bots.bot_adapter import BotAdapter
+
+            adapter = controller.adapter
+
+            # Successful auth
+            adapter.auth_event.onAuthenticationReturnCallback(mock_zoom_sdk_adapter.AUTHRET_SUCCESS)
+
+            # Connecting -> InMeeting
+            adapter.meeting_service_event.onMeetingStatusChangedCallback(
+                mock_zoom_sdk_adapter.MEETING_STATUS_CONNECTING,
+                mock_zoom_sdk_adapter.SDKERR_SUCCESS,
+            )
+            adapter.meeting_service_event.onMeetingStatusChangedCallback(
+                mock_zoom_sdk_adapter.MEETING_STATUS_INMEETING,
+                mock_zoom_sdk_adapter.SDKERR_SUCCESS,
+            )
+
+            # Allow on_join to run; default mock grants permission immediately
+            time.sleep(1)
+
+            # Revoke permission from host
+            adapter.handle_recording_permission_denied(BotAdapter.BOT_RECORDING_PERMISSION_DENIED_REASON.HOST_DENIED_PERMISSION)
+            time.sleep(0.5)
+
+            # Grant permission again
+            adapter.handle_recording_permission_granted()
+            time.sleep(0.5)
+
+            # End meeting
+            adapter.meeting_service_event.onMeetingStatusChangedCallback(
+                mock_zoom_sdk_adapter.MEETING_STATUS_ENDED,
+                mock_zoom_sdk_adapter.SDKERR_SUCCESS,
+            )
+
+            connection.close()
+
+        threading.Timer(2, simulate_flow).start()
+
+        bot_thread.join(timeout=12)
+
+        # Validate adapter resumed recording
+        self.assertFalse(controller.adapter.recording_is_paused)
+
+        self.bot.refresh_from_db()
+
+        # Verify ordered event sequence and state transitions
+        events = list(self.bot.bot_events.order_by("created_at", "id"))
+        self.assertEqual(len(events), 7)
+
+        # 1) JOIN_REQUESTED: READY -> JOINING
+        self.assertEqual(events[0].event_type, BotEventTypes.JOIN_REQUESTED)
+        self.assertEqual(events[0].old_state, BotStates.READY)
+        self.assertEqual(events[0].new_state, BotStates.JOINING)
+
+        # 2) BOT_JOINED_MEETING: JOINING -> JOINED_NOT_RECORDING
+        self.assertEqual(events[1].event_type, BotEventTypes.BOT_JOINED_MEETING)
+        self.assertEqual(events[1].old_state, BotStates.JOINING)
+        self.assertEqual(events[1].new_state, BotStates.JOINED_NOT_RECORDING)
+
+        # 3) BOT_RECORDING_PERMISSION_GRANTED: JOINED_NOT_RECORDING -> JOINED_RECORDING
+        self.assertEqual(events[2].event_type, BotEventTypes.BOT_RECORDING_PERMISSION_GRANTED)
+        self.assertEqual(events[2].old_state, BotStates.JOINED_NOT_RECORDING)
+        self.assertEqual(events[2].new_state, BotStates.JOINED_RECORDING)
+
+        # 5) BOT_RECORDING_PERMISSION_DENIED: JOINED_RECORDING -> JOINED_RECORDING_PERMISSION_DENIED
+        self.assertEqual(events[3].event_type, BotEventTypes.BOT_RECORDING_PERMISSION_DENIED)
+        self.assertEqual(events[3].old_state, BotStates.JOINED_RECORDING)
+        self.assertEqual(events[3].new_state, BotStates.JOINED_RECORDING_PERMISSION_DENIED)
+        self.assertEqual(events[3].event_sub_type, BotEventSubTypes.BOT_RECORDING_PERMISSION_DENIED_HOST_DENIED_PERMISSION)
+
+        # 6) BOT_RECORDING_PERMISSION_GRANTED: JOINED_RECORDING_PERMISSION_DENIED -> JOINED_RECORDING
+        self.assertEqual(events[4].event_type, BotEventTypes.BOT_RECORDING_PERMISSION_GRANTED)
+        self.assertEqual(events[4].old_state, BotStates.JOINED_RECORDING_PERMISSION_DENIED)
+        self.assertEqual(events[4].new_state, BotStates.JOINED_RECORDING)
+
+        # 7) MEETING_ENDED: JOINED_RECORDING -> POST_PROCESSING
+        self.assertEqual(events[5].event_type, BotEventTypes.MEETING_ENDED)
+        self.assertEqual(events[5].old_state, BotStates.JOINED_RECORDING)
+        self.assertEqual(events[5].new_state, BotStates.POST_PROCESSING)
+
+        # 8) POST_PROCESSING_COMPLETED: POST_PROCESSING -> ENDED
+        self.assertEqual(events[6].event_type, BotEventTypes.POST_PROCESSING_COMPLETED)
+        self.assertEqual(events[6].old_state, BotStates.POST_PROCESSING)
+        self.assertEqual(events[6].new_state, BotStates.ENDED)
+
+        # Verify Zoom SDK raw recording start/stop call counts: Start twice (initial grant, re-grant), Stop once (revoked)
+        mock_recording_controller = controller.adapter.meeting_service.GetMeetingRecordingController.return_value
+        self.assertEqual(mock_recording_controller.StartRawRecording.call_count, 2)
+        self.assertEqual(mock_recording_controller.StopRawRecording.call_count, 1)
+
+        controller.cleanup()
+        bot_thread.join(timeout=5)
+
+        # Close the database connection since we're in a thread
+        connection.close()

@@ -19,10 +19,9 @@ def calculate_normalized_rms(audio_bytes):
 
 
 class PerParticipantStreamingAudioInputManager:
-    def __init__(self, *, save_utterance_callback, get_participant_callback, sample_rate, transcription_provider, bot):
+    def __init__(self, *, get_participant_callback, sample_rate, transcription_provider, bot):
         self.queue = queue.Queue()
 
-        self.save_utterance_callback = save_utterance_callback
         self.get_participant_callback = get_participant_callback
 
         self.utterances = {}
@@ -61,12 +60,12 @@ class PerParticipantStreamingAudioInputManager:
             return DeepgramStreamingTranscriber(
                 deepgram_api_key=self.deepgram_api_key,
                 interim_results=True,
-                language=self.bot.deepgram_language(),
-                model=self.bot.deepgram_model(),
-                callback=self.bot.deepgram_callback(),
+                language=self.bot.transcription_settings.deepgram_language(),
+                model=self.bot.transcription_settings.deepgram_model(),
+                callback=self.bot.transcription_settings.deepgram_callback(),
                 sample_rate=self.sample_rate,
                 metadata=metadata_list,
-                redaction_settings=self.bot.deepgram_redaction_settings(),
+                redaction_settings=self.bot.transcription_settings.deepgram_redaction_settings(),
             )
         else:
             raise Exception(f"Unsupported transcription provider: {self.transcription_provider}")

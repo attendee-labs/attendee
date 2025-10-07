@@ -29,7 +29,11 @@
               required
             />
             <div class="text-danger mt-2 d-none" id="url-validation-message">
+              {% if REQUIRE_HTTPS_WEBHOOKS %}
               Please enter a valid URL starting with https://
+              {% else %}
+              Please enter a valid URL starting with http:// or https://
+              {% endif %}
             </div>
           </div>
           <div class="mb-3">
@@ -274,8 +278,12 @@
     const urlValue = urlInput.value.trim();
     const urlValidationMessage = document.getElementById('url-validation-message');
     
-    // Regular expression to validate URL format and ensure it starts with https://
-    const urlRegex = /^https:\/\/([\w-]+(\.[\w-]+)+)([\w.,@?^=%&:/~+#-]*[\w@?^=%&/~+#-])?$/;
+    // Regular expression to validate URL format
+    // If REQUIRE_HTTPS_WEBHOOKS is true, only allow https://, otherwise allow http:// or https://
+    const requireHttps = {% if REQUIRE_HTTPS_WEBHOOKS %}true{% else %}false{% endif %};
+    const urlRegex = requireHttps 
+      ? /^https:\/\/([\w-]+(\.[\w-]+)+)([\w.,@?^=%&:/~+#-]*[\w@?^=%&/~+#-])?$/
+      : /^https?:\/\/([\w-]+(\.[\w-]+)+)([\w.,@?^=%&:/~+#-]*[\w@?^=%&/~+#-])?$/;
     
     if (!urlRegex.test(urlValue)) {
       urlValidationMessage.classList.remove('d-none');

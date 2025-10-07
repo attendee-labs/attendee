@@ -707,6 +707,7 @@ class ProjectWebhooksView(LoginRequiredMixin, ProjectUrlContextMixin, View):
         context["webhooks"] = project.webhook_subscriptions.filter(bot__isnull=True).order_by("-created_at")
         context["webhook_options"] = [trigger_type for trigger_type in WebhookTriggerTypes]
         context["webhook_secret"] = base64.b64encode(webhook_secret.get_secret()).decode("utf-8")
+        context["REQUIRE_HTTPS_WEBHOOKS"] = settings.REQUIRE_HTTPS_WEBHOOKS
         return render(request, "projects/project_webhooks.html", context)
 
 
@@ -886,6 +887,7 @@ class DeleteWebhookView(LoginRequiredMixin, ProjectUrlContextMixin, View):
         context = self.get_project_context(object_id, webhook.project)
         context["webhooks"] = WebhookSubscription.objects.filter(project=webhook.project, bot__isnull=True).order_by("-created_at")
         context["webhook_options"] = [trigger_type for trigger_type in WebhookTriggerTypes]
+        context["REQUIRE_HTTPS_WEBHOOKS"] = settings.REQUIRE_HTTPS_WEBHOOKS
         return render(request, "projects/project_webhooks.html", context)
 
 

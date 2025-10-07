@@ -4,6 +4,7 @@ from unittest import mock
 from django.test import TransactionTestCase
 
 from bots.models import (
+    AudioChunk,
     Bot,
     Credentials,
     Organization,
@@ -38,13 +39,13 @@ class ProcessUtteranceTaskTest(TransactionTestCase):
         )
 
         self.participant = Participant.objects.create(bot=self.bot, uuid=str(uuid.uuid4()))
+        self.audio_chunk = AudioChunk.objects.create(recording=self.recording, participant=self.participant, audio_blob=b"rawpcmbytes", timestamp_ms=0, duration_ms=500, sample_rate=16000)
         self.utterance = Utterance.objects.create(
             recording=self.recording,
             participant=self.participant,
-            audio_blob=b"rawpcmbytes",
+            audio_chunk=self.audio_chunk,
             timestamp_ms=0,
             duration_ms=500,
-            sample_rate=16_000,
         )
         self.utterance.refresh_from_db()
 
@@ -114,42 +115,42 @@ class BotModelRedactionSettingsTest(TransactionTestCase):
         """Test that deepgram_redaction_settings returns correct redaction list with single type."""
         bot = self._create_bot_with_settings({"transcription_settings": {"deepgram": {"redact": ["pii"]}}})
 
-        result = bot.deepgram_redaction_settings()
+        result = bot.transcription_settings.deepgram_redaction_settings()
         self.assertEqual(result, ["pii"])
 
     def test_deepgram_redaction_settings_returns_correct_list_with_multiple_types(self):
         """Test that deepgram_redaction_settings returns correct redaction list with multiple types."""
         bot = self._create_bot_with_settings({"transcription_settings": {"deepgram": {"redact": ["pii", "pci", "numbers"]}}})
 
-        result = bot.deepgram_redaction_settings()
+        result = bot.transcription_settings.deepgram_redaction_settings()
         self.assertEqual(result, ["pii", "pci", "numbers"])
 
     def test_deepgram_redaction_settings_returns_empty_list_when_no_redaction_configured(self):
         """Test that deepgram_redaction_settings returns empty list when no redaction is configured."""
         bot = self._create_bot_with_settings({"transcription_settings": {"deepgram": {"language": "en-US", "model": "nova-3"}}})
 
-        result = bot.deepgram_redaction_settings()
+        result = bot.transcription_settings.deepgram_redaction_settings()
         self.assertEqual(result, [])
 
     def test_deepgram_redaction_settings_returns_empty_list_when_no_deepgram_settings(self):
         """Test that deepgram_redaction_settings returns empty list when no deepgram settings exist."""
         bot = self._create_bot_with_settings({"transcription_settings": {"openai": {"model": "gpt-4o-transcribe"}}})
 
-        result = bot.deepgram_redaction_settings()
+        result = bot.transcription_settings.deepgram_redaction_settings()
         self.assertEqual(result, [])
 
     def test_deepgram_redaction_settings_returns_empty_list_when_no_transcription_settings(self):
         """Test that deepgram_redaction_settings returns empty list when no transcription settings exist."""
         bot = self._create_bot_with_settings({"recording_settings": {"format": "mp4"}})
 
-        result = bot.deepgram_redaction_settings()
+        result = bot.transcription_settings.deepgram_redaction_settings()
         self.assertEqual(result, [])
 
     def test_deepgram_redaction_settings_returns_empty_list_when_settings_is_empty(self):
         """Test that deepgram_redaction_settings returns empty list when settings is empty."""
         bot = self._create_bot_with_settings({})
 
-        result = bot.deepgram_redaction_settings()
+        result = bot.transcription_settings.deepgram_redaction_settings()
         self.assertEqual(result, [])
 
     def test_deepgram_redaction_settings_backward_compatibility_with_no_settings(self):
@@ -161,28 +162,28 @@ class BotModelRedactionSettingsTest(TransactionTestCase):
             # No settings field set
         )
 
-        result = bot.deepgram_redaction_settings()
+        result = bot.transcription_settings.deepgram_redaction_settings()
         self.assertEqual(result, [])
 
     def test_deepgram_redaction_settings_with_empty_redaction_array(self):
         """Test that deepgram_redaction_settings handles empty redaction array correctly."""
         bot = self._create_bot_with_settings({"transcription_settings": {"deepgram": {"redact": []}}})
 
-        result = bot.deepgram_redaction_settings()
+        result = bot.transcription_settings.deepgram_redaction_settings()
         self.assertEqual(result, [])
 
     def test_deepgram_redaction_settings_preserves_order(self):
         """Test that deepgram_redaction_settings preserves the order of redaction types."""
         bot = self._create_bot_with_settings({"transcription_settings": {"deepgram": {"redact": ["numbers", "pii", "pci"]}}})
 
-        result = bot.deepgram_redaction_settings()
+        result = bot.transcription_settings.deepgram_redaction_settings()
         self.assertEqual(result, ["numbers", "pii", "pci"])
 
     def test_deepgram_redaction_settings_with_other_deepgram_settings(self):
         """Test that deepgram_redaction_settings works correctly when combined with other deepgram settings."""
         bot = self._create_bot_with_settings({"transcription_settings": {"deepgram": {"language": "en-US", "model": "nova-2", "redact": ["pci", "numbers"], "keywords": ["meeting", "agenda"]}}})
 
-        result = bot.deepgram_redaction_settings()
+        result = bot.transcription_settings.deepgram_redaction_settings()
         self.assertEqual(result, ["pci", "numbers"])
 
     def test_deepgram_redaction_settings_method_consistency_across_calls(self):
@@ -190,9 +191,9 @@ class BotModelRedactionSettingsTest(TransactionTestCase):
         bot = self._create_bot_with_settings({"transcription_settings": {"deepgram": {"redact": ["pii", "pci"]}}})
 
         # Call the method multiple times
-        result1 = bot.deepgram_redaction_settings()
-        result2 = bot.deepgram_redaction_settings()
-        result3 = bot.deepgram_redaction_settings()
+        result1 = bot.transcription_settings.deepgram_redaction_settings()
+        result2 = bot.transcription_settings.deepgram_redaction_settings()
+        result3 = bot.transcription_settings.deepgram_redaction_settings()
 
         # All results should be identical
         self.assertEqual(result1, result2)
@@ -239,7 +240,8 @@ class DeepgramPrerecordedTranscriptionRedactionTest(TransactionTestCase):
 
         # Create a proper audio blob as numpy array
         audio_data = np.array([0.1, 0.2, 0.3, 0.4], dtype=np.float32)
-        utterance = Utterance.objects.create(recording=recording, participant=participant, audio_blob=audio_data, timestamp_ms=0, duration_ms=1000, sample_rate=16000)
+        audio_chunk = AudioChunk.objects.create(recording=recording, participant=participant, audio_blob=audio_data, timestamp_ms=0, duration_ms=1000, sample_rate=16000)
+        utterance = Utterance.objects.create(recording=recording, participant=participant, audio_chunk=audio_chunk, timestamp_ms=0, duration_ms=1000)
         return utterance
 
     @mock.patch("deepgram.PrerecordedOptions")
@@ -271,7 +273,7 @@ class DeepgramPrerecordedTranscriptionRedactionTest(TransactionTestCase):
         self.assertEqual(call_kwargs["redact"], ["pii", "pci", "numbers"])
 
         # Verify other expected parameters are also present
-        expected_params = {"model": bot.deepgram_model(), "smart_format": True, "language": bot.deepgram_language(), "detect_language": bot.deepgram_detect_language(), "keyterm": bot.deepgram_keyterms(), "keywords": bot.deepgram_keywords(), "encoding": "linear16", "sample_rate": utterance.sample_rate, "redact": ["pii", "pci", "numbers"]}
+        expected_params = {"model": bot.transcription_settings.deepgram_model(), "smart_format": True, "language": bot.transcription_settings.deepgram_language(), "detect_language": bot.transcription_settings.deepgram_detect_language(), "keyterm": bot.transcription_settings.deepgram_keyterms(), "keywords": bot.transcription_settings.deepgram_keywords(), "encoding": "linear16", "sample_rate": utterance.audio_chunk.sample_rate, "redact": ["pii", "pci", "numbers"]}
 
         for param, expected_value in expected_params.items():
             self.assertIn(param, call_kwargs)
@@ -421,7 +423,7 @@ class DeepgramPrerecordedTranscriptionRedactionTest(TransactionTestCase):
         self.assertEqual(call_kwargs["keywords"], ["meeting", "agenda"])
         self.assertEqual(call_kwargs["smart_format"], True)
         self.assertEqual(call_kwargs["encoding"], "linear16")
-        self.assertEqual(call_kwargs["sample_rate"], utterance.sample_rate)
+        self.assertEqual(call_kwargs["sample_rate"], utterance.audio_chunk.sample_rate)
 
     def _run_task(self):
         """Invoke the Celery task with the test utterance id (synchronously)."""
@@ -532,13 +534,13 @@ class DeepgramProviderTest(TransactionTestCase):
             state=RecordingStates.COMPLETE,
         )
         self.participant = Participant.objects.create(bot=self.bot, uuid=str(uuid.uuid4()))
+        self.audio_chunk = AudioChunk.objects.create(recording=self.recording, participant=self.participant, audio_blob=b"\x01\x02", timestamp_ms=0, duration_ms=500, sample_rate=16000)
         self.utterance = Utterance.objects.create(
             recording=self.recording,
             participant=self.participant,
-            audio_blob=b"\x01\x02",
+            audio_chunk=self.audio_chunk,
             timestamp_ms=0,
             duration_ms=500,
-            sample_rate=16_000,
         )
         self.utterance.refresh_from_db()
         # Minimal Deepgram creds
@@ -617,13 +619,13 @@ class BotModelTest(TransactionTestCase):
     @mock.patch.dict("os.environ", {}, clear=True)
     def test_openai_transcription_model_default_without_env(self):
         """Test that the default model is used when no env var or settings are present"""
-        model = self.bot.openai_transcription_model()
+        model = self.bot.transcription_settings.openai_transcription_model()
         self.assertEqual(model, "gpt-4o-transcribe")
 
     @mock.patch.dict("os.environ", {"OPENAI_MODEL_NAME": "custom-env-model"})
     def test_openai_transcription_model_env_var_fallback(self):
         """Test that env var is used as fallback when no bot settings are present"""
-        model = self.bot.openai_transcription_model()
+        model = self.bot.transcription_settings.openai_transcription_model()
         self.assertEqual(model, "custom-env-model")
 
     @mock.patch.dict("os.environ", {"OPENAI_MODEL_NAME": "custom-env-model"})
@@ -631,7 +633,7 @@ class BotModelTest(TransactionTestCase):
         """Test that bot settings override env var"""
         self.bot.settings = {"transcription_settings": {"openai": {"model": "settings-model"}}}
         self.bot.save()
-        model = self.bot.openai_transcription_model()
+        model = self.bot.transcription_settings.openai_transcription_model()
         self.assertEqual(model, "settings-model")
 
     @mock.patch.dict("os.environ", {}, clear=True)
@@ -639,7 +641,7 @@ class BotModelTest(TransactionTestCase):
         """Test that bot settings override default"""
         self.bot.settings = {"transcription_settings": {"openai": {"model": "settings-model"}}}
         self.bot.save()
-        model = self.bot.openai_transcription_model()
+        model = self.bot.transcription_settings.openai_transcription_model()
         self.assertEqual(model, "settings-model")
 
 
@@ -661,13 +663,13 @@ class GladiaProviderTest(TransactionTestCase):
         )
 
         self.participant = Participant.objects.create(bot=self.bot, uuid="p1")
+        self.audio_chunk = AudioChunk.objects.create(recording=self.recording, participant=self.participant, audio_blob=b"pcm-bytes", timestamp_ms=0, duration_ms=600, sample_rate=16000)
         self.utterance = Utterance.objects.create(
             recording=self.recording,
             participant=self.participant,
-            audio_blob=b"pcm-bytes",
+            audio_chunk=self.audio_chunk,
             timestamp_ms=0,
             duration_ms=600,
-            sample_rate=16_000,
         )
         self.utterance.refresh_from_db()
         # "Real" credential row – we'll monkey‑patch get_credentials() later
@@ -790,13 +792,13 @@ class OpenAIProviderTest(TransactionTestCase):
         )
 
         self.participant = Participant.objects.create(bot=self.bot, uuid="p‑1")
+        self.audio_chunk = AudioChunk.objects.create(recording=self.rec, participant=self.participant, audio_blob=b"pcm", timestamp_ms=0, duration_ms=100, sample_rate=16000)
         self.utt = Utterance.objects.create(
             recording=self.rec,
             participant=self.participant,
-            audio_blob=b"pcm",
+            audio_chunk=self.audio_chunk,
             timestamp_ms=0,
             duration_ms=100,
-            sample_rate=16_000,
         )
         self.utt.refresh_from_db()
         # Real credentials row (the crypto doesn't matter – we patch .get_credentials)
@@ -999,13 +1001,13 @@ class AssemblyAIProviderTest(TransactionTestCase):
         )
 
         self.participant = Participant.objects.create(bot=self.bot, uuid="p1")
+        self.audio_chunk = AudioChunk.objects.create(recording=self.recording, participant=self.participant, audio_blob=b"pcm-bytes", timestamp_ms=0, duration_ms=600, sample_rate=16000)
         self.utterance = Utterance.objects.create(
             recording=self.recording,
             participant=self.participant,
-            audio_blob=b"pcm-bytes",
+            audio_chunk=self.audio_chunk,
             timestamp_ms=0,
             duration_ms=600,
-            sample_rate=16_000,
         )
         self.utterance.refresh_from_db()
         self.cred = CredModel.objects.create(
@@ -1241,13 +1243,13 @@ class SarvamProviderTest(TransactionTestCase):
         )
 
         self.participant = Participant.objects.create(bot=self.bot, uuid="p1")
+        self.audio_chunk = AudioChunk.objects.create(recording=self.recording, participant=self.participant, audio_blob=b"pcm-bytes", timestamp_ms=0, duration_ms=600, sample_rate=16000)
         self.utterance = Utterance.objects.create(
             recording=self.recording,
             participant=self.participant,
-            audio_blob=b"pcm-bytes",
+            audio_chunk=self.audio_chunk,
             timestamp_ms=0,
             duration_ms=600,
-            sample_rate=16_000,
         )
         self.utterance.refresh_from_db()
         self.cred = Credentials.objects.create(
@@ -1326,13 +1328,13 @@ class ElevenLabsProviderTest(TransactionTestCase):
         )
 
         self.participant = Participant.objects.create(bot=self.bot, uuid="p1")
+        self.audio_chunk = AudioChunk.objects.create(recording=self.recording, participant=self.participant, audio_blob=b"pcm-bytes", timestamp_ms=0, duration_ms=600, sample_rate=16000)
         self.utterance = Utterance.objects.create(
             recording=self.recording,
             participant=self.participant,
-            audio_blob=b"pcm-bytes",
+            audio_chunk=self.audio_chunk,
             timestamp_ms=0,
             duration_ms=600,
-            sample_rate=16_000,
         )
         self.utterance.refresh_from_db()
 

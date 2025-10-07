@@ -14,6 +14,8 @@ from selenium.common.exceptions import TimeoutException
 from bots.bot_controller import BotController
 from bots.google_meet_bot_adapter.google_meet_ui_methods import GoogleMeetUIMethods
 from bots.models import (
+    AsyncTranscription,
+    AsyncTranscriptionStates,
     Bot,
     BotEventManager,
     BotEventSubTypes,
@@ -27,6 +29,7 @@ from bots.models import (
     RecordingStates,
     RecordingTranscriptionStates,
     RecordingTypes,
+    TranscriptionFailureReasons,
     TranscriptionProviders,
     TranscriptionTypes,
     Utterance,
@@ -35,6 +38,7 @@ from bots.models import (
     WebhookSubscription,
     WebhookTriggerTypes,
 )
+from bots.tasks.process_async_transcription_task import process_async_transcription
 from bots.tests.mock_data import create_mock_file_uploader, create_mock_google_meet_driver
 from bots.web_bot_adapter.ui_methods import UiCouldNotJoinMeetingWaitingRoomTimeoutException
 
@@ -110,7 +114,7 @@ class TestGoogleMeetBot(TransactionTestCase):
         self.webhook_subscription = WebhookSubscription.objects.create(
             project=self.project,
             url="https://example.com/webhook",
-            triggers=[WebhookTriggerTypes.BOT_STATE_CHANGE, WebhookTriggerTypes.TRANSCRIPT_UPDATE],
+            triggers=[WebhookTriggerTypes.BOT_STATE_CHANGE, WebhookTriggerTypes.TRANSCRIPT_UPDATE, WebhookTriggerTypes.ASYNC_TRANSCRIPTION_STATE_CHANGE],
             is_active=True,
         )
 
@@ -277,11 +281,13 @@ class TestGoogleMeetBot(TransactionTestCase):
         # Verify utterances were processed
         utterances = Utterance.objects.filter(recording=self.recording)
         self.assertGreater(utterances.count(), 0)
+        self.assertEqual(utterances.count(), self.recording.audio_chunks.count())
 
         # Verify an audio utterance exists with the correct transcription
         audio_utterance = utterances.filter(source=Utterance.Sources.PER_PARTICIPANT_AUDIO, failure_data__isnull=True).first()
         self.assertIsNotNone(audio_utterance)
         self.assertEqual(audio_utterance.transcription.get("transcript"), "This is a test transcription from Deepgram")
+        self.assertEqual(audio_utterance.audio_chunk, self.recording.audio_chunks.first())
 
         # Verify webhook delivery attempts were created for transcript updates
         webhook_delivery_attempts = WebhookDeliveryAttempt.objects.filter(bot=self.bot, webhook_trigger_type=WebhookTriggerTypes.TRANSCRIPT_UPDATE)
@@ -312,6 +318,78 @@ class TestGoogleMeetBot(TransactionTestCase):
 
         # Close the database connection since we're in a thread
         connection.close()
+
+        # Now test creating an async transcription
+        async_transcription = AsyncTranscription.objects.create(recording=self.recording, settings={"transcription_settings": {"deepgram": {}}})
+        self.assertEqual(async_transcription.state, AsyncTranscriptionStates.NOT_STARTED)
+
+        process_async_transcription.delay(async_transcription.id)
+
+        async_transcription.refresh_from_db()
+
+        self.assertEqual(async_transcription.state, AsyncTranscriptionStates.COMPLETE)
+        self.assertIsNotNone(async_transcription.completed_at)
+        self.assertIsNotNone(async_transcription.started_at)
+        self.assertIsNone(async_transcription.failure_data)
+        self.assertEqual(utterances.first().transcription, async_transcription.utterances.first().transcription)
+        self.assertEqual(Utterance.objects.filter(recording=self.recording, async_transcription=async_transcription).count(), Utterance.objects.filter(recording=self.recording, async_transcription=None).count())
+
+        # Verify webhook delivery attempts were created for async transcription state changes
+        async_transcription_webhook_attempts = WebhookDeliveryAttempt.objects.filter(bot=self.bot, webhook_trigger_type=WebhookTriggerTypes.ASYNC_TRANSCRIPTION_STATE_CHANGE)
+        # Should have two webhook attempts: one for IN_PROGRESS, one for COMPLETE
+        self.assertEqual(async_transcription_webhook_attempts.count(), 2, "Expected webhook delivery attempts for async transcription state changes")
+
+        # Verify the webhook payloads contain the expected async transcription data
+        in_progress_webhook = async_transcription_webhook_attempts.filter(payload__state="in_progress").first()
+        self.assertIsNotNone(in_progress_webhook, "Expected webhook for IN_PROGRESS state")
+        self.assertEqual(in_progress_webhook.payload["id"], async_transcription.object_id)
+        self.assertIsNone(in_progress_webhook.payload["failure_data"])
+
+        complete_webhook = async_transcription_webhook_attempts.filter(payload__state="complete").first()
+        self.assertIsNotNone(complete_webhook, "Expected webhook for COMPLETE state")
+        self.assertEqual(complete_webhook.payload["id"], async_transcription.object_id)
+        self.assertIsNone(complete_webhook.payload["failure_data"])
+
+        # Now delete the deepgram credentials to simulate transcription failure
+        self.deepgram_credentials.delete()
+        async_transcription_after_credentials_deleted = AsyncTranscription.objects.create(recording=self.recording, settings={"transcription_settings": {"deepgram": {}}})
+
+        process_async_transcription.delay(async_transcription_after_credentials_deleted.id)
+
+        async_transcription_after_credentials_deleted.refresh_from_db()
+
+        self.assertEqual(async_transcription_after_credentials_deleted.state, AsyncTranscriptionStates.FAILED)
+        self.assertIsNotNone(async_transcription_after_credentials_deleted.failure_data.get("failure_reasons"))
+        self.assertIn(TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND, async_transcription_after_credentials_deleted.failure_data.get("failure_reasons"))
+        self.assertIsNotNone(async_transcription_after_credentials_deleted.failed_at)
+        self.assertIsNotNone(async_transcription_after_credentials_deleted.started_at)
+        self.assertIsNone(async_transcription_after_credentials_deleted.completed_at)
+        self.assertEqual(Utterance.objects.filter(recording=self.recording, async_transcription=async_transcription_after_credentials_deleted).count(), Utterance.objects.filter(recording=self.recording, async_transcription=None).count())
+
+        # Verify webhook delivery attempts were created for the failed async transcription
+        failed_async_transcription_webhook_attempts = WebhookDeliveryAttempt.objects.filter(bot=self.bot, webhook_trigger_type=WebhookTriggerTypes.ASYNC_TRANSCRIPTION_STATE_CHANGE).order_by("created_at")
+        # Should now have 4 total webhook attempts: 2 from successful transcription + 2 from failed transcription
+        self.assertEqual(failed_async_transcription_webhook_attempts.count(), 4, "Expected additional webhook delivery attempts for failed async transcription")
+
+        # Get the last two webhook attempts (for the failed transcription)
+        latest_webhooks = failed_async_transcription_webhook_attempts.order_by("-created_at")[:2]
+
+        # Find the IN_PROGRESS and FAILED webhooks for the second transcription
+        failed_transcription_in_progress_webhook = None
+        failed_transcription_failed_webhook = None
+
+        for webhook in latest_webhooks:
+            if webhook.payload.get("id") == async_transcription_after_credentials_deleted.object_id:
+                if webhook.payload.get("state") == "in_progress":
+                    failed_transcription_in_progress_webhook = webhook
+                elif webhook.payload.get("state") == "failed":
+                    failed_transcription_failed_webhook = webhook
+
+        self.assertIsNotNone(failed_transcription_in_progress_webhook, "Expected webhook for failed transcription IN_PROGRESS state")
+        self.assertIsNone(failed_transcription_in_progress_webhook.payload["failure_data"])
+
+        self.assertIsNotNone(failed_transcription_failed_webhook, "Expected webhook for FAILED state")
+        self.assertIn(TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND, failed_transcription_failed_webhook.payload["failure_data"]["failure_reasons"])
 
     @patch("bots.models.Bot.create_debug_recording", return_value=False)
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
