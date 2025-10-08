@@ -11,47 +11,17 @@ logger = logging.getLogger(__name__)
 
 def get_swift_client():
     """Create and return a Swift client instance using the working authentication method"""
-    auth_url = os.getenv("OS_AUTH_URL")
-    
-    # Check for application credentials first
-    app_cred_id = os.getenv("OS_APPLICATION_CREDENTIAL_ID")
-    app_cred_secret = os.getenv("OS_APPLICATION_CREDENTIAL_SECRET")
-    
-    # Check for username/password credentials
-    username = os.getenv("OS_USERNAME")
-    password = os.getenv("OS_PASSWORD")
-    project_name = os.getenv("OS_PROJECT_NAME")
-    
-    if app_cred_id and app_cred_secret:
-        # Use application credentials
-        return client.Connection(
-            authurl=auth_url,
-            auth_version="3",
-            os_options={
-                "auth_type": "v3applicationcredential",
-                "application_credential_id": app_cred_id,
-                "application_credential_secret": app_cred_secret,
-                "region_name": os.getenv("OS_REGION_NAME"),
-                "interface": os.getenv("OS_INTERFACE", "public"),
-            },
-        )
-    elif username and password and project_name:
-        # Use username/password authentication
-        return client.Connection(
-            authurl=auth_url,
-            auth_version="3",
-            user=username,
-            key=password,
-            tenant_name=project_name,
-            os_options={
-                "region_name": os.getenv("OS_REGION_NAME"),
-                "interface": os.getenv("OS_INTERFACE", "public"),
-                "user_domain_name": "default",
-                "project_domain_name": "default",
-            },
-        )
-    else:
-        raise ValueError("Swift credentials not configured. Please set either application credentials (OS_APPLICATION_CREDENTIAL_ID, OS_APPLICATION_CREDENTIAL_SECRET) or username/password (OS_USERNAME, OS_PASSWORD, OS_PROJECT_NAME)")
+    return client.Connection(
+        authurl=os.getenv("OS_AUTH_URL"),
+        auth_version="3",
+        os_options={
+            "auth_type": "v3applicationcredential",
+            "application_credential_id": os.getenv("OS_APPLICATION_CREDENTIAL_ID"),
+            "application_credential_secret": os.getenv("OS_APPLICATION_CREDENTIAL_SECRET"),
+            "region_name": os.getenv("OS_REGION_NAME"),
+            "interface": os.getenv("OS_INTERFACE", "public"),
+        },
+    )
 
 
 def get_container_name():

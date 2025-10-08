@@ -40,9 +40,9 @@ def get_swift_client():
         return client.Connection(
             authurl=auth_url,
             auth_version="3",
-            user=username,
-            key=password,
-            tenant_name=project_name,
+            username=username,
+            password=password,
+            project_name=project_name,
             os_options={
                 "region_name": os.getenv("OS_REGION_NAME"),
                 "interface": os.getenv("OS_INTERFACE", "public"),
