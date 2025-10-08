@@ -31,21 +31,15 @@ def get_swift_client():
     # Try application credentials first (recommended for Infomaniak)
     if app_cred_id and app_cred_secret:
         logger.info("Using Swift application credentials authentication")
-        project_name = os.getenv("SWIFT_PROJECT_NAME") or tenant_name
         try:
-            os_options = {
-                'application_credential_id': app_cred_id,
-                'application_credential_secret': app_cred_secret,
-            }
-            # Add project info if available
-            if project_name:
-                os_options['project_name'] = project_name
-                
             return swift_client.Connection(
                 authurl=auth_url,
                 auth_version=auth_version,
                 retries=3,
-                os_options=os_options
+                os_options={
+                    'application_credential_id': app_cred_id,
+                    'application_credential_secret': app_cred_secret,
+                }
             )
         except Exception as e:
             logger.error(f"Application credentials authentication failed: {e}")
@@ -54,9 +48,8 @@ def get_swift_client():
     # Fall back to username/password authentication
     if username and password and tenant_name:
         logger.info("Using Swift username/password authentication")
-        
-        # For Infomaniak, try the most compatible approach
         try:
+            # First try: Standard OpenStack v3 with project name
             return swift_client.Connection(
                 authurl=auth_url,
                 user=username,
@@ -64,17 +57,16 @@ def get_swift_client():
                 tenant_name=tenant_name,
                 auth_version=auth_version,
                 retries=3,
-                # Infomaniak-specific options
                 os_options={
                     'project_name': tenant_name,
-                    'user_domain_name': 'default',
-                    'project_domain_name': 'default',
+                    'user_domain_name': 'Default',
+                    'project_domain_name': 'Default',
                 }
             )
         except Exception as e1:
             logger.warning(f"First auth attempt failed: {e1}")
             try:
-                # Second try: Without domain specifications
+                # Second try: Simplified approach
                 return swift_client.Connection(
                     authurl=auth_url,
                     user=username,
