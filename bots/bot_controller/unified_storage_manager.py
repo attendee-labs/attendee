@@ -212,7 +212,7 @@ class UnifiedStorageManager:
             # Use the first uploader's delete method
             self.upload_threads[0].delete_file(file_path)
     
-        @property
+    @property
     def has_storage_configured(self) -> bool:
         """Check if any storage provider is configured."""
         return len(self.storage_configs) > 0
