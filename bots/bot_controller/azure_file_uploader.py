@@ -167,3 +167,16 @@ class AzureFileUploader:
         if file_path_obj.exists():
             file_path_obj.unlink()
             logger.info(f"Deleted local file: {file_path}")
+    
+    def get_blob_url(self) -> str:
+        """
+        Get the blob URL for the uploaded file.
+        
+        Returns:
+            str: The full URL to access the blob
+        """
+        blob_client = self.blob_service_client.get_blob_client(
+            container=self.container_name, 
+            blob=self.blob_name
+        )
+        return blob_client.url
