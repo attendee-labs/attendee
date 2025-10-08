@@ -465,26 +465,11 @@ class BotController:
             self.upload_recording_to_external_media_storage_if_enabled()
 
             logger.info("Telling file uploader to upload recording file...")
-            
-            # Choose the appropriate file uploader based on storage backend
-            from django.conf import settings
-            storage_backend = getattr(settings, 'RECORDING_STORAGE_BACKEND', 'S3')
-            
-            if storage_backend.upper() == 'SWIFT':
-                # Use Swift file uploader
-                from bots.storage.swift_utils import get_container_name
-                file_uploader = SwiftFileUploader(
-                    container=get_container_name(),
-                    key=self.get_recording_filename(),
-                )
-            else:
-                # Use S3 file uploader (existing code)
-                file_uploader = FileUploader(
-                    bucket=os.environ.get("AWS_RECORDING_STORAGE_BUCKET_NAME"),
-                    key=self.get_recording_filename(),
-                    endpoint_url=os.environ.get("AWS_ENDPOINT_URL"),
-                )
-            
+            file_uploader = FileUploader(
+                bucket=os.environ.get("AWS_RECORDING_STORAGE_BUCKET_NAME"),
+                key=self.get_recording_filename(),
+                endpoint_url=os.environ.get("AWS_ENDPOINT_URL"),
+            )
             file_uploader.upload_file(self.get_recording_file_location())
             file_uploader.wait_for_upload()
             logger.info("File uploader finished uploading file")

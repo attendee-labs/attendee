@@ -1585,21 +1585,12 @@ class Recording(models.Model):
     def url(self):
         if not self.file.name:
             return None
-        
-        # Check if we're using Swift storage
-        storage_backend = getattr(settings, 'RECORDING_STORAGE_BACKEND', 'S3')
-        
-        if storage_backend.upper() == 'SWIFT':
-            # Use Swift's presigned URL generation
-            from bots.storage.swift_utils import generate_presigned_url
-            return generate_presigned_url(self.file.name, expiry_seconds=1800)
-        else:
-            # Use S3's presigned URL generation (existing code)
-            return self.file.storage.bucket.meta.client.generate_presigned_url(
-                "get_object",
-                Params={"Bucket": self.file.storage.bucket_name, "Key": self.file.name},
-                ExpiresIn=1800,
-            )
+        # Generate a temporary signed URL that expires in 30 minutes (1800 seconds)
+        return self.file.storage.bucket.meta.client.generate_presigned_url(
+            "get_object",
+            Params={"Bucket": self.file.storage.bucket_name, "Key": self.file.name},
+            ExpiresIn=1800,
+        )
 
     OBJECT_ID_PREFIX = "rec_"
     object_id = models.CharField(max_length=32, unique=True, editable=False)
