@@ -352,6 +352,16 @@ class BotController:
         recording.file = s3_storage_key
         recording.first_buffer_timestamp_ms = self.get_first_buffer_timestamp_ms()
         recording.save()
+    
+    def save_azure_recording_url(self, azure_blob_url):
+        """Save the Azure blob URL to the recording."""
+        try:
+            recording = Recording.objects.get(bot=self.bot_in_db, is_default_recording=True)
+            recording.azure_blob_url = azure_blob_url
+            recording.save()
+            logger.info(f"Saved Azure blob URL to recording: {azure_blob_url}")
+        except Exception as e:
+            logger.error(f"Failed to save Azure blob URL to recording: {e}")
 
     def get_recording_transcription_provider(self):
         recording = Recording.objects.get(bot=self.bot_in_db, is_default_recording=True)
@@ -495,6 +505,14 @@ class BotController:
                 storage_manager.upload_file(self.get_recording_file_location(), upload_callback)
                 storage_manager.wait_for_uploads()
                 logger.info("Unified storage manager finished uploading to all providers")
+                
+                # Get Azure blob URL if it was uploaded to Azure
+                azure_blob_url = storage_manager.get_azure_blob_url()
+                if azure_blob_url:
+                    logger.info(f"Azure blob URL: {azure_blob_url}")
+                    # Save Azure URL to database
+                    self.save_azure_recording_url(azure_blob_url)
+                
                 storage_manager.delete_local_file(self.get_recording_file_location())
                 logger.info("Unified storage manager deleted file from local filesystem")
                 self.recording_file_saved(storage_manager.file_key)
@@ -1310,6 +1328,15 @@ class BotController:
                     storage_manager.upload_file(BotAdapter.DEBUG_RECORDING_FILE_PATH, debug_upload_callback)
                     storage_manager.wait_for_uploads()
                     logger.info("Unified storage manager finished uploading debug recording to all providers")
+                    
+                    # Get Azure blob URL if it was uploaded to Azure
+                    azure_blob_url = storage_manager.get_azure_blob_url()
+                    if azure_blob_url:
+                        logger.info(f"Debug recording Azure blob URL: {azure_blob_url}")
+                        # Save Azure URL to database
+                        debug_screenshot.azure_blob_url = azure_blob_url
+                        debug_screenshot.save()
+                        logger.info(f"Saved Azure blob URL to debug screenshot: {azure_blob_url}")
                 else:
                     if not django_storage_success:
                         logger.warning("Debug recording could not be saved: Django storage failed AND no additional storage providers configured")

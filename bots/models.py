@@ -1557,20 +1557,38 @@ class Recording(models.Model):
     first_buffer_timestamp_ms = models.BigIntegerField(null=True, blank=True)
 
     file = models.FileField(storage=RecordingStorage())
+    
+    # Azure Storage URL - populated when uploading to Azure Blob Storage
+    azure_blob_url = models.URLField(max_length=2048, null=True, blank=True, help_text="Azure Blob Storage URL for this recording")
 
     def __str__(self):
         return f"Recording for {self.bot.object_id}"
 
     @property
     def url(self):
-        if not self.file.name:
+        if not self.file.name and not self.azure_blob_url:
             return None
-        # Generate a temporary signed URL that expires in 30 minutes (1800 seconds)
-        return self.file.storage.bucket.meta.client.generate_presigned_url(
-            "get_object",
-            Params={"Bucket": self.file.storage.bucket_name, "Key": self.file.name},
-            ExpiresIn=1800,
-        )
+        
+        # Try to generate AWS S3 presigned URL first
+        try:
+            if self.file.name:
+                # Generate a temporary signed URL that expires in 30 minutes (1800 seconds)
+                return self.file.storage.bucket.meta.client.generate_presigned_url(
+                    "get_object",
+                    Params={"Bucket": self.file.storage.bucket_name, "Key": self.file.name},
+                    ExpiresIn=1800,
+                )
+        except Exception as e:
+            # If AWS S3 fails (missing credentials, etc.), fall back to Azure
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Failed to generate AWS S3 presigned URL for recording {self.object_id}: {e}")
+        
+        # Fallback to Azure Blob Storage URL
+        if self.azure_blob_url:
+            return self.azure_blob_url
+        
+        return None
 
     OBJECT_ID_PREFIX = "rec_"
     object_id = models.CharField(max_length=32, unique=True, editable=False)
@@ -2237,6 +2255,10 @@ class BotDebugScreenshot(models.Model):
     metadata = models.JSONField(null=False, default=dict)
 
     file = models.FileField(storage=BotDebugScreenshotStorage())
+    
+    # Azure Storage URL - populated when uploading to Azure Blob Storage
+    azure_blob_url = models.URLField(max_length=2048, null=True, blank=True, help_text="Azure Blob Storage URL for this debug screenshot")
+    
     created_at = models.DateTimeField(auto_now_add=True)
 
     def save(self, *args, **kwargs):
@@ -2248,14 +2270,29 @@ class BotDebugScreenshot(models.Model):
 
     @property
     def url(self):
-        if not self.file.name:
+        if not self.file.name and not self.azure_blob_url:
             return None
-        # Generate a temporary signed URL that expires in 30 minutes (1800 seconds)
-        return self.file.storage.bucket.meta.client.generate_presigned_url(
-            "get_object",
-            Params={"Bucket": self.file.storage.bucket_name, "Key": self.file.name},
-            ExpiresIn=1800,
-        )
+        
+        # Try to generate AWS S3 presigned URL first
+        try:
+            if self.file.name:
+                # Generate a temporary signed URL that expires in 30 minutes (1800 seconds)
+                return self.file.storage.bucket.meta.client.generate_presigned_url(
+                    "get_object",
+                    Params={"Bucket": self.file.storage.bucket_name, "Key": self.file.name},
+                    ExpiresIn=1800,
+                )
+        except Exception as e:
+            # If AWS S3 fails (missing credentials, etc.), fall back to Azure
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Failed to generate AWS S3 presigned URL for debug screenshot {self.object_id}: {e}")
+        
+        # Fallback to Azure Blob Storage URL
+        if self.azure_blob_url:
+            return self.azure_blob_url
+        
+        return None
 
     def __str__(self):
         return f"Debug Screenshot {self.object_id} for event {self.bot_event}"

@@ -53,6 +53,7 @@ class UnifiedStorageManager:
         self.file_key = file_key
         self.storage_configs = self._load_storage_configs()
         self.upload_threads = []
+        self.azure_uploader = None  # Store reference to Azure uploader for URL retrieval
     
     def _load_storage_configs(self) -> List[StorageConfig]:
         """Load storage configurations from environment variables."""
@@ -188,6 +189,9 @@ class UnifiedStorageManager:
             account_key=config.config.get('account_key')
         )
         
+        # Store reference to Azure uploader for URL retrieval
+        self.azure_uploader = uploader
+        
         def azure_callback(success: bool):
             callback("Azure Blob Storage", success)
         
@@ -208,7 +212,7 @@ class UnifiedStorageManager:
             # Use the first uploader's delete method
             self.upload_threads[0].delete_file(file_path)
     
-    @property
+        @property
     def has_storage_configured(self) -> bool:
         """Check if any storage provider is configured."""
         return len(self.storage_configs) > 0
@@ -217,3 +221,18 @@ class UnifiedStorageManager:
     def configured_providers(self) -> List[str]:
         """Get list of configured storage providers."""
         return [config.provider.value for config in self.storage_configs]
+    
+    def get_azure_blob_url(self) -> Optional[str]:
+        """
+        Get the Azure blob URL for the uploaded file.
+        
+        Returns:
+            str: The Azure blob URL, or None if Azure upload was not configured
+        """
+        if self.azure_uploader:
+            try:
+                return self.azure_uploader.get_blob_url()
+            except Exception as e:
+                logger.error(f"Failed to get Azure blob URL: {e}")
+                return None
+        return None
