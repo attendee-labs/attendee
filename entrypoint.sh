@@ -99,5 +99,13 @@ if [[ "${PA_DEBUG:-0}" = "1" ]]; then
   echo "================"
 fi
 
+# Install npm dependencies for Zoom RTMS adapter if needed.
+# DO NOT KEEP. IT's HACKY
+RTMS_DIR="/attendee/bots/zoom_rtms_adapter/zoom_rtms_node_app"
+if [[ -f "$RTMS_DIR/package.json" ]] && [[ ! -d "$RTMS_DIR/node_modules" ]]; then
+  echo "[entrypoint] Installing npm dependencies for Zoom RTMS adapter..."
+  (cd "$RTMS_DIR" && npm install) || echo "Warning: npm install failed"
+fi
+
 echo "[entrypoint] PulseAudio ready. Exec: $*"
 exec "$@"

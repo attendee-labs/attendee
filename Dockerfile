@@ -97,6 +97,7 @@ FROM base AS deps
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 
+
 ENV TINI_VERSION=v0.19.0
 ADD https://github.com/krallin/tini/releases/download/${TINI_VERSION}/tini /tini
 RUN chmod +x /tini
@@ -122,10 +123,6 @@ RUN mkdir -p "$cwd/staticfiles" && chown -R app:app "$cwd/staticfiles"
 
 # Switch to non-root AFTER copies to avoid permission flakiness
 USER app
-
-# Install node deps in the target directory
-WORKDIR /$project/bots/zoom_rtms_adapter/zoom_rtms_node_app
-RUN npm install
 
 # Go back to your project root
 WORKDIR /$project
