@@ -13,7 +13,6 @@ import gi
 import redis
 from django.core.files.base import ContentFile
 from django.utils import timezone
-from transcript_services import start_transcription, could_not_record
 
 from bots.automatic_leave_configuration import AutomaticLeaveConfiguration
 from bots.bot_adapter import BotAdapter
@@ -465,101 +464,91 @@ class BotController:
         self.cleanup_called = True
 
         normal_quitting_process_worked = False
+        import threading
 
-        # Start timeout thread
-        import threading, time, signal
         def terminate_worker():
+            import time
+
             time.sleep(600)
-            if not normal_quitting_process_worked:
-                logger.warning("Force terminating worker after 10 min timeout")
-                os.kill(os.getpid(), signal.SIGKILL)
-        threading.Thread(target=terminate_worker, daemon=True).start()
+            if normal_quitting_process_worked:
+                logger.info("Normal quitting process worked, not force terminating worker")
+                return
+            logger.info("Terminating worker with hard timeout...")
+            os.kill(os.getpid(), signal.SIGKILL)  # Force terminate the worker process
 
-        # Component cleanup
-        for component_name in [
-            "gstreamer_pipeline",
-            "rtmp_client",
-            "adapter",
-            "main_loop",
-            "screen_and_audio_recorder",
-            "realtime_audio_output_manager",
-            "websocket_audio_client",
-        ]:
-            component = getattr(self, component_name, None)
-            if component:
-                try:
-                    logger.info(f"Cleaning up {component_name}...")
-                    if hasattr(component, "stop"):
-                        component.stop()
-                    if hasattr(component, "cleanup"):
-                        component.cleanup()
-                    if component_name == "main_loop" and component.is_running():
-                        component.quit()
-                except Exception as e:
-                    logger.warning(f"Error cleaning up {component_name}: {e}")
+        termination_thread = threading.Thread(target=terminate_worker, daemon=True)
+        termination_thread.start()
 
-        # Upload recording
-        recording = None
-        try:
-            if self.get_recording_file_location():
-                self.upload_recording_to_external_media_storage_if_enabled()
-                logger.info("Uploading recording file...")
+        if self.gstreamer_pipeline:
+            logger.info("Telling gstreamer pipeline to cleanup...")
+            self.gstreamer_pipeline.cleanup()
 
-                from django.conf import settings
-                storage_backend = getattr(settings, 'RECORDING_STORAGE_BACKEND', 'S3')
+        if self.rtmp_client:
+            logger.info("Telling rtmp client to cleanup...")
+            self.rtmp_client.stop()
 
-                if storage_backend.upper() == 'SWIFT':
-                    from bots.storage.swift_utils import get_container_name
-                    file_uploader = SwiftFileUploader(
-                        container=get_container_name(),
-                        key=self.get_recording_filename(),
-                    )
-                else:
-                    file_uploader = FileUploader(
-                        bucket=os.environ.get("AWS_RECORDING_STORAGE_BUCKET_NAME"),
-                        key=self.get_recording_filename(),
-                        endpoint_url=os.environ.get("AWS_ENDPOINT_URL"),
-                    )
+        if self.adapter:
+            logger.info("Telling adapter to leave meeting...")
+            self.adapter.leave()
+            logger.info("Telling adapter to cleanup...")
+            self.adapter.cleanup()
 
-                file_uploader.upload_file(self.get_recording_file_location())
-                file_uploader.wait_for_upload()
-                logger.info("Recording upload finished")
+        if self.main_loop and self.main_loop.is_running():
+            self.main_loop.quit()
 
-                file_uploader.delete_file(self.get_recording_file_location())
-                self.recording_file_saved(file_uploader.key)
+        if self.screen_and_audio_recorder:
+            logger.info("Telling media recorder receiver to cleanup...")
+            self.screen_and_audio_recorder.cleanup()
 
-                recording = Recording.objects.get(bot=self.bot_in_db, is_default_recording=True)
-                normal_quitting_process_worked = True  # ✅ Mark success
-                self.notify_transcript_service(recording, success=True)
+        if self.realtime_audio_output_manager:
+            logger.info("Telling realtime audio output manager to cleanup...")
+            self.realtime_audio_output_manager.cleanup()
 
-        except Exception as e:
-            logger.error(f"Recording upload failed: {e}", exc_info=True)
-            if recording:
-                self.notify_transcript_service(recording, success=False)
+        if self.websocket_audio_client:
+            logger.info("Telling websocket audio client to cleanup...")
+            self.websocket_audio_client.cleanup()
+
+        if self.get_recording_file_location():
+            self.upload_recording_to_external_media_storage_if_enabled()
+
+            logger.info("Telling file uploader to upload recording file...")
+            
+            # Choose the appropriate file uploader based on storage backend
+            from django.conf import settings
+            storage_backend = getattr(settings, 'RECORDING_STORAGE_BACKEND', 'S3')
+            
+            if storage_backend.upper() == 'SWIFT':
+                logger.debug("Using Swift file uploader")
+                # Use Swift file uploader
+                from bots.storage.swift_utils import get_container_name
+                file_uploader = SwiftFileUploader(
+                    container=get_container_name(),
+                    key=self.get_recording_filename(),
+                )
+            else:
+                logger.debug("Using S3 file uploader")
+                # Use S3 file uploader (existing code)
+                file_uploader = FileUploader(
+                    bucket=os.environ.get("AWS_RECORDING_STORAGE_BUCKET_NAME"),
+                    key=self.get_recording_filename(),
+                    endpoint_url=os.environ.get("AWS_ENDPOINT_URL"),
+                )
+            
+            file_uploader.upload_file(self.get_recording_file_location())
+            file_uploader.wait_for_upload()
+            logger.info("File uploader finished uploading file")
+            file_uploader.delete_file(self.get_recording_file_location())
+            logger.info("File uploader deleted file from local filesystem")
+            self.recording_file_saved(file_uploader.key)
 
         if self.bot_in_db.create_debug_recording():
             self.save_debug_recording()
 
         if self.bot_in_db.state == BotStates.POST_PROCESSING:
             self.wait_until_all_utterances_are_terminated()
-            BotEventManager.create_event(
-                bot=self.bot_in_db, event_type=BotEventTypes.POST_PROCESSING_COMPLETED
-            )
+            BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.POST_PROCESSING_COMPLETED)
 
         normal_quitting_process_worked = True
-
-    def notify_transcript_service(self, recording, success):
-        """Notify transcript service of recording status"""
-        try:
-            if success:
-                start_transcription(recording.object_id)
-                logger.info(f"Successfully notified transcript service for recording {recording.object_id}")
-            else:
-                could_not_record(recording.object_id)
-                logger.info(f"Notified transcript service of recording failure for {recording.object_id}")
-        except Exception as e:
-            status = "success" if success else "failure"
-            logger.error(f"Failed to notify transcript service of recording {status}: {e}")
 
     # We're going to wait until all utterances are transcribed or have failed. If there are still
     # in progress utterances, after 5 minutes, then we'll consider them failed and mark them as timed out.
