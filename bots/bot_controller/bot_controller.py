@@ -1,12 +1,13 @@
 import json
 import logging
 import os
+import re
 import signal
 import threading
 import time
 import traceback
 from base64 import b64decode
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import gi
 import redis
@@ -357,10 +358,55 @@ class BotController:
         recording = Recording.objects.get(bot=self.bot_in_db, is_default_recording=True)
         return recording.transcription_provider
 
+#when meta data isn't available uses bot_{object_id} and rec_{recording_id}
     def get_recording_filename(self):
-        logger.debug("Getting recording filename...")
-        recording = Recording.objects.get(bot=self.bot_in_db, is_default_recording=True)
-        return f"{self.bot_in_db.object_id}-{recording.object_id}.{self.bot_in_db.recording_format()}"
+        logger.debug("Generating recording filename...")
+        rec = Recording.objects.get(bot=self.bot_in_db, is_default_recording=True)
+
+        def sanitize(text, max_len=40):
+            if not text:
+                return ""
+            text = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", str(text))
+            text = re.sub(r'[_\s]+', "_", text).strip("_.")
+            return text[:max_len]
+
+        def pick_first(data, keys):
+            for k in keys:
+                v = data.get(k)
+                if v:
+                    return sanitize(v)
+            return ""
+
+        b = self.bot_in_db
+        parts = []
+
+        # Title of the meeting
+        title = (b.calendar_event and sanitize(b.calendar_event.name)) or \
+                (b.metadata and pick_first(b.metadata, ['meeting_title','title','subject','purpose','name']))
+        if title: parts.append(title)
+
+        # Date of the meeting
+        dt = getattr(b.calendar_event, "start_time", None) or getattr(b, "join_at", None) or b.created_at
+        parts.append(dt.strftime("%Y%m%d_%H%M"))
+
+        # Organizer of the meeting
+        org = b.metadata and pick_first(b.metadata, ['organizer','host','user','owner','created_by'])
+        if not org and getattr(b.calendar_event, "attendees", None):
+            for a in b.calendar_event.attendees:
+                if isinstance(a, dict) and a.get("role") == "organizer":
+                    org = sanitize(a.get("name") or a.get("email", "").split("@")[0], 20)
+                    break
+        if org: parts.append(org)
+
+        # Include unique IDs incase the meeting names are similar
+        parts += [f"bot_{b.object_id}", f"rec_{rec.object_id}"]
+
+        base = "_".join(filter(None, parts))[:240]
+        ext = b.recording_format()
+        final = f"{base}.{ext}"
+        logger.info(f"Generated recording filename: {final}")
+        return final
+    
 
     def on_rtmp_connection_failed(self):
         logger.info("RTMP connection failed")
