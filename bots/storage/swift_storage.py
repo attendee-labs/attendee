@@ -70,6 +70,7 @@ class SwiftStorage(Storage):
                 file_content = content
                 
             # Upload to Swift
+            logger.debug(f"Saving file {name} to Swift...")
             upload_file_to_swift(file_content, name)
             
             return name

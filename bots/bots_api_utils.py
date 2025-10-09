@@ -168,6 +168,7 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
     if error:
         return None, error
 
+    logger.debug("Serializing bot creation data...")
     serializer = CreateBotSerializer(data=data)
     if not serializer.is_valid():
         return None, serializer.errors
@@ -221,7 +222,10 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
         "voice_agent_settings": voice_agent_settings,
     }
 
+    logger.debug("Creating bot with settings: " + str(settings))
+
     try:
+        logger.debug("Creating bot in database...")
         with transaction.atomic():
             bot = Bot.objects.create(
                 project=project,
@@ -251,9 +255,12 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
 
             # Create bot-level webhook subscriptions if provided
             if webhook_subscriptions:
+                logger.debug("Creating bot webhook subscriptions...")
                 create_webhook_subscriptions(webhook_subscriptions, project, bot)
 
+            logger.debug(f"Bot {bot.object_id} created successfully.")
             if bot.state == BotStates.READY:
+                logger.debug(f"Bot {bot.object_id} is in READY state, creating JOIN_REQUESTED event to initiate joining...")
                 # Try to transition the state from READY to JOINING
                 BotEventManager.create_event(bot=bot, event_type=BotEventTypes.JOIN_REQUESTED, event_metadata={"source": source})
 

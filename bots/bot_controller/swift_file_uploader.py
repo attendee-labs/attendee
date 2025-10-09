@@ -30,6 +30,7 @@ class SwiftFileUploader:
             file_path (str): Path to the local file to upload
             callback (callable, optional): Function to call when upload completes
         """
+        logger.debug(f"Starting upload of {file_path}...")
         self._upload_thread = threading.Thread(
             target=self._upload_worker, 
             args=(file_path, callback), 

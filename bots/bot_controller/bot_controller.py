@@ -358,6 +358,7 @@ class BotController:
         return recording.transcription_provider
 
     def get_recording_filename(self):
+        logger.debug("Getting recording filename...")
         recording = Recording.objects.get(bot=self.bot_in_db, is_default_recording=True)
         return f"{self.bot_in_db.object_id}-{recording.object_id}.{self.bot_in_db.recording_format()}"
 
@@ -471,6 +472,7 @@ class BotController:
             storage_backend = getattr(settings, 'RECORDING_STORAGE_BACKEND', 'S3')
             
             if storage_backend.upper() == 'SWIFT':
+                logger.debug("Using Swift file uploader")
                 # Use Swift file uploader
                 from bots.storage.swift_utils import get_container_name
                 file_uploader = SwiftFileUploader(
@@ -478,6 +480,7 @@ class BotController:
                     key=self.get_recording_filename(),
                 )
             else:
+                logger.debug("Using S3 file uploader")
                 # Use S3 file uploader (existing code)
                 file_uploader = FileUploader(
                     bucket=os.environ.get("AWS_RECORDING_STORAGE_BUCKET_NAME"),
@@ -637,6 +640,7 @@ class BotController:
             return 3  # seconds
 
     def run(self):
+        logger.debug(f"Starting bot...")
         if self.run_called:
             raise Exception("Run already called, exiting")
         self.run_called = True
@@ -1251,6 +1255,7 @@ class BotController:
         return
 
     def on_message_from_adapter(self, message):
+        logger.debug(f"Received message from adapter: {message}")
         GLib.idle_add(lambda: self.take_action_based_on_message_from_adapter(message))
 
     def flush_utterances(self):

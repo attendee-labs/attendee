@@ -992,7 +992,9 @@ class CreateCheckoutSessionView(LoginRequiredMixin, ProjectUrlContextMixin, View
 
 class CreateBotView(LoginRequiredMixin, ProjectUrlContextMixin, View):
     def post(self, request, object_id):
+        logger.debug(f"Creating bot...")
         try:
+            logger.debug("Getting project for user...")
             project = get_project_for_user(user=request.user, project_object_id=object_id)
 
             data = {
@@ -1000,8 +1002,10 @@ class CreateBotView(LoginRequiredMixin, ProjectUrlContextMixin, View):
                 "bot_name": request.POST.get("bot_name") or "Meeting Bot",
             }
 
+            logger.debug("Creating bot with data: " + str(data))
             bot, error = create_bot(data=data, source=BotCreationSource.DASHBOARD, project=project)
             if error:
+                logger.error(f"Error creating bot: {error}")
                 return HttpResponse(json.dumps(error), status=400)
 
             # If this is a scheduled bot, we don't want to launch it yet.

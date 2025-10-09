@@ -5,6 +5,7 @@ import os
 import random
 import secrets
 import string
+import logging
 
 from concurrency.exceptions import RecordModifiedError
 from concurrency.fields import IntegerVersionField
@@ -20,8 +21,9 @@ from django.utils.crypto import get_random_string
 from accounts.models import Organization, User, UserRole
 from bots.webhook_utils import trigger_webhook
 
-# Create your models here.
+logger = logging.getLogger(__name__)
 
+# Create your models here.
 
 class Project(models.Model):
     name = models.CharField(max_length=255)
@@ -1530,13 +1532,17 @@ class RecordingS3Storage(S3Boto3Storage):
 
 def get_recording_storage_backend():
     """Get the appropriate storage backend based on configuration"""
+    logger.debug(f"RECORDING_STORAGE_BACKEND is set to: {settings.RECORDING_STORAGE_BACKEND}")
     storage_backend = getattr(settings, 'RECORDING_STORAGE_BACKEND', 'S3')
+    logger.debug(f"Using recording storage backend: {storage_backend}")
     
     if storage_backend.upper() == 'SWIFT':
+        logger.debug(f"Using swift storage backend...")
         from bots.storage.swift_storage import SwiftStorage
         return SwiftStorage()
     else:
         # Default to S3 storage
+        logger.debug(f"Using S3 storage backend...")
         return RecordingS3Storage()
 
 
@@ -1549,6 +1555,9 @@ class RecordingStorage:
 
 
 class Recording(models.Model):
+    """
+    Represents a recording of a bot session.
+    """
     bot = models.ForeignKey(Bot, on_delete=models.CASCADE, related_name="recordings")
 
     recording_type = models.IntegerField(choices=RecordingTypes.choices, null=False)
