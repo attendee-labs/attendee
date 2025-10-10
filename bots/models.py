@@ -1525,11 +1525,19 @@ class TranscriptionProviders(models.IntegerChoices):
     ELEVENLABS = 7, "ElevenLabs"
 
 
+from storages.backends.azure_storage import AzureStorage
 from storages.backends.s3boto3 import S3Boto3Storage
 
 
-class RecordingStorage(S3Boto3Storage):
-    bucket_name = settings.AWS_RECORDING_STORAGE_BUCKET_NAME
+class RecordingStorage(AzureStorage if settings.STORAGE_PROTOCOL == "azure" else S3Boto3Storage):
+    if settings.STORAGE_PROTOCOL == "azure":
+        azure_container = settings.AZURE_RECORDING_STORAGE_CONTAINER_NAME
+        account_name = settings.DEFAULT_STORAGE_BACKEND.get("OPTIONS").get("account_name")
+        account_key = settings.DEFAULT_STORAGE_BACKEND.get("OPTIONS").get("account_key")
+        connection_string = settings.DEFAULT_STORAGE_BACKEND.get("OPTIONS").get("connection_string")
+        expiration_secs = settings.DEFAULT_STORAGE_BACKEND.get("OPTIONS").get("expiration_secs")
+    else:
+        bucket_name = settings.AWS_RECORDING_STORAGE_BUCKET_NAME
 
 
 class Recording(models.Model):
@@ -1569,6 +1577,10 @@ class Recording(models.Model):
     def url(self):
         if not self.file.name:
             return None
+
+        if settings.STORAGE_PROTOCOL == "azure":
+            return self.file.url
+
         # Generate a temporary signed URL that expires in 30 minutes (1800 seconds)
         return self.file.storage.bucket.meta.client.generate_presigned_url(
             "get_object",
@@ -2228,8 +2240,15 @@ class BotChatMessageRequestManager:
         chat_message_request.save()
 
 
-class BotDebugScreenshotStorage(S3Boto3Storage):
-    bucket_name = settings.AWS_RECORDING_STORAGE_BUCKET_NAME
+class BotDebugScreenshotStorage(AzureStorage if settings.STORAGE_PROTOCOL == "azure" else S3Boto3Storage):
+    if settings.STORAGE_PROTOCOL == "azure":
+        azure_container = settings.AZURE_RECORDING_STORAGE_CONTAINER_NAME
+        account_name = settings.DEFAULT_STORAGE_BACKEND.get("OPTIONS").get("account_name")
+        account_key = settings.DEFAULT_STORAGE_BACKEND.get("OPTIONS").get("account_key")
+        connection_string = settings.DEFAULT_STORAGE_BACKEND.get("OPTIONS").get("connection_string")
+        expiration_secs = settings.DEFAULT_STORAGE_BACKEND.get("OPTIONS").get("expiration_secs")
+    else:
+        bucket_name = settings.AWS_RECORDING_STORAGE_BUCKET_NAME
 
 
 class BotDebugScreenshot(models.Model):
@@ -2254,6 +2273,10 @@ class BotDebugScreenshot(models.Model):
     def url(self):
         if not self.file.name:
             return None
+
+        if settings.STORAGE_PROTOCOL == "azure":
+            return self.file.url
+
         # Generate a temporary signed URL that expires in 30 minutes (1800 seconds)
         return self.file.storage.bucket.meta.client.generate_presigned_url(
             "get_object",

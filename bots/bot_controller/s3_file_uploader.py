@@ -8,17 +8,17 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 
-class FileUploader:
-    def __init__(self, bucket, key, endpoint_url=None, region_name=None, access_key_id=None, access_key_secret=None):
-        """Initialize the FileUploader with an S3 bucket name.
+class S3FileUploader:
+    def __init__(self, bucket, filename, endpoint_url=None, region_name=None, access_key_id=None, access_key_secret=None):
+        """Initialize the S3FileUploader with an S3 bucket name.
 
         Args:
             bucket (str): The name of the S3 bucket to upload to
-            key (str): The name of the to be stored file
+            filename (str): The name of the to be stored file
         """
         self.s3_client = boto3.client("s3", endpoint_url=endpoint_url, region_name=region_name, aws_access_key_id=access_key_id, aws_secret_access_key=access_key_secret)
         self.bucket = bucket
-        self.key = key
+        self.filename = filename
         self._upload_thread = None
 
     def upload_file(self, file_path: str, callback=None):
@@ -44,9 +44,9 @@ class FileUploader:
                 raise FileNotFoundError(f"File not found: {file_path}")
 
             # Upload the file using S3's multipart upload functionality
-            self.s3_client.upload_file(str(file_path), self.bucket, self.key)
+            self.s3_client.upload_file(str(file_path), self.bucket, self.filename)
 
-            logger.info(f"Successfully uploaded {file_path} to s3://{self.bucket}/{self.key}")
+            logger.info(f"Successfully uploaded {file_path} to s3://{self.bucket}/{self.filename}")
 
             if callback:
                 callback(True)

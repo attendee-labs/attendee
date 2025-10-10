@@ -157,7 +157,7 @@ class TestGoogleMeetBot2(TransactionTestCase):
 
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
     @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
-    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
     def test_join_retry_on_failure(
         self,
         MockFileUploader,
@@ -371,7 +371,7 @@ class TestGoogleMeetBot2(TransactionTestCase):
     @patch("bots.models.Bot.create_debug_recording", return_value=False)
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
     @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
-    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
     @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.check_if_meeting_is_found", return_value=None)
     @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.wait_for_host_if_needed", return_value=None)
     @patch("time.time")
@@ -666,7 +666,7 @@ class TestGoogleMeetBot2(TransactionTestCase):
     @patch("bots.models.Bot.create_debug_recording", return_value=False)
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
     @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
-    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
     @patch("bots.bot_controller.bot_controller.ScreenAndAudioRecorder.start_recording", return_value=None)
     @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.check_if_meeting_is_found", return_value=None)
     @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.wait_for_host_if_needed", return_value=None)
@@ -753,7 +753,7 @@ class TestGoogleMeetBot2(TransactionTestCase):
     @patch("bots.models.Bot.create_debug_recording", return_value=False)
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
     @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
-    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
     @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.check_if_meeting_is_found", return_value=None)
     @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.wait_for_host_if_needed", return_value=None)
     @patch("bots.bot_controller.screen_and_audio_recorder.ScreenAndAudioRecorder.pause_recording", return_value=True)
@@ -948,7 +948,7 @@ class TestGoogleMeetBot2(TransactionTestCase):
     @patch("bots.models.Bot.create_debug_recording", return_value=False)
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
     @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
-    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
     @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.check_if_meeting_is_found", return_value=None)
     @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.wait_for_host_if_needed", return_value=None)
     @patch("time.time")
@@ -1250,7 +1250,7 @@ class TestGoogleMeetBot2(TransactionTestCase):
     @patch("bots.models.Bot.create_debug_recording", return_value=False)
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
     @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
-    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
     @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.check_if_meeting_is_found", return_value=None)
     @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.wait_for_host_if_needed", return_value=None)
     def test_bot_uploads_to_external_storage_when_credentials_available(
@@ -1340,7 +1340,7 @@ class TestGoogleMeetBot2(TransactionTestCase):
         external_call_args = MockFileUploader.call_args_list[0]
         external_call_kwargs = external_call_args.kwargs
         self.assertEqual(external_call_kwargs["bucket"], "my-external-bucket")
-        self.assertEqual(external_call_kwargs["key"], "custom-recording-name.mp4")
+        self.assertEqual(external_call_kwargs["filename"], "custom-recording-name.mp4")
         self.assertEqual(external_call_kwargs["endpoint_url"], "https://s3.amazonaws.com")
         self.assertEqual(external_call_kwargs["region_name"], "us-east-1")
         self.assertEqual(external_call_kwargs["access_key_id"], "test_access_key")
@@ -1350,7 +1350,7 @@ class TestGoogleMeetBot2(TransactionTestCase):
         regular_call_args = MockFileUploader.call_args_list[1]
         regular_call_kwargs = regular_call_args.kwargs
         self.assertEqual(regular_call_kwargs["bucket"], "test-bucket")  # From environment variable set in setUpClass
-        self.assertIsNotNone(regular_call_kwargs["key"])  # Should have some recording filename
+        self.assertIsNotNone(regular_call_kwargs["filename"])  # Should have some recording filename
 
         # Verify only one delete_file call (for the regular storage uploader)
         mock_uploader.delete_file.assert_called_once()

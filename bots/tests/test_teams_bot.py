@@ -16,7 +16,7 @@ def create_mock_file_uploader():
     mock_file_uploader.upload_file.return_value = None
     mock_file_uploader.wait_for_upload.return_value = None
     mock_file_uploader.delete_file.return_value = None
-    mock_file_uploader.key = "test-recording-key"
+    mock_file_uploader.filename = "test-recording-key"
     return mock_file_uploader
 
 
@@ -54,7 +54,7 @@ class TestTeamsBot(TransactionTestCase):
 
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
     @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
-    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
     def test_join_retry_on_failure(
         self,
         MockFileUploader,
@@ -113,7 +113,7 @@ class TestTeamsBot(TransactionTestCase):
 
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
     @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
-    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
     def test_handle_unexpected_exception_on_join(
         self,
         MockFileUploader,
@@ -178,7 +178,7 @@ class TestTeamsBot(TransactionTestCase):
 
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
     @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
-    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
     def test_attendee_internal_error_in_main_loop(
         self,
         MockFileUploader,

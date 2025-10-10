@@ -61,6 +61,12 @@ RUN apt-get install -y  pulseaudio pulseaudio-utils ffmpeg
 # Install Linux Kernel Dev
 RUN apt-get update && apt-get install -y linux-libc-dev
 
+# Update certificates
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && update-ca-certificates
+
 # Install Ctags
 RUN apt-get update && apt-get install -y universal-ctags
 

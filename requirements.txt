@@ -91,3 +91,5 @@ stripe==11.6.0
 tldextract==5.3.0
 aiortc==1.10.1
 deepgram-sdk==4.3.0
+azure-identity==1.25.1
+azure-storage-blob==12.26.0

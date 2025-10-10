@@ -15,7 +15,7 @@ def create_mock_file_uploader():
     mock_file_uploader.upload_file.return_value = None
     mock_file_uploader.wait_for_upload.return_value = None
     mock_file_uploader.delete_file.return_value = None
-    mock_file_uploader.key = "test-recording-key"
+    mock_file_uploader.filename = "test-recording-key"
     return mock_file_uploader
 
 
@@ -62,7 +62,7 @@ class TestZoomWebBot(TransactionTestCase):
 
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
     @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
-    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
     def test_join_meeting(
         self,
         MockFileUploader,
@@ -120,7 +120,7 @@ class TestZoomWebBot(TransactionTestCase):
 
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
     @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
-    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
     @patch("bots.bot_controller.screen_and_audio_recorder.ScreenAndAudioRecorder.pause_recording", return_value=True)
     @patch("bots.bot_controller.screen_and_audio_recorder.ScreenAndAudioRecorder.resume_recording", return_value=True)
     def test_recording_permission_denied(

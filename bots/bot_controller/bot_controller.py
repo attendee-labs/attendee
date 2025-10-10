@@ -10,6 +10,7 @@ from datetime import timedelta
 
 import gi
 import redis
+from django.conf import settings
 from django.core.files.base import ContentFile
 from django.utils import timezone
 
@@ -52,9 +53,9 @@ from bots.webhook_utils import trigger_webhook
 from bots.websocket_payloads import mixed_audio_websocket_payload
 
 from .audio_output_manager import AudioOutputManager
+from .azure_file_uploader import AzureFileUploader
 from .bot_resource_snapshot_taker import BotResourceSnapshotTaker
 from .closed_caption_manager import ClosedCaptionManager
-from .file_uploader import FileUploader
 from .grouped_closed_caption_manager import GroupedClosedCaptionManager
 from .gstreamer_pipeline import GstreamerPipeline
 from .per_participant_non_streaming_audio_input_manager import PerParticipantNonStreamingAudioInputManager
@@ -62,6 +63,7 @@ from .per_participant_streaming_audio_input_manager import PerParticipantStreami
 from .pipeline_configuration import PipelineConfiguration
 from .realtime_audio_output_manager import RealtimeAudioOutputManager
 from .rtmp_client import RTMPClient
+from .s3_file_uploader import S3FileUploader
 from .screen_and_audio_recorder import ScreenAndAudioRecorder
 from .video_output_manager import VideoOutputManager
 
@@ -395,9 +397,9 @@ class BotController:
 
         try:
             logger.info(f"Uploading recording to external media storage bucket {self.bot_in_db.external_media_storage_bucket_name()}")
-            file_uploader = FileUploader(
+            file_uploader = S3FileUploader(
                 bucket=self.bot_in_db.external_media_storage_bucket_name(),
-                key=self.bot_in_db.external_media_storage_recording_file_name() or self.get_recording_filename(),
+                filename=self.bot_in_db.external_media_storage_recording_file_name() or self.get_recording_filename(),
                 endpoint_url=external_media_storage_credentials.get("endpoint_url") or None,
                 region_name=external_media_storage_credentials.get("region_name"),
                 access_key_id=external_media_storage_credentials.get("access_key_id"),
@@ -408,6 +410,22 @@ class BotController:
             logger.info(f"File uploader finished uploading file to external media storage bucket {self.bot_in_db.external_media_storage_bucket_name()}")
         except Exception as e:
             logger.exception(f"Error uploading recording to external media storage bucket {self.bot_in_db.external_media_storage_bucket_name()}: {e}")
+
+    def get_file_uploader(self):
+        if settings.STORAGE_PROTOCOL == "azure":
+            return AzureFileUploader(
+                container=os.environ.get("AZURE_RECORDING_STORAGE_CONTAINER_NAME"),
+                filename=self.get_recording_filename(),
+                connection_string=os.environ.get("AZURE_CONNECTION_STRING"),
+                account_key=os.environ.get("AZURE_ACCOUNT_KEY"),
+                account_name=os.environ.get("AZURE_ACCOUNT_NAME"),
+            )
+
+        return S3FileUploader(
+            bucket=os.environ.get("AWS_RECORDING_STORAGE_BUCKET_NAME"),
+            filename=self.get_recording_filename(),
+            endpoint_url=os.environ.get("AWS_ENDPOINT_URL"),
+        )
 
     def cleanup(self):
         if self.cleanup_called:
@@ -464,17 +482,13 @@ class BotController:
             self.upload_recording_to_external_media_storage_if_enabled()
 
             logger.info("Telling file uploader to upload recording file...")
-            file_uploader = FileUploader(
-                bucket=os.environ.get("AWS_RECORDING_STORAGE_BUCKET_NAME"),
-                key=self.get_recording_filename(),
-                endpoint_url=os.environ.get("AWS_ENDPOINT_URL"),
-            )
+            file_uploader = self.get_file_uploader()
             file_uploader.upload_file(self.get_recording_file_location())
             file_uploader.wait_for_upload()
             logger.info("File uploader finished uploading file")
             file_uploader.delete_file(self.get_recording_file_location())
             logger.info("File uploader deleted file from local filesystem")
-            self.recording_file_saved(file_uploader.key)
+            self.recording_file_saved(file_uploader.filename)
 
         if self.bot_in_db.create_debug_recording():
             self.save_debug_recording()

@@ -29,6 +29,9 @@ Network Trash Folder
 Temporary Items
 .apdisk
 
+# Snyk Scanner
+.snyk
+.dccache
 
 ### Python ###
 # Byte-compiled / optimized / DLL files

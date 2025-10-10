@@ -136,7 +136,7 @@ def create_mock_file_uploader():
     mock_file_uploader.upload_file.return_value = None
     mock_file_uploader.wait_for_upload.return_value = None
     mock_file_uploader.delete_file.return_value = None
-    mock_file_uploader.key = "test-recording-key"
+    mock_file_uploader.filename = "test-recording-key"
     return mock_file_uploader
 
 

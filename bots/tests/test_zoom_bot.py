@@ -11,8 +11,8 @@ from django.test.testcases import TransactionTestCase
 
 from bots.automatic_leave_configuration import AutomaticLeaveConfiguration
 from bots.bot_controller import BotController
-from bots.bot_controller.file_uploader import FileUploader
 from bots.bot_controller.pipeline_configuration import PipelineConfiguration
+from bots.bot_controller.s3_file_uploader import S3FileUploader
 from bots.bots_api_views import send_sync_command
 from bots.models import (
     Bot,
@@ -63,11 +63,11 @@ def mock_file_field_delete_sets_name_to_none(instance, save=True):
 
 
 def create_mock_file_uploader():
-    mock_file_uploader = MagicMock(spec=FileUploader)
+    mock_file_uploader = MagicMock(spec=S3FileUploader)
     mock_file_uploader.upload_file.return_value = None
     mock_file_uploader.wait_for_upload.return_value = None
     mock_file_uploader.delete_file.return_value = None
-    mock_file_uploader.key = "test-recording-key"  # Simple string attribute
+    mock_file_uploader.filename = "test-recording-key"  # Simple string attribute
     return mock_file_uploader
 
 
@@ -415,7 +415,7 @@ class TestZoomBot(TransactionTestCase):
     )
     @patch("bots.zoom_bot_adapter.zoom_bot_adapter.zoom", new_callable=create_mock_zoom_sdk)
     @patch("bots.zoom_bot_adapter.zoom_bot_adapter.jwt")
-    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
     @patch("deepgram.DeepgramClient")
     def test_bot_can_wait_for_host_then_join_meeting(
         self,
@@ -569,7 +569,7 @@ class TestZoomBot(TransactionTestCase):
     )
     @patch("bots.zoom_bot_adapter.zoom_bot_adapter.zoom", new_callable=create_mock_zoom_sdk)
     @patch("bots.zoom_bot_adapter.zoom_bot_adapter.jwt")
-    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
     @patch("deepgram.DeepgramClient")
     @patch("time.time")
     def test_bot_auto_leaves_meeting_after_silence_timeout(
@@ -749,7 +749,7 @@ class TestZoomBot(TransactionTestCase):
     )
     @patch("bots.zoom_bot_adapter.zoom_bot_adapter.zoom", new_callable=create_mock_zoom_sdk)
     @patch("bots.zoom_bot_adapter.zoom_bot_adapter.jwt")
-    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
     @patch("deepgram.DeepgramClient")
     @patch("google.cloud.texttospeech.TextToSpeechClient")
     @patch("django.db.models.fields.files.FieldFile.delete", autospec=True)
@@ -1166,7 +1166,7 @@ class TestZoomBot(TransactionTestCase):
     )
     @patch("bots.zoom_bot_adapter.zoom_bot_adapter.zoom", new_callable=create_mock_zoom_sdk)
     @patch("bots.zoom_bot_adapter.zoom_bot_adapter.jwt")
-    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
     @patch("deepgram.DeepgramClient")
     def test_bot_can_join_meeting_and_record_audio_when_in_voice_agent_configuration(
         self,
@@ -1373,7 +1373,7 @@ class TestZoomBot(TransactionTestCase):
     )
     @patch("bots.zoom_bot_adapter.zoom_bot_adapter.zoom", new_callable=create_mock_zoom_sdk)
     @patch("bots.zoom_bot_adapter.zoom_bot_adapter.jwt")
-    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
     def test_bot_can_handle_failed_zoom_auth(
         self,
         MockFileUploader,
@@ -1474,7 +1474,7 @@ class TestZoomBot(TransactionTestCase):
     )
     @patch("bots.zoom_bot_adapter.zoom_bot_adapter.zoom", new_callable=create_mock_zoom_sdk)
     @patch("bots.zoom_bot_adapter.zoom_bot_adapter.jwt")
-    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
     def test_bot_can_handle_waiting_for_host(
         self,
         MockFileUploader,
@@ -1564,7 +1564,7 @@ class TestZoomBot(TransactionTestCase):
     )
     @patch("bots.zoom_bot_adapter.zoom_bot_adapter.zoom", new_callable=create_mock_zoom_sdk)
     @patch("bots.zoom_bot_adapter.zoom_bot_adapter.jwt")
-    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
     def test_bot_can_handle_unable_to_join_external_meeting(
         self,
         MockFileUploader,
@@ -1659,7 +1659,7 @@ class TestZoomBot(TransactionTestCase):
     )
     @patch("bots.zoom_bot_adapter.zoom_bot_adapter.zoom", new_callable=create_mock_zoom_sdk)
     @patch("bots.zoom_bot_adapter.zoom_bot_adapter.jwt")
-    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
     def test_bot_can_handle_meeting_failed_blocked_by_admin(
         self,
         MockFileUploader,
@@ -1754,7 +1754,7 @@ class TestZoomBot(TransactionTestCase):
     )
     @patch("bots.zoom_bot_adapter.zoom_bot_adapter.zoom", new_callable=create_mock_zoom_sdk)
     @patch("bots.zoom_bot_adapter.zoom_bot_adapter.jwt")
-    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
     @patch("deepgram.DeepgramClient")
 
     # We need run this test last because if the process isn't killed properly some weird behavior ensues
@@ -1915,7 +1915,7 @@ class TestZoomBot(TransactionTestCase):
     )
     @patch("bots.zoom_bot_adapter.zoom_bot_adapter.zoom", new_callable=create_mock_zoom_sdk)
     @patch("bots.zoom_bot_adapter.zoom_bot_adapter.jwt")
-    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
     def test_bot_can_handle_zoom_sdk_internal_error(
         self,
         MockFileUploader,
@@ -1999,7 +1999,7 @@ class TestZoomBot(TransactionTestCase):
     )
     @patch("bots.zoom_bot_adapter.zoom_bot_adapter.zoom", new_callable=create_mock_zoom_sdk)
     @patch("bots.zoom_bot_adapter.zoom_bot_adapter.jwt")
-    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
     @patch("deepgram.DeepgramClient")
     def test_bot_leaves_meeting_when_requested(
         self,
@@ -2167,7 +2167,7 @@ class TestZoomBot(TransactionTestCase):
     )
     @patch("bots.zoom_bot_adapter.zoom_bot_adapter.zoom", new_callable=create_mock_zoom_sdk)
     @patch("bots.zoom_bot_adapter.zoom_bot_adapter.jwt")
-    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
     @patch("deepgram.DeepgramClient")
     def test_bot_handles_deepgram_credential_failure(
         self,
@@ -2317,7 +2317,7 @@ class TestZoomBot(TransactionTestCase):
     )
     @patch("bots.zoom_bot_adapter.zoom_bot_adapter.zoom", new_callable=create_mock_zoom_sdk)
     @patch("bots.zoom_bot_adapter.zoom_bot_adapter.jwt")
-    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
     @patch("bots.tasks.process_utterance_task.process_utterance")
     def test_bot_handles_transcription_job_never_runs(
         self,
@@ -2465,7 +2465,7 @@ class TestZoomBot(TransactionTestCase):
     )
     @patch("bots.zoom_bot_adapter.zoom_bot_adapter.zoom", new_callable=create_mock_zoom_sdk)
     @patch("bots.zoom_bot_adapter.zoom_bot_adapter.jwt")
-    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
     @patch("deepgram.DeepgramClient")
     def test_bot_can_join_meeting_and_record_audio_in_mp3_format(
         self,
@@ -2638,7 +2638,7 @@ class TestZoomBot(TransactionTestCase):
     )
     @patch("bots.zoom_bot_adapter.zoom_bot_adapter.zoom", new_callable=create_mock_zoom_sdk)
     @patch("bots.zoom_bot_adapter.zoom_bot_adapter.jwt")
-    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
     def test_scheduled_bot_transitions_from_staged_to_joining_at_join_time(
         self,
         MockFileUploader,
@@ -2742,7 +2742,7 @@ class TestZoomBot(TransactionTestCase):
     )
     @patch("bots.zoom_bot_adapter.zoom_bot_adapter.zoom", new_callable=create_mock_zoom_sdk)
     @patch("bots.zoom_bot_adapter.zoom_bot_adapter.jwt")
-    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
     def test_bot_can_handle_stuck_in_connecting_state(
         self,
         MockFileUploader,
@@ -2852,7 +2852,7 @@ class TestZoomBot(TransactionTestCase):
     )
     @patch("bots.zoom_bot_adapter.zoom_bot_adapter.zoom", new_callable=create_mock_zoom_sdk)
     @patch("bots.zoom_bot_adapter.zoom_bot_adapter.jwt")
-    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
     def test_bot_uses_zoom_tokens_from_callback(
         self,
         MockFileUploader,
@@ -2937,7 +2937,7 @@ class TestZoomBot(TransactionTestCase):
     )
     @patch("bots.zoom_bot_adapter.zoom_bot_adapter.zoom", new_callable=create_mock_zoom_sdk)
     @patch("bots.zoom_bot_adapter.zoom_bot_adapter.jwt")
-    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
     @patch("deepgram.DeepgramClient")
     def test_bot_can_join_meeting_with_no_recording_format(
         self,
@@ -3100,7 +3100,7 @@ class TestZoomBot(TransactionTestCase):
     )
     @patch("bots.zoom_bot_adapter.zoom_bot_adapter.zoom", new_callable=create_mock_zoom_sdk)
     @patch("bots.zoom_bot_adapter.zoom_bot_adapter.jwt")
-    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
     @patch("deepgram.DeepgramClient")
     @patch("google.cloud.texttospeech.TextToSpeechClient")
     @patch("django.db.models.fields.files.FieldFile.delete", autospec=True)
@@ -3422,7 +3422,7 @@ class TestZoomBot(TransactionTestCase):
     )
     @patch("bots.zoom_bot_adapter.zoom_bot_adapter.zoom", new_callable=create_mock_zoom_sdk)
     @patch("bots.zoom_bot_adapter.zoom_bot_adapter.jwt")
-    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
     @patch("deepgram.DeepgramClient")
     def test_recording_permission_denied_by_host(
         self,
@@ -3519,7 +3519,7 @@ class TestZoomBot(TransactionTestCase):
     )
     @patch("bots.zoom_bot_adapter.zoom_bot_adapter.zoom", new_callable=create_mock_zoom_sdk)
     @patch("bots.zoom_bot_adapter.zoom_bot_adapter.jwt")
-    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
     @patch("deepgram.DeepgramClient")
     def test_recording_permission_granted_then_paused_then_revoked_then_granted_again(
         self,
@@ -3652,7 +3652,7 @@ class TestZoomBot(TransactionTestCase):
     )
     @patch("bots.zoom_bot_adapter.zoom_bot_adapter.zoom", new_callable=create_mock_zoom_sdk)
     @patch("bots.zoom_bot_adapter.zoom_bot_adapter.jwt")
-    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
     @patch("deepgram.DeepgramClient")
     def test_recording_permission_granted_then_revoked_then_granted_again(
         self,
