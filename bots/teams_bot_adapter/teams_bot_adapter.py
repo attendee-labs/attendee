@@ -49,6 +49,22 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
             logger.error(f"Error sending chat message: {e}")
             return
 
+    def update_closed_captions_language(self, language):
+        if self.teams_closed_captions_language == language:
+            logger.info(f"In update_closed_captions_language, closed captions language is already set to {language}. Doing nothing.")
+            return
+
+        if not language:
+            logger.info("In update_closed_captions_language, new language is None. Doing nothing.")
+            return
+
+        self.teams_closed_captions_language = language
+        closed_caption_set_language_result = self.driver.execute_script(f"return window.callManager?.setClosedCaptionsLanguage('{self.teams_closed_captions_language}')")
+        if closed_caption_set_language_result:
+            logger.info("In update_closed_captions_language, closed captions language set programatically")
+        else:
+            logger.error("In update_closed_captions_language, failed to set closed captions language programatically")
+
     def get_staged_bot_join_delay_seconds(self):
         return 10
 

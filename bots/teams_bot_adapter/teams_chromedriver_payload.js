@@ -2704,6 +2704,8 @@ navigator.mediaDevices.getUserMedia = function(constraints) {
 class CallManager {
     constructor() {
         this.activeCall = null;
+        this.closedCaptionLanguageInterval = null;
+        this.closedCaptionLanguage = null;
     }
 
     setActiveCall() {
@@ -2798,35 +2800,40 @@ class CallManager {
     setClosedCaptionsLanguage(language) {
         this.setActiveCall();
         if (this.activeCall) {
-            this.activeCall.setClosedCaptionsLanguage(language);
+            this.closedCaptionLanguage = language;
+            this.activeCall.setClosedCaptionsLanguage(this.closedCaptionLanguage);
             // Unfortunately, this is needed for improved reliability.
             // It seems like when the host joins at the same time as the bot, they reset the cc language to the default.
             setTimeout(() => {
                 if (this.activeCall) {
-                    this.activeCall.setClosedCaptionsLanguage(language);
+                    this.activeCall.setClosedCaptionsLanguage(this.closedCaptionLanguage);
                 }
             }, 1000);         
             setTimeout(() => {
                 if (this.activeCall) {
-                    this.activeCall.setClosedCaptionsLanguage(language);
+                    this.activeCall.setClosedCaptionsLanguage(this.closedCaptionLanguage);
                 }
             }, 3000);
             setTimeout(() => {
                 if (this.activeCall) {
-                    this.activeCall.setClosedCaptionsLanguage(language);
+                    this.activeCall.setClosedCaptionsLanguage(this.closedCaptionLanguage);
                 }
             }, 5000);
             setTimeout(() => {
                 if (this.activeCall) {
-                    this.activeCall.setClosedCaptionsLanguage(language);
+                    this.activeCall.setClosedCaptionsLanguage(this.closedCaptionLanguage);
                     // Set an interval that runs every 60 seconds and makes sure the current closed caption language is equal to the language
                     // This is for debugging purposes
-                    setInterval(() => {
+
+                    // Only do it if the interval is not already set
+                    if (this.closedCaptionLanguageInterval)
+                        return;
+                    this.closedCaptionLanguageInterval = setInterval(() => {
                         if (this.activeCall && this.activeCall.getClosedCaptionsLanguage) {
-                            if (this.activeCall.getClosedCaptionsLanguage() !== language) {
+                            if (this.activeCall.getClosedCaptionsLanguage() !== this.closedCaptionLanguage) {
                                 window.ws?.sendJson({
                                     type: "closedCaptionsLanguageMismatch",
-                                    desiredLanguage: language,
+                                    desiredLanguage: this.closedCaptionLanguage,
                                     currentLanguage: this.activeCall.getClosedCaptionsLanguage()
                                 });
                             }

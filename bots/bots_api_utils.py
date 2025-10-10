@@ -5,6 +5,7 @@ import uuid
 from enum import Enum
 
 import redis
+from concurrency.exceptions import RecordModifiedError
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
@@ -25,6 +26,8 @@ from .models import (
     MeetingTypes,
     Project,
     Recording,
+    TranscriptionProviders,
+    TranscriptionSettings,
     TranscriptionTypes,
     WebhookSecret,
     WebhookSubscription,
@@ -33,10 +36,20 @@ from .models import (
 from .serializers import (
     CreateBotSerializer,
     PatchBotSerializer,
+    PatchBotTranscriptionSettingsSerializer,
 )
 from .utils import transcription_provider_from_bot_creation_data
 
 logger = logging.getLogger(__name__)
+
+
+def build_site_url(path=""):
+    """
+    Build a full URL using SITE_DOMAIN setting.
+    Automatically uses http:// for localhost, https:// for everything else.
+    """
+    protocol = "http" if settings.SITE_DOMAIN.startswith("localhost") else "https"
+    return f"{protocol}://{settings.SITE_DOMAIN}{path}"
 
 
 def send_sync_command(bot, command="sync"):
@@ -102,7 +115,7 @@ def validate_meeting_url_and_credentials(meeting_url, project):
         zoom_credentials = project.credentials.filter(credential_type=Credentials.CredentialTypes.ZOOM_OAUTH).first()
         if not zoom_credentials:
             relative_url = reverse("bots:project-credentials", kwargs={"object_id": project.object_id})
-            settings_url = f"https://{os.getenv('SITE_DOMAIN', 'app.attendee.dev')}{relative_url}"
+            settings_url = build_site_url(relative_url)
             return {"error": f"Zoom App credentials are required to create a Zoom bot. Please add Zoom credentials at {settings_url}"}
 
     return None
@@ -145,7 +158,7 @@ def validate_external_media_storage_settings(external_media_storage_settings, pr
 
     if not project.credentials.filter(credential_type=Credentials.CredentialTypes.EXTERNAL_MEDIA_STORAGE).exists():
         relative_url = reverse("bots:project-credentials", kwargs={"object_id": project.object_id})
-        settings_url = f"https://{os.getenv('SITE_DOMAIN', 'app.attendee.dev')}{relative_url}"
+        settings_url = build_site_url(relative_url)
         return {"error": f"External media storage credentials are required to upload recordings to an external storage bucket. Please add external media storage credentials at {settings_url}."}
 
     return None
@@ -270,6 +283,37 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
         error_id = str(uuid.uuid4())
         logger.error(f"Error creating bot (error_id={error_id}): {e}")
         return None, {"error": f"An error occurred while creating the bot. Error ID: {error_id}"}
+
+
+def patch_bot_transcription_settings(bot: Bot, data: dict) -> tuple[Bot | None, dict | None]:
+    # Check if bot is in a state that allows updating transcription settings
+    if not BotEventManager.is_state_that_can_update_transcription_settings(bot.state):
+        return None, {"error": f"Bot is in state {BotStates.state_to_api_code(bot.state)} and cannot update transcription settings"}
+
+    default_recording = Recording.objects.get(bot=bot, is_default_recording=True)
+    if default_recording.transcription_provider != TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM:
+        return None, {"error": "Bot is not transcribing with meeting closed captions"}
+
+    # Validate the request data
+    serializer = PatchBotTranscriptionSettingsSerializer(data=data)
+    if not serializer.is_valid():
+        return None, serializer.errors
+
+    validated_data = serializer.validated_data
+
+    # Update the bot in the DB. Handle concurrency conflict
+    # Only legal update is to update the teams closed captions language
+    try:
+        if "transcription_settings" not in bot.settings:
+            bot.settings["transcription_settings"] = {}
+        if "meeting_closed_captions" not in bot.settings["transcription_settings"]:
+            bot.settings["transcription_settings"]["meeting_closed_captions"] = {}
+        bot.settings["transcription_settings"]["meeting_closed_captions"]["teams_language"] = TranscriptionSettings(validated_data.get("transcription_settings")).teams_closed_captions_language()
+        bot.save()
+    except RecordModifiedError:
+        return None, {"error": "Version conflict. Please try again."}
+
+    return bot, None
 
 
 def patch_bot(bot: Bot, data: dict) -> tuple[Bot | None, dict | None]:

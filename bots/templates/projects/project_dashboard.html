@@ -1,14 +1,14 @@
 {% extends 'projects/sidebar.html' %}
 
 {% block content %}
-    <div class="container mt-4">          
+    <div class="container mt-4">
         <div class="card bg-info-subtle text-dark">
             <div class="card-body">
                 <h5 class="card-title">Hi {{ request.user.email }}! 👋</h5>
                 <p class="card-text">Welcome to Attendee - the open source meeting bot API. You have 5 hours of free credits to get started.</p>
                 <p class="card-text mb-0">
-                    If you're building something that needs meeting bots, we'd love to chat on our <a href="https://join.slack.com/t/attendeecommu-rff8300/shared_invite/zt-2uhpam6p2-ZzLAoVrljbL2UEjqdSHrgQ">Slack</a>. And please ⭐ us on <a href="https://github.com/noah-duncan/attendee" target="_blank" rel="noopener noreferrer">Github</a> if you find us useful. 
-                    
+                    If you're building something that needs meeting bots, we'd love to chat on our <a href="https://join.slack.com/t/attendeecommu-rff8300/shared_invite/zt-2uhpam6p2-ZzLAoVrljbL2UEjqdSHrgQ">Slack</a>. And please ⭐ us on <a href="https://github.com/noah-duncan/attendee" target="_blank" rel="noopener noreferrer">Github</a> if you find us useful.
+
                 </p>
             </div>
         </div>
@@ -69,7 +69,7 @@
                                 <small>Create bot</small>
                                 <pre class="bg-light p-1 m-1 rounded">
 <code class="small">curl -X POST \
-https://app.attendee.dev/api/v1/bots \
+{{ request.scheme }}://{{ request.get_host }}/api/v1/bots \
 -H 'Authorization: Token &lt;YOUR_API_KEY&gt;' \
 -H 'Content-Type: application/json' \
 -d '{"meeting_url": "https://us05web.zoom.us/j/xxxxxxx?pwd=xxxxxx", "bot_name": "My Bot"}'</code>
@@ -79,7 +79,7 @@ https://app.attendee.dev/api/v1/bots \
                                 <small>Retrieve transcript</small>
                                 <pre class="bg-light p-1 m-1 rounded">
 <code class="small">curl -X GET \
-https://app.attendee.dev/api/v1/bots/&lt;BOT_ID&gt/transcript \
+{{ request.scheme }}://{{ request.get_host }}/api/v1/bots/&lt;BOT_ID&gt/transcript \
 -H 'Authorization: Token &lt;YOUR_API_KEY&gt;' \
 -H 'Content-Type: application/json'</code>
                                 </pre>

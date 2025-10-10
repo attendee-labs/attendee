@@ -18,7 +18,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .authentication import ApiKeyAuthentication
-from .bots_api_utils import BotCreationSource, create_bot, create_bot_chat_message_request, create_bot_media_request_for_image, delete_bot, patch_bot, send_sync_command
+from .bots_api_utils import BotCreationSource, create_bot, create_bot_chat_message_request, create_bot_media_request_for_image, delete_bot, patch_bot, patch_bot_transcription_settings, send_sync_command
 from .launch_bot_utils import launch_bot
 from .meeting_url_utils import meeting_type_from_url
 from .models import (
@@ -1104,6 +1104,33 @@ class SendChatMessageView(APIView):
                 {"error": "Failed to create chat message request"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+
+class TranscriptionSettingsView(APIView):
+    authentication_classes = [ApiKeyAuthentication]
+
+    @extend_schema(exclude=True)
+    def patch(self, request, object_id):
+        try:
+            bot = Bot.objects.get(object_id=object_id, project=request.auth.project)
+
+            bot_updated, error = patch_bot_transcription_settings(bot, request.data)
+            if error:
+                return Response(error, status=status.HTTP_400_BAD_REQUEST)
+
+            try:
+                logging.info(f"Patching transcription settings for bot {bot.object_id}")
+                send_sync_command(bot, "sync_transcription_settings")
+                return Response(status=status.HTTP_200_OK)
+            except Exception as e:
+                logging.error(f"Error patching transcription settings for bot {bot.object_id}: {str(e)}")
+                return Response(
+                    {"error": "Failed to patch transcription settings"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        except Bot.DoesNotExist:
+            return Response({"error": "Bot not found"}, status=status.HTTP_404_NOT_FOUND)
 
 
 class AdmitFromWaitingRoomView(APIView):

@@ -71,6 +71,11 @@ urlpatterns = [
         name="create-credentials",
     ),
     path(
+        "<str:object_id>/settings/credentials/delete/",
+        projects_views.DeleteCredentialsView.as_view(),
+        name="delete-credentials",
+    ),
+    path(
         "<str:object_id>/webhooks/",
         projects_views.ProjectWebhooksView.as_view(),
         name="project-webhooks",
