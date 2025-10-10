@@ -5,6 +5,11 @@ py-zoom-meeting-sdk/
 
 venv
 env.sh
+.dccache
+
+# Snyk Scanner
+.snyk
+.dccache
 
 ### OSX ###
 .DS_Store

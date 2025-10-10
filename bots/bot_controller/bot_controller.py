@@ -55,6 +55,7 @@ from .audio_output_manager import AudioOutputManager
 from .bot_resource_snapshot_taker import BotResourceSnapshotTaker
 from .closed_caption_manager import ClosedCaptionManager
 from .file_uploader import FileUploader
+from .unified_storage_manager import UnifiedStorageManager
 from .grouped_closed_caption_manager import GroupedClosedCaptionManager
 from .gstreamer_pipeline import GstreamerPipeline
 from .per_participant_non_streaming_audio_input_manager import PerParticipantNonStreamingAudioInputManager
@@ -351,6 +352,16 @@ class BotController:
         recording.file = s3_storage_key
         recording.first_buffer_timestamp_ms = self.get_first_buffer_timestamp_ms()
         recording.save()
+    
+    def save_azure_recording_url(self, azure_blob_url):
+        """Save the Azure blob URL to the recording."""
+        try:
+            recording = Recording.objects.get(bot=self.bot_in_db, is_default_recording=True)
+            recording.azure_blob_url = azure_blob_url
+            recording.save()
+            logger.info(f"Saved Azure blob URL to recording: {azure_blob_url}")
+        except Exception as e:
+            logger.error(f"Failed to save Azure blob URL to recording: {e}")
 
     def get_recording_transcription_provider(self):
         recording = Recording.objects.get(bot=self.bot_in_db, is_default_recording=True)
@@ -463,18 +474,48 @@ class BotController:
         if self.get_recording_file_location():
             self.upload_recording_to_external_media_storage_if_enabled()
 
-            logger.info("Telling file uploader to upload recording file...")
-            file_uploader = FileUploader(
-                bucket=os.environ.get("AWS_RECORDING_STORAGE_BUCKET_NAME"),
-                key=self.get_recording_filename(),
-                endpoint_url=os.environ.get("AWS_ENDPOINT_URL"),
-            )
-            file_uploader.upload_file(self.get_recording_file_location())
-            file_uploader.wait_for_upload()
-            logger.info("File uploader finished uploading file")
-            file_uploader.delete_file(self.get_recording_file_location())
-            logger.info("File uploader deleted file from local filesystem")
-            self.recording_file_saved(file_uploader.key)
+            logger.info("Starting unified storage upload for recording file...")
+            
+            # Use unified storage manager for multi-provider uploads
+            storage_manager = UnifiedStorageManager(self.get_recording_filename())
+            
+            if not storage_manager.has_storage_configured:
+                logger.warning("No storage providers configured, falling back to legacy AWS S3 upload")
+                # Fallback to legacy S3 upload
+                file_uploader = FileUploader(
+                    bucket=os.environ.get("AWS_RECORDING_STORAGE_BUCKET_NAME"),
+                    key=self.get_recording_filename(),
+                    endpoint_url=os.environ.get("AWS_ENDPOINT_URL"),
+                )
+                file_uploader.upload_file(self.get_recording_file_location())
+                file_uploader.wait_for_upload()
+                logger.info("Legacy file uploader finished uploading file")
+                file_uploader.delete_file(self.get_recording_file_location())
+                logger.info("Legacy file uploader deleted file from local filesystem")
+                self.recording_file_saved(file_uploader.key)
+            else:
+                logger.info(f"Uploading to configured providers: {', '.join(storage_manager.configured_providers)}")
+                
+                def upload_callback(provider_name: str, success: bool):
+                    if success:
+                        logger.info(f"Successfully uploaded recording to {provider_name}")
+                    else:
+                        logger.error(f"Failed to upload recording to {provider_name}")
+                
+                storage_manager.upload_file(self.get_recording_file_location(), upload_callback)
+                storage_manager.wait_for_uploads()
+                logger.info("Unified storage manager finished uploading to all providers")
+                
+                # Get Azure blob URL if it was uploaded to Azure
+                azure_blob_url = storage_manager.get_azure_blob_url()
+                if azure_blob_url:
+                    logger.info(f"Azure blob URL: {azure_blob_url}")
+                    # Save Azure URL to database
+                    self.save_azure_recording_url(azure_blob_url)
+                
+                storage_manager.delete_local_file(self.get_recording_file_location())
+                logger.info("Unified storage manager deleted file from local filesystem")
+                self.recording_file_saved(storage_manager.file_key)
 
         if self.bot_in_db.create_debug_recording():
             self.save_debug_recording()
@@ -1275,10 +1316,54 @@ class BotController:
         if last_bot_event:
             debug_screenshot = BotDebugScreenshot.objects.create(bot_event=last_bot_event)
 
-            # Save the file directly from the file path
-            with open(BotAdapter.DEBUG_RECORDING_FILE_PATH, "rb") as f:
-                debug_screenshot.file.save(f"debug_screen_recording_{debug_screenshot.object_id}.mp4", f, save=True)
-            logger.info(f"Saved debug recording with ID {debug_screenshot.object_id}")
+            # Try to save to Django storage (AWS S3) - but don't fail if it doesn't work
+            django_storage_success = False
+            try:
+                # Save the file directly from the file path (original Django storage - AWS S3)
+                with open(BotAdapter.DEBUG_RECORDING_FILE_PATH, "rb") as f:
+                    debug_screenshot.file.save(f"debug_screen_recording_{debug_screenshot.object_id}.mp4", f, save=True)
+                logger.info(f"Saved debug recording with ID {debug_screenshot.object_id}")
+                django_storage_success = True
+            except Exception as e:
+                logger.error(f"Failed to save debug recording to Django storage (AWS S3): {e}")
+                # Continue to try unified storage manager
+
+            # Also upload debug recording using unified storage manager (supports Azure + AWS)
+            try:
+                debug_filename = f"debug_screen_recording_{debug_screenshot.object_id}.mp4"
+                logger.info(f"Starting unified storage upload for debug recording: {debug_filename}")
+                
+                storage_manager = UnifiedStorageManager(debug_filename)
+                
+                if storage_manager.has_storage_configured:
+                    logger.info(f"Uploading debug recording to configured providers: {', '.join(storage_manager.configured_providers)}")
+                    
+                    def debug_upload_callback(provider_name: str, success: bool):
+                        if success:
+                            logger.info(f"Successfully uploaded debug recording to {provider_name}")
+                        else:
+                            logger.error(f"Failed to upload debug recording to {provider_name}")
+                    
+                    storage_manager.upload_file(BotAdapter.DEBUG_RECORDING_FILE_PATH, debug_upload_callback)
+                    storage_manager.wait_for_uploads()
+                    logger.info("Unified storage manager finished uploading debug recording to all providers")
+                    
+                    # Get Azure blob URL if it was uploaded to Azure
+                    azure_blob_url = storage_manager.get_azure_blob_url()
+                    if azure_blob_url:
+                        logger.info(f"Debug recording Azure blob URL: {azure_blob_url}")
+                        # Save Azure URL to database
+                        debug_screenshot.azure_blob_url = azure_blob_url
+                        debug_screenshot.save()
+                        logger.info(f"Saved Azure blob URL to debug screenshot: {azure_blob_url}")
+                else:
+                    if not django_storage_success:
+                        logger.warning("Debug recording could not be saved: Django storage failed AND no additional storage providers configured")
+                    else:
+                        logger.info("No additional storage providers configured for debug recording - using Django default storage only")
+            except Exception as e:
+                logger.exception(f"Error uploading debug recording with unified storage manager: {e}")
+                # Don't fail the entire process if unified storage fails
 
     def on_message_from_websocket_audio(self, message_json: str):
         try:
