@@ -312,7 +312,7 @@ class StyleManager {
                 });
                 return;
             }
-            const botOtherOptionsButton = botVideoElement.querySelector('button[aria-label="More options"]');
+            const botOtherOptionsButton = botVideoElement.querySelector('button[aria-label*="More options"]');
             if (!botOtherOptionsButton)
             {
                 window.ws.sendJson({
