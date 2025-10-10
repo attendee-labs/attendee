@@ -28,13 +28,16 @@ services:
     entrypoint: []
 
   attendee-app-local:
-    build: ./
+    build: 
+      context: .
+      args:
+        INSTALL_CHROME: false
     volumes:
      - .:/attendee
     networks:
       - attendee_network
     ports:
-      - "8000:8000"
+      - "8002:8000"
     environment:
       - POSTGRES_HOST=postgres
       - REDIS_URL=redis://redis:6379/5

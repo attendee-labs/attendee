@@ -9,8 +9,18 @@ logger = logging.getLogger(__name__)
 
 
 def calculate_normalized_rms(audio_bytes):
+    if not audio_bytes or len(audio_bytes) < 2:
+        return 0.0
+
     samples = np.frombuffer(audio_bytes, dtype=np.int16)
+    if len(samples) == 0:
+        return 0.0
+
     rms = np.sqrt(np.mean(np.square(samples)))
+    # Handle NaN case (shouldn't happen with valid data, but be safe)
+    if np.isnan(rms):
+        return 0.0
+
     # Normalize by max possible value for 16-bit audio (32768)
     return rms / 32768
 
