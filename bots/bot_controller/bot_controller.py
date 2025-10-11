@@ -412,7 +412,7 @@ class BotController:
         if org: parts.append(org)
 
         # Include unique IDs incase the meeting names are similar
-        parts += [f"bot_{b.object_id}", f"rec_{rec.object_id}"]
+        parts += [b.object_id, rec.object_id]
 
         base = "_".join(filter(None, parts))[:240]
         ext = b.recording_format()
