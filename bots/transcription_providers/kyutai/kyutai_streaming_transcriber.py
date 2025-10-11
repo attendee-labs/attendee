@@ -1,3 +1,4 @@
+import array
 import asyncio
 import audioop
 import logging
@@ -6,7 +7,6 @@ from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 
 import msgpack
-import numpy as np
 import websockets
 
 logger = logging.getLogger(__name__)
@@ -18,11 +18,12 @@ CHANNELS = 1  # mono
 
 # Kyutai's semantic VAD
 PAUSE_PREDICTION_HEAD_INDEX = 0
-PAUSE_THRESHOLD = 0.5
+PAUSE_THRESHOLD = 0.25
 
-# Batching configuration
-BATCH_SIZE = 3  # Number of chunks to batch together
-BATCH_TIMEOUT = 0.05  # Max time (seconds) to wait for batch
+# Batching configuration - optimized for low latency
+# Send every chunk immediately for fastest response time
+BATCH_SIZE = 1  # No batching - send immediately
+BATCH_TIMEOUT = 0.02  # 20ms max wait as safety
 
 
 class KyutaiStreamingTranscriber:
@@ -82,6 +83,15 @@ class KyutaiStreamingTranscriber:
 
         # Thread pool executor for running sync callbacks from async context
         self.executor = ThreadPoolExecutor(max_workers=2)
+
+        # Resampling state cache for continuous audio processing
+        self.resample_state = None
+
+        # Pre-allocated buffers for low-latency audio processing
+        # Max expected chunk size: 200ms at 24kHz = 4800 samples
+        self.max_samples = 4800
+        self.float_buffer = [0.0] * self.max_samples
+        self.int16_array = array.array("h")  # Reusable int16 array
 
         # Start async loop in background thread
         self._start_async_loop()
@@ -238,10 +248,6 @@ class KyutaiStreamingTranscriber:
                         self.last_send_time = time.time()
                         last_send = time.time()
 
-                        # Log occasionally
-                        if int(time.time() * 10) % 50 == 0:
-                            logger.info(f"Kyutai: Sent batch of {len(batch)} chunks")
-
                         batch = []  # Clear batch
 
                     # Small sleep to prevent busy waiting
@@ -266,26 +272,45 @@ class KyutaiStreamingTranscriber:
                     logger.error(f"Error sending final batch: {e}")
 
     def _prepare_audio_message(self, audio_data):
-        """Prepare audio data for sending (resampling + serialization)."""
-        # Resample if needed
+        """
+        Prepare audio data for sending (resampling + serialization).
+
+        Optimized for low latency:
+        - Cache resampling state for continuity across chunks
+        - Direct int16 → float32 conversion without NumPy overhead
+        - Pre-allocated buffer reuse to minimize allocations
+        """
+        # Resample if needed, caching state for continuity
         if self.sample_rate != KYUTAI_SAMPLE_RATE:
-            audio_data, _ = audioop.ratecv(
+            audio_data, self.resample_state = audioop.ratecv(
                 audio_data,
                 SAMPLE_WIDTH,
                 CHANNELS,
                 self.sample_rate,
                 KYUTAI_SAMPLE_RATE,
-                None,
+                self.resample_state,  # Reuse state for smooth resampling
             )
 
-        # Convert to float32
-        audio_samples = np.frombuffer(audio_data, dtype=np.int16)
-        audio_float = audio_samples.astype(np.float32) / 32768.0
-        pcm_list = audio_float.tolist()
+        # Fast int16 → float32 conversion using array.array (no NumPy)
+        # Clear and populate the reusable int16 array
+        self.int16_array.frombytes(audio_data)
+        num_samples = len(self.int16_array)
 
-        # Pack with MessagePack
+        # Convert to float32 using pre-allocated buffer
+        if num_samples <= self.max_samples:
+            # Reuse pre-allocated buffer
+            for i in range(num_samples):
+                self.float_buffer[i] = self.int16_array[i] / 32768.0
+            audio_float = self.float_buffer[:num_samples]
+        else:
+            # Fallback for unexpectedly large chunks
+            audio_float = [sample / 32768.0 for sample in self.int16_array]
+
+        # Clear array for next use
+        self.int16_array = array.array("h")
+
         return msgpack.packb(
-            {"type": "Audio", "pcm": pcm_list},
+            {"type": "Audio", "pcm": audio_float},
             use_bin_type=True,
             use_single_float=True,
         )

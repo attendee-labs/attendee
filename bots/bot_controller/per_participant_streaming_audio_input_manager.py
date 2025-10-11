@@ -116,11 +116,15 @@ class PerParticipantStreamingAudioInputManager:
         if not server_url:
             kyutai_credentials_record = self.project.credentials.filter(credential_type=Credentials.CredentialTypes.KYUTAI).first()
             if not kyutai_credentials_record:
-                return None, None
+                raise ValueError("Kyutai transcription is configured but no credentials found. " "Please add Kyutai credentials to the project or configure " "kyutai_server_url in transcription settings.")
 
             kyutai_credentials = kyutai_credentials_record.get_credentials()
-            server_url = kyutai_credentials.get("server_url", "ws://127.0.0.1:8012/api/asr-streaming")
-            api_key = kyutai_credentials.get("api_key", None)
+            server_url = kyutai_credentials.get("server_url")
+            api_key = kyutai_credentials.get("api_key")
+
+        # Validate that we have a server URL
+        if not server_url:
+            raise ValueError("Kyutai server_url is required but not configured. " "Please set kyutai_server_url in transcription settings or credentials.")
 
         # Use "public_token" as default if no API key is provided
         # This matches the default behavior of the reference implementation
@@ -174,15 +178,27 @@ class PerParticipantStreamingAudioInputManager:
         return self.streaming_transcribers[speaker_id]
 
     def add_chunk(self, speaker_id, chunk_time, chunk_bytes):
-        # Check if we have credentials for the transcription provider
+        # Fast path for Kyutai: Skip silence detection, use built-in semantic VAD
+        if self.transcription_provider == TranscriptionProviders.KYUTAI:
+            if not self.kyutai_server_url:
+                raise ValueError("Kyutai transcription is configured but no server URL found. " "Please configure Kyutai credentials or transcription settings.")
+
+            # Update activity timestamp
+            self.last_nonsilent_audio_time[speaker_id] = time.time()
+
+            # Get or create transcriber
+            transcriber = self.streaming_transcribers.get(speaker_id)
+            if transcriber is None:
+                transcriber = self.find_or_create_streaming_transcriber_for_speaker(speaker_id)
+
+            # Send immediately - Kyutai has its own semantic VAD
+            transcriber.send(chunk_bytes)
+            return
+
+        # Standard path for Deepgram and other providers (with silence detection)
         if self.transcription_provider == TranscriptionProviders.DEEPGRAM:
             if not self.deepgram_api_key:
-                logger.warning("No Deepgram API key available")
-                return
-        elif self.transcription_provider == TranscriptionProviders.KYUTAI:
-            if not self.kyutai_server_url:
-                logger.warning("No Kyutai server URL available")
-                return
+                raise ValueError("Deepgram transcription is configured but no API key found. " "Please add Deepgram credentials to the project.")
 
         audio_is_silent = self.silence_detected(chunk_bytes)
 
