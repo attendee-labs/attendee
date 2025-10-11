@@ -117,6 +117,13 @@ paths:
                   bot_name: My Bot
                 summary: Valid meeting URL
                 description: Example of a valid Zoom meeting URL
+              ValidMeetingURLWithCustomFilename:
+                value:
+                  meeting_url: https://zoom.us/j/123?pwd=456
+                  bot_name: My Bot
+                  recording_file_name: team-meeting-jan-2024
+                summary: Valid meeting URL with custom filename
+                description: Example of a valid Zoom meeting URL with custom recording filename
         required: true
       security:
       - {}
@@ -1770,6 +1777,9 @@ components:
             client_id: abc123
             user: john_doe
             purpose: Weekly team meeting
+        recording_file_name:
+          type: string
+          description: Optional custom filename for the recording. If provided, this will be used instead of generating a filename from meeting metadata. The filename should not include an extension as it will be added automatically based on the recording format.
         bot_chat_message:
           allOf:
           - $ref: '#/components/schemas/BotChatMessageRequestRequest'

@@ -361,6 +361,19 @@ class BotController:
 #when meta data isn't available uses bot_{object_id} and rec_{recording_id}
     def get_recording_filename(self):
         logger.debug("Generating recording filename...")
+        
+        # Check for custom filename first
+        custom_name = self.bot_in_db.custom_recording_file_name()
+        if custom_name:
+            logger.debug(f"Using custom recording filename: {custom_name}")
+            ext = self.bot_in_db.recording_format()
+            # If custom name already has extension, don't add another
+            if custom_name.endswith(f".{ext}"):
+                return custom_name
+            return f"{custom_name}.{ext}"
+        
+        # Fall back to metadata-based naming
+        logger.debug("No custom filename found, using metadata-based naming")
         rec = Recording.objects.get(bot=self.bot_in_db, is_default_recording=True)
 
         def sanitize(text, max_len=40):

@@ -589,6 +589,10 @@ class Bot(models.Model):
             recording_settings = {}
         return recording_settings.get("format", RecordingFormats.MP4)
 
+    def custom_recording_file_name(self):
+        """Get the custom recording filename from bot settings."""
+        return self.settings.get("recording_file_name")
+
     def record_chat_messages_when_paused(self):
         recording_settings = self.settings.get("recording_settings", {})
         if recording_settings is None:

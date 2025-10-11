@@ -181,6 +181,7 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
         return None, error
 
     bot_name = serializer.validated_data["bot_name"]
+    recording_file_name = serializer.validated_data["recording_file_name"]
     transcription_settings = serializer.validated_data["transcription_settings"]
     rtmp_settings = serializer.validated_data["rtmp_settings"]
     recording_settings = serializer.validated_data["recording_settings"]
@@ -221,6 +222,10 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
         "external_media_storage_settings": external_media_storage_settings,
         "voice_agent_settings": voice_agent_settings,
     }
+    
+    # Only include recording_file_name if it's not None or empty
+    if recording_file_name:
+        settings["recording_file_name"] = recording_file_name
 
     logger.debug("Creating bot with settings: " + str(settings))
 

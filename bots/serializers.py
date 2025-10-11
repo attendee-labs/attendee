@@ -835,6 +835,7 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
     bot_name = serializers.CharField(help_text="The name of the bot to create, e.g. 'My Bot'")
     bot_image = BotImageSerializer(help_text="The image for the bot", required=False, default=None)
     metadata = MetadataJSONField(help_text="JSON object containing metadata to associate with the bot", required=False, default=None)
+    recording_file_name = serializers.CharField(help_text="Optional custom filename for the recording. If provided, this will be used instead of generating a filename from meeting metadata. The filename should not include an extension as it will be added automatically based on the recording format.", required=False, default=None, allow_blank=True)
     bot_chat_message = BotChatMessageRequestSerializer(help_text="The chat message the bot sends after it joins the meeting", required=False, default=None)
     join_at = serializers.DateTimeField(help_text="The time the bot should join the meeting. ISO 8601 format, e.g. 2025-06-13T12:00:00Z", required=False, default=None)
     calendar_event_id = serializers.CharField(help_text="The ID of the calendar event the bot should join.", required=False, default=None)
@@ -1330,6 +1331,32 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
             if ord(char) > 0xFFFF:
                 raise serializers.ValidationError("Bot name cannot contain emojis or rare script characters.")
         return value
+
+    def validate_recording_file_name(self, value):
+        """Validate and sanitize the custom recording filename."""
+        if value is None or value == "":
+            return value
+        
+        # Import re module if not already imported at the top
+        import re
+        
+        # Sanitize the filename - remove invalid characters
+        sanitized = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", str(value))
+        # Collapse multiple underscores and spaces to single underscores
+        sanitized = re.sub(r'[_\s]+', "_", sanitized).strip("_.")
+        
+        # Limit length to reasonable size (240 chars - space for extension)
+        sanitized = sanitized[:200]
+        
+        if not sanitized:
+            # If sanitization results in empty string, return empty string (will trigger fallback)
+            return ""
+        
+        # Check that it doesn't contain only invalid characters
+        if len(sanitized.strip()) == 0:
+            return ""
+            
+        return sanitized
 
     def validate(self, data):
         """Validate that no unexpected fields are provided."""
