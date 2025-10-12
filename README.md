@@ -1,52 +1,3 @@
----
-description: "Open source meeting bot API for Zoom, Google Meet, and Microsoft Teams. Build meeting bots with transcription, recording, and real-time audio/video streaming."
-keywords:
-  - meeting bot
-  - zoom bot
-  - google meet bot
-  - teams bot
-  - meeting transcription
-  - meeting recording
-  - bot framework
-  - video conferencing bot
-  - virtual meeting assistant
-  - meeting automation
-  - recall.ai alternative
-  - fireflies.ai alternative
-  - otter.ai alternative
-use_cases:
-  - AI meeting assistants
-  - Automated note-taking
-  - Meeting transcription services
-  - Sales call recording (Gong alternative)
-  - Customer support call analysis
-  - Virtual meeting participants
-  - Meeting compliance and recording
-  - Voice agents in meetings
-platforms:
-  - name: Zoom
-    status: production
-    implementation: native-sdk, web-automation
-  - name: Google Meet
-    status: production
-    implementation: web-automation
-  - name: Microsoft Teams
-    status: production
-    implementation: web-automation
-  - name: Webex
-    status: planned
-tech_stack:
-  - Python
-  - Django
-  - Django REST Framework
-  - Docker
-  - PostgreSQL
-  - Redis
-  - GStreamer
-  - Selenium/Chrome automation
-  - Zoom Meeting SDK
----
-
 <div align="center">
 <img src="static/images/logo_black_white.svg" width="300" alt="Attendee Logo">
 </div>
@@ -89,7 +40,7 @@ See a [quick demo of the API](https://www.loom.com/embed/b738d02aabf84f489f0bfba
 
 ## Getting started
 
-Sign up for free on our hosted instance [here](https://app.attendee.dev/accounts/signup/). 
+Sign up for free on our hosted instance [here](https://app.attendee.dev/accounts/signup/).
 
 Interested in using Attendee at your company? Schedule a call [here](https://calendly.com/noah-attendee/30min). By self-hosting Attendee you can reduce costs by 10x compared to closed source vendors.
 
@@ -132,7 +83,7 @@ curl -X POST https://app.attendee.dev/api/v1/bots \
 Response:
 ```{"id":"bot_3hfP0PXEsNinIZmh","meeting_url":"https://us05web.zoom.us/j/4849920355?pwd=aTBpNz760UTEBwUT2mQFtdXbl3SS3i.1","state":"joining","transcription_state":"not_started"}```
 
-The API will respond with an object that represents your bot's state in the meeting. 
+The API will respond with an object that represents your bot's state in the meeting.
 
 
 
@@ -142,7 +93,7 @@ curl -X GET https://app.attendee.dev/api/v1/bots/bot_3hfP0PXEsNinIZmh \
 -H 'Authorization: Token <YOUR_API_KEY>' \
 -H 'Content-Type: application/json'
 ```
-Response: 
+Response:
 ```{"id":"bot_3hfP0PXEsNinIZmh","meeting_url":"https://us05web.zoom.us/j/88669088234?pwd=AheaMumvS4qxh6UuDtSOYTpnQ1ZbAS.1","state":"ended","transcription_state":"complete"}```
 
 When the endpoint returns a state of `ended`, it means the meeting has ended. When the `transcription_state` is `complete` it means the meeting recording has been transcribed.
@@ -196,7 +147,7 @@ For more details, follow [this guide](https://developers.zoom.us/docs/meeting-sd
 - Build the Docker image: `docker compose -f dev.docker-compose.yaml build` (Takes about 5 minutes)
 - Create local environment variables
   - **Linux/Mac**: `docker compose -f dev.docker-compose.yaml run --rm attendee-app-local python init_env.py > .env`
-  - **Windows**: `docker compose -f dev.docker-compose.yaml run --rm attendee-app-local python init_env.py | Out-File -Encoding utf8 .env` 
+  - **Windows**: `docker compose -f dev.docker-compose.yaml run --rm attendee-app-local python init_env.py | Out-File -Encoding utf8 .env`
 - Edit the `.env` file and enter your AWS information.
 - Start all the services: `docker compose -f dev.docker-compose.yaml up`
 - After the services have started, run migrations in a separate terminal tab: `docker compose -f dev.docker-compose.yaml exec attendee-app-local python manage.py migrate`
@@ -206,7 +157,7 @@ For more details, follow [this guide](https://developers.zoom.us/docs/meeting-sd
 - You should now be able to log in, input your credentials and obtain an API key. API calls should be directed to http://localhost:8000 instead of https://app.attendee.dev.
 
 
-## Contribute 
+## Contribute
 
 Attendee is open source. The best way to contribute is to open an issue or join the [Slack Community](https://join.slack.com/t/attendeecommu-rff8300/shared_invite/zt-2uhpam6p2-ZzLAoVrljbL2UEjqdSHrgQ) and let us know what you want to build.
 
@@ -220,7 +171,7 @@ See CONTRIBUTING.md for detailed instructions on how to contribute to Attendee.
 - [x] API Reference
 - [x] Audio input / output
 - [x] Video input / output
-- [x] Custom bot image 
+- [x] Custom bot image
 - [x] Google Meet support
 - [x] Speech support
 - [x] Automatically leave meetings
