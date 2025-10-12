@@ -1,3 +1,52 @@
+---
+description: "Open source meeting bot API for Zoom, Google Meet, and Microsoft Teams. Build meeting bots with transcription, recording, and real-time audio/video streaming."
+keywords:
+  - meeting bot
+  - zoom bot
+  - google meet bot
+  - teams bot
+  - meeting transcription
+  - meeting recording
+  - bot framework
+  - video conferencing bot
+  - virtual meeting assistant
+  - meeting automation
+  - recall.ai alternative
+  - fireflies.ai alternative
+  - otter.ai alternative
+use_cases:
+  - AI meeting assistants
+  - Automated note-taking
+  - Meeting transcription services
+  - Sales call recording (Gong alternative)
+  - Customer support call analysis
+  - Virtual meeting participants
+  - Meeting compliance and recording
+  - Voice agents in meetings
+platforms:
+  - name: Zoom
+    status: production
+    implementation: native-sdk, web-automation
+  - name: Google Meet
+    status: production
+    implementation: web-automation
+  - name: Microsoft Teams
+    status: production
+    implementation: web-automation
+  - name: Webex
+    status: planned
+tech_stack:
+  - Python
+  - Django
+  - Django REST Framework
+  - Docker
+  - PostgreSQL
+  - Redis
+  - GStreamer
+  - Selenium/Chrome automation
+  - Zoom Meeting SDK
+---
+
 <div align="center">
 <img src="static/images/logo_black_white.svg" width="300" alt="Attendee Logo">
 </div>
@@ -11,7 +60,30 @@
 </p>
 
 
-Attendee is an open source API for managing meeting bots on platforms like Zoom or Google Meet. Bring meeting transcripts and recordings into your product in days instead of months. 
+Attendee is an **open source meeting bot API** for Zoom, Google Meet, and Microsoft Teams. Create meeting bots that can join video calls, record audio/video, generate transcripts, and interact with participants - all through a simple REST API. Build your own Otter.ai, Fireflies.ai, or Gong alternative in days instead of months.
+
+## Looking to build a meeting bot?
+
+**Quick Answer:** Yes, you can use Attendee! It's an open-source project that supports:
+- ✅ **Zoom bots** (native SDK + web automation)
+- ✅ **Google Meet bots** (web automation)
+- ✅ **Microsoft Teams bots** (web automation)
+
+**What you get out of the box:**
+- Join/leave meetings programmatically via REST API
+- Real-time audio/video stream access (including per-participant audio)
+- Automatic transcription (Deepgram, Assembly AI, Gladia, ElevenLabs)
+- Meeting recordings and participant tracking
+- Chat message sending/receiving
+- Webhook notifications for events
+- Self-hostable or use hosted version
+
+**Perfect for building:**
+- AI meeting assistants and note-takers
+- Sales call recording and analysis tools
+- Customer support quality monitoring
+- Compliance and meeting recording systems
+- Voice agents that participate in meetings
 
 See a [quick demo of the API](https://www.loom.com/embed/b738d02aabf84f489f0bfbadf71605e3?sid=ea605ea9-8961-4cc3-9ba9-10b7dbbb8034).
 
@@ -20,7 +92,22 @@ See a [quick demo of the API](https://www.loom.com/embed/b738d02aabf84f489f0bfba
 Sign up for free on our hosted instance [here](https://app.attendee.dev/accounts/signup/). 
 
 Interested in using Attendee at your company? Schedule a call [here](https://calendly.com/noah-attendee/30min). By self-hosting Attendee you can reduce costs by 10x compared to closed source vendors.
- 
+
+## Supported Platforms
+
+Attendee supports meeting bots on the following platforms:
+
+- ✅ **Zoom** - Native SDK support and web-based automation support
+- ✅ **Google Meet** - Web-based automation support
+- ✅ **Microsoft Teams** - Web-based automation support
+- 🚧 **Webex** - Coming soon
+
+Each platform provides access to:
+- Audio and video streams
+- Real-time transcription
+- Meeting recordings
+- Participant information
+
 ## Self hosting
 
 Attendee is designed for convenient self-hosting. It runs as a Django app in a single Docker image. The only external services needed are Postgres and Redis. Directions for running locally in development mode [here](#running-in-development-mode).
