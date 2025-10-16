@@ -51,9 +51,14 @@ SERVER_EMAIL = os.getenv("SERVER_EMAIL", "noreply@mail.attendee.dev")
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
+    "formatters": {
+        "plain": {"format": "{levelname} {message}", "style": "{"},
+        "json": {"class": "attendee.logging.ISOJsonFormatter", "format": "%(timestamp)s %(name)s %(levelname)s %(message)s"},
+    },
     "handlers": {
         "console": {
             "class": "logging.StreamHandler",
+            "formatter": os.getenv("ATTENDEE_LOG_FORMAT"),  # `None` is the default
         },
     },
     "root": {
