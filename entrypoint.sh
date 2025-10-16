@@ -60,7 +60,7 @@ if [[ -z "${PULSE_SERVER:-}" ]]; then
   pulseaudio --daemonize=yes \
              --exit-idle-time="${PA_IDLE_TIME:--1}" \
              --realtime=no --high-priority=no \
-             --log-level="${PA_LOG_LEVEL:-info}" --log-target=stderr \
+             --log-level="${PA_LOG_LEVEL:-error}" --log-target=syslog \
              --disallow-exit || die "pulseaudio failed to start"
   export PULSE_SERVER="unix:${PULSE_RUNTIME_PATH}/native"
 else
