@@ -1,3 +1,6 @@
+import logging
+import os
+
 import dj_database_url
 
 from .base import *
@@ -41,23 +44,73 @@ SERVER_EMAIL = "noreply@mail.attendee.dev"
 
 CSRF_TRUSTED_ORIGINS = ["https://*.attendee.dev"]
 
-# Log more stuff in staging
+# Configure logging to write JSON to stdout for GCP Cloud Logging
+# GCP Cloud Logging parses JSON and extracts the severity field
+
+
+class JsonFormatter(logging.Formatter):
+    """Format logs as JSON for GCP Cloud Logging severity parsing."""
+
+    def format(self, record):
+        import json
+        from datetime import datetime
+
+        log_obj = {
+            "message": record.getMessage(),
+            "severity": record.levelname,
+            "timestamp": datetime.utcfromtimestamp(record.created).isoformat() + "Z",
+            "logger": record.name,
+        }
+
+        # Add exception info if present
+        if record.exc_info:
+            log_obj["exception"] = self.formatException(record.exc_info)
+
+        return json.dumps(log_obj)
+
+
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
+    "formatters": {
+        "json": {
+            "()": JsonFormatter,
+        },
+    },
     "handlers": {
-        "console": {
-            "class": "logging.StreamHandler",
+        "console_stdout": {
+            "class": "bots.stdout_handler.StdoutStreamHandler",
+            "formatter": "json",
         },
     },
     "root": {
-        "handlers": ["console"],
-        "level": "INFO",
+        "handlers": ["console_stdout"],
+        "level": os.getenv("ATTENDEE_LOG_LEVEL", "INFO"),
     },
     "loggers": {
         "django": {
-            "handlers": ["console"],
-            "level": "INFO",
+            "handlers": ["console_stdout"],
+            "level": os.getenv("ATTENDEE_LOG_LEVEL", "INFO"),
+            "propagate": False,
+        },
+        "bots": {
+            "handlers": ["console_stdout"],
+            "level": os.getenv("ATTENDEE_LOG_LEVEL", "INFO"),
+            "propagate": False,
+        },
+        "bots.bot_controller": {
+            "handlers": ["console_stdout"],
+            "level": os.getenv("ATTENDEE_LOG_LEVEL", "INFO"),
+            "propagate": False,
+        },
+        "bots.web_bot_adapter": {
+            "handlers": ["console_stdout"],
+            "level": os.getenv("ATTENDEE_LOG_LEVEL", "INFO"),
+            "propagate": False,
+        },
+        "bots.management": {
+            "handlers": ["console_stdout"],
+            "level": os.getenv("ATTENDEE_LOG_LEVEL", "INFO"),
             "propagate": False,
         },
     },
