@@ -352,7 +352,7 @@ class StyleManager {
     start() {
         this.startSilenceDetection();
         this.makeMainVideoFillFrame();
-        window.receiverManager.startPollingReceivers();
+        //window.receiverManager.startPollingReceivers();
 
         console.log('Started StyleManager');
     }
@@ -1606,10 +1606,6 @@ class ReceiverManager {
     constructor() {
         this.receiverMap = new Map();
         this.participantSpeakingStateMachineMap = new Map();
-        
-    }
-
-    startPollingReceivers() {
         setInterval(() => {
             this.pollReceivers();
         }, 100);
