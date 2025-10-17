@@ -475,6 +475,8 @@ def transcription_provider_from_bot_creation_data(data):
         return TranscriptionProviders.SARVAM
     elif "elevenlabs" in settings:
         return TranscriptionProviders.ELEVENLABS
+    elif "kyutai" in settings:
+        return TranscriptionProviders.KYUTAI
     elif "meeting_closed_captions" in settings:
         return TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM
 

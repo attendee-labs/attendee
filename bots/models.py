@@ -534,6 +534,15 @@ class TranscriptionSettings:
     def deepgram_redaction_settings(self):
         return self._settings.get("deepgram", {}).get("redact", [])
 
+    def kyutai_model(self):
+        return self._settings.get("kyutai", {}).get("model", None)
+
+    def kyutai_server_url(self):
+        return self._settings.get("kyutai", {}).get("server_url", None)
+
+    def kyutai_api_key(self):
+        return self._settings.get("kyutai", {}).get("api_key", None)
+
     def google_meet_closed_captions_language(self):
         return self._settings.get("meeting_closed_captions", {}).get("google_meet_language", None)
 
@@ -1665,7 +1674,9 @@ class TranscriptionProviders(models.IntegerChoices):
     OPENAI = 4, "OpenAI"
     ASSEMBLY_AI = 5, "Assembly AI"
     SARVAM = 6, "Sarvam"
+
     ELEVENLABS = 7, "ElevenLabs"
+    KYUTAI = 8, "Kyutai"
 
 
 class RecordingStorage(Storage):
@@ -1887,6 +1898,7 @@ class TranscriptionFailureReasons(models.TextChoices):
     TRANSCRIPTION_REQUEST_FAILED = "transcription_request_failed"
     TIMED_OUT = "timed_out"
     INTERNAL_ERROR = "internal_error"
+    STREAMING_ONLY_PROVIDER = "streaming_only_provider"
     # This reason applies to the transcription operation as a whole, not a specific utterance
     UTTERANCES_STILL_IN_PROGRESS_WHEN_RECORDING_TERMINATED = "utterances_still_in_progress_when_recording_terminated"
     UTTERANCES_STILL_IN_PROGRESS_WHEN_TRANSCRIPTION_TERMINATED = "utterances_still_in_progress_when_transcription_terminated"
@@ -2106,6 +2118,7 @@ class Credentials(models.Model):
         TEAMS_BOT_LOGIN = 8, "Teams Bot Login"
         EXTERNAL_MEDIA_STORAGE = 9, "External Media Storage"
         ELEVENLABS = 10, "ElevenLabs"
+        KYUTAI = 11, "Kyutai"
 
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="credentials")
     credential_type = models.IntegerField(choices=CredentialTypes.choices, null=False)
