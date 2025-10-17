@@ -55,7 +55,7 @@ class PerParticipantNonStreamingAudioInputManager:
     def silence_detected(self, chunk_bytes):
         if calculate_normalized_rms(chunk_bytes) < 0.01:
             return True
-        return False
+        return not self.vad.is_speech(chunk_bytes, self.sample_rate)
 
     def process_chunk(self, speaker_id, chunk_time, chunk_bytes):
         audio_is_silent = self.silence_detected(chunk_bytes) if chunk_bytes else True
