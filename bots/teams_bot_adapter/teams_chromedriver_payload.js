@@ -1747,7 +1747,7 @@ class UtteranceIdGenerator {
 
 const utteranceIdGenerator = new UtteranceIdGenerator();
 
-window.captureDominantSpeakerViaCaptions = false;
+window.captureDominantSpeakerViaCaptions = true;
 
 const processClosedCaptionData = (item) => {
     realConsole?.log('processClosedCaptionData', item);
