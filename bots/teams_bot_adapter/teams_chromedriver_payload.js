@@ -352,6 +352,7 @@ class StyleManager {
     start() {
         this.startSilenceDetection();
         this.makeMainVideoFillFrame();
+        window.receiverManager.startPollingReceivers();
 
         console.log('Started StyleManager');
     }
@@ -1605,6 +1606,10 @@ class ReceiverManager {
     constructor() {
         this.receiverMap = new Map();
         this.participantSpeakingStateMachineMap = new Map();
+        
+    }
+
+    startPollingReceivers() {
         setInterval(() => {
             this.pollReceivers();
         }, 100);
@@ -1659,6 +1664,10 @@ class ReceiverManager {
     addReceiver(receiver) {
         if (!receiver || this.receiverMap.has(receiver)) return;
         realConsole?.log('ReceiverManager is adding receiver', receiver);
+        ws.sendJson({
+            type: 'ReceiverAdded',
+            receiver: "raw"
+        });
         this.receiverMap.set(receiver, false);
     }
 }
@@ -2049,6 +2058,11 @@ const handleVideoTrack = async (event) => {
     event.track.addEventListener('ended', () => {
         clearInterval(queueProcessingInterval);
         console.log('Audio track ended, cleared queue processing interval');
+    });
+
+    ws.sendJson({
+        type: 'AudioTrackStarted',
+        trackId: event.track.id
     });
     
     try {
