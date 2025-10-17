@@ -1,4 +1,5 @@
 import os
+import sys
 
 import dj_database_url
 
@@ -58,6 +59,7 @@ LOGGING = {
     "handlers": {
         "console": {
             "class": "logging.StreamHandler",
+            "stream": sys.stdout,
             "formatter": os.getenv("ATTENDEE_LOG_FORMAT"),  # `None` is the default
         },
     },
