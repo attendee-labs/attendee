@@ -35,6 +35,7 @@ class AttendeeClient:
         payload = {"meeting_url": meeting_url, "bot_name": bot_name}
         if enable_transcription:
             payload["transcription_settings"] = {"assembly_ai": {}}
+            payload["recording_settings"] = {"format": "mp3", "record_async_transcription_audio_chunks": True}
         if extra:
             payload.update(extra)
         r = self.session.post(self._url("/api/v1/bots"), data=json.dumps(payload), timeout=self.timeout)
@@ -98,6 +99,10 @@ class AttendeeClient:
         except Exception:
             return []
 
+    def get_participant_events(self, bot_id: str) -> List[Dict]:
+        r = self.session.get(self._url(f"/api/v1/bots/{bot_id}/participant_events"), timeout=self.timeout)
+        r.raise_for_status()
+        return r.json()
 
 # ----------------------------
 # Core workflow
@@ -192,6 +197,8 @@ def main():
     def _speak(bot_id: str, path: Path):
         client.output_audio(bot_id, path)
 
+    # Record the absolute timestamp when the audio is played
+    audio_played_at = int(time.time() * 1000)
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
         fut1 = pool.submit(_speak, bot1_id, path1)
         fut2 = pool.submit(_speak, bot2_id, path2)
@@ -248,6 +255,16 @@ def main():
     
     print(f"Speaker 1 utterances: {speaker1_utterances}")
     print(f"Speaker 2 utterances: {speaker2_utterances}")
+
+    # Get a list of participant events for the meeting from the recorder bot
+    participant_events = client.get_participant_events(recorder_id)
+    print(f"Participant events: {participant_events}")
+    participant_events = participant_events.get("results", [])
+
+    # We only want speech events
+    speech_events = [{"speaker": event["participant_name"], "event_type": event["event_type"], "relative_timestamp": event["timestamp_ms"] - audio_played_at} for event in participant_events if event["event_type"] == "speech_start" or event["event_type"] == "speech_stop"]
+
+    print(f"Speech events: {speech_events}")
 
     sys.exit(0)
 
