@@ -1579,11 +1579,11 @@ class ParticipantSpeakingStateMachine {
             this.samples.shift();
         }
 
-        const lastFiveSamples = this.samples.slice(-3);
-        if (lastFiveSamples.length < 3)
+        const lastFiveSamples = this.samples.slice(-5);
+        if (lastFiveSamples.length < 5)
             return;
 
-        const majorityOfLastFiveSamplesWereTrue = lastFiveSamples.filter(sample => sample.isSpeaking).length > 2;
+        const majorityOfLastFiveSamplesWereTrue = lastFiveSamples.filter(sample => sample.isSpeaking).length > 3;
         const previousState = this.state;
         const firstOfLastFiveSamplesTimestamp = lastFiveSamples[0].timestamp;
         if (majorityOfLastFiveSamplesWereTrue) {
