@@ -39,6 +39,7 @@ from bots.models import (
     MeetingTypes,
     Participant,
     ParticipantEvent,
+    ParticipantEventTypes,
     RealtimeTriggerTypes,
     Recording,
     RecordingFormats,
@@ -1222,6 +1223,10 @@ class BotController:
 
         # Don't send webhook for the bot itself
         if participant.is_the_bot:
+            return
+
+        # Don't send webhook for non join / leave events
+        if participant_event.event_type != ParticipantEventTypes.JOIN and participant_event.event_type != ParticipantEventTypes.LEAVE:
             return
 
         trigger_webhook(
