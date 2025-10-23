@@ -237,6 +237,7 @@ class Calendar(models.Model):
     last_successful_sync_started_at = models.DateTimeField(null=True, blank=True)
     sync_task_enqueued_at = models.DateTimeField(null=True, blank=True)
     sync_task_requested_at = models.DateTimeField(null=True, blank=True)
+    refresh_notification_channels_at = models.DateTimeField(null=True, blank=True)
 
     _encrypted_data = models.BinaryField(
         null=True,
@@ -275,21 +276,13 @@ class Calendar(models.Model):
 class CalendarNotificationChannel(models.Model):
     calendar = models.ForeignKey(Calendar, on_delete=models.CASCADE, related_name="notification_channels")
 
-    OBJECT_ID_PREFIX = "cnc_"
-    object_id = models.CharField(max_length=32, unique=True, editable=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     expires_at = models.DateTimeField()
     notification_last_received_at = models.DateTimeField(null=True, blank=True)
-    platform_uuid = models.CharField(max_length=1024, null=True, blank=True)
+    platform_uuid = models.CharField(max_length=1024, unique=True)
+    secret_token = models.CharField(max_length=1024, unique=True)
     raw = models.JSONField()
-
-    def save(self, *args, **kwargs):
-        if not self.object_id:
-            # Generate a random 16-character string
-            random_string = "".join(random.choices(string.ascii_letters + string.digits, k=16))
-            self.object_id = f"{self.OBJECT_ID_PREFIX}{random_string}"
-        super().save(*args, **kwargs)
 
 
 class CalendarEvent(models.Model):

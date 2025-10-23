@@ -4,7 +4,7 @@ import time
 
 from django.core.management.base import BaseCommand
 from django.db import connection, models, transaction
-from django.db.models import Q
+from django.db.models import F, Q
 from django.utils import timezone
 
 from accounts.models import Organization
@@ -76,15 +76,18 @@ class Command(BaseCommand):
     def _run_periodic_calendar_syncs(self):
         """
         Run periodic calendar syncs.
-        Launch sync tasks for calendars that haven't had a sync task enqueued in the last 30 minutes.
+        Launch sync tasks for calendars that:
+        - Haven't had a sync task enqueued in the last 2 days, OR
+        - Have a refresh_notification_channels_at time that has passed (and no sync task enqueued after that time), OR
+        - Have a manual sync_task_requested_at set
         """
         now = timezone.now()
-        cutoff_time = now - timezone.timedelta(minutes=30)
+        cutoff_time = now - timezone.timedelta(days=2)
 
-        # Find connected calendars that haven't had a sync task enqueued in the last 30 minutes
+        # Find connected calendars that haven't had a sync task enqueued in the last 2 days
         calendars = Calendar.objects.filter(
             state=CalendarStates.CONNECTED,
-        ).filter(Q(sync_task_enqueued_at__isnull=True) | Q(sync_task_enqueued_at__lte=cutoff_time) | Q(sync_task_requested_at__isnull=False))
+        ).filter(Q(sync_task_enqueued_at__isnull=True) | Q(sync_task_enqueued_at__lte=cutoff_time) | Q(sync_task_requested_at__isnull=False) | (Q(refresh_notification_channels_at__lte=now) & Q(sync_task_enqueued_at__isnull=False) & Q(sync_task_enqueued_at__lt=F("refresh_notification_channels_at"))))
 
         for calendar in calendars:
             last_enqueued = calendar.sync_task_enqueued_at.isoformat() if calendar.sync_task_enqueued_at else "never"

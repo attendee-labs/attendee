@@ -1,6 +1,7 @@
 import copy
 import logging
 import re
+import uuid
 from datetime import datetime, timedelta
 from datetime import timezone as python_timezone
 from typing import Dict, List, Optional
@@ -9,7 +10,6 @@ from zoneinfo import ZoneInfo
 import dateutil.parser
 import requests
 from celery import shared_task
-from django.conf import settings
 from django.db import transaction
 from django.urls import reverse
 from django.utils import timezone
@@ -311,43 +311,79 @@ class CalendarSyncHandler:
 class GoogleCalendarSyncHandler(CalendarSyncHandler):
     """Handler for syncing calendar events with Google Calendar API."""
 
+    def _is_duplicate_channel_error(self, e: Exception) -> bool:
+        """Look for channelIdNotUnique in the error response body as string."""
+        if e.response.text.find("channelIdNotUnique") != -1:
+            return True
+        return False
+
     def _create_notification_channel(self):
         """Make a request to create a notification channel for the calendar."""
         calendar_id = self.calendar.platform_uuid or "primary"
         url = f"https://www.googleapis.com/calendar/v3/calendars/{calendar_id}/events/watch"
         access_token = self._get_access_token()
-        with transaction.atomic():
-            calendar_notification_channel = CalendarNotificationChannel.objects.create(
-                calendar=self.calendar,
-                expires_at=timezone.now() + timedelta(days=7),
-                raw={},
-            )
-            body = {
-                "address": f"https://0f2f82536851.ngrok-free.app{reverse('external_webhooks:external-webhook-google-calendar')}",
-                "type": "webhook",
-                "id": calendar_notification_channel.object_id,
-            }
+
+        date_with_hour_string = timezone.now().strftime("%Y-%m-%d_%H")
+        channel_id = self.calendar.object_id + "_" + date_with_hour_string + "__sss_"
+
+        # This channel_id format ensures that we can't create a bunch of notification channels in a short period of time.
+        secret_token = str(uuid.uuid4())
+        logger.info(f"Creating notification channel in Google Calendar API for calendar {self.calendar.object_id}: {channel_id}")
+
+        body = {
+            "address": f"https://0f2f82536851.ngrok-free.app{reverse('external_webhooks:external-webhook-google-calendar')}",
+            "type": "webhook",
+            "id": channel_id,
+            "token": secret_token,
+        }
+        try:
             response = self._make_gcal_request(url, access_token, method="POST", body=body)
-            logger.info(f"Created notification channel for calendar {self.calendar.object_id}: {calendar_notification_channel.object_id}. Response: {response}")
-            if response.get("expiration"):
-                expiration_timestamp_ms = int(response.get("expiration"))
-                calendar_notification_channel.expires_at = datetime.fromtimestamp(expiration_timestamp_ms / 1000)
-            calendar_notification_channel.raw = response
-            calendar_notification_channel.platform_uuid = response.get("id")
-            calendar_notification_channel.save()
-            logger.info(f"Created notification channel for calendar {self.calendar.object_id}: {calendar_notification_channel.object_id}. Response: {response}")
+        except Exception as e:
+            if self._is_duplicate_channel_error(e):
+                logger.info(f"Notification channel with platform_uuid {channel_id} already exists for calendar {self.calendar.object_id}")
+                return
+            raise
+
+        logger.info(f"Created notification channel in Google Calendar API for calendar {self.calendar.object_id} Response: {response}")
+
+        if response.get("expiration"):
+            expiration_timestamp_ms = int(response.get("expiration"))
+        else:
+            expiration_timestamp_ms = datetime.now().timestamp() + 60 * 60 * 24 * 7
+            logger.warn(f"No expiration timestamp in Google Calendar API response for calendar {self.calendar.object_id}. Using default of 1 week.")
+
+        expires_at = datetime.fromtimestamp(expiration_timestamp_ms / 1000)
+        with transaction.atomic():
+            calendar_notification_channel, created = CalendarNotificationChannel.objects.get_or_create(
+                calendar=self.calendar,
+                platform_uuid=response.get("id"),
+                defaults={
+                    "expires_at": expires_at,
+                    "raw": response,
+                    "secret_token": response.get("token"),
+                },
+            )
+            if not created:
+                logger.info(f"Notification channel with platform_uuid {channel_id} already exists for calendar {self.calendar.object_id}")
+                calendar_notification_channel.expires_at = expires_at
+                calendar_notification_channel.raw = response
+                calendar_notification_channel.secret_token = response.get("token")
+                calendar_notification_channel.save()
+            # Guarantee a refresh of notification channels 1 hour before the expiration time.
+            self.calendar.refresh_notification_channels_at = expires_at - timedelta(hours=1)
+        logger.info(f"Created notification channel in database for calendar {self.calendar.object_id}: {calendar_notification_channel.platform_uuid}")
 
     def _refresh_notification_channels(self):
         notification_channels = CalendarNotificationChannel.objects.filter(calendar=self.calendar)
         # Get notification channel with largest expires_at
         notification_channel = notification_channels.order_by("-expires_at").first()
 
-        # If there is no notification channel or it will expire within 24 hours, create a new one
-        if not notification_channel or notification_channel.expires_at < timezone.now() + timedelta(hours=24):
+        # If there is no notification channel or it will expire within 2 hours, create a new one
+        if not notification_channel or notification_channel.expires_at < timezone.now() + timedelta(hours=2):
             self._create_notification_channel()
 
-        # Any notification channels that expired over 24 hours ago should be deleted
-        notification_channels.filter(expires_at__lt=timezone.now() - timedelta(hours=24)).delete()
+        # Any notification channels that expired over 1 hour ago should be deleted
+        notification_channels.filter(expires_at__lt=timezone.now() - timedelta(hours=1)).delete()
 
     def _raise_if_error_is_authentication_error(self, e: requests.RequestException):
         error_code = e.response.json().get("error")
