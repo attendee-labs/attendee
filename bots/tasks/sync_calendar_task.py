@@ -1,6 +1,8 @@
 import copy
+import json
 import logging
 import re
+import uuid
 from datetime import datetime, timedelta
 from datetime import timezone as python_timezone
 from typing import Dict, List, Optional
@@ -10,18 +12,22 @@ import dateutil.parser
 import requests
 from celery import shared_task
 from django.db import transaction
+from django.urls import reverse
 from django.utils import timezone
 
 from bots.bots_api_utils import delete_bot, patch_bot
 from bots.calendars_api_utils import remove_bots_from_calendar
 from bots.meeting_url_utils import meeting_type_from_url
-from bots.models import Bot, BotStates, Calendar, CalendarEvent, CalendarPlatform, CalendarStates, WebhookTriggerTypes
+from bots.models import Bot, BotStates, Calendar, CalendarEvent, CalendarNotificationChannel, CalendarPlatform, CalendarStates, WebhookTriggerTypes
 from bots.webhook_payloads import calendar_webhook_payload
 from bots.webhook_utils import trigger_webhook
 
 logger = logging.getLogger(__name__)
 
 URL_CANDIDATE = re.compile(r"https?://[^\s<>\"']+")
+
+NOTIFICATION_CHANNEL_RENEWAL_THRESHOLD_HOURS = 26  # If the latest channel will expire within this amount of hours, create a new one
+NOTIFICATION_CHANNEL_CLEANUP_THRESHOLD_HOURS = 24  # If a channel has expired more than this amount of hours ago, delete it
 
 
 def extract_meeting_url_from_text(text: str) -> Optional[str]:
@@ -188,7 +194,10 @@ class CalendarSyncHandler:
             dict: Summary of sync results
         """
         try:
-            # Step 0: Set time window
+            # Step 0: Refresh notification channels
+            self._refresh_notification_channels()
+
+            # Step 1: Set time window
             now = timezone.now()
             self.time_window_start = now - timedelta(days=1)
             self.time_window_end = now + timedelta(days=28)
@@ -200,15 +209,15 @@ class CalendarSyncHandler:
             # Set the sync start time
             sync_started_at = timezone.now()
 
-            # Step 1: Pull from Remote Calendar
+            # Step 2: Pull from Remote Calendar
 
-            # Step 1a: List all events from Remote Calendar within time window
+            # Step 2a: List all events from Remote Calendar within time window
             remote_events = self._list_events(access_token)
             remote_event_ids = {event["id"] for event in remote_events}
 
             # Start transaction
             with transaction.atomic():
-                # Step 1b: Find local events not in the remote fetch and get them individually
+                # Step 2b: Find local events not in the remote fetch and get them individually
                 local_events = self._get_local_events_in_window()
                 local_events_missing_from_remote = set(local_events.keys()) - remote_event_ids
 
@@ -229,7 +238,7 @@ class CalendarSyncHandler:
                     except Exception as e:
                         logger.error(f"Failed to check individual event {missing_event_id}: {e}")
 
-                # Step 2: Diff against local DB - upsert all Remote events
+                # Step 3: Diff against local DB - upsert all Remote events
                 created_count = 0
                 updated_count = 0
 
@@ -306,6 +315,66 @@ class CalendarSyncHandler:
 class GoogleCalendarSyncHandler(CalendarSyncHandler):
     """Handler for syncing calendar events with Google Calendar API."""
 
+    def _create_notification_channel(self):
+        """Make a request to create a notification channel for the calendar."""
+        calendar_id = self.calendar.platform_uuid or "primary"
+        url = f"https://www.googleapis.com/calendar/v3/calendars/{calendar_id}/events/watch"
+        access_token = self._get_access_token()
+        notification_channel_uuid = str(uuid.uuid4())
+        # The unique key will be used to stop concurrency errors where a bunch of threads are creating notification channels for the same calendar.
+        # It will be set to the platform_uuid of the most recent existing notification channel or "first_channel_" + object_id of the calendar
+        most_recent_notification_channel = CalendarNotificationChannel.objects.filter(calendar=self.calendar).order_by("-created_at").first()
+        if most_recent_notification_channel:
+            notification_channel_unique_key = most_recent_notification_channel.platform_uuid
+        else:
+            notification_channel_unique_key = "first_channel_" + self.calendar.object_id
+
+        body = {
+            "address": f"https://0ae40e3e033d.ngrok-free.app{reverse('external_webhooks:external-webhook-google-calendar')}",
+            "type": "webhook",
+            "id": notification_channel_uuid,
+            "token": json.dumps({"calendar_id": self.calendar.object_id}),
+        }
+        logger.info(f"Creating notification channel in Google API for calendar {self.calendar.object_id} with platform_uuid {notification_channel_uuid}.")
+        response = self._make_gcal_request(url, access_token, method="POST", body=body)
+        logger.info(f"Created notification channel in Google API for calendar {self.calendar.object_id} with platform_uuid {notification_channel_uuid}. Response: {response}")
+
+        if response.get("expiration"):
+            expiration_timestamp_ms = int(response.get("expiration"))
+        else:
+            expiration_timestamp_ms = datetime.now().timestamp() + 60 * 60 * 24 * 7
+            logger.warn(f"No expiration timestamp in Google Calendar API response for calendar {self.calendar.object_id}. Using default of 1 week.")
+
+        CalendarNotificationChannel.objects.create(
+            calendar=self.calendar,
+            platform_uuid=notification_channel_uuid,
+            unique_key=notification_channel_unique_key,
+            expires_at=datetime.fromtimestamp(expiration_timestamp_ms / 1000),
+            raw=response,
+        )
+        logger.info(f"Created notification channel in database for calendar {self.calendar.object_id} with platform_uuid {notification_channel_uuid}.")
+
+    def _refresh_notification_channels(self):
+        notification_channels = CalendarNotificationChannel.objects.filter(calendar=self.calendar)
+        # Get notification channel with largest expires_at
+        notification_channel = notification_channels.order_by("-expires_at").first()
+
+        # Wrote a warning to the logs if the latest notification channel has expired already. This should never happen.
+        if notification_channel and notification_channel.expires_at < timezone.now():
+            logger.warning(f"Latest notification channel ({notification_channel.platform_uuid}) for calendar {self.calendar.object_id} has expired already. This should never happen.")
+
+        # If there is no notification channel or it will expire within 26 hours, create a new one
+        # The choice of 26 hours ensures that there won't be any window where there's no active notification channel
+        # Because the scheduler process guarantees that calendars will never go more than 24 hours without a sync task.
+        if not notification_channel or notification_channel.expires_at < timezone.now() + timedelta(hours=NOTIFICATION_CHANNEL_RENEWAL_THRESHOLD_HOURS):
+            self._create_notification_channel()
+
+        # Any notification channels that expired over 24 hours ago should be deleted
+        expired_notification_channels = notification_channels.filter(expires_at__lt=timezone.now() - timedelta(hours=NOTIFICATION_CHANNEL_CLEANUP_THRESHOLD_HOURS))
+        if expired_notification_channels.count() > 0:
+            logger.info(f"Deleting {expired_notification_channels.count()} expired notification channels: {list(map(lambda x: x.platform_uuid, expired_notification_channels))}")
+        expired_notification_channels.delete()
+
     def _raise_if_error_is_authentication_error(self, e: requests.RequestException):
         error_code = e.response.json().get("error")
         if error_code == "invalid_grant" or error_code == "invalid_client":
@@ -351,11 +420,11 @@ class GoogleCalendarSyncHandler(CalendarSyncHandler):
             self._raise_if_error_is_authentication_error(e)
             raise CalendarAPIError(f"Failed to refresh Google access token. Response body: {e.response.json()}")
 
-    def _make_gcal_request(self, url: str, access_token: str, params: dict = None) -> dict:
+    def _make_gcal_request(self, url: str, access_token: str, params: dict = None, method: str = "GET", body: dict = None) -> dict:
         headers = {"Authorization": f"Bearer {access_token}"}
         # Optional: log the fully encoded URL
-        req = requests.Request("GET", url, headers=headers, params=params).prepare()
-        logger.info("Fetching Google Calendar events: %s", req.url)
+        req = requests.Request(method, url, headers=headers, params=params, json=body).prepare()
+        logger.info("Making Google Calendar request: %s", req.url)
 
         try:
             # Send the request
@@ -504,6 +573,39 @@ class MicrosoftCalendarSyncHandler(CalendarSyncHandler):
     GRAPH_BASE = "https://graph.microsoft.com/v1.0"
     CALENDAR_EVENT_SELECT_FIELDS = "id,subject,start,end,attendees,organizer,iCalUId,seriesMasterId,isCancelled,isOnlineMeeting,onlineMeetingProvider,onlineMeeting,onlineMeetingUrl,location,body,webLink"
 
+    def _refresh_notification_channels(self):
+        notification_channels = CalendarNotificationChannel.objects.filter(calendar=self.calendar)
+        # For microsoft calendars, we only need one notification channel. We can keep updating it to increase the expiration time.
+        notification_channel = notification_channels.first()
+
+        if not notification_channel:
+            self._create_notification_channel()
+        else:
+            self._extend_notification_channel_expiration_time(notification_channel)
+
+    def _create_notification_channel(self):
+        # Make request to create a notification channel in Microsoft Graph
+        url = f"{self.GRAPH_BASE}/subscriptions"
+        if self.calendar.platform_uuid:
+            resource_url = f"me/calendars/{self.calendar.platform_uuid}/events"
+        else:
+            resource_url = "me/calendar/events"
+        expires_at = timezone.now() + timedelta(minutes=10070 - 1)
+        body = {"changeType": "created,updated,deleted", "notificationUrl": f"https://0ae40e3e033d.ngrok-free.app{reverse('external_webhooks:external-webhook-microsoft-calendar')}", "resource": resource_url, "clientState": json.dumps({"calendar_id": self.calendar.object_id}), "expirationDateTime": expires_at.isoformat(), "latestSupportedTlsVersion": "v1_2"}
+        logger.info(f"Creating Microsoft Calendar notification channel. Body: {body}")
+        access_token = self._get_access_token()
+        response = self._make_graph_request(url, access_token, method="POST", body=body)
+        logger.info(f"Created Microsoft Calendar notification channel. Response: {response}")
+
+        calendar_notification_channel = CalendarNotificationChannel.objects.create(
+            calendar=self.calendar,
+            platform_uuid=response.get("id"),
+            unique_key=f"notification_channel_{self.calendar.object_id}",
+            expires_at=expires_at,
+            raw=response,
+        )
+        logger.info(f"Created Microsoft Calendar notification channel in database. Platform UUID: {calendar_notification_channel.platform_uuid}")
+
     def _raise_if_error_is_authentication_error(self, e: requests.RequestException):
         if e.response.json().get("error") == "invalid_grant":
             raise CalendarAPIAuthenticationError(f"Microsoft Authentication error: {e.response.json()}")
@@ -562,7 +664,7 @@ class MicrosoftCalendarSyncHandler(CalendarSyncHandler):
     # ---------------------------
     # HTTP helpers
     # ---------------------------
-    def _make_graph_request(self, url: str, access_token: str, params: dict | None = None) -> dict:
+    def _make_graph_request(self, url: str, access_token: str, params: dict | None = None, method: str = "GET", body: dict | None = None) -> dict:
         """
         Make a Microsoft Graph request with proper headers. If url is a full @odata.nextLink,
         we pass it as-is and ignore params.
@@ -574,10 +676,14 @@ class MicrosoftCalendarSyncHandler(CalendarSyncHandler):
         }
 
         # Build request
-        if params is None:
-            req = requests.Request("GET", url, headers=headers).prepare()
+        if params is None and body is None:
+            req = requests.Request(method, url, headers=headers).prepare()
+        elif params is None:
+            req = requests.Request(method, url, headers=headers, json=body).prepare()
+        elif body is None:
+            req = requests.Request(method, url, headers=headers, params=params).prepare()
         else:
-            req = requests.Request("GET", url, headers=headers, params=params).prepare()
+            req = requests.Request(method, url, headers=headers, params=params, json=body).prepare()
 
         logger.info("Fetching Microsoft Graph: %s", req.url)
 
