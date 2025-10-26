@@ -94,3 +94,4 @@ deepgram-sdk==4.3.0
 azure-identity==1.25.1
 azure-storage-blob==12.26.0
 python-json-logger==4.0.0
+pysaml2==7.5.4
