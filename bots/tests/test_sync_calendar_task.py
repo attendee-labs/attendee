@@ -7,17 +7,21 @@ from django.test import TestCase, TransactionTestCase
 from django.utils import timezone
 
 from accounts.models import Organization
+from bots.management.commands.run_scheduler import CALENDAR_SYNC_THRESHOLD_HOURS
 from bots.models import (
     Bot,
     BotStates,
     Calendar,
     CalendarEvent,
+    CalendarNotificationChannel,
     CalendarPlatform,
     CalendarStates,
     Project,
     WebhookTriggerTypes,
 )
 from bots.tasks.sync_calendar_task import (
+    NOTIFICATION_CHANNEL_CLEANUP_THRESHOLD_HOURS,
+    NOTIFICATION_CHANNEL_RENEWAL_THRESHOLD_HOURS,
     CalendarAPIAuthenticationError,
     CalendarSyncHandler,
     GoogleCalendarSyncHandler,
@@ -791,3 +795,90 @@ class TestMicrosoftCalendarSyncHandler(TestCase):
         self.assertEqual(result[0]["id"], "event_1")
         self.assertEqual(result[2]["id"], "event_3")
         self.assertEqual(mock_session.send.call_count, 2)
+
+
+class TestNotificationChannelRefreshWithScheduler(TransactionTestCase):
+    """Test that notification channels are refreshed correctly even in worst-case scenarios."""
+
+    def setUp(self):
+        self.organization = Organization.objects.create(name="Test Org")
+        self.project = Project.objects.create(name="Test Project", organization=self.organization)
+        self.calendar = Calendar.objects.create(
+            project=self.project,
+            platform=CalendarPlatform.GOOGLE,
+            client_id="test_client_id",
+            state=CalendarStates.CONNECTED,
+        )
+        self.calendar.set_credentials({"client_secret": "test_secret", "refresh_token": "test_refresh_token"})
+        from django.conf import settings
+
+        settings.CELERY_TASK_ALWAYS_EAGER = True
+        settings.CELERY_TASK_EAGER_PROPAGATES = True
+
+    @patch("bots.tasks.sync_calendar_task.GoogleCalendarSyncHandler._list_events")
+    @patch("bots.tasks.sync_calendar_task.GoogleCalendarSyncHandler._get_event_by_id")
+    @patch("bots.tasks.sync_calendar_task.GoogleCalendarSyncHandler._get_access_token")
+    @patch("bots.tasks.sync_calendar_task.GoogleCalendarSyncHandler._make_gcal_request")
+    @patch("bots.tasks.sync_calendar_task.trigger_webhook")
+    def test_worst_case_notification_channel_refresh_before_26_hour_threshold(self, mock_trigger_webhook, mock_make_gcal_request, mock_get_access_token, mock_get_event, mock_list_events):
+        """
+        Test that even in the worst-case scenario where a sync happens right before
+        the 26-hour mark, the scheduler will still trigger a sync that creates a new
+        notification channel before the existing one expires.
+        """
+        # Set up the timeline
+        now = timezone.now()
+
+        # Step 1: Create a notification channel with an expiration time that is just before the renewal threshold
+        # so that if we run the sync task right now, it will just miss creating a new channel
+        expiration_time = now + timedelta(hours=NOTIFICATION_CHANNEL_RENEWAL_THRESHOLD_HOURS, minutes=1)
+        initial_channel = CalendarNotificationChannel.objects.create(
+            calendar=self.calendar,
+            platform_uuid="initial_channel_uuid",
+            unique_key="first_channel_" + self.calendar.object_id,
+            expires_at=expiration_time,
+            raw={"test": "data"},
+        )
+
+        # Step 2: Run the sync task and verify that we did not create a new channel.
+        # Mock the API calls to avoid actual HTTP requests
+        mock_get_access_token.return_value = "mock_token"
+        mock_list_events.return_value = []  # No events to sync
+        mock_get_event.return_value = None
+        mock_make_gcal_request.return_value = {
+            "expiration": (datetime.now() + timedelta(days=7)).timestamp() * 1000,
+        }
+
+        enqueue_sync_calendar_task(self.calendar)
+
+        # Verify that count did not change
+        self.assertEqual(CalendarNotificationChannel.objects.filter(calendar=self.calendar).count(), 1)
+        # Verify that the id of the notification channel is the same as the initial channel
+        first_notification_channel = CalendarNotificationChannel.objects.filter(calendar=self.calendar).first()
+        self.assertEqual(first_notification_channel.platform_uuid, initial_channel.platform_uuid)
+
+        # Step 3: Run the scheduler's periodic calendar sync logic
+        # Import here to avoid circular imports
+        from bots.management.commands.run_scheduler import Command
+
+        command = Command()
+
+        # Mock timezone.now() to return our test time
+        with patch("django.utils.timezone.now", return_value=self.calendar.sync_task_enqueued_at + timedelta(hours=CALENDAR_SYNC_THRESHOLD_HOURS)):
+            # Assert that the latest notification channel for the calendar has NOT expired yet
+            self.assertGreater(CalendarNotificationChannel.objects.filter(calendar=self.calendar).order_by("-expires_at").first().expires_at, timezone.now())
+            command._run_periodic_calendar_syncs()
+
+        # Step 4: Verify that a new notification channel was created
+        # There should now be 2 channels total (initial + newly created)
+        all_channels = CalendarNotificationChannel.objects.filter(calendar=self.calendar).order_by("created_at")
+        self.assertEqual(all_channels.count(), 2, "A new notification channel should have been created")
+
+        # Verify the initial channel is still there
+        self.assertEqual(all_channels[0].platform_uuid, "initial_channel_uuid")
+
+        # Now switch to the time that the original notification channel will expire + the cleanup threshold and make sure that it is deleted
+        with patch("django.utils.timezone.now", return_value=initial_channel.expires_at + timedelta(hours=NOTIFICATION_CHANNEL_CLEANUP_THRESHOLD_HOURS, minutes=1)):
+            command._run_periodic_calendar_syncs()
+            self.assertEqual(CalendarNotificationChannel.objects.filter(calendar=self.calendar).count(), 1, "The initial notification channel should be deleted")
+            self.assertFalse(CalendarNotificationChannel.objects.filter(calendar=self.calendar, platform_uuid="initial_channel_uuid").exists(), "The initial notification channel should be deleted")
