@@ -5,6 +5,8 @@ from django.contrib import admin
 from django.db import models
 from django.db.models import Case, Count, ExpressionWrapper, F, FloatField, When
 from django.db.models.functions import Extract
+from django.http import HttpResponse
+from django.urls import path, reverse
 from django.utils import timezone
 from django.utils.html import format_html
 
@@ -215,7 +217,7 @@ class UtteranceAdmin(admin.ModelAdmin):
     list_display = ("recording", "participant", "timestamp_ms", "duration_ms", "source", "created_at", "updated_at")
     list_filter = ("source", "audio_format")
     search_fields = ("participant__full_name", "recording__bot__object_id")
-    readonly_fields = ("recording", "participant", "audio_blob", "audio_format", "timestamp_ms", "duration_ms", "source_uuid", "sample_rate", "source")
+    readonly_fields = ("recording", "participant", "audio_format", "timestamp_ms", "duration_ms", "source_uuid", "audio_sample_rate", "source", "download_audio_link")
 
     def has_add_permission(self, request):
         return False
@@ -225,6 +227,49 @@ class UtteranceAdmin(admin.ModelAdmin):
 
     def has_delete_permission(self, request, obj=None):
         return False
+
+    def audio_sample_rate(self, obj):
+        """Display the sample rate from audio chunk or fallback to deprecated field"""
+        return obj.get_sample_rate()
+
+    audio_sample_rate.short_description = "Sample Rate"
+
+    def download_audio_link(self, obj):
+        """Provides a download link for the audio blob if available"""
+        audio_blob = obj.get_audio_blob()
+        if audio_blob:
+            url = reverse("admin:utterance_download_audio", args=[obj.pk])
+            return format_html('<a href="{}" class="button">Download Audio</a>', url)
+        return "No audio available"
+
+    download_audio_link.short_description = "Audio Download"
+
+    def download_audio_view(self, request, object_id):
+        """View to serve the audio blob as a download"""
+        utterance = self.get_object(request, object_id)
+        if not utterance:
+            return HttpResponse("Utterance not found", status=404)
+
+        audio_blob = utterance.get_audio_blob()
+        if not audio_blob:
+            return HttpResponse("No audio available", status=404)
+
+        # Create response with audio data
+        response = HttpResponse(audio_blob)
+        response["Content-Disposition"] = f'attachment; filename="utterance_{object_id}_{utterance.timestamp_ms}.raw"'
+        return response
+
+    def get_urls(self):
+        """Add custom URL for audio download"""
+        urls = super().get_urls()
+        custom_urls = [
+            path(
+                "<path:object_id>/download-audio/",
+                self.admin_site.admin_view(self.download_audio_view),
+                name="utterance_download_audio",
+            ),
+        ]
+        return custom_urls + urls
 
     def changelist_view(self, request, extra_context=None):
         # Get latency statistics for the last 12 hours
