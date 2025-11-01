@@ -14,12 +14,70 @@
       </div>
     </main>
 
+
     <!-- Dependencies for client view and component view -->
     <script src="https://source.zoom.us/4.0.0/lib/vendor/react.min.js"></script>
     <script src="https://source.zoom.us/4.0.0/lib/vendor/react-dom.min.js"></script>
     <script src="https://source.zoom.us/4.0.0/lib/vendor/redux.min.js"></script>
     <script src="https://source.zoom.us/4.0.0/lib/vendor/redux-thunk.min.js"></script>
     <script src="https://source.zoom.us/4.0.0/lib/vendor/lodash.min.js"></script>
+
+    <!-- Hook Redux to capture the store -->
+    <!-- To get persistent user ids, look at the object returned by window.__zoomGetState()-->
+    <!-- Look at the attendeesList attribute within that object, it will be an array of particiapnts -->
+    <!-- These participants will have more attributes than the participants returned by the SDK -->
+    <!-- Look at the strConfUserID userId attribute for the persistent id. This is the same id you can use with the zoom rest api-->
+    <script>
+
+      (function () {
+        const R = window.Redux;
+        if (!R) { console.warn('[hook] Redux not present yet'); return; }
+      
+        function capture(store) {
+          if (store && typeof store.getState === 'function' && typeof store.dispatch === 'function') {
+            window.__zoomStore = store;
+            window.__zoomGetState = store.getState.bind(store);
+            window.__zoomDispatch = store.dispatch.bind(store);
+            console.log('[hook] captured store via createStore');
+          }
+          return store;
+        }
+      
+        function wrapCreate(create) {
+          return function (...args) {
+            const store = create.apply(this, args);
+            return capture(store);
+          };
+        }
+      
+        if (R.createStore) R.createStore = wrapCreate(R.createStore);
+        if (R.legacy_createStore) R.legacy_createStore = wrapCreate(R.legacy_createStore);
+      
+        // Also wrap applyMiddleware/compose so enhanced factories still get captured
+        if (R.applyMiddleware) {
+          const _apply = R.applyMiddleware;
+          R.applyMiddleware = (...mws) => {
+            const enhancer = _apply(...mws);
+            return (create) => (...args) => capture(enhancer(create)(...args));
+          };
+        }
+      
+        if (R.compose) {
+          const _compose = R.compose;
+          R.compose = (...funcs) => {
+            const composed = _compose(...funcs);
+            return (...args) => {
+              const res = composed(...args);
+              if (typeof res === 'function') {
+                return (...a2) => capture(res(...a2));
+              }
+              return capture(res);
+            };
+          };
+        }
+      })();
+      
+    </script>
 
     <script src="https://source.zoom.us/4.0.0/zoom-meeting-4.0.0.min.js"></script>
     <script type="text/javascript" src="zoom_web_chromedriver_page.js"></script> 
