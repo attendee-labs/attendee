@@ -516,10 +516,11 @@ class GoogleMeetUIMethods:
         start_waiting_at = time.time()
         while self.driver.current_url == url_before_signin:
             time.sleep(1)
-            if time.time() - start_waiting_at > 60:
-                logger.info("Login timed out, redirecting to meeting page")
+            if time.time() - start_waiting_at > 120:
+                logger.info("Login timed out, failing")
                 # TODO Replace with error message for login failed
-                break
+
+                raise UiCouldNotLocateElementException("Login timed out", "login_to_google_meet_account")
 
         logger.info(f"Redirected to {self.driver.current_url}")
         self.wait_until_url_has_stopped_changing(stable_for=1.0)
