@@ -526,6 +526,10 @@ class GoogleMeetUIMethods:
         self.wait_until_url_has_stopped_changing(stable_for=1.0)
         logger.info(f"stabilized to {self.driver.current_url}")
 
+        if "https://accounts.google.com/signin/continue" in self.driver.current_url:
+            logger.info("Login failed, redirecting to login page")
+            raise UiLoginAttemptFailedException("Login failed", "login_to_google_meet_account")
+
     # returns nothing if succeeded, raises an exception if failed
     def attempt_to_join_meeting(self):
         if self.google_meet_bot_login_is_available and self.google_meet_bot_login_should_be_used:
