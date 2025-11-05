@@ -527,7 +527,7 @@ class GoogleMeetUIMethods:
         self.wait_until_url_has_stopped_changing(stable_for=15.0)
         logger.info(f"stabilized to {self.driver.current_url}")
 
-        if "https://accounts.google.com/signin/continue" in self.driver.current_url:
+        if "https://myaccount.google.com" not in self.driver.current_url:
             logger.info("Login failed, redirecting to login page")
             raise UiCouldNotLocateElementException("Login failed", "login_to_google_meet_account")
 
