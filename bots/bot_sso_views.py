@@ -21,10 +21,12 @@ class GoogleMeetSetCookieView(View):
         # There should be a query parameter called "session_id"
         session_id = request.GET.get("session_id")
         if not session_id:
+            logger.info(f"Could not set cookie: no session_id found in request")
             return HttpResponseBadRequest("Could not set cookie")
 
         # Check in redis store to confirm that a key with the id "google_meet_sign_in_session:<session_id>" exists
         if not get_bot_login_for_google_meet_sign_in_session(session_id):
+            logger.info(f"Could not set cookie: no bot login found for session_id: {session_id}")
             return HttpResponseBadRequest("Could not set cookie")
 
         # Set a cookie with the session_id
@@ -50,17 +52,20 @@ class GoogleMeetSignInView(View):
         # Get the session_id from the cookie
         session_id = request.COOKIES.get("google_meet_sign_in_session_id")
         if not session_id:
+            logger.info(f"Could not sign in: no session_id found in cookie")
             return HttpResponseBadRequest("Could not sign in")
 
         # Get the google meet bot login to use from the session id
         google_meet_bot_login = get_bot_login_for_google_meet_sign_in_session(session_id)
         if not google_meet_bot_login:
+            logger.info(f"Could not sign in: no google meet bot login found for session_id: {session_id}")
             return HttpResponseBadRequest("Could not sign in")
 
         saml_request_b64 = request.GET.get("SAMLRequest")
         relay_state = request.GET.get("RelayState")
 
         if not saml_request_b64:
+            logger.info(f"Could not sign in: no SAMLRequest found in request")
             return HttpResponseBadRequest("Missing SAMLRequest")
 
         # Create and sign the SAMLResponse
