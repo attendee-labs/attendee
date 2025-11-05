@@ -528,7 +528,7 @@ class GoogleMeetUIMethods:
 
         if "https://accounts.google.com/signin/continue" in self.driver.current_url:
             logger.info("Login failed, redirecting to login page")
-            raise UiLoginAttemptFailedException("Login failed", "login_to_google_meet_account")
+            raise UiCouldNotLocateElementException("Login failed", "login_to_google_meet_account")
 
     # returns nothing if succeeded, raises an exception if failed
     def attempt_to_join_meeting(self):
