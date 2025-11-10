@@ -590,7 +590,8 @@ class StyleManager {
 
     start() {
         this.startSilenceDetection();
-        this.makeMainVideoFillFrame();
+        // disable for debug purposes
+        //this.makeMainVideoFillFrame();
 
         console.log('Started StyleManager');
     }
@@ -2951,11 +2952,16 @@ navigator.mediaDevices.getUserMedia = function(constraints) {
         const bound = _bind.apply(this, [thisArg, ...args]);
         return function (...callArgs) {
           const eventData = callArgs[0];
+          // Add for debugging purposes
+          window.ws.sendJson({
+            type: 'RawOnMessageReceivedData',
+            eventData: eventData
+          });
           if (eventData?.data?.chatServiceBatchEvent?.[0]?.message)
           {
             const message = eventData.data.chatServiceBatchEvent[0].message;
             realConsole?.log('chatMessage', message);
-            //window.chatMessageManager?.handleChatMessage(message);
+            window.chatMessageManager?.handleChatMessage(message);
           }
           return bound.apply(this, callArgs);
         };
