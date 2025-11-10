@@ -289,7 +289,7 @@ class StyleManager {
                 }
                 this.chatMessagesReadInterval = setInterval(() => {
                     this.readChatMessagesFromDOM();
-                }, 2000);
+                }, 10000);
             } else {
                 // Chat input not found yet, check again in 500ms
                 setTimeout(checkForChatPanel, 500);
