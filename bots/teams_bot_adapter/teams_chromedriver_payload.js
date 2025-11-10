@@ -8,71 +8,7 @@
   
     var rootsByRenderer = {};
     var renderers = {};
-  
-    function sanitizeShallow(obj, depth = 0, maxDepth = 3) {
-        if (obj == null || typeof obj !== "object") return obj;
-        if (depth > maxDepth) return "[[Truncated]]";
-      
-        // Replace known bad types
-        if (obj instanceof Window) return "[[Window]]";
-        if (typeof Node !== "undefined" && obj instanceof Node) {
-          return `[[Node ${obj.nodeName}]]`;
-        }
-      
-        const out = Array.isArray(obj) ? [] : {};
-        for (const [k, v] of Object.entries(obj)) {
-          if (typeof v === "function") continue;
-          if (k === "_owner") continue; // React internal cycles etc.
-          out[k] = sanitizeShallow(v, depth + 1, maxDepth);
-        }
-        return out;
-      }
-      
-      function serializeFiberNode(fiber, depth) {
-        const type =
-          typeof fiber.type === "string"
-            ? fiber.type
-            : (fiber.type && fiber.type.displayName) ||
-              (fiber.type && fiber.type.name) ||
-              "Unknown";
-      
-        const node = {
-          type,
-          key: fiber.key,
-          depth,
-          props: sanitizeShallow(fiber.memoizedProps),
-          state: sanitizeShallow(fiber.memoizedState),
-        };
-      
-        node.children = [];
-        let child = fiber.child;
-        while (child) {
-          node.children.push(serializeFiberNode(child, depth + 1));
-          child = child.sibling;
-        }
-        return node;
-      }
-  
-    // This is what you'll call from Selenium:
-    //   window.__get_react_state()
-    window.__get_react_state = function () {
-      try {
-        var result = [];
-        Object.keys(rootsByRenderer).forEach(function (rendererID) {
-          var roots = rootsByRenderer[rendererID];
-          if (!roots) return;
-          roots.forEach(function (root) {
-            if (root && root.current) {
-              result.push(serializeFiberNode(root.current, 0));
-            }
-          });
-        });
-        return result;
-      } catch (e) {
-        return { error: e && e.message, stack: e && e.stack };
-      }
-    };
-  
+        
     // Minimal DevTools-style hook object React expects.
     // (This pattern is used in various tools that fake DevTools.) :contentReference[oaicite:1]{index=1}
     window.__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
@@ -132,18 +68,9 @@
     return node[fiberKey] || null;
   }
   
-    function looksLikeChatMessage(obj, sentinel) {
+    function looksLikeChatMessage(obj) {
       if (!obj || typeof obj !== "object") return false;
-  
-      // If we gave a sentinel, treat it as highest priority
-      if (sentinel) {
-        for (const v of Object.values(obj)) {
-          if (typeof v === "string" && v.includes(sentinel)) {
-            return true;
-          }
-        }
-      }
-  
+    
       const keys = Object.keys(obj);
       const keySet = new Set(keys);
   
@@ -160,7 +87,6 @@
         if (keySet.has(k) && obj[k]) score++;
       }
   
-      // “Looks like a message” if it has at least a couple of these keys
       return score === msgKeys.length;
     }
   
@@ -192,7 +118,7 @@
           if (!value.length) return;
   
           const first = value[0];
-          if (typeof first === "object" && looksLikeChatMessage(first, opts.sentinel)) {
+          if (typeof first === "object" && looksLikeChatMessage(first)) {
             // Scan through existing out and only push if the message contains a clientMessageId that is not already in the out array
             const chatMessages = value.map(sanitizeChatMessageFromFiber).filter(msg => msg["clientMessageId"]);
             chatMessages.forEach(msg => {
@@ -261,23 +187,7 @@
           }
           return out;
         }
-    
-        // Fallback: old behavior, scan every root
-        const rootsByRenderer = hook._roots;
-    
-        Object.values(rootsByRenderer).forEach((rootsSet) => {
-          rootsSet.forEach((root) => {
-            try {
-              if (root && root.current) {
-                scanFiber(root.current, 0, ["<root>"], out, opts);
-              }
-            } catch (e) {
-              // ignore individual errors
-            }
-          });
-        });
-    
-        return out;
+        return [];
       };
   })();
 
@@ -350,7 +260,7 @@ class StyleManager {
         try {
             const chatPanel = document.querySelector("[data-tid='message-pane-layout']");
             if (chatPanel) {
-                const chatMessagesFromDOM = window.__get_chat_messages();
+                const chatMessagesFromDOM = window.__get_chat_messages({ containerNode: chatPanel });
                 for (const chatMessage of chatMessagesFromDOM) {
                     window.chatMessageManager?.handleChatMessage(chatMessage);
                 }
