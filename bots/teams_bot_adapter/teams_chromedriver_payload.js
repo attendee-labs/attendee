@@ -1,3 +1,286 @@
+// This must run before React is loaded on the page.
+(function () {
+    if (window.__REACT_DEVTOOLS_GLOBAL_HOOK__) {
+      // Something else already installed it (e.g. real DevTools).
+      // You could also wrap/monkey-patch it here instead of replacing.
+      return;
+    }
+  
+    var rootsByRenderer = {};
+    var renderers = {};
+  
+    function sanitizeShallow(obj, depth = 0, maxDepth = 3) {
+        if (obj == null || typeof obj !== "object") return obj;
+        if (depth > maxDepth) return "[[Truncated]]";
+      
+        // Replace known bad types
+        if (obj instanceof Window) return "[[Window]]";
+        if (typeof Node !== "undefined" && obj instanceof Node) {
+          return `[[Node ${obj.nodeName}]]`;
+        }
+      
+        const out = Array.isArray(obj) ? [] : {};
+        for (const [k, v] of Object.entries(obj)) {
+          if (typeof v === "function") continue;
+          if (k === "_owner") continue; // React internal cycles etc.
+          out[k] = sanitizeShallow(v, depth + 1, maxDepth);
+        }
+        return out;
+      }
+      
+      function serializeFiberNode(fiber, depth) {
+        const type =
+          typeof fiber.type === "string"
+            ? fiber.type
+            : (fiber.type && fiber.type.displayName) ||
+              (fiber.type && fiber.type.name) ||
+              "Unknown";
+      
+        const node = {
+          type,
+          key: fiber.key,
+          depth,
+          props: sanitizeShallow(fiber.memoizedProps),
+          state: sanitizeShallow(fiber.memoizedState),
+        };
+      
+        node.children = [];
+        let child = fiber.child;
+        while (child) {
+          node.children.push(serializeFiberNode(child, depth + 1));
+          child = child.sibling;
+        }
+        return node;
+      }
+  
+    // This is what you'll call from Selenium:
+    //   window.__get_react_state()
+    window.__get_react_state = function () {
+      try {
+        var result = [];
+        Object.keys(rootsByRenderer).forEach(function (rendererID) {
+          var roots = rootsByRenderer[rendererID];
+          if (!roots) return;
+          roots.forEach(function (root) {
+            if (root && root.current) {
+              result.push(serializeFiberNode(root.current, 0));
+            }
+          });
+        });
+        return result;
+      } catch (e) {
+        return { error: e && e.message, stack: e && e.stack };
+      }
+    };
+  
+    // Minimal DevTools-style hook object React expects.
+    // (This pattern is used in various tools that fake DevTools.) :contentReference[oaicite:1]{index=1}
+    window.__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
+      supportsFiber: true,
+      _renderers: renderers,
+      _roots: rootsByRenderer,
+  
+      inject: function (renderer) {
+        var id = Math.random().toString(16).slice(2);
+        renderers[id] = renderer;
+        rootsByRenderer[id] = new Set();
+        return id;
+      },
+  
+      onCommitFiberRoot: function (rendererID, root /*, priority, didError */) {
+        var roots = rootsByRenderer[rendererID];
+        if (!roots) {
+          roots = new Set();
+          rootsByRenderer[rendererID] = roots;
+        }
+        roots.add(root);
+        // You could also do logging here to discover where Teams chat lives.
+      },
+  
+      onCommitFiberUnmount: function (rendererID, fiber) {
+        // no-op for now
+      },
+  
+      // Optional helpers DevTools sometimes uses; safe to omit or stub.
+      getFiberRoots: function (rendererID) {
+        return rootsByRenderer[rendererID] || new Set();
+      },
+    };
+  })();
+
+(function () {
+  if (window.__get_chat_messages) return; // don't redefine
+
+  function getTypeName(fiber) {
+    if (typeof fiber.type === "string") return fiber.type; // DOM node
+    if (!fiber.type) return "Unknown";
+    return fiber.type.displayName || fiber.type.name || "Anonymous";
+  }
+
+  // NEW: map a host DOM node -> its React fiber
+  function getFiberFromDOMNode(node) {
+    if (!node) return null;
+
+    // React 16+ uses __reactFiber$random, older versions __reactInternalInstance$random
+    const allKeys = Object.getOwnPropertyNames(node);
+    const fiberKey = allKeys.find(
+      (k) =>
+        k.startsWith("__reactFiber$") ||
+        k.startsWith("__reactInternalInstance$")
+    );
+    if (!fiberKey) return null;
+    return node[fiberKey] || null;
+  }
+  
+    function looksLikeChatMessage(obj, sentinel) {
+      if (!obj || typeof obj !== "object") return false;
+  
+      // If we gave a sentinel, treat it as highest priority
+      if (sentinel) {
+        for (const v of Object.values(obj)) {
+          if (typeof v === "string" && v.includes(sentinel)) {
+            return true;
+          }
+        }
+      }
+  
+      const keys = Object.keys(obj);
+      const keySet = new Set(keys);
+  
+      // The only data we care about will have all of these keys defined.
+      const msgKeys = [
+        "clientMessageId",
+        "from",
+        "content",
+        "originalArrivalTime",
+      ];
+  
+      let score = 0;
+      for (const k of msgKeys) {
+        if (keySet.has(k) && obj[k]) score++;
+      }
+  
+      // “Looks like a message” if it has at least a couple of these keys
+      return score === msgKeys.length;
+    }
+  
+    function sanitizeChatMessageFromFiber(fiber) {
+      const out = {};
+      for (const [k, v] of Object.entries(fiber)) {
+        if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") {
+          out[k] = v;
+        }
+      }
+      return out;
+    }
+  
+    function scanContainerForArrays(container, where, fiberPath, out, opts) {
+      if (!container || typeof container !== "object") return;
+  
+      const maxDepth = opts.maxObjectDepth || 3;
+      const maxArrayScan = opts.maxArrayScan || 5;
+  
+      function scan(value, localPath, depth) {
+        if (!value || typeof value !== "object") return;
+        if (depth > maxDepth) return;
+  
+        // Skip DOM nodes / window
+        if (typeof Window !== "undefined" && value instanceof Window) return;
+        if (typeof Node !== "undefined" && value instanceof Node) return;
+  
+        if (Array.isArray(value)) {
+          if (!value.length) return;
+  
+          const first = value[0];
+          if (typeof first === "object" && looksLikeChatMessage(first, opts.sentinel)) {
+            // Scan through existing out and only push if the message contains a clientMessageId that is not already in the out array
+            const chatMessages = value.map(sanitizeChatMessageFromFiber).filter(msg => msg["clientMessageId"]);
+            chatMessages.forEach(msg => {
+                const messageAlreadyExists = out.some(item => item["clientMessageId"] === msg["clientMessageId"]);
+                if (!messageAlreadyExists) {
+                    out.push(msg);
+                }
+            });
+            return; // don't recurse further into this array
+          }
+  
+          // Otherwise, just peek into first few elements
+          for (let i = 0; i < Math.min(value.length, maxArrayScan); i++) {
+            scan(value[i], localPath.concat(`[${i}]`), depth + 1);
+          }
+        } else {
+          for (const [k, v] of Object.entries(value)) {
+            if (
+              typeof v === "object" &&
+              v !== null &&
+              k !== "_owner" && // avoid React internal cycles
+              k !== "theme" &&
+              k !== "style"
+            ) {
+              scan(v, localPath.concat(k), depth + 1);
+            }
+          }
+        }
+      }
+  
+      scan(container, [], 0);
+    }
+  
+    function scanFiber(fiber, depth, fiberPath, out, opts) {
+      if (!fiber) return;
+  
+      const typeName = getTypeName(fiber);
+      const nextPath = fiberPath.concat(typeName);
+  
+      // Look into props/state for arrays of messages
+      scanContainerForArrays(fiber.memoizedProps, "props", nextPath, out, opts);
+      scanContainerForArrays(fiber.memoizedState, "state", nextPath, out, opts);
+  
+      if (fiber.child) scanFiber(fiber.child, depth + 1, nextPath, out, opts);
+      if (fiber.sibling) scanFiber(fiber.sibling, depth, fiberPath, out, opts);
+    }
+  
+    window.__get_chat_messages = function (options) {
+        const opts = options || {};
+        const hook = window.__REACT_DEVTOOLS_GLOBAL_HOOK__;
+        if (!hook || !hook._roots) return [];
+    
+        const out = [];
+    
+        // If caller gives us a specific DOM container, only scan that subtree.
+        // e.g. window.__get_chat_messages({ containerNode: chatDiv, sentinel: "Message" })
+        if (opts.containerNode) {
+          const fiber = getFiberFromDOMNode(opts.containerNode);
+          if (fiber) {
+            try {
+              const label = getTypeName(fiber) || "<container>";
+              scanFiber(fiber, 0, [label], out, opts);
+            } catch (e) {
+              // ignore errors
+            }
+          }
+          return out;
+        }
+    
+        // Fallback: old behavior, scan every root
+        const rootsByRenderer = hook._roots;
+    
+        Object.values(rootsByRenderer).forEach((rootsSet) => {
+          rootsSet.forEach((root) => {
+            try {
+              if (root && root.current) {
+                scanFiber(root.current, 0, ["<root>"], out, opts);
+              }
+            } catch (e) {
+              // ignore individual errors
+            }
+          });
+        });
+    
+        return out;
+      };
+  })();
+
 class StyleManager {
     constructor() {
         this.audioContext = null;
@@ -58,7 +341,53 @@ class StyleManager {
             
             // Wait until the chat input element appears in the DOM
             this.waitForChatInputAndSendReadyMessage();
+            // Wait until chat panel appears in the DOM
+            this.waitForChatPanelToAppear();
         }
+    }
+
+    readChatMessagesFromDOM() {
+        try {
+            const chatPanel = document.querySelector("[data-tid='message-pane-layout']");
+            if (chatPanel) {
+                const chatMessagesFromDOM = window.__get_chat_messages();
+                for (const chatMessage of chatMessagesFromDOM) {
+                    window.chatMessageManager?.handleChatMessage(chatMessage);
+                }
+            }
+        } catch (error) {
+            window.ws.sendJson({
+                type: 'ChatMessageReadError',
+                message: 'Error reading chat messages: ' + error.message
+            });
+        }
+    }
+
+    waitForChatPanelToAppear() {
+        const checkForChatPanel = () => {
+            const chatPanel = document.querySelector("[data-tid='message-pane-layout']");
+            if (chatPanel) {
+                // Chat input is now available, send the ready message
+                window.ws.sendJson({
+                    type: 'ChatStatusChange',
+                    change: 'chat_panel_appeared'
+                });
+
+                // Set an interval to read the chat messages from the DOM every 2 seconds
+                if (this.chatMessagesReadInterval) {
+                    clearInterval(this.chatMessagesReadInterval);
+                }
+                this.chatMessagesReadInterval = setInterval(() => {
+                    this.readChatMessagesFromDOM();
+                }, 2000);
+            } else {
+                // Chat input not found yet, check again in 500ms
+                setTimeout(checkForChatPanel, 500);
+            }
+        };
+        
+        // Start checking for the chat panel
+        checkForChatPanel();
     }
 
     waitForChatInputAndSendReadyMessage() {
