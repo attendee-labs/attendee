@@ -2955,7 +2955,7 @@ navigator.mediaDevices.getUserMedia = function(constraints) {
           {
             const message = eventData.data.chatServiceBatchEvent[0].message;
             realConsole?.log('chatMessage', message);
-            window.chatMessageManager?.handleChatMessage(message);
+            //window.chatMessageManager?.handleChatMessage(message);
           }
           return bound.apply(this, callArgs);
         };
