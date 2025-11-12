@@ -1322,6 +1322,11 @@ class WebSocketClient {
         window.styleManager.start();
         window.callManager.syncParticipants();
 
+        // Set an interval to call syncParticipants every 60 seconds
+        setInterval(() => {
+            window.callManager.logParticipants();
+        }, 60000);
+
         // No longer need this because we're not using MediaStreamTrackProcessor's
         //this.startBlackFrameTimer();
     }
@@ -1726,6 +1731,10 @@ const wsInterceptor = new WebSocketInterceptor({
     */
     onMessage: ({ url, data }) => {
         realConsole?.log('onMessage', url, data);
+        window.ws?.sendJson({
+            type: 'RawOnWebSocketMessageReceived',
+            data: data
+        });
         if (data.startsWith("3:::")) {
             const eventDataObject = JSON.parse(data.slice(4));
             
@@ -3016,6 +3025,26 @@ class CallManager {
         return this.activeCall.callerMri;
         // We're using callerMri because it includes the 8: prefix. If callerMri stops working, we can easily use the thing below.
         // return this.activeCall.currentUserSkypeIdentity?.id;
+    }
+
+    logParticipants() {
+        this.setActiveCall();
+        if (!this.activeCall) {
+            return;
+        }
+        const participantsRaw = this.activeCall.participants;
+        const participants = participantsRaw.map(participant => {
+            return {
+                id: participant.id,
+                displayName: participant.displayName,
+                endpoints: participant.endpoints,
+                meetingRole: participant.meetingRole
+            };
+        }).filter(participant => participant.displayName);
+        window.ws?.sendJson({
+            type: 'LogParticipants',
+            participants: participants
+        });
     }
 
     syncParticipants() {
