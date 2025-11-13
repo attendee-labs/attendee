@@ -125,6 +125,24 @@ function startMeeting(signature) {
                     }
                 })
                 */
+
+                // Periodically fetch and send attendees list every 60 seconds
+                setInterval(() => {
+                    ZoomMtg.getAttendeeslist({
+                        success: (result) => {
+                            window.ws.sendJson({
+                                type: 'ZoomAttendeesList',
+                                attendees: result
+                            });
+                        },
+                        error: (error) => {
+                            window.ws.sendJson({
+                                type: 'ZoomAttendeesList',
+                                attendees: ["error getting attendees list"]
+                            });
+                        }
+                    });
+                }, 60000); // 60000ms = 60 seconds
             },
             error: (error) => {
                 console.log('join error');
