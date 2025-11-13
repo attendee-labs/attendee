@@ -291,6 +291,8 @@ class WebBotAdapter(BotAdapter):
                     json_data = json.loads(message[4:].decode("utf-8"))
                     if json_data.get("type") == "ZoomAttendeesList":
                         logger.error("Received ZoomAttendeesList JSON message: %s", json_data)
+                    elif json_data.get("type") == "CaptionUpdate":
+                        logger.debug("Received CaptionUpdate JSON message: %s", json_data)
                     else:
                         logger.info("Received JSON message: %s", json_data)
 
