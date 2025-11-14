@@ -12,6 +12,7 @@ class TestWebpageStreamerManager(unittest.TestCase):
         self.start_peer_connection_callback = MagicMock()
         self.play_bot_output_media_stream_callback = MagicMock()
         self.stop_bot_output_media_stream_callback = MagicMock()
+        self.on_message_that_webpage_streamer_connection_can_start_callback = MagicMock()
         self.webpage_streamer_service_hostname = "test-hostname"
 
         self.manager = WebpageStreamerManager(
@@ -19,10 +20,11 @@ class TestWebpageStreamerManager(unittest.TestCase):
             start_peer_connection_callback=self.start_peer_connection_callback,
             play_bot_output_media_stream_callback=self.play_bot_output_media_stream_callback,
             stop_bot_output_media_stream_callback=self.stop_bot_output_media_stream_callback,
+            on_message_that_webpage_streamer_connection_can_start_callback=self.on_message_that_webpage_streamer_connection_can_start_callback,
             webpage_streamer_service_hostname=self.webpage_streamer_service_hostname,
         )
 
-    def test_init(self):
+    def test_initialization(self):
         """Test initialization of WebpageStreamerManager."""
         self.assertIsNone(self.manager.url)
         self.assertIsNone(self.manager.last_non_empty_url)
@@ -30,11 +32,38 @@ class TestWebpageStreamerManager(unittest.TestCase):
         self.assertEqual(self.manager.get_peer_connection_offer_callback, self.get_peer_connection_offer_callback)
         self.assertEqual(self.manager.start_peer_connection_callback, self.start_peer_connection_callback)
         self.assertFalse(self.manager.cleaned_up)
-        self.assertIsNone(self.manager.webpage_streamer_keepalive_task)
+        self.assertIsNone(self.manager.keepalive_task)
         self.assertEqual(self.manager.webpage_streamer_service_hostname, self.webpage_streamer_service_hostname)
         self.assertEqual(self.manager.play_bot_output_media_stream_callback, self.play_bot_output_media_stream_callback)
         self.assertEqual(self.manager.stop_bot_output_media_stream_callback, self.stop_bot_output_media_stream_callback)
+        self.assertEqual(self.manager.on_message_that_webpage_streamer_connection_can_start_callback, self.on_message_that_webpage_streamer_connection_can_start_callback)
         self.assertFalse(self.manager.webrtc_connection_started)
+        self.assertFalse(self.manager.webpage_streamer_has_started)
+
+    @patch("bots.bot_controller.webpage_streamer_manager.threading.Thread")
+    def test_init_method(self, mock_thread):
+        """Test init method starts keepalive task."""
+        mock_thread_instance = Mock()
+        mock_thread.return_value = mock_thread_instance
+
+        self.manager.init()
+
+        mock_thread.assert_called_once()
+        mock_thread_instance.start.assert_called_once()
+        self.assertIsNotNone(self.manager.keepalive_task)
+
+    @patch("bots.bot_controller.webpage_streamer_manager.threading.Thread")
+    def test_init_method_called_twice(self, mock_thread):
+        """Test init method doesn't start keepalive task twice."""
+        mock_thread_instance = Mock()
+        mock_thread.return_value = mock_thread_instance
+
+        self.manager.init()
+        self.manager.init()
+
+        # Should only call thread once
+        mock_thread.assert_called_once()
+        mock_thread_instance.start.assert_called_once()
 
     def test_streaming_service_hostname_kubernetes(self):
         """Test streaming_service_hostname returns correct hostname for kubernetes."""
@@ -51,7 +80,7 @@ class TestWebpageStreamerManager(unittest.TestCase):
     @patch("bots.bot_controller.webpage_streamer_manager.threading.Thread")
     @patch("bots.bot_controller.webpage_streamer_manager.requests.post")
     def test_update_first_time_with_url(self, mock_post, mock_thread):
-        """Test update when streaming hasn't started yet."""
+        """Test update when streaming hasn't started yet - should return early."""
         # Mock the thread to prevent keepalive from actually running
         mock_thread_instance = Mock()
         mock_thread.return_value = mock_thread_instance
@@ -61,6 +90,35 @@ class TestWebpageStreamerManager(unittest.TestCase):
         mock_start_response = Mock()
         mock_start_response.status_code = 200
         mock_post.side_effect = [mock_offer_response, mock_start_response]
+
+        # When webpage_streamer_has_started is False, update should return early
+        self.manager.update("https://example.com", "screenshare")
+
+        # Nothing should be updated or called because it returned early
+        self.assertIsNone(self.manager.url)
+        self.assertIsNone(self.manager.output_destination)
+        self.assertIsNone(self.manager.last_non_empty_url)
+        self.get_peer_connection_offer_callback.assert_not_called()
+        self.start_peer_connection_callback.assert_not_called()
+        self.play_bot_output_media_stream_callback.assert_not_called()
+        self.assertFalse(self.manager.webrtc_connection_started)
+
+    @patch("bots.bot_controller.webpage_streamer_manager.threading.Thread")
+    @patch("bots.bot_controller.webpage_streamer_manager.requests.post")
+    def test_update_after_streamer_started(self, mock_post, mock_thread):
+        """Test update after webpage streamer has started."""
+        # Mock the thread to prevent keepalive from actually running
+        mock_thread_instance = Mock()
+        mock_thread.return_value = mock_thread_instance
+
+        mock_offer_response = Mock()
+        mock_offer_response.json.return_value = {"answer": "test_answer"}
+        mock_start_response = Mock()
+        mock_start_response.status_code = 200
+        mock_post.side_effect = [mock_offer_response, mock_start_response]
+
+        # Set streamer as started
+        self.manager.webpage_streamer_has_started = True
 
         self.manager.update("https://example.com", "screenshare")
 
@@ -79,6 +137,9 @@ class TestWebpageStreamerManager(unittest.TestCase):
         # Mock the thread to prevent keepalive from actually running
         mock_thread_instance = Mock()
         mock_thread.return_value = mock_thread_instance
+
+        # Set streamer as started
+        self.manager.webpage_streamer_has_started = True
 
         # First setup initial state
         mock_offer_response = Mock()
@@ -108,6 +169,9 @@ class TestWebpageStreamerManager(unittest.TestCase):
         mock_thread_instance = Mock()
         mock_thread.return_value = mock_thread_instance
 
+        # Set streamer as started
+        self.manager.webpage_streamer_has_started = True
+
         # First setup initial state
         mock_offer_response = Mock()
         mock_offer_response.json.return_value = {"answer": "test_answer"}
@@ -135,6 +199,9 @@ class TestWebpageStreamerManager(unittest.TestCase):
         # Mock the thread to prevent keepalive from actually running
         mock_thread_instance = Mock()
         mock_thread.return_value = mock_thread_instance
+
+        # Set streamer as started
+        self.manager.webpage_streamer_has_started = True
 
         # First setup initial state
         mock_offer_response = Mock()
@@ -167,6 +234,9 @@ class TestWebpageStreamerManager(unittest.TestCase):
         mock_thread_instance = Mock()
         mock_thread.return_value = mock_thread_instance
 
+        # Set streamer as started
+        self.manager.webpage_streamer_has_started = True
+
         # First setup initial state
         mock_offer_response = Mock()
         mock_offer_response.json.return_value = {"answer": "test_answer"}
@@ -192,6 +262,9 @@ class TestWebpageStreamerManager(unittest.TestCase):
         mock_thread_instance = Mock()
         mock_thread.return_value = mock_thread_instance
 
+        # Set streamer as started
+        self.manager.webpage_streamer_has_started = True
+
         # First setup initial state
         mock_offer_response = Mock()
         mock_offer_response.json.return_value = {"answer": "test_answer"}
@@ -212,14 +285,9 @@ class TestWebpageStreamerManager(unittest.TestCase):
         self.play_bot_output_media_stream_callback.assert_not_called()
         self.stop_bot_output_media_stream_callback.assert_not_called()
 
-    @patch("bots.bot_controller.webpage_streamer_manager.threading.Thread")
     @patch("bots.bot_controller.webpage_streamer_manager.requests.post")
-    def test_start_or_update_webrtc_connection_first_time(self, mock_post, mock_thread):
+    def test_start_or_update_webrtc_connection_first_time(self, mock_post):
         """Test starting WebRTC connection for the first time."""
-        # Mock the thread to prevent keepalive from actually running
-        mock_thread_instance = Mock()
-        mock_thread.return_value = mock_thread_instance
-
         mock_offer_response = Mock()
         mock_offer_response.json.return_value = {"answer": "test_answer"}
         mock_start_response = Mock()
@@ -231,8 +299,6 @@ class TestWebpageStreamerManager(unittest.TestCase):
         self.get_peer_connection_offer_callback.assert_called_once()
         self.start_peer_connection_callback.assert_called_once_with({"answer": "test_answer"})
         self.assertTrue(self.manager.webrtc_connection_started)
-        # Should start keepalive task
-        self.assertIsNotNone(self.manager.webpage_streamer_keepalive_task)
 
     @patch("bots.bot_controller.webpage_streamer_manager.requests.post")
     def test_start_or_update_webrtc_connection_with_error(self, mock_post):
@@ -260,8 +326,6 @@ class TestWebpageStreamerManager(unittest.TestCase):
         self.get_peer_connection_offer_callback.assert_called_once()
         self.start_peer_connection_callback.assert_called_once()
         self.assertFalse(self.manager.webrtc_connection_started)
-        # Should not start keepalive task
-        self.assertIsNone(self.manager.webpage_streamer_keepalive_task)
 
     @patch("bots.bot_controller.webpage_streamer_manager.requests.post")
     def test_update_webrtc_connection(self, mock_post):
@@ -339,7 +403,7 @@ class TestWebpageStreamerManager(unittest.TestCase):
     @patch("bots.bot_controller.webpage_streamer_manager.time.sleep")
     @patch("bots.bot_controller.webpage_streamer_manager.requests.post")
     def test_send_webpage_streamer_keepalive_periodically(self, mock_post, mock_sleep):
-        """Test keepalive task sends requests periodically."""
+        """Test keepalive task sends requests periodically and notifies when started."""
         mock_keepalive_response = Mock()
         mock_keepalive_response.status_code = 200
         mock_post.return_value = mock_keepalive_response
@@ -356,11 +420,15 @@ class TestWebpageStreamerManager(unittest.TestCase):
 
         self.manager.send_webpage_streamer_keepalive_periodically()
 
-        # Should have called sleep twice and sent one keepalive request
+        # Should have called sleep twice (10 seconds initially) and sent one keepalive request
         self.assertEqual(mock_sleep.call_count, 2)
+        self.assertEqual(mock_sleep.call_args_list[0], call(10))  # First call with 10 seconds
         mock_post.assert_called_once()
         call_args = mock_post.call_args
         self.assertIn("keepalive", call_args[0][0])
+        # Should have marked streamer as started and called the callback
+        self.assertTrue(self.manager.webpage_streamer_has_started)
+        self.on_message_that_webpage_streamer_connection_can_start_callback.assert_called_once()
 
     @patch("bots.bot_controller.webpage_streamer_manager.time.sleep")
     @patch("bots.bot_controller.webpage_streamer_manager.requests.post")
@@ -383,6 +451,8 @@ class TestWebpageStreamerManager(unittest.TestCase):
 
         self.assertEqual(mock_sleep.call_count, 2)
         mock_post.assert_called_once()
+        # Callback should not be called since keepalive failed
+        self.on_message_that_webpage_streamer_connection_can_start_callback.assert_not_called()
 
     @patch("bots.bot_controller.webpage_streamer_manager.time.sleep")
     @patch("bots.bot_controller.webpage_streamer_manager.requests.post")
@@ -400,8 +470,8 @@ class TestWebpageStreamerManager(unittest.TestCase):
 
         self.manager.send_webpage_streamer_keepalive_periodically()
 
-        # Should have called sleep once and not sent any keepalive (exited before check)
-        mock_sleep.assert_called_once_with(60)
+        # Should have called sleep once with 10 seconds (not started yet) and not sent any keepalive (exited before check)
+        mock_sleep.assert_called_once_with(10)
         mock_post.assert_not_called()
 
     @patch("bots.bot_controller.webpage_streamer_manager.threading.Thread")
@@ -412,6 +482,9 @@ class TestWebpageStreamerManager(unittest.TestCase):
         # Mock the thread to prevent keepalive from actually running
         mock_thread_instance = Mock()
         mock_thread.return_value = mock_thread_instance
+
+        # Set streamer as started
+        self.manager.webpage_streamer_has_started = True
 
         # First setup initial state
         mock_offer_response = Mock()
@@ -445,6 +518,9 @@ class TestWebpageStreamerManager(unittest.TestCase):
         mock_thread_instance = Mock()
         mock_thread.return_value = mock_thread_instance
 
+        # Set streamer as started
+        self.manager.webpage_streamer_has_started = True
+
         mock_offer_response = Mock()
         mock_offer_response.json.return_value = {"answer": "test_answer"}
         mock_start_response = Mock()
@@ -465,3 +541,30 @@ class TestWebpageStreamerManager(unittest.TestCase):
         self.manager.update("", "screenshare")
         # last_non_empty_url should still be the second URL
         self.assertEqual(self.manager.last_non_empty_url, "https://second.com")
+
+    @patch("bots.bot_controller.webpage_streamer_manager.time.sleep")
+    @patch("bots.bot_controller.webpage_streamer_manager.requests.post")
+    def test_keepalive_changes_sleep_duration_after_started(self, mock_post, mock_sleep):
+        """Test keepalive task sleeps for 10s initially and 60s after started."""
+        mock_keepalive_response = Mock()
+        mock_keepalive_response.status_code = 200
+        mock_post.return_value = mock_keepalive_response
+
+        call_count = [0]
+
+        def sleep_side_effect(seconds):
+            call_count[0] += 1
+            if call_count[0] >= 3:
+                self.manager.cleaned_up = True
+
+        mock_sleep.side_effect = sleep_side_effect
+
+        self.manager.send_webpage_streamer_keepalive_periodically()
+
+        # Should have called sleep 3 times: 10s (not started), 60s (after started), 60s (after started)
+        self.assertEqual(mock_sleep.call_count, 3)
+        self.assertEqual(mock_sleep.call_args_list[0], call(10))  # First call with 10 seconds
+        self.assertEqual(mock_sleep.call_args_list[1], call(60))  # Second call with 60 seconds
+        self.assertEqual(mock_sleep.call_args_list[2], call(60))  # Third call with 60 seconds
+        # Should have sent two keepalive requests
+        self.assertEqual(mock_post.call_count, 2)

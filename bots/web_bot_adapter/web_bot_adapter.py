@@ -722,8 +722,6 @@ class WebBotAdapter(BotAdapter):
 
         self.media_sending_enable_timestamp_ms = time.time() * 1000
 
-        self.ready_to_show_webpage_stream()
-
     def leave(self):
         if self.left_meeting:
             return
@@ -836,11 +834,11 @@ class WebBotAdapter(BotAdapter):
     def webpage_streamer_stop_bot_output_media_stream(self):
         self.driver.execute_script("window.botOutputManager.stopBotOutputMediaStream();")
 
+    def is_bot_ready_for_webpage_streamer(self):
+        return self.driver.execute_script("return window.botOutputManager.isReadyForWebpageStreamer();")
+
     def ready_to_show_bot_image(self):
         self.send_message_callback({"message": self.Messages.READY_TO_SHOW_BOT_IMAGE})
-
-    def ready_to_show_webpage_stream(self):
-        self.send_message_callback({"message": self.Messages.READY_TO_SHOW_WEBPAGE_STREAM})
 
     def get_first_buffer_timestamp_ms(self):
         if self.media_sending_enable_timestamp_ms is None:

@@ -10,12 +10,65 @@ import time
 
 import numpy as np
 from aiohttp import web
-from aiortc import RTCPeerConnection, RTCSessionDescription
+from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack
 from aiortc.contrib.media import MediaPlayer, MediaRelay
 from av.audio.frame import AudioFrame
 from pyvirtualdisplay import Display
 
 os.environ["PULSE_LATENCY_MSEC"] = "20"
+
+
+class LatestFrameTrack(VideoStreamTrack):
+    """
+    Wraps another VideoStreamTrack and always exposes the latest frame,
+    dropping older frames if we fall behind.
+
+    This gives "live-ish" behavior instead of slowly draining a backlog.
+    """
+
+    def __init__(self, source_track: VideoStreamTrack):
+        super().__init__()
+        self._source = source_track
+        self._queue = asyncio.Queue(maxsize=1)
+        self._reader_task = asyncio.create_task(self._reader())
+        self._stopped = False
+
+    async def _reader(self):
+        try:
+            while not self._stopped:
+                frame = await self._source.recv()
+
+                # Keep only the freshest frame in our queue
+                if self._queue.full():
+                    try:
+                        self._queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        pass
+
+                await self._queue.put(frame)
+        except Exception:
+            # Source ended or PC closed; just exit
+            pass
+
+    async def recv(self):
+        # Wait for the next frame that the reader has pulled
+        frame = await self._queue.get()
+
+        # Re-stamp timing using our own clock so aiortc sees this as real-time
+        pts, time_base = await self.next_timestamp()
+        frame.pts = pts
+        frame.time_base = time_base
+        return frame
+
+    async def stop(self):
+        self._stopped = True
+        if self._reader_task:
+            self._reader_task.cancel()
+            try:
+                await self._reader_task
+            except Exception:
+                pass
+        await super().stop()
 
 
 def audioframe_to_s16le_bytes(frame: AudioFrame, target_channels=2):
@@ -236,7 +289,8 @@ class WebpageStreamer:
             a_player = req.app["audio_player"]
 
             if v_player and v_player.video:
-                v_sender = pc.addTrack(v_player.video)
+                latest_video_track = LatestFrameTrack(v_player.video)
+                v_sender = pc.addTrack(latest_video_track)
                 # Hint the encoder for real-time, modest bitrate, no B-frames
                 try:
                     params = v_sender.getParameters()
@@ -324,7 +378,7 @@ class WebpageStreamer:
             "flags": "low_delay",
             "probesize": "32",
             "analyzeduration": "0",
-            "thread_queue_size": "64",
+            "thread_queue_size": "4",
             "draw_mouse": "0",
         }
         video_player = MediaPlayer(video_device, format=video_format, options=v_opts)

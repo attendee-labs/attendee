@@ -763,12 +763,15 @@ class BotController:
         self.webpage_streamer_manager = None
         if self.bot_in_db.should_launch_webpage_streamer():
             self.webpage_streamer_manager = WebpageStreamerManager(
+                is_bot_ready_for_webpage_streamer_callback=self.adapter.is_bot_ready_for_webpage_streamer,
                 get_peer_connection_offer_callback=self.adapter.webpage_streamer_get_peer_connection_offer,
                 start_peer_connection_callback=self.adapter.webpage_streamer_start_peer_connection,
                 play_bot_output_media_stream_callback=self.adapter.webpage_streamer_play_bot_output_media_stream,
                 stop_bot_output_media_stream_callback=self.adapter.webpage_streamer_stop_bot_output_media_stream,
+                on_message_that_webpage_streamer_connection_can_start_callback=self.on_message_that_webpage_streamer_connection_can_start,
                 webpage_streamer_service_hostname=self.bot_in_db.k8s_webpage_streamer_service_hostname(),
             )
+            self.webpage_streamer_manager.init()
 
         self.bot_resource_snapshot_taker = BotResourceSnapshotTaker(self.bot_in_db)
 
@@ -1248,6 +1251,9 @@ class BotController:
     def on_new_chat_message(self, chat_message):
         GLib.idle_add(lambda: self.upsert_chat_message(chat_message))
 
+    def on_message_that_webpage_streamer_connection_can_start(self):
+        GLib.idle_add(lambda: self.take_action_based_on_voice_agent_settings_in_db())
+
     def add_participant_event(self, event):
         logger.info(f"Adding participant event: {event}")
 
@@ -1679,13 +1685,6 @@ class BotController:
             # If there are any image media requests, this will start playing them
             # For now the only type of media request is an image, so this will start showing the bot's image
             self.take_action_based_on_image_media_requests_in_db()
-            return
-
-        if message.get("message") == BotAdapter.Messages.READY_TO_SHOW_WEBPAGE_STREAM:
-            logger.info("Received message that bot is ready to show webpage stream")
-            # If there are any webpage stream media requests, this will start playing them
-            # For now the only type of media request is a webpage stream, so this will start showing the bot's webpage stream
-            self.take_action_based_on_voice_agent_settings_in_db()
             return
 
         if message.get("message") == BotAdapter.Messages.BOT_RECORDING_PERMISSION_GRANTED:
