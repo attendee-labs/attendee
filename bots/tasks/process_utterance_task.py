@@ -26,6 +26,7 @@ def is_retryable_failure(failure_data):
 
 def get_transcription(utterance):
     try:
+        # Regular transcription providers that support post-processing
         if utterance.transcription_provider == TranscriptionProviders.DEEPGRAM:
             transcription, failure_data = get_transcription_via_deepgram(utterance)
         elif utterance.transcription_provider == TranscriptionProviders.GLADIA:
@@ -39,7 +40,7 @@ def get_transcription(utterance):
         elif utterance.transcription_provider == TranscriptionProviders.ELEVENLABS:
             transcription, failure_data = get_transcription_via_elevenlabs(utterance)
         else:
-            raise Exception(f"Unknown transcription provider: {utterance.transcription_provider}")
+            raise Exception(f"Unknown or streaming-only transcription provider: {utterance.transcription_provider}")
 
         return transcription, failure_data
     except Exception as e:

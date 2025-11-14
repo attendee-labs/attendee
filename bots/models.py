@@ -506,127 +506,6 @@ class RecordingViews(models.TextChoices):
     SPEAKER_VIEW_NO_SIDEBAR = "speaker_view_no_sidebar"
 
 
-class TranscriptionSettings:
-    def __init__(self, settings: dict):
-        self._settings = settings or {}
-
-    def openai_transcription_prompt(self):
-        return self._settings.get("openai", {}).get("prompt", None)
-
-    def openai_transcription_model(self):
-        default_model = os.getenv("OPENAI_MODEL_NAME", "gpt-4o-transcribe")
-        return self._settings.get("openai", {}).get("model", default_model)
-
-    def openai_transcription_language(self):
-        return self._settings.get("openai", {}).get("language", None)
-
-    def gladia_code_switching_languages(self):
-        return self._settings.get("gladia", {}).get("code_switching_languages", None)
-
-    def gladia_enable_code_switching(self):
-        return self._settings.get("gladia", {}).get("enable_code_switching", False)
-
-    def assembly_ai_language_code(self):
-        return self._settings.get("assembly_ai", {}).get("language_code", None)
-
-    def assembly_ai_language_detection(self):
-        return self._settings.get("assembly_ai", {}).get("language_detection", False)
-
-    def assemblyai_keyterms_prompt(self):
-        return self._settings.get("assembly_ai", {}).get("keyterms_prompt", None)
-
-    def assemblyai_speech_model(self):
-        return self._settings.get("assembly_ai", {}).get("speech_model", None)
-
-    def assemblyai_speaker_labels(self):
-        return self._settings.get("assembly_ai", {}).get("speaker_labels", False)
-
-    def assemblyai_base_url(self):
-        if os.getenv("ASSEMBLYAI_BASE_URL"):
-            return os.getenv("ASSEMBLYAI_BASE_URL")
-        use_eu_server = self._settings.get("assembly_ai", {}).get("use_eu_server", False)
-        if use_eu_server:
-            return "https://api.eu.assemblyai.com/v2"
-        return "https://api.assemblyai.com/v2"
-
-    def assemblyai_language_detection_options(self):
-        language_detection_options = self._settings.get("assembly_ai", {}).get("language_detection_options", None)
-        if not language_detection_options:
-            return None
-        return {
-            "expected_languages": language_detection_options.get("expected_languages", ["all"]),
-            "fallback_language": language_detection_options.get("fallback_language", "auto"),
-        }
-
-    def sarvam_language_code(self):
-        return self._settings.get("sarvam", {}).get("language_code", None)
-
-    def sarvam_model(self):
-        return self._settings.get("sarvam", {}).get("model", None)
-
-    def elevenlabs_model_id(self):
-        return self._settings.get("elevenlabs", {}).get("model_id", "scribe_v1")
-
-    def elevenlabs_language_code(self):
-        return self._settings.get("elevenlabs", {}).get("language_code", None)
-
-    def elevenlabs_tag_audio_events(self):
-        return self._settings.get("elevenlabs", {}).get("tag_audio_events", None)
-
-    def deepgram_language(self):
-        return self._settings.get("deepgram", {}).get("language", None)
-
-    def deepgram_detect_language(self):
-        return self._settings.get("deepgram", {}).get("detect_language", None)
-
-    def deepgram_callback(self):
-        return self._settings.get("deepgram", {}).get("callback", None)
-
-    def deepgram_keyterms(self):
-        return self._settings.get("deepgram", {}).get("keyterms", None)
-
-    def deepgram_keywords(self):
-        return self._settings.get("deepgram", {}).get("keywords", None)
-
-    def deepgram_use_streaming(self):
-        return self.deepgram_callback() is not None
-
-    def deepgram_model(self):
-        model_from_settings = self._settings.get("deepgram", {}).get("model", None)
-        if model_from_settings:
-            return model_from_settings
-
-        # nova-3 does not have multilingual support yet, so we need to use nova-2 if we're transcribing with a non-default language
-        if (self.deepgram_language() != "en" and self.deepgram_language()) or self.deepgram_detect_language():
-            deepgram_model = "nova-2"
-        else:
-            deepgram_model = "nova-3"
-
-        # Special case: we can use nova-3 for language=multi
-        if self.deepgram_language() == "multi":
-            deepgram_model = "nova-3"
-
-        return deepgram_model
-
-    def deepgram_redaction_settings(self):
-        return self._settings.get("deepgram", {}).get("redact", [])
-
-    def deepgram_replace_settings(self):
-        return self._settings.get("deepgram", {}).get("replace", [])
-
-    def google_meet_closed_captions_language(self):
-        return self._settings.get("meeting_closed_captions", {}).get("google_meet_language", None)
-
-    def teams_closed_captions_language(self):
-        return self._settings.get("meeting_closed_captions", {}).get("teams_language", None)
-
-    def zoom_closed_captions_language(self):
-        return self._settings.get("meeting_closed_captions", {}).get("zoom_language", None)
-
-    def meeting_closed_captions_merge_consecutive_captions(self):
-        return self._settings.get("meeting_closed_captions", {}).get("merge_consecutive_captions", False)
-
-
 class Bot(models.Model):
     OBJECT_ID_PREFIX = "bot_"
 
@@ -1772,6 +1651,151 @@ class TranscriptionProviders(models.IntegerChoices):
     ASSEMBLY_AI = 5, "Assembly AI"
     SARVAM = 6, "Sarvam"
     ELEVENLABS = 7, "ElevenLabs"
+    KYUTAI = 8, "Kyutai"
+
+
+class TranscriptionSettings:
+    def __init__(self, settings: dict):
+        self._settings = settings or {}
+
+    def openai_transcription_prompt(self):
+        return self._settings.get("openai", {}).get("prompt", None)
+
+    def openai_transcription_model(self):
+        default_model = os.getenv("OPENAI_MODEL_NAME", "gpt-4o-transcribe")
+        return self._settings.get("openai", {}).get("model", default_model)
+
+    def openai_transcription_language(self):
+        return self._settings.get("openai", {}).get("language", None)
+
+    def gladia_code_switching_languages(self):
+        return self._settings.get("gladia", {}).get("code_switching_languages", None)
+
+    def gladia_enable_code_switching(self):
+        return self._settings.get("gladia", {}).get("enable_code_switching", False)
+
+    def assembly_ai_language_code(self):
+        return self._settings.get("assembly_ai", {}).get("language_code", None)
+
+    def assembly_ai_language_detection(self):
+        return self._settings.get("assembly_ai", {}).get("language_detection", False)
+
+    def assemblyai_keyterms_prompt(self):
+        return self._settings.get("assembly_ai", {}).get("keyterms_prompt", None)
+
+    def assemblyai_speech_model(self):
+        return self._settings.get("assembly_ai", {}).get("speech_model", None)
+
+    def assemblyai_speaker_labels(self):
+        return self._settings.get("assembly_ai", {}).get("speaker_labels", False)
+
+    def assemblyai_base_url(self):
+        if os.getenv("ASSEMBLYAI_BASE_URL"):
+            return os.getenv("ASSEMBLYAI_BASE_URL")
+        use_eu_server = self._settings.get("assembly_ai", {}).get("use_eu_server", False)
+        if use_eu_server:
+            return "https://api.eu.assemblyai.com/v2"
+        return "https://api.assemblyai.com/v2"
+
+    def assemblyai_language_detection_options(self):
+        language_detection_options = self._settings.get("assembly_ai", {}).get("language_detection_options", None)
+        if not language_detection_options:
+            return None
+        return {
+            "expected_languages": language_detection_options.get("expected_languages", ["all"]),
+            "fallback_language": language_detection_options.get("fallback_language", "auto"),
+        }
+
+    def sarvam_language_code(self):
+        return self._settings.get("sarvam", {}).get("language_code", None)
+
+    def sarvam_model(self):
+        return self._settings.get("sarvam", {}).get("model", None)
+
+    def elevenlabs_model_id(self):
+        return self._settings.get("elevenlabs", {}).get("model_id", "scribe_v1")
+
+    def elevenlabs_language_code(self):
+        return self._settings.get("elevenlabs", {}).get("language_code", None)
+
+    def elevenlabs_tag_audio_events(self):
+        return self._settings.get("elevenlabs", {}).get("tag_audio_events", None)
+
+    def deepgram_language(self):
+        return self._settings.get("deepgram", {}).get("language", None)
+
+    def deepgram_detect_language(self):
+        return self._settings.get("deepgram", {}).get("detect_language", None)
+
+    def deepgram_callback(self):
+        return self._settings.get("deepgram", {}).get("callback", None)
+
+    def deepgram_keyterms(self):
+        return self._settings.get("deepgram", {}).get("keyterms", None)
+
+    def deepgram_keywords(self):
+        return self._settings.get("deepgram", {}).get("keywords", None)
+
+    def deepgram_use_streaming(self):
+        return self.deepgram_callback() is not None
+
+    def use_streaming(self, provider):
+        """
+        Determine if streaming should be used based on the transcription provider.
+        Returns True for Deepgram with streaming enabled or Kyutai (streaming-only).
+
+        Args:
+            provider: TranscriptionProviders enum value
+        """
+        if provider == TranscriptionProviders.KYUTAI:
+            return True
+        if provider == TranscriptionProviders.DEEPGRAM:
+            return self.deepgram_use_streaming()
+        return False
+
+    def deepgram_model(self):
+        model_from_settings = self._settings.get("deepgram", {}).get("model", None)
+        if model_from_settings:
+            return model_from_settings
+
+        # nova-3 does not have multilingual support yet, so we need to use nova-2 if we're transcribing with a non-default language
+        if (self.deepgram_language() != "en" and self.deepgram_language()) or self.deepgram_detect_language():
+            deepgram_model = "nova-2"
+        else:
+            deepgram_model = "nova-3"
+
+        # Special case: we can use nova-3 for language=multi
+        if self.deepgram_language() == "multi":
+            deepgram_model = "nova-3"
+
+        return deepgram_model
+
+    def deepgram_redaction_settings(self):
+        return self._settings.get("deepgram", {}).get("redact", [])
+
+    def deepgram_replace_settings(self):
+        return self._settings.get("deepgram", {}).get("replace", [])
+
+    def kyutai_model(self):
+        return self._settings.get("kyutai", {}).get("model", None)
+
+    def kyutai_server_url(self):
+        return self._settings.get("kyutai", {}).get("server_url", None)
+
+    def kyutai_api_key(self):
+        return self._settings.get("kyutai", {}).get("api_key", None)
+
+    def google_meet_closed_captions_language(self):
+        return self._settings.get("meeting_closed_captions", {}).get("google_meet_language", None)
+
+    def teams_closed_captions_language(self):
+        return self._settings.get("meeting_closed_captions", {}).get("teams_language", None)
+
+    def zoom_closed_captions_language(self):
+        return self._settings.get("meeting_closed_captions", {}).get("zoom_language", None)
+
+    def meeting_closed_captions_merge_consecutive_captions(self):
+        return self._settings.get("meeting_closed_captions", {}).get("merge_consecutive_captions", False)
 
 
 class RecordingStorage(Storage):
@@ -1993,6 +2017,7 @@ class TranscriptionFailureReasons(models.TextChoices):
     TRANSCRIPTION_REQUEST_FAILED = "transcription_request_failed"
     TIMED_OUT = "timed_out"
     INTERNAL_ERROR = "internal_error"
+    STREAMING_ONLY_PROVIDER = "streaming_only_provider"
     # This reason applies to the transcription operation as a whole, not a specific utterance
     UTTERANCES_STILL_IN_PROGRESS_WHEN_RECORDING_TERMINATED = "utterances_still_in_progress_when_recording_terminated"
     UTTERANCES_STILL_IN_PROGRESS_WHEN_TRANSCRIPTION_TERMINATED = "utterances_still_in_progress_when_transcription_terminated"
@@ -2212,6 +2237,7 @@ class Credentials(models.Model):
         TEAMS_BOT_LOGIN = 8, "Teams Bot Login"
         EXTERNAL_MEDIA_STORAGE = 9, "External Media Storage"
         ELEVENLABS = 10, "ElevenLabs"
+        KYUTAI = 11, "Kyutai"
 
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="credentials")
     credential_type = models.IntegerField(choices=CredentialTypes.choices, null=False)
