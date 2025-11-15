@@ -14,6 +14,12 @@ class StyleManager {
 
     addAudioTrack(audioTrack) {
         this.audioTracks.push(audioTrack);
+        if (this.audioTracks.length > 1) {
+            window.ws?.sendJson({
+                type: 'MultipleAudioTracksDetected',
+                numberOfTracks: this.audioTracks.length,
+            });
+        }
     }
 
     checkAudioActivity() {
@@ -2058,6 +2064,7 @@ const handleVideoTrack = async (event) => {
     }
   };
 
+  const globalAudioQueueIntervalsSet = new Set();
 
   const handleAudioTrack = async (event) => {
     let lastAudioFormat = null;  // Track last seen format
@@ -2111,11 +2118,22 @@ const handleVideoTrack = async (event) => {
 
     // Set up background processing every 100ms
     const queueProcessingInterval = setInterval(processAudioQueue, 100);
+    globalAudioQueueIntervalsSet.add(queueProcessingInterval);
+    if (globalAudioQueueIntervalsSet.size > 1) {
+        window.ws?.sendJson({
+            type: 'MultipleAudioQueuesDetected',
+            trackId: event.track?.id,
+        });
+    }
     
     // Clean up interval when track ends
     event.track.addEventListener('ended', () => {
         clearInterval(queueProcessingInterval);
         console.log('Audio track ended, cleared queue processing interval');
+        window.ws?.sendJson({
+            type: 'AudioTrackEnded',
+            trackId: event.track?.id,
+        });
     });
     
     try {
@@ -2211,6 +2229,11 @@ const handleVideoTrack = async (event) => {
                     return;
                   }
 
+                  // If we have multiple audio queues, we hit multiple audioTracks, so we're in an irregular state. Filter out non-zero audio data.
+                  if (globalAudioQueueIntervalsSet.size > 1 && !audioData.some(value => value !== 0)) {
+                    return;
+                  }
+
                   // Add to queue with timestamp - the background thread will process it
                   audioDataQueue.push({
                     audioArrivalTime: Date.now(),
@@ -2228,6 +2251,10 @@ const handleVideoTrack = async (event) => {
               console.log('Transform stream flush called');
               // Clear the interval when the stream ends
               clearInterval(queueProcessingInterval);
+              window.ws?.sendJson({
+                type: 'AudioQueueFlush',
+                trackId: event.track?.id,
+            });
           }
       });
   
@@ -2253,12 +2280,20 @@ const handleVideoTrack = async (event) => {
           abortController.abort();
           // Clear the interval on error
           clearInterval(queueProcessingInterval);
+          window.ws?.sendJson({
+            type: 'AudioQueueError',
+            trackId: event.track?.id,
+          });
       }
   
     } catch (error) {
         console.error('Error setting up audio interceptor:', error);
         // Clear the interval on error
         clearInterval(queueProcessingInterval);
+        window.ws?.sendJson({
+            type: 'AudioQueueError',
+            trackId: event.track?.id,
+        });
     }
   };
   

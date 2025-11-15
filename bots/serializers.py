@@ -1279,6 +1279,10 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
         if view not in [RecordingViews.SPEAKER_VIEW, RecordingViews.GALLERY_VIEW, RecordingViews.SPEAKER_VIEW_NO_SIDEBAR, None]:
             raise serializers.ValidationError({"view": "View must be speaker_view or gallery_view or speaker_view_no_sidebar"})
 
+        # You can only reserve additional storage if you're using Kubernetes to launch the bot
+        if value.get("reserve_additional_storage") and os.getenv("LAUNCH_BOT_METHOD") != "kubernetes":
+            raise serializers.ValidationError({"reserve_additional_storage": "Not supported unless using Kubernetes"})
+
         return value
 
     google_meet_settings = GoogleMeetSettingsJSONField(
