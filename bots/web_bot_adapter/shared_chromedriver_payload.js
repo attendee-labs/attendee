@@ -695,6 +695,10 @@ class BotOutputManager {
         }
     }
 
+    isReadyForWebpageStreamer() {
+        return !!window.styleManager.getMeetingAudioStream();
+    }
+
     async getBotOutputPeerConnectionOffer() {
         try
         {

@@ -11,10 +11,12 @@ logger = logging.getLogger(__name__)
 class WebpageStreamerManager:
     def __init__(
         self,
+        is_bot_ready_for_webpage_streamer_callback,
         get_peer_connection_offer_callback,
         start_peer_connection_callback,
         play_bot_output_media_stream_callback,
         stop_bot_output_media_stream_callback,
+        on_message_that_webpage_streamer_connection_can_start_callback,
         webpage_streamer_service_hostname,
     ):
         self.url = None
@@ -23,11 +25,21 @@ class WebpageStreamerManager:
         self.get_peer_connection_offer_callback = get_peer_connection_offer_callback
         self.start_peer_connection_callback = start_peer_connection_callback
         self.cleaned_up = False
-        self.webpage_streamer_keepalive_task = None
         self.webpage_streamer_service_hostname = webpage_streamer_service_hostname
+        self.is_bot_ready_for_webpage_streamer_callback = is_bot_ready_for_webpage_streamer_callback
         self.play_bot_output_media_stream_callback = play_bot_output_media_stream_callback
         self.stop_bot_output_media_stream_callback = stop_bot_output_media_stream_callback
+        self.on_message_that_webpage_streamer_connection_can_start_callback = on_message_that_webpage_streamer_connection_can_start_callback
         self.webrtc_connection_started = False
+        self.keepalive_task = None
+        self.webpage_streamer_connection_can_start = False
+
+    def init(self):
+        if self.keepalive_task is not None:
+            return
+
+        self.keepalive_task = threading.Thread(target=self.send_webpage_streamer_keepalive_periodically, daemon=True)
+        self.keepalive_task.start()
 
     # Possible cases:
     # 1. Streaming has not started yet.
@@ -35,6 +47,10 @@ class WebpageStreamerManager:
     # 3. Streaming has started. Output destination has changed.
     # 4. Streaming has started. URL and output destination have changed.
     def update(self, url, output_destination):
+        if not self.webpage_streamer_connection_can_start:
+            logger.info("In WebpageStreamerManager.update, Webpage streamer connection can not start yet. Not updating.")
+            return
+
         sleep_before_playing_bot_output_media_stream = False
         if url != self.url or output_destination != self.output_destination:
             if url:
@@ -109,24 +125,30 @@ class WebpageStreamerManager:
             logger.info(f"Failed to start streaming, not starting webpage streamer keepalive task. Response: {start_streaming_response.status_code}")
             return
 
-        # Start the keepalive task after successful streaming start
-        if self.webpage_streamer_keepalive_task is None or not self.webpage_streamer_keepalive_task.is_alive():
-            self.webpage_streamer_keepalive_task = threading.Thread(target=self.send_webpage_streamer_keepalive_periodically, daemon=True)
-            self.webpage_streamer_keepalive_task.start()
-
         self.webrtc_connection_started = True
 
     def send_webpage_streamer_keepalive_periodically(self):
-        """Send keepalive requests to the streaming service every 60 seconds."""
+        """Send keepalive requests to the streaming service periodically."""
         while not self.cleaned_up:
             try:
-                time.sleep(60)  # Wait 60 seconds between keepalive requests
+                if not self.webpage_streamer_connection_can_start:
+                    time.sleep(10)
+                else:
+                    time.sleep(60)  # Wait 60 seconds between keepalive requests if we know it's started
 
                 if self.cleaned_up:
                     break
 
                 response = requests.post(f"http://{self.streaming_service_hostname()}:8000/keepalive", json={})
                 logger.info(f"Webpage streamer keepalive response: {response.status_code}")
+                if response.status_code == 200 and not self.webpage_streamer_connection_can_start:
+                    bot_is_ready_for_webpage_streamer = self.is_bot_ready_for_webpage_streamer_callback()
+                    if bot_is_ready_for_webpage_streamer:
+                        logger.info("Webpage streamer has started and bot is ready for webpage streamer. Notifying bot controller.")
+                        self.webpage_streamer_connection_can_start = True
+                        self.on_message_that_webpage_streamer_connection_can_start_callback()
+                    else:
+                        logger.info("Webpage streamer has started but bot is not ready for webpage streamer. Not notifying bot controller.")
 
             except Exception as e:
                 logger.info(f"Failed to send webpage streamer keepalive: {e}")

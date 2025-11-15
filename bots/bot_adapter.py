@@ -24,7 +24,6 @@ class BotAdapter:
         JOINING_BREAKOUT_ROOM = "Joining breakout room"
         LEAVING_BREAKOUT_ROOM = "Leaving breakout room"
         BOT_RECORDING_PERMISSION_DENIED = "Bot recording permission denied"
-        READY_TO_SHOW_WEBPAGE_STREAM = "Ready to show webpage stream"
 
     class BOT_RECORDING_PERMISSION_DENIED_REASON:
         HOST_DENIED_PERMISSION = "HOST_DENIED_PERMISSION"
