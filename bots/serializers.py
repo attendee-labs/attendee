@@ -832,7 +832,18 @@ class BotChatMessageRequestSerializer(serializers.Serializer):
                 },
                 "required": ["url"],
                 "additionalProperties": False,
-            }
+            },
+            "per_participant_video": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "The URL of the websocket to use for receiving meeting video in real time and having the bot output video in real time. It must start with wss://. See https://docs.attendee.dev/guides/realtime-video-input-and-output for details on how to receive and send video through the websocket connection.",
+                    },
+                },
+                "required": ["url"],
+                "additionalProperties": False,
+            },
         },
         "required": [],
         "additionalProperties": False,
@@ -1168,7 +1179,18 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
                 },
                 "required": ["url"],
                 "additionalProperties": False,
-            }
+            },
+            "per_participant_video": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "The URL of the websocket to use for receiving meeting video in real time and having the bot output video in real time for each participant. It must start with wss://. See https://docs.attendee.dev/guides/realtime-video-input-and-output for details on how to receive and send video through the websocket connection.",
+                    },
+                },
+                "required": ["url"],
+                "additionalProperties": False,
+            },
         },
         "required": [],
         "additionalProperties": False,

@@ -54,7 +54,7 @@ from bots.models import (
 )
 from bots.webhook_payloads import chat_message_webhook_payload, participant_event_webhook_payload, utterance_webhook_payload
 from bots.webhook_utils import trigger_webhook
-from bots.websocket_payloads import mixed_audio_websocket_payload
+from bots.websocket_payloads import mixed_audio_websocket_payload, per_participant_video_websocket_payload
 from bots.zoom_oauth_connections_utils import get_zoom_tokens_via_zoom_oauth_app
 
 from .audio_output_manager import AudioOutputManager
@@ -137,6 +137,7 @@ class BotController:
             add_video_frame_callback=None,
             wants_any_video_frames_callback=None,
             add_mixed_audio_chunk_callback=self.add_mixed_audio_chunk_callback if self.pipeline_configuration.websocket_stream_audio else None,
+            add_per_participant_video_frame_callback=self.add_per_participant_video_frame_callback if self.pipeline_configuration.websocket_stream_video else None,
             upsert_caption_callback=self.closed_caption_manager.upsert_caption if self.save_utterances_for_closed_captions() else None,
             upsert_chat_message_callback=self.on_new_chat_message,
             add_participant_event_callback=self.add_participant_event,
@@ -173,6 +174,7 @@ class BotController:
             add_video_frame_callback=None,
             wants_any_video_frames_callback=None,
             add_mixed_audio_chunk_callback=self.add_mixed_audio_chunk_callback if self.pipeline_configuration.websocket_stream_audio else None,
+            add_per_participant_video_frame_callback=self.add_per_participant_video_frame_callback if self.pipeline_configuration.websocket_stream_video else None,
             upsert_caption_callback=self.closed_caption_manager.upsert_caption if self.save_utterances_for_closed_captions() else None,
             upsert_chat_message_callback=self.on_new_chat_message,
             add_participant_event_callback=self.add_participant_event,
@@ -236,6 +238,7 @@ class BotController:
             add_video_frame_callback=None,
             wants_any_video_frames_callback=None,
             add_mixed_audio_chunk_callback=self.add_mixed_audio_chunk_callback if self.pipeline_configuration.websocket_stream_audio else None,
+            add_per_participant_video_frame_callback=self.add_per_participant_video_frame_callback if self.pipeline_configuration.websocket_stream_video else None,
             upsert_caption_callback=self.closed_caption_manager.upsert_caption if self.save_utterances_for_closed_captions() else None,
             upsert_chat_message_callback=self.on_new_chat_message,
             add_participant_event_callback=self.add_participant_event,
@@ -249,7 +252,7 @@ class BotController:
             zoom_client_id=zoom_oauth_credentials["client_id"],
             zoom_client_secret=zoom_oauth_credentials["client_secret"],
             zoom_closed_captions_language=self.bot_in_db.transcription_settings.zoom_closed_captions_language(),
-            should_ask_for_recording_permission=self.pipeline_configuration.record_audio or self.pipeline_configuration.rtmp_stream_audio or self.pipeline_configuration.websocket_stream_audio or self.pipeline_configuration.record_video or self.pipeline_configuration.rtmp_stream_video,
+            should_ask_for_recording_permission=self.pipeline_configuration.record_audio or self.pipeline_configuration.rtmp_stream_audio or self.pipeline_configuration.websocket_stream_audio or self.pipeline_configuration.websocket_stream_video or self.pipeline_configuration.record_video or self.pipeline_configuration.rtmp_stream_video,
             record_chat_messages_when_paused=self.bot_in_db.record_chat_messages_when_paused(),
             disable_incoming_video=self.disable_incoming_video_for_web_bots(),
             zoom_tokens=zoom_tokens,
@@ -303,6 +306,22 @@ class BotController:
         )
 
         self.websocket_audio_client.send_async(payload)
+
+    def add_per_participant_video_frame_callback(self, frame: bytes, participant_id: str):
+        if not self.websocket_video_client:
+            return
+
+        if not self.websocket_video_client.started():
+            logger.info("Starting websocket video client...")
+            self.websocket_video_client.start()
+
+        payload = per_participant_video_websocket_payload(
+            frame=frame,
+            bot_object_id=self.bot_in_db.object_id,
+            participant_id=participant_id,
+        )
+
+        self.websocket_video_client.send_async(payload)
 
     def get_meeting_type(self):
         meeting_type = meeting_type_from_url(self.bot_in_db.meeting_url)
@@ -514,6 +533,9 @@ class BotController:
         if self.websocket_audio_client:
             logger.info("Telling websocket audio client to cleanup...")
             self.websocket_audio_client.cleanup()
+        if self.websocket_video_client:
+            logger.info("Telling websocket video client to cleanup...")
+            self.websocket_video_client.cleanup()
 
         if self.get_recording_file_location():
             self.upload_recording_to_external_media_storage_if_enabled()
@@ -586,8 +608,14 @@ class BotController:
             else:
                 return PipelineConfiguration.pure_transcription_bot()
 
-        if self.bot_in_db.websocket_audio_url():
+        if self.bot_in_db.websocket_audio_url() and not self.bot_in_db.websocket_per_participant_video_url():
             return PipelineConfiguration.recorder_bot_with_websocket_audio()
+
+        if self.bot_in_db.websocket_per_participant_video_url() and not self.bot_in_db.websocket_audio_url():
+            return PipelineConfiguration.recorder_bot_with_websocket_video()
+
+        if self.bot_in_db.websocket_audio_url() and self.bot_in_db.websocket_per_participant_video_url():
+            return PipelineConfiguration.recorder_bot_with_websocket_audio_and_video()
 
         return PipelineConfiguration.recorder_bot()
 
@@ -640,8 +668,11 @@ class BotController:
         elif meeting_type == MeetingTypes.TEAMS:
             return False
 
-    def should_create_websocket_client(self):
+    def should_create_websocket_audio_client(self):
         return self.pipeline_configuration.websocket_stream_audio
+
+    def should_create_websocket_video_client(self):
+        return self.pipeline_configuration.websocket_stream_video
 
     def should_create_screen_and_audio_recorder(self):
         # if we're not recording audio or video and not doing rtmp streaming, then we don't need to create a screen and audio recorder
@@ -741,10 +772,16 @@ class BotController:
             )
 
         self.websocket_audio_client = None
-        if self.should_create_websocket_client():
+        if self.should_create_websocket_audio_client():
             self.websocket_audio_client = BotWebsocketClient(
                 url=self.bot_in_db.websocket_audio_url(),
                 on_message_callback=self.on_message_from_websocket_audio,
+            )
+        self.websocket_video_client = None
+        if self.should_create_websocket_video_client():
+            self.websocket_video_client = BotWebsocketClient(
+                url=self.bot_in_db.websocket_per_participant_video_url(),
+                on_message_callback=None,
             )
 
         self.adapter = self.get_bot_adapter()

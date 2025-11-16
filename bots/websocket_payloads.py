@@ -47,3 +47,14 @@ def mixed_audio_websocket_payload(chunk: bytes, input_sample_rate: int, output_s
             "sample_rate": output_sample_rate,
         },
     }
+
+
+def per_participant_video_websocket_payload(frame: bytes, bot_object_id: str, participant_id: str) -> dict:
+    return {
+        "trigger": RealtimeTriggerTypes.type_to_api_code(RealtimeTriggerTypes.PER_PARTICIPANT_VIDEO_FRAME),
+        "bot_id": bot_object_id,
+        "data": {
+            "frame": b64encode(frame).decode("ascii"),
+            "participant_id": participant_id,
+        },
+    }

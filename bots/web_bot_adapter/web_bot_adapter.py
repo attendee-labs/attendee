@@ -38,6 +38,7 @@ class WebBotAdapter(BotAdapter):
         wants_any_video_frames_callback,
         add_audio_chunk_callback,
         add_mixed_audio_chunk_callback,
+        add_per_participant_video_frame_callback,
         add_encoded_mp4_chunk_callback,
         upsert_caption_callback,
         upsert_chat_message_callback,
@@ -55,6 +56,7 @@ class WebBotAdapter(BotAdapter):
         self.send_message_callback = send_message_callback
         self.add_audio_chunk_callback = add_audio_chunk_callback
         self.add_mixed_audio_chunk_callback = add_mixed_audio_chunk_callback
+        self.add_per_participant_video_frame_callback = add_per_participant_video_frame_callback
         self.add_video_frame_callback = add_video_frame_callback
         self.wants_any_video_frames_callback = wants_any_video_frames_callback
         self.add_encoded_mp4_chunk_callback = add_encoded_mp4_chunk_callback
@@ -250,6 +252,21 @@ class WebBotAdapter(BotAdapter):
 
             self.add_audio_chunk_callback(participant_id, datetime.datetime.utcnow(), audio_data.tobytes())
 
+    def process_per_participant_video_frame(self, message):
+        if self.recording_paused:
+            return
+
+        self.last_media_message_processed_time = time.time()
+        if len(message) > 12:
+            # Byte 5 contains the participant ID length
+            participant_id_length = int.from_bytes(message[4:5], byteorder="little")
+            participant_id = message[5 : 5 + participant_id_length].decode("utf-8")
+
+            # Get the video frame
+            video_frame = message[5 + participant_id_length :]
+
+            self.add_per_participant_video_frame_callback(video_frame, participant_id)
+
     def update_only_one_participant_in_meeting_at(self):
         if not self.joined_at:
             return
@@ -377,6 +394,8 @@ class WebBotAdapter(BotAdapter):
                     self.process_encoded_mp4_chunk(message)
                 elif message_type == 5:  # PER_PARTICIPANT_AUDIO
                     self.process_per_participant_audio_frame(message)
+                elif message_type == 6:  # PER_PARTICIPANT_VIDEO
+                    self.process_per_participant_video_frame(message)
 
                 self.last_websocket_message_processed_time = time.time()
         except Exception as e:
@@ -542,7 +561,7 @@ class WebBotAdapter(BotAdapter):
         self.driver = webdriver.Chrome(options=options)
         logger.info(f"web driver server initialized at port {self.driver.service.port}")
 
-        initial_data_code = f"window.initialData = {{websocketPort: {self.websocket_port}, videoFrameWidth: {self.video_frame_size[0]}, videoFrameHeight: {self.video_frame_size[1]}, botName: {json.dumps(self.display_name)}, addClickRipple: {'true' if self.should_create_debug_recording else 'false'}, recordingView: '{self.recording_view}', sendMixedAudio: {'true' if self.add_mixed_audio_chunk_callback else 'false'}, sendPerParticipantAudio: {'true' if self.add_audio_chunk_callback else 'false'}, collectCaptions: {'true' if self.upsert_caption_callback else 'false'}}}"
+        initial_data_code = f"window.initialData = {{websocketPort: {self.websocket_port}, videoFrameWidth: {self.video_frame_size[0]}, videoFrameHeight: {self.video_frame_size[1]}, botName: {json.dumps(self.display_name)}, addClickRipple: {'true' if self.should_create_debug_recording else 'false'}, recordingView: '{self.recording_view}', sendMixedAudio: {'true' if self.add_mixed_audio_chunk_callback else 'false'}, sendPerParticipantAudio: {'true' if self.add_audio_chunk_callback else 'false'}, sendPerParticipantVideo: {'true' if self.add_per_participant_video_frame_callback else 'false'}, collectCaptions: {'true' if self.upsert_caption_callback else 'false'}}}"
 
         # Define the CDN libraries needed
         CDN_LIBRARIES = ["https://cdnjs.cloudflare.com/ajax/libs/protobufjs/7.4.0/protobuf.min.js", "https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"]
