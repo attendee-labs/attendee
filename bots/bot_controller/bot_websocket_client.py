@@ -159,7 +159,8 @@ class BotWebsocketClient:
         while self.connection_state == self.CONNECTED:
             try:
                 message = self.websocket.recv()
-                self.on_message_callback(message)
+                if self.on_message_callback:
+                    self.on_message_callback(message)
             except ConnectionClosed:
                 logger.info("BotWebsocketClient connection closed. Leaving loop.")
                 break

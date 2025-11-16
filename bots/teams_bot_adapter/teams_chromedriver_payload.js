@@ -1101,7 +1101,8 @@ class WebSocketClient {
         VIDEO: 2,  // Reserved for future use
         AUDIO: 3,   // Reserved for future use
         ENCODED_MP4_CHUNK: 4,
-        PER_PARTICIPANT_AUDIO: 5
+        PER_PARTICIPANT_AUDIO: 5,
+        PER_PARTICIPANT_VIDEO: 6,
     };
   
     constructor() {

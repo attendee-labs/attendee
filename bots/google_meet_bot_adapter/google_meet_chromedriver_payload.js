@@ -18,10 +18,7 @@ class VideoFrameInterceptor {
     }
 
     onFrame(frame) {
-        window.ws?.sendJson({
-            type: "per_participant_video_frame",
-            ...frame,
-        });
+        window.ws?.sendPerParticipantVideo(frame.participantId, frame.dataUrl);
     }
   
     start() {
@@ -770,7 +767,7 @@ class StyleManager {
 
         this.startSilenceDetection();
 
-        if (window.initialData.sendPerParticipantVideo || true) {
+        if (window.initialData.sendPerParticipantVideo) {
             window.videoFrameInterceptor.start();
         }
 
@@ -1122,7 +1119,9 @@ class WebSocketClient {
       VIDEO: 2,
       AUDIO: 3,
       ENCODED_MP4_CHUNK: 4,
-      PER_PARTICIPANT_AUDIO: 5
+      PER_PARTICIPANT_AUDIO: 5,
+      PER_PARTICIPANT_VIDEO: 6,
+
   };
 
   constructor() {
@@ -1309,6 +1308,47 @@ class WebSocketClient {
       this.ws.send(message);
     } catch (error) {
       console.error('Error sending WebSocket video chunk:', error);
+    }
+  }
+
+  sendPerParticipantVideo(participantId, videoData) {
+    if (this.ws.readyState !== WebSocket.OPEN) {
+      console.error('WebSocket is not connected for per participant video send', this.ws.readyState);
+      return;
+    }
+
+    if (!this.mediaSendingEnabled) {
+      return;
+    }
+
+    try {
+        // Convert participantId to UTF-8 bytes
+        const participantIdBytes = new TextEncoder().encode(participantId);
+        
+        // Convert videoData string to UTF-8 bytes
+        const videoDataBytes = new TextEncoder().encode(videoData);
+        
+        // Create final message: type (4 bytes) + participantId length (1 byte) + 
+        // participantId bytes + video data
+        const message = new Uint8Array(4 + 1 + participantIdBytes.length + videoDataBytes.length);
+        const dataView = new DataView(message.buffer);
+        
+        // Set message type (6 for PER_PARTICIPANT_VIDEO)
+        dataView.setInt32(0, WebSocketClient.MESSAGE_TYPES.PER_PARTICIPANT_VIDEO, true);
+        
+        // Set participantId length as uint8 (1 byte)
+        dataView.setUint8(4, participantIdBytes.length);
+        
+        // Copy participantId bytes
+        message.set(participantIdBytes, 5);
+        
+        // Copy video data after type, length and participantId
+        message.set(videoDataBytes, 5 + participantIdBytes.length);
+        
+        // Send the binary message
+        this.ws.send(message.buffer);
+    } catch (error) {
+        console.error('Error sending WebSocket video message:', error);
     }
   }
 
