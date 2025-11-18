@@ -13,6 +13,7 @@ from bots.utils import png_to_yuv420_frame, scale_i420
 
 from .mp4_demuxer import MP4Demuxer
 from .video_input_manager import VideoInputManager
+from .periodic_multi_participant_video_subscriber import PeriodicMultiParticipantVideoSubscriber
 
 gi.require_version("GLib", "2.0")
 import logging
@@ -68,6 +69,7 @@ class ZoomBotAdapter(BotAdapter):
         add_video_frame_callback,
         wants_any_video_frames_callback,
         add_mixed_audio_chunk_callback,
+        add_per_participant_video_frame_callback,
         upsert_chat_message_callback,
         add_participant_event_callback,
         automatic_leave_configuration: AutomaticLeaveConfiguration,
@@ -83,6 +85,7 @@ class ZoomBotAdapter(BotAdapter):
         self.send_message_callback = send_message_callback
         self.add_audio_chunk_callback = add_audio_chunk_callback
         self.add_mixed_audio_chunk_callback = add_mixed_audio_chunk_callback
+        self.add_per_participant_video_frame_callback = add_per_participant_video_frame_callback
         self.add_video_frame_callback = add_video_frame_callback
         self.wants_any_video_frames_callback = wants_any_video_frames_callback
         self.upsert_chat_message_callback = upsert_chat_message_callback
@@ -148,6 +151,11 @@ class ZoomBotAdapter(BotAdapter):
             )
         else:
             self.video_input_manager = None
+
+        self.periodic_multi_participant_video_subscriber = PeriodicMultiParticipantVideoSubscriber(
+            get_participant_ids_callback= lambda: self.participants_ctrl.GetParticipantsList(),
+            frame_callback=self.add_per_participant_video_frame_callback,
+        )
 
         self.meeting_sharing_controller = None
         self.meeting_share_ctrl_event = None
@@ -285,6 +293,8 @@ class ZoomBotAdapter(BotAdapter):
 
         if not self.video_input_manager:
             return
+
+        self.periodic_multi_participant_video_subscriber.start()
 
         logger.info(f"set_video_input_manager_based_on_state self.active_speaker_id = {self.active_speaker_id}, self.active_sharer_id = {self.active_sharer_id}, self.active_sharer_source_id = {self.active_sharer_source_id}")
         if self.active_sharer_id:
