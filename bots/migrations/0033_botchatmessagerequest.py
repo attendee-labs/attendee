@@ -16,7 +16,7 @@ class Migration(migrations.Migration):
             fields=[
                 ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
                 ('to_user_uuid', models.CharField(blank=True, max_length=255, null=True)),
-                ('to', models.CharField(choices=[('everyone', 'Everyone'), ('specific_user', 'Specific User'), ('everyone_but_host', 'Everyone But Host')])),
+                ('to', models.CharField(max_length=50, choices=[('everyone', 'Everyone'), ('specific_user', 'Specific User'), ('everyone_but_host', 'Everyone But Host')])),
                 ('message', models.TextField()),
                 ('additional_data', models.JSONField(default=dict)),
                 ('state', models.IntegerField(choices=[(1, 'Enqueued'), (2, 'Sent'), (3, 'Failed')], default=1)),

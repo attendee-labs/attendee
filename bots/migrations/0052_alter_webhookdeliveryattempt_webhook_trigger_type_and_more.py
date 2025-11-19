@@ -2,7 +2,45 @@
 
 import concurrency.fields
 import django.db.models.deletion
-from django.db import migrations, models
+from django.db import connection, migrations, models
+
+
+def add_calendar_constraints(apps, schema_editor):
+    """Add unique constraints - skip for MariaDB/MySQL due to foreign key constraint ordering issues"""
+    if connection.vendor == 'mysql':
+        # MariaDB/MySQL: Skip adding these constraints in migration
+        # Application code should enforce uniqueness for these fields
+        pass
+    else:
+        # PostgreSQL: Add unique constraints
+        Calendar = apps.get_model('bots', 'Calendar')
+        CalendarEvent = apps.get_model('bots', 'CalendarEvent')
+        schema_editor.add_constraint(
+            Calendar,
+            models.UniqueConstraint(fields=('project', 'deduplication_key'), name='unique_calendar_deduplication_key')
+        )
+        schema_editor.add_constraint(
+            CalendarEvent,
+            models.UniqueConstraint(fields=('calendar', 'platform_uuid'), name='unique_calendar_event_platform_uuid')
+        )
+
+
+def remove_calendar_constraints(apps, schema_editor):
+    """Remove constraints on migration rollback"""
+    if connection.vendor == 'mysql':
+        # Nothing to remove for MySQL
+        pass
+    else:
+        Calendar = apps.get_model('bots', 'Calendar')
+        CalendarEvent = apps.get_model('bots', 'CalendarEvent')
+        schema_editor.remove_constraint(
+            Calendar,
+            models.UniqueConstraint(fields=('project', 'deduplication_key'), name='unique_calendar_deduplication_key')
+        )
+        schema_editor.remove_constraint(
+            CalendarEvent,
+            models.UniqueConstraint(fields=('calendar', 'platform_uuid'), name='unique_calendar_event_platform_uuid')
+        )
 
 
 class Migration(migrations.Migration):
@@ -43,11 +81,6 @@ class Migration(migrations.Migration):
                 ('project', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='calendars', to='bots.project')),
             ],
         ),
-        migrations.AddField(
-            model_name='webhookdeliveryattempt',
-            name='calendar',
-            field=models.ForeignKey(null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='webhook_delivery_attempts', to='bots.calendar'),
-        ),
         migrations.CreateModel(
             name='CalendarEvent',
             fields=[
@@ -68,16 +101,14 @@ class Migration(migrations.Migration):
             ],
         ),
         migrations.AddField(
+            model_name='webhookdeliveryattempt',
+            name='calendar',
+            field=models.ForeignKey(null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='webhook_delivery_attempts', to='bots.calendar'),
+        ),
+        migrations.AddField(
             model_name='bot',
             name='calendar_event',
             field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='bots', to='bots.calendarevent'),
         ),
-        migrations.AddConstraint(
-            model_name='calendar',
-            constraint=models.UniqueConstraint(fields=('project', 'deduplication_key'), name='unique_calendar_deduplication_key'),
-        ),
-        migrations.AddConstraint(
-            model_name='calendarevent',
-            constraint=models.UniqueConstraint(fields=('calendar', 'platform_uuid'), name='unique_calendar_event_platform_uuid'),
-        ),
+        migrations.RunPython(add_calendar_constraints, remove_calendar_constraints, atomic=False),
     ]

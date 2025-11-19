@@ -36,6 +36,7 @@ outcome==1.3.0.post0
 packaging==24.2
 prompt_toolkit==3.0.48
 psycopg2==2.9.10
+mysqlclient==2.2.4
 pycparser==2.22
 pydub==0.25.1
 PyJWT==2.9.0

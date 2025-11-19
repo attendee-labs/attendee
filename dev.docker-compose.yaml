@@ -6,13 +6,23 @@ services:
     networks:
       - attendee_network
     environment:
+      - DB_ENGINE=${DB_ENGINE:-postgresql}
+      - DB_HOST=${DB_HOST:-postgres}
+      - DB_PORT=${DB_PORT:-5432}
+      - DB_NAME=${DB_NAME:-attendee_development}
+      - DB_USER=${DB_USER:-attendee_development_user}
+      - DB_PASSWORD=${DB_PASSWORD:-attendee_development_user}
       - POSTGRES_HOST=postgres
       - REDIS_URL=redis://redis:6379/5
       - DJANGO_SETTINGS_MODULE=attendee.settings.development
       - ENABLE_CHROME_SANDBOX=true
+      - AWS_ENDPOINT_URL=${AWS_ENDPOINT_URL:-}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+      - AWS_RECORDING_STORAGE_BUCKET_NAME=${AWS_RECORDING_STORAGE_BUCKET_NAME:-}
     command: "celery -A attendee worker -l INFO"
     security_opt:
-      - seccomp=./bots/web_bot_adapter/chrome_seccomp.json
+      - seccomp=${PWD}/bots/web_bot_adapter/chrome_seccomp.json
 
   attendee-scheduler-local:
     build: ./
@@ -21,9 +31,19 @@ services:
     networks:
       - attendee_network
     environment:
+      - DB_ENGINE=${DB_ENGINE:-postgresql}
+      - DB_HOST=${DB_HOST:-postgres}
+      - DB_PORT=${DB_PORT:-5432}
+      - DB_NAME=${DB_NAME:-attendee_development}
+      - DB_USER=${DB_USER:-attendee_development_user}
+      - DB_PASSWORD=${DB_PASSWORD:-attendee_development_user}
       - POSTGRES_HOST=postgres
       - REDIS_URL=redis://redis:6379/5
       - DJANGO_SETTINGS_MODULE=attendee.settings.development
+      - AWS_ENDPOINT_URL=${AWS_ENDPOINT_URL:-}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+      - AWS_RECORDING_STORAGE_BUCKET_NAME=${AWS_RECORDING_STORAGE_BUCKET_NAME:-}
     command: "python manage.py run_scheduler"
     entrypoint: []
 
@@ -36,9 +56,19 @@ services:
     ports:
       - "8000:8000"
     environment:
+      - DB_ENGINE=${DB_ENGINE:-postgresql}
+      - DB_HOST=${DB_HOST:-postgres}
+      - DB_PORT=${DB_PORT:-5432}
+      - DB_NAME=${DB_NAME:-attendee_development}
+      - DB_USER=${DB_USER:-attendee_development_user}
+      - DB_PASSWORD=${DB_PASSWORD:-attendee_development_user}
       - POSTGRES_HOST=postgres
       - REDIS_URL=redis://redis:6379/5
       - DJANGO_SETTINGS_MODULE=attendee.settings.development
+      - AWS_ENDPOINT_URL=${AWS_ENDPOINT_URL:-}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+      - AWS_RECORDING_STORAGE_BUCKET_NAME=${AWS_RECORDING_STORAGE_BUCKET_NAME:-}
     command: python manage.py runserver 0.0.0.0:8000
     entrypoint: []
 
@@ -53,11 +83,57 @@ services:
     environment:
       - DJANGO_SETTINGS_MODULE=attendee.settings.development
       - ENABLE_CHROME_SANDBOX=true
+      - AWS_ENDPOINT_URL=${AWS_ENDPOINT_URL:-}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+      - AWS_RECORDING_STORAGE_BUCKET_NAME=${AWS_RECORDING_STORAGE_BUCKET_NAME:-}
     command: "python bots/webpage_streamer/run_webpage_streamer.py"
     security_opt:
-      - seccomp=./bots/web_bot_adapter/chrome_seccomp.json
+      - seccomp:unconfined
     profiles:
       - webpage-streamer
+
+  # MinIO for S3-compatible object storage
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio:/data
+    networks:
+      - attendee_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    profiles:
+      - minio
+
+  # MariaDB as an alternative to PostgreSQL
+  mariadb:
+    image: mariadb:11.2
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-rootpassword}
+      MYSQL_DATABASE: ${DB_NAME:-attendee_development}
+      MYSQL_USER: ${DB_USER:-attendee_user}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-rootpassword}
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - mariadb:/var/lib/mysql
+    networks:
+      - attendee_network
+    restart: unless-stopped
+    ports:
+      - "3306:3306"
+    profiles:
+      - mariadb
 
 
   postgres:
@@ -89,3 +165,5 @@ networks:
 volumes:
   postgres:
   redis:
+  mariadb:
+  minio:

@@ -2456,7 +2456,7 @@ class BotChatMessageRequest(models.Model):
     bot = models.ForeignKey(Bot, on_delete=models.CASCADE, related_name="chat_message_requests")
 
     to_user_uuid = models.CharField(max_length=255, null=True, blank=True)
-    to = models.CharField(choices=BotChatMessageToOptions.choices, null=False)
+    to = models.CharField(max_length=50, choices=BotChatMessageToOptions.choices, null=False)
 
     message = models.TextField(null=False)
     additional_data = models.JSONField(null=False, default=dict)
