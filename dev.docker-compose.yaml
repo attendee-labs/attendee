@@ -22,7 +22,7 @@ services:
       - AWS_RECORDING_STORAGE_BUCKET_NAME=${AWS_RECORDING_STORAGE_BUCKET_NAME:-}
     command: "celery -A attendee worker -l INFO"
     security_opt:
-      - seccomp=unconfined
+      - seccomp=${PWD}/bots/web_bot_adapter/chrome_seccomp.json
 
   attendee-scheduler-local:
     build: ./
