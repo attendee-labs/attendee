@@ -44,7 +44,8 @@ RUN apt-get update  \
     unzip \
     zip \
     vim \
-    libpq-dev
+    libpq-dev \
+    default-libmysqlclient-dev
 
 # Install Chrome dependencies
 RUN apt-get install -y xvfb x11-xkb-utils xfonts-100dpi xfonts-75dpi xfonts-scalable xfonts-cyrillic x11-apps libvulkan1 fonts-liberation xdg-utils wget
@@ -80,6 +81,7 @@ RUN apt-get update && apt-get install -y xmlsec1
 RUN apt-get update && apt-get install -y xclip
 
 # Install python dependencies
+RUN pip install --upgrade pip setuptools wheel
 RUN pip install pyjwt cython gdown python-dotenv
 
 # Install libavdevice-dev. Needed so that webpage streaming using pyav will work.
