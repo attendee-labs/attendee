@@ -10,7 +10,7 @@ services:
       - REDIS_URL=redis://redis:6379/5
       - DJANGO_SETTINGS_MODULE=attendee.settings.development
       - ENABLE_CHROME_SANDBOX=true
-    command: "celery -A attendee worker -l INFO"
+    command: "celery -A attendee worker -l INFO --max-tasks-per-child=2"
     security_opt:
       - seccomp=./bots/web_bot_adapter/chrome_seccomp.json
 
