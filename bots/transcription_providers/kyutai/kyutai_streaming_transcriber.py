@@ -203,6 +203,7 @@ class KyutaiStreamingTranscriber:
 
         # Track when audio was last sent (used for monitoring/cleanup)
         self.last_send_time = time.time()
+        self.last_utterance_time = time.time()  # Track when last utterance was emitted
 
         # WebSocket connection state
         self.ws = None
@@ -352,7 +353,13 @@ class KyutaiStreamingTranscriber:
             if not self.should_stop:
                 logger.error(f"[{self._participant_name}] Error in receiver loop: {e}", exc_info=True)
         finally:
+            # Clean up connection state
             self.connected = False
+            
+            # Trigger reconnection if this wasn't an intentional shutdown
+            if not self.should_stop:
+                self.reconnecting = True
+                asyncio.create_task(self._connect())
 
     async def _sender_loop(self):
         """Send messages from queue with frame-based timing control."""
@@ -747,6 +754,8 @@ class KyutaiStreamingTranscriber:
             def run_callback():
                 try:
                     self.save_utterance_callback(transcript_text, metadata)
+                    # Update last utterance time after successful emission
+                    self.last_utterance_time = time.time()
                 except Exception as e:
                     logger.error(f"Error in save_utterance_callback: {e}", exc_info=True)
 
