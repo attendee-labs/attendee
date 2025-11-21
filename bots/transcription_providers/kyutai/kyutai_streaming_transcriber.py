@@ -203,7 +203,6 @@ class KyutaiStreamingTranscriber:
 
         # Track when audio was last sent (used for monitoring/cleanup)
         self.last_send_time = time.time()
-        self.last_utterance_time = time.time()  # Track when last utterance was emitted
 
         # WebSocket connection state
         self.ws = None
@@ -754,8 +753,6 @@ class KyutaiStreamingTranscriber:
             def run_callback():
                 try:
                     self.save_utterance_callback(transcript_text, metadata)
-                    # Update last utterance time after successful emission
-                    self.last_utterance_time = time.time()
                 except Exception as e:
                     logger.error(f"Error in save_utterance_callback: {e}", exc_info=True)
 
