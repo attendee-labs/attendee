@@ -151,12 +151,7 @@ class PerParticipantStreamingAudioInputManager:
             return self.streaming_transcribers[speaker_id]
 
         # Create new transcriber
-        participant_info = self.get_participant_callback(speaker_id)
-        if participant_info is None:
-            logger.warning(f"Participant info not found for speaker {speaker_id}, using empty metadata")
-            participant_info = {}
-        
-        metadata = {"bot_id": self.bot.object_id, **(self.bot.metadata or {}), **participant_info}
+        metadata = {"bot_id": self.bot.object_id, **(self.bot.metadata or {}), **self.get_participant_callback(speaker_id)}
         participant_name = metadata.get("participant_full_name", speaker_id)
 
         logger.info(f"Creating streaming transcriber for speaker {speaker_id} ({participant_name})")
@@ -188,8 +183,16 @@ class PerParticipantStreamingAudioInputManager:
             # Create transcriber if needed
             streaming_transcriber = self.find_or_create_streaming_transcriber_for_speaker(speaker_id)
             if streaming_transcriber:
-                # Send audio - transcriber handles reconnection internally
-                streaming_transcriber.send(chunk_bytes)
+                # Send audio
+                try:
+                    streaming_transcriber.send(chunk_bytes)
+                except Exception as e:
+                    participant_info = self.get_participant_callback(speaker_id)
+                    participant_name = participant_info.get("participant_full_name", speaker_id) if participant_info else speaker_id
+                    logger.info(f"Recreating transcriber for speaker {speaker_id} ({participant_name}) after connection failure: {e}")
+                    # Remove failed transcriber so it will be recreated on next chunk
+                    if speaker_id in self.streaming_transcribers:
+                        del self.streaming_transcribers[speaker_id]
         else:
             # Deepgram and other providers: use VAD pre-filtering
             audio_is_silent = self.silence_detected(chunk_bytes)
@@ -226,26 +229,6 @@ class PerParticipantStreamingAudioInputManager:
                 speakers_to_remove.append(speaker_id)
                 logger.info(f"Speaker {speaker_id} has been silent for too long, stopping streaming transcriber")
                 continue
-
-            # For Kyutai: Detect zombie transcribers (receiving audio but not producing output)
-            # This catches cases where the WebSocket connection dies silently
-            if self.transcription_provider == TranscriptionProviders.KYUTAI:
-                # Check if transcriber has last_utterance_time attribute (for Kyutai)
-                if hasattr(streaming_transcriber, 'last_utterance_time') and hasattr(streaming_transcriber, 'last_send_time'):
-                    # If we're actively sending audio (last 5 seconds) but haven't gotten an utterance in 30 seconds
-                    time_since_last_send = time.time() - streaming_transcriber.last_send_time
-                    time_since_last_utterance = time.time() - streaming_transcriber.last_utterance_time
-                    
-                    if time_since_last_send < 5.0 and time_since_last_utterance > 30.0:
-                        participant_info = self.get_participant_callback(speaker_id)
-                        participant_name = participant_info.get("participant_full_name", speaker_id) if participant_info else speaker_id
-                        logger.warning(
-                            f"Detected zombie transcriber for {speaker_id} ({participant_name}): "
-                            f"receiving audio (last send {time_since_last_send:.1f}s ago) but no utterances "
-                            f"for {time_since_last_utterance:.1f}s. Recreating transcriber."
-                        )
-                        speakers_to_remove.append(speaker_id)
-                        continue
 
         for speaker_id in speakers_to_remove:
             if speaker_id in self.streaming_transcribers:
