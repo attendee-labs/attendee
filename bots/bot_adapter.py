@@ -26,6 +26,11 @@ class BotAdapter:
         BOT_RECORDING_PERMISSION_DENIED = "Bot recording permission denied"
         READY_TO_SHOW_WEBPAGE_STREAM = "Ready to show webpage stream"
 
+        # App session messages
+        APP_SESSION_CONNECTED = "App session connected"
+        APP_SESSION_DISCONNECT_REQUESTED = "App session disconnect requested"
+        APP_SESSION_DISCONNECTED = "App session disconnected"
+
     class BOT_RECORDING_PERMISSION_DENIED_REASON:
         HOST_DENIED_PERMISSION = "HOST_DENIED_PERMISSION"
         REQUEST_TIMED_OUT = "REQUEST_TIMED_OUT"

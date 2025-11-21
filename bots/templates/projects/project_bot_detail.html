@@ -94,17 +94,28 @@
 
 <div class="container mt-4">
     <div class="d-flex justify-content-between align-items-center mb-4">
-        <h2 class="mb-0">Bot Details</h2>
-        <a href="{% url 'projects:project-bots' project.object_id %}" 
-           class="btn btn-outline-secondary">
-            <i class="bi bi-arrow-left"></i> Back to Bots
-        </a>
+        {% if bot.session_type == SessionTypes.BOT %}
+            <h2 class="mb-0">Bot Details</h2>
+            <a href="{% url 'projects:project-bots' project.object_id %}" 
+            class="btn btn-outline-secondary">
+                <i class="bi bi-arrow-left"></i> Back to Bots
+            </a>
+        {% endif %}
+        {% if bot.session_type == SessionTypes.APP_SESSION %}
+            <h2 class="mb-0">App Session Details</h2>
+            <a href="{% url 'projects:project-app-sessions' project.object_id %}" 
+            class="btn btn-outline-secondary">
+                <i class="bi bi-arrow-left"></i> Back to App Sessions
+            </a>
+        {% endif %}
     </div>
 
     <div class="row mb-4">
         <div class="col-md-6">
             <p><strong>ID:</strong> {{ bot.object_id }}</p>
-            <p><strong>Name:</strong> {{ bot.name }}</p>
+            {% if bot.session_type == SessionTypes.BOT %}
+                <p><strong>Name:</strong> {{ bot.name }}</p>
+            {% endif %}
             <p><strong>Created:</strong> {{ bot.created_at|date:"M d, Y H:i" }}</p>
             {% if bot.join_at %}
                 <p><strong>Join at:</strong> {{ bot.join_at|date:"M d, Y H:i" }}
@@ -115,7 +126,9 @@
             {% endif %}
         </div>
         <div class="col-md-6">
-            <p><strong>Meeting URL:</strong> {{ bot.meeting_url }}</p>
+            {% if bot.session_type == SessionTypes.BOT %}
+                <p><strong>Meeting URL:</strong> {{ bot.meeting_url }}</p>
+            {% endif %}
             <p><strong>Status:</strong> 
                 <span class="badge {% if bot.state == BotStates.READY %}bg-warning{% elif bot.state == BotStates.FATAL_ERROR %}bg-danger{% elif bot.state == BotStates.ENDED %}bg-secondary{% else %}bg-success{% endif %}">
                     {{ bot.get_state_display }}
@@ -280,7 +293,7 @@
                     {% endfor %}
                 </div>
             {% else %}
-                <div class="alert alert-info">The bot did not record any chat messages.</div>
+                <div class="alert alert-info">No chat messages recorded.</div>
             {% endif %}
         </div>
 

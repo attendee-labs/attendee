@@ -56,6 +56,7 @@ from bots.webhook_payloads import chat_message_webhook_payload, participant_even
 from bots.webhook_utils import trigger_webhook
 from bots.websocket_payloads import mixed_audio_websocket_payload
 from bots.zoom_oauth_connections_utils import get_zoom_tokens_via_zoom_oauth_app
+from bots.zoom_rtms_adapter.rtms_gstreamer_pipeline import RTMSGstreamerPipeline
 
 from .audio_output_manager import AudioOutputManager
 from .azure_file_uploader import AzureFileUploader
@@ -293,6 +294,34 @@ class BotController:
             record_chat_messages_when_paused=self.bot_in_db.record_chat_messages_when_paused(),
         )
 
+    def get_zoom_rtms_adapter(self):
+        from bots.zoom_rtms_adapter import ZoomRTMSAdapter
+
+        zoom_oauth_credentials, zoom_tokens = self.get_zoom_oauth_credentials_and_tokens()
+
+        if self.get_recording_transcription_provider() == TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM:
+            add_audio_chunk_callback = None
+        else:
+            add_audio_chunk_callback = self.per_participant_audio_input_manager().add_chunk
+
+        return ZoomRTMSAdapter(
+            use_one_way_audio=self.pipeline_configuration.transcribe_audio,
+            use_mixed_audio=self.pipeline_configuration.record_audio or self.pipeline_configuration.rtmp_stream_audio or self.pipeline_configuration.websocket_stream_audio,
+            use_video=self.pipeline_configuration.record_video or self.pipeline_configuration.rtmp_stream_video,
+            send_message_callback=self.on_message_from_adapter,
+            add_audio_chunk_callback=add_audio_chunk_callback,
+            upsert_caption_callback=self.closed_caption_manager.upsert_caption,
+            zoom_client_id=zoom_oauth_credentials["client_id"],
+            zoom_client_secret=zoom_oauth_credentials["client_secret"],
+            zoom_rtms=self.bot_in_db.zoom_rtms(),
+            add_video_frame_callback=self.gstreamer_pipeline.on_new_video_frame if self.gstreamer_pipeline else None,
+            wants_any_video_frames_callback=self.gstreamer_pipeline.wants_any_video_frames if self.gstreamer_pipeline else lambda: False,
+            add_mixed_audio_chunk_callback=self.add_mixed_audio_chunk_callback,
+            upsert_chat_message_callback=self.on_new_chat_message,
+            add_participant_event_callback=self.add_participant_event,
+            video_frame_size=self.bot_in_db.recording_dimensions(),
+        )
+
     def add_mixed_audio_chunk_callback(self, chunk: bytes):
         if self.gstreamer_pipeline:
             self.gstreamer_pipeline.on_mixed_audio_raw_data_received_callback(chunk)
@@ -313,7 +342,13 @@ class BotController:
 
         self.websocket_audio_client.send_async(payload)
 
+    def is_rtms_meeting(self):
+        return self.bot_in_db.zoom_rtms_stream_id is not None
+
     def get_meeting_type(self):
+        if self.is_rtms_meeting():
+            return MeetingTypes.ZOOM
+
         meeting_type = meeting_type_from_url(self.bot_in_db.meeting_url)
         if meeting_type is None:
             raise Exception(f"Could not determine meeting type for meeting url {self.bot_in_db.meeting_url}")
@@ -330,7 +365,9 @@ class BotController:
     def get_per_participant_audio_sample_rate(self):
         meeting_type = self.get_meeting_type()
         if meeting_type == MeetingTypes.ZOOM:
-            if self.bot_in_db.use_zoom_web_adapter():
+            if self.is_rtms_meeting():
+                return 16000
+            elif self.bot_in_db.use_zoom_web_adapter():
                 return 48000
             else:
                 return 32000
@@ -342,7 +379,9 @@ class BotController:
     def mixed_audio_sample_rate(self):
         meeting_type = self.get_meeting_type()
         if meeting_type == MeetingTypes.ZOOM:
-            if self.bot_in_db.use_zoom_web_adapter():
+            if self.is_rtms_meeting():
+                return 16000
+            elif self.bot_in_db.use_zoom_web_adapter():
                 return 48000
             else:
                 return 32000
@@ -354,7 +393,9 @@ class BotController:
     def get_audio_format(self):
         meeting_type = self.get_meeting_type()
         if meeting_type == MeetingTypes.ZOOM:
-            if self.bot_in_db.use_zoom_web_adapter():
+            if self.is_rtms_meeting():
+                return RTMSGstreamerPipeline.AUDIO_FORMAT_PCM_16KHZ
+            elif self.bot_in_db.use_zoom_web_adapter():
                 return GstreamerPipeline.AUDIO_FORMAT_FLOAT
             else:
                 return GstreamerPipeline.AUDIO_FORMAT_PCM
@@ -372,7 +413,9 @@ class BotController:
     def get_bot_adapter(self):
         meeting_type = self.get_meeting_type()
         if meeting_type == MeetingTypes.ZOOM:
-            if self.bot_in_db.use_zoom_web_adapter():
+            if self.is_rtms_meeting():
+                return self.get_zoom_rtms_adapter()
+            elif self.bot_in_db.use_zoom_web_adapter():
                 return self.get_zoom_web_bot_adapter()
             else:
                 return self.get_zoom_bot_adapter()
@@ -389,6 +432,9 @@ class BotController:
             if self.gstreamer_pipeline.start_time_ns is None:
                 return None
             return int(self.gstreamer_pipeline.start_time_ns / 1_000_000) + self.adapter.get_first_buffer_timestamp_ms_offset()
+
+        if self.is_rtms_meeting():
+            return self.adapter.get_first_buffer_timestamp_ms()
 
     def recording_file_saved(self, s3_storage_key):
         recording = Recording.objects.get(bot=self.bot_in_db, is_default_recording=True)
@@ -640,7 +686,9 @@ class BotController:
         # so we don't need to create a gstreamer pipeline here
         meeting_type = self.get_meeting_type()
         if meeting_type == MeetingTypes.ZOOM:
-            if self.bot_in_db.use_zoom_web_adapter():
+            if self.is_rtms_meeting():
+                return True
+            elif self.bot_in_db.use_zoom_web_adapter():
                 return False
             else:
                 return True
@@ -731,7 +779,8 @@ class BotController:
 
         self.gstreamer_pipeline = None
         if self.should_create_gstreamer_pipeline():
-            self.gstreamer_pipeline = GstreamerPipeline(
+            gstreamer_pipeline_class = RTMSGstreamerPipeline if self.is_rtms_meeting() else GstreamerPipeline
+            self.gstreamer_pipeline = gstreamer_pipeline_class(
                 on_new_sample_callback=self.on_new_sample_from_gstreamer_pipeline,
                 video_frame_size=self.bot_in_db.recording_dimensions(),
                 audio_format=self.get_audio_format(),
@@ -856,6 +905,16 @@ class BotController:
             self.adapter.leave()
         if self.bot_in_db.state == BotStates.STAGED:
             logger.info(f"take_action_based_on_bot_in_db - STAGED. For now, this is a no-op. join_at = {self.bot_in_db.join_at.isoformat()}")
+
+        # App session states
+        if self.bot_in_db.state == BotStates.CONNECTING:
+            logger.info("take_action_based_on_bot_in_db - CONNECTING")
+            BotEventManager.set_requested_bot_action_taken_at(self.bot_in_db)
+            self.adapter.init()
+        if self.bot_in_db.state == BotStates.DISCONNECTING:
+            logger.info("take_action_based_on_bot_in_db - DISCONNECTING")
+            BotEventManager.set_requested_bot_action_taken_at(self.bot_in_db)
+            self.adapter.disconnect()
 
     def join_if_staged_and_time_to_join(self):
         if self.bot_in_db.state != BotStates.STAGED:
@@ -1744,6 +1803,26 @@ class BotController:
                 event_type=BotEventTypes.BOT_RECORDING_PERMISSION_DENIED,
                 event_sub_type=event_sub_type_for_permission_denied,
             )
+            return
+
+        # App session messages
+        if message.get("message") == BotAdapter.Messages.APP_SESSION_CONNECTED:
+            logger.info("Received message that app session connected")
+            BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.APP_SESSION_CONNECTED)
+            return
+
+        if message.get("message") == BotAdapter.Messages.APP_SESSION_DISCONNECT_REQUESTED:
+            logger.info("Received message that app session disconnect requested")
+            BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.APP_SESSION_DISCONNECT_REQUESTED)
+            BotEventManager.set_requested_bot_action_taken_at(self.bot_in_db)
+            self.adapter.disconnect()
+            return
+
+        if message.get("message") == BotAdapter.Messages.APP_SESSION_DISCONNECTED:
+            logger.info("Received message that app session disconnected")
+            self.flush_utterances()
+            BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.APP_SESSION_DISCONNECTED)
+            self.cleanup()
             return
 
         raise Exception(f"Received unexpected message from bot adapter: {message}")

@@ -451,6 +451,11 @@ class BotStates(models.IntegerChoices):
     LEAVING_BREAKOUT_ROOM = 15, "Leaving Breakout Room"
     JOINED_RECORDING_PERMISSION_DENIED = 16, "Joined - Recording Permission Denied"
 
+    # App session states
+    CONNECTING = 100, "Connecting"
+    CONNECTED = 101, "Connected"
+    DISCONNECTING = 102, "Disconnecting"
+
     @classmethod
     def _get_state_to_api_code_mapping(cls):
         """Get the trigger type to API code mapping"""
@@ -471,6 +476,9 @@ class BotStates(models.IntegerChoices):
             cls.JOINING_BREAKOUT_ROOM: "joining_breakout_room",
             cls.LEAVING_BREAKOUT_ROOM: "leaving_breakout_room",
             cls.JOINED_RECORDING_PERMISSION_DENIED: "joined_recording_permission_denied",
+            cls.CONNECTING: "connecting",
+            cls.CONNECTED: "connected",
+            cls.DISCONNECTING: "disconnecting",
         }
 
     @classmethod
@@ -504,6 +512,13 @@ class RecordingViews(models.TextChoices):
     SPEAKER_VIEW = "speaker_view"
     GALLERY_VIEW = "gallery_view"
     SPEAKER_VIEW_NO_SIDEBAR = "speaker_view_no_sidebar"
+
+
+# Session type = BOT means you are connecting as a meeting bot (virtual participant)
+# Session type = APP_SESSION means you are connecting as an app (Zoom RTMS, Google Meet Media API)
+class SessionTypes(models.IntegerChoices):
+    BOT = 1, "Bot"
+    APP_SESSION = 2, "App Session"
 
 
 class TranscriptionSettings:
@@ -656,6 +671,9 @@ class Bot(models.Model):
     join_at = models.DateTimeField(null=True, blank=True, help_text="The time the bot should join the meeting")
     deduplication_key = models.CharField(max_length=1024, null=True, blank=True, help_text="Optional key for deduplicating bots")
     calendar_event = models.ForeignKey(CalendarEvent, on_delete=models.SET_NULL, null=True, blank=True, related_name="bots")
+
+    zoom_rtms_stream_id = models.CharField(max_length=255, null=True, blank=True)
+    session_type = models.IntegerField(choices=SessionTypes.choices, default=SessionTypes.BOT, db_default=SessionTypes.BOT, null=False)
 
     def delete_data(self):
         # Check if bot is in a state where the data deleted event can be created
@@ -906,11 +924,17 @@ class Bot(models.Model):
     def last_bot_event(self):
         return self.bot_events.order_by("-created_at").first()
 
+    def object_id_prefix(self):
+        if self.session_type == SessionTypes.BOT:
+            return "bot_"
+        else:
+            return "app_"
+
     def save(self, *args, **kwargs):
         if not self.object_id:
             # Generate a random 16-character string
             random_string = "".join(random.choices(string.ascii_letters + string.digits, k=16))
-            self.object_id = f"{self.OBJECT_ID_PREFIX}{random_string}"
+            self.object_id = f"{self.object_id_prefix()}{random_string}"
         super().save(*args, **kwargs)
 
     def __str__(self):
@@ -924,6 +948,9 @@ class Bot(models.Model):
 
     def automatic_leave_settings(self):
         return self.settings.get("automatic_leave_settings", {})
+
+    def zoom_rtms(self):
+        return self.settings.get("zoom_rtms", {})
 
     class Meta:
         # We'll have to do a periodic query to find bots that have a join_at that is within 5 minutes of now.
@@ -1047,6 +1074,12 @@ class BotEventTypes(models.IntegerChoices):
     BOT_BEGAN_LEAVING_BREAKOUT_ROOM = 18, "Bot began leaving breakout room"
     BOT_RECORDING_PERMISSION_DENIED = 19, "Bot recording permission denied"
 
+    # App session events
+    APP_SESSION_CONNECTION_REQUESTED = 100, "App Session Connection Requested"
+    APP_SESSION_CONNECTED = 101, "App Session Connected"
+    APP_SESSION_DISCONNECT_REQUESTED = 102, "App Session Disconnect Requested"
+    APP_SESSION_DISCONNECTED = 103, "App Session Disconnected"
+
     @classmethod
     def type_to_api_code(cls, value):
         """Returns the API code for a given type value"""
@@ -1070,6 +1103,10 @@ class BotEventTypes(models.IntegerChoices):
             cls.BOT_BEGAN_JOINING_BREAKOUT_ROOM: "began_joining_breakout_room",
             cls.BOT_BEGAN_LEAVING_BREAKOUT_ROOM: "began_leaving_breakout_room",
             cls.BOT_RECORDING_PERMISSION_DENIED: "recording_permission_denied",
+            cls.APP_SESSION_CONNECTION_REQUESTED: "app_session_connection_requested",
+            cls.APP_SESSION_CONNECTED: "app_session_connected",
+            cls.APP_SESSION_DISCONNECT_REQUESTED: "app_session_disconnect_requested",
+            cls.APP_SESSION_DISCONNECTED: "app_session_disconnected",
         }
         return mapping.get(value)
 
@@ -1267,6 +1304,9 @@ class BotEventManager:
                 BotStates.SCHEDULED,
                 BotStates.JOINING_BREAKOUT_ROOM,
                 BotStates.LEAVING_BREAKOUT_ROOM,
+                BotStates.CONNECTING,
+                BotStates.DISCONNECTING,
+                BotStates.CONNECTED,
             ],
             "to": BotStates.FATAL_ERROR,
         },
@@ -1353,6 +1393,23 @@ class BotEventManager:
             "from": [BotStates.JOINED_NOT_RECORDING, BotStates.JOINED_RECORDING_PERMISSION_DENIED, BotStates.JOINED_RECORDING, BotStates.JOINED_RECORDING_PAUSED],
             "to": BotStates.JOINED_RECORDING_PERMISSION_DENIED,
         },
+        # App session events
+        BotEventTypes.APP_SESSION_CONNECTION_REQUESTED: {
+            "from": BotStates.READY,
+            "to": BotStates.CONNECTING,
+        },
+        BotEventTypes.APP_SESSION_CONNECTED: {
+            "from": BotStates.CONNECTING,
+            "to": BotStates.CONNECTED,
+        },
+        BotEventTypes.APP_SESSION_DISCONNECT_REQUESTED: {
+            "from": [BotStates.CONNECTED, BotStates.CONNECTING],
+            "to": BotStates.DISCONNECTING,
+        },
+        BotEventTypes.APP_SESSION_DISCONNECTED: {
+            "from": BotStates.DISCONNECTING,
+            "to": BotStates.POST_PROCESSING,
+        },
     }
 
     @classmethod
@@ -1364,6 +1421,8 @@ class BotEventManager:
         event_type = {
             BotStates.JOINING: BotEventTypes.JOIN_REQUESTED,
             BotStates.LEAVING: BotEventTypes.LEAVE_REQUESTED,
+            BotStates.CONNECTING: BotEventTypes.APP_SESSION_CONNECTION_REQUESTED,
+            BotStates.DISCONNECTING: BotEventTypes.APP_SESSION_DISCONNECT_REQUESTED,
         }.get(bot.state)
 
         if event_type is None:
@@ -1462,6 +1521,11 @@ class BotEventManager:
             raise ValidationError(f"Expected exactly one pending recording for bot {bot.object_id} in state {BotStates.state_to_api_code(new_state)}, but found {pending_recordings.count()}")
         pending_recording = pending_recordings.first()
         RecordingManager.set_recording_in_progress(pending_recording)
+
+    @classmethod
+    def after_new_state_is_connected(cls, bot: Bot, event_type: BotEventTypes, new_state: BotStates):
+        # It's the same thing as if we moved to joined recording
+        cls.after_new_state_is_joined_recording(bot, event_type, new_state)
 
     @classmethod
     def after_new_state_is_joined_recording_paused(cls, bot: Bot, new_state: BotStates):
@@ -1594,6 +1658,9 @@ class BotEventManager:
                     # If we moved to the recording state
                     if new_state == BotStates.JOINED_RECORDING:
                         cls.after_new_state_is_joined_recording(bot=bot, event_type=event_type, new_state=new_state)
+
+                    if new_state == BotStates.CONNECTED:
+                        cls.after_new_state_is_connected(bot=bot, event_type=event_type, new_state=new_state)
 
                     if new_state == BotStates.JOINED_RECORDING_PAUSED:
                         cls.after_new_state_is_joined_recording_paused(bot=bot, new_state=new_state)

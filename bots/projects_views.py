@@ -44,6 +44,7 @@ from .models import (
     RecordingStates,
     RecordingTranscriptionStates,
     RecordingTypes,
+    SessionTypes,
     Utterance,
     WebhookDeliveryAttempt,
     WebhookDeliveryAttemptStatus,
@@ -469,12 +470,17 @@ class ProjectBotsView(LoginRequiredMixin, ProjectUrlContextMixin, ListView):
     template_name = "projects/project_bots.html"
     context_object_name = "bots"
     paginate_by = 20
+    session_type = None
+
+    def get_session_type(self):
+        """Get session type from class attribute"""
+        return self.session_type
 
     def get_queryset(self):
         project = get_project_for_user(user=self.request.user, project_object_id=self.kwargs["object_id"])
 
-        # Start with the base queryset
-        queryset = Bot.objects.filter(project=project)
+        # Filter based on session type
+        queryset = Bot.objects.filter(project=project, session_type=self.get_session_type())
 
         # Apply date filters if provided
         start_date = self.request.GET.get("start_date")
@@ -533,8 +539,12 @@ class ProjectBotsView(LoginRequiredMixin, ProjectUrlContextMixin, ListView):
         project = get_project_for_user(user=self.request.user, project_object_id=self.kwargs["object_id"])
         context.update(self.get_project_context(self.kwargs["object_id"], project))
 
-        # Add BotStates for the template
+        # Add BotStates and SessionTypes for the template
         context["BotStates"] = BotStates
+        context["SessionTypes"] = SessionTypes
+
+        # Add session type to context
+        context["session_type"] = self.get_session_type()
 
         # Add filter parameters to context for maintaining state
         context["filter_params"] = {"start_date": self.request.GET.get("start_date", ""), "end_date": self.request.GET.get("end_date", ""), "states": self.request.GET.getlist("states"), "search": self.request.GET.get("search", "")}
@@ -756,6 +766,7 @@ class ProjectBotDetailView(LoginRequiredMixin, ProjectUrlContextMixin, View):
             {
                 "bot": bot,
                 "BotStates": BotStates,
+                "SessionTypes": SessionTypes,
                 "webhook_delivery_attempts": webhook_delivery_attempts,
                 "chat_messages": chat_messages,
                 "participants": participants,

@@ -17,6 +17,7 @@ class Organization(models.Model):
     is_webhooks_enabled = models.BooleanField(default=True)
     is_async_transcription_enabled = models.BooleanField(default=False)
     is_managed_zoom_oauth_enabled = models.BooleanField(default=False)
+    is_app_sessions_enabled = models.BooleanField(default=False)
 
     autopay_enabled = models.BooleanField(default=False)
     autopay_threshold_centricredits = models.IntegerField(default=1000)
