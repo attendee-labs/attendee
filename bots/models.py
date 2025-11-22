@@ -5,6 +5,7 @@ import os
 import random
 import secrets
 import string
+from datetime import timedelta
 
 from concurrency.exceptions import RecordModifiedError
 from concurrency.fields import IntegerVersionField
@@ -19,6 +20,7 @@ from django.utils import timezone
 from django.utils.crypto import get_random_string
 
 from accounts.models import Organization, User, UserRole
+from bots.bot_pod_creator.bot_pod_spec import BotPodSpecType
 from bots.webhook_utils import trigger_webhook
 
 # Create your models here.
@@ -705,6 +707,14 @@ class Bot(models.Model):
                 if retry_count >= max_retries:
                     raise
                 continue
+
+    @property
+    def bot_pod_spec_type(self) -> BotPodSpecType:
+        # If join_at is greater than SCHEDULED_BOT_POD_SPEC_MARGIN_SECONDS seconds into the future, use the scheduled pod spec
+        scheduled_bot_pod_spec_margin_seconds = int(os.getenv("SCHEDULED_BOT_POD_SPEC_MARGIN_SECONDS", 120))
+        if self.join_at and self.join_at - timedelta(seconds=scheduled_bot_pod_spec_margin_seconds) > timezone.now():
+            return BotPodSpecType.SCHEDULED
+        return BotPodSpecType.DEFAULT
 
     def bot_duration_seconds(self) -> int:
         if self.first_heartbeat_timestamp is None or self.last_heartbeat_timestamp is None:

@@ -87,6 +87,7 @@ def restart_bot_pod(self, bot_id):
         bot_cpu_request=bot.cpu_request(),
         add_webpage_streamer=bot.should_launch_webpage_streamer(),
         add_persistent_storage=bot.reserve_additional_storage(),
+        bot_pod_spec_type=bot.bot_pod_spec_type,
     )
 
     logger.info(f"Bot pod create result: {bot_pod_create_result}")

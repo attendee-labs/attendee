@@ -96,3 +96,5 @@ azure-identity==1.25.1
 azure-storage-blob==12.26.0
 python-json-logger==4.0.0
 pysaml2==7.5.4
+jsonpatch==1.33
+jsonpointer==3.0.0
