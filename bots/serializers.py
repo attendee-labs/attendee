@@ -392,6 +392,12 @@ TRANSCRIPTION_SETTINGS_SCHEMA = {
             "required": [],
             "additionalProperties": False,
         },
+        "custom_stt_long_poll": {
+            "type": "object",
+            "description": "Custom self-hosted transcription service with long polling. Additional properties will be sent as form data in the request.",
+            "required": [],
+            "additionalProperties": True,
+        },
     },
     "required": [],
     "additionalProperties": False,

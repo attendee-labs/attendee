@@ -16,7 +16,7 @@ from bots.models import (
     TranscriptionFailureReasons,
     Utterance,
 )
-from bots.tasks.process_utterance_task import get_transcription_via_assemblyai, get_transcription_via_deepgram, get_transcription_via_elevenlabs, get_transcription_via_gladia, get_transcription_via_openai, get_transcription_via_sarvam, process_utterance
+from bots.tasks.process_utterance_task import get_transcription_via_assemblyai, get_transcription_via_custom_stt_long_poll, get_transcription_via_deepgram, get_transcription_via_elevenlabs, get_transcription_via_gladia, get_transcription_via_openai, get_transcription_via_sarvam, process_utterance
 
 
 class ProcessUtteranceTaskTest(TransactionTestCase):
@@ -1463,3 +1463,216 @@ class ElevenLabsProviderTest(TransactionTestCase):
             self.assertIsNone(transcript)
             self.assertEqual(failure["reason"], TranscriptionFailureReasons.INTERNAL_ERROR)
             self.assertIn("Network error", failure["error"])
+
+
+class CustomSTTLongPollProviderTest(TransactionTestCase):
+    """Unit‑tests for bots.tasks.process_utterance_task.get_transcription_via_custom_stt_long_poll"""
+
+    def setUp(self):
+        # Minimal DB fixtures ---------------------------------------------------------------
+        self.org = Organization.objects.create(name="Org")
+        self.project = Project.objects.create(name="Proj", organization=self.org)
+        self.bot = Bot.objects.create(project=self.project, meeting_url="https://zoom.us/j/999")
+
+        self.recording = Recording.objects.create(
+            bot=self.bot,
+            recording_type=1,
+            transcription_type=1,
+            state=RecordingStates.COMPLETE,  # finished recording
+            transcription_provider=9,  # CUSTOM_STT_LONG_POLL
+        )
+
+        self.participant = Participant.objects.create(bot=self.bot, uuid="p1")
+        self.audio_chunk = AudioChunk.objects.create(recording=self.recording, participant=self.participant, audio_blob=b"pcm-bytes", timestamp_ms=0, duration_ms=600, sample_rate=16000)
+        self.utterance = Utterance.objects.create(
+            recording=self.recording,
+            participant=self.participant,
+            audio_chunk=self.audio_chunk,
+            timestamp_ms=0,
+            duration_ms=600,
+        )
+        self.utterance.refresh_from_db()
+
+    # ------------------------------------------------------------------ helpers
+
+    def _patch_env(self, url="http://test-service.com/transcribe", timeout="120"):
+        """Mock environment variables."""
+        return mock.patch.dict("os.environ", {"CUSTOM_STT_LONG_POLL_URL": url, "CUSTOM_STT_LONG_POLL_TIMEOUT": timeout})
+
+    # ------------------------------------------------------------------ SUCCESS PATH
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    def test_success_path(self, mock_post):
+        """Custom STT transcription succeeds and returns formatted transcript with words."""
+        with self._patch_env():
+            # Mock successful response from custom STT API
+            mock_response = mock.Mock(status_code=200)
+            mock_response.json.return_value = {
+                "status": "done",
+                "result": {
+                    "transcription": {
+                        "full_transcript": "hello world",
+                        "utterances": [
+                            {
+                                "words": [
+                                    {"word": "hello", "start": 0.0, "end": 0.5},
+                                    {"word": "world", "start": 0.6, "end": 1.0},
+                                ]
+                            }
+                        ],
+                    }
+                },
+            }
+            mock_post.return_value = mock_response
+
+            transcript, failure = get_transcription_via_custom_stt_long_poll(self.utterance)
+
+            # Assertions
+            self.assertIsNone(failure)
+            self.assertEqual(transcript["transcript"], "hello world")
+            self.assertEqual(len(transcript["words"]), 2)
+            self.assertEqual(transcript["words"][0]["word"], "hello")
+            self.assertEqual(transcript["words"][0]["start"], 0.0)
+            self.assertEqual(transcript["words"][0]["end"], 0.5)
+            self.assertEqual(transcript["words"][1]["word"], "world")
+            self.assertEqual(transcript["words"][1]["start"], 0.6)
+            self.assertEqual(transcript["words"][1]["end"], 1.0)
+
+            # Verify API call was made correctly
+            mock_post.assert_called_once()
+            call_args = mock_post.call_args
+            # First argument is the URL
+            self.assertEqual(call_args[0][0], "http://test-service.com/transcribe")
+            # Check audio was sent as PCM
+            self.assertEqual(call_args[1]["files"]["audio"][0], "audio.pcm")
+            self.assertEqual(call_args[1]["files"]["audio"][1], b"pcm-bytes")
+            self.assertEqual(call_args[1]["files"]["audio"][2], "audio/pcm")
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    def test_success_path_with_bot_settings(self, mock_post):
+        """Custom STT transcription succeeds with bot-specific settings applied."""
+        # Configure bot with custom settings
+        self.bot.settings = {"transcription_settings": {"custom_stt_long_poll": {"language": "fr-FR", "model": "whisper-large-v3", "custom_param": "test_value"}}}
+        self.bot.save()
+
+        with self._patch_env():
+            # Mock successful response
+            mock_response = mock.Mock(status_code=200)
+            mock_response.json.return_value = {"status": "done", "result": {"transcription": {"full_transcript": "test transcript", "utterances": [{"words": [{"word": "test", "start": 0.0, "end": 0.5}]}]}}}
+            mock_post.return_value = mock_response
+
+            transcript, failure = get_transcription_via_custom_stt_long_poll(self.utterance)
+
+            # Assertions
+            self.assertIsNone(failure)
+            self.assertEqual(transcript["transcript"], "test transcript")
+
+            # Verify custom settings were passed in the request
+            call_args = mock_post.call_args
+            data = call_args[1]["data"]
+            self.assertEqual(data["language"], "fr-FR")
+            self.assertEqual(data["model"], "whisper-large-v3")
+            self.assertEqual(data["custom_param"], "test_value")
+
+    def test_missing_env_url(self):
+        """No CUSTOM_STT_LONG_POLL_URL env var → CREDENTIALS_NOT_FOUND."""
+        with mock.patch.dict("os.environ", {}, clear=True):
+            transcript, failure = get_transcription_via_custom_stt_long_poll(self.utterance)
+
+            self.assertIsNone(transcript)
+            self.assertEqual(failure["reason"], TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND)
+            self.assertIn("CUSTOM_STT_LONG_POLL_URL", failure["error"])
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    def test_invalid_credentials_401(self, mock_post):
+        """Custom STT returns 401 → CREDENTIALS_INVALID."""
+        with self._patch_env():
+            mock_response = mock.Mock(status_code=401)
+            mock_post.return_value = mock_response
+
+            transcript, failure = get_transcription_via_custom_stt_long_poll(self.utterance)
+
+            self.assertIsNone(transcript)
+            self.assertEqual(failure["reason"], TranscriptionFailureReasons.CREDENTIALS_INVALID)
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    def test_rate_limit_429(self, mock_post):
+        """Custom STT returns 429 → RATE_LIMIT_EXCEEDED."""
+        with self._patch_env():
+            mock_response = mock.Mock(status_code=429)
+            mock_post.return_value = mock_response
+
+            transcript, failure = get_transcription_via_custom_stt_long_poll(self.utterance)
+
+            self.assertIsNone(transcript)
+            self.assertEqual(failure["reason"], TranscriptionFailureReasons.RATE_LIMIT_EXCEEDED)
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    def test_request_failure_500(self, mock_post):
+        """Custom STT returns 500 → TRANSCRIPTION_REQUEST_FAILED."""
+        with self._patch_env():
+            mock_response = mock.Mock(status_code=500)
+            mock_response.text = "Internal Server Error"
+            mock_post.return_value = mock_response
+
+            transcript, failure = get_transcription_via_custom_stt_long_poll(self.utterance)
+
+            self.assertIsNone(transcript)
+            self.assertEqual(failure["reason"], TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED)
+            self.assertEqual(failure["status_code"], 500)
+            self.assertEqual(failure["response_text"], "Internal Server Error")
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    def test_error_status_in_response(self, mock_post):
+        """Custom STT returns status='error' → TRANSCRIPTION_REQUEST_FAILED."""
+        with self._patch_env():
+            mock_response = mock.Mock(status_code=200)
+            mock_response.json.return_value = {"status": "error", "error_code": "TRANSCRIPTION_FAILED"}
+            mock_post.return_value = mock_response
+
+            transcript, failure = get_transcription_via_custom_stt_long_poll(self.utterance)
+
+            self.assertIsNone(transcript)
+            self.assertEqual(failure["reason"], TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED)
+            self.assertEqual(failure["error_code"], "TRANSCRIPTION_FAILED")
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    def test_timeout_exception(self, mock_post):
+        """Request timeout → TIMED_OUT."""
+        with self._patch_env():
+            from requests.exceptions import Timeout
+
+            mock_post.side_effect = Timeout("Request timed out")
+
+            transcript, failure = get_transcription_via_custom_stt_long_poll(self.utterance)
+
+            self.assertIsNone(transcript)
+            self.assertEqual(failure["reason"], TranscriptionFailureReasons.TIMED_OUT)
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    def test_request_exception(self, mock_post):
+        """Network request exception → TRANSCRIPTION_REQUEST_FAILED."""
+        with self._patch_env():
+            from requests.exceptions import RequestException
+
+            mock_post.side_effect = RequestException("Network error")
+
+            transcript, failure = get_transcription_via_custom_stt_long_poll(self.utterance)
+
+            self.assertIsNone(transcript)
+            self.assertEqual(failure["reason"], TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED)
+            self.assertIn("Network error", failure["error"])
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    def test_invalid_json_response(self, mock_post):
+        """Invalid JSON response → TRANSCRIPTION_REQUEST_FAILED."""
+        with self._patch_env():
+            mock_response = mock.Mock(status_code=200)
+            mock_response.json.side_effect = ValueError("Invalid JSON")
+            mock_post.return_value = mock_response
+
+            transcript, failure = get_transcription_via_custom_stt_long_poll(self.utterance)
+
+            self.assertIsNone(transcript)
+            self.assertEqual(failure["reason"], TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED)
+            self.assertIn("Invalid JSON", failure["error"])
