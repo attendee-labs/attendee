@@ -281,6 +281,9 @@ class BotPodCreator:
         # Out of caution ensure bot_pod_spec_type is purely alphabetical and all uppercase
         if not bot_pod_spec_type.isalpha() or not bot_pod_spec_type.isupper():
             raise ValueError(f"bot_pod_spec_type must be purely alphabetical and all uppercase: {bot_pod_spec_type}")
+        # Make sure it is in the BotPodSpecType enum or the custom allowlist.
+        if bot_pod_spec_type not in BotPodSpecType.__members__ and bot_pod_spec_type not in settings.CUSTOM_BOT_POD_SPEC_TYPES:
+            raise ValueError(f"bot_pod_spec_type must be in the BotPodSpecType enum or the custom allowlist: {bot_pod_spec_type}")
         return os.getenv(f"BOT_POD_SPEC_{bot_pod_spec_type}")
 
     def create_bot_pod(
