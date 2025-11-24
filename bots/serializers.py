@@ -917,6 +917,10 @@ class ExternalMediaStorageSettingsJSONField(serializers.JSONField):
     pass
 
 
+class KubernetesSettingsJSONField(serializers.JSONField):
+    pass
+
+
 class CreateAsyncTranscriptionSerializer(serializers.Serializer):
     transcription_settings = TranscriptionSettingsJSONField(help_text="The transcription settings to use for the async transcription.", required=True)
 
@@ -1453,6 +1457,43 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
             # Set default if not provided
             if param not in value:
                 value[param] = default
+
+        return value
+
+    kubernetes_settings = KubernetesSettingsJSONField(
+        help_text="Kubernetes-specific settings for the bot pod, e.g. {'bot_pod_spec_type': 'HIGH_MEMORY'}. Only available when self-hosting Attendee.",
+        required=False,
+        default=None,
+    )
+
+    KUBERNETES_SETTINGS_SCHEMA = {
+        "type": "object",
+        "properties": {
+            "bot_pod_spec_type": {
+                "type": "string",
+                "pattern": "^[A-Z]+$",
+            },
+        },
+        "required": [],
+        "additionalProperties": False,
+    }
+
+    def validate_kubernetes_settings(self, value):
+        if value is None:
+            return value
+
+        try:
+            jsonschema.validate(instance=value, schema=self.KUBERNETES_SETTINGS_SCHEMA)
+        except jsonschema.exceptions.ValidationError as e:
+            raise serializers.ValidationError(e.message)
+
+        # Validate that the bot pod spec type is in the allowlist
+        bot_pod_spec_type = value.get("bot_pod_spec_type", None)
+        if bot_pod_spec_type and bot_pod_spec_type not in settings.CUSTOM_BOT_POD_SPEC_TYPES:
+            if settings.CUSTOM_BOT_POD_SPEC_TYPES:
+                raise serializers.ValidationError(f"Invalid bot pod spec type: {bot_pod_spec_type}. Allowed types are: {', '.join(settings.CUSTOM_BOT_POD_SPEC_TYPES)}")
+            else:
+                raise serializers.ValidationError("Custom bot pod spec types are not allowed.")
 
         return value
 

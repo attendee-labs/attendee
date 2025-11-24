@@ -709,7 +709,13 @@ class Bot(models.Model):
                 continue
 
     @property
-    def bot_pod_spec_type(self) -> BotPodSpecType:
+    def bot_pod_spec_type(self) -> str:
+        # Check if a custom bot pod spec type is specified in kubernetes_settings.
+        # If so, it overrides the normal logic for determining the bot pod spec type.
+        custom_bot_pod_spec_type = self.settings.get("kubernetes_settings", {}).get("bot_pod_spec_type", None)
+        if custom_bot_pod_spec_type:
+            return custom_bot_pod_spec_type
+
         # If join_at is greater than SCHEDULED_BOT_POD_SPEC_MARGIN_SECONDS seconds into the future, use the scheduled pod spec
         scheduled_bot_pod_spec_margin_seconds = int(os.getenv("SCHEDULED_BOT_POD_SPEC_MARGIN_SECONDS", 120))
         if self.join_at and self.join_at - timedelta(seconds=scheduled_bot_pod_spec_margin_seconds) > timezone.now():

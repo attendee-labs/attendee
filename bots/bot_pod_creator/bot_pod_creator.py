@@ -283,7 +283,7 @@ class BotPodCreator:
         bot_cpu_request: Optional[int] = None,
         add_webpage_streamer: Optional[bool] = False,
         add_persistent_storage: Optional[bool] = False,
-        bot_pod_spec_type: Optional[BotPodSpecType] = BotPodSpecType.DEFAULT,
+        bot_pod_spec_type: Optional[str] = BotPodSpecType.DEFAULT,
     ) -> Dict:
         """
         Create a bot pod with configuration from environment.
@@ -291,6 +291,11 @@ class BotPodCreator:
         Args:
             bot_id: Integer ID of the bot to run
             bot_name: Optional name for the bot (will generate if not provided)
+            bot_cpu_request: Optional CPU request override for the bot
+            add_webpage_streamer: Whether to create a webpage streamer pod
+            add_persistent_storage: Whether to add persistent storage to the bot pod
+            bot_pod_spec_type: Name of the bot pod spec to use (e.g. DEFAULT, SCHEDULED, or any custom name).
+                              Will look up BOT_POD_SPEC_{name} from environment variables.
         """
         if bot_name is None:
             bot_name = f"bot-{bot_id}-{uuid.uuid4().hex[:8]}"
