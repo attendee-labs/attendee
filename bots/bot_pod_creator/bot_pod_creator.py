@@ -8,13 +8,16 @@ import jsonpatch
 from django.conf import settings
 from kubernetes import client, config
 
-from .bot_pod_spec import BotPodSpecType
+from .bot_pod_spec import BotPodSpecType, fetch_bot_pod_spec
 
 logger = logging.getLogger(__name__)
 
 # fmt: off
 
-def apply_json6902_patch(json_to_patch: dict, patch_str: str) -> dict:
+class InvalidBotPodSpecException(Exception):
+    pass
+
+def apply_json6902_patch(json_to_patch: dict, patch_ops: list[dict]) -> dict:
     """
     Apply a JSON6902 (RFC 6902) patch to a JSON object.
 
@@ -22,20 +25,7 @@ def apply_json6902_patch(json_to_patch: dict, patch_str: str) -> dict:
         json_to_patch: The JSON object to patch
         patch_str: The JSON6902 patch string
     """
-    if not patch_str:
-        return json_to_patch
-
-    try:
-        patch_ops = json.loads(patch_str)
-    except json.JSONDecodeError as e:
-        logger.error("patch_str is not valid JSON: %s", e)
-        return json_to_patch
-
-    if not isinstance(patch_ops, list):
-        logger.error(
-            "patch_str must be a JSON array of JSON6902 operations; got %r",
-            type(patch_ops),
-        )
+    if not patch_ops:
         return json_to_patch
 
     try:
@@ -273,8 +263,8 @@ class BotPodCreator:
         ]
 
     def apply_spec_to_bot_pod(self, bot_pod: client.V1Pod) -> dict:
-        bot_pod_spec_data = self.api_client.sanitize_for_serialization(bot_pod)
-        return apply_json6902_patch(bot_pod_spec_data, self.bot_pod_spec)
+        bot_pod_data = self.api_client.sanitize_for_serialization(bot_pod)
+        return apply_json6902_patch(bot_pod_data, self.bot_pod_spec)
 
     def create_bot_pod(
         self,
@@ -302,8 +292,8 @@ class BotPodCreator:
         # Out of caution ensure bot_pod_spec_type is purely alphabetical and all uppercase
         if not bot_pod_spec_type.isalpha() or not bot_pod_spec_type.isupper():
             raise ValueError(f"bot_pod_spec_type must be purely alphabetical and all uppercase: {bot_pod_spec_type}")
-        # Fetch bot pod spec from environment variable, falling back to default if not defined
-        self.bot_pod_spec = os.getenv(f"BOT_POD_SPEC_{bot_pod_spec_type}") or os.getenv(f"BOT_POD_SPEC_{BotPodSpecType.DEFAULT}")
+        # Fetch bot pod spec, falling back to default if not defined
+        self.bot_pod_spec = fetch_bot_pod_spec(bot_pod_spec_type) or fetch_bot_pod_spec(BotPodSpecType.DEFAULT)
 
         # Metadata labels matching the deployment
         bot_pod_labels = {

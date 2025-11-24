@@ -255,3 +255,14 @@ REQUIRE_HTTPS_WEBHOOKS = os.getenv("REQUIRE_HTTPS_WEBHOOKS", "true") == "true"
 MAX_METADATA_LENGTH = int(os.getenv("MAX_METADATA_LENGTH", 1000))
 SITE_DOMAIN = os.getenv("SITE_DOMAIN", "app.attendee.dev")
 MASK_TRANSCRIPT_IN_LOGS = os.getenv("MASK_TRANSCRIPT_IN_LOGS", "false") == "true"
+
+VALIDATE_BOT_POD_SPEC_ON_SERVER_START = os.getenv("VALIDATE_BOT_POD_SPEC_ON_SERVER_START", "false") == "true"
+RAISE_ERROR_ON_INVALID_BOT_POD_SPEC = (os.getenv("RAISE_ERROR_ON_INVALID_BOT_POD_SPEC", "false") == "true") or VALIDATE_BOT_POD_SPEC_ON_SERVER_START
+
+if VALIDATE_BOT_POD_SPEC_ON_SERVER_START:
+    from bots.bot_pod_creator.bot_pod_spec import fetch_bot_pod_spec, InvalidBotPodSpecException, BotPodSpecType
+    try:
+        fetch_bot_pod_spec(BotPodSpecType.DEFAULT)
+        fetch_bot_pod_spec(BotPodSpecType.SCHEDULED)
+    except InvalidBotPodSpecException as e:
+        raise ImproperlyConfigured("Invalid bot pod spec. See error log for details.")
