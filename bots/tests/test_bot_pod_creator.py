@@ -1,11 +1,9 @@
-import json
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import MagicMock, patch
 
 from django.test import TestCase
 from kubernetes import client
 
 from bots.bot_pod_creator.bot_pod_creator import BotPodCreator, apply_json6902_patch
-from bots.bot_pod_creator.bot_pod_spec import BotPodSpecType
 
 
 class TestApplyJson6902Patch(TestCase):
@@ -82,9 +80,10 @@ class TestBotPodCreator(TestCase):
 
         # Should try in-cluster config first, then fall back to kube config
         from kubernetes.config import ConfigException
+
         mock_config.ConfigException = ConfigException
         mock_config.load_incluster_config.side_effect = ConfigException()
-        
+
         creator = BotPodCreator()
 
         mock_config.load_incluster_config.assert_called_once()
@@ -102,9 +101,9 @@ class TestBotPodCreator(TestCase):
         mock_getenv.side_effect = lambda key, default=None: self.env_vars.get(key, default)
         mock_settings.BOT_POD_NAMESPACE = "bot-namespace"
         mock_settings.WEBPAGE_STREAMER_POD_NAMESPACE = "streamer-namespace"
-        
+
         creator = BotPodCreator()
-        
+
         result = creator.fetch_bot_pod_spec("DEFAULT")
         self.assertEqual(result, "")
 
@@ -117,17 +116,17 @@ class TestBotPodCreator(TestCase):
         mock_getenv.side_effect = lambda key, default=None: self.env_vars.get(key, default)
         mock_settings.BOT_POD_NAMESPACE = "bot-namespace"
         mock_settings.WEBPAGE_STREAMER_POD_NAMESPACE = "streamer-namespace"
-        
+
         creator = BotPodCreator()
-        
+
         # Test with lowercase
         with self.assertRaises(ValueError):
             creator.fetch_bot_pod_spec("default")
-        
+
         # Test with numbers
         with self.assertRaises(ValueError):
             creator.fetch_bot_pod_spec("DEFAULT123")
-        
+
         # Test with special characters
         with self.assertRaises(ValueError):
             creator.fetch_bot_pod_spec("DEFAULT_SPEC")
@@ -141,7 +140,7 @@ class TestBotPodCreator(TestCase):
         mock_getenv.side_effect = lambda key, default=None: self.env_vars.get(key, default)
         mock_settings.BOT_POD_NAMESPACE = "bot-namespace"
         mock_settings.WEBPAGE_STREAMER_POD_NAMESPACE = "streamer-namespace"
-        
+
         # Mock the V1 API
         mock_v1 = MagicMock()
         mock_api_response = MagicMock()
@@ -149,15 +148,15 @@ class TestBotPodCreator(TestCase):
         mock_api_response.status.phase = "Pending"
         mock_v1.create_namespaced_pod.return_value = mock_api_response
         mock_client.CoreV1Api.return_value = mock_v1
-        
+
         # Mock ApiClient
         mock_api_client = MagicMock()
         mock_api_client.sanitize_for_serialization.return_value = {"kind": "Pod", "metadata": {"name": "bot-123-abc"}}
         mock_client.ApiClient.return_value = mock_api_client
-        
+
         creator = BotPodCreator()
         result = creator.create_bot_pod(bot_id=123, bot_name="bot-123-abc")
-        
+
         self.assertTrue(result["created"])
         self.assertEqual(result["name"], "bot-123-abc")
         self.assertEqual(result["status"], "Pending")
@@ -173,33 +172,29 @@ class TestBotPodCreator(TestCase):
         mock_getenv.side_effect = lambda key, default=None: self.env_vars.get(key, default)
         mock_settings.BOT_POD_NAMESPACE = "bot-namespace"
         mock_settings.WEBPAGE_STREAMER_POD_NAMESPACE = "streamer-namespace"
-        
+
         # Mock the V1 API
         mock_v1 = MagicMock()
         mock_bot_response = MagicMock()
         mock_bot_response.metadata.name = "bot-123-abc"
         mock_bot_response.status.phase = "Pending"
-        
+
         mock_streamer_response = MagicMock()
         mock_streamer_response.metadata.name = "bot-123-abc-webpage-streamer"
         mock_streamer_response.metadata.uid = "streamer-uid-123"
-        
+
         mock_v1.create_namespaced_pod.side_effect = [mock_bot_response, mock_streamer_response]
         mock_v1.create_namespaced_service.return_value = MagicMock()
         mock_client.CoreV1Api.return_value = mock_v1
-        
+
         # Mock ApiClient
         mock_api_client = MagicMock()
         mock_api_client.sanitize_for_serialization.return_value = {"kind": "Pod"}
         mock_client.ApiClient.return_value = mock_api_client
-        
+
         creator = BotPodCreator()
-        result = creator.create_bot_pod(
-            bot_id=123,
-            bot_name="bot-123-abc",
-            add_webpage_streamer=True
-        )
-        
+        result = creator.create_bot_pod(bot_id=123, bot_name="bot-123-abc", add_webpage_streamer=True)
+
         self.assertTrue(result["created"])
         # Should create both bot pod and streamer pod
         self.assertEqual(mock_v1.create_namespaced_pod.call_count, 2)
@@ -215,21 +210,21 @@ class TestBotPodCreator(TestCase):
         mock_getenv.side_effect = lambda key, default=None: self.env_vars.get(key, default)
         mock_settings.BOT_POD_NAMESPACE = "bot-namespace"
         mock_settings.WEBPAGE_STREAMER_POD_NAMESPACE = "streamer-namespace"
-        
+
         # Mock the V1 API to raise an exception
         mock_v1 = MagicMock()
         mock_v1.create_namespaced_pod.side_effect = client.ApiException("Error creating pod")
         mock_client.CoreV1Api.return_value = mock_v1
         mock_client.ApiException = client.ApiException
-        
+
         # Mock ApiClient
         mock_api_client = MagicMock()
         mock_api_client.sanitize_for_serialization.return_value = {"kind": "Pod"}
         mock_client.ApiClient.return_value = mock_api_client
-        
+
         creator = BotPodCreator()
         result = creator.create_bot_pod(bot_id=123, bot_name="bot-123-abc")
-        
+
         self.assertFalse(result["created"])
         self.assertEqual(result["status"], "Error")
         self.assertIn("error", result)
@@ -243,21 +238,17 @@ class TestBotPodCreator(TestCase):
         mock_getenv.side_effect = lambda key, default=None: self.env_vars.get(key, default)
         mock_settings.BOT_POD_NAMESPACE = "bot-namespace"
         mock_settings.WEBPAGE_STREAMER_POD_NAMESPACE = "streamer-namespace"
-        
+
         # Mock the V1 API
         mock_v1 = MagicMock()
         mock_v1.delete_namespaced_pod.return_value = MagicMock()
         mock_client.CoreV1Api.return_value = mock_v1
-        
+
         creator = BotPodCreator()
         result = creator.delete_bot_pod("bot-123-abc")
-        
+
         self.assertTrue(result["deleted"])
-        mock_v1.delete_namespaced_pod.assert_called_once_with(
-            name="bot-123-abc",
-            namespace="bot-namespace",
-            grace_period_seconds=60
-        )
+        mock_v1.delete_namespaced_pod.assert_called_once_with(name="bot-123-abc", namespace="bot-namespace", grace_period_seconds=60)
 
     @patch("bots.bot_pod_creator.bot_pod_creator.config")
     @patch("bots.bot_pod_creator.bot_pod_creator.client")
@@ -268,16 +259,16 @@ class TestBotPodCreator(TestCase):
         mock_getenv.side_effect = lambda key, default=None: self.env_vars.get(key, default)
         mock_settings.BOT_POD_NAMESPACE = "bot-namespace"
         mock_settings.WEBPAGE_STREAMER_POD_NAMESPACE = "streamer-namespace"
-        
+
         # Mock the V1 API to raise an exception
         mock_v1 = MagicMock()
         mock_v1.delete_namespaced_pod.side_effect = client.ApiException("Pod not found")
         mock_client.CoreV1Api.return_value = mock_v1
         mock_client.ApiException = client.ApiException
-        
+
         creator = BotPodCreator()
         result = creator.delete_bot_pod("bot-123-abc")
-        
+
         self.assertFalse(result["deleted"])
         self.assertIn("error", result)
 
@@ -292,19 +283,16 @@ class TestBotPodCreator(TestCase):
         mock_getenv.side_effect = lambda key, default=None: env_vars_with_spec.get(key, default)
         mock_settings.BOT_POD_NAMESPACE = "bot-namespace"
         mock_settings.WEBPAGE_STREAMER_POD_NAMESPACE = "streamer-namespace"
-        
+
         # Mock ApiClient
         mock_api_client = MagicMock()
-        mock_api_client.sanitize_for_serialization.return_value = {
-            "metadata": {"name": "test", "labels": {}}
-        }
+        mock_api_client.sanitize_for_serialization.return_value = {"metadata": {"name": "test", "labels": {}}}
         mock_client.ApiClient.return_value = mock_api_client
-        
+
         creator = BotPodCreator()
         creator.bot_pod_spec = '[{"op": "add", "path": "/metadata/labels/custom", "value": "test"}]'
-        
+
         mock_pod = MagicMock(spec=client.V1Pod)
         result = creator.apply_spec_to_bot_pod(mock_pod)
-        
-        self.assertEqual(result["metadata"]["labels"]["custom"], "test")
 
+        self.assertEqual(result["metadata"]["labels"]["custom"], "test")
