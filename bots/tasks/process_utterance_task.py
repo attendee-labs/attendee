@@ -292,7 +292,7 @@ def get_transcription_via_openai(utterance):
 
     # Prepare the request for OpenAI's transcription API
     base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
-    url = f"{base_url}/audio/transcriptions"
+    url = f"{base_url}"
     headers = {
         "Authorization": f"Bearer {openai_credentials['api_key']}",
     }

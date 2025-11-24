@@ -1091,6 +1091,7 @@ class CreateBotView(LoginRequiredMixin, ProjectUrlContextMixin, View):
             data = {
                 "meeting_url": request.POST.get("meeting_url"),
                 "bot_name": request.POST.get("bot_name") or "Meeting Bot",
+                "queue_name": str(request.POST.get("queue_name")) or "celery"
             }
 
             bot, error = create_bot(data=data, source=BotCreationSource.DASHBOARD, project=project)

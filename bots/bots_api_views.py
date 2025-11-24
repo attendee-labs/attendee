@@ -841,7 +841,7 @@ class TranscriptView(APIView):
             async_transcription = AsyncTranscription.objects.create(recording=recording, settings=serializer.validated_data)
 
             # Create celery task to process the async transcription
-            process_async_transcription.delay(async_transcription.id)
+            process_async_transcription.apply_async(args=[async_transcription.id], queue=os.getenv("CUSTOM_QUEUE_NAME", "celery"))
 
             return Response(AsyncTranscriptionSerializer(async_transcription).data)
         except Bot.DoesNotExist:

@@ -222,6 +222,7 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
     external_media_storage_settings = serializer.validated_data["external_media_storage_settings"]
     voice_agent_settings = serializer.validated_data["voice_agent_settings"]
     initial_state = BotStates.SCHEDULED if join_at else BotStates.READY
+    queue_name = serializer.validated_data["queue_name"]
 
     error = validate_external_media_storage_settings(external_media_storage_settings, project)
     if error:
@@ -246,6 +247,9 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
         "voice_agent_settings": voice_agent_settings,
     }
 
+    if not queue_name:
+        queue_name = "celery"
+
     try:
         with transaction.atomic():
             bot = Bot.objects.create(
@@ -258,6 +262,7 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
                 deduplication_key=deduplication_key,
                 state=initial_state,
                 calendar_event=calendar_event,
+                queue_name=queue_name
             )
 
             Recording.objects.create(

@@ -996,6 +996,8 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
         },
     }
 
+    queue_name = serializers.CharField(help_text="The queue name the app to use for each request.")
+
     def validate_webhooks(self, value):
         if value is None:
             return value

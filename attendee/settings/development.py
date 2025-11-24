@@ -4,14 +4,16 @@ from .base import *
 
 DEBUG = True
 SITE_DOMAIN = "localhost:8000"
-ALLOWED_HOSTS = ["tendee-stripe-hooks.ngrok.io", "localhost"]
+ALLOWED_HOSTS = ["*"]
+CSRF_TRUSTED_ORIGINS = ["https://*.metanotes.ai"]
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
-        "NAME": "attendee_development",
-        "USER": "attendee_development_user",
-        "PASSWORD": "attendee_development_user",
+        "NAME": os.getenv("POSTGRES_DATABASE"),
+        "USER": os.getenv("POSTGRES_USER"),
+        "PASSWORD": os.getenv("POSTGRES_PASSWORD"),
         "HOST": os.getenv("POSTGRES_HOST", "localhost"),
         "PORT": "5432",
     }

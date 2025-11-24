@@ -39,4 +39,5 @@ def launch_bot(bot):
         # Default to launching bot via celery
         from .tasks.run_bot_task import run_bot
 
-        run_bot.delay(bot.id)
+        queue_name = bot.queue_name or "celery"
+        run_bot.apply_async(args=[bot.id], queue=queue_name )

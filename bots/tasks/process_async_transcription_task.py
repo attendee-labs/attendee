@@ -1,3 +1,4 @@
+import os
 import logging
 
 from celery import shared_task
@@ -27,7 +28,7 @@ def create_utterances_for_transcription(async_transcription):
         )
 
         # Spread out the utterance tasks a bit
-        process_utterance.apply_async(args=[utterance.id], countdown=utterance_task_delay_seconds)
+        process_utterance.apply_async(args=[utterance.id], countdown=utterance_task_delay_seconds, queue=os.getenv("CUSTOM_QUEUE_NAME", "celery"))
         utterance_task_delay_seconds += 1
 
     # After the utterances have been created and queued for transcription, set the recording artifact to in progress
@@ -59,7 +60,7 @@ def check_for_transcription_completion(async_transcription):
 
     # An in progress utterance exists and we haven't timed out, so we need to check again in 1 minute
     logger.info(f"Checking for transcription completion for recording artifact {async_transcription.id} again in 1 minute")
-    process_async_transcription.apply_async(args=[async_transcription.id], countdown=60)
+    process_async_transcription.apply_async(args=[async_transcription.id], countdown=60, queue=os.getenv("CUSTOM_QUEUE_NAME", "celery"))
 
 
 @shared_task(

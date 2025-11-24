@@ -534,6 +534,7 @@ class BotController:
             self.wait_until_all_utterances_are_terminated()
             BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.POST_PROCESSING_COMPLETED)
 
+        os._exit(0)
         normal_quitting_process_worked = True
 
     # We're going to wait until all utterances are transcribed or have failed. If there are still
@@ -819,6 +820,8 @@ class BotController:
 
         # Add timeout just for audio processing
         self.first_timeout_call = True
+        self.custom_counter = 0
+        self.meeting_joined = False
         GLib.timeout_add(100, self.on_main_loop_timeout)
 
         # Add signal handlers so that when we get a SIGTERM or SIGINT, we can clean up the bot
@@ -839,6 +842,7 @@ class BotController:
     def take_action_based_on_bot_in_db(self):
         if self.bot_in_db.state == BotStates.JOINING:
             logger.info("take_action_based_on_bot_in_db - JOINING")
+            self.meeting_joined = True
             BotEventManager.set_requested_bot_action_taken_at(self.bot_in_db)
             self.adapter.init()
         if self.bot_in_db.state == BotStates.LEAVING:
@@ -1098,6 +1102,10 @@ class BotController:
             self.bot_in_db.set_heartbeat()
 
     def on_main_loop_timeout(self):
+        self.custom_counter += 1
+        if (self.custom_counter > 300 and not self.meeting_joined):
+            logger.info("Not joined meeting in 5 minutes. Hence, stopping the bot.")
+            os._exit(0)
         try:
             if self.first_timeout_call:
                 logger.info("First timeout call - taking initial action")
@@ -1249,7 +1257,7 @@ class BotController:
         RecordingManager.set_recording_transcription_in_progress(recording_in_progress)
 
         # Process the utterance immediately
-        process_utterance.delay(utterance.id)
+        process_utterance.apply_async(args=[utterance.id], queue=os.getenv("CUSTOM_QUEUE_NAME", "celery"))
         return
 
     def on_new_chat_message(self, chat_message):
@@ -1516,7 +1524,7 @@ class BotController:
 
             logger.info("Received message that we were blocked by platform repeatedly, so recreating pod")
             # Run task to restart the bot pod with 1 minute delay
-            restart_bot_pod.apply_async(args=[self.bot_in_db.id], countdown=60)
+            restart_bot_pod.apply_async(args=[self.bot_in_db.id], countdown=60, queue=os.getenv("CUSTOM_QUEUE_NAME", "celery"))
             # Don't do the normal cleanup tasks because we'll be restarting the pod
             if self.main_loop and self.main_loop.is_running():
                 logger.info("Quitting main loop")

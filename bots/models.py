@@ -653,6 +653,7 @@ class Bot(models.Model):
     join_at = models.DateTimeField(null=True, blank=True, help_text="The time the bot should join the meeting")
     deduplication_key = models.CharField(max_length=1024, null=True, blank=True, help_text="Optional key for deduplicating bots")
     calendar_event = models.ForeignKey(CalendarEvent, on_delete=models.SET_NULL, null=True, blank=True, related_name="bots")
+    queue_name = models.CharField(max_length=100, null=True)
 
     def delete_data(self):
         # Check if bot is in a state where the data deleted event can be created
