@@ -276,6 +276,13 @@ class BotPodCreator:
         bot_pod_data = self.api_client.sanitize_for_serialization(bot_pod)
         return apply_json6902_patch(bot_pod_data, self.bot_pod_spec)
 
+    # Fetch bot pod spec from environment variable.
+    def fetch_bot_pod_spec(self, bot_pod_spec_type: str) -> str:
+        # Out of caution ensure bot_pod_spec_type is purely alphabetical and all uppercase
+        if not bot_pod_spec_type.isalpha() or not bot_pod_spec_type.isupper():
+            raise ValueError(f"bot_pod_spec_type must be purely alphabetical and all uppercase: {bot_pod_spec_type}")
+        return os.getenv(f"BOT_POD_SPEC_{bot_pod_spec_type}")
+
     def create_bot_pod(
         self,
         bot_id: int,
@@ -304,11 +311,8 @@ class BotPodCreator:
         self.bot_cpu_request = bot_cpu_request
         self.add_persistent_storage = add_persistent_storage
 
-        # Out of caution ensure bot_pod_spec_type is purely alphabetical and all uppercase
-        if not bot_pod_spec_type.isalpha() or not bot_pod_spec_type.isupper():
-            raise ValueError(f"bot_pod_spec_type must be purely alphabetical and all uppercase: {bot_pod_spec_type}")
-        # Fetch bot pod spec from environment variable, falling back to default if not defined
-        self.bot_pod_spec = os.getenv(f"BOT_POD_SPEC_{bot_pod_spec_type}") or os.getenv(f"BOT_POD_SPEC_{BotPodSpecType.DEFAULT}")
+        # Fetch bot pod spec from the bot_pod_spec_type passed in. Fall back to BotPodSpecType.DEFAULT if the type in the argument is not defined.
+        self.bot_pod_spec = self.fetch_bot_pod_spec(bot_pod_spec_type) or self.fetch_bot_pod_spec(BotPodSpecType.DEFAULT)
 
         # Metadata labels matching the deployment
         bot_pod_labels = {
