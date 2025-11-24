@@ -712,7 +712,8 @@ class Bot(models.Model):
     def bot_pod_spec_type(self) -> str:
         # Check if a custom bot pod spec type is specified in kubernetes_settings.
         # If so, it overrides the normal logic for determining the bot pod spec type.
-        custom_bot_pod_spec_type = self.settings.get("kubernetes_settings", {}).get("bot_pod_spec_type", None)
+        kubernetes_settings = self.settings.get("kubernetes_settings") or {}
+        custom_bot_pod_spec_type = kubernetes_settings.get("bot_pod_spec_type", None)
         if custom_bot_pod_spec_type:
             return custom_bot_pod_spec_type
 
