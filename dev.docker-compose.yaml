@@ -9,10 +9,8 @@ services:
       - POSTGRES_HOST=postgres
       - REDIS_URL=redis://redis:6379/5
       - DJANGO_SETTINGS_MODULE=attendee.settings.development
-      - ENABLE_CHROME_SANDBOX=true
+      - ENABLE_CHROME_SANDBOX=false
     command: "celery -A attendee worker -l INFO"
-    security_opt:
-      - seccomp=./bots/web_bot_adapter/chrome_seccomp.json
 
   attendee-scheduler-local:
     build: ./

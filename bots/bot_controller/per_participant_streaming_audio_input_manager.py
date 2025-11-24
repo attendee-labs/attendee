@@ -146,11 +146,18 @@ class PerParticipantStreamingAudioInputManager:
             raise Exception(f"Unsupported transcription provider: {self.transcription_provider}")
 
     def find_or_create_streaming_transcriber_for_speaker(self, speaker_id):
-        if speaker_id not in self.streaming_transcribers:
-            metadata = {"bot_id": self.bot.object_id, **(self.bot.metadata or {}), **self.get_participant_callback(speaker_id)}
-            self.streaming_transcribers[speaker_id] = self.create_streaming_transcriber(speaker_id, metadata)
-            # Initialize last audio time for this speaker
-            self.last_nonsilent_audio_time[speaker_id] = time.time()
+        # If transcriber exists, return it
+        if speaker_id in self.streaming_transcribers:
+            return self.streaming_transcribers[speaker_id]
+
+        # Create new transcriber
+        metadata = {"bot_id": self.bot.object_id, **(self.bot.metadata or {}), **self.get_participant_callback(speaker_id)}
+        participant_name = metadata.get("participant_full_name", speaker_id)
+
+        logger.info(f"Creating streaming transcriber for speaker {speaker_id} ({participant_name})")
+        self.streaming_transcribers[speaker_id] = self.create_streaming_transcriber(speaker_id, metadata)
+        # Initialize last audio time for this speaker
+        self.last_nonsilent_audio_time[speaker_id] = time.time()
         return self.streaming_transcribers[speaker_id]
 
     def add_chunk(self, speaker_id, chunk_time, chunk_bytes):
@@ -173,12 +180,19 @@ class PerParticipantStreamingAudioInputManager:
             if not audio_is_silent:
                 self.last_nonsilent_audio_time[speaker_id] = time.time()
 
-            # Create transcriber if needed and send all audio
+            # Create transcriber if needed
             streaming_transcriber = self.find_or_create_streaming_transcriber_for_speaker(speaker_id)
             if streaming_transcriber:
-                streaming_transcriber.send(chunk_bytes)
-            else:
-                logger.warning(f"Failed to create transcriber for speaker {speaker_id}")
+                # Send audio
+                try:
+                    streaming_transcriber.send(chunk_bytes)
+                except Exception as e:
+                    participant_info = self.get_participant_callback(speaker_id)
+                    participant_name = participant_info.get("participant_full_name", speaker_id) if participant_info else speaker_id
+                    logger.info(f"Recreating transcriber for speaker {speaker_id} ({participant_name}) after connection failure: {e}")
+                    # Remove failed transcriber so it will be recreated on next chunk
+                    if speaker_id in self.streaming_transcribers:
+                        del self.streaming_transcribers[speaker_id]
         else:
             # Deepgram and other providers: use VAD pre-filtering
             audio_is_silent = self.silence_detected(chunk_bytes)

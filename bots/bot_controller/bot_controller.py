@@ -811,7 +811,7 @@ class BotController:
                     message = self.pubsub.get_message(timeout=1.0)
                     if message:
                         # Schedule Redis message handling in the main GLib loop
-                        GLib.idle_add(lambda: self.handle_redis_message(message))
+                        GLib.idle_add(self.handle_redis_message, message)
                 except Exception as e:
                     # If this is a certain type of exception, we can attempt to reconnect
                     if isinstance(e, redis.exceptions.ConnectionError) and "Connection closed by server." in str(e):
@@ -945,6 +945,10 @@ class BotController:
             BotMediaRequestManager.set_media_request_failed_to_play(oldest_enqueued_media_request)
 
     def take_action_based_on_chat_message_requests_in_db(self):
+        if not self.adapter.is_ready_to_send_chat_messages():
+            logger.info("Bot adapter is not ready to send chat messages, so not sending chat message requests")
+            return
+
         chat_message_requests = self.bot_in_db.chat_message_requests.filter(state=BotChatMessageRequestStates.ENQUEUED)
         for chat_message_request in chat_message_requests:
             self.adapter.send_chat_message(text=chat_message_request.message, to_user_uuid=chat_message_request.to_user_uuid)

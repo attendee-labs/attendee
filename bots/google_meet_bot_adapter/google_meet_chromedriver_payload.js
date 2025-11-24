@@ -88,7 +88,7 @@ class StyleManager {
         // Check for recording notification dialog
         const recordingDialog = document.querySelector('div[aria-modal="true"][role="dialog"]');
         
-        if (recordingDialog && recordingDialog.textContent.includes('This video call is being recorded')) {           
+        if (recordingDialog && (recordingDialog.textContent.includes('This video call is being recorded') || recordingDialog.textContent.includes('This video call is being transcribed') || recordingDialog.textContent.includes('Gemini is taking notes'))) {           
             // Find and click the "Join now" button (usually the confirm/OK button)
             const joinNowButton = recordingDialog.querySelector('button[data-mdc-dialog-action="ok"]');
             

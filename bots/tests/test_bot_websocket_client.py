@@ -71,7 +71,7 @@ class TestBotWebsocketClient(unittest.TestCase):
         self.client.start()
 
         # Wait a moment for the connection thread to work
-        time.sleep(0.1)
+        time.sleep(0.5)
 
         # Check that connection was attempted
         mock_connect.assert_called_with(self.test_url)

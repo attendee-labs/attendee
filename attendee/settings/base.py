@@ -180,6 +180,7 @@ REST_FRAMEWORK = {
     },
 }
 
+DISABLE_RATE_LIMITING = os.getenv("DISABLE_RATE_LIMITING", "false") == "true"
 SPECTACULAR_SETTINGS = {
     "TITLE": "Attendee API",
     "DESCRIPTION": "Meetings bots made easy",

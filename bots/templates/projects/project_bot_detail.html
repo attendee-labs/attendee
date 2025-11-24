@@ -486,6 +486,7 @@
                             <th>Timestamp</th>
                             <th>RAM Usage (MB)</th>
                             <th>CPU Usage (millicores)</th>
+                            <th>Top 5 Processes by RAM Usage (MB)</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -494,6 +495,20 @@
                                 <td>{{ snapshot.created_at|date:"M d, Y H:i:s" }}</td>
                                 <td>{{ snapshot.data.ram_usage_megabytes|default:"-" }}</td>
                                 <td>{{ snapshot.data.cpu_usage_millicores|default:"-" }}</td>
+                                <td>
+                                    {% if snapshot.data.processes %}
+                                        <div class="small d-flex flex-wrap gap-2">
+                                            {% for process in snapshot.data.processes %}
+                                                <div class="me-2">
+                                                    <strong>{{ process.name }}</strong>: {{ process.memory_megabytes }}
+                                                    <span class="text-muted">({{ process.memory_percentage|floatformat:1 }}%)</span>
+                                                </div>
+                                            {% endfor %}
+                                        </div>
+                                    {% else %}
+                                        -
+                                    {% endif %}
+                                </td>
                             </tr>
                         {% endfor %}
                     </tbody>

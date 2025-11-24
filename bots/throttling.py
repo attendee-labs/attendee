@@ -1,3 +1,4 @@
+from django.conf import settings
 from rest_framework.throttling import SimpleRateThrottle
 
 
@@ -23,5 +24,7 @@ class ProjectPostThrottle(ProjectRateThrottle):
 
     def allow_request(self, request, view):
         if request.method != "POST":
+            return True
+        if settings.DISABLE_RATE_LIMITING:
             return True
         return super().allow_request(request, view)

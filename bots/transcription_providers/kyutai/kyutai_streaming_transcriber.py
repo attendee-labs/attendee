@@ -204,11 +204,11 @@ class KyutaiStreamingTranscriber:
         # Track when audio was last sent (used for monitoring/cleanup)
         self.last_send_time = time.time()
 
-        # WebSocket connection
+        # WebSocket connection state
         self.ws = None
-        self.connected = False
-        self.should_stop = False
-        self.finished = False  # Track if finish() has been called
+        self.connected = False  # True when WebSocket is actively connected
+        self.should_stop = False  # True when finish() is called (intentional shutdown)
+        self.reconnecting = True  # Start as True since we begin connecting immediately
 
         # Start event loop in background thread and initialize connection
         self._start_event_loop()
@@ -275,6 +275,7 @@ class KyutaiStreamingTranscriber:
                 ) as ws:
                     self._ws_connection = ws
                     self.connected = True
+                    self.reconnecting = False  # Successfully connected
 
                     # Create send queue in the event loop
                     self._send_queue = asyncio.Queue()
@@ -294,12 +295,16 @@ class KyutaiStreamingTranscriber:
                     return
 
                 logger.warning(f"[{self._participant_name}] Kyutai connection closed unexpectedly, will retry...")
+                # Mark as reconnecting since we'll retry
+                self.reconnecting = True
 
             except asyncio.CancelledError:
                 logger.info(f"[{self._participant_name}] Kyutai connection cancelled")
                 return
             except Exception as e:
                 logger.error(f"[{self._participant_name}] Error connecting to Kyutai server (attempt {attempt}): {e}")
+                # Mark as reconnecting since we'll retry
+                self.reconnecting = True
 
             # Connection failed, determine retry delay
             if attempt <= len(exponential_delays):
@@ -317,6 +322,8 @@ class KyutaiStreamingTranscriber:
                 if remaining_time > 0:
                     logger.info(f"[{self._participant_name}] Only {remaining_time:.1f}s remaining before timeout")
                     await asyncio.sleep(remaining_time)
+                # Gave up - stop reconnecting
+                self.reconnecting = False
                 break
             else:
                 await asyncio.sleep(delay)
@@ -326,6 +333,9 @@ class KyutaiStreamingTranscriber:
             self._ws_connection = None
             self._send_queue = None
 
+        # Exited retry loop - mark as not reconnecting
+        self.reconnecting = False
+
     async def _receiver_loop(self):
         """
         Async receiver loop - processes messages from WebSocket.
@@ -333,10 +343,14 @@ class KyutaiStreamingTranscriber:
         try:
             async for message in self._ws_connection:
                 await self._process_message(message)
-        except websockets.exceptions.ConnectionClosed:
-            logger.warning(f"[{self._participant_name}] Kyutai WebSocket connection closed")
+        except websockets.exceptions.ConnectionClosed as e:
+            if not self.should_stop:
+                logger.warning(f"[{self._participant_name}] Kyutai WebSocket connection closed unexpectedly: {e}")
+            else:
+                logger.info(f"[{self._participant_name}] Kyutai WebSocket connection closed normally")
         except Exception as e:
-            logger.error(f"[{self._participant_name}] Error in receiver loop: {e}", exc_info=True)
+            if not self.should_stop:
+                logger.error(f"[{self._participant_name}] Error in receiver loop: {e}", exc_info=True)
         finally:
             self.connected = False
 
@@ -518,9 +532,16 @@ class KyutaiStreamingTranscriber:
 
         Args:
             audio_data: Audio data as bytes (int16 PCM)
+
+        Raises:
+            ConnectionError: If connection failed permanently (gave up reconnecting)
         """
+        # If not connected and not reconnecting and not stopping, connection failed permanently
+        if not self.connected and not self.reconnecting and not self.should_stop:
+            raise ConnectionError("Kyutai WebSocket connection failed permanently")
+
         if not self.connected or self.should_stop:
-            # Silently drop audio during shutdown - expected behavior
+            # Silently drop audio during shutdown, reconnection, or when disconnected
             return
 
         # Update last send time for monitoring/cleanup
@@ -562,10 +583,18 @@ class KyutaiStreamingTranscriber:
                 # Queue for sending with timing in sender loop
                 # Use call_soon_threadsafe for thread-safe queue operations
                 if self._loop and self._send_queue:
-                    self._loop.call_soon_threadsafe(self._send_queue.put_nowait, message)
+                    try:
+                        self._loop.call_soon_threadsafe(self._send_queue.put_nowait, message)
+                    except Exception as queue_error:
+                        # Queue full or loop closed - connection likely dead
+                        logger.warning(f"[{self._participant_name}] Failed to queue audio, connection may be dead: {queue_error}")
+                        self.connected = False
+                        break
 
         except Exception as e:
             logger.error(f"[{self._participant_name}] Error sending audio to Kyutai: {e}", exc_info=True)
+            # Mark as disconnected so it can be recreated
+            self.connected = False
 
     async def _flush_buffer(self):
         """Flush remaining audio in buffer (may be smaller than FRAME_SIZE)."""
@@ -742,10 +771,10 @@ class KyutaiStreamingTranscriber:
         Close the connection and clean up resources.
         Fast cleanup optimized for multi-speaker scenarios.
         """
-        if self.finished:
-            return  # Already finished
+        if self.should_stop:
+            return  # Already finishing
 
-        self.finished = True
+        self.should_stop = True
         logger.info(f"Finishing Kyutai transcriber [{self._participant_name}]")
 
         # Emit any remaining transcript before closing
