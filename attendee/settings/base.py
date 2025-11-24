@@ -259,13 +259,12 @@ SITE_DOMAIN = os.getenv("SITE_DOMAIN", "app.attendee.dev")
 MASK_TRANSCRIPT_IN_LOGS = os.getenv("MASK_TRANSCRIPT_IN_LOGS", "false") == "true"
 
 VALIDATE_BOT_POD_SPEC_ON_START = os.getenv("VALIDATE_BOT_POD_SPEC_ON_START", "false") == "true"
-RAISE_ERROR_ON_INVALID_BOT_POD_SPEC = (os.getenv("RAISE_ERROR_ON_INVALID_BOT_POD_SPEC", "false") == "true") or VALIDATE_BOT_POD_SPEC_ON_START
 
 if VALIDATE_BOT_POD_SPEC_ON_START:
     from bots.bot_pod_creator.bot_pod_spec import BotPodSpecType, fetch_bot_pod_spec
 
     try:
-        fetch_bot_pod_spec(BotPodSpecType.DEFAULT)
-        fetch_bot_pod_spec(BotPodSpecType.SCHEDULED)
+        fetch_bot_pod_spec(BotPodSpecType.DEFAULT, raise_error_on_invalid_bot_pod_spec=True)
+        fetch_bot_pod_spec(BotPodSpecType.SCHEDULED, raise_error_on_invalid_bot_pod_spec=True)
     except Exception as e:
         raise ImproperlyConfigured(f"Invalid bot pod spec. See error log for details: {e}")
