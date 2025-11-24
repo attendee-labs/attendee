@@ -1,4 +1,3 @@
-import json
 import logging
 import os
 import uuid
@@ -13,9 +12,6 @@ from .bot_pod_spec import BotPodSpecType, fetch_bot_pod_spec
 logger = logging.getLogger(__name__)
 
 # fmt: off
-
-class InvalidBotPodSpecException(Exception):
-    pass
 
 def apply_json6902_patch(json_to_patch: dict, patch_ops: list[dict]) -> dict:
     """
@@ -336,7 +332,7 @@ class BotPodCreator:
             )
         )
 
-        bot_pod_spec_data = self.apply_spec_to_bot_pod(bot_pod)
+        bot_pod_data = self.apply_spec_to_bot_pod(bot_pod)
 
         if add_webpage_streamer:
             # Create specific labels for the webpage streamer pod
@@ -366,7 +362,7 @@ class BotPodCreator:
         try:
             bot_pod_api_response = self.v1.create_namespaced_pod(
                 namespace=self.namespace,
-                body=bot_pod_spec_data
+                body=bot_pod_data
             )
 
             if add_webpage_streamer:

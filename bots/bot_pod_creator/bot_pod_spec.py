@@ -1,16 +1,20 @@
-from enum import Enum
-
-from django.conf import settings
 import json
 import logging
 import os
+from enum import Enum
+
+from django.conf import settings
 
 logger = logging.getLogger(__name__)
+
+
+class InvalidBotPodSpecException(Exception):
+    pass
+
 
 class BotPodSpecType(str, Enum):
     DEFAULT = "DEFAULT"
     SCHEDULED = "SCHEDULED"
-
 
 
 # For now, we fetch based on environment variable.
