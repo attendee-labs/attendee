@@ -644,6 +644,14 @@ class BotModelTest(TransactionTestCase):
         model = self.bot.transcription_settings.openai_transcription_model()
         self.assertEqual(model, "settings-model")
 
+    @mock.patch.dict("os.environ", {"OPENAI_MODEL_NAME": "gpt-4o-transcribe-diarize"})
+    def test_openai_transcription_response_format_diarize_model(self):
+        """Test defaults for response_format and chunking_strategy for gpt-4o-transcribe-diarize"""
+        response_format = self.bot.transcription_settings.openai_transcription_response_format()
+        chunking_strategy = self.bot.transcription_settings.openai_transcription_chunking_strategy()
+        self.assertEqual(response_format, "diarized_json")
+        self.assertEqual(chunking_strategy, "auto")
+
 
 class GladiaProviderTest(TransactionTestCase):
     """Unit‑tests for bots.tasks.process_utterance_task.get_transcription_via_gladia"""
@@ -915,6 +923,94 @@ class OpenAIProviderTest(TransactionTestCase):
         files_dict = call_args[1]["files"]
         self.assertEqual(files_dict["model"][1], "gpt-4-turbo-transcribe")
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3")
+    def test_diarize_model_with_response_format(self, mock_pcm, mock_post):
+        """Test that response_format is sent when using gpt-4o-transcribe-diarize"""
+        mock_post.return_value.status_code = 200
+        mock_post.return_value.json.return_value = {
+            "text": "Hello world",
+            "segments": [
+                {
+                    "type": "transcript.text.segment",
+                    "id": "seg_001",
+                    "start": 0.0,
+                    "end": 2.0,
+                    "text": "Hello world",
+                    "speaker": "A"
+                }
+            ],
+            "duration": 2.0
+        }
+        
+        # Set up bot with diarize model and response_format
+        self.bot.settings = {
+            "transcription_settings": {
+                "openai": {
+                    "model": "gpt-4o-transcribe-diarize",
+                    "response_format": "diarized_json"
+                }
+            }
+        }
+        self.bot.save()
+        self.utt.refresh_from_db()
+        
+        with mock.patch.object(self.creds.__class__, "get_credentials", return_value={"api_key": "sk‑XYZ"}):
+            tx, failure = get_transcription_via_openai(self.utt)
+
+        self.assertIsNone(failure)
+        self.assertEqual(tx["transcript"], "Hello world")
+        self.assertIn("segments", tx)
+        self.assertEqual(len(tx["segments"]), 1)
+        self.assertEqual(tx["duration"], 2.0)
+        
+        # Verify response_format was sent
+        mock_post.assert_called_once()
+        call_args = mock_post.call_args
+        files_dict = call_args[1]["files"]
+        self.assertEqual(files_dict["response_format"][1], "diarized_json")
+
+    # ────────────────────────────────────────────────────────────────────────────────
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3")
+    def test_diarize_model_with_server_vad_chunking(self, mock_pcm, mock_post):
+        """Test that chunking_strategy with server_vad is sent correctly"""
+        mock_post.return_value.status_code = 200
+        mock_post.return_value.json.return_value = {"text": "Test transcription"}
+        
+        # Set up bot with diarize model and server_vad chunking
+        self.bot.settings = {
+            "transcription_settings": {
+                "openai": {
+                    "model": "gpt-4o-transcribe-diarize",
+                    "chunking_strategy": {
+                        "type": "server_vad",
+                        "prefix_padding_ms": 500,
+                        "silence_duration_ms": 300,
+                        "threshold": 0.7
+                    }
+                }
+            }
+        }
+        self.bot.save()
+        self.utt.refresh_from_db()
+        
+        with mock.patch.object(self.creds.__class__, "get_credentials", return_value={"api_key": "sk‑XYZ"}):
+            tx, failure = get_transcription_via_openai(self.utt)
+
+        self.assertIsNone(failure)
+        
+        # Verify chunking_strategy was sent as JSON string
+        mock_post.assert_called_once()
+        call_args = mock_post.call_args
+        files_dict = call_args[1]["files"]
+        import json
+        chunking_strategy = json.loads(files_dict["chunking_strategy"][1])
+        self.assertEqual(chunking_strategy["type"], "server_vad")
+        self.assertEqual(chunking_strategy["prefix_padding_ms"], 500)
+        self.assertEqual(chunking_strategy["silence_duration_ms"], 300)
+        self.assertEqual(chunking_strategy["threshold"], 0.7)
 
 class OpenAIModelValidationTest(TransactionTestCase):
     """Tests for OpenAI model validation in serializers"""
@@ -929,7 +1025,7 @@ class OpenAIModelValidationTest(TransactionTestCase):
         from bots.serializers import get_openai_model_enum
 
         models = get_openai_model_enum()
-        expected = ["gpt-4o-transcribe", "gpt-4o-mini-transcribe"]
+        expected = ["gpt-4o-transcribe", "gpt-4o-mini-transcribe", "gpt-4o-transcribe-diarize"]
         self.assertEqual(models, expected)
 
     @mock.patch.dict("os.environ", {"OPENAI_MODEL_NAME": "custom-whisper-model"})
@@ -938,7 +1034,7 @@ class OpenAIModelValidationTest(TransactionTestCase):
         from bots.serializers import get_openai_model_enum
 
         models = get_openai_model_enum()
-        expected = ["gpt-4o-transcribe", "gpt-4o-mini-transcribe", "custom-whisper-model"]
+        expected = ["gpt-4o-transcribe", "gpt-4o-mini-transcribe", "gpt-4o-transcribe-diarize", "custom-whisper-model"]
         self.assertEqual(models, expected)
 
     @mock.patch.dict("os.environ", {}, clear=True)
