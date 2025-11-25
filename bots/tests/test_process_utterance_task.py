@@ -929,33 +929,13 @@ class OpenAIProviderTest(TransactionTestCase):
     def test_diarize_model_with_response_format(self, mock_pcm, mock_post):
         """Test that response_format is sent when using gpt-4o-transcribe-diarize"""
         mock_post.return_value.status_code = 200
-        mock_post.return_value.json.return_value = {
-            "text": "Hello world",
-            "segments": [
-                {
-                    "type": "transcript.text.segment",
-                    "id": "seg_001",
-                    "start": 0.0,
-                    "end": 2.0,
-                    "text": "Hello world",
-                    "speaker": "A"
-                }
-            ],
-            "duration": 2.0
-        }
-        
+        mock_post.return_value.json.return_value = {"text": "Hello world", "segments": [{"type": "transcript.text.segment", "id": "seg_001", "start": 0.0, "end": 2.0, "text": "Hello world", "speaker": "A"}], "duration": 2.0}
+
         # Set up bot with diarize model and response_format
-        self.bot.settings = {
-            "transcription_settings": {
-                "openai": {
-                    "model": "gpt-4o-transcribe-diarize",
-                    "response_format": "diarized_json"
-                }
-            }
-        }
+        self.bot.settings = {"transcription_settings": {"openai": {"model": "gpt-4o-transcribe-diarize", "response_format": "diarized_json"}}}
         self.bot.save()
         self.utt.refresh_from_db()
-        
+
         with mock.patch.object(self.creds.__class__, "get_credentials", return_value={"api_key": "sk‑XYZ"}):
             tx, failure = get_transcription_via_openai(self.utt)
 
@@ -964,7 +944,7 @@ class OpenAIProviderTest(TransactionTestCase):
         self.assertIn("segments", tx)
         self.assertEqual(len(tx["segments"]), 1)
         self.assertEqual(tx["duration"], 2.0)
-        
+
         # Verify response_format was sent
         mock_post.assert_called_once()
         call_args = mock_post.call_args
@@ -978,39 +958,29 @@ class OpenAIProviderTest(TransactionTestCase):
         """Test that chunking_strategy with server_vad is sent correctly"""
         mock_post.return_value.status_code = 200
         mock_post.return_value.json.return_value = {"text": "Test transcription"}
-        
+
         # Set up bot with diarize model and server_vad chunking
-        self.bot.settings = {
-            "transcription_settings": {
-                "openai": {
-                    "model": "gpt-4o-transcribe-diarize",
-                    "chunking_strategy": {
-                        "type": "server_vad",
-                        "prefix_padding_ms": 500,
-                        "silence_duration_ms": 300,
-                        "threshold": 0.7
-                    }
-                }
-            }
-        }
+        self.bot.settings = {"transcription_settings": {"openai": {"model": "gpt-4o-transcribe-diarize", "chunking_strategy": {"type": "server_vad", "prefix_padding_ms": 500, "silence_duration_ms": 300, "threshold": 0.7}}}}
         self.bot.save()
         self.utt.refresh_from_db()
-        
+
         with mock.patch.object(self.creds.__class__, "get_credentials", return_value={"api_key": "sk‑XYZ"}):
             tx, failure = get_transcription_via_openai(self.utt)
 
         self.assertIsNone(failure)
-        
+
         # Verify chunking_strategy was sent as JSON string
         mock_post.assert_called_once()
         call_args = mock_post.call_args
         files_dict = call_args[1]["files"]
         import json
+
         chunking_strategy = json.loads(files_dict["chunking_strategy"][1])
         self.assertEqual(chunking_strategy["type"], "server_vad")
         self.assertEqual(chunking_strategy["prefix_padding_ms"], 500)
         self.assertEqual(chunking_strategy["silence_duration_ms"], 300)
         self.assertEqual(chunking_strategy["threshold"], 0.7)
+
 
 class OpenAIModelValidationTest(TransactionTestCase):
     """Tests for OpenAI model validation in serializers"""

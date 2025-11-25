@@ -306,7 +306,7 @@ def get_transcription_via_openai(utterance):
     response_format = transcription_settings.openai_transcription_response_format()
     if response_format:
         files["response_format"] = (None, response_format)
-    
+
     chunking_strategy = transcription_settings.openai_transcription_chunking_strategy()
     if chunking_strategy:
         # If chunking_strategy is a dict (server_vad object), JSON stringify it
@@ -315,7 +315,7 @@ def get_transcription_via_openai(utterance):
             files["chunking_strategy"] = (None, json.dumps(chunking_strategy))
         else:
             files["chunking_strategy"] = (None, chunking_strategy)
-    
+
     response = requests.post(url, headers=headers, files=files)
 
     if response.status_code == 401:
@@ -330,7 +330,7 @@ def get_transcription_via_openai(utterance):
 
     # Format the response to match our expected schema
     transcription = {"transcript": result.get("text", "")}
-    
+
     # If diarized_json format, preserve segments and other metadata
     if "segments" in result:
         transcription["segments"] = result.get("segments", [])
