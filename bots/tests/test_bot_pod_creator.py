@@ -1,9 +1,13 @@
+from datetime import timedelta
 from unittest.mock import MagicMock, patch
 
 from django.test import TestCase
+from django.utils import timezone
 from kubernetes import client
 
-from bots.bot_pod_creator.bot_pod_creator import BotPodCreator, apply_json6902_patch
+from bots.bot_pod_creator.bot_pod_creator import BotPodCreator, apply_json6902_patch, fetch_bot_pod_spec
+from bots.bot_pod_creator.bot_pod_spec import BotPodSpecType
+from bots.models import Bot, Organization, Project
 
 
 class TestApplyJson6902Patch(TestCase):
@@ -92,44 +96,32 @@ class TestBotPodCreator(TestCase):
         self.assertEqual(creator.app_name, "attendee")
         self.assertEqual(creator.app_version, "abc123-1234567890")
 
-    @patch("bots.bot_pod_creator.bot_pod_creator.config")
-    @patch("bots.bot_pod_creator.bot_pod_creator.client")
     @patch("bots.bot_pod_creator.bot_pod_creator.os.getenv")
     @patch("bots.bot_pod_creator.bot_pod_creator.settings")
-    def test_fetch_bot_pod_spec_valid_type(self, mock_settings, mock_getenv, mock_client, mock_config):
+    def test_fetch_bot_pod_spec_valid_type(self, mock_settings, mock_getenv):
         """Test fetching bot pod spec with valid type"""
         mock_getenv.side_effect = lambda key, default=None: self.env_vars.get(key, default)
-        mock_settings.BOT_POD_NAMESPACE = "bot-namespace"
-        mock_settings.WEBPAGE_STREAMER_POD_NAMESPACE = "streamer-namespace"
+        mock_settings.CUSTOM_BOT_POD_SPEC_TYPES = []
 
-        creator = BotPodCreator()
-
-        result = creator.fetch_bot_pod_spec("DEFAULT")
+        result = fetch_bot_pod_spec("DEFAULT")
         self.assertEqual(result, "")
 
-    @patch("bots.bot_pod_creator.bot_pod_creator.config")
-    @patch("bots.bot_pod_creator.bot_pod_creator.client")
-    @patch("bots.bot_pod_creator.bot_pod_creator.os.getenv")
     @patch("bots.bot_pod_creator.bot_pod_creator.settings")
-    def test_fetch_bot_pod_spec_invalid_type(self, mock_settings, mock_getenv, mock_client, mock_config):
+    def test_fetch_bot_pod_spec_invalid_type(self, mock_settings):
         """Test that fetch_bot_pod_spec rejects invalid types"""
-        mock_getenv.side_effect = lambda key, default=None: self.env_vars.get(key, default)
-        mock_settings.BOT_POD_NAMESPACE = "bot-namespace"
-        mock_settings.WEBPAGE_STREAMER_POD_NAMESPACE = "streamer-namespace"
-
-        creator = BotPodCreator()
+        mock_settings.CUSTOM_BOT_POD_SPEC_TYPES = []
 
         # Test with lowercase
         with self.assertRaises(ValueError):
-            creator.fetch_bot_pod_spec("default")
+            fetch_bot_pod_spec("default")
 
         # Test with numbers
         with self.assertRaises(ValueError):
-            creator.fetch_bot_pod_spec("DEFAULT123")
+            fetch_bot_pod_spec("DEFAULT123")
 
         # Test with special characters
         with self.assertRaises(ValueError):
-            creator.fetch_bot_pod_spec("DEFAULT_SPEC")
+            fetch_bot_pod_spec("DEFAULT_SPEC")
 
     @patch("bots.bot_pod_creator.bot_pod_creator.config")
     @patch("bots.bot_pod_creator.bot_pod_creator.client")
@@ -296,3 +288,79 @@ class TestBotPodCreator(TestCase):
         result = creator.apply_spec_to_bot_pod(mock_pod)
 
         self.assertEqual(result["metadata"]["labels"]["custom"], "test")
+
+
+class TestBotPodSpecType(TestCase):
+    """Test the bot_pod_spec_type property on Bot model"""
+
+    def setUp(self):
+        """Set up test fixtures"""
+        self.org = Organization.objects.create(name="Test Org")
+        self.project = Project.objects.create(name="Test Project", organization=self.org)
+        self.bot = Bot.objects.create(project=self.project, meeting_url="https://zoom.us/j/test")
+
+    def test_bot_pod_spec_type_with_custom_type_in_kubernetes_settings(self):
+        """Test that custom bot_pod_spec_type in kubernetes_settings overrides all other logic"""
+        self.bot.settings = {"kubernetes_settings": {"bot_pod_spec_type": "CUSTOM"}}
+        self.bot.save()
+        self.assertEqual(self.bot.bot_pod_spec_type, "CUSTOM")
+
+    def test_bot_pod_spec_type_with_custom_type_overrides_future_join_at(self):
+        """Test that custom bot_pod_spec_type overrides scheduled logic even with future join_at"""
+        # Set join_at far in the future (would normally return SCHEDULED)
+        self.bot.join_at = timezone.now() + timedelta(minutes=10)
+        self.bot.settings = {"kubernetes_settings": {"bot_pod_spec_type": "CUSTOM"}}
+        self.bot.save()
+        self.assertEqual(self.bot.bot_pod_spec_type, "CUSTOM")
+
+    @patch.dict("os.environ", {"SCHEDULED_BOT_POD_SPEC_MARGIN_SECONDS": "120"})
+    def test_bot_pod_spec_type_scheduled_with_future_join_at(self):
+        """Test that bot returns SCHEDULED when join_at is beyond the margin"""
+        # Set join_at 5 minutes in the future (beyond 120 second margin)
+        self.bot.join_at = timezone.now() + timedelta(minutes=5)
+        self.bot.save()
+        self.assertEqual(self.bot.bot_pod_spec_type, BotPodSpecType.SCHEDULED)
+
+    @patch.dict("os.environ", {"SCHEDULED_BOT_POD_SPEC_MARGIN_SECONDS": "120"})
+    def test_bot_pod_spec_type_default_with_near_future_join_at(self):
+        """Test that bot returns DEFAULT when join_at is within the margin"""
+        # Set join_at 1 minute in the future (within 120 second margin)
+        self.bot.join_at = timezone.now() + timedelta(seconds=60)
+        self.bot.save()
+        self.assertEqual(self.bot.bot_pod_spec_type, BotPodSpecType.DEFAULT)
+
+    @patch.dict("os.environ", {"SCHEDULED_BOT_POD_SPEC_MARGIN_SECONDS": "120"})
+    def test_bot_pod_spec_type_default_with_past_join_at(self):
+        """Test that bot returns DEFAULT when join_at is in the past"""
+        self.bot.join_at = timezone.now() - timedelta(minutes=1)
+        self.bot.save()
+        self.assertEqual(self.bot.bot_pod_spec_type, BotPodSpecType.DEFAULT)
+
+    @patch.dict("os.environ", {"SCHEDULED_BOT_POD_SPEC_MARGIN_SECONDS": "120"})
+    def test_bot_pod_spec_type_default_without_join_at(self):
+        """Test that bot returns DEFAULT when join_at is not set"""
+        self.bot.join_at = None
+        self.bot.save()
+        self.assertEqual(self.bot.bot_pod_spec_type, BotPodSpecType.DEFAULT)
+
+    @patch.dict("os.environ", {"SCHEDULED_BOT_POD_SPEC_MARGIN_SECONDS": "300"})
+    def test_bot_pod_spec_type_respects_custom_margin(self):
+        """Test that bot_pod_spec_type respects custom SCHEDULED_BOT_POD_SPEC_MARGIN_SECONDS"""
+        # Set join_at 4 minutes in the future
+        self.bot.join_at = timezone.now() + timedelta(minutes=4)
+        self.bot.save()
+        # With 300 second (5 minute) margin, this should be within margin -> DEFAULT
+        self.assertEqual(self.bot.bot_pod_spec_type, BotPodSpecType.DEFAULT)
+
+        # Set join_at 6 minutes in the future
+        self.bot.join_at = timezone.now() + timedelta(minutes=6)
+        self.bot.save()
+        # With 300 second (5 minute) margin, this should be beyond margin -> SCHEDULED
+        self.assertEqual(self.bot.bot_pod_spec_type, BotPodSpecType.SCHEDULED)
+
+    def test_bot_pod_spec_type_with_empty_kubernetes_settings(self):
+        """Test that empty kubernetes_settings doesn't affect bot_pod_spec_type logic"""
+        self.bot.settings = {"kubernetes_settings": {}}
+        self.bot.join_at = timezone.now() + timedelta(minutes=5)
+        self.bot.save()
+        self.assertEqual(self.bot.bot_pod_spec_type, BotPodSpecType.SCHEDULED)
