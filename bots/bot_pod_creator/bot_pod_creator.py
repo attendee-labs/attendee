@@ -314,7 +314,7 @@ class BotPodCreator:
         self.bot_id = bot_id
         self.bot_cpu_request = bot_cpu_request
         self.add_persistent_storage = add_persistent_storage
-        self.dry_run_arg = "ALL" if dry_run else None
+        self.dry_run_arg = "All" if dry_run else None
 
         # Fetch bot pod spec from the bot_pod_spec_type passed in. Fall back to BotPodSpecType.DEFAULT if the type in the argument is not defined.
         self.bot_pod_spec = fetch_bot_pod_spec(bot_pod_spec_type) or fetch_bot_pod_spec(BotPodSpecType.DEFAULT)
