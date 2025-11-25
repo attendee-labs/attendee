@@ -302,6 +302,27 @@ def get_transcription_via_openai(utterance):
         files["prompt"] = (None, transcription_settings.openai_transcription_prompt())
     if transcription_settings.openai_transcription_language():
         files["language"] = (None, transcription_settings.openai_transcription_language())
+    # Add response_format and chunking_strategy for gpt-4o-transcribe-diarize
+    response_format = transcription_settings.openai_transcription_response_format()
+    if response_format:
+        files["response_format"] = (None, response_format)
+        logger.info(f"OpenAI transcription using response_format: {response_format}")
+    
+    chunking_strategy = transcription_settings.openai_transcription_chunking_strategy()
+    if chunking_strategy:
+        # If chunking_strategy is a dict (server_vad object), JSON stringify it
+        # Otherwise pass it as-is (e.g., "auto")
+        if isinstance(chunking_strategy, dict):
+            files["chunking_strategy"] = (None, json.dumps(chunking_strategy))
+            logger.info(f"OpenAI transcription using chunking_strategy: {json.dumps(chunking_strategy)}")
+        else:
+            files["chunking_strategy"] = (None, chunking_strategy)
+            logger.info(f"OpenAI transcription using chunking_strategy: {chunking_strategy}")
+    
+    # Log the model being used for debugging
+    model = transcription_settings.openai_transcription_model()
+    logger.info(f"OpenAI transcription using model: {model}")
+    
     response = requests.post(url, headers=headers, files=files)
 
     if response.status_code == 401:
@@ -313,9 +334,25 @@ def get_transcription_via_openai(utterance):
 
     result = response.json()
     logger.info(f"OpenAI transcription completed successfully for utterance {utterance.id}.")
+    logger.info(f"OpenAI transcription response keys: {list(result.keys())}")
+    if "segments" in result:
+        logger.info(f"OpenAI transcription response includes segments (diarized_json format)")
+    else:
+        logger.info(f"OpenAI transcription response does not include segments (json format)")
 
     # Format the response to match our expected schema
+    # Preserve all fields from diarized_json response (segments, duration, usage, etc.)
     transcription = {"transcript": result.get("text", "")}
+    
+    # If diarized_json format, preserve segments and other metadata
+    if "segments" in result:
+        transcription["segments"] = result.get("segments", [])
+    if "duration" in result:
+        transcription["duration"] = result.get("duration")
+    if "usage" in result:
+        transcription["usage"] = result.get("usage")
+    if "task" in result:
+        transcription["task"] = result.get("task")
 
     return transcription, None
 
