@@ -3,6 +3,7 @@ Django system checks for the bots app.
 """
 
 import logging
+import os
 
 from django.conf import settings
 from django.core.checks import Error, register
@@ -22,6 +23,10 @@ def check_bot_pod_specs(app_configs, **kwargs):
     and CUSTOM_BOT_POD_SPEC_TYPES setting) and attempts to create a pod with each
     spec in dry-run mode. If any spec fails, an error is returned.
     """
+    # Only run this check when using kubernetes for bot launching
+    if os.getenv("LAUNCH_BOT_METHOD") != "kubernetes":
+        return []
+    
     errors = []
 
     # Collect all spec types to check
