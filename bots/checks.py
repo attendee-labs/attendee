@@ -26,7 +26,7 @@ def check_bot_pod_specs(app_configs, **kwargs):
     # Only run this check when using kubernetes for bot launching
     if os.getenv("LAUNCH_BOT_METHOD") != "kubernetes":
         return []
-    
+
     errors = []
 
     # Collect all spec types to check
