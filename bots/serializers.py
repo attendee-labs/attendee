@@ -1475,7 +1475,7 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
                 "pattern": "^[A-Z]+$",
             },
         },
-        "required": [],
+        "required": ["bot_pod_spec_type"],
         "additionalProperties": False,
     }
 
