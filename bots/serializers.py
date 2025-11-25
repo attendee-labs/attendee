@@ -19,6 +19,7 @@ from drf_spectacular.utils import (
 from rest_framework import serializers
 
 from .automatic_leave_configuration import AutomaticLeaveConfiguration
+from .bot_pod_creator.bot_pod_creator import fetch_bot_pod_spec
 from .models import (
     AsyncTranscription,
     AsyncTranscriptionStates,
@@ -1494,6 +1495,9 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
                 raise serializers.ValidationError(f"Invalid bot pod spec type: {bot_pod_spec_type}. Allowed types are: {', '.join(settings.CUSTOM_BOT_POD_SPEC_TYPES)}")
             else:
                 raise serializers.ValidationError("Custom bot pod spec types are not allowed.")
+
+        if not fetch_bot_pod_spec(bot_pod_spec_type):
+            raise serializers.ValidationError(f"Invalid bot pod spec type: {bot_pod_spec_type}. Bot pod spec type not found in environment variables.")
 
         return value
 

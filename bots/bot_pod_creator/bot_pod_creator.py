@@ -46,6 +46,16 @@ def apply_json6902_patch(json_to_patch: dict, patch_str: str) -> dict:
         logger.error("Failed to apply patch: %s", e)
         return json_to_patch
 
+# Fetch bot pod spec from environment variable.
+def fetch_bot_pod_spec(bot_pod_spec_type: str) -> str:
+    # Out of caution ensure bot_pod_spec_type is purely alphabetical and all uppercase
+    if not bot_pod_spec_type.isalpha() or not bot_pod_spec_type.isupper():
+        raise ValueError(f"bot_pod_spec_type must be purely alphabetical and all uppercase: {bot_pod_spec_type}")
+    # Make sure it is in the BotPodSpecType enum or the custom allowlist.
+    if bot_pod_spec_type not in BotPodSpecType.__members__ and bot_pod_spec_type not in settings.CUSTOM_BOT_POD_SPEC_TYPES:
+        raise ValueError(f"bot_pod_spec_type must be in the BotPodSpecType enum or the custom allowlist: {bot_pod_spec_type}")
+    return os.getenv(f"BOT_POD_SPEC_{bot_pod_spec_type}")
+
 class BotPodCreator:
     def __init__(self):
         try:
@@ -276,16 +286,6 @@ class BotPodCreator:
         bot_pod_data = self.api_client.sanitize_for_serialization(bot_pod)
         return apply_json6902_patch(bot_pod_data, self.bot_pod_spec)
 
-    # Fetch bot pod spec from environment variable.
-    def fetch_bot_pod_spec(self, bot_pod_spec_type: str) -> str:
-        # Out of caution ensure bot_pod_spec_type is purely alphabetical and all uppercase
-        if not bot_pod_spec_type.isalpha() or not bot_pod_spec_type.isupper():
-            raise ValueError(f"bot_pod_spec_type must be purely alphabetical and all uppercase: {bot_pod_spec_type}")
-        # Make sure it is in the BotPodSpecType enum or the custom allowlist.
-        if bot_pod_spec_type not in BotPodSpecType.__members__ and bot_pod_spec_type not in settings.CUSTOM_BOT_POD_SPEC_TYPES:
-            raise ValueError(f"bot_pod_spec_type must be in the BotPodSpecType enum or the custom allowlist: {bot_pod_spec_type}")
-        return os.getenv(f"BOT_POD_SPEC_{bot_pod_spec_type}")
-
     def create_bot_pod(
         self,
         bot_id: int,
@@ -315,7 +315,7 @@ class BotPodCreator:
         self.add_persistent_storage = add_persistent_storage
 
         # Fetch bot pod spec from the bot_pod_spec_type passed in. Fall back to BotPodSpecType.DEFAULT if the type in the argument is not defined.
-        self.bot_pod_spec = self.fetch_bot_pod_spec(bot_pod_spec_type) or self.fetch_bot_pod_spec(BotPodSpecType.DEFAULT)
+        self.bot_pod_spec = fetch_bot_pod_spec(bot_pod_spec_type) or fetch_bot_pod_spec(BotPodSpecType.DEFAULT)
 
         # Metadata labels matching the deployment
         bot_pod_labels = {
