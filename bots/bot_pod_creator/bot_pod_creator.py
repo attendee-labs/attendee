@@ -294,6 +294,7 @@ class BotPodCreator:
         add_webpage_streamer: Optional[bool] = False,
         add_persistent_storage: Optional[bool] = False,
         bot_pod_spec_type: Optional[str] = BotPodSpecType.DEFAULT,
+        dry_run: Optional[bool] = False,
     ) -> Dict:
         """
         Create a bot pod with configuration from environment.
@@ -313,6 +314,7 @@ class BotPodCreator:
         self.bot_id = bot_id
         self.bot_cpu_request = bot_cpu_request
         self.add_persistent_storage = add_persistent_storage
+        self.dry_run_arg = "ALL" if dry_run else None
 
         # Fetch bot pod spec from the bot_pod_spec_type passed in. Fall back to BotPodSpecType.DEFAULT if the type in the argument is not defined.
         self.bot_pod_spec = fetch_bot_pod_spec(bot_pod_spec_type) or fetch_bot_pod_spec(BotPodSpecType.DEFAULT)
@@ -389,13 +391,15 @@ class BotPodCreator:
         try:
             bot_pod_api_response = self.v1.create_namespaced_pod(
                 namespace=self.namespace,
-                body=bot_pod_data
+                body=bot_pod_data,
+                dry_run=self.dry_run_arg,
             )
 
             if add_webpage_streamer:
                 webpage_streamer_pod_api_response = self.v1.create_namespaced_pod(
                     namespace=self.webpage_streamer_namespace,
-                    body=webpage_streamer_pod
+                    body=webpage_streamer_pod,
+                    dry_run=self.dry_run_arg,
                 )
                 logger.info(f"Webpage streamer pod created: {webpage_streamer_pod_api_response}")
             
