@@ -324,7 +324,7 @@ class BotPodCreator:
             "app.kubernetes.io/version": self.app_version,
             "app.kubernetes.io/managed-by": "cuber",
             "app": "bot-proc",
-            "bot_pod_spec_type": bot_pod_spec_type,
+            "bot-pod-spec-type": bot_pod_spec_type,
         }
         if add_webpage_streamer:
             bot_pod_labels["network-role"] = "attendee-webpage-streamer-receiver"
