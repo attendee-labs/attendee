@@ -240,6 +240,56 @@ def get_elevenlabs_language_codes():
 from .meeting_url_utils import meeting_type_from_url, normalize_meeting_url
 from .utils import is_valid_png, transcription_provider_from_bot_creation_data
 
+# Define the transcription response schema
+TRANSCRIPTION_RESPONSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "transcript": {
+            "type": "string",
+            "description": "The full transcript text",
+        },
+        "language": {
+            "type": ["string", "null"],
+            "description": "Language code (e.g., 'en_us', 'en-US')",
+        },
+        "words": {
+            "type": "array",
+            "description": "List of words with timing and confidence information",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "word": {
+                        "type": "string",
+                        "description": "The transcribed word text",
+                    },
+                    "start": {
+                        "type": "number",
+                        "description": "Start time in seconds",
+                    },
+                    "end": {
+                        "type": "number",
+                        "description": "End time in seconds",
+                    },
+                    "speaker": {
+                        "type": ["string", "null"],
+                        "description": "Speaker identifier (can be null if speaker diarization is not enabled)",
+                    },
+                    "confidence": {
+                        "type": "number",
+                        "description": "Confidence score for the transcription (0.0 to 1.0)",
+                        "minimum": 0.0,
+                        "maximum": 1.0,
+                    },
+                },
+                "required": ["word", "start", "end"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["transcript"],
+    "additionalProperties": False,
+}
+
 # Define the schema once
 BOT_IMAGE_SCHEMA = {
     "type": "object",
@@ -503,6 +553,12 @@ class BotImageSerializer(serializers.Serializer):
 
 @extend_schema_field(TRANSCRIPTION_SETTINGS_SCHEMA)
 class TranscriptionSettingsJSONField(serializers.JSONField):
+    pass
+
+
+@extend_schema_field(TRANSCRIPTION_RESPONSE_SCHEMA)
+class TranscriptionResponseJSONField(serializers.JSONField):
+    """Field for transcription response with validation"""
     pass
 
 
@@ -1578,7 +1634,7 @@ class TranscriptUtteranceSerializer(serializers.Serializer):
     speaker_is_host = serializers.BooleanField()
     timestamp_ms = serializers.IntegerField()
     duration_ms = serializers.IntegerField()
-    transcription = serializers.JSONField()
+    transcription = TranscriptionResponseJSONField()
 
 
 @extend_schema_serializer(

@@ -2712,7 +2712,50 @@ components:
           type: integer
         duration_ms:
           type: integer
-        transcription: {}
+        transcription:
+          type: object
+          properties:
+            transcript:
+              type: string
+              description: The full transcript text
+            words:
+              type: array
+              description: List of words with timing and confidence information
+              items:
+                type: object
+                properties:
+                  word:
+                    type: string
+                    description: The transcribed word text
+                  start:
+                    type: number
+                    description: Start time in seconds
+                  end:
+                    type: number
+                    description: End time in seconds
+                  speaker:
+                    type:
+                      - string
+                      - null
+                    description: Speaker identifier (can be null if speaker diarization is not enabled)
+                  confidence:
+                    type: number
+                    description: Confidence score for the transcription (0.0 to 1.0)
+                    minimum: 0.0
+                    maximum: 1.0
+                required:
+                  - word
+                  - start
+                  - end
+                additionalProperties: false
+            language:
+              type:
+                - string
+                - null
+              description: Language code (e.g., 'en_us')
+          required:
+            - transcript
+          additionalProperties: false
       required:
       - duration_ms
       - speaker_name

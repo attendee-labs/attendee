@@ -314,13 +314,14 @@ def png_to_yuv420_frame(png_bytes: bytes) -> tuple:
 
 def utterance_words(utterance, offset=0.0):
     if "words" in utterance.transcription:
+        # Words should already conform to schema from normalization
         return utterance.transcription["words"]
 
+    # Create a word object from transcript (conforms to schema: word, start, end required)
     return [
         {
             "start": offset,
             "end": offset + utterance.duration_ms / 1000.0,
-            "punctuated_word": utterance.transcription["transcript"],
             "word": utterance.transcription["transcript"],
         }
     ]

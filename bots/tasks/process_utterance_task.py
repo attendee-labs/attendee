@@ -14,6 +14,23 @@ from bots.webhook_payloads import utterance_webhook_payload
 from bots.webhook_utils import trigger_webhook
 
 
+def normalize_transcription(transcription):
+    """
+    Normalize a transcription object to conform to the schema.
+    Only keeps: transcript (required), words (optional), language (optional).
+    Removes any other fields.
+    """
+    normalized = {"transcript": transcription.get("transcript", "")}
+    
+    if "words" in transcription:
+        normalized["words"] = transcription["words"]
+    
+    if "language" in transcription:
+        normalized["language"] = transcription["language"]
+    
+    return normalized
+
+
 def is_retryable_failure(failure_data):
     return failure_data.get("reason") in [
         TranscriptionFailureReasons.AUDIO_UPLOAD_FAILED,
@@ -184,18 +201,23 @@ def get_transcription_via_gladia(utterance):
             else:
                 logger.info("Gladia delete successful")
 
-            transcription["transcript"] = transcription["full_transcript"]
-            del transcription["full_transcript"]
-
+            # Extract transcript and words from Gladia response
+            transcript_text = transcription.get("full_transcript", "")
+            
             # Extract all words from all utterances into a flat list
             all_words = []
-            for utterance in transcription["utterances"]:
+            for utterance in transcription.get("utterances", []):
                 if "words" in utterance:
                     all_words.extend(utterance["words"])
-            transcription["words"] = all_words
-            del transcription["utterances"]
+            
+            # Build normalized transcription object
+            normalized_transcription = {"transcript": transcript_text}
+            if all_words:
+                normalized_transcription["words"] = all_words
+            if "language" in transcription:
+                normalized_transcription["language"] = transcription["language"]
 
-            return transcription, None
+            return normalized_transcription, None
 
         elif status == "error":
             error_code = result_data.get("error_code")
@@ -267,7 +289,10 @@ def get_transcription_via_deepgram(utterance):
     if len(alternatives) == 0:
         logger.info(f"Deepgram transcription with model {deepgram_model} had no alternatives, returning empty transcription")
         return {"transcript": "", "words": []}, None
-    return json.loads(alternatives[0].to_json()), None
+    
+    # Deepgram response may contain extra fields, normalize it
+    deepgram_transcription = json.loads(alternatives[0].to_json())
+    return normalize_transcription(deepgram_transcription), None
 
 
 def get_transcription_via_openai(utterance):
@@ -314,7 +339,7 @@ def get_transcription_via_openai(utterance):
     result = response.json()
     logger.info(f"OpenAI transcription completed successfully for utterance {utterance.id}.")
 
-    # Format the response to match our expected schema
+    # Format the response to match our expected schema - only include required field
     transcription = {"transcript": result.get("text", "")}
 
     return transcription, None
