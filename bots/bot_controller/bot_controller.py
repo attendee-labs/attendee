@@ -12,6 +12,7 @@ import gi
 import redis
 from django.conf import settings
 from django.core.files.base import ContentFile
+from django.db.models import F
 from django.utils import timezone
 
 from bots.automatic_leave_configuration import AutomaticLeaveConfiguration
@@ -116,7 +117,7 @@ class BotController:
         first_google_meet_bot_login_group = GoogleMeetBotLoginGroup.objects.filter(project=self.bot_in_db.project).first()
         if not first_google_meet_bot_login_group:
             return None
-        least_used_google_meet_bot_login = first_google_meet_bot_login_group.google_meet_bot_logins.order_by("last_used_at").first()
+        least_used_google_meet_bot_login = first_google_meet_bot_login_group.google_meet_bot_logins.order_by(F("last_used_at").asc(nulls_first=True)).first()
         if not least_used_google_meet_bot_login:
             return None
         least_used_google_meet_bot_login.last_used_at = timezone.now()
@@ -125,6 +126,7 @@ class BotController:
         return {
             "session_id": session_id,
             "login_email": least_used_google_meet_bot_login.email,
+            "login_domain": least_used_google_meet_bot_login.workspace_domain,
         }
 
     def google_meet_bot_login_is_available(self):
