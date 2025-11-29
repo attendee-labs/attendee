@@ -17,125 +17,6 @@ from pyvirtualdisplay import Display
 
 os.environ["PULSE_LATENCY_MSEC"] = "20"
 
-
-class LatestFrameTrack(VideoStreamTrack):
-    """
-    Wraps another VideoStreamTrack and always exposes the latest frame,
-    dropping older frames if we fall behind.
-
-    This gives "live-ish" behavior instead of slowly draining a backlog.
-    """
-
-    def __init__(self, source_track: VideoStreamTrack):
-        super().__init__()
-        self._source = source_track
-        self._queue = asyncio.Queue(maxsize=1)
-        self._reader_task = asyncio.create_task(self._reader())
-        self._stopped = False
-
-    async def _reader(self):
-        try:
-            while not self._stopped:
-                frame = await self._source.recv()
-
-                # Keep only the freshest frame in our queue
-                if self._queue.full():
-                    try:
-                        self._queue.get_nowait()
-                    except asyncio.QueueEmpty:
-                        pass
-
-                await self._queue.put(frame)
-        except Exception:
-            # Source ended or PC closed; just exit
-            pass
-
-    async def recv(self):
-        # Wait for the next frame that the reader has pulled
-        frame = await self._queue.get()
-
-        # Re-stamp timing using our own clock so aiortc sees this as real-time
-        pts, time_base = await self.next_timestamp()
-        frame.pts = pts
-        frame.time_base = time_base
-        return frame
-
-    async def stop(self):
-        self._stopped = True
-        if self._reader_task:
-            self._reader_task.cancel()
-            try:
-                await self._reader_task
-            except Exception:
-                pass
-        await super().stop()
-
-
-def audioframe_to_s16le_bytes(frame: AudioFrame, target_channels=2):
-    """
-    Convert aiortc AudioFrame to interleaved s16le bytes at 48k stereo.
-    """
-    # Ensure 48k
-    if frame.sample_rate != 48000:
-        # aiortc typically gives 48k; if not, let av resample:
-        frame.pts = None
-        frame.sample_rate = 48000
-
-    # Convert to s16
-    pcm = frame.to_ndarray(format="s16")  # shape: (channels, samples)
-    if pcm.ndim == 1:
-        pcm = np.expand_dims(pcm, axis=0)
-
-    # Upmix/downmix to target_channels
-    ch = pcm.shape[0]
-    if ch < target_channels:
-        pcm = np.vstack([pcm] + [pcm[0:1, :]] * (target_channels - ch))
-    elif ch > target_channels:
-        pcm = pcm[:target_channels, :]
-
-    # Interleave channels (C, N) -> (N, C) -> bytes
-    interleaved = pcm.T.astype(np.int16).tobytes()
-    return interleaved
-
-
-class AlsaLoopbackSink:
-    """
-    Writes 48k s16le stereo PCM to ALSA loopback using ffmpeg.
-    Target device: hw:Loopback,0,0 (provided by snd-aloop).
-    """
-
-    def __init__(self, device="hw:Loopback,0,0", sample_rate=48000, channels=2):
-        self.device = device
-        self.sample_rate = sample_rate
-        self.channels = channels
-        self._proc = None
-        self._stdin = None
-        self._task = None
-        self._stopped = asyncio.Event()
-
-    def start(self):
-        # Build ffmpeg proc: raw s16le → ALSA device
-        pass
-
-    def write(self, pcm_bytes: bytes):
-        # Calculate volume (RMS) of the PCM data
-        if len(pcm_bytes) > 0:
-            # Convert bytes back to int16 array for volume calculation
-            pcm_array = np.frombuffer(pcm_bytes, dtype=np.int16)
-            # Calculate RMS (Root Mean Square) for volume
-            rms = np.sqrt(np.mean(pcm_array.astype(np.float32) ** 2))
-            # Normalize to 0-100 scale (int16 max is 32767)
-            volume_percent = (rms / 32767.0) * 100
-            print(f"PCM volume: {volume_percent:.2f}% (RMS: {rms:.1f})")
-        else:
-            print("Empty PCM data")
-
-        print(f"PCM bytes length: {len(pcm_bytes)}")
-
-    async def stop(self):
-        pass
-
-
 class WebpageStreamer:
     def __init__(
         self,
@@ -289,28 +170,12 @@ class WebpageStreamer:
             a_player = req.app["audio_player"]
 
             if v_player and v_player.video:
-                latest_video_track = LatestFrameTrack(v_player.video)
+                latest_video_track = v_player.video
                 v_sender = pc.addTrack(latest_video_track)
-                # Hint the encoder for real-time, modest bitrate, no B-frames
-                try:
-                    params = v_sender.getParameters()
-                    # Keep one encoding, cap bitrate to avoid queue build-up
-                    params.encodings = [{"maxBitrate": 750000, "maxFramerate": 15}]
-                    v_sender.setParameters(params)
-                except Exception:
-                    pass
 
             # You can still send server audio if you want the page to hear server audio too:
             if a_player and a_player.audio:
                 a_sender = pc.addTrack(a_player.audio)
-                # Hint the encoder for real-time, modest bitrate, no B-frames
-                try:
-                    params = a_sender.getParameters()
-                    # Keep one encoding, cap bitrate to avoid queue build-up
-                    # params.encodings = [{"maxBitrate": 64_000, "maxFramerate": 15}]
-                    a_sender.setParameters(params)
-                except Exception:
-                    pass
 
             # --- NEW: receive client's mic and feed to ALSA loopback ---
             # loopback_sink = AlsaLoopbackSink(device="hw:Loopback,0,0", sample_rate=48000, channels=2)
