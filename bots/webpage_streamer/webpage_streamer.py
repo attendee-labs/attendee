@@ -7,15 +7,172 @@ logger = logging.getLogger(__name__)
 import asyncio
 import os
 import time
+from fractions import Fraction
 
 import numpy as np
 from aiohttp import web
-from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack
-from aiortc.contrib.media import MediaPlayer, MediaRelay
+from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack, MediaStreamTrack
+from aiortc.contrib.media import MediaRelay
 from av.audio.frame import AudioFrame
+from av.video.frame import VideoFrame
 from pyvirtualdisplay import Display
 
+import gi
+gi.require_version("Gst", "1.0")
+gi.require_version("GstApp", "1.0")
+from gi.repository import Gst, GstApp
+
+Gst.init(None)
+
 os.environ["PULSE_LATENCY_MSEC"] = "20"
+
+
+class SharedAVClock:
+    """
+    Map GStreamer PTS (in ns) onto wall-clock time and provide a shared
+    clock for both audio and video tracks so they stay in sync.
+    """
+
+    def __init__(self, max_lag_seconds: float = 3.0):
+        self._start_pts = None
+        self._start_time = None
+        self._max_lag = max_lag_seconds
+        self._lock = asyncio.Lock()
+
+    async def wait(self, pts_ns: int):
+        async with self._lock:
+            if self._start_pts is None:
+                # First frame: establish reference
+                self._start_pts = pts_ns
+                self._start_time = time.time()
+                return
+
+            pts_diff_ns = pts_ns - self._start_pts
+            pts_seconds = pts_diff_ns / 1e9
+            target_time = self._start_time + pts_seconds
+
+        now = time.time()
+        delay = target_time - now
+        if delay > 0:
+            # Don't ever wait more than max_lag, just in case
+            await asyncio.sleep(min(delay, self._max_lag))
+
+
+class GstVideoStreamTrack(MediaStreamTrack):
+    kind = "video"
+
+    def __init__(self, sink, clock: SharedAVClock, width, height, framerate=30):
+        super().__init__()
+        self._sink = sink
+        self._clock = clock
+        self._width = width
+        self._height = height
+        self._framerate = framerate
+        self._ts = 0
+
+    def _pull_sample(self):
+        return self._sink.emit("pull-sample")
+
+    async def recv(self) -> VideoFrame:
+        loop = asyncio.get_running_loop()
+        sample = await loop.run_in_executor(None, self._pull_sample)
+        if sample is None:
+            raise asyncio.CancelledError("Video pipeline ended")
+
+        buffer = sample.get_buffer()
+        pts_ns = buffer.pts
+
+        await self._clock.wait(pts_ns)
+
+        ok, mapinfo = buffer.map(Gst.MapFlags.READ)
+        if not ok:
+            raise RuntimeError("Could not map video buffer")
+
+        try:
+            data = memoryview(mapinfo.data)
+            w, h = self._width, self._height
+
+            # I420 layout: Y (W*H), U (W/2*H/2), V (W/2*H/2)
+            y_size = w * h
+            uv_size = y_size // 4
+
+            y_plane = data[0:y_size]
+            u_plane = data[y_size : y_size + uv_size]
+            v_plane = data[y_size + uv_size : y_size + 2 * uv_size]
+
+            frame = VideoFrame(format="yuv420p", width=w, height=h)
+            frame.planes[0].update(y_plane)
+            frame.planes[1].update(u_plane)
+            frame.planes[2].update(v_plane)
+        finally:
+            buffer.unmap(mapinfo)
+
+        # ---- NEW: use real PTS in nanoseconds
+        frame.pts = int(pts_ns)
+        frame.time_base = Fraction(1, 1_000_000_000)
+        self._ts = pts_ns
+        # ---- END NEW
+
+        return frame
+
+
+class GstAudioStreamTrack(MediaStreamTrack):
+    kind = "audio"
+
+    def __init__(
+        self,
+        sink: GstApp.AppSink,
+        clock: SharedAVClock,
+        sample_rate: int = 48000,
+        channels: int = 2,
+    ):
+        super().__init__()
+        self._sink = sink
+        self._clock = clock
+        self._sample_rate = sample_rate
+        self._channels = channels
+        self._ts = 0
+
+    def _pull_sample(self):
+        return self._sink.emit("pull-sample")
+
+    async def recv(self) -> AudioFrame:
+        loop = asyncio.get_running_loop()
+        sample = await loop.run_in_executor(None, self._pull_sample)
+        if sample is None:
+            raise asyncio.CancelledError("Audio pipeline ended")
+
+        buffer = sample.get_buffer()
+        pts_ns = buffer.pts
+
+        await self._clock.wait(pts_ns)
+
+        ok, mapinfo = buffer.map(Gst.MapFlags.READ)
+        if not ok:
+            raise RuntimeError("Could not map audio buffer")
+
+        try:
+            data = mapinfo.data
+            # S16LE: 2 bytes per sample * channels
+            num_samples = len(data) // (2 * self._channels)
+            if num_samples <= 0:
+                raise RuntimeError("Empty audio buffer")
+            pcm = np.frombuffer(data, dtype=np.int16).reshape(num_samples, self._channels)
+        finally:
+            buffer.unmap(mapinfo)
+
+        layout = "stereo" if self._channels == 2 else "mono"
+        frame = AudioFrame(format="s16", layout=layout, samples=num_samples)
+        frame.planes[0].update(pcm.tobytes())
+        frame.sample_rate = self._sample_rate
+        # ---- NEW: use real PTS in nanoseconds
+        frame.pts = int(pts_ns)
+        frame.time_base = Fraction(1, 1_000_000_000)
+        self._ts = pts_ns
+        # ---- END NEW
+
+        return frame
+
 
 class WebpageStreamer:
     def __init__(
@@ -28,6 +185,75 @@ class WebpageStreamer:
         self.display = None
         self.last_keepalive_time = None
         self.web_app = None
+
+        # GStreamer-related
+        self._gst_pipeline = None
+        self._gst_video_sink = None
+        self._gst_audio_sink = None
+        self._video_track = None
+        self._audio_track = None
+
+    def _start_gstreamer_capture(self):
+        """
+        Start a single GStreamer pipeline that captures both X11 video and
+        system audio, feeding them into appsinks.
+        """
+        if self._gst_pipeline:
+            return
+
+        width, height = self.video_frame_size
+        display_var = self.display_var_for_recording
+
+        # Shared clock with bounded lag
+        clock = SharedAVClock(max_lag_seconds=30.0)
+
+        pipeline_desc = f"""
+            ximagesrc display-name={display_var} use-damage=0 show-pointer=false
+                ! video/x-raw,framerate=30/1,width={width},height={height}
+                ! videoconvert
+                ! videoscale
+                ! video/x-raw,format=I420,width={width},height={height}
+                ! queue max-size-buffers=5 max-size-time=0 leaky=downstream
+                ! appsink name=video_sink emit-signals=false sync=false max-buffers=1 drop=true
+
+            alsasrc device=default
+                ! audio/x-raw,format=S16LE,channels=1,rate=48000
+                ! audioconvert
+                ! audioresample
+                ! queue max-size-buffers=50 max-size-time=0 leaky=downstream
+                ! appsink name=audio_sink emit-signals=false sync=false max-buffers=10 drop=true
+        """
+
+        logger.info("Starting GStreamer capture pipeline")
+        self._gst_pipeline = Gst.parse_launch(pipeline_desc)
+
+        self._gst_video_sink = self._gst_pipeline.get_by_name("video_sink")
+        self._gst_audio_sink = self._gst_pipeline.get_by_name("audio_sink")
+
+        if not self._gst_video_sink or not self._gst_audio_sink:
+            raise RuntimeError("Failed to get GStreamer appsinks for audio/video")
+
+        # Put pipeline into PLAYING
+        ret = self._gst_pipeline.set_state(Gst.State.PLAYING)
+        if ret == Gst.StateChangeReturn.FAILURE:
+            self._gst_pipeline.set_state(Gst.State.NULL)
+            raise RuntimeError("Failed to start GStreamer pipeline")
+
+        logger.info("GStreamer capture pipeline is PLAYING")
+
+        self._video_track = GstVideoStreamTrack(
+            sink=self._gst_video_sink,
+            clock=clock,
+            width=width,
+            height=height,
+            framerate=30,
+        )
+        self._audio_track = GstAudioStreamTrack(
+            sink=self._gst_audio_sink,
+            clock=clock,
+            sample_rate=48000,
+            channels=1,
+        )
 
     def run(self):
         self.display_var_for_recording = os.environ.get("DISPLAY")
@@ -105,6 +331,9 @@ class WebpageStreamer:
     async def shutdown_process(self):
         """Gracefully shutdown the process."""
         try:
+            if self._gst_pipeline:
+                self._gst_pipeline.set_state(Gst.State.NULL)
+                self._gst_pipeline = None
             if self.driver:
                 self.driver.quit()
             if self.display:
@@ -125,6 +354,9 @@ class WebpageStreamer:
         # will hold the *original* upstream AudioStreamTrack
         # from the first client that posts to /offer
         UPSTREAM_AUDIO_TRACK_KEY = "upstream_audio_track"
+
+        # Start GStreamer capture instead of ffmpeg/MediaPlayer
+        self._start_gstreamer_capture()
 
         async def offer_meeting_audio(req):
             """
@@ -165,19 +397,21 @@ class WebpageStreamer:
             pc = RTCPeerConnection()
             pcs.add(pc)
 
-            # --- server-to-client (unchanged): send your local video/audio if desired ---
-            v_player = req.app["video_player"]
-            a_player = req.app["audio_player"]
+            # --- server-to-client: send local GStreamer video/audio if desired ---
+            video_track = req.app.get("video_track")
+            audio_track = req.app.get("audio_track")
 
-            if v_player and v_player.video:
-                latest_video_track = v_player.video
-                v_sender = pc.addTrack(latest_video_track)
+            if video_track:
+                pc.addTrack(video_track)
 
             # You can still send server audio if you want the page to hear server audio too:
-            if a_player and a_player.audio:
-                a_sender = pc.addTrack(a_player.audio)
+            if audio_track:
+                pc.addTrack(audio_track)
 
-            # --- NEW: receive client's mic and feed to ALSA loopback ---
+            # Note: aiortc's RTCRtpSender doesn't support getParameters/setParameters
+            # Bitrate control must be done at the encoder level (e.g., in the video track)
+
+            # --- NEW: receive client's mic and feed to ALSA loopback (if you re-enable it) ---
             # loopback_sink = AlsaLoopbackSink(device="hw:Loopback,0,0", sample_rate=48000, channels=2)
             # loopback_sink.start()
 
@@ -224,38 +458,7 @@ class WebpageStreamer:
             await self.shutdown_process()
             return web.json_response({"status": "success"})
 
-        video_size = f"{self.video_frame_size[0]}x{self.video_frame_size[1]}"
-        framerate = "15"
-        video_device = self.display.new_display_var
-        video_format = "x11grab"
-
-        audio_device = "default"
-        audio_format = "pulse"
-
         port = 8000
-
-        # Build players
-        # Video options: set size + fps (many webcams accept these via v4l2)
-        v_opts = {
-            "video_size": video_size,
-            "framerate": framerate,
-            "fflags": "nobuffer",
-            "flags": "low_delay",
-            "probesize": "32",
-            "analyzeduration": "0",
-            "thread_queue_size": "4",
-            "draw_mouse": "0",
-        }
-        video_player = MediaPlayer(video_device, format=video_format, options=v_opts)
-
-        # Audio player: let aiortc/ffmpeg handle resampling to 48k
-        a_opts = {
-            "fflags": "nobuffer",
-            "probesize": "32",
-            "analyzeduration": "0",
-            "thread_queue_size": "64",
-        }
-        audio_player = MediaPlayer(audio_device, format=audio_format, options=a_opts)
 
         app = web.Application()
         self.web_app = app
@@ -311,7 +514,8 @@ class WebpageStreamer:
         app.router.add_post("/offer_meeting_audio", offer_meeting_audio)  # SDP exchange
         app.router.add_options("/offer_meeting_audio", handle_cors_preflight)
 
-        app["video_player"] = video_player
-        app["audio_player"] = audio_player
+        # Expose the GStreamer tracks via the app for offer()
+        app["video_track"] = self._video_track
+        app["audio_track"] = self._audio_track
 
         web.run_app(app, host="0.0.0.0", port=port)
