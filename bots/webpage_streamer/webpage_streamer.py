@@ -78,10 +78,18 @@ class SharedAVClock:
         if delay > 0:
             await asyncio.sleep(delay)
 
+
 class GstVideoStreamTrack(MediaStreamTrack):
     kind = "video"
 
-    def __init__(self, sink, clock, width, height, framerate=15):
+    def __init__(
+        self,
+        sink: GstApp.AppSink,
+        clock: SharedAVClock,
+        width: int,
+        height: int,
+        framerate: int = 15,
+    ):
         super().__init__()
         self._sink = sink
         self._clock = clock
@@ -94,6 +102,7 @@ class GstVideoStreamTrack(MediaStreamTrack):
         return self._sink.emit("pull-sample")
 
     async def recv(self) -> VideoFrame:
+        # Block in a thread while waiting for the next GStreamer sample
         loop = asyncio.get_running_loop()
         sample = await loop.run_in_executor(None, self._pull_sample)
         if sample is None:
@@ -102,6 +111,7 @@ class GstVideoStreamTrack(MediaStreamTrack):
         buffer = sample.get_buffer()
         pts_ns = buffer.pts
 
+        # Keep audio + video aligned in real time
         await self._clock.wait(pts_ns)
 
         ok, mapinfo = buffer.map(Gst.MapFlags.READ)
@@ -109,33 +119,18 @@ class GstVideoStreamTrack(MediaStreamTrack):
             raise RuntimeError("Could not map video buffer")
 
         try:
-            data = memoryview(mapinfo.data)
-            w, h = self._width, self._height
-
-            # I420 layout: Y (W*H), U (W/2*H/2), V (W/2*H/2)
-            y_size = w * h
-            uv_size = y_size // 4
-
-            y_plane = data[0:y_size]
-            u_plane = data[y_size : y_size + uv_size]
-            v_plane = data[y_size + uv_size : y_size + 2 * uv_size]
-
-            frame = VideoFrame(format="yuv420p", width=w, height=h)
-            frame.planes[0].update(y_plane)
-            frame.planes[1].update(u_plane)
-            frame.planes[2].update(v_plane)
-
+            data = mapinfo.data
+            # Data comes in as BGRx (4 bytes per pixel, with X as padding)
+            arr = np.frombuffer(data, dtype=np.uint8).reshape(self._height, self._width, 4)
+            # Strip the unused X channel to get BGR
+            frame = VideoFrame.from_ndarray(arr[:, :, :3], format="bgr24")
+            ##logger.info("GStreamer video frame: width=%d height=%d format=%s", frame.width, frame.height, frame.format)
         finally:
             buffer.unmap(mapinfo)
 
         frame.pts = self._ts
         frame.time_base = Fraction(1, self._framerate)
         self._ts += 1
-
-
-        if (self._ts % self._framerate) == 0:
-            logger.info("Sending frame %dx%d", frame.width, frame.height)
-
         return frame
 
 
@@ -230,11 +225,8 @@ class WebpageStreamer:
         pipeline_desc = f"""
             ximagesrc display-name={display_var} use-damage=0 show-pointer=false
                 ! video/x-raw,framerate=15/1,width={width},height={height}
-                ! videoconvert
-                ! videoscale
-                ! video/x-raw,format=I420,width={width},height={height}
-                ! queue max-size-buffers=5 max-size-time=0 leaky=downstream
-                ! appsink name=video_sink emit-signals=false sync=false max-buffers=1 drop=true
+                ! queue max-size-buffers=50 max-size-time=0 leaky=downstream
+                ! appsink name=video_sink emit-signals=false sync=false max-buffers=10 drop=true
 
             alsasrc device=default
                 ! audio/x-raw,format=S16LE,channels=1,rate=48000
