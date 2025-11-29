@@ -96,7 +96,6 @@ class GstVideoStreamTrack(MediaStreamTrack):
         self._width = width
         self._height = height
         self._framerate = framerate
-        self._ts = 0
 
     def _pull_sample(self):
         return self._sink.emit("pull-sample")
@@ -127,9 +126,8 @@ class GstVideoStreamTrack(MediaStreamTrack):
         finally:
             buffer.unmap(mapinfo)
 
-        frame.pts = self._ts
-        frame.time_base = Fraction(1, self._framerate)
-        self._ts += 1
+        frame.pts = int(pts_ns)
+        frame.time_base = Fraction(1, 1_000_000_000)
         return frame
 
 
@@ -141,14 +139,13 @@ class GstAudioStreamTrack(MediaStreamTrack):
         sink: GstApp.AppSink,
         clock: SharedAVClock,
         sample_rate: int = 48000,
-        channels: int = 2,
+        channels: int = 1,
     ):
         super().__init__()
         self._sink = sink
         self._clock = clock
         self._sample_rate = sample_rate
         self._channels = channels
-        self._ts = 0
 
     def _pull_sample(self):
         return self._sink.emit("pull-sample")
@@ -182,9 +179,9 @@ class GstAudioStreamTrack(MediaStreamTrack):
         frame = AudioFrame(format="s16", layout=layout, samples=num_samples)
         frame.planes[0].update(pcm.tobytes())
         frame.sample_rate = self._sample_rate
-        frame.time_base = Fraction(1, self._sample_rate)
-        frame.pts = self._ts
-        self._ts += num_samples
+
+        frame.pts = int(pts_ns)
+        frame.time_base = Fraction(1, 1_000_000_000)
         return frame
 
 
