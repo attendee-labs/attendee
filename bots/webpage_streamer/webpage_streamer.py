@@ -131,6 +131,11 @@ class GstVideoStreamTrack(MediaStreamTrack):
         frame.pts = self._ts
         frame.time_base = Fraction(1, self._framerate)
         self._ts += 1
+
+
+        if (self._ts % self._framerate) == 0:
+            logger.info("Sending frame %dx%d", frame.width, frame.height)
+
         return frame
 
 
