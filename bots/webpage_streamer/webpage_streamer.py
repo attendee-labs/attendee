@@ -124,7 +124,6 @@ class GstVideoStreamTrack(MediaStreamTrack):
             arr = np.frombuffer(data, dtype=np.uint8).reshape(self._height, self._width, 4)
             # Strip the unused X channel to get BGR
             frame = VideoFrame.from_ndarray(arr[:, :, :3], format="bgr24")
-            ##logger.info("GStreamer video frame: width=%d height=%d format=%s", frame.width, frame.height, frame.format)
         finally:
             buffer.unmap(mapinfo)
 
@@ -221,7 +220,7 @@ class WebpageStreamer:
 
         # Shared clock with bounded lag
         clock = SharedAVClock(max_lag_seconds=3.0)
-        
+
         pipeline_desc = f"""
             ximagesrc display-name={display_var} use-damage=0 show-pointer=false
                 ! video/x-raw,framerate=15/1,width={width},height={height}
@@ -426,23 +425,10 @@ class WebpageStreamer:
             a_track = self._audio_track
 
             if v_track is not None:
-                v_sender = pc.addTrack(SERVER_RELAY.subscribe(v_track))
-                # Optional: hint encoder
-                try:
-                    params = v_sender.getParameters()
-                    #params.encodings = [{"maxBitrate": 2_500_000, "maxFramerate": 15, "scaleResolutionDownBy": 1}]
-                    v_sender.setParameters(params)
-                except Exception:
-                    pass
+                pc.addTrack(SERVER_RELAY.subscribe(v_track))
 
             if a_track is not None:
-                a_sender = pc.addTrack(SERVER_RELAY.subscribe(a_track))
-                try:
-                    params = a_sender.getParameters()
-                    #params.encodings = [{"maxBitrate": 64_000}]
-                    a_sender.setParameters(params)
-                except Exception:
-                    pass
+                pc.addTrack(SERVER_RELAY.subscribe(a_track))
 
             @pc.on("track")
             def on_track(track):
