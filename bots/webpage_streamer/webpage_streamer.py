@@ -433,7 +433,7 @@ class WebpageStreamer:
                 # Optional: hint encoder
                 try:
                     params = v_sender.getParameters()
-                    params.encodings = [{"maxBitrate": 1_200_000, "maxFramerate": 15}]
+                    params.encodings = [{"maxBitrate": 2_500_000, "maxFramerate": 15, "scaleResolutionDownBy": 1}]
                     v_sender.setParameters(params)
                 except Exception:
                     pass
