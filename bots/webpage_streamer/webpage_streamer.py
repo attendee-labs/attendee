@@ -433,7 +433,7 @@ class WebpageStreamer:
                 # Optional: hint encoder
                 try:
                     params = v_sender.getParameters()
-                    params.encodings = [{"maxBitrate": 2_500_000, "maxFramerate": 15, "scaleResolutionDownBy": 1}]
+                    #params.encodings = [{"maxBitrate": 2_500_000, "maxFramerate": 15, "scaleResolutionDownBy": 1}]
                     v_sender.setParameters(params)
                 except Exception:
                     pass
@@ -442,7 +442,7 @@ class WebpageStreamer:
                 a_sender = pc.addTrack(SERVER_RELAY.subscribe(a_track))
                 try:
                     params = a_sender.getParameters()
-                    params.encodings = [{"maxBitrate": 64_000}]
+                    #params.encodings = [{"maxBitrate": 64_000}]
                     a_sender.setParameters(params)
                 except Exception:
                     pass

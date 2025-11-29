@@ -132,7 +132,7 @@ class WebpageStreamerManager:
         while not self.cleaned_up:
             try:
                 if not self.webpage_streamer_connection_can_start:
-                    time.sleep(10)
+                    time.sleep(1)
                 else:
                     time.sleep(60)  # Wait 60 seconds between keepalive requests if we know it's started
 
