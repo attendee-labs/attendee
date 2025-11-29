@@ -840,7 +840,7 @@ class WebBotAdapter(BotAdapter):
     def is_bot_ready_for_webpage_streamer(self):
         if not self.driver:
             return False
-        return self.driver.execute_script("return window.botOutputManager.isReadyForWebpageStreamer();")
+        return self.driver.execute_script("return window.botOutputManager?.isReadyForWebpageStreamer();")
 
     def ready_to_show_bot_image(self):
         self.send_message_callback({"message": self.Messages.READY_TO_SHOW_BOT_IMAGE})
