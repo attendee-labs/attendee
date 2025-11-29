@@ -9,15 +9,15 @@ import os
 import time
 from fractions import Fraction
 
+import gi
 import numpy as np
 from aiohttp import web
-from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack, MediaStreamTrack
+from aiortc import MediaStreamTrack, RTCPeerConnection, RTCSessionDescription
 from aiortc.contrib.media import MediaRelay
 from av.audio.frame import AudioFrame
 from av.video.frame import VideoFrame
 from pyvirtualdisplay import Display
 
-import gi
 gi.require_version("Gst", "1.0")
 gi.require_version("GstApp", "1.0")
 from gi.repository import Gst, GstApp
