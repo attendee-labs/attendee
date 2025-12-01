@@ -321,12 +321,20 @@ class KyutaiStreamingTranscriber:
                 remaining_time = self.max_retry_time - elapsed_time
                 if remaining_time > 0:
                     logger.info(f"[{self._participant_name}] Only {remaining_time:.1f}s remaining before timeout")
-                    await asyncio.sleep(remaining_time)
+                    try:
+                        await asyncio.sleep(remaining_time)
+                    except (RuntimeError, asyncio.CancelledError):
+                        # Event loop closed or cancelled during shutdown
+                        break
                 # Gave up - stop reconnecting
                 self.reconnecting = False
                 break
             else:
-                await asyncio.sleep(delay)
+                try:
+                    await asyncio.sleep(delay)
+                except (RuntimeError, asyncio.CancelledError):
+                    # Event loop closed or cancelled during shutdown
+                    break
 
             # Reset connection state for retry
             self.connected = False
@@ -775,7 +783,7 @@ class KyutaiStreamingTranscriber:
     def finish(self):
         """
         Close the connection and clean up resources.
-        Fast cleanup optimized for multi-speaker scenarios.
+        Gracefully shuts down event loop and tasks.
         """
         if self.should_stop:
             return  # Already finishing
@@ -785,13 +793,11 @@ class KyutaiStreamingTranscriber:
 
         # Emit any remaining transcript before closing
         self._emit_current_utterance()
-        self.should_stop = True
 
         try:
             # Signal stop to async tasks
             if self._loop and self._loop.is_running():
-                # Flush buffer and send Marker message to indicate end
-                # of stream
+                # Flush buffer and send Marker message to indicate end of stream
                 if self.connected and self._ws_connection:
 
                     async def flush_and_close():
@@ -799,24 +805,53 @@ class KyutaiStreamingTranscriber:
                             # Flush any remaining audio buffer
                             await self._flush_buffer()
 
-                            # Send marker (fire and forget)
+                            # Send marker to signal end of stream
                             marker_msg = msgpack.packb({"type": "Marker", "id": 0}, use_bin_type=True)
                             await self._ws_connection.send(marker_msg)
 
-                            # Close WebSocket immediately
+                            # Give server time to process marker
+                            await asyncio.sleep(0.1)
+
+                            # Close WebSocket gracefully
                             await self._ws_connection.close()
                         except Exception as e:
-                            logger.error(f"[{self._participant_name}] Error closing WebSocket: {e}")
+                            logger.debug(f"[{self._participant_name}] Error in flush_and_close: {e}")
 
-                    # Schedule close but don't wait for it
-                    asyncio.run_coroutine_threadsafe(flush_and_close(), self._loop)
+                    # Cancel tasks first
+                    async def cancel_tasks():
+                        tasks = []
+                        if self._sender_task and not self._sender_task.done():
+                            self._sender_task.cancel()
+                            tasks.append(self._sender_task)
+                        if self._receiver_task and not self._receiver_task.done():
+                            self._receiver_task.cancel()
+                            tasks.append(self._receiver_task)
+                        
+                        # Wait for cancellation
+                        if tasks:
+                            await asyncio.gather(*tasks, return_exceptions=True)
+                        
+                        # Now flush and close
+                        await flush_and_close()
+                        
+                        # Stop the loop
+                        self._loop.stop()
 
-                # Stop the event loop immediately (don't wait)
-                self._loop.call_soon_threadsafe(self._loop.stop)
+                    # Schedule graceful shutdown
+                    asyncio.run_coroutine_threadsafe(cancel_tasks(), self._loop)
 
-            # Don't wait for thread - let it finish in background
-            # This releases the connection immediately for other speakers
-            logger.info(f"Released connection [{self._participant_name}] (background cleanup)")
+                    # Wait a short time for graceful shutdown (non-blocking for caller)
+                    # This prevents the "no running event loop" error
+                    import threading
+                    if threading.current_thread() != self._loop_thread:
+                        # Only wait if we're not in the event loop thread
+                        import time
+                        time.sleep(0.2)  # Brief wait for cleanup
+                else:
+                    # No active connection, just stop the loop
+                    self._loop.call_soon_threadsafe(self._loop.stop)
+
+            logger.info(f"Released connection [{self._participant_name}] (graceful cleanup)")
 
         except Exception as e:
             logger.error(f"Error finishing Kyutai transcriber [{self._participant_name}]: {e}")
