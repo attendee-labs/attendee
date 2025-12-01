@@ -237,11 +237,15 @@ class PerParticipantStreamingAudioInputManager:
             if speaker_id in self.last_nonsilent_audio_time:
                 del self.last_nonsilent_audio_time[speaker_id]
 
-        # If Number of streaming transcribers is greater than 4,
-        # stop the oldest one
-        if len(self.streaming_transcribers) > 4:
+        # Determine max concurrent transcribers based on provider
+        # Kyutai: Higher limit (10) since it has 300s silence timeout and handles inactive connections well
+        # Deepgram: Lower limit (4) due to tight rate limits and 10s silence timeout
+        max_transcribers = 10 if self.transcription_provider == TranscriptionProviders.KYUTAI else 4
+        
+        # If Number of streaming transcribers exceeds limit, stop the oldest one
+        if len(self.streaming_transcribers) > max_transcribers:
             # Find speaker_id and transcriber with oldest last_send_time
             oldest_speaker_id, oldest_transcriber = min(self.streaming_transcribers.items(), key=lambda item: item[1].last_send_time)
             oldest_transcriber.finish()
             del self.streaming_transcribers[oldest_speaker_id]
-            logger.info(f"Stopped oldest streaming transcriber for speaker {oldest_speaker_id}")
+            logger.info(f"Stopped oldest streaming transcriber for speaker {oldest_speaker_id} (limit: {max_transcribers})")
