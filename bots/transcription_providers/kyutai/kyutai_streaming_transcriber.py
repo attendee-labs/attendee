@@ -210,6 +210,17 @@ class KyutaiStreamingTranscriber:
         self.should_stop = False  # True when finish() is called (intentional shutdown)
         self.reconnecting = True  # Start as True since we begin connecting immediately
 
+        # Health monitoring: track last message received from server
+        # Used to detect silent WebSocket failures where connection appears alive
+        # but no data is being received (e.g., server-side timeout without close frame)
+        self._last_message_received_time = None
+        self._last_audio_sent_time = None  # Track when we last sent audio
+        self._health_check_task = None
+        # Timeout for considering connection stale (seconds)
+        # Only applies when we're actively sending audio - if we send audio but
+        # get no response for this long, the connection is likely dead
+        self._connection_stale_timeout = 10
+
         # Start event loop in background thread and initialize connection
         self._start_event_loop()
 
@@ -282,12 +293,16 @@ class KyutaiStreamingTranscriber:
 
                     logger.info(f"✅ [{self._participant_name}] Successfully connected to Kyutai server after {attempt} attempt(s)")
 
-                    # Start both receiver and sender tasks
+                    # Initialize health monitoring timestamp
+                    self._last_message_received_time = time.time()
+
+                    # Start receiver, sender, and health check tasks
                     self._receiver_task = asyncio.create_task(self._receiver_loop())
                     self._sender_task = asyncio.create_task(self._sender_loop())
+                    self._health_check_task = asyncio.create_task(self._health_check_loop())
 
-                    # Wait for both tasks
-                    await asyncio.gather(self._receiver_task, self._sender_task, return_exceptions=True)
+                    # Wait for all tasks
+                    await asyncio.gather(self._receiver_task, self._sender_task, self._health_check_task, return_exceptions=True)
 
                 # Connection closed - check if intentional
                 if self.should_stop:
@@ -344,12 +359,56 @@ class KyutaiStreamingTranscriber:
         # Exited retry loop - mark as not reconnecting
         self.reconnecting = False
 
+    async def _health_check_loop(self):
+        """
+        Monitor connection health by checking for stale connections.
+        
+        Detects silent WebSocket failures where the connection appears alive
+        but no messages are being received (e.g., server-side timeout without
+        proper close frame, network issues that bypass ping/pong).
+        
+        Only considers connection stale if we're actively sending audio but
+        not receiving any response - this avoids false positives when the
+        speaker is simply not talking.
+        """
+        try:
+            while not self.should_stop and self.connected:
+                await asyncio.sleep(5)  # Check every 5 seconds for fast detection
+                
+                # Need both timestamps to make a decision
+                if self._last_message_received_time is None or self._last_audio_sent_time is None:
+                    continue
+                
+                time_since_last_message = time.time() - self._last_message_received_time
+                time_since_last_audio_sent = time.time() - self._last_audio_sent_time
+                
+                # Only consider stale if:
+                # 1. We've been sending audio recently (within last 5 seconds)
+                # 2. But haven't received any response for too long
+                # This means: we're actively streaming but server went silent
+                if time_since_last_audio_sent < 5 and time_since_last_message > self._connection_stale_timeout:
+                    logger.warning(
+                        f"[{self._participant_name}] Kyutai connection appears stale - "
+                        f"no messages received for {time_since_last_message:.1f}s. "
+                        f"Forcing reconnection..."
+                    )
+                    # Force close the WebSocket to trigger reconnection
+                    if self._ws_connection:
+                        await self._ws_connection.close()
+                    break
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error(f"[{self._participant_name}] Health check error: {e}")
+
     async def _receiver_loop(self):
         """
         Async receiver loop - processes messages from WebSocket.
         """
         try:
             async for message in self._ws_connection:
+                # Update health monitoring timestamp on every received message
+                self._last_message_received_time = time.time()
                 await self._process_message(message)
         except websockets.exceptions.ConnectionClosed as e:
             if not self.should_stop:
@@ -373,6 +432,11 @@ class KyutaiStreamingTranscriber:
         try:
             while not self.should_stop:
                 try:
+                    # Check if queue exists before trying to get from it
+                    if self._send_queue is None:
+                        await asyncio.sleep(0.1)
+                        continue
+
                     message = await asyncio.wait_for(self._send_queue.get(), timeout=1.0)
 
                     if not self.connected or not self._ws_connection:
@@ -394,8 +458,9 @@ class KyutaiStreamingTranscriber:
                     if current_time < expected_send_time:
                         await asyncio.sleep(expected_send_time - current_time)
 
-                    # Send message
+                    # Send message and track time for health monitoring
                     await self._ws_connection.send(message)
+                    self._last_audio_sent_time = time.time()
 
                 except asyncio.TimeoutError:
                     continue
@@ -810,7 +875,7 @@ class KyutaiStreamingTranscriber:
                             await self._ws_connection.send(marker_msg)
 
                             # Give server time to process marker
-                            await asyncio.sleep(0.1)
+                            await asyncio.sleep(1)
 
                             # Close WebSocket gracefully
                             await self._ws_connection.close()
@@ -846,7 +911,7 @@ class KyutaiStreamingTranscriber:
                     if threading.current_thread() != self._loop_thread:
                         # Only wait if we're not in the event loop thread
                         import time
-                        time.sleep(0.2)  # Brief wait for cleanup
+                        time.sleep(0.5)  # Brief wait for cleanup
                 else:
                     # No active connection, just stop the loop
                     self._loop.call_soon_threadsafe(self._loop.stop)
