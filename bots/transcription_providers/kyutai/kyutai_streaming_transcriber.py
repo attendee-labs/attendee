@@ -214,10 +214,10 @@ class KyutaiStreamingTranscriber:
         # Used to detect silent WebSocket failures where connection appears alive
         # but no data is being received (e.g., server-side timeout without close frame)
         self._last_message_received_time = None
-        self._last_audio_sent_time = None  # Track when we last sent audio
+        self._last_audio_queued_time = None  # Track when audio was QUEUED (not sent)
         self._health_check_task = None
         # Timeout for considering connection stale (seconds)
-        # Only applies when we're actively sending audio - if we send audio but
+        # Only applies when we're actively queueing audio - if we queue audio but
         # get no response for this long, the connection is likely dead
         self._connection_stale_timeout = 10
 
@@ -376,17 +376,18 @@ class KyutaiStreamingTranscriber:
                 await asyncio.sleep(5)  # Check every 5 seconds for fast detection
                 
                 # Need both timestamps to make a decision
-                if self._last_message_received_time is None or self._last_audio_sent_time is None:
+                if self._last_message_received_time is None or self._last_audio_queued_time is None:
                     continue
                 
                 time_since_last_message = time.time() - self._last_message_received_time
-                time_since_last_audio_sent = time.time() - self._last_audio_sent_time
+                time_since_last_audio_queued = time.time() - self._last_audio_queued_time
                 
                 # Only consider stale if:
-                # 1. We've been sending audio recently (within last 5 seconds)
+                # 1. We've been queueing audio recently (within last 5 seconds)
                 # 2. But haven't received any response for too long
                 # This means: we're actively streaming but server went silent
-                if time_since_last_audio_sent < 5 and time_since_last_message > self._connection_stale_timeout:
+                # NOTE: We track queue time, not send time, because send() may block on dead socket
+                if time_since_last_audio_queued < 5 and time_since_last_message > self._connection_stale_timeout:
                     logger.warning(
                         f"[{self._participant_name}] Kyutai connection appears stale - "
                         f"no messages received for {time_since_last_message:.1f}s. "
@@ -458,9 +459,8 @@ class KyutaiStreamingTranscriber:
                     if current_time < expected_send_time:
                         await asyncio.sleep(expected_send_time - current_time)
 
-                    # Send message and track time for health monitoring
+                    # Send message (queuing time already tracked when audio entered queue)
                     await self._ws_connection.send(message)
-                    self._last_audio_sent_time = time.time()
 
                 except asyncio.TimeoutError:
                     continue
@@ -664,6 +664,10 @@ class KyutaiStreamingTranscriber:
                 if self._loop and self._send_queue:
                     try:
                         self._loop.call_soon_threadsafe(self._send_queue.put_nowait, message)
+                        # Track queue time for health monitoring
+                        # This is updated when audio enters the queue, NOT when it's sent
+                        # This ensures health check triggers even if send() blocks on dead socket
+                        self._last_audio_queued_time = time.time()
                     except Exception as queue_error:
                         # Queue full or loop closed - connection likely dead
                         logger.warning(f"[{self._participant_name}] Failed to queue audio, connection may be dead: {queue_error}")
