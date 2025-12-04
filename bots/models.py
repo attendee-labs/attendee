@@ -537,6 +537,20 @@ class TranscriptionSettings:
     def openai_transcription_language(self):
         return self._settings.get("openai", {}).get("language", None)
 
+    def openai_transcription_response_format(self):
+        # Only applicable for gpt-4o-transcribe-diarize, default to diarized_json
+        model = self.openai_transcription_model()
+        if model == "gpt-4o-transcribe-diarize":
+            return self._settings.get("openai", {}).get("response_format", "diarized_json")
+        return None
+
+    def openai_transcription_chunking_strategy(self):
+        # Only applicable for gpt-4o-transcribe-diarize, default to auto
+        model = self.openai_transcription_model()
+        if model == "gpt-4o-transcribe-diarize":
+            return self._settings.get("openai", {}).get("chunking_strategy", "auto")
+        return None
+
     def gladia_code_switching_languages(self):
         return self._settings.get("gladia", {}).get("code_switching_languages", None)
 

@@ -62,7 +62,7 @@ def url_is_allowed_for_voice_agent(url):
 
 def get_openai_model_enum():
     """Get allowed OpenAI models including custom env var if set"""
-    default_models = ["gpt-4o-transcribe", "gpt-4o-mini-transcribe"]
+    default_models = ["gpt-4o-transcribe", "gpt-4o-mini-transcribe", "gpt-4o-transcribe-diarize"]
     custom_model = os.getenv("OPENAI_MODEL_NAME")
     if custom_model and custom_model not in default_models:
         return default_models + [custom_model]
@@ -302,6 +302,28 @@ TRANSCRIPTION_SETTINGS_SCHEMA = {
                 "language": {
                     "type": "string",
                     "description": "The language to use for transcription. See here in the 'Set 1' column for available language codes: https://en.wikipedia.org/wiki/List_of_ISO_639_language_codes. This parameter is optional but if you know the language in advance, setting it will improve accuracy.",
+                },
+                "response_format": {
+                    "type": "string",
+                    "enum": ["json", "diarized_json"],
+                    "description": "The format of the transcription response. Only applicable for gpt-4o-transcribe-diarize model. Defaults to diarized_json.",
+                },
+                "chunking_strategy": {
+                    "oneOf": [
+                        {"type": "string", "enum": ["auto"]},
+                        {
+                            "type": "object",
+                            "properties": {
+                                "type": {"type": "string", "enum": ["server_vad"], "description": "Must be set to server_vad to enable manual chunking using server side VAD."},
+                                "prefix_padding_ms": {"type": "integer", "description": "Amount of audio to include before the VAD detected speech (in milliseconds). Defaults to 300."},
+                                "silence_duration_ms": {"type": "integer", "description": "Duration of silence to detect speech stop (in milliseconds). With shorter values the model will respond more quickly, but may jump in on short pauses from the user. Defaults to 200."},
+                                "threshold": {"type": "number", "description": "Sensitivity threshold (0.0 to 1.0) for voice activity detection. A higher threshold will require louder audio to activate the model, and thus might perform better in noisy environments. Defaults to 0.5."},
+                            },
+                            "required": ["type"],
+                            "additionalProperties": False,
+                        },
+                    ],
+                    "description": "The chunking strategy for transcription. Only applicable for gpt-4o-transcribe-diarize model. Defaults to auto. Can be 'auto' or a server_vad object with optional prefix_padding_ms, silence_duration_ms, and threshold parameters.",
                 },
             },
             "required": ["model"],

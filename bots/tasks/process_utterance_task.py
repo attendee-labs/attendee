@@ -14,6 +14,37 @@ from bots.webhook_payloads import utterance_webhook_payload
 from bots.webhook_utils import trigger_webhook
 
 
+def transform_diarized_json_to_schema(result):
+    """
+    Transform OpenAI diarized_json format to Attendee's expected transcription schema.
+    """
+    transcription = {"transcript": result.get("text", "")}
+
+    # Extract segments (OpenAI sends each "word" as a separate segment, may contain multiple words).
+    # We will transform each segment into a word object, despite the fact that it may contain multiple words.
+    segments = result.get("segments", [])
+    words = []
+
+    for segment in segments:
+        segment_text = segment.get("text", "")
+        segment_start = segment.get("start", 0.0)
+        segment_end = segment.get("end", segment_start)
+        speaker = segment.get("speaker", None)
+
+        word_obj = {
+            "word": segment_text,
+            "start": segment_start,
+            "end": segment_end,
+            "speaker": speaker,
+        }
+        words.append(word_obj)
+
+    if words:
+        transcription["words"] = words
+
+    return transcription
+
+
 def is_retryable_failure(failure_data):
     return failure_data.get("reason") in [
         TranscriptionFailureReasons.AUDIO_UPLOAD_FAILED,
@@ -302,6 +333,18 @@ def get_transcription_via_openai(utterance):
         files["prompt"] = (None, transcription_settings.openai_transcription_prompt())
     if transcription_settings.openai_transcription_language():
         files["language"] = (None, transcription_settings.openai_transcription_language())
+    # Add response_format and chunking_strategy for gpt-4o-transcribe-diarize
+    response_format = transcription_settings.openai_transcription_response_format()
+    if response_format:
+        files["response_format"] = (None, response_format)
+    chunking_strategy = transcription_settings.openai_transcription_chunking_strategy()
+    if chunking_strategy:
+        # If chunking_strategy is a dict (server_vad object), JSON stringify it
+        if isinstance(chunking_strategy, dict):
+            files["chunking_strategy"] = (None, json.dumps(chunking_strategy))
+        else:
+            files["chunking_strategy"] = (None, chunking_strategy)
+
     response = requests.post(url, headers=headers, files=files)
 
     if response.status_code == 401:
@@ -314,8 +357,11 @@ def get_transcription_via_openai(utterance):
     result = response.json()
     logger.info(f"OpenAI transcription completed successfully for utterance {utterance.id}.")
 
-    # Format the response to match our expected schema
-    transcription = {"transcript": result.get("text", "")}
+    # If diarized_json format, transform to Attendee's expected transcription schema
+    if response_format == "diarized_json":
+        transcription = transform_diarized_json_to_schema(result)
+    else:
+        transcription = {"transcript": result.get("text", "")}
 
     return transcription, None
 

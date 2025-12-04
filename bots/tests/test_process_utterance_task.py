@@ -644,6 +644,14 @@ class BotModelTest(TransactionTestCase):
         model = self.bot.transcription_settings.openai_transcription_model()
         self.assertEqual(model, "settings-model")
 
+    @mock.patch.dict("os.environ", {"OPENAI_MODEL_NAME": "gpt-4o-transcribe-diarize"})
+    def test_openai_transcription_response_format_diarize_model(self):
+        """Test defaults for response_format and chunking_strategy for gpt-4o-transcribe-diarize"""
+        response_format = self.bot.transcription_settings.openai_transcription_response_format()
+        chunking_strategy = self.bot.transcription_settings.openai_transcription_chunking_strategy()
+        self.assertEqual(response_format, "diarized_json")
+        self.assertEqual(chunking_strategy, "auto")
+
 
 class GladiaProviderTest(TransactionTestCase):
     """Unit‑tests for bots.tasks.process_utterance_task.get_transcription_via_gladia"""
@@ -915,6 +923,40 @@ class OpenAIProviderTest(TransactionTestCase):
         files_dict = call_args[1]["files"]
         self.assertEqual(files_dict["model"][1], "gpt-4-turbo-transcribe")
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3")
+    def test_diarized_json_transformation(self, mock_pcm, mock_post):
+        """Test that diarized_json format is transformed to Attendee's expected transcription schema"""
+        # Mock diarized_json response with segments
+        mock_post.return_value.status_code = 200
+        mock_post.return_value.json.return_value = {
+            "text": "Hey, what's up? I'm good, thank you!",
+            "segments": [
+                {"text": "Hey, what's up?", "start": 0.08, "end": 0.28, "speaker": "A"},
+                {"text": "I'm good, thank you!", "start": 0.28, "end": 0.52, "speaker": "B"},
+            ],
+        }
+
+        # Set up bot with diarize model and response_format
+        self.bot.settings = {"transcription_settings": {"openai": {"model": "gpt-4o-transcribe-diarize", "response_format": "diarized_json"}}}
+        self.bot.save()
+        self.utt.refresh_from_db()
+
+        with mock.patch.object(self.creds.__class__, "get_credentials", return_value={"api_key": "sk‑XYZ"}):
+            tx, failure = get_transcription_via_openai(self.utt)
+
+        self.assertIsNone(failure)
+        # Verify transformation to our schema
+        self.assertEqual(tx["transcript"], "Hey, what's up? I'm good, thank you!")
+        self.assertIn("words", tx)
+        self.assertEqual(len(tx["words"]), 2)
+        # Verify first word
+        self.assertEqual(tx["words"][0]["word"], "Hey, what's up?")
+        self.assertEqual(tx["words"][0]["start"], 0.08)
+        self.assertEqual(tx["words"][0]["end"], 0.28)
+        self.assertEqual(tx["words"][0]["speaker"], "A")
+
 
 class OpenAIModelValidationTest(TransactionTestCase):
     """Tests for OpenAI model validation in serializers"""
@@ -929,7 +971,7 @@ class OpenAIModelValidationTest(TransactionTestCase):
         from bots.serializers import get_openai_model_enum
 
         models = get_openai_model_enum()
-        expected = ["gpt-4o-transcribe", "gpt-4o-mini-transcribe"]
+        expected = ["gpt-4o-transcribe", "gpt-4o-mini-transcribe", "gpt-4o-transcribe-diarize"]
         self.assertEqual(models, expected)
 
     @mock.patch.dict("os.environ", {"OPENAI_MODEL_NAME": "custom-whisper-model"})
@@ -938,7 +980,7 @@ class OpenAIModelValidationTest(TransactionTestCase):
         from bots.serializers import get_openai_model_enum
 
         models = get_openai_model_enum()
-        expected = ["gpt-4o-transcribe", "gpt-4o-mini-transcribe", "custom-whisper-model"]
+        expected = ["gpt-4o-transcribe", "gpt-4o-mini-transcribe", "gpt-4o-transcribe-diarize", "custom-whisper-model"]
         self.assertEqual(models, expected)
 
     @mock.patch.dict("os.environ", {}, clear=True)
