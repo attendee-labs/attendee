@@ -215,6 +215,7 @@ class KyutaiStreamingTranscriber:
         # but no data is being received (e.g., server-side timeout without close frame)
         self._last_message_received_time = None
         self._last_audio_queued_time = None  # Track when audio was QUEUED (not sent)
+        self._last_audio_received_time = None  # Track when send() was called (audio received from caller)
         self._health_check_task = None
         # Timeout for considering connection stale (seconds)
         # Only applies when we're actively queueing audio - if we queue audio but
@@ -371,26 +372,43 @@ class KyutaiStreamingTranscriber:
         not receiving any response - this avoids false positives when the
         speaker is simply not talking.
         """
+        check_count = 0
         try:
             while not self.should_stop and self.connected:
                 await asyncio.sleep(5)  # Check every 5 seconds for fast detection
+                check_count += 1
                 
-                # Need both timestamps to make a decision
-                if self._last_message_received_time is None or self._last_audio_queued_time is None:
+                # Need message timestamp to make a decision
+                # Use audio_received_time (when send() was called) as the primary signal
+                # This is more reliable than audio_queued_time which may not update if queue is full
+                if self._last_message_received_time is None:
                     continue
                 
                 time_since_last_message = time.time() - self._last_message_received_time
-                time_since_last_audio_queued = time.time() - self._last_audio_queued_time
                 
-                # Only consider stale if:
-                # 1. We've been queueing audio recently (within last 5 seconds)
-                # 2. But haven't received any response for too long
-                # This means: we're actively streaming but server went silent
-                # NOTE: We track queue time, not send time, because send() may block on dead socket
-                if time_since_last_audio_queued < 5 and time_since_last_message > self._connection_stale_timeout:
+                # Check if audio is being received (someone is calling send())
+                time_since_last_audio_received = None
+                if self._last_audio_received_time is not None:
+                    time_since_last_audio_received = time.time() - self._last_audio_received_time
+                
+                # Log health check status every 30 seconds for debugging
+                if check_count % 6 == 0:
+                    audio_info = f"{time_since_last_audio_received:.1f}s ago" if time_since_last_audio_received else "no audio yet"
+                    logger.debug(
+                        f"[{self._participant_name}] Health check: "
+                        f"last_msg={time_since_last_message:.1f}s ago, "
+                        f"last_audio_received={audio_info}, "
+                        f"stale_timeout={self._connection_stale_timeout}s"
+                    )
+                
+                # Consider stale if:
+                # 1. Audio is being sent to us recently (send() called within last 5 seconds)
+                # 2. But we haven't received any response from server for too long
+                # This detects: speaker talking -> audio flowing -> but WebSocket silently dead
+                if time_since_last_audio_received is not None and time_since_last_audio_received < 5 and time_since_last_message > self._connection_stale_timeout:
                     logger.warning(
                         f"[{self._participant_name}] Kyutai connection appears stale - "
-                        f"no messages received for {time_since_last_message:.1f}s. "
+                        f"no messages received for {time_since_last_message:.1f}s while actively receiving audio. "
                         f"Forcing reconnection..."
                     )
                     # Force close the WebSocket to trigger reconnection
@@ -615,6 +633,11 @@ class KyutaiStreamingTranscriber:
         Raises:
             ConnectionError: If connection failed permanently (gave up reconnecting)
         """
+        # Track when audio is received from caller - used for health monitoring
+        # This is updated even if we drop the audio (e.g., during reconnection)
+        # so the health check knows audio is actively being sent to us
+        self._last_audio_received_time = time.time()
+        
         # If not connected and not reconnecting and not stopping, connection failed permanently
         if not self.connected and not self.reconnecting and not self.should_stop:
             raise ConnectionError("Kyutai WebSocket connection failed permanently")
