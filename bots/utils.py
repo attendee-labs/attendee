@@ -477,6 +477,8 @@ def transcription_provider_from_bot_creation_data(data):
         return TranscriptionProviders.ELEVENLABS
     elif "kyutai" in settings:
         return TranscriptionProviders.KYUTAI
+    elif "custom_stt_long_poll" in settings:
+        return TranscriptionProviders.CUSTOM_STT_LONG_POLL
     elif "meeting_closed_captions" in settings:
         return TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM
 

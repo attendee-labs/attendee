@@ -39,6 +39,8 @@ def get_transcription(utterance):
             transcription, failure_data = get_transcription_via_sarvam(utterance)
         elif utterance.transcription_provider == TranscriptionProviders.ELEVENLABS:
             transcription, failure_data = get_transcription_via_elevenlabs(utterance)
+        elif utterance.transcription_provider == TranscriptionProviders.CUSTOM_STT_LONG_POLL:
+            transcription, failure_data = get_transcription_via_custom_stt_long_poll(utterance)
         else:
             raise Exception(f"Unknown or streaming-only transcription provider: {utterance.transcription_provider}")
 
@@ -600,4 +602,86 @@ def get_transcription_via_elevenlabs(utterance):
         return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "error": f"Invalid JSON response: {str(e)}"}
     except Exception as e:
         logger.error(f"ElevenLabs transcription unexpected error: {str(e)}")
+        return None, {"reason": TranscriptionFailureReasons.INTERNAL_ERROR, "error": str(e)}
+
+
+def get_transcription_via_custom_stt_long_poll(utterance):
+    transcription_settings = utterance.transcription_settings
+
+    # Get the base URL from environment variable
+    base_url = os.getenv("CUSTOM_STT_LONG_POLL_URL")
+    if not base_url:
+        return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND, "error": "CUSTOM_STT_LONG_POLL_URL environment variable not set"}
+
+    # Get additional properties from settings
+    additional_props = transcription_settings.custom_stt_long_poll_additional_props()
+
+    # Get raw PCM audio data
+    audio_blob = utterance.get_audio_blob().tobytes()
+
+    # Prepare the multipart form data
+    files = {"audio": ("audio.pcm", audio_blob, "audio/pcm")}
+
+    # Add additional properties as form data
+    data = {}
+    for key, value in additional_props.items():
+        data[key] = value
+
+    # Get timeout from environment or use default (120 retries like Gladia and AssemblyAI)
+    timeout = int(os.getenv("CUSTOM_STT_LONG_POLL_TIMEOUT", "120"))  # 300 seconds default timeout
+
+    try:
+        # Make the POST request to the custom transcription service
+        logger.info(f"Sending audio to custom STT service at {base_url}")
+        response = requests.post(base_url, files=files, data=data if data else None, timeout=timeout)
+
+        if response.status_code == 401:
+            return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_INVALID}
+
+        if response.status_code == 429:
+            return None, {"reason": TranscriptionFailureReasons.RATE_LIMIT_EXCEEDED, "status_code": response.status_code}
+
+        if response.status_code != 200:
+            logger.error(f"Custom STT transcription failed with status code {response.status_code}: {response.text}")
+            return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "status_code": response.status_code, "response_text": response.text}
+
+        result_data = response.json()
+        logger.info("Custom STT transcription request completed")
+
+        status = result_data.get("status")
+        if status == "done":
+            transcription = result_data.get("result", {}).get("transcription", "")
+            logger.info("Custom STT transcription completed successfully")
+            transcription["transcript"] = transcription["full_transcript"]
+            del transcription["full_transcript"]
+
+            # Extract all words from all utterances into a flat list
+            all_words = []
+            for utt in transcription["utterances"]:
+                if "words" in utt:
+                    all_words.extend(utt["words"])
+            transcription["words"] = all_words
+            del transcription["utterances"]
+
+            return transcription, None
+
+        elif status == "error":
+            error_code = result_data.get("error_code")
+            return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "step": "transcribe_result_poll", "error_code": error_code}
+
+        else:
+            # Unknown status
+            return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "step": "transcribe_result_poll", "status": status}
+
+    except requests.exceptions.Timeout:
+        logger.error(f"Custom STT transcription request timed out after {timeout} seconds")
+        return None, {"reason": TranscriptionFailureReasons.TIMED_OUT, "timeout": timeout}
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Custom STT transcription request failed: {str(e)}")
+        return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "error": str(e)}
+    except (json.JSONDecodeError, ValueError) as e:
+        logger.error(f"Custom STT transcription response parsing failed: {str(e)}")
+        return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "error": f"Invalid JSON response: {str(e)}"}
+    except Exception as e:
+        logger.error(f"Custom STT transcription unexpected error: {str(e)}")
         return None, {"reason": TranscriptionFailureReasons.INTERNAL_ERROR, "error": str(e)}
