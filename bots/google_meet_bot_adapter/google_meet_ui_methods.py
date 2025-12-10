@@ -5,7 +5,6 @@ import time
 from selenium.common.exceptions import ElementNotInteractableException, NoSuchElementException, TimeoutException
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
@@ -507,22 +506,13 @@ class GoogleMeetUIMethods:
         logger.info(f"Navigating to Google Meet set cookie URL: {google_meet_set_cookie_url}")
         self.driver.get(google_meet_set_cookie_url)
         # Then you need to navigate to http://accounts.google.com/
-        logger.info("Navigating to http://accounts.google.com/")
-        self.driver.get("http://accounts.google.com/")
-
-        # Then you need to fill in the email input
-        logger.info("Filling in the email input...")
-        # Look for input type = email and fill it in
-        session_email = self.google_meet_bot_login_session.get("login_email")
-        email_input = self.locate_element(step="email_input_for_google_account_sign_in", condition=EC.presence_of_element_located((By.CSS_SELECTOR, 'input[type="email"]')), wait_time_seconds=10)
-        email_input.send_keys(session_email)
-
-        url_before_signin = self.driver.current_url
-        # Press the enter key to submit the email input
-        email_input.send_keys(Keys.ENTER)
+        gmail_domain_url = f"https://mail.google.com/a/{self.google_meet_bot_login_session.get('login_domain')}"
+        logger.info(f"Navigating to gmail domain url: {gmail_domain_url}")
+        self.driver.get(gmail_domain_url)
 
         logger.info("Login attempted, waiting for redirect...")
-        logger.info(f"Current URL: {self.driver.current_url}")
+        url_before_signin = self.driver.current_url
+        logger.info(f"Current URL: {url_before_signin}")
 
         ## Wait until the url changes to something other than the login page or too much time has passed
         start_waiting_at = time.time()
@@ -537,8 +527,9 @@ class GoogleMeetUIMethods:
 
         # Wait for the URL to include https://myaccount.google.com, this indicates that we have logged in successfully
         start_waiting_at = time.time()
-        while "https://myaccount.google.com" not in self.driver.current_url:
+        while "https://mail.google.com" not in self.driver.current_url:
             time.sleep(1)
+            logger.info(f"Waiting for inbox URL. Current URL: {self.driver.current_url}")
             if time.time() - start_waiting_at > 120:
                 # We'll raise an exception if it's not logged in after 120 seconds
                 raise UiLoginAttemptFailedException("My Account page was not loaded", "login_to_google_meet_account")
