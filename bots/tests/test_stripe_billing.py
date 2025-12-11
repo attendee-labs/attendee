@@ -192,7 +192,7 @@ class StripeBillingTestCase(TestCase):
 
         # Test the webhook endpoint
         response = webhook_client.post(
-            reverse("external-webhook-stripe"),
+            reverse("external_webhooks:external-webhook-stripe"),
             data=json.dumps({"type": "checkout.session.completed"}),  # Actual content not important due to mocking
             content_type="application/json",
             HTTP_STRIPE_SIGNATURE="test_signature",
@@ -237,7 +237,7 @@ class StripeBillingTestCase(TestCase):
 
         # Test the webhook endpoint
         response = webhook_client.post(
-            reverse("external-webhook-stripe"),
+            reverse("external_webhooks:external-webhook-stripe"),
             data=json.dumps({"type": "payment_intent.succeeded"}),  # Actual content not important due to mocking
             content_type="application/json",
             HTTP_STRIPE_SIGNATURE="test_signature",
@@ -298,7 +298,7 @@ class StripeBillingTestCase(TestCase):
 
         # Test the webhook endpoint
         response = webhook_client.post(
-            reverse("external-webhook-stripe"),
+            reverse("external_webhooks:external-webhook-stripe"),
             data=json.dumps({"type": "customer.updated"}),
             content_type="application/json",
             HTTP_STRIPE_SIGNATURE="test_signature",
@@ -318,18 +318,18 @@ class StripeBillingTestCase(TestCase):
         webhook_client = Client(enforce_csrf_checks=False)
 
         # Test missing signature header
-        response = webhook_client.post(reverse("external-webhook-stripe"), data=json.dumps({"type": "test"}), content_type="application/json")
+        response = webhook_client.post(reverse("external_webhooks:external-webhook-stripe"), data=json.dumps({"type": "test"}), content_type="application/json")
         self.assertEqual(response.status_code, 400)
         mock_construct_event.assert_not_called()
 
         # Test invalid signature
         mock_construct_event.side_effect = stripe.error.SignatureVerificationError("Invalid signature", "sig")
-        response = webhook_client.post(reverse("external-webhook-stripe"), data=json.dumps({"type": "test"}), content_type="application/json", HTTP_STRIPE_SIGNATURE="invalid_signature")
+        response = webhook_client.post(reverse("external_webhooks:external-webhook-stripe"), data=json.dumps({"type": "test"}), content_type="application/json", HTTP_STRIPE_SIGNATURE="invalid_signature")
         self.assertEqual(response.status_code, 400)
 
         # Test invalid payload
         mock_construct_event.side_effect = ValueError("Invalid payload")
-        response = webhook_client.post(reverse("external-webhook-stripe"), data="invalid json", content_type="application/json", HTTP_STRIPE_SIGNATURE="test_signature")
+        response = webhook_client.post(reverse("external_webhooks:external-webhook-stripe"), data="invalid json", content_type="application/json", HTTP_STRIPE_SIGNATURE="test_signature")
         self.assertEqual(response.status_code, 400)
 
     # Tests for ProjectAutopayStripePortalView
