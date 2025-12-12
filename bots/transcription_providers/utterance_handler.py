@@ -18,7 +18,6 @@ from bots.models import (
     Utterance,
     WebhookTriggerTypes,
 )
-from bots.webhook_payloads import utterance_webhook_payload
 from bots.webhook_utils import trigger_webhook
 
 logger = logging.getLogger(__name__)
@@ -108,7 +107,27 @@ class DefaultUtteranceHandler(UtteranceHandler):
             else:
                 timestamp_ms = int(time.time() * 1000)
 
-            # Create utterance
+            # Build webhook payload BEFORE DB write to fire ASAP
+            # This avoids blocking the webhook on DB transaction
+            webhook_payload = {
+                "speaker_name": participant.full_name,
+                "speaker_uuid": participant.uuid,
+                "speaker_user_uuid": participant.user_uuid,
+                "speaker_is_host": participant.is_host,
+                "timestamp_ms": timestamp_ms,
+                "duration_ms": duration_ms,
+                "transcription": {"transcript": transcript_text},
+            }
+
+            # Fire webhook immediately (before DB write)
+            trigger_webhook(
+                webhook_trigger_type=WebhookTriggerTypes.TRANSCRIPT_UPDATE,
+                bot=self.bot,
+                payload=webhook_payload,
+            )
+
+            # Create utterance in DB (after webhook is queued)
+            source_uuid = f"{recording.object_id}-{uuid.uuid4()}"
             utterance, created = Utterance.objects.update_or_create(
                 recording=recording,
                 source_uuid=source_uuid,
@@ -127,13 +146,6 @@ class DefaultUtteranceHandler(UtteranceHandler):
                 f"id={utterance.id}, participant={participant.full_name}, "
                 f"recording={recording.object_id}, ts={timestamp_ms}, "
                 f"text={transcript_text[:50]}..."
-            )
-
-            # Trigger webhook
-            trigger_webhook(
-                webhook_trigger_type=WebhookTriggerTypes.TRANSCRIPT_UPDATE,
-                bot=self.bot,
-                payload=utterance_webhook_payload(utterance),
             )
 
         except Exception as e:
