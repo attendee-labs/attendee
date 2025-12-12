@@ -109,7 +109,7 @@ class DefaultUtteranceHandler(UtteranceHandler):
                 timestamp_ms = int(time.time() * 1000)
 
             # Create utterance
-            utterance, _ = Utterance.objects.update_or_create(
+            utterance, created = Utterance.objects.update_or_create(
                 recording=recording,
                 source_uuid=source_uuid,
                 defaults={
@@ -120,6 +120,13 @@ class DefaultUtteranceHandler(UtteranceHandler):
                     "duration_ms": duration_ms,
                     "sample_rate": self.sample_rate,
                 },
+            )
+
+            logger.debug(
+                f"Utterance {'created' if created else 'updated'}: "
+                f"id={utterance.id}, participant={participant.full_name}, "
+                f"recording={recording.object_id}, ts={timestamp_ms}, "
+                f"text={transcript_text[:50]}..."
             )
 
             # Trigger webhook
