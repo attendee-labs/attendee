@@ -662,16 +662,18 @@ def get_transcription_via_custom_async(utterance):
     # Get additional properties from settings
     additional_props = transcription_settings.custom_async_additional_props()
 
-    # Get raw PCM audio data
-    audio_blob = utterance.get_audio_blob().tobytes()
 
-    # Prepare the multipart form data
-    files = {"audio": ("audio.pcm", audio_blob, "audio/pcm")}
+    payload_mp3 = pcm_to_mp3(utterance.get_audio_blob().tobytes(), sample_rate=utterance.get_sample_rate())
+
+    files = {"audio": ("audio.mp3", payload_mp3, "audio/mpeg")}
 
     # Add additional properties as form data
-    data = {"sample_rate": utterance.get_sample_rate()}
+    data = {}
     for key, value in additional_props.items():
-        data[key] = value
+        if isinstance(value, (dict, list)):
+            data[key] = json.dumps(value)
+        else:
+            data[key] = value
 
     # Get timeout from environment or use default (120 retries like Gladia and AssemblyAI)
     timeout = int(os.getenv("CUSTOM_ASYNC_TRANSCRIPTION_TIMEOUT", "120"))  # 120 seconds default timeout

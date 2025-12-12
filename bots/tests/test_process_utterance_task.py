@@ -1544,7 +1544,8 @@ class CustomAsyncProviderTest(TransactionTestCase):
     # ------------------------------------------------------------------ SUCCESS PATH
 
     @mock.patch("bots.tasks.process_utterance_task.requests.post")
-    def test_success_path(self, mock_post):
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3-audio-data")
+    def test_success_path(self, mock_pcm, mock_post):
         """Custom async transcription succeeds and returns formatted transcript with words."""
         with self._patch_env():
             # Mock successful response from custom async API
@@ -1585,16 +1586,28 @@ class CustomAsyncProviderTest(TransactionTestCase):
             call_args = mock_post.call_args
             # First argument is the URL
             self.assertEqual(call_args[0][0], "http://test-service.com/transcribe")
-            # Check audio was sent as PCM
-            self.assertEqual(call_args[1]["files"]["audio"][0], "audio.pcm")
-            self.assertEqual(call_args[1]["files"]["audio"][1], b"pcm-bytes")
-            self.assertEqual(call_args[1]["files"]["audio"][2], "audio/pcm")
+            # Check audio was sent as MP3
+            self.assertEqual(call_args[1]["files"]["audio"][0], "audio.mp3")
+            self.assertEqual(call_args[1]["files"]["audio"][1], b"mp3-audio-data")
+            self.assertEqual(call_args[1]["files"]["audio"][2], "audio/mpeg")
+            # Verify pcm_to_mp3 was called
+            mock_pcm.assert_called_once()
 
     @mock.patch("bots.tasks.process_utterance_task.requests.post")
-    def test_success_path_with_bot_settings(self, mock_post):
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3-audio-data")
+    def test_success_path_with_bot_settings(self, mock_pcm, mock_post):
         """Custom async transcription succeeds with bot-specific settings applied."""
-        # Configure bot with custom settings
-        self.bot.settings = {"transcription_settings": {"custom_async": {"language": "fr-FR", "model": "whisper-large-v3", "custom_param": "test_value"}}}
+        # Configure bot with custom settings (including nested dict to test JSON conversion)
+        self.bot.settings = {
+            "transcription_settings": {
+                "custom_async": {
+                    "language": "fr-FR",
+                    "model": "whisper-large-v3",
+                    "custom_param": "test_value",
+                    "nested_param": {"key": "value", "list": [1, 2, 3]},
+                }
+            }
+        }
         self.bot.save()
 
         with self._patch_env():
@@ -1615,6 +1628,9 @@ class CustomAsyncProviderTest(TransactionTestCase):
             self.assertEqual(data["language"], "fr-FR")
             self.assertEqual(data["model"], "whisper-large-v3")
             self.assertEqual(data["custom_param"], "test_value")
+            # Verify nested dict/list are converted to JSON string
+            import json
+            self.assertEqual(data["nested_param"], json.dumps({"key": "value", "list": [1, 2, 3]}))
 
     def test_missing_env_url(self):
         """No CUSTOM_ASYNC_TRANSCRIPTION_URL env var → CREDENTIALS_NOT_FOUND."""
@@ -1626,7 +1642,8 @@ class CustomAsyncProviderTest(TransactionTestCase):
             self.assertIn("CUSTOM_ASYNC_TRANSCRIPTION_URL", failure["error"])
 
     @mock.patch("bots.tasks.process_utterance_task.requests.post")
-    def test_invalid_credentials_401(self, mock_post):
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3-audio-data")
+    def test_invalid_credentials_401(self, mock_pcm, mock_post):
         """Custom async returns 401 → CREDENTIALS_INVALID."""
         with self._patch_env():
             mock_response = mock.Mock(status_code=401)
@@ -1638,7 +1655,8 @@ class CustomAsyncProviderTest(TransactionTestCase):
             self.assertEqual(failure["reason"], TranscriptionFailureReasons.CREDENTIALS_INVALID)
 
     @mock.patch("bots.tasks.process_utterance_task.requests.post")
-    def test_rate_limit_429(self, mock_post):
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3-audio-data")
+    def test_rate_limit_429(self, mock_pcm, mock_post):
         """Custom async returns 429 → RATE_LIMIT_EXCEEDED."""
         with self._patch_env():
             mock_response = mock.Mock(status_code=429)
@@ -1650,7 +1668,8 @@ class CustomAsyncProviderTest(TransactionTestCase):
             self.assertEqual(failure["reason"], TranscriptionFailureReasons.RATE_LIMIT_EXCEEDED)
 
     @mock.patch("bots.tasks.process_utterance_task.requests.post")
-    def test_request_failure_500(self, mock_post):
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3-audio-data")
+    def test_request_failure_500(self, mock_pcm, mock_post):
         """Custom async returns 500 → TRANSCRIPTION_REQUEST_FAILED."""
         with self._patch_env():
             mock_response = mock.Mock(status_code=500)
@@ -1665,7 +1684,8 @@ class CustomAsyncProviderTest(TransactionTestCase):
             self.assertEqual(failure["response_text"], "Internal Server Error")
 
     @mock.patch("bots.tasks.process_utterance_task.requests.post")
-    def test_error_status_in_response(self, mock_post):
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3-audio-data")
+    def test_error_status_in_response(self, mock_pcm, mock_post):
         """Custom async returns status='error' → TRANSCRIPTION_REQUEST_FAILED."""
         with self._patch_env():
             mock_response = mock.Mock(status_code=200)
@@ -1679,7 +1699,8 @@ class CustomAsyncProviderTest(TransactionTestCase):
             self.assertEqual(failure["error_code"], "TRANSCRIPTION_FAILED")
 
     @mock.patch("bots.tasks.process_utterance_task.requests.post")
-    def test_timeout_exception(self, mock_post):
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3-audio-data")
+    def test_timeout_exception(self, mock_pcm, mock_post):
         """Request timeout → TIMED_OUT."""
         with self._patch_env():
             from requests.exceptions import Timeout
@@ -1692,7 +1713,8 @@ class CustomAsyncProviderTest(TransactionTestCase):
             self.assertEqual(failure["reason"], TranscriptionFailureReasons.TIMED_OUT)
 
     @mock.patch("bots.tasks.process_utterance_task.requests.post")
-    def test_request_exception(self, mock_post):
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3-audio-data")
+    def test_request_exception(self, mock_pcm, mock_post):
         """Network request exception → TRANSCRIPTION_REQUEST_FAILED."""
         with self._patch_env():
             from requests.exceptions import RequestException
@@ -1706,7 +1728,8 @@ class CustomAsyncProviderTest(TransactionTestCase):
             self.assertIn("Network error", failure["error"])
 
     @mock.patch("bots.tasks.process_utterance_task.requests.post")
-    def test_invalid_json_response(self, mock_post):
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3-audio-data")
+    def test_invalid_json_response(self, mock_pcm, mock_post):
         """Invalid JSON response → TRANSCRIPTION_REQUEST_FAILED."""
         with self._patch_env():
             mock_response = mock.Mock(status_code=200)
