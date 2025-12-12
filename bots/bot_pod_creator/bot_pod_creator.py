@@ -311,6 +311,7 @@ class BotPodCreator:
             "app.kubernetes.io/instance": self.app_instance,
             "app.kubernetes.io/version": self.app_version,
             "app.kubernetes.io/managed-by": "cuber",
+            "app.kubernetes.io/component": "bot-proc",
             "app": "bot-proc",
         }
         if add_webpage_streamer:
