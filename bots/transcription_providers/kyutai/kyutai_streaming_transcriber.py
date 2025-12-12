@@ -20,6 +20,13 @@ _callback_consumer_running = False
 _callback_consumer_lock = threading.Lock()
 
 
+# Track callback processing stats for debugging
+_callbacks_enqueued = 0
+_callbacks_processed = 0
+_callbacks_failed = 0
+_last_queue_log_time = 0
+
+
 def _ensure_callback_consumer_started():
     """Ensure the callback consumer thread is running (lazy initialization)."""
     global _callback_consumer_thread, _callback_consumer_running
@@ -37,16 +44,31 @@ def _ensure_callback_consumer_started():
 
         def consume_callbacks():
             """Process callbacks from queue sequentially."""
+            global _callbacks_processed, _callbacks_failed, _last_queue_log_time
             logger.info("Kyutai callback consumer thread started")
             while _callback_consumer_running:
                 try:
+                    # Log queue depth periodically (every 30 seconds)
+                    current_time = time.time()
+                    if current_time - _last_queue_log_time > 30:
+                        queue_size = _callback_queue.qsize()
+                        if queue_size > 0 or _callbacks_processed > 0:
+                            logger.info(
+                                f"Kyutai callback queue status: "
+                                f"queued={_callbacks_enqueued}, processed={_callbacks_processed}, "
+                                f"failed={_callbacks_failed}, pending={queue_size}"
+                            )
+                        _last_queue_log_time = current_time
+
                     # Wait for callback with timeout to allow graceful shutdown
                     callback_func = _callback_queue.get(timeout=1.0)
 
                     try:
                         # Execute callback - this writes to DB
                         callback_func()
+                        _callbacks_processed += 1
                     except Exception as e:
+                        _callbacks_failed += 1
                         logger.error(f"Error executing callback: {e}", exc_info=True)
                     finally:
                         _callback_queue.task_done()
@@ -54,6 +76,13 @@ def _ensure_callback_consumer_started():
                 except queue.Empty:
                     # Timeout - check if we should keep running
                     continue
+
+            # Log final stats when consumer stops
+            logger.info(
+                f"Kyutai callback consumer stopping. Final stats: "
+                f"queued={_callbacks_enqueued}, processed={_callbacks_processed}, "
+                f"failed={_callbacks_failed}, remaining={_callback_queue.qsize()}"
+            )
 
         _callback_consumer_thread = threading.Thread(target=consume_callbacks, daemon=True, name="kyutai-callback-consumer")
         _callback_consumer_thread.start()
@@ -850,16 +879,36 @@ class KyutaiStreamingTranscriber:
             # Enqueue callback to global queue for sequential processing
             # All speakers share one queue, processed by single consumer thread
             # This ensures DB writes happen in chronological order
+            participant_name = self._participant_name  # Capture for closure
+            word_count = len(self.current_transcript)
+
             def run_callback():
                 try:
                     self.save_utterance_callback(transcript_text, metadata)
+                    logger.info(
+                        f"Kyutai [{participant_name}]: Saved utterance to DB "
+                        f"({word_count} words, ts={timestamp_ms})"
+                    )
                 except Exception as e:
-                    logger.error(f"Error in save_utterance_callback: {e}", exc_info=True)
+                    logger.error(
+                        f"Kyutai [{participant_name}]: Failed to save utterance: {e}",
+                        exc_info=True
+                    )
 
             # Ensure consumer thread is running (lazy init for Celery workers)
             _ensure_callback_consumer_started()
 
-            # Add to queue - consumer thread will process sequentially
+            # Track enqueue and add to queue
+            global _callbacks_enqueued
+            _callbacks_enqueued += 1
+            queue_size = _callback_queue.qsize()
+            
+            # Warn if queue is backing up
+            if queue_size > 50:
+                logger.warning(
+                    f"Kyutai callback queue backing up: {queue_size} pending callbacks"
+                )
+            
             _callback_queue.put(run_callback)
 
             # Clear transcript for next utterance
