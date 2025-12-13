@@ -4,6 +4,9 @@ import time
 import numpy as np
 import webrtcvad
 
+from bots.bot_controller.per_participant_non_streaming_audio_input_manager import (
+    PerParticipantNonStreamingAudioInputManager,
+)
 from bots.models import (
     Credentials,
     TranscriptionProviders,
@@ -53,7 +56,7 @@ def calculate_normalized_rms(audio_bytes):
 
 
 class PerParticipantStreamingAudioInputManager:
-    def __init__(self, *, get_participant_callback, sample_rate, transcription_provider, bot):
+    def __init__(self, *, get_participant_callback, sample_rate, transcription_provider, bot, save_audio_chunk_callback=None):
         self.get_participant_callback = get_participant_callback
 
         self.utterances = {}
@@ -81,6 +84,25 @@ class PerParticipantStreamingAudioInputManager:
 
         # Create utterance handler for providers that need it (like Kyutai)
         self.utterance_handler = DefaultUtteranceHandler(bot=bot, get_participant_callback=get_participant_callback, sample_rate=sample_rate)
+
+        # Audio chunk saving for async transcription support
+        # Reuse PerParticipantNonStreamingAudioInputManager for buffering and saving audio chunks
+        self.should_save_audio_chunks = save_audio_chunk_callback is not None and bot.record_async_transcription_audio_chunks()
+        self.audio_chunk_buffer_manager = None
+        if self.should_save_audio_chunks:
+            self.audio_chunk_buffer_manager = PerParticipantNonStreamingAudioInputManager(
+                save_audio_chunk_callback=save_audio_chunk_callback,
+                get_participant_callback=get_participant_callback,
+                sample_rate=sample_rate,
+                utterance_size_limit=19200000,  # ~300 seconds of audio at 32kHz
+                silence_duration_limit=3,  # seconds of silence before flushing
+                should_print_diagnostic_info=True,
+            )
+
+    def flush_all_audio_chunk_buffers(self):
+        """Flush all audio chunk buffers. Called when the meeting ends."""
+        if self.audio_chunk_buffer_manager:
+            self.audio_chunk_buffer_manager.flush_utterances()
 
     def silence_detected(self, chunk_bytes):
         if calculate_normalized_rms(chunk_bytes) < 0.0025:
@@ -170,6 +192,11 @@ class PerParticipantStreamingAudioInputManager:
             if not self.kyutai_server_url:
                 logger.warning("No Kyutai server URL available")
                 return
+
+        # Buffer audio chunks for async transcription if enabled
+        # Uses the same logic as PerParticipantNonStreamingAudioInputManager
+        if self.audio_chunk_buffer_manager:
+            self.audio_chunk_buffer_manager.process_chunk(speaker_id, chunk_time, chunk_bytes)
 
         # For Kyutai: Send all audio continuously, let semantic VAD handle it
         # For Deepgram: Use pre-filtering to reduce API costs

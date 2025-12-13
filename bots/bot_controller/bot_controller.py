@@ -103,6 +103,10 @@ class BotController:
             return self.per_participant_non_streaming_audio_input_manager
 
     def save_utterances_for_individual_audio_chunks(self):
+        # Don't create utterances for streaming transcription providers (they handle transcription directly)
+        # Audio chunks are still saved for async transcription but processed later, not during the meeting
+        if self.use_streaming_transcription():
+            return False
         return self.get_recording_transcription_provider() != TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM
 
     def save_utterances_for_closed_captions(self):
@@ -739,7 +743,10 @@ class BotController:
         if self.get_recording_transcription_provider() == TranscriptionProviders.SARVAM:
             return 1  # seconds
         else:
-            return 3  # seconds
+            # For async transcription, use longer silence threshold to accumulate larger chunks
+            # This prevents sending very short clips (<2s) that can cause hallucination in OpenAI
+            # For streaming transcription during the meeting, the streaming manager uses its own 3s limit
+            return 5  # seconds
 
     def run(self):
         if self.run_called:
@@ -765,6 +772,7 @@ class BotController:
             sample_rate=self.get_per_participant_audio_sample_rate(),
             transcription_provider=self.get_recording_transcription_provider(),
             bot=self.bot_in_db,
+            save_audio_chunk_callback=self.process_individual_audio_chunk,
         )
 
         # Only used for adapters that can provide closed captions
@@ -1448,6 +1456,9 @@ class BotController:
         if self.per_participant_non_streaming_audio_input_manager:
             logger.info("Flushing utterances...")
             self.per_participant_non_streaming_audio_input_manager.flush_utterances()
+        if self.per_participant_streaming_audio_input_manager:
+            logger.info("Flushing streaming audio chunks for async transcription...")
+            self.per_participant_streaming_audio_input_manager.flush_all_audio_chunk_buffers()
         if self.closed_caption_manager:
             logger.info("Flushing captions...")
             self.closed_caption_manager.flush_captions()
