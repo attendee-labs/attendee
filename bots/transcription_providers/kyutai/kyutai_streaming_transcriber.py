@@ -398,8 +398,13 @@ class KyutaiStreamingTranscriber:
         proper close frame, network issues that bypass ping/pong).
         
         Only considers connection stale if we're actively sending audio but
-        not receiving any response - this avoids false positives when the
+        not receiving any transcription - this avoids false positives when the
         speaker is simply not talking.
+        
+        NOTE: We check for Word messages specifically, not just any message,
+        because SilenceStatus messages arrive every second and would mask
+        a stalled transcription where the server stops sending Word/EndWord
+        but continues sending SilenceStatus.
         """
         check_count = 0
         try:
@@ -420,24 +425,35 @@ class KyutaiStreamingTranscriber:
                 if self._last_audio_received_time is not None:
                     time_since_last_audio_received = time.time() - self._last_audio_received_time
                 
+                # Check specifically for Word messages (transcription output)
+                time_since_last_word = None
+                if self.last_valid_word_time is not None:
+                    time_since_last_word = time.time() - self.last_valid_word_time
+                
                 # Log health check status every 30 seconds for debugging
                 if check_count % 6 == 0:
                     audio_info = f"{time_since_last_audio_received:.1f}s ago" if time_since_last_audio_received else "no audio yet"
+                    word_info = f"{time_since_last_word:.1f}s ago" if time_since_last_word else "no words yet"
                     logger.debug(
                         f"[{self._participant_name}] Health check: "
                         f"last_msg={time_since_last_message:.1f}s ago, "
+                        f"last_word={word_info}, "
                         f"last_audio_received={audio_info}, "
                         f"stale_timeout={self._connection_stale_timeout}s"
                     )
                 
                 # Consider stale if:
                 # 1. Audio is being sent to us recently (send() called within last 5 seconds)
-                # 2. But we haven't received any response from server for too long
-                # This detects: speaker talking -> audio flowing -> but WebSocket silently dead
-                if time_since_last_audio_received is not None and time_since_last_audio_received < 5 and time_since_last_message > self._connection_stale_timeout:
+                # 2. We've received at least one Word message before (so we know transcription started)
+                # 3. But we haven't received any Word for too long
+                # This detects: speaker talking -> audio flowing -> Word messages stop -> but SilenceStatus continues
+                if (time_since_last_audio_received is not None and 
+                    time_since_last_audio_received < 5 and 
+                    time_since_last_word is not None and 
+                    time_since_last_word > self._connection_stale_timeout):
                     logger.warning(
-                        f"[{self._participant_name}] Kyutai connection appears stale - "
-                        f"no messages received for {time_since_last_message:.1f}s while actively receiving audio. "
+                        f"[{self._participant_name}] Kyutai transcription appears stalled - "
+                        f"no Word messages received for {time_since_last_word:.1f}s while actively receiving audio. "
                         f"Forcing reconnection..."
                     )
                     # Force close the WebSocket to trigger reconnection
@@ -514,7 +530,13 @@ class KyutaiStreamingTranscriber:
         except asyncio.CancelledError:
             pass
         except Exception as e:
-            logger.error(f"[{self._participant_name}] Sender error: {e}", exc_info=True)
+            # Check if this is a connection closed error from health check forcing reconnection
+            # If so, this is expected and not an error
+            from websockets.exceptions import ConnectionClosedError
+            if isinstance(e, ConnectionClosedError):
+                logger.debug(f"[{self._participant_name}] Sender loop stopped due to connection closure (expected during reconnection)")
+            else:
+                logger.error(f"[{self._participant_name}] Sender error: {e}", exc_info=True)
 
     async def _process_message(self, message):
         """
@@ -807,13 +829,13 @@ class KyutaiStreamingTranscriber:
         silence_duration = current_time - self.last_word_received_time
 
         # Require minimum silence before emitting to avoid fragmentation
-        MIN_SILENCE_FOR_EMIT = 0.8  # 800ms minimum silence
+        MIN_SILENCE_FOR_EMIT = 0.5  # 500ms minimum silence
 
         # For single-word utterances, be more patient waiting for EndWord
         if len(self.current_transcript) == 1:
-            # Wait up to 1.5s for EndWord on single-word utterances
+            # Wait up to 0.1s for EndWord on single-word utterances
             if self.current_utterance_last_word_stop_time is None:
-                if silence_duration > 1.5:
+                if silence_duration > 0.1:
                     logger.info(f"Kyutai [{self._participant_name}]: Single-word utterance, no EndWord after {silence_duration:.2f}s - emitting anyway")
                     self._emit_current_utterance()
             else:
