@@ -10,10 +10,19 @@ logger = logging.getLogger(__name__)
 
 
 def calculate_normalized_rms(audio_bytes):
+    if not audio_bytes or len(audio_bytes) < 2:
+        return 0.0
+
     samples = np.frombuffer(audio_bytes, dtype=np.int16)
-    rms = np.sqrt(np.mean(np.square(samples)))
-    # Normalize by max possible value for 16-bit audio (32768)
-    return rms / 32768
+    if samples.size == 0:
+        return 0.0
+
+    # Use float32 for efficiency and normalize in one step to avoid overflow
+    # Dividing before squaring prevents int16 overflow
+    normalized_samples = samples.astype(np.float32) / 32768.0
+    rms = np.sqrt(np.mean(np.square(normalized_samples)))
+    
+    return float(rms)
 
 
 class PerParticipantNonStreamingAudioInputManager:
