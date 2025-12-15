@@ -2,9 +2,7 @@ import hashlib
 import json
 import math
 import os
-import random
 import secrets
-import string
 from datetime import timedelta
 
 from concurrency.exceptions import RecordModifiedError
@@ -53,7 +51,7 @@ class Project(models.Model):
     def save(self, *args, **kwargs):
         if not self.object_id:
             # Generate a random 16-character string
-            random_string = "".join(random.choices(string.ascii_letters + string.digits, k=16))
+            random_string = secrets.token_urlsafe(12)[:16]  # Cryptographically secure
             self.object_id = f"{self.OBJECT_ID_PREFIX}{random_string}"
         super().save(*args, **kwargs)
 
@@ -72,7 +70,7 @@ class GoogleMeetBotLoginGroup(models.Model):
     def save(self, *args, **kwargs):
         if not self.object_id:
             # Generate a random 16-character string
-            random_string = "".join(random.choices(string.ascii_letters + string.digits, k=16))
+            random_string = secrets.token_urlsafe(12)[:16]  # Cryptographically secure
             self.object_id = f"{self.OBJECT_ID_PREFIX}{random_string}"
         super().save(*args, **kwargs)
 
@@ -124,7 +122,7 @@ class GoogleMeetBotLogin(models.Model):
     def save(self, *args, **kwargs):
         if not self.object_id:
             # Generate a random 16-character string
-            random_string = "".join(random.choices(string.ascii_letters + string.digits, k=16))
+            random_string = secrets.token_urlsafe(12)[:16]  # Cryptographically secure
             self.object_id = f"{self.OBJECT_ID_PREFIX}{random_string}"
         super().save(*args, **kwargs)
 
@@ -180,7 +178,7 @@ class ZoomOAuthApp(models.Model):
     def save(self, *args, **kwargs):
         if not self.object_id:
             # Generate a random 16-character string
-            random_string = "".join(random.choices(string.ascii_letters + string.digits, k=16))
+            random_string = secrets.token_urlsafe(12)[:16]  # Cryptographically secure
             self.object_id = f"{self.OBJECT_ID_PREFIX}{random_string}"
         super().save(*args, **kwargs)
 
@@ -238,7 +236,7 @@ class ZoomOAuthConnection(models.Model):
     def save(self, *args, **kwargs):
         if not self.object_id:
             # Generate a random 16-character string
-            random_string = "".join(random.choices(string.ascii_letters + string.digits, k=16))
+            random_string = secrets.token_urlsafe(12)[:16]  # Cryptographically secure
             self.object_id = f"{self.OBJECT_ID_PREFIX}{random_string}"
         super().save(*args, **kwargs)
 
@@ -263,7 +261,7 @@ class ZoomMeetingToZoomOAuthConnectionMapping(models.Model):
     def save(self, *args, **kwargs):
         if not self.object_id:
             # Generate a random 16-character string
-            random_string = "".join(random.choices(string.ascii_letters + string.digits, k=16))
+            random_string = secrets.token_urlsafe(12)[:16]  # Cryptographically secure
             self.object_id = f"{self.OBJECT_ID_PREFIX}{random_string}"
         super().save(*args, **kwargs)
 
@@ -340,7 +338,7 @@ class Calendar(models.Model):
     def save(self, *args, **kwargs):
         if not self.object_id:
             # Generate a random 16-character string
-            random_string = "".join(random.choices(string.ascii_letters + string.digits, k=16))
+            random_string = secrets.token_urlsafe(12)[:16]  # Cryptographically secure
             self.object_id = f"{self.OBJECT_ID_PREFIX}{random_string}"
         super().save(*args, **kwargs)
 
@@ -377,7 +375,7 @@ class CalendarEvent(models.Model):
     def save(self, *args, **kwargs):
         if not self.object_id:
             # Generate a random 16-character string
-            random_string = "".join(random.choices(string.ascii_letters + string.digits, k=16))
+            random_string = secrets.token_urlsafe(12)[:16]  # Cryptographically secure
             self.object_id = f"{self.OBJECT_ID_PREFIX}{random_string}"
         super().save(*args, **kwargs)
 
@@ -402,7 +400,7 @@ class ApiKey(models.Model):
     def save(self, *args, **kwargs):
         if not self.object_id:
             # Generate a random 16-character string
-            random_string = "".join(random.choices(string.ascii_letters + string.digits, k=16))
+            random_string = secrets.token_urlsafe(12)[:16]  # Cryptographically secure
             self.object_id = f"{self.OBJECT_ID_PREFIX}{random_string}"
         super().save(*args, **kwargs)
 
@@ -960,7 +958,7 @@ class Bot(models.Model):
     def save(self, *args, **kwargs):
         if not self.object_id:
             # Generate a random 16-character string
-            random_string = "".join(random.choices(string.ascii_letters + string.digits, k=16))
+            random_string = secrets.token_urlsafe(12)[:16]  # Cryptographically secure
             self.object_id = f"{self.object_id_prefix()}{random_string}"
         super().save(*args, **kwargs)
 
@@ -1784,7 +1782,7 @@ class Participant(models.Model):
     def save(self, *args, **kwargs):
         if not self.object_id:
             # Generate a random 16-character string
-            random_string = "".join(random.choices(string.ascii_letters + string.digits, k=16))
+            random_string = secrets.token_urlsafe(12)[:16]  # Cryptographically secure
             self.object_id = f"{self.OBJECT_ID_PREFIX}{random_string}"
         super().save(*args, **kwargs)
 
@@ -1823,7 +1821,7 @@ class ParticipantEvent(models.Model):
     def save(self, *args, **kwargs):
         if not self.object_id:
             # Generate a random 16-character string
-            random_string = "".join(random.choices(string.ascii_letters + string.digits, k=16))
+            random_string = secrets.token_urlsafe(12)[:16]  # Cryptographically secure
             self.object_id = f"{self.OBJECT_ID_PREFIX}{random_string}"
         super().save(*args, **kwargs)
 
@@ -1968,7 +1966,7 @@ class Recording(models.Model):
     def save(self, *args, **kwargs):
         if not self.object_id:
             # Generate a random 16-character string
-            random_string = "".join(random.choices(string.ascii_letters + string.digits, k=16))
+            random_string = secrets.token_urlsafe(12)[:16]  # Cryptographically secure
             self.object_id = f"{self.OBJECT_ID_PREFIX}{random_string}"
         super().save(*args, **kwargs)
 
@@ -2163,7 +2161,7 @@ class AsyncTranscription(models.Model):
     def save(self, *args, **kwargs):
         if not self.object_id:
             # Generate a random 16-character string
-            random_string = "".join(random.choices(string.ascii_letters + string.digits, k=16))
+            random_string = secrets.token_urlsafe(12)[:16]  # Cryptographically secure
             self.object_id = f"{self.OBJECT_ID_PREFIX}{random_string}"
         super().save(*args, **kwargs)
 
@@ -2403,7 +2401,7 @@ class MediaBlob(models.Model):
     def save(self, *args, **kwargs):
         if not self.object_id:
             # Generate a random 16-character string
-            random_string = "".join(random.choices(string.ascii_letters + string.digits, k=16))
+            random_string = secrets.token_urlsafe(12)[:16]  # Cryptographically secure
             self.object_id = f"{self.OBJECT_ID_PREFIX}{random_string}"
 
         if len(self.blob) > 10485760:
@@ -2639,7 +2637,7 @@ class BotDebugScreenshot(models.Model):
     def save(self, *args, **kwargs):
         if not self.object_id:
             # Generate a random 16-character string
-            random_string = "".join(random.choices(string.ascii_letters + string.digits, k=16))
+            random_string = secrets.token_urlsafe(12)[:16]  # Cryptographically secure
             self.object_id = f"{self.OBJECT_ID_PREFIX}{random_string}"
         super().save(*args, **kwargs)
 
@@ -2741,7 +2739,7 @@ class WebhookSubscription(models.Model):
     def save(self, *args, **kwargs):
         if not self.object_id:
             # Generate a random 16-character string
-            random_string = "".join(random.choices(string.ascii_letters + string.digits, k=16))
+            random_string = secrets.token_urlsafe(12)[:16]  # Cryptographically secure
             self.object_id = f"{self.OBJECT_ID_PREFIX}{random_string}"
         super().save(*args, **kwargs)
 
@@ -2805,7 +2803,7 @@ class ChatMessage(models.Model):
     def save(self, *args, **kwargs):
         if not self.object_id:
             # Generate a random 16-character string
-            random_string = "".join(random.choices(string.ascii_letters + string.digits, k=16))
+            random_string = secrets.token_urlsafe(12)[:16]  # Cryptographically secure
             self.object_id = f"{self.OBJECT_ID_PREFIX}{random_string}"
         super().save(*args, **kwargs)
 

@@ -29,7 +29,12 @@ class ExternalWebhookZoomOAuthAppView(View):
         signature_header = request.META.get("HTTP_X_ZM_SIGNATURE")
         timestamp_header = request.META.get("HTTP_X_ZM_REQUEST_TIMESTAMP")
 
-        logger.info(f"Received Zoom OAuth app webhook event: {request_body}")
+        # Log event type only, not full payload to avoid leaking sensitive data
+        try:
+            event_preview = json.loads(request_body)
+            logger.info(f"Received Zoom OAuth app webhook event: {event_preview.get('event', 'unknown')}")
+        except json.JSONDecodeError:
+            logger.info("Received Zoom OAuth app webhook event: (unparseable)")
 
         try:
             zoom_oauth_app = ZoomOAuthApp.objects.get(object_id=object_id)
@@ -95,7 +100,7 @@ class ExternalWebhookZoomOAuthAppView(View):
             # Handle endpoint.url_validation event type
             if event_type == "endpoint.url_validation":
                 json_response = compute_zoom_webhook_validation_response(event_json.get("payload", {}).get("plainToken"), zoom_oauth_app.webhook_secret)
-                logger.info(f"Received Zoom OAuth app webhook event for endpoint URL validation: {event_json}. Returning JSON response: {json_response}")
+                logger.info("Received Zoom OAuth app webhook event for endpoint URL validation")
                 return JsonResponse(json_response, status=200)
 
         except ZoomOAuthApp.DoesNotExist:
@@ -161,16 +166,16 @@ class ExternalWebhookStripeView(View):
             return HttpResponse(status=400)
 
     def _handle_checkout_session_completed(self, session):
-        logger.info(f"Received Stripe webhook event for checkout session completed: {session}")
+        logger.info(f"Received Stripe webhook event for checkout session completed: {session.get('id', 'unknown')}")
 
         process_checkout_session_completed(session)
 
     def _handle_payment_intent_succeeded(self, payment_intent):
-        logger.info(f"Received Stripe webhook event for payment intent succeeded: {payment_intent}")
+        logger.info(f"Received Stripe webhook event for payment intent succeeded: {payment_intent.get('id', 'unknown')}")
 
         process_payment_intent_succeeded(payment_intent)
 
     def _handle_customer_updated(self, customer, customer_previous_attributes):
-        logger.info(f"Received Stripe webhook event for customer updated: {customer}")
+        logger.info(f"Received Stripe webhook event for customer updated: {customer.get('id', 'unknown')}")
 
         process_customer_updated(customer, customer_previous_attributes)
