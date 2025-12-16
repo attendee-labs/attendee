@@ -10,6 +10,9 @@ services:
       - REDIS_URL=redis://redis:6379/5
       - DJANGO_SETTINGS_MODULE=attendee.settings.development
       - ENABLE_CHROME_SANDBOX=false
+      # Voice Activity Detection: 'webrtc' (default, fast) or 'silero' (more accurate)
+      - VAD_PROVIDER=webrtc
+      - SAVE_BOT_RESOURCE_SNAPSHOTS=true
     command: "celery -A attendee worker -l INFO"
 
   attendee-scheduler-local:
@@ -32,7 +35,7 @@ services:
     networks:
       - attendee_network
     ports:
-      - "8000:8000"
+      - "8002:8000"
     environment:
       - POSTGRES_HOST=postgres
       - REDIS_URL=redis://redis:6379/5
