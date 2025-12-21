@@ -91,18 +91,12 @@
         border-right: none !important; /* Remove border from last tab */
     }
 
-    table.logs-table {
-        table-layout: fixed;
-        width: 100%;
-    }
-    .logs-created-column {
-        width: clamp(140px, 18vw, 200px);
-    }
-    .logs-level-column {
-        width: clamp(70px, 8vw, 110px);
-    }
-    .logs-type-column {
-        width: clamp(160px, 22vw, 260px);
+    .log-message {
+        max-width: 800px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        display: block;
     }
 </style>
 
@@ -511,13 +505,7 @@
         {% if logs %}
         <div class="tab-pane fade" id="logs" role="tabpanel">
             <div class="table-responsive">
-                <table class="table table-sm align-middle mb-0 logs-table">
-                    <colgroup>
-                        <col class="logs-created-column">
-                        <col class="logs-level-column">
-                        <col class="logs-type-column">
-                        <col>
-                    </colgroup>
+                <table class="table">
                     <thead>
                         <tr>
                             <th>Created</th>
@@ -529,9 +517,7 @@
                     <tbody>
                         {% for log in logs %}
                         <tr>
-                            <td class="text-muted" style="white-space: nowrap;">
-                                {{ log.created_at|date:"M d, Y H:i:s" }}
-                            </td>
+                            <td><small>{{ log.created_at|date:"M d, Y H:i:s" }}</small></td>
                             <td style="white-space: nowrap;">
                                 <span class="badge
                                     {% if log.level == 4 %}text-bg-danger
@@ -546,9 +532,7 @@
                                     {{ log.get_entry_type_display }}
                                 </span>
                             </td>
-                            <td class="text-truncate" style="max-width: 0;" title="{{ log.message }}">
-                                {{ log.message }}
-                            </td>
+                            <td><small><span class="log-message" title="{{ log.message }}">{{ log.message }}</span></small></td>
                         </tr>
                         {% endfor %}
                     </tbody>
