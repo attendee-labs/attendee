@@ -90,6 +90,21 @@
     .nav-tabs .nav-item:last-child .nav-link {
         border-right: none !important; /* Remove border from last tab */
     }
+
+    /* Logs table: keep first columns reasonably sized and let Message take the remaining space */
+    table.logs-table {
+        table-layout: fixed;
+        width: 100%;
+    }
+    .logs-col-created {
+        width: clamp(140px, 18vw, 200px);
+    }
+    .logs-col-level {
+        width: clamp(70px, 8vw, 110px);
+    }
+    .logs-col-type {
+        width: clamp(160px, 22vw, 260px);
+    }
 </style>
 
 <div class="container mt-4">
@@ -186,6 +201,14 @@
             <button class="nav-link" id="participants-tab" data-bs-toggle="tab" 
                     data-bs-target="#participants" type="button" role="tab">
                 Participants
+            </button>
+        </li>
+        {% endif %}
+        {% if logs %}
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="logs-tab" data-bs-toggle="tab" 
+                    data-bs-target="#logs" type="button" role="tab">
+                Logs
             </button>
         </li>
         {% endif %}
@@ -481,6 +504,56 @@
                         </div>
                     </div>
                 {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Logs Tab -->
+        {% if logs %}
+        <div class="tab-pane fade" id="logs" role="tabpanel">
+            <div class="table-responsive">
+                <table class="table table-sm align-middle mb-0 logs-table">
+                    <colgroup>
+                        <col class="logs-col-created">
+                        <col class="logs-col-level">
+                        <col class="logs-col-type">
+                        <col>
+                    </colgroup>
+                    <thead>
+                        <tr>
+                            <th>Created</th>
+                            <th>Level</th>
+                            <th>Type</th>
+                            <th>Message</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for log in logs %}
+                        <tr>
+                            <td class="text-muted" style="white-space: nowrap;">
+                                {{ log.created_at|date:"M d, Y H:i:s" }}
+                            </td>
+                            <td style="white-space: nowrap;">
+                                <span class="badge
+                                    {% if log.level == 4 %}text-bg-danger
+                                    {% elif log.level == 3 %}text-bg-warning
+                                    {% elif log.level == 2 %}text-bg-primary
+                                    {% else %}text-bg-secondary{% endif %}">
+                                    {{ log.get_level_display }}
+                                </span>
+                            </td>
+                            <td>
+                                <span class="badge text-bg-light border text-body">
+                                    {{ log.get_entry_type_display }}
+                                </span>
+                            </td>
+                            <td class="text-truncate" style="max-width: 0;" title="{{ log.message }}">
+                                {{ log.message }}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
             </div>
         </div>
         {% endif %}
