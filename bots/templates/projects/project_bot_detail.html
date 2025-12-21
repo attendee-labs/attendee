@@ -91,18 +91,17 @@
         border-right: none !important; /* Remove border from last tab */
     }
 
-    /* Logs table: keep first columns reasonably sized and let Message take the remaining space */
     table.logs-table {
         table-layout: fixed;
         width: 100%;
     }
-    .logs-col-created {
+    .logs-created-column {
         width: clamp(140px, 18vw, 200px);
     }
-    .logs-col-level {
+    .logs-level-column {
         width: clamp(70px, 8vw, 110px);
     }
-    .logs-col-type {
+    .logs-type-column {
         width: clamp(160px, 22vw, 260px);
     }
 </style>
@@ -514,9 +513,9 @@
             <div class="table-responsive">
                 <table class="table table-sm align-middle mb-0 logs-table">
                     <colgroup>
-                        <col class="logs-col-created">
-                        <col class="logs-col-level">
-                        <col class="logs-col-type">
+                        <col class="logs-created-column">
+                        <col class="logs-level-column">
+                        <col class="logs-type-column">
                         <col>
                     </colgroup>
                     <thead>
