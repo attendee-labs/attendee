@@ -8,7 +8,7 @@ from django.db.models.functions import Extract
 from django.utils import timezone
 from django.utils.html import format_html
 
-from .models import Bot, BotEvent, Calendar, CalendarEvent, Utterance, WebhookDeliveryAttempt, WebhookSubscription
+from .models import Bot, BotEvent, BotLogEntry, Calendar, CalendarEvent, Utterance, WebhookDeliveryAttempt, WebhookSubscription
 
 
 # Create an inline for BotEvent to show on the Bot admin page
@@ -90,6 +90,45 @@ class BotEventAdmin(admin.ModelAdmin):
         ("Debug Data", {"fields": ("debug_screenshots_display",)}),
         ("System", {"fields": ("version",)}),
     )
+
+
+@admin.register(BotLogEntry)
+class BotLogEntryAdmin(admin.ModelAdmin):
+    list_display = ("bot_object_id", "bot_project", "level", "entry_type", "created_at", "short_message")
+    list_filter = ("level", "entry_type", "bot__project")
+    search_fields = ("bot__object_id", "bot__project__name", "message")
+    readonly_fields = ("object_id", "bot", "level", "entry_type", "message", "created_at")
+    ordering = ("-created_at",)
+    date_hierarchy = "created_at"
+    raw_id_fields = ("bot",)
+
+    def bot_object_id(self, obj):
+        return obj.bot.object_id
+
+    bot_object_id.short_description = "Bot"
+    bot_object_id.admin_order_field = "bot__object_id"
+
+    def bot_project(self, obj):
+        return obj.bot.project
+
+    bot_project.short_description = "Project"
+    bot_project.admin_order_field = "bot__project"
+
+    def short_message(self, obj):
+        if not obj.message:
+            return "-"
+        return (obj.message[:117] + "...") if len(obj.message) > 120 else obj.message
+
+    short_message.short_description = "Message"
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return True
 
 
 @admin.register(Bot)
