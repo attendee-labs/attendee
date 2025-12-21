@@ -94,9 +94,9 @@ class BotEventAdmin(admin.ModelAdmin):
 
 @admin.register(BotLogEntry)
 class BotLogEntryAdmin(admin.ModelAdmin):
-    list_display = ("bot_object_id", "bot_project", "level", "entry_type", "created_at", "short_message")
-    list_filter = ("level", "entry_type", "bot__project")
-    search_fields = ("bot__object_id", "bot__project__name", "message")
+    list_display = ("bot_object_id", "level", "entry_type", "created_at", "short_message")
+    list_filter = ("level", "entry_type")
+    search_fields = ("message",)
     readonly_fields = ("object_id", "bot", "level", "entry_type", "message", "created_at")
     ordering = ("-created_at",)
     date_hierarchy = "created_at"
@@ -107,12 +107,6 @@ class BotLogEntryAdmin(admin.ModelAdmin):
 
     bot_object_id.short_description = "Bot"
     bot_object_id.admin_order_field = "bot__object_id"
-
-    def bot_project(self, obj):
-        return obj.bot.project
-
-    bot_project.short_description = "Project"
-    bot_project.admin_order_field = "bot__project"
 
     def short_message(self, obj):
         if not obj.message:
