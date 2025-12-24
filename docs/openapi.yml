@@ -764,7 +764,7 @@ paths:
     post:
       operationId: Pause Recording
       description: Pauses the recording for the specified bot. This functionality
-        is in beta and only supported for Google Meet and MS Teamsbots.
+        is in beta and only supported for Google Meet and MS Teams bots.
       summary: Pause the bot's recording
       parameters:
       - in: header
