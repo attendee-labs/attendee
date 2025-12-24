@@ -769,6 +769,17 @@ class ZoomSettingsJSONField(serializers.JSONField):
                 "description": "Number of seconds to wait before leaving if the authorized user is not in the meeting. Only relevant if this is a Zoom bot using the on behalf of token.",
                 "default": 600,
             },
+            "only_bots_in_meeting_timeout_seconds": {
+                "type": "integer",
+                "description": "Number of seconds to wait before leaving if only bots (matching only_bots_in_meeting_name_patterns) remain in the meeting",
+                "default": 300,
+            },
+            "only_bots_in_meeting_name_patterns": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "List of regex patterns to identify bot participants. If only participants matching these patterns remain, the auto-leave timer starts.",
+                "default": None,
+            },
         },
         "required": [],
         "additionalProperties": False,
@@ -1509,9 +1520,27 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
             if key not in defaults.keys():
                 raise serializers.ValidationError(f"Unexpected attribute: {key}")
 
-        # Validate that all values are positive integers
+        # Validate only_bots_in_meeting_name_patterns separately (it's a list, not an int)
+        if "only_bots_in_meeting_name_patterns" in value:
+            if value["only_bots_in_meeting_name_patterns"] is not None:
+                if not isinstance(value["only_bots_in_meeting_name_patterns"], list):
+                    raise serializers.ValidationError("only_bots_in_meeting_name_patterns must be a list of strings or null")
+                # Validate each pattern is a valid regex
+                import re
+                for pattern in value["only_bots_in_meeting_name_patterns"]:
+                    if not isinstance(pattern, str):
+                        raise serializers.ValidationError("Each pattern in only_bots_in_meeting_name_patterns must be a string")
+                    try:
+                        re.compile(pattern)
+                    except re.error as e:
+                        raise serializers.ValidationError(f"Invalid regex pattern '{pattern}': {str(e)}")
+
+        # Validate that all other values are positive integers
         for param, default in defaults.items():
-            if param in value and (not isinstance(value[param], int) or value[param] <= 0):
+            if param == "only_bots_in_meeting_name_patterns":
+                continue  # Skip, already validated above
+            
+            if param in value and value[param] is not None and (not isinstance(value[param], int) or value[param] <= 0):
                 raise serializers.ValidationError(f"{param} must be a positive integer")
             # Set default if not provided
             if param not in value:

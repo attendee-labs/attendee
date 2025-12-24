@@ -134,6 +134,7 @@ class ZoomBotAdapter(BotAdapter):
         self.automatic_leave_configuration = automatic_leave_configuration
 
         self.only_one_participant_in_meeting_at = None
+        self.only_bots_in_meeting_at = None
         self.last_audio_received_at = None
         self.silence_detection_activated = False
         self.cleaned_up = False
@@ -226,6 +227,7 @@ class ZoomBotAdapter(BotAdapter):
     def on_user_join_callback(self, joined_user_ids, _):
         logger.info(f"on_user_join_callback called. joined_user_ids = {joined_user_ids}")
         self.update_only_one_participant_in_meeting_at()
+        self.update_only_bots_in_meeting_at()
         for joined_user_id in joined_user_ids:
             self.get_participant(joined_user_id)
             self.send_participant_event(joined_user_id, event_type=ParticipantEventTypes.JOIN)
@@ -246,9 +248,63 @@ class ZoomBotAdapter(BotAdapter):
         else:
             self.only_one_participant_in_meeting_at = None
 
+    def update_only_bots_in_meeting_at(self):
+        """Update the timer for when only bots are in the meeting"""
+        if not self.joined_at:
+            return
+        
+        # If the feature is not enabled, reset timer and return
+        if not self.automatic_leave_configuration.only_bots_in_meeting_name_patterns:
+            self.only_bots_in_meeting_at = None
+            return
+        
+        if self._are_only_bots_in_meeting():
+            if self.only_bots_in_meeting_at is None:
+                logger.info("Only bots detected in meeting, starting timer")
+                self.only_bots_in_meeting_at = time.time()
+        else:
+            if self.only_bots_in_meeting_at is not None:
+                logger.info("Non-bot participant detected, resetting only-bots timer")
+            self.only_bots_in_meeting_at = None
+
+    def _are_only_bots_in_meeting(self) -> bool:
+        """Check if only bot participants (matching only_bots_in_meeting_name_patterns) are in the meeting"""
+        import re
+        
+        if not self.automatic_leave_configuration.only_bots_in_meeting_name_patterns:
+            return False
+        
+        if not self.participants_ctrl:
+            return False
+        
+        # Compile regex patterns
+        patterns = [re.compile(pattern, re.IGNORECASE) for pattern in self.automatic_leave_configuration.only_bots_in_meeting_name_patterns]
+        
+        # Get all participants
+        all_participant_ids = self.participants_ctrl.GetParticipantsList()
+        if len(all_participant_ids) == 0:
+            return False
+        
+        # Check each participant
+        for participant_id in all_participant_ids:
+            user = self.participants_ctrl.GetUserByUserID(participant_id)
+            if user:
+                participant_name = user.GetUserName()
+                
+                # Check if this participant matches any bot pattern
+                is_bot = any(pattern.search(participant_name) for pattern in patterns)
+                
+                # If we find a non-bot participant, return False
+                if not is_bot:
+                    return False
+        
+        # All participants are bots
+        return True
+
     def on_user_left_callback(self, left_user_ids, _):
         logger.info(f"on_user_left_callback called. left_user_ids = {left_user_ids}")
         self.update_only_one_participant_in_meeting_at()
+        self.update_only_bots_in_meeting_at()
 
         for left_user_id in left_user_ids:
             self.send_participant_event(left_user_id, event_type=ParticipantEventTypes.LEAVE)
@@ -1092,6 +1148,13 @@ class ZoomBotAdapter(BotAdapter):
             if time.time() - self.only_one_participant_in_meeting_at > self.automatic_leave_configuration.only_participant_in_meeting_timeout_seconds:
                 logger.info(f"Auto-leaving meeting because there was only one participant in the meeting for {self.automatic_leave_configuration.only_participant_in_meeting_timeout_seconds} seconds")
                 self.send_message_callback({"message": self.Messages.ADAPTER_REQUESTED_BOT_LEAVE_MEETING, "leave_reason": BotAdapter.LEAVE_REASON.AUTO_LEAVE_ONLY_PARTICIPANT_IN_MEETING})
+                return
+
+        # Check if only bots remain in the meeting
+        if self.only_bots_in_meeting_at is not None:
+            if time.time() - self.only_bots_in_meeting_at > self.automatic_leave_configuration.only_bots_in_meeting_timeout_seconds:
+                logger.info(f"Auto-leaving meeting because only bots have been in the meeting for {self.automatic_leave_configuration.only_bots_in_meeting_timeout_seconds} seconds")
+                self.send_message_callback({"message": self.Messages.ADAPTER_REQUESTED_BOT_LEAVE_MEETING, "leave_reason": BotAdapter.LEAVE_REASON.AUTO_LEAVE_ONLY_BOTS_IN_MEETING})
                 return
 
         if not self.silence_detection_activated and self.joined_at is not None and time.time() - self.joined_at > self.automatic_leave_configuration.silence_activate_after_seconds:

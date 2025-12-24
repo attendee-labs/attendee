@@ -1214,6 +1214,7 @@ class BotEventSubTypes(models.IntegerChoices):
     BOT_RECORDING_PERMISSION_DENIED_HOST_CLIENT_CANNOT_GRANT_PERMISSION = 25, "Bot recording permission denied - Host client cannot grant permission"
     LEAVE_REQUESTED_AUTO_LEAVE_COULD_NOT_ENABLE_CLOSED_CAPTIONS = 26, "Leave requested - Auto leave could not enable closed captions"
     COULD_NOT_JOIN_MEETING_AUTHORIZED_USER_NOT_IN_MEETING_TIMEOUT_EXCEEDED = 27, "Bot could not join meeting - Authorized user not in meeting timeout exceeded. See https://developers.zoom.us/blog/transition-to-obf-token-meetingsdk-apps/"
+    LEAVE_REQUESTED_AUTO_LEAVE_ONLY_BOTS_IN_MEETING = 28, "Leave requested - Auto leave only bots in meeting"
 
     @classmethod
     def sub_type_to_api_code(cls, value):
@@ -1246,6 +1247,7 @@ class BotEventSubTypes(models.IntegerChoices):
             cls.BOT_RECORDING_PERMISSION_DENIED_HOST_CLIENT_CANNOT_GRANT_PERMISSION: "host_client_cannot_grant_permission",
             cls.LEAVE_REQUESTED_AUTO_LEAVE_COULD_NOT_ENABLE_CLOSED_CAPTIONS: "auto_leave_could_not_enable_closed_captions",
             cls.COULD_NOT_JOIN_MEETING_AUTHORIZED_USER_NOT_IN_MEETING_TIMEOUT_EXCEEDED: "authorized_user_not_in_meeting_timeout_exceeded",
+            cls.LEAVE_REQUESTED_AUTO_LEAVE_ONLY_BOTS_IN_MEETING: "auto_leave_only_bots_in_meeting",
         }
         return mapping.get(value)
 
@@ -1308,7 +1310,7 @@ class BotEvent(models.Model):
                     )
                     |
                     # For LEAVE_REQUESTED event type, must have one of the valid event subtypes or be null (for backwards compatibility, this will eventually be removed)
-                    (Q(event_type=BotEventTypes.LEAVE_REQUESTED) & (Q(event_sub_type=BotEventSubTypes.LEAVE_REQUESTED_USER_REQUESTED) | Q(event_sub_type=BotEventSubTypes.LEAVE_REQUESTED_AUTO_LEAVE_SILENCE) | Q(event_sub_type=BotEventSubTypes.LEAVE_REQUESTED_AUTO_LEAVE_ONLY_PARTICIPANT_IN_MEETING) | Q(event_sub_type=BotEventSubTypes.LEAVE_REQUESTED_AUTO_LEAVE_MAX_UPTIME_EXCEEDED) | Q(event_sub_type=BotEventSubTypes.LEAVE_REQUESTED_AUTO_LEAVE_COULD_NOT_ENABLE_CLOSED_CAPTIONS) | Q(event_sub_type__isnull=True)))
+                    (Q(event_type=BotEventTypes.LEAVE_REQUESTED) & (Q(event_sub_type=BotEventSubTypes.LEAVE_REQUESTED_USER_REQUESTED) | Q(event_sub_type=BotEventSubTypes.LEAVE_REQUESTED_AUTO_LEAVE_SILENCE) | Q(event_sub_type=BotEventSubTypes.LEAVE_REQUESTED_AUTO_LEAVE_ONLY_PARTICIPANT_IN_MEETING) | Q(event_sub_type=BotEventSubTypes.LEAVE_REQUESTED_AUTO_LEAVE_MAX_UPTIME_EXCEEDED) | Q(event_sub_type=BotEventSubTypes.LEAVE_REQUESTED_AUTO_LEAVE_COULD_NOT_ENABLE_CLOSED_CAPTIONS) | Q(event_sub_type=BotEventSubTypes.LEAVE_REQUESTED_AUTO_LEAVE_ONLY_BOTS_IN_MEETING) | Q(event_sub_type__isnull=True)))
                     |
                     # For BOT_RECORDING_PERMISSION_DENIED event type, must have one of the valid event subtypes
                     (Q(event_type=BotEventTypes.BOT_RECORDING_PERMISSION_DENIED) & (Q(event_sub_type=BotEventSubTypes.BOT_RECORDING_PERMISSION_DENIED_HOST_DENIED_PERMISSION) | Q(event_sub_type=BotEventSubTypes.BOT_RECORDING_PERMISSION_DENIED_REQUEST_TIMED_OUT) | Q(event_sub_type=BotEventSubTypes.BOT_RECORDING_PERMISSION_DENIED_HOST_CLIENT_CANNOT_GRANT_PERMISSION)))

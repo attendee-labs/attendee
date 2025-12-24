@@ -14,6 +14,8 @@ class AutomaticLeaveConfiguration:
         max_uptime_seconds: Maximum number of seconds that the bot should be running before automatically leaving (infinite by default)
         enable_closed_captions_timeout_seconds: Number of seconds to wait before leaving if bot could not enable closed captions (infinite by default)
         authorized_user_not_in_meeting_timeout_seconds: Number of seconds to wait before leaving if the authorized user is not in the meeting. Only relevant if this is a Zoom bot using the on behalf of token.
+        only_bots_in_meeting_timeout_seconds: Number of seconds to wait before leaving if only bots (matching only_bots_in_meeting_name_patterns) remain in the meeting
+        only_bots_in_meeting_name_patterns: List of regex patterns to identify bot participants. If only participants matching these patterns remain, the auto-leave timer starts.
     """
 
     silence_timeout_seconds: int = 600
@@ -24,3 +26,5 @@ class AutomaticLeaveConfiguration:
     max_uptime_seconds: int | None = None
     enable_closed_captions_timeout_seconds: int | None = None
     authorized_user_not_in_meeting_timeout_seconds: int = 600
+    only_bots_in_meeting_timeout_seconds: int = 300
+    only_bots_in_meeting_name_patterns: list[str] | None = None

@@ -93,6 +93,7 @@ class WebBotAdapter(BotAdapter):
 
         self.participants_info = {}
         self.only_one_participant_in_meeting_at = None
+        self.only_bots_in_meeting_at = None
         self.video_frame_ticker = 0
 
         self.automatic_leave_configuration = automatic_leave_configuration
@@ -820,6 +821,25 @@ class WebBotAdapter(BotAdapter):
                 self.send_message_callback({"message": self.Messages.ADAPTER_REQUESTED_BOT_LEAVE_MEETING, "leave_reason": BotAdapter.LEAVE_REASON.AUTO_LEAVE_ONLY_PARTICIPANT_IN_MEETING})
                 return
 
+        # Check if only bots remain in the meeting
+        if self.automatic_leave_configuration.only_bots_in_meeting_name_patterns is not None and len(self.automatic_leave_configuration.only_bots_in_meeting_name_patterns) > 0:
+            if self.only_bots_in_meeting_at is None:
+                # Check if only bots are in the meeting
+                if self._are_only_bots_in_meeting():
+                    logger.info("Only bots detected in meeting, starting timer")
+                    self.only_bots_in_meeting_at = time.time()
+            else:
+                # Timer is running, check if we should leave
+                if time.time() - self.only_bots_in_meeting_at > self.automatic_leave_configuration.only_bots_in_meeting_timeout_seconds:
+                    logger.info(f"Auto-leaving meeting because only bots have been in the meeting for {self.automatic_leave_configuration.only_bots_in_meeting_timeout_seconds} seconds")
+                    self.send_message_callback({"message": self.Messages.ADAPTER_REQUESTED_BOT_LEAVE_MEETING, "leave_reason": BotAdapter.LEAVE_REASON.AUTO_LEAVE_ONLY_BOTS_IN_MEETING})
+                    return
+                
+                # Reset timer if non-bot participants joined
+                if not self._are_only_bots_in_meeting():
+                    logger.info("Non-bot participant detected, resetting only-bots timer")
+                    self.only_bots_in_meeting_at = None
+
         if not self.silence_detection_activated and self.joined_at is not None and time.time() - self.joined_at > self.automatic_leave_configuration.silence_activate_after_seconds:
             self.silence_detection_activated = True
             self.last_audio_message_processed_time = time.time()
@@ -836,6 +856,36 @@ class WebBotAdapter(BotAdapter):
                 logger.info(f"Auto-leaving meeting because bot has been running for more than {self.automatic_leave_configuration.max_uptime_seconds} seconds")
                 self.send_message_callback({"message": self.Messages.ADAPTER_REQUESTED_BOT_LEAVE_MEETING, "leave_reason": BotAdapter.LEAVE_REASON.AUTO_LEAVE_MAX_UPTIME})
                 return
+
+    def _are_only_bots_in_meeting(self) -> bool:
+        """Check if only bot participants (matching only_bots_in_meeting_name_patterns) are in the meeting"""
+        import re
+        
+        if not self.automatic_leave_configuration.only_bots_in_meeting_name_patterns:
+            return False
+        
+        # Compile regex patterns
+        patterns = [re.compile(pattern, re.IGNORECASE) for pattern in self.automatic_leave_configuration.only_bots_in_meeting_name_patterns]
+        
+        # Get all active participants
+        active_participants = [participant for participant in self.participants_info.values() if participant.get("active", False)]
+        
+        if len(active_participants) == 0:
+            return False
+        
+        # Check all participants
+        for participant in active_participants:
+            participant_name = participant.get("fullName", "")
+            
+            # Check if this participant matches any bot pattern
+            is_bot = any(pattern.search(participant_name) for pattern in patterns)
+            
+            # If we find a non-bot participant, return False
+            if not is_bot:
+                return False
+        
+        # All participants are bots
+        return True
 
     def is_ready_to_send_chat_messages(self):
         return self.ready_to_send_chat_messages

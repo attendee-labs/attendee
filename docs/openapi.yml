@@ -2630,6 +2630,19 @@ components:
                 user is not in the meeting. Only relevant if this is a Zoom bot using
                 the on behalf of token.
               default: 600
+            only_bots_in_meeting_timeout_seconds:
+              type: integer
+              description: Number of seconds to wait before leaving if only bots (matching
+                only_bots_in_meeting_name_patterns) remain in the meeting
+              default: 300
+            only_bots_in_meeting_name_patterns:
+              type: array
+              items:
+                type: string
+              description: List of regex patterns to identify bot participants. If only
+                participants matching these patterns remain, the auto-leave timer starts.
+              nullable: true
+              default: null
           required: []
           additionalProperties: false
       required:
