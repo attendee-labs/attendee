@@ -23,6 +23,13 @@ Bots go through these lifecycle states:
 7. Fatal Error: Bot encountered an unrecoverable error
 8. Waiting Room: Bot is in meeting's waiting room
 9. Ended: Bot has completed all tasks and recordings and transcripts are available for download
+10. Data Deleted: Bot data has been permanently deleted (recordings, transcripts, participants)
+11. Scheduled: Bot is scheduled to join at a future time (see scheduled bots documentation)
+12. Staged: Bot resources are allocated and ready to join at scheduled time
+13. Joined - Recording Paused: Bot has joined and recording is temporarily paused
+14. Joining Breakout Room: Bot is moving to a breakout room
+15. Leaving Breakout Room: Bot is leaving a breakout room
+16. Joined - Recording Permission Denied: Bot has joined but doesn't have permission to record
 
 ## Transcription Features
 
