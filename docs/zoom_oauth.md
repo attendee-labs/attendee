@@ -32,8 +32,8 @@ You'll need to create a Zoom OAuth App that your users will authorize. We recomm
    - `meeting:read:local_recording_token`
    - `user:read:zak`
 8. Add the following scopes if you want to use the onbehalf token:
+   - `user:read:user`
    - `user:read:token`
-   - `user:read:zak`
 
 ## Register your Zoom App with Attendee
 
