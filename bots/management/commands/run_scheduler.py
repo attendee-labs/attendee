@@ -17,6 +17,8 @@ from bots.tasks.sync_zoom_oauth_connection_task import enqueue_sync_zoom_oauth_c
 
 log = logging.getLogger(__name__)
 
+CALENDAR_SYNC_THRESHOLD_HOURS = 24  # The longest a calendar can go without having been synced
+
 
 class Command(BaseCommand):
     help = "Runs celery tasks for scheduled bots."
@@ -78,12 +80,12 @@ class Command(BaseCommand):
     def _run_periodic_calendar_syncs(self):
         """
         Run periodic calendar syncs.
-        Launch sync tasks for calendars that haven't had a sync task enqueued in the last 30 minutes.
+        Launch sync tasks for calendars that haven't had a sync task enqueued in the last 24 hours.
         """
         now = timezone.now()
-        cutoff_time = now - timezone.timedelta(minutes=30)
+        cutoff_time = now - timezone.timedelta(hours=CALENDAR_SYNC_THRESHOLD_HOURS)
 
-        # Find connected calendars that haven't had a sync task enqueued in the last 30 minutes
+        # Find connected calendars that haven't had a sync task enqueued in the last 24 hours
         calendars = Calendar.objects.filter(
             state=CalendarStates.CONNECTED,
         ).filter(Q(sync_task_enqueued_at__isnull=True) | Q(sync_task_enqueued_at__lte=cutoff_time) | Q(sync_task_requested_at__isnull=False))

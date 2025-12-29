@@ -358,6 +358,18 @@ class Calendar(models.Model):
         ]
 
 
+class CalendarNotificationChannel(models.Model):
+    calendar = models.ForeignKey(Calendar, on_delete=models.CASCADE, related_name="notification_channels")
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    expires_at = models.DateTimeField()
+    notification_last_received_at = models.DateTimeField(null=True, blank=True)
+    platform_uuid = models.CharField(max_length=1024, unique=True)
+    unique_key = models.CharField(max_length=256, unique=True)
+    raw = models.JSONField()
+
+
 class CalendarEvent(models.Model):
     OBJECT_ID_PREFIX = "evt_"
 
