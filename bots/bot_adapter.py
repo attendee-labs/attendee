@@ -26,6 +26,7 @@ class BotAdapter:
         BOT_RECORDING_PERMISSION_DENIED = "Bot recording permission denied"
         AUTHORIZED_USER_NOT_IN_MEETING_TIMEOUT_EXCEEDED = "Authorized user not in meeting timeout exceeded"
         COULD_NOT_ENABLE_CLOSED_CAPTIONS = "Could not enable closed captions"
+        BOT_PUT_IN_WAITING_ROOM_AFTER_JOINING = "Bot put in waiting room after joining"
 
         # App session messages
         APP_SESSION_CONNECTED = "App session connected"

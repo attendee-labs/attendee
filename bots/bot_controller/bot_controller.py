@@ -1754,6 +1754,13 @@ class BotController:
             BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.BOT_PUT_IN_WAITING_ROOM)
             return
 
+        if message.get("message") == BotAdapter.Messages.BOT_PUT_IN_WAITING_ROOM_AFTER_JOINING:
+            logger.info("Received message to put bot in waiting room after joining")
+            # The internal pipeline needs to stop recording.
+            self.pause_recording_for_pipeline_objects_raise_on_failure()
+            BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.BOT_PUT_IN_WAITING_ROOM_AFTER_JOINING)
+            return
+
         if message.get("message") == BotAdapter.Messages.BOT_JOINED_MEETING:
             if self.bot_in_db.state == BotStates.JOINING_BREAKOUT_ROOM:
                 logger.info("Received message that bot joined breakout room")

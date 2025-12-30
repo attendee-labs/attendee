@@ -982,6 +982,17 @@ class ZoomBotAdapter(BotAdapter):
         logger.info(f"Failed to join meeting and the onbehalf token user is not in the meeting but the timeout of {self.automatic_leave_configuration.authorized_user_not_in_meeting_timeout_seconds} seconds has not exceeded, so retrying")
         self.should_retry_after_meeting_ends = True
 
+    def handle_put_in_waiting_room(self):
+        # Different if we had already joined the meeting
+        if self.joined_at:
+            self.send_message_callback({"message": self.Messages.BOT_PUT_IN_WAITING_ROOM_AFTER_JOINING})
+            self.recording_permission_granted = False
+            return
+
+        self.send_message_callback({"message": self.Messages.BOT_PUT_IN_WAITING_ROOM})
+        GLib.timeout_add_seconds(self.automatic_leave_configuration.waiting_room_timeout_seconds, self.leave_meeting_if_still_in_waiting_room)
+
+
     def meeting_status_changed(self, status, iResult):
         logger.info(f"meeting_status_changed called. status = {status}, iResult={iResult}")
         self.clear_stuck_in_connecting_state_timeout()
@@ -1002,8 +1013,7 @@ class ZoomBotAdapter(BotAdapter):
             self.wait_for_host_to_start_meeting_then_give_up()
 
         if status == zoom.MEETING_STATUS_IN_WAITING_ROOM:
-            self.send_message_callback({"message": self.Messages.BOT_PUT_IN_WAITING_ROOM})
-            GLib.timeout_add_seconds(self.automatic_leave_configuration.waiting_room_timeout_seconds, self.leave_meeting_if_still_in_waiting_room)
+            self.handle_put_in_waiting_room()
 
         if status == zoom.MEETING_STATUS_INMEETING:
             self.send_message_callback({"message": self.Messages.BOT_JOINED_MEETING})

@@ -1110,6 +1110,7 @@ class BotEventTypes(models.IntegerChoices):
     BOT_BEGAN_JOINING_BREAKOUT_ROOM = 17, "Bot began joining breakout room"
     BOT_BEGAN_LEAVING_BREAKOUT_ROOM = 18, "Bot began leaving breakout room"
     BOT_RECORDING_PERMISSION_DENIED = 19, "Bot recording permission denied"
+    BOT_PUT_IN_WAITING_ROOM_AFTER_JOINING = 20, "Bot put in waiting room after joining"
 
     # App session events
     APP_SESSION_CONNECTION_REQUESTED = 100, "App Session Connection Requested"
@@ -1140,6 +1141,7 @@ class BotEventTypes(models.IntegerChoices):
             cls.BOT_BEGAN_JOINING_BREAKOUT_ROOM: "began_joining_breakout_room",
             cls.BOT_BEGAN_LEAVING_BREAKOUT_ROOM: "began_leaving_breakout_room",
             cls.BOT_RECORDING_PERMISSION_DENIED: "recording_permission_denied",
+            cls.BOT_PUT_IN_WAITING_ROOM_AFTER_JOINING: "put_in_waiting_room_after_joining",
             cls.APP_SESSION_CONNECTION_REQUESTED: "app_session_connection_requested",
             cls.APP_SESSION_CONNECTED: "app_session_connected",
             cls.APP_SESSION_DISCONNECT_REQUESTED: "app_session_disconnect_requested",
@@ -1369,6 +1371,10 @@ class BotEventManager:
         },
         BotEventTypes.BOT_PUT_IN_WAITING_ROOM: {
             "from": BotStates.JOINING,
+            "to": BotStates.WAITING_ROOM,
+        },
+        BotEventTypes.BOT_PUT_IN_WAITING_ROOM_AFTER_JOINING: {
+            "from": [BotStates.JOINED_NOT_RECORDING, BotStates.JOINED_RECORDING_PERMISSION_DENIED, BotStates.JOINED_RECORDING, BotStates.JOINED_RECORDING_PAUSED],
             "to": BotStates.WAITING_ROOM,
         },
         BotEventTypes.BOT_JOINED_MEETING: {
@@ -1701,6 +1707,7 @@ class BotEventManager:
                     # Get valid transition for this event type
                     transition = cls.VALID_TRANSITIONS.get(event_type)
                     if not transition:
+                        logger.info(f"cls.VALID_TRANSITIONS = {cls.VALID_TRANSITIONS}")
                         raise ValidationError(f"No valid transitions defined for event type {event_type}")
 
                     # Check if current state is valid for this transition
@@ -1742,7 +1749,7 @@ class BotEventManager:
                     if new_state == BotStates.JOINED_RECORDING_PAUSED:
                         cls.after_new_state_is_joined_recording_paused(bot=bot, new_state=new_state)
 
-                    if new_state == BotStates.JOINED_RECORDING_PERMISSION_DENIED:
+                    if new_state == BotStates.JOINED_RECORDING_PERMISSION_DENIED or new_state == BotStates.WAITING_ROOM:
                         cls.after_new_state_is_joined_recording_permission_denied(bot=bot, new_state=new_state)
 
                     if new_state == BotStates.FATAL_ERROR:
