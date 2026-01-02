@@ -2630,6 +2630,13 @@ components:
                 user is not in the meeting. Only relevant if this is a Zoom bot using
                 the on behalf of token.
               default: 600
+            bot_keywords:
+              type: array
+              items:
+                type: string
+              description: List of keywords to identify bot participants. A participant is considered a bot if any word in their name matches a keyword. Words are found by splitting on spaces, hyphens, and underscores, and the comparison is case-insensitive. Bot participants are excluded when determining if the bot is the only participant in the meeting.
+              nullable: true
+              default: null
           required: []
           additionalProperties: false
       required:

@@ -18,6 +18,7 @@ from selenium.webdriver.chrome.service import Service
 from websockets.sync.server import serve
 
 from bots.automatic_leave_configuration import AutomaticLeaveConfiguration
+from bots.automatic_leave_utils import participant_is_another_bot
 from bots.bot_adapter import BotAdapter
 from bots.models import ParticipantEventTypes, RecordingViews
 from bots.utils import half_ceil, scale_i420
@@ -251,19 +252,31 @@ class WebBotAdapter(BotAdapter):
 
             self.add_audio_chunk_callback(participant_id, datetime.datetime.utcnow(), audio_data.tobytes())
 
+    def number_of_participants_ever_in_meeting_excluding_other_bots(self):
+        return len([participant for participant in self.participants_info.values() if not participant_is_another_bot(participant["fullName"], participant["isCurrentUser"], self.automatic_leave_configuration)])
+
     def update_only_one_participant_in_meeting_at(self):
         if not self.joined_at:
             return
 
-        # If nobody other than the bot was ever in the meeting, then don't activate this. We only want to activate if someone else was in the meeting and left
-        if len(self.participants_info) <= 1:
+        # If nobody (excluding other bots) other than the bot was ever in the meeting, then don't activate this. We only want to activate if someone else was in the meeting and left
+        if self.number_of_participants_ever_in_meeting_excluding_other_bots() <= 1:
             return
 
-        all_participants_in_meeting = [x for x in self.participants_info.values() if x["active"]]
-        if len(all_participants_in_meeting) == 1 and all_participants_in_meeting[0]["fullName"] == self.display_name:
+        all_participants_in_meeting_excluding_other_bots = []
+        other_bots_in_meeting_names = []
+        for participant in self.participants_info.values():
+            if not participant["active"]:
+                continue
+            if not participant_is_another_bot(participant["fullName"], participant["isCurrentUser"], self.automatic_leave_configuration):
+                all_participants_in_meeting_excluding_other_bots.append(participant)
+            else:
+                other_bots_in_meeting_names.append(participant["fullName"])
+
+        if len(all_participants_in_meeting_excluding_other_bots) == 1 and all_participants_in_meeting_excluding_other_bots[0]["fullName"] == self.display_name:
             if self.only_one_participant_in_meeting_at is None:
                 self.only_one_participant_in_meeting_at = time.time()
-                logger.info(f"only_one_participant_in_meeting_at set to {self.only_one_participant_in_meeting_at}")
+                logger.info(f"only_one_participant_in_meeting_at set to {self.only_one_participant_in_meeting_at}. Ignoring other bots in meeting: {other_bots_in_meeting_names}")
         else:
             self.only_one_participant_in_meeting_at = None
 
