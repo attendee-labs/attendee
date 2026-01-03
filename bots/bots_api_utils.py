@@ -348,13 +348,19 @@ def patch_bot_transcription_settings(bot: Bot, data: dict) -> tuple[Bot | None, 
     validated_data = serializer.validated_data
 
     # Update the bot in the DB. Handle concurrency conflict
-    # Only legal update is to update the teams closed captions language
+    # Only legal update is to update the teams closed captions language or google meet closed captions language
     try:
         if "transcription_settings" not in bot.settings:
             bot.settings["transcription_settings"] = {}
         if "meeting_closed_captions" not in bot.settings["transcription_settings"]:
             bot.settings["transcription_settings"]["meeting_closed_captions"] = {}
-        bot.settings["transcription_settings"]["meeting_closed_captions"]["teams_language"] = TranscriptionSettings(validated_data.get("transcription_settings")).teams_closed_captions_language()
+        new_transcription_settings = TranscriptionSettings(validated_data.get("transcription_settings"))
+        new_teams_language = new_transcription_settings.teams_closed_captions_language()
+        if new_teams_language:
+            bot.settings["transcription_settings"]["meeting_closed_captions"]["teams_language"] = new_teams_language
+        new_google_meet_language = new_transcription_settings.google_meet_closed_captions_language()
+        if new_google_meet_language:
+            bot.settings["transcription_settings"]["meeting_closed_captions"]["google_meet_language"] = new_google_meet_language
         bot.save()
     except RecordModifiedError:
         return None, {"error": "Version conflict. Please try again."}

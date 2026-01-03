@@ -1030,8 +1030,8 @@ class BotController:
     def take_action_based_on_transcription_settings_in_db(self):
         # If it is not a teams bot, do nothing
         meeting_type = meeting_type_from_url(self.bot_in_db.meeting_url)
-        if meeting_type != MeetingTypes.TEAMS:
-            logger.info(f"Bot {self.bot_in_db.object_id} is not a teams bot, so cannot update closed captions language")
+        if meeting_type != MeetingTypes.TEAMS and meeting_type != MeetingTypes.GOOGLE_MEET:
+            logger.info(f"Bot {self.bot_in_db.object_id} is not a teams or google meet bot, so cannot update closed captions language")
             return
 
         # If it not using closed caption from platform, do nothing
@@ -1039,8 +1039,11 @@ class BotController:
             logger.info(f"Bot {self.bot_in_db.object_id} is not using closed caption from platform, so cannot update closed captions language")
             return
 
-        # If it is a teams bot using closed caption from platform, we need to update the transcription settings
-        self.adapter.update_closed_captions_language(self.bot_in_db.transcription_settings.teams_closed_captions_language())
+        # If it is a teams or google meet bot using closed caption from platform, we need to update the transcription settings
+        if meeting_type == MeetingTypes.TEAMS:
+            self.adapter.update_closed_captions_language(self.bot_in_db.transcription_settings.teams_closed_captions_language())
+        if meeting_type == MeetingTypes.GOOGLE_MEET:
+            self.adapter.update_closed_captions_language(self.bot_in_db.transcription_settings.google_meet_closed_captions_language())
 
     def handle_glib_shutdown(self):
         logger.info("handle_glib_shutdown called")

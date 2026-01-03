@@ -542,8 +542,12 @@ PATCH_BOT_TRANSCRIPTION_SETTINGS_SCHEMA = {
             "type": "object",
             "properties": {
                 "teams_language": TRANSCRIPTION_SETTINGS_SCHEMA["properties"]["meeting_closed_captions"]["properties"]["teams_language"],
+                "google_meet_language": TRANSCRIPTION_SETTINGS_SCHEMA["properties"]["meeting_closed_captions"]["properties"]["google_meet_language"],
             },
-            "required": ["teams_language"],
+            "oneOf": [
+                {"required": ["teams_language"]},
+                {"required": ["google_meet_language"]},
+            ],
             "additionalProperties": False,
         },
     },
