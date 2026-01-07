@@ -15,11 +15,12 @@ Including another URLconf
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
 
+import json
 import os
 
 from django.conf import settings
 from django.contrib import admin
-from django.http import HttpResponse
+from django.http import HttpResponse, JsonResponse
 from django.urls import include, path
 from drf_spectacular.views import (
     SpectacularAPIView,
@@ -33,9 +34,16 @@ from accounts import views
 def health_check(request):
     return HttpResponse(status=200)
 
+def version_view(request):
+    version = os.getenv("ATTENDEE_VERSION", "DEVELOPMENT")
+    return JsonResponse(
+        {"version": version},
+        status=200
+    )
 
 urlpatterns = [
     path("health/", health_check, name="health-check"),
+    path("api/v1/version/", version_view, name="api-version"),
 ]
 
 if not os.environ.get("DISABLE_ADMIN"):

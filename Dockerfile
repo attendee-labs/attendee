@@ -120,6 +120,9 @@ ENV project=attendee
 ENV cwd=/$project
 WORKDIR $cwd
 
+ARG ATTENDEE_VERSION
+ENV ATTENDEE_VERSION=${ATTENDEE_VERSION}
+
 # Copy only what you need; set ownership/perm at copy time
 COPY --chown=app:app --chmod=0755 entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY --chown=app:app . .
