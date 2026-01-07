@@ -1,0 +1,41 @@
+# Extended docker-compose for fully local development with MinIO (local S3)
+# Usage: docker compose -f dev.docker-compose.yaml -f dev.docker-compose.local.yaml up
+
+services:
+  minio:
+    image: minio/minio:latest
+    ports:
+      - "9000:9000" # S3 API
+      - "9001:9001" # Console UI
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+    networks:
+      - attendee_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  # Create the bucket on startup
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 minioadmin minioadmin;
+      mc mb local/attendee-recordings --ignore-existing;
+      mc anonymous set download local/attendee-recordings;
+      echo 'Bucket created successfully';
+      "
+    networks:
+      - attendee_network
+
+volumes:
+  minio_data:
