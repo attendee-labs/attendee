@@ -2,23 +2,119 @@
 
 {% block content %}
     <div class="container mt-4">
-        <div class="card bg-info-subtle text-dark">
-            <div class="card-body">
-                <h5 class="card-title">Hi {{ request.user.email }}! 👋</h5>
-                <p class="card-text">Welcome to Attendee - the open source meeting bot API. You have 5 hours of free credits to get started.</p>
-                <p class="card-text mb-0">
-                    If you're building something that needs meeting bots, we'd love to chat on our <a href="https://join.slack.com/t/attendee-community/shared_invite/zt-3l43ns8cl-G8YnMccWVTugMlloUtSf9g">Slack</a>. And please ⭐ us on <a href="https://github.com/noah-duncan/attendee" target="_blank" rel="noopener noreferrer">Github</a> if you find us useful.
-
-                </p>
+        <!-- Welcome Card -->
+        <div class="card border-0 shadow-sm mb-4 welcome-card" style="border-radius: 16px; background: var(--gradient-welcome-bg); overflow: hidden; position: relative;">
+            <div style="position: absolute; top: -50px; right: -50px; width: 200px; height: 200px; background: var(--accent-blue-bg); border-radius: 50%;"></div>
+            <div style="position: absolute; bottom: -30px; left: -30px; width: 150px; height: 150px; background: var(--accent-cyan-bg); border-radius: 50%;"></div>
+            <div class="card-body p-4" style="position: relative; z-index: 1;">
+                <div class="d-flex align-items-start">
+                    <div style="width: 56px; height: 56px; background: var(--gradient-blue); border-radius: 14px; display: flex; align-items: center; justify-content: center; margin-right: 16px; flex-shrink: 0; box-shadow: 0 4px 12px var(--shadow-blue);">
+                        <span style="font-size: 1.75rem;">👋</span>
+                    </div>
+                    <div class="flex-grow-1">
+                        <h5 class="card-title mb-2 fw-bold" style="font-size: var(--font-size-2xl); color: var(--accent-blue);">Hi {{ request.user.email }}!</h5>
+                        <p class="card-text mb-2" style="color: var(--text-secondary); line-height: var(--line-height-relaxed);">
+                            Welcome to <strong>Attendee</strong> - the open source meeting bot API. You have <span class="badge bg-primary" style="padding: 0.35rem 0.65rem;">5 hours of free credits</span> to get started.
+                        </p>
+                        <p class="card-text mb-0" style="color: var(--text-muted);">
+                            If you're building something that needs meeting bots, we'd love to chat on our 
+                            <a href="https://join.slack.com/t/attendee-community/shared_invite/zt-3l43ns8cl-G8YnMccWVTugMlloUtSf9g" 
+                               class="text-decoration-none fw-semibold" 
+                               style="color: var(--accent-blue);"
+                               onmouseover="this.style.color='var(--accent-blue-hover)'" 
+                               onmouseout="this.style.color='var(--accent-blue)'">Slack</a>. 
+                            And please ⭐ us on 
+                            <a href="https://github.com/noah-duncan/attendee" 
+                               target="_blank" 
+                               rel="noopener noreferrer"
+                               class="text-decoration-none fw-semibold" 
+                               style="color: var(--accent-blue);"
+                               onmouseover="this.style.color='var(--accent-blue-hover)'" 
+                               onmouseout="this.style.color='var(--accent-blue)'">Github</a> 
+                            if you find us useful.
+                        </p>
+                    </div>
+                </div>
             </div>
         </div>
-        <div">
-            <div class="card-body">
-                <h4 class="mt-4">Follow these steps to get started</h4>
+
+        <!-- Project Summary Cards -->
+        <div class="row mb-4 g-3">
+            <div class="col-md-4">
+                <div class="card border-0 shadow-sm h-100 metric-card" style="transition: transform 0.2s, box-shadow 0.2s;">
+                    <div class="card-body p-4">
+                        <div class="d-flex justify-content-between align-items-start">
+                            <div class="flex-grow-1">
+                                <p class="text-muted mb-2 small text-uppercase fw-semibold" style="letter-spacing: var(--letter-spacing-wider); font-size: var(--font-size-xs);">Total Bots</p>
+                                <h2 class="mb-0 fw-bold" style="font-size: var(--font-size-4xl); color: var(--accent-blue);">{{ metrics.total_bots }}</h2>
+                            </div>
+                            <div class="metric-icon" style="width: 60px; height: 60px; background: var(--gradient-blue); border-radius: 12px; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px var(--shadow-blue);">
+                                <i class="bi bi-robot text-white" style="font-size: 1.75rem;"></i>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card border-0 shadow-sm h-100 metric-card" style="transition: transform 0.2s, box-shadow 0.2s;">
+                    <div class="card-body p-4">
+                        <div class="d-flex justify-content-between align-items-start">
+                            <div class="flex-grow-1">
+                                <p class="text-muted mb-2 small text-uppercase fw-semibold" style="letter-spacing: var(--letter-spacing-wider); font-size: var(--font-size-xs);">Active Bots</p>
+                                <h2 class="mb-0 fw-bold" style="font-size: var(--font-size-4xl); color: var(--accent-green);">{{ metrics.active_bots }}</h2>
+                            </div>
+                            <div class="metric-icon" style="width: 60px; height: 60px; background: var(--gradient-green); border-radius: 12px; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px var(--shadow-green);">
+                                <i class="bi bi-play-circle-fill text-white" style="font-size: 1.75rem;"></i>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card border-0 shadow-sm h-100 metric-card" style="transition: transform 0.2s, box-shadow 0.2s;">
+                    <div class="card-body p-4">
+                        <div class="d-flex justify-content-between align-items-start">
+                            <div class="flex-grow-1">
+                                <p class="text-muted mb-2 small text-uppercase fw-semibold" style="letter-spacing: var(--letter-spacing-wider); font-size: var(--font-size-xs);">Recordings</p>
+                                <h2 class="mb-0 fw-bold" style="font-size: var(--font-size-4xl); color: var(--accent-cyan);">{{ metrics.total_recordings }}</h2>
+                            </div>
+                            <div class="metric-icon" style="width: 60px; height: 60px; background: var(--gradient-cyan); border-radius: 12px; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px var(--shadow-cyan);">
+                                <i class="bi bi-camera-video-fill text-white" style="font-size: 1.75rem;"></i>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Quick Setup Wizard (Collapsible) -->
+        <div class="card border-0 shadow-sm" style="border-radius: 16px; overflow: hidden;">
+            <div class="card-header border-0" style="background: var(--gradient-purple) !important; padding: 1.25rem 1.5rem;">
+                <h5 class="card-title mb-0">
+                    <a class="text-decoration-none text-white d-flex justify-content-between align-items-center wizard-header-link" 
+                       data-bs-toggle="collapse" 
+                       href="#quickSetupWizard" 
+                       role="button" 
+                       aria-expanded="false" 
+                       aria-controls="quickSetupWizard"
+                       style="transition: opacity 0.2s; color: #ffffff !important;">
+                        <span class="d-flex align-items-center">
+                            <div style="width: 40px; height: 40px; background: rgba(255, 255, 255, 0.25); border-radius: 10px; display: flex; align-items: center; justify-content: center; margin-right: 12px;">
+                                <i class="bi bi-magic text-white" style="font-size: 1.25rem; color: #ffffff !important;"></i>
+                            </div>
+                            <span class="fw-semibold text-white" style="font-size: var(--font-size-lg); letter-spacing: var(--letter-spacing-wide); color: #ffffff !important;">Quick Setup</span>
+                        </span>
+                        <i class="bi bi-chevron-down wizard-chevron text-white" style="font-size: 1.1rem; transition: transform 0.3s ease; color: #ffffff !important;"></i>
+                    </a>
+                </h5>
+            </div>
+            <div class="collapse" id="quickSetupWizard">
+                <div class="card-body">
+                    <p class="text-muted mb-3">Follow these steps to get started with Attendee:</p>
                 <ol class="list-group list-group-flush">
                     <!-- Step 1: Test the API by creating a bot -->
                     <li class="list-group-item pt-4 pb-4 fs-5">
-                        <a href="#step1-content" data-bs-toggle="collapse" role="button" aria-expanded="{% if not quick_start.has_ended_bots %}true{% else %}false{% endif %}" class="text-decoration-none text-dark d-flex justify-content-between align-items-center">
+                        <a href="#step1-content" data-bs-toggle="collapse" role="button" aria-expanded="{% if not quick_start.has_ended_bots %}true{% else %}false{% endif %}" class="text-decoration-none d-flex justify-content-between align-items-center" style="color: var(--text-primary);">
                             <span>1. Create a bot in the dashboard
                             {% if quick_start.has_ended_bots %}
                             <span class="text-success ms-2"><i class="bi bi-check-circle-fill"></i></span>
@@ -37,7 +133,7 @@
 
                     <!-- Step 2: API Key -->
                     <li class="list-group-item pt-4 pb-4 fs-5">
-                        <a href="#step2-content" data-bs-toggle="collapse" role="button" aria-expanded="{% if not quick_start.has_api_keys %}true{% else %}false{% endif %}" class="text-decoration-none text-dark d-flex justify-content-between align-items-center">
+                        <a href="#step2-content" data-bs-toggle="collapse" role="button" aria-expanded="{% if not quick_start.has_api_keys %}true{% else %}false{% endif %}" class="text-decoration-none d-flex justify-content-between align-items-center" style="color: var(--text-primary);">
                             <span>2. Create an API key
                             {% if quick_start.has_api_keys %}
                             <span class="text-success ms-2"><i class="bi bi-check-circle-fill"></i></span>
@@ -48,7 +144,7 @@
                         <div id="step2-content" class="collapse {% if not quick_start.has_api_keys %}show{% endif %}">
                             <div class="mt-2">
                                 <a href="{% url 'projects:project-api-keys' project.object_id %}" class="btn btn-sm btn-primary">
-                                    Go to API Keys
+                                    Go to Settings → API Keys
                                 </a>
                             </div>
                         </div>
@@ -56,7 +152,7 @@
 
                     <!-- Step 3: Call API -->
                     <li class="list-group-item pt-4 pb-4 fs-5">
-                        <a href="#step3-content" data-bs-toggle="collapse" role="button" aria-expanded="{% if not quick_start.has_created_bots_via_api %}true{% else %}false{% endif %}" class="text-decoration-none text-dark d-flex justify-content-between align-items-center">
+                        <a href="#step3-content" data-bs-toggle="collapse" role="button" aria-expanded="{% if not quick_start.has_created_bots_via_api %}true{% else %}false{% endif %}" class="text-decoration-none d-flex justify-content-between align-items-center" style="color: var(--text-primary);">
                             <span>3. Call the API
                             {% if quick_start.has_created_bots_via_api %}
                             <span class="text-success ms-2"><i class="bi bi-check-circle-fill"></i></span>
@@ -67,7 +163,7 @@
                         <div id="step3-content" class="collapse {% if not quick_start.has_created_bots_via_api %}show{% endif %}">
                             <div class="mt-2">
                                 <small>Create bot</small>
-                                <pre class="bg-light p-1 m-1 rounded">
+                                <pre class="p-1 m-1 rounded" style="background-color: var(--bg-secondary);">
 <code class="small">curl -X POST \
 {{ request.scheme }}://{{ request.get_host }}/api/v1/bots \
 -H 'Authorization: Token &lt;YOUR_API_KEY&gt;' \
@@ -77,7 +173,7 @@
                             </div>
                             <div class="mt-2">
                                 <small>Retrieve transcript</small>
-                                <pre class="bg-light p-1 m-1 rounded">
+                                <pre class="p-1 m-1 rounded" style="background-color: var(--bg-secondary);">
 <code class="small">curl -X GET \
 {{ request.scheme }}://{{ request.get_host }}/api/v1/bots/&lt;BOT_ID&gt/transcript \
 -H 'Authorization: Token &lt;YOUR_API_KEY&gt;' \
@@ -89,7 +185,7 @@
 
                     <!-- Step 4: Credentials -->
                     <li class="list-group-item pt-4 pb-4 fs-5">
-                        <a href="#step4-content" data-bs-toggle="collapse" role="button" aria-expanded="{% if not quick_start.has_credentials %}true{% else %}false{% endif %}" class="text-decoration-none text-dark d-flex justify-content-between align-items-center">
+                        <a href="#step4-content" data-bs-toggle="collapse" role="button" aria-expanded="{% if not quick_start.has_credentials %}true{% else %}false{% endif %}" class="text-decoration-none d-flex justify-content-between align-items-center" style="color: var(--text-primary);">
                             <span>4. Add credentials
                             {% if quick_start.has_credentials %}
                             <span class="text-success ms-2"><i class="bi bi-check-circle-fill"></i></span>
@@ -106,7 +202,45 @@
                         </div>
                     </li>
                 </ol>
+                </div>
             </div>
         </div>
     </div>
+
+    <style>
+        .metric-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 8px 24px var(--shadow-lg) !important;
+        }
+        
+        .metric-card {
+            border-radius: 16px !important;
+        }
+        
+        .metric-icon {
+            transition: transform 0.2s;
+        }
+        
+        .metric-card:hover .metric-icon {
+            transform: scale(1.1);
+        }
+        
+        .wizard-header-link:hover {
+            opacity: 0.9;
+        }
+        
+        .wizard-header-link[aria-expanded="true"] .wizard-chevron {
+            transform: rotate(180deg);
+        }
+        
+        .welcome-card {
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        
+        .welcome-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 24px var(--shadow-lg) !important;
+        }
+        
+    </style>
 {% endblock %}
