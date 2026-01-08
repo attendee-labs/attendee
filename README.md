@@ -132,8 +132,16 @@ For more details, follow [this guide](https://developers.zoom.us/docs/meeting-sd
   AWS_ACCESS_KEY_ID=minioadmin
   AWS_SECRET_ACCESS_KEY=minioadmin
   AWS_DEFAULT_REGION=us-east-1
-  AWS_ENDPOINT_URL=http://minio:9000
+  AWS_ENDPOINT_URL=http://host.docker.internal:9000
   ```
+
+  **Important for MinIO:** To access MinIO-generated URLs from your browser, add `host.docker.internal` to your hosts file:
+
+  ```bash
+  sudo sh -c 'echo "127.0.0.1 host.docker.internal" >> /etc/hosts'
+  ```
+
+  This allows your browser to resolve `host.docker.internal:9000` to access recordings stored in MinIO.
 
 - Start all the services:
   - **With AWS S3**: `docker compose -f dev.docker-compose.yaml up`
