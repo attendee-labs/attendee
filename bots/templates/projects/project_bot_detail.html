@@ -90,6 +90,14 @@
     .nav-tabs .nav-item:last-child .nav-link {
         border-right: none !important; /* Remove border from last tab */
     }
+
+    .log-message {
+        max-width: 800px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        display: block;
+    }
 </style>
 
 <div class="container mt-4">
@@ -186,6 +194,14 @@
             <button class="nav-link" id="participants-tab" data-bs-toggle="tab" 
                     data-bs-target="#participants" type="button" role="tab">
                 Participants
+            </button>
+        </li>
+        {% endif %}
+        {% if logs %}
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="logs-tab" data-bs-toggle="tab" 
+                    data-bs-target="#logs" type="button" role="tab">
+                Logs
             </button>
         </li>
         {% endif %}
@@ -493,6 +509,46 @@
                         </div>
                     </div>
                 {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Logs Tab -->
+        {% if logs %}
+        <div class="tab-pane fade" id="logs" role="tabpanel">
+            <div class="table-responsive">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Created</th>
+                            <th>Level</th>
+                            <th>Type</th>
+                            <th>Message</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for log in logs %}
+                        <tr>
+                            <td><small>{{ log.created_at|date:"M d, Y H:i:s" }}</small></td>
+                            <td style="white-space: nowrap;">
+                                <span class="badge
+                                    {% if log.level == 4 %}text-bg-danger
+                                    {% elif log.level == 3 %}text-bg-warning
+                                    {% elif log.level == 2 %}text-bg-primary
+                                    {% else %}text-bg-secondary{% endif %}">
+                                    {{ log.get_level_display }}
+                                </span>
+                            </td>
+                            <td>
+                                <span class="badge text-bg-light border text-body">
+                                    {{ log.get_entry_type_display }}
+                                </span>
+                            </td>
+                            <td><small><span class="log-message" title="{{ log.message }}">{{ log.message }}</span></small></td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
             </div>
         </div>
         {% endif %}

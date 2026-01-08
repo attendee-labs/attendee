@@ -26,6 +26,7 @@ from .models import (
     BotEvent,
     BotEventSubTypes,
     BotEventTypes,
+    BotLogEntry,
     BotStates,
     Calendar,
     CalendarEvent,
@@ -770,6 +771,9 @@ class ProjectBotDetailView(LoginRequiredMixin, ProjectUrlContextMixin, View):
         # Get participants and participant events for this bot
         participants = Participant.objects.filter(bot=bot, is_the_bot=False).prefetch_related("events").order_by("created_at")
 
+        # Get logs for this bot (newest first for easier debugging)
+        logs = BotLogEntry.objects.filter(bot=bot).order_by("-created_at")
+
         # Get resource snapshots for this bot
         resource_snapshots = bot.resource_snapshots.all().order_by("created_at")
 
@@ -796,6 +800,7 @@ class ProjectBotDetailView(LoginRequiredMixin, ProjectUrlContextMixin, View):
                 "webhook_delivery_attempts": webhook_delivery_attempts,
                 "chat_messages": chat_messages,
                 "participants": participants,
+                "logs": logs,
                 "ParticipantEventTypes": ParticipantEventTypes,
                 "WebhookDeliveryAttemptStatus": WebhookDeliveryAttemptStatus,
                 "credits_consumed": -sum([t.credits_delta() for t in bot.credit_transactions.all()]) if bot.credit_transactions.exists() else None,
