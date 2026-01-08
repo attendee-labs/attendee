@@ -102,7 +102,7 @@ Attendee powers a variety of applications:
 
 See [Self Hosting](#-self-hosting) section for Docker setup instructions.
 
-## 📡 API Examples
+## 💻 API Examples
 
 ### Join a Meeting
 
@@ -151,7 +151,7 @@ curl -X GET https://app.attendee.dev/api/v1/bots/bot_3hfP0PXEsNinIZmh/transcript
 
 See the [full API documentation](https://docs.attendee.dev/) for more examples.
 
-## 🏗️ Self Hosting
+## ⚙️ Self Hosting
 
 Attendee is designed for easy self-hosting. It runs as a Django app in a single Docker image.
 
@@ -216,7 +216,7 @@ We welcome contributions! Here's how you can help:
 - **[Obtaining Zoom OAuth Credentials](#obtaining-zoom-oauth-credentials)** - Setup guide
 - **[Running in Development Mode](#running-in-development-mode)** - Local development setup
 
-## Obtaining Zoom OAuth Credentials
+## 🔑 Obtaining Zoom OAuth Credentials
 
 1. Navigate to [Zoom Marketplace](https://marketplace.zoom.us/) and log into your developer account
 2. Click "Develop" → "Build App" → Choose "General App"
@@ -225,7 +225,7 @@ We welcome contributions! Here's how you can help:
 
 For detailed instructions, see [this guide](https://developers.zoom.us/docs/meeting-sdk/developer-accounts/) or [watch this video](https://www.loom.com/embed/7cbd3eab1bc4438fb1badcb3787996d6?sid=825a92b5-51ca-447c-86c1-c45f5294ec9d).
 
-## Running in Development Mode
+## 🧪 Running in Development Mode
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for complete development setup instructions.
 
