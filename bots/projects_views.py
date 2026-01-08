@@ -54,6 +54,7 @@ from .models import (
     ZoomOAuthApp,
 )
 from .stripe_utils import credit_amount_for_purchase_amount_dollars, process_checkout_session_completed
+from .tasks.deliver_webhook_task import deliver_webhook
 from .utils import generate_recordings_json_for_bot_detail_view
 from .zoom_oauth_apps_api_utils import create_or_update_zoom_oauth_app
 
@@ -106,6 +107,14 @@ def get_google_meet_bot_login_for_user(user, google_meet_bot_login_object_id):
     if user.role != UserRole.ADMIN and not ProjectAccess.objects.filter(project=google_meet_bot_login.group.project, user=user).exists():
         raise PermissionDenied
     return google_meet_bot_login
+
+
+def get_webhook_delivery_attempt_for_user(user, idempotency_key):
+    webhook_delivery_attempt = get_object_or_404(WebhookDeliveryAttempt, idempotency_key=idempotency_key, webhook_subscription__project__organization=user.organization)
+    # If you're an admin you can access any webhook delivery attempt in the organization
+    if user.role != UserRole.ADMIN and not ProjectAccess.objects.filter(project=webhook_delivery_attempt.webhook_subscription.project, user=user).exists():
+        raise PermissionDenied
+    return webhook_delivery_attempt
 
 
 def get_webhook_options_for_project(project):
@@ -1027,6 +1036,31 @@ class DeleteWebhookView(LoginRequiredMixin, ProjectUrlContextMixin, View):
         context["webhook_options"] = get_webhook_options_for_project(webhook.project)
         context["REQUIRE_HTTPS_WEBHOOKS"] = settings.REQUIRE_HTTPS_WEBHOOKS
         return render(request, "projects/project_webhooks.html", context)
+
+
+class ResendWebhookDeliveryAttemptView(LoginRequiredMixin, View):
+    def post(self, request, object_id, idempotency_key):
+        # Verify user has access to this project
+        get_project_for_user(user=request.user, project_object_id=object_id)
+
+        # Get and verify access to the webhook delivery attempt
+        webhook_delivery_attempt = get_webhook_delivery_attempt_for_user(
+            user=request.user,
+            idempotency_key=idempotency_key,
+        )
+
+        # Reset status to pending and queue for redelivery
+        webhook_delivery_attempt.status = WebhookDeliveryAttemptStatus.PENDING
+        webhook_delivery_attempt.save()
+
+        # Queue the webhook for delivery
+        deliver_webhook.delay(webhook_delivery_attempt.id)
+
+        # Return a simple confirmation badge - user can refresh page to see final status
+        return HttpResponse(
+            '<span class="badge bg-info"><i class="bi bi-check"></i> Queued</span>',
+            content_type="text/html",
+        )
 
 
 class ProjectBillingView(AdminRequiredMixin, ProjectUrlContextMixin, ListView):
