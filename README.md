@@ -151,7 +151,7 @@ curl -X GET https://app.attendee.dev/api/v1/bots/bot_3hfP0PXEsNinIZmh/transcript
 
 See the [full API documentation](https://docs.attendee.dev/) for more examples.
 
-## ⚙️ Self Hosting
+## 🏠 Self Hosting
 
 Attendee is designed for easy self-hosting. It runs as a Django app in a single Docker image.
 
@@ -194,7 +194,7 @@ We welcome contributions! Here's how you can help:
 
 **Join our [Slack Community](https://join.slack.com/t/attendee-community/shared_invite/zt-3l43ns8cl-G8YnMccWVTugMlloUtSf9g)** to connect with other developers and get help.
 
-## 🗺️ Roadmap
+## 📍 Roadmap
 
 - [x] Join and leave Zoom meetings
 - [x] Real-time transcripts
