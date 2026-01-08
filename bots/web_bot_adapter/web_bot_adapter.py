@@ -325,13 +325,13 @@ class WebBotAdapter(BotAdapter):
 
                 if message_type == 1:  # JSON
                     json_data = json.loads(message[4:].decode("utf-8"))
-                    if json_data.get("type") == "CaptionUpdate":
-                        logger.info("Received JSON message: %s", self.mask_transcript_if_required(json_data))
-                    else:
-                        logger.info("Received JSON message: %s", json_data)
 
-                    # Handle audio format information
                     if isinstance(json_data, dict):
+                        if json_data.get("type") == "CaptionUpdate":
+                            logger.info("Received JSON message: %s", self.mask_transcript_if_required(json_data))
+                        else:
+                            logger.info("Received JSON message: %s", json_data)
+
                         if json_data.get("type") == "AudioFormatUpdate":
                             audio_format = json_data["format"]
                             logger.info(f"audio format {audio_format}")
@@ -386,6 +386,8 @@ class WebBotAdapter(BotAdapter):
                         elif json_data.get("type") == "ClosedCaptionStatusChange":
                             if json_data.get("change") == "save_caption_not_allowed":
                                 self.could_not_enable_closed_captions()
+                    else:
+                        logger.warning("Received non-dict JSON message: %s (type: %s)", json_data, type(json_data).__name__)
 
                 elif message_type == 2:  # VIDEO
                     self.process_video_frame(message)
