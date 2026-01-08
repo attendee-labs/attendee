@@ -94,13 +94,13 @@ Attendee powers a variety of applications:
 1. **Sign up** at [app.attendee.dev](https://app.attendee.dev/accounts/signup/) (free)
 2. **Get your API key** from Settings → API Keys
 3. **Add credentials** in Settings → Credentials:
-   - Zoom OAuth credentials ([how to get them](#obtaining-zoom-oauth-credentials))
+   - Zoom OAuth credentials ([how to get them](#-obtaining-zoom-oauth-credentials))
    - Deepgram API key ([sign up free](https://console.deepgram.com/signup))
 4. **Start building!** See [API Examples](#-api-examples) below
 
 ### Option 2: Self-Host
 
-See [Self Hosting](#-self-hosting) section for Docker setup instructions.
+See [Self Hosting](#self-hosting) section for Docker setup instructions.
 
 ## 💻 API Examples
 
@@ -213,8 +213,8 @@ We welcome contributions! Here's how you can help:
 ## 📚 Additional Resources
 
 - **[Full Documentation](https://docs.attendee.dev/)** - Complete API reference
-- **[Obtaining Zoom OAuth Credentials](#obtaining-zoom-oauth-credentials)** - Setup guide
-- **[Running in Development Mode](#running-in-development-mode)** - Local development setup
+- **[Obtaining Zoom OAuth Credentials](#-obtaining-zoom-oauth-credentials)** - Setup guide
+- **[Running in Development Mode](#-running-in-development-mode)** - Local development setup
 
 ## 🔑 Obtaining Zoom OAuth Credentials
 
