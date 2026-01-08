@@ -310,6 +310,7 @@
                                 <th>Attempts</th>
                                 <th>Last Attempt</th>
                                 <th>Succeeded At</th>
+                                <th>Actions</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -317,7 +318,7 @@
                                 <tr>
                                     <td>{{ attempt.webhook_subscription.url }}</td>
                                     <td>{{ attempt.get_webhook_trigger_type_display }}</td>
-                                    <td>
+                                    <td id="webhook-status-{{ attempt.idempotency_key }}">
                                         <span class="badge {% if attempt.status == WebhookDeliveryAttemptStatus.SUCCESS %}bg-success{% elif attempt.status == WebhookDeliveryAttemptStatus.FAILURE %}bg-danger{% else %}bg-warning{% endif %}">
                                             {{ attempt.get_status_display }}
                                         </span>
@@ -325,10 +326,21 @@
                                     <td>{{ attempt.attempt_count }}</td>
                                     <td>{% if attempt.last_attempt_at %}{{ attempt.last_attempt_at|date:"M d, Y H:i:s" }}{% else %}Not attempted{% endif %}</td>
                                     <td>{% if attempt.succeeded_at %}{{ attempt.succeeded_at|date:"M d, Y H:i:s" }}{% else %}-{% endif %}</td>
+                                    <td>
+                                        <button 
+                                            class="btn btn-sm btn-outline-primary"
+                                            hx-post="{% url 'projects:resend-webhook-delivery-attempt' project.object_id attempt.idempotency_key %}"
+                                            hx-target="#webhook-status-{{ attempt.idempotency_key }}"
+                                            hx-swap="innerHTML"
+                                            hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+                                            title="Resend this webhook">
+                                            <i class="bi bi-arrow-repeat"></i> Resend
+                                        </button>
+                                    </td>
                                 </tr>
                                 {% if attempt.response_body_list or attempt.payload %}
                                     <tr>
-                                        <td colspan="6">
+                                        <td colspan="7">
                                             <div class="accordion" id="responseAccordion{{ attempt.id }}">
                                                 <div class="accordion-item">
                                                     <h2 class="accordion-header" id="heading{{ attempt.id }}">
