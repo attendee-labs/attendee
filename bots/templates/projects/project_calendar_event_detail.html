@@ -9,7 +9,7 @@
     }
     .timeline-item {
         padding: 1rem;
-        border-left: 2px solid #dee2e6;
+        border-left: 2px solid var(--border-color);
         margin-left: 1rem;
         position: relative;
     }
@@ -20,8 +20,8 @@
         top: 1.5rem;
         width: 1rem;
         height: 1rem;
-        background: #fff;
-        border: 2px solid #007bff;
+        background: var(--bg-card);
+        border: 2px solid var(--accent-blue);
         border-radius: 50%;
     }
     .timeline-container {
@@ -30,22 +30,22 @@
     }
     /* Override Bootstrap tab colors */
     .nav-tabs .nav-link {
-        color: #6c757d !important; /* Light grey for non-active tabs */
-        border-right: 1px solid #dee2e6 !important; /* Add vertical separator */
+        color: var(--text-muted) !important; /* Light grey for non-active tabs */
+        border-right: 1px solid var(--border-color) !important; /* Add vertical separator */
         border-radius: 0 !important; /* Remove rounded corners for cleaner separation */
     }
     .nav-tabs .nav-link.active {
-        color: #2e2f31 !important; /* Keep blue for active tab */
-        border-right: 1px solid #dee2e6 !important; /* Keep separator on active tab too */
+        color: var(--text-primary) !important; /* Keep primary text color for active tab */
+        border-right: 1px solid var(--border-color) !important; /* Keep separator on active tab too */
     }
     .nav-tabs .nav-item:last-child .nav-link {
         border-right: none !important; /* Remove border from last tab */
     }
     .status-badge {
-        font-size: 0.875rem;
+        font-size: var(--font-size-sm);
     }
     .event-info-card {
-        background-color: #f8f9fa;
+        background-color: var(--bg-secondary);
         border-radius: 0.375rem;
         padding: 1rem;
         margin-bottom: 1rem;
@@ -161,7 +161,7 @@
                     <h6 class="mb-0">Raw Data from API</h6>
                 </div>
                 <div class="card-body">
-                    <pre class="bg-light p-3 rounded" style="max-height: 400px; overflow-y: auto; font-size: 0.875rem; white-space: pre-wrap; word-wrap: break-word; overflow-wrap: break-word;">{{ calendar_event.raw|pprint }}</pre>
+                    <pre class="p-3 rounded" style="background-color: var(--bg-secondary); color: var(--text-primary); max-height: 400px; overflow-y: auto; font-size: 0.875rem; white-space: pre-wrap; word-wrap: break-word; overflow-wrap: break-word;">{{ calendar_event.raw|pprint }}</pre>
                 </div>
             </div>
         </div>

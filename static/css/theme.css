@@ -1,0 +1,570 @@
+/* Theme CSS Variables - Light Mode (Default) */
+:root {
+  /* Background Colors - Clean whites and light greys */
+  --bg-primary: #ffffff;
+  --bg-secondary: #f8f9fa;
+  --bg-tertiary: #f1f3f5;
+  --bg-hover: #f1f3f5;
+  --bg-sidebar: #ffffff;
+  --bg-card: #ffffff;
+
+  /* Text Colors - Dark greys */
+  --text-primary: #2d3748;
+  --text-secondary: #4a5568;
+  --text-muted: #718096;
+  --text-light: #a0aec0;
+
+  /* Border Colors - Very subtle */
+  --border-color: #e2e8f0;
+  --border-light: #edf2f7;
+  --border-hover: #cbd5e0;
+
+  /* Accent Colors - Minimal blue only */
+  --accent-blue: #2563eb;
+  --accent-blue-light: #3b82f6;
+  --accent-blue-bg: #f7fafc;
+  --accent-blue-bg-light: #edf2f7;
+  --accent-blue-hover: #1d4ed8;
+
+  /* Minimal other colors - only when needed */
+  --accent-green: #10b981;
+  --accent-red: #ef4444;
+
+  /* No gradients - flat colors only */
+  --bg-nav-hover: #f8f9fa;
+  --bg-nav-active: #f1f3f5;
+
+  /* Minimal shadows - almost none */
+  --shadow-sm: rgba(0, 0, 0, 0.02);
+  --shadow-md: rgba(0, 0, 0, 0.03);
+  --shadow-lg: rgba(0, 0, 0, 0.05);
+
+  /* Typography - Smaller font sizes */
+  --font-size-xs: 0.6875rem; /* 11px */
+  --font-size-sm: 0.8125rem; /* 13px */
+  --font-size-base: 0.9375rem; /* 15px - base */
+  --font-size-md: 0.9375rem; /* 15px */
+  --font-size-lg: 1rem; /* 16px */
+  --font-size-xl: 1.125rem; /* 18px */
+  --font-size-2xl: 1.25rem; /* 20px */
+  --font-size-3xl: 1.5rem; /* 24px */
+  --font-size-4xl: 1.875rem; /* 30px */
+
+  /* Typography - Font Weights */
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+
+  /* Typography - Line Heights */
+  --line-height-tight: 1.3;
+  --line-height-normal: 1.5;
+  --line-height-relaxed: 1.6;
+
+  /* Typography - Letter Spacing */
+  --letter-spacing-normal: 0;
+  --letter-spacing-wide: 0.2px;
+}
+
+/* Dark Mode - Minimal */
+[data-bs-theme="dark"] {
+  /* Background Colors */
+  --bg-primary: #1a202c;
+  --bg-secondary: #2d3748;
+  --bg-tertiary: #4a5568;
+  --bg-hover: #374151;
+  --bg-sidebar: #1a202c;
+  --bg-card: #2d3748;
+
+  /* Text Colors */
+  --text-primary: #f7fafc;
+  --text-secondary: #e2e8f0;
+  --text-muted: #a0aec0;
+  --text-light: #718096;
+
+  /* Border Colors */
+  --border-color: #4a5568;
+  --border-light: #2d3748;
+  --border-hover: #718096;
+
+  /* Accent Colors */
+  --accent-blue: #60a5fa;
+  --accent-blue-light: #3b82f6;
+  --accent-blue-bg: rgba(59, 130, 246, 0.1);
+  --accent-blue-bg-light: rgba(59, 130, 246, 0.15);
+  --accent-blue-hover: #93c5fd;
+
+  --accent-green: #34d399;
+  --accent-red: #f87171;
+
+  /* No gradients - flat colors */
+  --bg-nav-hover: #374151;
+  --bg-nav-active: #4a5568;
+
+  /* Minimal shadows */
+  --shadow-sm: rgba(0, 0, 0, 0.1);
+  --shadow-md: rgba(0, 0, 0, 0.15);
+  --shadow-lg: rgba(0, 0, 0, 0.2);
+}
+
+/* Base Typography */
+/* Bootstrap handles base font-size (1rem/16px) */
+html {
+  font-size: 100%; /* Use browser default, typically 16px */
+}
+
+body {
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  /* Don't override Bootstrap's default font-size - it's already 1rem */
+  font-weight: var(--font-weight-normal);
+  line-height: var(--line-height-normal);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  transition: background-color 0.3s ease, color 0.3s ease;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Header */
+.app-header {
+  background-color: var(--bg-primary) !important;
+  border-bottom: 1px solid var(--border-color) !important;
+  box-shadow: none;
+}
+
+/* Logo visibility in dark mode */
+[data-bs-theme="dark"] .app-header .app-logo,
+[data-bs-theme="dark"] .app-logo {
+  filter: brightness(0) invert(1);
+  opacity: 0.9;
+}
+
+/* Sidebar */
+.sidebar {
+  background-color: var(--bg-sidebar) !important;
+  border-right: 1px solid var(--border-color) !important;
+  transition: background-color 0.3s ease, border-color 0.3s ease;
+}
+
+/* Theme Toggle Button - Square and aligned */
+.theme-toggle-icon {
+  padding: 0;
+  border-radius: 4px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+}
+
+.theme-toggle-icon:hover {
+  background: var(--bg-nav-hover);
+  color: var(--text-primary);
+  border-color: var(--border-color);
+}
+
+.theme-toggle-icon i {
+  font-size: var(--font-size-sm);
+  color: inherit;
+  line-height: 1;
+}
+
+/* Project Selector - Flat */
+.project-dropdown-toggle {
+  background: var(--bg-primary) !important;
+  border-color: var(--border-color) !important;
+  color: var(--text-primary) !important;
+}
+
+.project-dropdown-toggle:hover {
+  background: var(--bg-nav-hover) !important;
+  border-color: var(--border-color) !important;
+}
+
+.project-selector .dropdown-item.active {
+  background: var(--bg-nav-active) !important;
+  color: var(--accent-blue) !important;
+}
+
+/* Navigation Links - Clean and minimal */
+.sidebar-nav-link {
+  color: var(--text-secondary) !important;
+}
+
+.sidebar-nav-link:hover {
+  background: var(--bg-nav-hover) !important;
+  color: var(--text-primary) !important;
+}
+
+.sidebar-nav-link.active {
+  background: var(--bg-nav-active) !important;
+  color: var(--text-primary) !important;
+}
+
+.sidebar-icon-wrapper {
+  background: transparent !important;
+}
+
+.sidebar-nav-link:hover .sidebar-icon-wrapper {
+  background: transparent !important;
+}
+
+.sidebar-nav-link.active .sidebar-icon-wrapper {
+  background: transparent !important;
+}
+
+/* Cards */
+.card {
+  background-color: var(--bg-card) !important;
+  border-color: var(--border-color) !important;
+  color: var(--text-primary) !important;
+}
+
+/* Welcome Card - Flat */
+.welcome-card {
+  background: var(--bg-card) !important;
+}
+
+/* Metric Cards - Flat */
+.metric-card {
+  background-color: var(--bg-card) !important;
+}
+
+/* Code blocks */
+pre {
+  background-color: var(--bg-secondary) !important;
+  color: var(--text-primary) !important;
+  border-color: var(--border-color) !important;
+}
+
+code {
+  color: var(--text-primary) !important;
+}
+
+/* Text muted */
+.text-muted {
+  color: var(--text-muted) !important;
+}
+
+/* Alerts */
+.alert {
+  border-color: var(--border-color) !important;
+}
+
+/* Dropdown menus */
+.dropdown-menu {
+  background-color: var(--bg-card) !important;
+  border-color: var(--border-color) !important;
+}
+
+.dropdown-item {
+  color: var(--text-primary) !important;
+  transition: background-color 0.15s ease;
+}
+
+.dropdown-item:hover {
+  background-color: var(--bg-nav-hover) !important;
+  color: var(--text-primary) !important;
+}
+
+/* Modals */
+.modal-content {
+  background-color: var(--bg-card) !important;
+  border-color: var(--border-color) !important;
+}
+
+.modal-header {
+  border-bottom-color: var(--border-color) !important;
+}
+
+.modal-footer {
+  border-top-color: var(--border-color) !important;
+}
+
+/* Form controls */
+.form-control {
+  background-color: var(--bg-primary) !important;
+  border-color: var(--border-color) !important;
+  color: var(--text-primary) !important;
+}
+
+.form-control:focus {
+  background-color: var(--bg-primary) !important;
+  border-color: var(--accent-blue) !important;
+  color: var(--text-primary) !important;
+}
+
+/* List group */
+.list-group-item {
+  background-color: var(--bg-card) !important;
+  border-color: var(--border-color) !important;
+  color: var(--text-primary) !important;
+}
+
+/* HR */
+hr {
+  border-color: var(--border-color) !important;
+  opacity: 0.5;
+}
+
+/* Table Styling */
+.table {
+  color: var(--text-primary) !important;
+  border-collapse: separate;
+  border-spacing: 0;
+  background-color: var(--bg-card);
+  border-radius: 4px;
+  overflow: hidden;
+  box-shadow: none;
+  margin-bottom: 0;
+  border: none;
+}
+
+.card-body .table,
+.card .table {
+  margin-bottom: 0;
+  width: 100%;
+  border-radius: 4px !important;
+  overflow: hidden !important;
+  box-shadow: none !important;
+  background-color: var(--bg-card) !important;
+  border: none !important;
+}
+
+/* Table headers - flat background */
+.card-body .table thead,
+.card .table thead {
+  background: var(--bg-secondary) !important;
+}
+
+.card-body .table tbody td,
+.card .table tbody td {
+  padding: 0.75rem 1rem !important;
+  vertical-align: middle !important;
+  color: var(--text-primary) !important;
+  border-top: none !important;
+  font-size: var(--font-size-sm) !important;
+}
+
+.card-body .table thead th,
+.card .table thead th {
+  padding: 0.75rem 1rem !important;
+  font-weight: var(--font-weight-medium) !important;
+  font-size: var(--font-size-sm) !important;
+  text-transform: none !important;
+  letter-spacing: var(--letter-spacing-normal) !important;
+  color: var(--text-secondary) !important;
+  border-bottom: 1px solid var(--border-color) !important;
+  border-top: none !important;
+  white-space: nowrap !important;
+}
+
+.table thead {
+  background: var(--bg-secondary);
+}
+
+.table thead th {
+  padding: 0.75rem 1rem;
+  font-weight: var(--font-weight-medium);
+  font-size: var(--font-size-sm);
+  text-transform: none;
+  letter-spacing: var(--letter-spacing-normal);
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-color);
+  border-top: none;
+  white-space: nowrap;
+}
+
+.table tbody tr {
+  border-bottom: 1px solid var(--border-color);
+  transition: all 0.2s ease;
+}
+
+.table tbody tr:last-child {
+  border-bottom: none;
+}
+
+.table tbody td {
+  padding: 0.75rem 1rem;
+  vertical-align: middle;
+  color: var(--text-primary);
+  border-top: none;
+  font-size: var(--font-size-sm);
+}
+
+.table tbody tr:hover {
+  background-color: var(--bg-hover) !important;
+}
+
+.table tbody tr.clickable-row {
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.table tbody tr.clickable-row:hover {
+  background-color: var(--bg-hover) !important;
+}
+
+.table tbody tr.clickable-row:hover td {
+  background-color: transparent;
+}
+
+/* Badge styling in tables */
+.table .badge {
+  font-weight: var(--font-weight-medium);
+  padding: 0.4rem 0.75rem;
+  font-size: var(--font-size-sm);
+  border-radius: 6px;
+}
+
+/* Small text in tables */
+.table tbody td small {
+  color: var(--text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.table-striped > tbody > tr:nth-of-type(odd) > td {
+  background-color: transparent;
+}
+
+.table-striped > tbody > tr:nth-of-type(odd):hover > td {
+  background-color: var(--bg-hover) !important;
+}
+
+.table-hover > tbody > tr:hover {
+  background-color: var(--bg-hover) !important;
+  transition: all 0.2s ease;
+}
+
+/* Small text */
+small {
+  color: var(--text-muted) !important;
+}
+
+/* Headings */
+h1 {
+  font-size: var(--font-size-3xl);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-height-tight);
+  color: var(--accent-blue) !important;
+  letter-spacing: var(--letter-spacing-normal);
+}
+
+h2 {
+  font-size: var(--font-size-2xl);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-height-tight);
+  color: var(--text-primary) !important;
+  letter-spacing: var(--letter-spacing-normal);
+}
+
+h3 {
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-medium);
+  line-height: var(--line-height-normal);
+  color: var(--text-primary) !important;
+}
+
+h4 {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-medium);
+  line-height: var(--line-height-normal);
+  color: var(--text-primary) !important;
+}
+
+h5 {
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-medium);
+  line-height: var(--line-height-normal);
+  color: var(--text-primary) !important;
+}
+
+h6 {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  line-height: var(--line-height-normal);
+  color: var(--text-primary) !important;
+}
+
+/* Paragraphs - Use Bootstrap default, just adjust line-height and color */
+p {
+  /* Don't override font-size - use Bootstrap's default */
+  line-height: var(--line-height-relaxed);
+  color: var(--text-primary);
+}
+
+/* Small text */
+small,
+.small {
+  font-size: var(--font-size-sm) !important;
+  line-height: var(--line-height-normal);
+}
+
+/* Extra small text */
+.text-xs {
+  font-size: var(--font-size-xs) !important;
+}
+
+/* Typography Utility Classes */
+.fs-xs {
+  font-size: var(--font-size-xs) !important;
+}
+.fs-sm {
+  font-size: var(--font-size-sm) !important;
+}
+.fs-base {
+  font-size: var(--font-size-base) !important;
+}
+.fs-md {
+  font-size: var(--font-size-md) !important;
+}
+.fs-lg {
+  font-size: var(--font-size-lg) !important;
+}
+.fs-xl {
+  font-size: var(--font-size-xl) !important;
+}
+.fs-2xl {
+  font-size: var(--font-size-2xl) !important;
+}
+.fs-3xl {
+  font-size: var(--font-size-3xl) !important;
+}
+.fs-4xl {
+  font-size: var(--font-size-4xl) !important;
+}
+
+/* Font Weight Utilities */
+.fw-normal {
+  font-weight: var(--font-weight-normal) !important;
+}
+.fw-medium {
+  font-weight: var(--font-weight-medium) !important;
+}
+.fw-semibold {
+  font-weight: var(--font-weight-semibold) !important;
+}
+.fw-bold {
+  font-weight: var(--font-weight-bold) !important;
+}
+
+/* Line Height Utilities */
+.lh-tight {
+  line-height: var(--line-height-tight) !important;
+}
+.lh-normal {
+  line-height: var(--line-height-normal) !important;
+}
+.lh-relaxed {
+  line-height: var(--line-height-relaxed) !important;
+}
+.lh-loose {
+  line-height: var(--line-height-loose) !important;
+}

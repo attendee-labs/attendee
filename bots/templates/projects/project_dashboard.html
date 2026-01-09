@@ -2,111 +2,235 @@
 
 {% block content %}
     <div class="container mt-4">
-        <div class="card bg-info-subtle text-dark">
-            <div class="card-body">
-                <h5 class="card-title">Hi {{ request.user.email }}! 👋</h5>
-                <p class="card-text">Welcome to Attendee - the open source meeting bot API. You have 5 hours of free credits to get started.</p>
-                <p class="card-text mb-0">
-                    If you're building something that needs meeting bots, we'd love to chat on our <a href="https://join.slack.com/t/attendee-community/shared_invite/zt-3l43ns8cl-G8YnMccWVTugMlloUtSf9g">Slack</a>. And please ⭐ us on <a href="https://github.com/noah-duncan/attendee" target="_blank" rel="noopener noreferrer">Github</a> if you find us useful.
-
+        <!-- Welcome Card -->
+        <div class="card border mb-4 welcome-card" style="border-radius: 4px; background: var(--bg-card); border-color: var(--border-color);">
+            <div class="card-body p-3">
+                <h5 class="card-title mb-2" style="font-size: var(--font-size-xl); color: var(--accent-blue); font-weight: var(--font-weight-semibold);">Welcome to Attendee!</h5>
+                <p class="card-text mb-2" style="color: var(--text-secondary); font-size: var(--font-size-sm); line-height: var(--line-height-normal);">
+                    You have <span class="badge bg-primary" style="padding: 0.25rem 0.5rem; font-size: var(--font-size-xs);">5 hours of free credits</span> to get started.
+                </p>
+                <p class="card-text mb-0" style="color: var(--text-muted); font-size: var(--font-size-sm);">
+                    If you're building something that needs meeting bots, we'd love to chat on our 
+                    <a href="https://join.slack.com/t/attendee-community/shared_invite/zt-3l43ns8cl-G8YnMccWVTugMlloUtSf9g" 
+                       class="text-decoration-none" 
+                       style="color: var(--accent-blue);">Slack</a>. 
+                    And please ⭐ us on 
+                    <a href="https://github.com/noah-duncan/attendee" 
+                       target="_blank" 
+                       rel="noopener noreferrer"
+                       class="text-decoration-none" 
+                       style="color: var(--accent-blue);">Github</a> 
+                    if you find us useful.
                 </p>
             </div>
         </div>
-        <div">
-            <div class="card-body">
-                <h4 class="mt-4">Follow these steps to get started</h4>
-                <ol class="list-group list-group-flush">
-                    <!-- Step 1: Test the API by creating a bot -->
-                    <li class="list-group-item pt-4 pb-4 fs-5">
-                        <a href="#step1-content" data-bs-toggle="collapse" role="button" aria-expanded="{% if not quick_start.has_ended_bots %}true{% else %}false{% endif %}" class="text-decoration-none text-dark d-flex justify-content-between align-items-center">
-                            <span>1. Create a bot in the dashboard
-                            {% if quick_start.has_ended_bots %}
-                            <span class="text-success ms-2"><i class="bi bi-check-circle-fill"></i></span>
-                            {% endif %}
-                            </span>
-                            <i class="bi bi-chevron-down"></i>
-                        </a>
-                        <div id="step1-content" class="collapse {% if not quick_start.has_ended_bots %}show{% endif %}">
-                            <div class="mt-2">
-                                <a href="{% url 'projects:project-bots' project.object_id %}?open_create_modal=true" class="btn btn-sm btn-primary">
+
+        <!-- Project Summary Cards -->
+        <div class="row mb-4 g-3">
+            <div class="col-md-4">
+                <div class="card border h-100 metric-card" style="border-radius: 4px; border-color: var(--border-color);">
+                    <div class="card-body p-3">
+                        <p class="text-muted mb-1" style="font-size: var(--font-size-xs); font-weight: var(--font-weight-normal);">Total Bots</p>
+                        <h3 class="mb-0" style="font-size: var(--font-size-2xl); color: var(--accent-blue) !important; font-weight: var(--font-weight-semibold);">{{ metrics.total_bots }}</h3>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card border h-100 metric-card" style="border-radius: 4px; border-color: var(--border-color);">
+                    <div class="card-body p-3">
+                        <p class="text-muted mb-1" style="font-size: var(--font-size-xs); font-weight: var(--font-weight-normal);">Active Bots</p>
+                        <h3 class="mb-0" style="font-size: var(--font-size-2xl); color: var(--accent-blue) !important; font-weight: var(--font-weight-semibold);">{{ metrics.active_bots }}</h3>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card border h-100 metric-card" style="border-radius: 4px; border-color: var(--border-color);">
+                    <div class="card-body p-3">
+                        <p class="text-muted mb-1" style="font-size: var(--font-size-xs); font-weight: var(--font-weight-normal);">Recordings</p>
+                        <h3 class="mb-0" style="font-size: var(--font-size-2xl); color: var(--accent-blue) !important; font-weight: var(--font-weight-semibold);">{{ metrics.total_recordings }}</h3>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Quick Setup Wizard (Collapsible) -->
+        {% if not quick_start.has_ended_bots or not quick_start.has_api_keys or not quick_start.has_created_bots_via_api or not quick_start.has_credentials %}
+        <div class="card border" style="border-radius: 4px; border-color: var(--border-color);">
+            <div class="card-header border-bottom" style="background: var(--bg-card) !important; padding: 0.75rem 1rem; border-color: var(--border-color) !important;">
+                <h5 class="card-title mb-0">
+                    <a class="text-decoration-none d-flex justify-content-between align-items-center wizard-header-link" 
+                       data-bs-toggle="collapse" 
+                       href="#quickSetupWizard" 
+                       role="button" 
+                       aria-expanded="false" 
+                       aria-controls="quickSetupWizard"
+                       style="color: var(--text-primary) !important; font-size: var(--font-size-base); font-weight: var(--font-weight-medium);">
+                        <span>Quick Setup</span>
+                        <i class="bi bi-chevron-down wizard-chevron" style="font-size: var(--font-size-sm); transition: transform 0.3s ease; color: var(--text-muted) !important;"></i>
+                    </a>
+                </h5>
+            </div>
+            <div class="collapse" id="quickSetupWizard">
+                <div class="card-body" style="padding: 1rem;">
+                    <div class="setup-steps">
+                        <!-- Step 1: Test the API by creating a bot -->
+                        <div class="setup-step mb-2" style="padding: 0.75rem 0; border-bottom: 1px solid var(--border-color);">
+                            <a href="#step1-content" data-bs-toggle="collapse" role="button" aria-expanded="{% if not quick_start.has_ended_bots %}true{% else %}false{% endif %}" class="text-decoration-none d-flex align-items-center" style="color: var(--text-primary); font-size: var(--font-size-sm);">
+                                {% if quick_start.has_ended_bots %}
+                                <i class="bi bi-check" style="font-size: var(--font-size-sm); color: var(--accent-blue); margin-right: 0.5rem; width: 16px;"></i>
+                                {% else %}
+                                <span style="width: 16px; height: 16px; border: 1.5px solid var(--text-muted); border-radius: 2px; margin-right: 0.5rem; display: inline-block;"></span>
+                                {% endif %}
+                                <span>Create a bot in the dashboard</span>
+                            </a>
+                            <div id="step1-content" class="collapse {% if not quick_start.has_ended_bots %}show{% endif %}" style="margin-top: 0.75rem; margin-left: 1.5rem;">
+                                <a href="{% url 'projects:project-bots' project.object_id %}?open_create_modal=true" class="btn btn-sm" style="font-size: var(--font-size-sm); padding: 0.25rem 0.75rem; background: var(--accent-blue); color: white; border: none; border-radius: 4px;">
                                     Create a bot
                                 </a>
                             </div>
                         </div>
-                    </li>
 
-                    <!-- Step 2: API Key -->
-                    <li class="list-group-item pt-4 pb-4 fs-5">
-                        <a href="#step2-content" data-bs-toggle="collapse" role="button" aria-expanded="{% if not quick_start.has_api_keys %}true{% else %}false{% endif %}" class="text-decoration-none text-dark d-flex justify-content-between align-items-center">
-                            <span>2. Create an API key
-                            {% if quick_start.has_api_keys %}
-                            <span class="text-success ms-2"><i class="bi bi-check-circle-fill"></i></span>
-                            {% endif %}
-                            </span>
-                            <i class="bi bi-chevron-down"></i>
-                        </a>
-                        <div id="step2-content" class="collapse {% if not quick_start.has_api_keys %}show{% endif %}">
-                            <div class="mt-2">
-                                <a href="{% url 'projects:project-api-keys' project.object_id %}" class="btn btn-sm btn-primary">
-                                    Go to API Keys
+                        <!-- Step 2: API Key -->
+                        <div class="setup-step mb-2" style="padding: 0.75rem 0; border-bottom: 1px solid var(--border-color);">
+                            <a href="#step2-content" data-bs-toggle="collapse" role="button" aria-expanded="{% if not quick_start.has_api_keys %}true{% else %}false{% endif %}" class="text-decoration-none d-flex align-items-center" style="color: var(--text-primary); font-size: var(--font-size-sm);">
+                                {% if quick_start.has_api_keys %}
+                                <i class="bi bi-check" style="font-size: var(--font-size-sm); color: var(--accent-blue); margin-right: 0.5rem; width: 16px;"></i>
+                                {% else %}
+                                <span style="width: 16px; height: 16px; border: 1.5px solid var(--text-muted); border-radius: 2px; margin-right: 0.5rem; display: inline-block;"></span>
+                                {% endif %}
+                                <span>Create an API key</span>
+                            </a>
+                            <div id="step2-content" class="collapse {% if not quick_start.has_api_keys %}show{% endif %}" style="margin-top: 0.75rem; margin-left: 1.5rem;">
+                                <a href="{% url 'projects:project-api-keys' project.object_id %}" class="btn btn-sm" style="font-size: var(--font-size-sm); padding: 0.25rem 0.75rem; background: var(--accent-blue); color: white; border: none; border-radius: 4px;">
+                                    Go to Settings → API Keys
                                 </a>
                             </div>
                         </div>
-                    </li>
 
-                    <!-- Step 3: Call API -->
-                    <li class="list-group-item pt-4 pb-4 fs-5">
-                        <a href="#step3-content" data-bs-toggle="collapse" role="button" aria-expanded="{% if not quick_start.has_created_bots_via_api %}true{% else %}false{% endif %}" class="text-decoration-none text-dark d-flex justify-content-between align-items-center">
-                            <span>3. Call the API
-                            {% if quick_start.has_created_bots_via_api %}
-                            <span class="text-success ms-2"><i class="bi bi-check-circle-fill"></i></span>
-                            {% endif %}
-                            </span>
-                            <i class="bi bi-chevron-down"></i>
-                        </a>
-                        <div id="step3-content" class="collapse {% if not quick_start.has_created_bots_via_api %}show{% endif %}">
-                            <div class="mt-2">
-                                <small>Create bot</small>
-                                <pre class="bg-light p-1 m-1 rounded">
-<code class="small">curl -X POST \
+                        <!-- Step 3: Call API -->
+                        <div class="setup-step mb-2" style="padding: 0.75rem 0; border-bottom: 1px solid var(--border-color);">
+                            <a href="#step3-content" data-bs-toggle="collapse" role="button" aria-expanded="{% if not quick_start.has_created_bots_via_api %}true{% else %}false{% endif %}" class="text-decoration-none d-flex align-items-center" style="color: var(--text-primary); font-size: var(--font-size-sm);">
+                                {% if quick_start.has_created_bots_via_api %}
+                                <i class="bi bi-check" style="font-size: var(--font-size-sm); color: var(--accent-blue); margin-right: 0.5rem; width: 16px;"></i>
+                                {% else %}
+                                <span style="width: 16px; height: 16px; border: 1.5px solid var(--text-muted); border-radius: 2px; margin-right: 0.5rem; display: inline-block;"></span>
+                                {% endif %}
+                                <span>Call the API</span>
+                            </a>
+                            <div id="step3-content" class="collapse {% if not quick_start.has_created_bots_via_api %}show{% endif %}" style="margin-top: 0.75rem; margin-left: 1.5rem;">
+                                <div class="mb-3">
+                                    <div class="d-flex justify-content-between align-items-center mb-1">
+                                        <small style="font-size: var(--font-size-xs); color: var(--text-muted);">Create bot</small>
+                                        <button class="btn-copy-code" data-code="curl -X POST \
 {{ request.scheme }}://{{ request.get_host }}/api/v1/bots \
 -H 'Authorization: Token &lt;YOUR_API_KEY&gt;' \
 -H 'Content-Type: application/json' \
--d '{"meeting_url": "https://us05web.zoom.us/j/xxxxxxx?pwd=xxxxxx", "bot_name": "My Bot"}'</code>
-                                </pre>
-                            </div>
-                            <div class="mt-2">
-                                <small>Retrieve transcript</small>
-                                <pre class="bg-light p-1 m-1 rounded">
-<code class="small">curl -X GET \
+-d '{\"meeting_url\": \"https://us05web.zoom.us/j/xxxxxxx?pwd=xxxxxx\", \"bot_name\": \"My Bot\"}'" style="background: none; border: none; color: var(--text-muted); font-size: var(--font-size-xs); cursor: pointer; padding: 0.25rem 0.5rem;">
+                                            <i class="bi bi-clipboard"></i> Copy
+                                        </button>
+                                    </div>
+                                    <pre class="p-2 rounded code-block" style="background-color: var(--bg-secondary); border: 1px solid var(--border-color); font-size: var(--font-size-xs); margin: 0; position: relative;"><code>curl -X POST \
+{{ request.scheme }}://{{ request.get_host }}/api/v1/bots \
+-H 'Authorization: Token &lt;YOUR_API_KEY&gt;' \
+-H 'Content-Type: application/json' \
+-d '{"meeting_url": "https://us05web.zoom.us/j/xxxxxxx?pwd=xxxxxx", "bot_name": "My Bot"}'</code></pre>
+                                </div>
+                                <div>
+                                    <div class="d-flex justify-content-between align-items-center mb-1">
+                                        <small style="font-size: var(--font-size-xs); color: var(--text-muted);">Retrieve transcript</small>
+                                        <button class="btn-copy-code" data-code="curl -X GET \
 {{ request.scheme }}://{{ request.get_host }}/api/v1/bots/&lt;BOT_ID&gt/transcript \
 -H 'Authorization: Token &lt;YOUR_API_KEY&gt;' \
--H 'Content-Type: application/json'</code>
-                                </pre>
+-H 'Content-Type: application/json'" style="background: none; border: none; color: var(--text-muted); font-size: var(--font-size-xs); cursor: pointer; padding: 0.25rem 0.5rem;">
+                                            <i class="bi bi-clipboard"></i> Copy
+                                        </button>
+                                    </div>
+                                    <pre class="p-2 rounded code-block" style="background-color: var(--bg-secondary); border: 1px solid var(--border-color); font-size: var(--font-size-xs); margin: 0;"><code>curl -X GET \
+{{ request.scheme }}://{{ request.get_host }}/api/v1/bots/&lt;BOT_ID&gt/transcript \
+-H 'Authorization: Token &lt;YOUR_API_KEY&gt;' \
+-H 'Content-Type: application/json'</code></pre>
+                                </div>
                             </div>
                         </div>
-                    </li>
 
-                    <!-- Step 4: Credentials -->
-                    <li class="list-group-item pt-4 pb-4 fs-5">
-                        <a href="#step4-content" data-bs-toggle="collapse" role="button" aria-expanded="{% if not quick_start.has_credentials %}true{% else %}false{% endif %}" class="text-decoration-none text-dark d-flex justify-content-between align-items-center">
-                            <span>4. Add credentials
-                            {% if quick_start.has_credentials %}
-                            <span class="text-success ms-2"><i class="bi bi-check-circle-fill"></i></span>
-                            {% endif %}
-                            </span>
-                            <i class="bi bi-chevron-down"></i>
-                        </a>
-                        <div id="step4-content" class="collapse {% if not quick_start.has_credentials %}show{% endif %}">
-                            <div class="mt-2">
-                                <a href="{% url 'projects:project-credentials' project.object_id %}" class="btn btn-sm btn-primary">
+                        <!-- Step 4: Credentials -->
+                        <div class="setup-step mb-2" style="padding: 0.75rem 0;">
+                            <a href="#step4-content" data-bs-toggle="collapse" role="button" aria-expanded="{% if not quick_start.has_credentials %}true{% else %}false{% endif %}" class="text-decoration-none d-flex align-items-center" style="color: var(--text-primary); font-size: var(--font-size-sm);">
+                                {% if quick_start.has_credentials %}
+                                <i class="bi bi-check" style="font-size: var(--font-size-sm); color: var(--accent-blue); margin-right: 0.5rem; width: 16px;"></i>
+                                {% else %}
+                                <span style="width: 16px; height: 16px; border: 1.5px solid var(--text-muted); border-radius: 2px; margin-right: 0.5rem; display: inline-block;"></span>
+                                {% endif %}
+                                <span>Add credentials</span>
+                            </a>
+                            <div id="step4-content" class="collapse {% if not quick_start.has_credentials %}show{% endif %}" style="margin-top: 0.75rem; margin-left: 1.5rem;">
+                                <a href="{% url 'projects:project-credentials' project.object_id %}" class="btn btn-sm" style="font-size: var(--font-size-sm); padding: 0.25rem 0.75rem; background: var(--accent-blue); color: white; border: none; border-radius: 4px;">
                                     Go to Credentials
                                 </a>
                             </div>
                         </div>
-                    </li>
-                </ol>
+                    </div>
+                </div>
             </div>
         </div>
+        {% endif %}
     </div>
+
+    <style>
+        .wizard-header-link[aria-expanded="true"] .wizard-chevron {
+            transform: rotate(180deg);
+        }
+        .btn-copy-code:hover {
+            color: var(--accent-blue) !important;
+        }
+        .setup-step a:hover {
+            color: var(--accent-blue) !important;
+        }
+    </style>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // Copy to clipboard functionality
+            document.querySelectorAll('.btn-copy-code').forEach(function(button) {
+                button.addEventListener('click', function() {
+                    const code = this.getAttribute('data-code');
+                    if (navigator.clipboard && navigator.clipboard.writeText) {
+                        navigator.clipboard.writeText(code).then(function() {
+                            const icon = button.querySelector('i');
+                            const originalClass = icon.className;
+                            icon.className = 'bi bi-check';
+                            button.style.color = 'var(--accent-blue)';
+                            setTimeout(function() {
+                                icon.className = originalClass;
+                                button.style.color = 'var(--text-muted)';
+                            }, 2000);
+                        }).catch(function(err) {
+                            console.error('Failed to copy:', err);
+                        });
+                    } else {
+                        // Fallback for older browsers
+                        const textArea = document.createElement('textarea');
+                        textArea.value = code;
+                        textArea.style.position = 'fixed';
+                        textArea.style.opacity = '0';
+                        document.body.appendChild(textArea);
+                        textArea.select();
+                        try {
+                            document.execCommand('copy');
+                            const icon = button.querySelector('i');
+                            const originalClass = icon.className;
+                            icon.className = 'bi bi-check';
+                            button.style.color = 'var(--accent-blue)';
+                            setTimeout(function() {
+                                icon.className = originalClass;
+                                button.style.color = 'var(--text-muted)';
+                            }, 2000);
+                        } catch (err) {
+                            console.error('Fallback copy failed:', err);
+                        }
+                        document.body.removeChild(textArea);
+                    }
+                });
+            });
+        });
+    </script>
 {% endblock %}

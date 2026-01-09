@@ -200,6 +200,12 @@ class ProjectDashboardView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 
         has_created_bots_via_api = BotEvent.objects.filter(bot__project=project, event_type=BotEventTypes.JOIN_REQUESTED, metadata__source=BotCreationSource.API).exists()
 
+        # Dashboard metrics
+        total_bots = Bot.objects.filter(project=project).count()
+        # Active bots are those not in post-meeting states (ENDED, FATAL_ERROR, DATA_DELETED)
+        active_bots = Bot.objects.filter(project=project).exclude(state__in=BotStates.post_meeting_states()).count()
+        total_recordings = Recording.objects.filter(bot__project=project).count()
+
         context = self.get_project_context(object_id, project)
         context.update(
             {
@@ -208,6 +214,11 @@ class ProjectDashboardView(LoginRequiredMixin, ProjectUrlContextMixin, View):
                     "has_api_keys": has_api_keys,
                     "has_ended_bots": has_ended_bots,
                     "has_created_bots_via_api": has_created_bots_via_api,
+                },
+                "metrics": {
+                    "total_bots": total_bots,
+                    "active_bots": active_bots,
+                    "total_recordings": total_recordings,
                 },
             }
         )
