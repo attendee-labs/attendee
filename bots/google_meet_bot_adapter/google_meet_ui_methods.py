@@ -200,7 +200,8 @@ class GoogleMeetUIMethods:
                     raise UiCouldNotLocateElementException("Could not find name input. Timed out.", "name_input", e)
 
             except ElementNotInteractableException as e:
-                logger.info("Name input is not interactable. Going to try again.")
+                logger.info("Name input is not interactable. Trying to dismiss any blocking popups.")
+                self.click_others_may_see_your_meeting_differently_button("name_input")
                 last_check_non_interactable = attempt_to_look_for_name_input_index == num_attempts_to_look_for_name_input - 1
                 if last_check_non_interactable:
                     logger.info("Could not find name input. Non interactable. Raising UiCouldNotLocateElementException")

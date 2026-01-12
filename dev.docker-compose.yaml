@@ -5,12 +5,14 @@ services:
      - .:/attendee
     networks:
       - attendee_network
+    env_file:
+      - /home/deploy/.infisical-agent/secrets.env
     environment:
       - POSTGRES_HOST=postgres
       - REDIS_URL=redis://redis:6379/5
       - DJANGO_SETTINGS_MODULE=attendee.settings.development
       - ENABLE_CHROME_SANDBOX=false
-    command: "celery -A attendee worker -l INFO"
+    command: "celery -A attendee worker -l INFO --concurrency=16"
 
   attendee-scheduler-local:
     build: ./
@@ -18,6 +20,8 @@ services:
      - .:/attendee
     networks:
       - attendee_network
+    env_file:
+      - /home/deploy/.infisical-agent/secrets.env
     environment:
       - POSTGRES_HOST=postgres
       - REDIS_URL=redis://redis:6379/5
@@ -33,6 +37,8 @@ services:
       - attendee_network
     ports:
       - "8000:8000"
+    env_file:
+      - /home/deploy/.infisical-agent/secrets.env
     environment:
       - POSTGRES_HOST=postgres
       - REDIS_URL=redis://redis:6379/5
@@ -76,6 +82,8 @@ services:
     image: redis:7-alpine
     networks:
       - attendee_network
+    ports:
+      - "127.0.0.1:6379:6379"
     restart: unless-stopped
     volumes:
       - redis:/data/redis
