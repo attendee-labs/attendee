@@ -4047,6 +4047,197 @@ class TestZoomBot(TransactionTestCase):
     @patch("bots.bot_controller.bot_controller.S3FileUploader")
     @patch("deepgram.DeepgramClient")
     @patch("time.time")
+    def test_bot_auto_leaves_only_participant_with_bot_keywords(
+        self,
+        mock_time,
+        MockDeepgramClient,
+        MockFileUploader,
+        mock_jwt,
+        mock_zoom_sdk_adapter,
+        MockVideoInputManager,
+    ):
+        """
+        Test that the bot auto-leaves when only another bot (identified by bot_keywords) is in the meeting.
+        1. Real participant joins
+        2. Another bot (name matching bot_keywords) joins
+        3. Real participant leaves (timer should start, because the other bot is excluded)
+        4. Wait 8+ seconds - bot should leave (even though the other bot is still in the meeting)
+        """
+        # Set up Deepgram mock
+        MockDeepgramClient.return_value = create_mock_deepgram()
+
+        # Configure the mock uploader
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        # Mock the JWT token generation
+        mock_jwt.encode.return_value = "fake_jwt_token"
+
+        # Mock VideoInputManager to avoid renderer creation issues
+        mock_video_input_manager = MagicMock()
+        mock_video_input_manager.set_mode = MagicMock()
+        mock_video_input_manager.cleanup = MagicMock()
+        MockVideoInputManager.return_value = mock_video_input_manager
+
+        # Set initial time
+        current_time = 1000.0
+        mock_time.return_value = current_time
+
+        # Create bot controller with bot_keywords configured
+        controller = BotController(self.bot.id)
+        controller.automatic_leave_configuration = AutomaticLeaveConfiguration(
+            only_participant_in_meeting_timeout_seconds=8,
+            silence_timeout_seconds=999999,  # Set very high so it doesn't interfere
+            silence_activate_after_seconds=999999,  # Set very high so it doesn't interfere
+            waiting_room_timeout_seconds=300,
+            wait_for_host_to_start_meeting_timeout_seconds=300,
+            max_uptime_seconds=None,
+            bot_keywords=["Notetaker", "Recording Bot"],  # Keywords to identify other bots
+        )
+
+        # Run the bot in a separate thread since it has an event loop
+        bot_thread = threading.Thread(target=controller.run)
+        bot_thread.daemon = True
+        bot_thread.start()
+
+        def simulate_join_flow():
+            adapter = controller.adapter
+
+            # Simulate successful auth
+            adapter.auth_event.onAuthenticationReturnCallback(mock_zoom_sdk_adapter.AUTHRET_SUCCESS)
+
+            # Configure GetMeetingStatus to return the correct status
+            adapter.meeting_service.GetMeetingStatus.return_value = mock_zoom_sdk_adapter.MEETING_STATUS_CONNECTING
+
+            # Simulate connecting
+            adapter.meeting_service_event.onMeetingStatusChangedCallback(
+                mock_zoom_sdk_adapter.MEETING_STATUS_CONNECTING,
+                mock_zoom_sdk_adapter.SDKERR_SUCCESS,
+            )
+
+            # Update GetMeetingStatus to return in-meeting status
+            adapter.meeting_service.GetMeetingStatus.return_value = mock_zoom_sdk_adapter.MEETING_STATUS_INMEETING
+
+            # Simulate successful join
+            adapter.meeting_service_event.onMeetingStatusChangedCallback(
+                mock_zoom_sdk_adapter.MEETING_STATUS_INMEETING,
+                mock_zoom_sdk_adapter.SDKERR_SUCCESS,
+            )
+
+            # Wait for the video input manager to be set up
+            time.sleep(2)
+
+            # Create mock participants:
+            # ID 1 = Our bot
+            # ID 2 = Real participant (Test User)
+            # ID 3 = Another bot (Notetaker Bot - matches bot_keywords)
+            class MockParticipant:
+                def __init__(self, user_id, user_name, persistent_id, is_host=False):
+                    self._user_id = user_id
+                    self._user_name = user_name
+                    self._persistent_id = persistent_id
+                    self._is_host = is_host
+
+                def GetUserID(self):
+                    return self._user_id
+
+                def GetUserName(self):
+                    return self._user_name
+
+                def GetPersistentId(self):
+                    return self._persistent_id
+
+                def IsHost(self):
+                    return self._is_host
+
+            def get_user_by_id(user_id):
+                if user_id == 1:
+                    return MockParticipant(1, "Bot User", "bot_persistent_id")
+                elif user_id == 2:
+                    return MockParticipant(2, "Test User", "test_persistent_id_123")
+                elif user_id == 3:
+                    return MockParticipant(3, "REcOrding-Bot-for John", "notetaker_persistent_id")
+                return None
+
+            adapter.participants_ctrl.GetUserByUserID.side_effect = get_user_by_id
+
+            # Step 1: Real participant joins (participant ID = 2, bot ID = 1)
+            adapter.participants_ctrl.GetParticipantsList.return_value = [1, 2]
+            adapter.on_user_join_callback([2], [])
+
+            # Check auto-leave conditions - should not trigger (real participant is there)
+            adapter.check_auto_leave_conditions()
+            time.sleep(0.5)
+
+            # Step 2: Another bot joins (Notetaker - matches bot_keywords)
+            adapter.participants_ctrl.GetParticipantsList.return_value = [1, 2, 3]
+            adapter.on_user_join_callback([3], [])
+
+            # Check auto-leave conditions - should not trigger (real participant still there)
+            adapter.check_auto_leave_conditions()
+            time.sleep(0.5)
+
+            # Verify bot hasn't requested to leave yet
+            assert not adapter.requested_leave, "Bot should not have requested to leave yet"
+
+            # Step 3: Real participant leaves (only our bot and the other notetaker bot remain)
+            nonlocal current_time
+            adapter.participants_ctrl.GetParticipantsList.return_value = [1, 3]
+            adapter.on_user_left_callback([2], [])
+
+            # Check auto-leave conditions - timer should start (notetaker is excluded due to bot_keywords)
+            adapter.check_auto_leave_conditions()
+            time.sleep(0.5)
+
+            # Step 4: Advance time by 9 seconds (past the 8 second threshold)
+            current_time += 9
+            mock_time.return_value = current_time
+
+            # Check auto-leave conditions - should trigger auto-leave now
+            # (because the Notetaker bot is excluded from participant count)
+            adapter.check_auto_leave_conditions()
+            time.sleep(1)
+
+            # Update GetMeetingStatus to return ended status when meeting ends
+            adapter.meeting_service.GetMeetingStatus.return_value = mock_zoom_sdk_adapter.MEETING_STATUS_ENDED
+
+            # Simulate meeting ended after auto-leave
+            adapter.meeting_service_event.onMeetingStatusChangedCallback(
+                mock_zoom_sdk_adapter.MEETING_STATUS_ENDED,
+                mock_zoom_sdk_adapter.SDKERR_SUCCESS,
+            )
+
+            # Clean up connections in thread
+            connection.close()
+
+        # Run join flow simulation after a short delay
+        threading.Timer(2, simulate_join_flow).start()
+
+        # Give the bot some time to process
+        bot_thread.join(timeout=20)
+
+        # Refresh the bot from the database
+        time.sleep(2)
+        self.bot.refresh_from_db()
+
+        # Assert that the bot is in the ENDED state
+        self.assertEqual(self.bot.state, BotStates.ENDED)
+
+        # Assert that the number of participants ever in meeting excluding other bots is 2
+        self.assertEqual(controller.adapter.number_of_participants_ever_in_meeting_excluding_other_bots(), 2)
+
+        # Verify that the bot auto-left due to being only participant
+        # (the other notetaker bot was excluded from the count)
+        bot_events = self.bot.bot_events.all()
+        auto_leave_events = [event for event in bot_events if event.event_sub_type == BotEventSubTypes.LEAVE_REQUESTED_AUTO_LEAVE_ONLY_PARTICIPANT_IN_MEETING]
+        self.assertEqual(len(auto_leave_events), 1, "Expected exactly one auto-leave event")
+
+    @patch("bots.zoom_bot_adapter.zoom_bot_adapter.VideoInputManager")
+    @patch("bots.zoom_bot_adapter.zoom_bot_adapter.zoom", new_callable=create_mock_zoom_sdk)
+    @patch("jwt.encode")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
+    @patch("deepgram.DeepgramClient")
+    @patch("time.time")
     def test_bot_auto_leaves_only_participant_with_participant_rejoin(
         self,
         mock_time,

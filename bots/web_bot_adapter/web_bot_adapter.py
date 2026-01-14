@@ -18,12 +18,13 @@ from selenium.webdriver.chrome.service import Service
 from websockets.sync.server import serve
 
 from bots.automatic_leave_configuration import AutomaticLeaveConfiguration
+from bots.automatic_leave_utils import participant_is_another_bot
 from bots.bot_adapter import BotAdapter
 from bots.models import ParticipantEventTypes, RecordingViews
 from bots.utils import half_ceil, scale_i420
 
 from .debug_screen_recorder import DebugScreenRecorder
-from .ui_methods import UiAuthorizedUserNotInMeetingTimeoutExceededException, UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiIncorrectPasswordException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableException, UiRetryableExpectedException
+from .ui_methods import UiAuthorizedUserNotInMeetingTimeoutExceededException, UiBlockedByCaptchaException, UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiIncorrectPasswordException, UiInfinitelyRetryableException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableException, UiRetryableExpectedException
 
 logger = logging.getLogger(__name__)
 
@@ -251,19 +252,31 @@ class WebBotAdapter(BotAdapter):
 
             self.add_audio_chunk_callback(participant_id, datetime.datetime.utcnow(), audio_data.tobytes())
 
+    def number_of_participants_ever_in_meeting_excluding_other_bots(self):
+        return len([participant for participant in self.participants_info.values() if not participant_is_another_bot(participant["fullName"], participant["isCurrentUser"], self.automatic_leave_configuration)])
+
     def update_only_one_participant_in_meeting_at(self):
         if not self.joined_at:
             return
 
-        # If nobody other than the bot was ever in the meeting, then don't activate this. We only want to activate if someone else was in the meeting and left
-        if len(self.participants_info) <= 1:
+        # If nobody (excluding other bots) other than the bot was ever in the meeting, then don't activate this. We only want to activate if someone else was in the meeting and left
+        if self.number_of_participants_ever_in_meeting_excluding_other_bots() <= 1:
             return
 
-        all_participants_in_meeting = [x for x in self.participants_info.values() if x["active"]]
-        if len(all_participants_in_meeting) == 1 and all_participants_in_meeting[0]["fullName"] == self.display_name:
+        all_participants_in_meeting_excluding_other_bots = []
+        other_bots_in_meeting_names = []
+        for participant in self.participants_info.values():
+            if not participant["active"]:
+                continue
+            if not participant_is_another_bot(participant["fullName"], participant["isCurrentUser"], self.automatic_leave_configuration):
+                all_participants_in_meeting_excluding_other_bots.append(participant)
+            else:
+                other_bots_in_meeting_names.append(participant["fullName"])
+
+        if len(all_participants_in_meeting_excluding_other_bots) == 1 and all_participants_in_meeting_excluding_other_bots[0]["fullName"] == self.display_name:
             if self.only_one_participant_in_meeting_at is None:
                 self.only_one_participant_in_meeting_at = time.time()
-                logger.info(f"only_one_participant_in_meeting_at set to {self.only_one_participant_in_meeting_at}")
+                logger.info(f"only_one_participant_in_meeting_at set to {self.only_one_participant_in_meeting_at}. Ignoring other bots in meeting: {other_bots_in_meeting_names}")
         else:
             self.only_one_participant_in_meeting_at = None
 
@@ -463,6 +476,13 @@ class WebBotAdapter(BotAdapter):
     def send_incorrect_password_message(self):
         self.send_message_callback({"message": self.Messages.COULD_NOT_CONNECT_TO_MEETING})
 
+    def send_blocked_by_captcha_message(self):
+        self.send_message_callback(
+            {
+                "message": self.Messages.BLOCKED_BY_CAPTCHA,
+            }
+        )
+
     def send_debug_screenshot_message(self, step, exception, inner_exception):
         current_time = datetime.datetime.now()
         timestamp = current_time.strftime("%Y%m%d_%H%M%S")
@@ -654,6 +674,10 @@ class WebBotAdapter(BotAdapter):
                 self.send_incorrect_password_message()
                 return
 
+            except UiBlockedByCaptchaException:
+                self.send_blocked_by_captcha_message()
+                return
+
             except UiAuthorizedUserNotInMeetingTimeoutExceededException:
                 # If the timeout has exceeded, send the message. If not, we will retry again.
                 if time.time() - attempts_to_join_started_at > self.automatic_leave_configuration.authorized_user_not_in_meeting_timeout_seconds:
@@ -661,6 +685,16 @@ class WebBotAdapter(BotAdapter):
                     return
                 else:
                     logger.info(f"Failed to join meeting and the UiAuthorizedUserNotInMeetingTimeoutExceededException exception has occurred but the timeout of {self.automatic_leave_configuration.authorized_user_not_in_meeting_timeout_seconds} seconds has not exceeded, so retrying")
+
+            except UiInfinitelyRetryableException as e:
+                # Exceptions of this type will always be retried, it is up to the adapter to
+                # stop throwing this exception
+
+                if self.left_meeting or self.cleaned_up:
+                    logger.info(f"Failed to join meeting and the {e.__class__.__name__} exception is infinitely retryable but the bot has left the meeting or cleaned up, so returning")
+                    return
+
+                logger.warning(f"Failed to join meeting and the {e.__class__.__name__} exception is infinitely retryable so retrying")
 
             except UiRetryableExpectedException as e:
                 if num_retries >= max_retries:
@@ -691,7 +725,6 @@ class WebBotAdapter(BotAdapter):
                 logger.info(f"Failed to join meeting and the {e.__class__.__name__} exception is retryable so retrying")
 
                 num_retries += 1
-
             except Exception as e:
                 if num_retries >= max_retries:
                     logger.exception(f"Failed to join meeting and the unexpected {e.__class__.__name__} exception with message {e.__str__()} is retryable but the number of retries exceeded the limit, so returning.")
@@ -903,7 +936,7 @@ class WebBotAdapter(BotAdapter):
         audio_data = np.frombuffer(bytes, dtype=np.int16).tolist()
 
         # Call the JavaScript function to enqueue the PCM chunk
-        self.driver.execute_script(f"window.botOutputManager.playPCMAudio({audio_data}, {sample_rate})")
+        self.driver.execute_script("window.botOutputManager.playPCMAudio(arguments[0], arguments[1]);", audio_data, sample_rate)
 
     def send_chat_message(self, text, to_user_uuid):
         logger.info("send_chat_message not supported in web bots")

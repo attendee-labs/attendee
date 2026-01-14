@@ -59,7 +59,26 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
         self.driver.execute_script(f"window.botOutputManager.playVideo({json.dumps(video_url)})")
 
     def send_chat_message(self, text, to_user_uuid):
-        self.driver.execute_script(f"window?.sendChatMessage({json.dumps(text)})")
+        self.driver.execute_script("window?.sendChatMessage(arguments[0]);", text)
+
+    def update_closed_captions_language(self, language):
+        if self.google_meet_closed_captions_language == language:
+            logger.info(f"In update_closed_captions_language, closed captions language is already set to {language}. Doing nothing.")
+            return
+
+        if not language:
+            logger.info("In update_closed_captions_language, new language is None. Doing nothing.")
+            return
+
+        self.google_meet_closed_captions_language = language
+        closed_caption_set_language_result = self.driver.execute_script(
+            "return setClosedCaptionsLanguage(arguments[0]);",
+            self.google_meet_closed_captions_language,
+        )
+        if closed_caption_set_language_result:
+            logger.info("In update_closed_captions_language, closed captions language set programatically")
+        else:
+            logger.error("In update_closed_captions_language, failed to set closed captions language programatically")
 
     def get_staged_bot_join_delay_seconds(self):
         return 5

@@ -201,6 +201,74 @@ class BotModelRedactionSettingsTest(TransactionTestCase):
         self.assertEqual(result1, ["pii", "pci"])
 
 
+class BotModelDeepgramModelTest(TransactionTestCase):
+    """Unit tests for Bot model deepgram_model method."""
+
+    def setUp(self):
+        self.organization = Organization.objects.create(name="Test Org")
+        self.project = Project.objects.create(name="Test Project", organization=self.organization)
+
+    def _create_bot_with_settings(self, settings):
+        """Helper to create a bot with specific settings."""
+        return Bot.objects.create(project=self.project, meeting_url="https://zoom.us/j/test", settings=settings)
+
+    def test_deepgram_model_returns_nova3_by_default(self):
+        """Test that deepgram_model returns nova-3 by default."""
+        bot = self._create_bot_with_settings({})
+
+        result = bot.transcription_settings.deepgram_model()
+        self.assertEqual(result, "nova-3")
+
+    def test_deepgram_model_returns_nova3_for_english(self):
+        """Test that deepgram_model returns nova-3 for English language."""
+        bot = self._create_bot_with_settings({"transcription_settings": {"deepgram": {"language": "en-US"}}})
+
+        result = bot.transcription_settings.deepgram_model()
+        self.assertEqual(result, "nova-3")
+
+    def test_deepgram_model_returns_nova3_for_other_languages(self):
+        """Test that deepgram_model returns nova-3 for languages supported by nova-3."""
+        for lang in ["es", "de", "fr", "ja", "ko", "pt", "ru"]:
+            bot = self._create_bot_with_settings({"transcription_settings": {"deepgram": {"language": lang}}})
+            result = bot.transcription_settings.deepgram_model()
+            self.assertEqual(result, "nova-3", f"Expected nova-3 for language {lang}")
+
+    def test_deepgram_model_fallback_to_nova2_for_chinese_simplified(self):
+        """Test that deepgram_model falls back to nova-2 for Chinese Simplified."""
+        for lang in ["zh", "zh-CN", "zh-Hans"]:
+            bot = self._create_bot_with_settings({"transcription_settings": {"deepgram": {"language": lang}}})
+            result = bot.transcription_settings.deepgram_model()
+            self.assertEqual(result, "nova-2", f"Expected nova-2 for language {lang}")
+
+    def test_deepgram_model_fallback_to_nova2_for_chinese_traditional(self):
+        """Test that deepgram_model falls back to nova-2 for Chinese Traditional."""
+        for lang in ["zh-TW", "zh-Hant", "zh-HK"]:
+            bot = self._create_bot_with_settings({"transcription_settings": {"deepgram": {"language": lang}}})
+            result = bot.transcription_settings.deepgram_model()
+            self.assertEqual(result, "nova-2", f"Expected nova-2 for language {lang}")
+
+    def test_deepgram_model_fallback_to_nova2_for_thai(self):
+        """Test that deepgram_model falls back to nova-2 for Thai."""
+        for lang in ["th", "th-TH"]:
+            bot = self._create_bot_with_settings({"transcription_settings": {"deepgram": {"language": lang}}})
+            result = bot.transcription_settings.deepgram_model()
+            self.assertEqual(result, "nova-2", f"Expected nova-2 for language {lang}")
+
+    def test_deepgram_model_settings_override_default(self):
+        """Test that explicit model in settings overrides default nova-3."""
+        bot = self._create_bot_with_settings({"transcription_settings": {"deepgram": {"model": "nova-2-general"}}})
+
+        result = bot.transcription_settings.deepgram_model()
+        self.assertEqual(result, "nova-2-general")
+
+    def test_deepgram_model_settings_override_language_fallback(self):
+        """Test that explicit model in settings overrides language-based fallback."""
+        bot = self._create_bot_with_settings({"transcription_settings": {"deepgram": {"model": "nova-3", "language": "zh-CN"}}})
+
+        result = bot.transcription_settings.deepgram_model()
+        self.assertEqual(result, "nova-3")
+
+
 class DeepgramPrerecordedTranscriptionRedactionTest(TransactionTestCase):
     """Unit tests for pre-recorded transcription redaction integration."""
 

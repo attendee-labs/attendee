@@ -637,17 +637,12 @@ class TranscriptionSettings:
         if model_from_settings:
             return model_from_settings
 
-        # nova-3 does not have multilingual support yet, so we need to use nova-2 if we're transcribing with a non-default language
-        if (self.deepgram_language() != "en" and self.deepgram_language()) or self.deepgram_detect_language():
-            deepgram_model = "nova-2"
-        else:
-            deepgram_model = "nova-3"
+        # nova-3 doesn't support Chinese and Thai languages yet, fall back to nova-2
+        nova2_only_languages = {"zh", "zh-CN", "zh-Hans", "zh-TW", "zh-Hant", "zh-HK", "th", "th-TH"}
+        if self.deepgram_language() in nova2_only_languages:
+            return "nova-2"
 
-        # Special case: we can use nova-3 for language=multi
-        if self.deepgram_language() == "multi":
-            deepgram_model = "nova-3"
-
-        return deepgram_model
+        return "nova-3"
 
     def deepgram_redaction_settings(self):
         return self._settings.get("deepgram", {}).get("redact", [])
@@ -1214,6 +1209,7 @@ class BotEventSubTypes(models.IntegerChoices):
     BOT_RECORDING_PERMISSION_DENIED_HOST_CLIENT_CANNOT_GRANT_PERMISSION = 25, "Bot recording permission denied - Host client cannot grant permission"
     LEAVE_REQUESTED_AUTO_LEAVE_COULD_NOT_ENABLE_CLOSED_CAPTIONS = 26, "Leave requested - Auto leave could not enable closed captions"
     COULD_NOT_JOIN_MEETING_AUTHORIZED_USER_NOT_IN_MEETING_TIMEOUT_EXCEEDED = 27, "Bot could not join meeting - Authorized user not in meeting timeout exceeded. See https://developers.zoom.us/blog/transition-to-obf-token-meetingsdk-apps/"
+    COULD_NOT_JOIN_MEETING_BLOCKED_BY_CAPTCHA = 28, "Bot could not join meeting - Blocked by captcha (Verification challenge)."
 
     @classmethod
     def sub_type_to_api_code(cls, value):
@@ -1246,6 +1242,7 @@ class BotEventSubTypes(models.IntegerChoices):
             cls.BOT_RECORDING_PERMISSION_DENIED_HOST_CLIENT_CANNOT_GRANT_PERMISSION: "host_client_cannot_grant_permission",
             cls.LEAVE_REQUESTED_AUTO_LEAVE_COULD_NOT_ENABLE_CLOSED_CAPTIONS: "auto_leave_could_not_enable_closed_captions",
             cls.COULD_NOT_JOIN_MEETING_AUTHORIZED_USER_NOT_IN_MEETING_TIMEOUT_EXCEEDED: "authorized_user_not_in_meeting_timeout_exceeded",
+            cls.COULD_NOT_JOIN_MEETING_BLOCKED_BY_CAPTCHA: "blocked_by_captcha",
         }
         return mapping.get(value)
 
@@ -1304,6 +1301,7 @@ class BotEvent(models.Model):
                             | Q(event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_ZOOM_SDK_INTERNAL_ERROR)
                             | Q(event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_REQUEST_TO_JOIN_DENIED)
                             | Q(event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_MEETING_NOT_FOUND)
+                            | Q(event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_BLOCKED_BY_CAPTCHA)
                         )
                     )
                     |

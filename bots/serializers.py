@@ -542,8 +542,12 @@ PATCH_BOT_TRANSCRIPTION_SETTINGS_SCHEMA = {
             "type": "object",
             "properties": {
                 "teams_language": TRANSCRIPTION_SETTINGS_SCHEMA["properties"]["meeting_closed_captions"]["properties"]["teams_language"],
+                "google_meet_language": TRANSCRIPTION_SETTINGS_SCHEMA["properties"]["meeting_closed_captions"]["properties"]["google_meet_language"],
             },
-            "required": ["teams_language"],
+            "oneOf": [
+                {"required": ["teams_language"]},
+                {"required": ["google_meet_language"]},
+            ],
             "additionalProperties": False,
         },
     },
@@ -768,6 +772,12 @@ class ZoomSettingsJSONField(serializers.JSONField):
                 "type": "integer",
                 "description": "Number of seconds to wait before leaving if the authorized user is not in the meeting. Only relevant if this is a Zoom bot using the on behalf of token.",
                 "default": 600,
+            },
+            "bot_keywords": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "List of keywords to identify bot participants. A participant is considered a bot if any word in their name matches a keyword. Words are found by splitting on spaces, hyphens, and underscores, and the comparison is case-insensitive. Bot participants are excluded when determining if the bot is the only participant in the meeting.",
+                "default": None,
             },
         },
         "required": [],
@@ -1509,9 +1519,17 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
             if key not in defaults.keys():
                 raise serializers.ValidationError(f"Unexpected attribute: {key}")
 
-        # Validate that all values are positive integers
+        # Validate bot_keywords separately (it's a list, not an int)
+        if "bot_keywords" in value and value["bot_keywords"] is not None:
+            if not isinstance(value["bot_keywords"], list):
+                raise serializers.ValidationError("bot_keywords must be a list of strings or null")
+            if not all(isinstance(k, str) for k in value["bot_keywords"]):
+                raise serializers.ValidationError("Each keyword in bot_keywords must be a string")
+
+        # Validate that all other values are positive integers
+        non_integer_parameters = ["bot_keywords"]
         for param, default in defaults.items():
-            if param in value and (not isinstance(value[param], int) or value[param] <= 0):
+            if param in value and param not in non_integer_parameters and (not isinstance(value[param], int) or value[param] <= 0):
                 raise serializers.ValidationError(f"{param} must be a positive integer")
             # Set default if not provided
             if param not in value:

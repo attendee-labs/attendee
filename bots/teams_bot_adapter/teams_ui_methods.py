@@ -106,7 +106,7 @@ class TeamsUIMethods:
             logger.info("Closed captions enabled programatically")
 
             if self.teams_closed_captions_language:
-                closed_caption_set_language_result = self.driver.execute_script(f"return window.callManager?.setClosedCaptionsLanguage('{self.teams_closed_captions_language}')")
+                closed_caption_set_language_result = self.driver.execute_script("return window.callManager?.setClosedCaptionsLanguage(arguments[0]);", self.teams_closed_captions_language)
                 if closed_caption_set_language_result:
                     logger.info("Closed captions language set programatically")
                 else:

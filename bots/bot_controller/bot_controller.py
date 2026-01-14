@@ -220,16 +220,20 @@ class BotController:
 
         return {"client_id": zoom_oauth_app.client_id, "client_secret": zoom_oauth_app.client_secret}
 
-    def get_zoom_oauth_credentials_and_tokens(self):
-        zoom_oauth_credentials = self.get_zoom_oauth_credentials_via_zoom_oauth_app() or self.get_zoom_oauth_credentials_via_credentials_record()
+    def get_zoom_oauth_credentials(self):
+        return self.get_zoom_oauth_credentials_via_zoom_oauth_app() or self.get_zoom_oauth_credentials_via_credentials_record()
 
+    def get_zoom_tokens(self):
         zoom_tokens = {}
         if self.bot_in_db.zoom_tokens_callback_url():
             zoom_tokens = get_zoom_tokens(self.bot_in_db)
         else:
             zoom_tokens = get_zoom_tokens_via_zoom_oauth_app(self.bot_in_db)
 
-        return zoom_oauth_credentials, zoom_tokens
+        return zoom_tokens
+
+    def get_zoom_oauth_credentials_and_tokens(self):
+        return self.get_zoom_oauth_credentials(), self.get_zoom_tokens()
 
     def get_zoom_web_bot_adapter(self):
         from bots.zoom_web_bot_adapter import ZoomWebBotAdapter
@@ -239,7 +243,7 @@ class BotController:
         else:
             add_audio_chunk_callback = None
 
-        zoom_oauth_credentials, zoom_tokens = self.get_zoom_oauth_credentials_and_tokens()
+        zoom_tokens = self.get_zoom_tokens()
 
         return ZoomWebBotAdapter(
             display_name=self.bot_in_db.name,
@@ -259,8 +263,7 @@ class BotController:
             start_recording_screen_callback=self.screen_and_audio_recorder.start_recording if self.screen_and_audio_recorder else None,
             stop_recording_screen_callback=self.screen_and_audio_recorder.stop_recording if self.screen_and_audio_recorder else None,
             video_frame_size=self.bot_in_db.recording_dimensions(),
-            zoom_client_id=zoom_oauth_credentials["client_id"],
-            zoom_client_secret=zoom_oauth_credentials["client_secret"],
+            zoom_oauth_credentials_callback=self.get_zoom_oauth_credentials,
             zoom_closed_captions_language=self.bot_in_db.transcription_settings.zoom_closed_captions_language(),
             should_ask_for_recording_permission=self.pipeline_configuration.record_audio or self.pipeline_configuration.rtmp_stream_audio or self.pipeline_configuration.websocket_stream_audio or self.pipeline_configuration.record_video or self.pipeline_configuration.rtmp_stream_video,
             record_chat_messages_when_paused=self.bot_in_db.record_chat_messages_when_paused(),
@@ -1030,8 +1033,8 @@ class BotController:
     def take_action_based_on_transcription_settings_in_db(self):
         # If it is not a teams bot, do nothing
         meeting_type = meeting_type_from_url(self.bot_in_db.meeting_url)
-        if meeting_type != MeetingTypes.TEAMS:
-            logger.info(f"Bot {self.bot_in_db.object_id} is not a teams bot, so cannot update closed captions language")
+        if meeting_type != MeetingTypes.TEAMS and meeting_type != MeetingTypes.GOOGLE_MEET:
+            logger.info(f"Bot {self.bot_in_db.object_id} is not a teams or google meet bot, so cannot update closed captions language")
             return
 
         # If it not using closed caption from platform, do nothing
@@ -1039,8 +1042,11 @@ class BotController:
             logger.info(f"Bot {self.bot_in_db.object_id} is not using closed caption from platform, so cannot update closed captions language")
             return
 
-        # If it is a teams bot using closed caption from platform, we need to update the transcription settings
-        self.adapter.update_closed_captions_language(self.bot_in_db.transcription_settings.teams_closed_captions_language())
+        # If it is a teams or google meet bot using closed caption from platform, we need to update the transcription settings
+        if meeting_type == MeetingTypes.TEAMS:
+            self.adapter.update_closed_captions_language(self.bot_in_db.transcription_settings.teams_closed_captions_language())
+        if meeting_type == MeetingTypes.GOOGLE_MEET:
+            self.adapter.update_closed_captions_language(self.bot_in_db.transcription_settings.google_meet_closed_captions_language())
 
     def handle_glib_shutdown(self):
         logger.info("handle_glib_shutdown called")
@@ -1537,6 +1543,16 @@ class BotController:
                 bot=self.bot_in_db,
                 event_type=BotEventTypes.COULD_NOT_JOIN,
                 event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_UNABLE_TO_CONNECT_TO_MEETING,
+            )
+            self.cleanup()
+            return
+
+        if message.get("message") == BotAdapter.Messages.BLOCKED_BY_CAPTCHA:
+            logger.info("Received message that captcha/verification is required to join")
+            BotEventManager.create_event(
+                bot=self.bot_in_db,
+                event_type=BotEventTypes.COULD_NOT_JOIN,
+                event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_BLOCKED_BY_CAPTCHA,
             )
             self.cleanup()
             return

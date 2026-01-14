@@ -112,6 +112,11 @@ urlpatterns = [
         name="delete-webhook",
     ),
     path(
+        "<str:object_id>/webhooks/delivery/<uuid:idempotency_key>/resend/",
+        projects_views.ResendWebhookDeliveryAttemptView.as_view(),
+        name="resend-webhook-delivery-attempt",
+    ),
+    path(
         "<str:object_id>/billing/",
         projects_views.ProjectBillingView.as_view(),
         name="project-billing",

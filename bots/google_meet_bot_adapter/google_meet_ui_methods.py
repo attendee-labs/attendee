@@ -641,7 +641,7 @@ class GoogleMeetUIMethods:
         )
 
         # Uses javascript to select the language, bypassing the need for the dropdown to be visible
-        click_language_option_result = self.driver.execute_script("return clickLanguageOption('{}')".format(language))
+        click_language_option_result = self.driver.execute_script("return clickLanguageOption(arguments[0]);", language)
         logger.info(f"click_language_option_result: {click_language_option_result}")
         if not click_language_option_result:
             raise UiCouldNotLocateElementException(f"Could not find language option {language}", "language_option")

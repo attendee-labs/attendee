@@ -7,11 +7,16 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
-from bots.web_bot_adapter.ui_methods import UiAuthorizedUserNotInMeetingTimeoutExceededException, UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiIncorrectPasswordException
+from bots.web_bot_adapter.ui_methods import UiAuthorizedUserNotInMeetingTimeoutExceededException, UiBlockedByCaptchaException, UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiIncorrectPasswordException, UiInfinitelyRetryableException
 
 from .zoom_web_static_server import start_zoom_web_static_server
 
 logger = logging.getLogger(__name__)
+
+
+class UiZoomWebGenericJoinErrorException(UiInfinitelyRetryableException):
+    def __init__(self, message, step=None, inner_exception=None):
+        super().__init__(message, step, inner_exception)
 
 
 class ZoomWebUIMethods:
@@ -105,9 +110,14 @@ class ZoomWebUIMethods:
     def check_if_failed_to_join_because_onbehalf_token_user_not_in_meeting(self):
         failed_to_join_because_onbehalf_token_user_not_in_meeting = self.driver.execute_script("return window.userHasEncounteredOnBehalfTokenUserNotInMeetingError && window.userHasEncounteredOnBehalfTokenUserNotInMeetingError()")
         if failed_to_join_because_onbehalf_token_user_not_in_meeting:
-            logger.info("Bot failed to join because onbehalf token user not in meeting. Raising UiAuthorizedUserNotInMeetingTimeoutExceededException after sleeping for 5 seconds.")
+            logger.warning("Bot failed to join because onbehalf token user not in meeting. Raising UiAuthorizedUserNotInMeetingTimeoutExceededException after sleeping for 5 seconds.")
             time.sleep(5)  # Sleep for 5 seconds, so we're not constantly retrying
             raise UiAuthorizedUserNotInMeetingTimeoutExceededException("Bot failed to join because onbehalf token user not in meeting")
+
+    def check_if_failed_to_join_because_generic_join_error(self):
+        failed_to_join_because_generic_join_error = self.driver.execute_script("return window.userHasEncounteredGenericJoinError && window.userHasEncounteredGenericJoinError()")
+        if failed_to_join_because_generic_join_error:
+            self.handle_generic_join_error()
 
     def wait_to_be_admitted_to_meeting(self):
         num_attempts_to_look_for_more_meeting_control_button = (self.automatic_leave_configuration.waiting_room_timeout_seconds + self.automatic_leave_configuration.wait_for_host_to_start_meeting_timeout_seconds) * 10
@@ -127,8 +137,10 @@ class ZoomWebUIMethods:
                 time.sleep(1)
                 raise TimeoutException("User has not entered the meeting")
             except TimeoutException as e:
+                self.check_if_blocked_by_captcha()
                 self.check_if_passcode_incorrect()
                 self.check_if_failed_to_join_because_onbehalf_token_user_not_in_meeting()
+                self.check_if_failed_to_join_because_generic_join_error()
 
                 previous_is_waiting_for_host_to_start_meeting = is_waiting_for_host_to_start_meeting
                 try:
@@ -217,6 +229,34 @@ class ZoomWebUIMethods:
         if passcode_incorrect_element and passcode_incorrect_element.is_displayed():
             logger.info("Passcode incorrect. Raising UiIncorrectPasswordException")
             raise UiIncorrectPasswordException("Passcode incorrect")
+
+    def check_if_blocked_by_captcha(self):
+        """
+        Detects the Zoom Web SDK captcha/verification challenge UI.
+
+        Some Zoom accounts may be forced through a "Check Captcha" flow which can reappear
+        after submitting the verification code, effectively blocking programmatic joining.
+        See: https://devforum.zoom.us/t/check-captcha-button-show-again-after-filling-in-the-verification-code/25076
+        """
+        upper = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        lower = "abcdefghijklmnopqrstuvwxyz"
+        xpath = f"//button[contains(translate(normalize-space(.), '{upper}', '{lower}'), 'check captcha')]"
+
+        try:
+            candidates = self.driver.find_elements(By.XPATH, xpath) or []
+        except Exception:
+            return
+
+        for el in candidates:
+            try:
+                if el and el.is_displayed():
+                    logger.info("Blocked by captcha / verification challenge detected (button text). Raising UiBlockedByCaptchaException")
+                    raise UiBlockedByCaptchaException("Blocked by captcha (Zoom Web SDK verification challenge)")
+            except UiBlockedByCaptchaException:
+                raise
+            except Exception:
+                # If the element becomes stale between queries, ignore and continue scanning.
+                continue
 
     def set_zoom_closed_captions_language(self):
         if not self.zoom_closed_captions_language:
