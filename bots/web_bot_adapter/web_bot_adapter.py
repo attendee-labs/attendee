@@ -484,6 +484,17 @@ class WebBotAdapter(BotAdapter):
         )
 
     def send_debug_screenshot_message(self, step, exception, inner_exception):
+        """
+        Send a debug screenshot message to the callback function.
+
+        Args:
+            step: at which step the exception occurred.
+            exception: the exception that occurred.
+            inner_exception:
+
+        Returns: None
+
+        """
         current_time = datetime.datetime.now()
         timestamp = current_time.strftime("%Y%m%d_%H%M%S")
         screenshot_path = f"/tmp/ui_element_not_found_{timestamp}.png"
@@ -639,6 +650,7 @@ class WebBotAdapter(BotAdapter):
         attempts_to_join_started_at = time.time()
 
         while num_retries <= max_retries:
+            logger.info(f"Trying to join meeting for the {num_retries + 1} time.")
             try:
                 self.init_driver()
                 self.attempt_to_join_meeting()
@@ -738,6 +750,11 @@ class WebBotAdapter(BotAdapter):
                 logger.exception(f"Failed to join meeting and the unexpected {e.__class__.__name__} exception with message {e.__str__()} is retryable so retrying")
 
                 num_retries += 1
+
+            except Exception as e:
+                logger.info(f"Failed to join meeting and the {e.__class__.__name__} exception is not retryable so returning")
+                self.send_debug_screenshot_message(step="unknown", exception=e, inner_exception="None")
+                return
 
             sleep(1)
 
