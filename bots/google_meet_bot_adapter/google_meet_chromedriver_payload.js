@@ -84,6 +84,16 @@ class StyleManager {
         });
     }
 
+    showTopBannerFor60Seconds() {
+        if (this.topBannerVisibilityTimeout) {
+            clearTimeout(this.topBannerVisibilityTimeout);
+        }
+        this.modifyTopBannerVisibility(true);
+        this.topBannerVisibilityTimeout = setTimeout(() => {
+            this.modifyTopBannerVisibility(false);
+        }, 60000);
+    }
+
     checkNeededInteractions() {
         // Check for recording notification dialog
         const recordingDialog = document.querySelector('div[aria-modal="true"][role="dialog"]');
@@ -94,6 +104,10 @@ class StyleManager {
             
             if (joinNowButton) {
                 try {
+                    // We need to show this banner for 60 seconds. Otherwise we will be booted out of the meeting because the recording badge
+                    // was not shown. See here for details: https://support.google.com/meet/thread/41179616?hl=en&msgid=52752357
+                    this.showTopBannerFor60Seconds();
+    
                     joinNowButton.click();
                     window.ws.sendJson({
                         type: 'UiInteraction',
@@ -396,6 +410,46 @@ class StyleManager {
         console.log('Restored all hidden elements to their original display values');
     }
 
+    modifyTopBannerVisibility(visible) {
+        try{
+            const topBanner = document.querySelector('div.IjxGeb');
+            if (!topBanner) {
+                console.log('No top banner found');
+                window.ws.sendJson({
+                    type: 'Error',
+                    message: 'No top banner found'
+                });
+                return;
+            }
+            const topBannerParent = topBanner.parentElement;
+            if (!topBannerParent) {
+                console.log('No top banner parent found');
+                window.ws.sendJson({
+                    type: 'Error',
+                    message: 'No top banner parent found'
+                });
+                return;
+            }
+            const desiredDisplayValue = visible ? '' : 'none';
+            topBannerParent.style.display = desiredDisplayValue;
+            for (const el of topBannerParent.getElementsByTagName("*")) {
+                el.style.display = desiredDisplayValue;
+            }
+            console.log('Modified top banner visibility to', visible);
+            window.ws.sendJson({
+                type: 'TopBannerVisibilityChange',
+                visible: visible
+            });
+        }
+        catch (error) {
+            console.error('Error in modifyTopBannerVisibility:', error);
+            window.ws.sendJson({
+                type: 'Error',
+                message: 'Error in modifyTopBannerVisibility: ' + error.message
+            });
+        }
+    }
+
     async onlyShowSubsetofGMeetUI() {
         try {
             // Find the main element that contains all the video elements
@@ -557,7 +611,6 @@ class StyleManager {
 
         await this.onlyShowSubsetofGMeetUI();
         
-
         if (window.initialData.recordingView === 'gallery_view')
         {
             this.unpinInterval = setInterval(() => {
