@@ -98,32 +98,38 @@ class StyleManager {
         // Check for recording notification dialog
         const recordingDialog = document.querySelector('div[aria-modal="true"][role="dialog"]');
         
-        if (recordingDialog && (recordingDialog.textContent.includes('This video call is being recorded') || recordingDialog.textContent.includes('Others may see your video differently') || recordingDialog.textContent.includes('This video call is being transcribed') || recordingDialog.textContent.includes('Gemini is taking notes'))) {           
-            // Find and click the "Join now" button (usually the confirm/OK button)
-            const joinNowButton = recordingDialog.querySelector('button[data-mdc-dialog-action="ok"]');
+        if (recordingDialog) {
+            const dialogTextIsForConsent = recordingDialog.textContent.includes('This video call is being recorded') || recordingDialog.textContent.includes('This video call is being transcribed') || recordingDialog.textContent.includes('Gemini is taking notes');
+            const dialogTextIsForSomethingOtherThanConsent = recordingDialog.textContent.includes('Others may see your video differently');
             
-            if (joinNowButton) {
-                try {
-                    // We need to show this banner for 60 seconds. Otherwise we will be booted out of the meeting because the recording badge
-                    // was not shown. See here for details: https://support.google.com/meet/thread/41179616?hl=en&msgid=52752357
-                    this.showTopBannerFor60Seconds();
-    
-                    joinNowButton.click();
-                    window.ws.sendJson({
-                        type: 'UiInteraction',
-                        message: 'Automatically accepted recording notification'
-                    });
-                } catch (error) {
+            if (dialogTextIsForConsent || dialogTextIsForSomethingOtherThanConsent) {
+                // Find and click the "Join now" button (usually the confirm/OK button)
+                const joinNowButton = recordingDialog.querySelector('button[data-mdc-dialog-action="ok"]');
+                
+                if (joinNowButton) {
+                    try {
+                        // We need to show this banner for 60 seconds. Otherwise we will be booted out of the meeting because the recording badge
+                        // was not shown. See here for details: https://support.google.com/meet/thread/41179616?hl=en&msgid=52752357
+                        if (dialogTextIsForConsent)
+                            this.showTopBannerFor60Seconds();
+        
+                        joinNowButton.click();
+                        window.ws.sendJson({
+                            type: 'UiInteraction',
+                            message: 'Automatically accepted recording notification'
+                        });
+                    } catch (error) {
+                        window.ws.sendJson({
+                            type: 'Error',
+                            message: 'Error clicking button to accept recording notification'
+                        });
+                    }                
+                } else {                
                     window.ws.sendJson({
                         type: 'Error',
-                        message: 'Error clicking button to accept recording notification'
+                        message: 'Found recording dialog but could not find button to accept recording notification'
                     });
-                }                
-            } else {                
-                window.ws.sendJson({
-                    type: 'Error',
-                    message: 'Found recording dialog but could not find button to accept recording notification'
-                });
+                }
             }
         }
 
@@ -417,7 +423,7 @@ class StyleManager {
                 console.log('No top banner found');
                 window.ws.sendJson({
                     type: 'Error',
-                    message: 'No top banner found'
+                    message: 'In modifyTopBannerVisibility, no top banner found'
                 });
                 return;
             }
@@ -426,7 +432,7 @@ class StyleManager {
                 console.log('No top banner parent found');
                 window.ws.sendJson({
                     type: 'Error',
-                    message: 'No top banner parent found'
+                    message: 'In modifyTopBannerVisibility, no top banner parent found'
                 });
                 return;
             }
