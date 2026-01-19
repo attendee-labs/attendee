@@ -436,11 +436,19 @@ class StyleManager {
                 });
                 return;
             }
+            if (visible) {
+                // Use translate3d for better compositor behavior
+                topBannerParent.style.transform = 'translate3d(0, -200px, 0)';
+            } else {
+                topBannerParent.style.transform = '';
+            }
+
             const desiredDisplayValue = visible ? '' : 'none';
             topBannerParent.style.display = desiredDisplayValue;
             for (const el of topBannerParent.getElementsByTagName("*")) {
                 el.style.display = desiredDisplayValue;
             }
+            
             console.log('Modified top banner visibility to', visible);
             window.ws.sendJson({
                 type: 'TopBannerVisibilityChange',
@@ -616,6 +624,9 @@ class StyleManager {
         await this.openChatPanel();
 
         await this.onlyShowSubsetofGMeetUI();
+
+
+        this.modifyTopBannerVisibility(true);
         
         if (window.initialData.recordingView === 'gallery_view')
         {
