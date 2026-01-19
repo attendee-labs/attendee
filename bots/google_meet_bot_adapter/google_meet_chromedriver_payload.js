@@ -435,6 +435,44 @@ class StyleManager {
         }
     }
 
+    makeTopBannerVisibleButOutOfView() {
+        try{
+            const topBanner = document.querySelector('div.IjxGeb');
+            if (!topBanner) {
+                console.log('No top banner found');
+                window.ws.sendJson({
+                    type: 'Error',
+                    message: 'In modifyTopBannerVisibility, no top banner found'
+                });
+                return;
+            }
+            const topBannerParent = topBanner.parentElement;
+            if (!topBannerParent) {
+                console.log('No top banner parent found');
+                window.ws.sendJson({
+                    type: 'Error',
+                    message: 'In modifyTopBannerVisibility, no top banner parent found'
+                });
+                return;
+            }
+            // Use translate3d for better compositor behavior
+            topBannerParent.style.transform = 'translate3d(0, -200px, 0)';
+            
+            const desiredDisplayValue = '';
+            topBannerParent.style.display = desiredDisplayValue;
+            for (const el of topBannerParent.getElementsByTagName("*")) {
+                el.style.display = desiredDisplayValue;
+            }
+        }
+        catch (error) {
+            console.error('Error in modifyTopBannerVisibility:', error);
+            window.ws.sendJson({
+                type: 'Error',
+                message: 'Error in modifyTopBannerVisibility: ' + error.message
+            });
+        }
+    }
+
     unpinPinnedVideos() {
         const participantList = document.querySelector('div[aria-label="Participants"][role="list"]');
         // console.log('participantList', participantList);
@@ -556,7 +594,8 @@ class StyleManager {
         await this.openChatPanel();
 
         await this.onlyShowSubsetofGMeetUI();
-        
+
+        this.makeTopBannerVisibleButOutOfView();        
 
         if (window.initialData.recordingView === 'gallery_view')
         {
