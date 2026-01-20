@@ -477,12 +477,22 @@ def transcription_provider_from_bot_creation_data(data):
         return TranscriptionProviders.ELEVENLABS
     elif "kyutai" in settings:
         return TranscriptionProviders.KYUTAI
+    elif "azure" in settings:
+        return TranscriptionProviders.AZURE
     elif "custom_async" in settings:
         return TranscriptionProviders.CUSTOM_ASYNC
     elif "meeting_closed_captions" in settings:
         return TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM
 
-    # Return default provider. Which is deepgram for Zoom, and meeting_closed_captions for Google Meet / Teams
+    # Check for default provider from environment variable
+    from bots.transcription_provider_utils import get_default_transcription_provider_from_env
+    
+    default_provider = get_default_transcription_provider_from_env()
+    if default_provider:
+        return default_provider
+
+    # Return platform-specific default provider if no env var is set
+    # Which is deepgram for Zoom, and meeting_closed_captions for Google Meet / Teams
     if meeting_type_from_url(url) == MeetingTypes.ZOOM and not use_zoom_web_adapter:
         return TranscriptionProviders.DEEPGRAM
     return TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM

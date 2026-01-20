@@ -653,6 +653,38 @@ class TranscriptionSettings:
     def kyutai_server_url(self):
         return self._settings.get("kyutai", {}).get("server_url", None)
 
+    def azure_subscription_key(self):
+        return self._settings.get("azure", {}).get("subscription_key", None)
+
+    def azure_region(self):
+        return self._settings.get("azure", {}).get("region", "eastus")
+
+    def azure_language(self):
+        return self._settings.get("azure", {}).get("language", "en-US")
+
+    def azure_candidate_languages(self):
+        """For auto language detection. Returns list of BCP-47 locale codes."""
+        return self._settings.get("azure", {}).get("candidate_languages", None)
+
+    def azure_profanity_option(self):
+        """Options: 'Raw', 'Masked', 'Removed'"""
+        return self._settings.get("azure", {}).get("profanity_option", "Masked")
+
+    def azure_enable_disfluency_removal(self):
+        return self._settings.get("azure", {}).get("enable_disfluency_removal", False)
+
+    def azure_phrase_list(self):
+        """List of phrases for vocabulary hints."""
+        return self._settings.get("azure", {}).get("phrase_list", None)
+
+    def azure_custom_endpoint_id(self):
+        """Endpoint ID for custom speech models."""
+        return self._settings.get("azure", {}).get("custom_endpoint_id", None)
+
+    def azure_custom_endpoint(self):
+        """Custom endpoint URL (optional, overrides region)."""
+        return self._settings.get("azure", {}).get("custom_endpoint", None)
+
     def google_meet_closed_captions_language(self):
         return self._settings.get("meeting_closed_captions", {}).get("google_meet_language", None)
 
@@ -2004,6 +2036,7 @@ class TranscriptionProviders(models.IntegerChoices):
     ELEVENLABS = 7, "ElevenLabs"
     KYUTAI = 8, "Kyutai"
     CUSTOM_ASYNC = 9, "Custom Async"
+    AZURE = 10, "Azure"
 
 
 class RecordingStorage(Storage):
@@ -2445,6 +2478,7 @@ class Credentials(models.Model):
         EXTERNAL_MEDIA_STORAGE = 9, "External Media Storage"
         ELEVENLABS = 10, "ElevenLabs"
         KYUTAI = 11, "Kyutai"
+        AZURE = 12, "Azure"
 
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="credentials")
     credential_type = models.IntegerField(choices=CredentialTypes.choices, null=False)

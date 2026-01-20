@@ -24,6 +24,7 @@ Third-party-based transcription is generally of higher quality than closed capti
 - Sarvam
 - ElevenLabs
 - Kyutai Labs
+- Azure Speech-to-Text
 - Custom Async (Bring Your Own Platform)
 
 See the [API reference](https://docs.attendee.dev/api-reference#tag/bots/POST/api/v1/bots) for supported parameters for configuring the transcription providers.
@@ -141,6 +142,90 @@ To use a custom OpenAI-compatible endpoint (such as a proxy server or alternativ
 - `OPENAI_MODEL_NAME`: The model name to use for transcription (default: `gpt-4o-transcribe`)
 
 Example: `OPENAI_BASE_URL=https://your-proxy.com/v1` and `OPENAI_MODEL_NAME=whisper-large-v3`
+
+### Azure Speech-to-Text
+
+Microsoft's enterprise-grade speech recognition with support for 140+ languages. Uses Azure Fast Transcription API for synchronous, high-quality transcription of audio segments.
+
+**Features:**
+- Fast synchronous transcription (typically 15 seconds for 10 minutes of audio)
+- Automatic language detection from candidate languages
+- Profanity filtering options
+- Phrase lists for vocabulary hints
+- Word-level timestamps
+- Support for audio files up to 2 hours / 300 MB
+
+$5 in free credits per month for new users, then pay-as-you-go pricing.
+
+#### Configuration
+
+Azure Speech-to-Text is configured entirely through environment variables. All configuration must be set before using Azure as a transcription provider.
+
+**Required environment variables:**
+```bash
+# Azure Speech service subscription key
+AZURE_SPEECH_SUBSCRIPTION_KEY=your-subscription-key-here
+
+# API version (use 2025-10-15 for latest features)
+AZURE_SPEECH_API_VERSION=2025-10-15
+
+# Candidate languages - comma-separated BCP-47 locale codes
+# Azure will automatically detect which language is being spoken from this list
+# Example: en-US,fr-FR,es-ES,ar-AE,de-DE
+AZURE_SPEECH_CANDIDATE_LANGUAGES=en-US,fr-FR,es-ES
+
+# Endpoint configuration (choose one):
+# Option 1: Full endpoint URL
+AZURE_SPEECH_ENDPOINT=https://eastus.api.cognitive.microsoft.com/speechtotext/transcriptions:transcribe
+
+# Option 2: Region (endpoint will be auto-built)
+AZURE_SPEECH_REGION=eastus
+```
+
+**Optional environment variables:**
+```bash
+# Phrase list for vocabulary hints (comma-separated)
+# Helps Azure recognize specific terms or domain-specific vocabulary
+AZURE_SPEECH_PHRASE_LIST=Microsoft,Azure,Attendee,WebSocket
+
+# Profanity filter mode: None, Masked (default), or Removed
+AZURE_SPEECH_PROFANITY_FILTER=Masked
+```
+
+**Example configuration:**
+```bash
+AZURE_SPEECH_SUBSCRIPTION_KEY=abc123def456ghi789
+AZURE_SPEECH_API_VERSION=2025-10-15
+AZURE_SPEECH_REGION=eastus
+AZURE_SPEECH_CANDIDATE_LANGUAGES=en-US,ar-AE,fr-FR,es-ES
+AZURE_SPEECH_PHRASE_LIST=Attendee,WebSocket,gRPC,Azure
+AZURE_SPEECH_PROFANITY_FILTER=Masked
+```
+
+**Supported locales:**
+Common supported locales include:
+- `en-US` (English - US)
+- `fr-FR` (French - France)
+- `es-ES`, `es-MX` (Spanish)
+- `ar-AE`, `ar-BH`, `ar-EG` (Arabic)
+- `de-DE` (German)
+- `it-IT` (Italian)
+- `ja-JP` (Japanese)
+- `ko-KR` (Korean)
+- `pt-BR` (Portuguese - Brazil)
+- `hi-IN` (Hindi)
+
+See [Azure's language support documentation](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/language-support) for the complete list of supported locales.
+
+**Validation:**
+All required environment variables are validated when Azure is selected as the transcription provider. If any required variable is missing, transcription will fail with a clear error message listing all missing variables.
+
+**How it works:**
+1. Audio segments are accumulated per participant (from speech start until 3 seconds of silence or max size limit)
+2. Each segment is sent to Azure Fast Transcription API as a WAV file
+3. Azure detects the language from your candidate languages list
+4. Transcription results are returned synchronously with word-level timestamps
+5. Results are saved and webhooks are triggered (if configured)
 
 ### Custom Async (Bring Your Own Platform)
 

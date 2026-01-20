@@ -414,6 +414,48 @@ TRANSCRIPTION_SETTINGS_SCHEMA = {
             "required": [],
             "additionalProperties": False,
         },
+        "azure": {
+            "type": "object",
+            "properties": {
+                "language": {
+                    "type": "string",
+                    "description": "The BCP-47 language code for transcription (e.g., 'en-US', 'ar-AE', 'fr-FR'). Defaults to 'en-US' if not specified.",
+                },
+                "candidate_languages": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of BCP-47 locale codes for automatic language detection (2-10 languages). If provided, enables automatic language detection. Azure will detect which language is being spoken from this list.",
+                },
+                "region": {
+                    "type": "string",
+                    "description": "The Azure region for the Speech service (e.g., 'eastus', 'westus'). Defaults to 'eastus' if not specified.",
+                },
+                "profanity_option": {
+                    "type": "string",
+                    "enum": ["Raw", "Masked", "Removed"],
+                    "description": "How to handle profanity in transcripts. 'Raw' includes profanity, 'Masked' replaces with asterisks, 'Removed' removes profanity. Defaults to 'Masked'.",
+                },
+                "enable_disfluency_removal": {
+                    "type": "boolean",
+                    "description": "Enable TrueText post-processing to remove filler words (e.g., 'um', 'uh'). Defaults to false.",
+                },
+                "phrase_list": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of phrases for vocabulary hints to improve recognition of specific terms or domain-specific vocabulary.",
+                },
+                "custom_endpoint_id": {
+                    "type": "string",
+                    "description": "Endpoint ID for custom speech models. If provided, uses a custom trained model instead of the base model.",
+                },
+                "custom_endpoint": {
+                    "type": "string",
+                    "description": "Custom endpoint URL for the Speech service. If provided, overrides the region-based endpoint.",
+                },
+            },
+            "required": [],
+            "additionalProperties": False,
+        },
         "custom_async": {
             "type": "object",
             "description": "Custom self-hosted transcription service with async processing. Additional properties will be sent as form data in the request. Only supported if self-hosting Attendee.",
@@ -1189,6 +1231,13 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
 
         # Set a default transcription_settings value if nothing given
         if value is None:
+            # Check for default provider from environment variable first
+            from bots.transcription_provider_utils import get_default_transcription_settings_from_env
+            
+            default_settings = get_default_transcription_settings_from_env()
+            if default_settings:
+                return default_settings
+            # Fall back to platform-specific defaults if no env var is set or invalid
             if meeting_type == MeetingTypes.ZOOM:
                 if use_zoom_web_adapter:
                     value = {"meeting_closed_captions": {}}
@@ -1221,6 +1270,22 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
 
         if "custom_async" in value and not os.getenv("CUSTOM_ASYNC_TRANSCRIPTION_URL"):
             raise serializers.ValidationError({"transcription_settings": "CUSTOM_ASYNC_TRANSCRIPTION_URL environment variable is not set. Please set the CUSTOM_ASYNC_TRANSCRIPTION_URL environment variable to the URL of your custom async transcription service."})
+
+        if "azure" in value:
+            missing_vars = []
+            if not os.getenv("AZURE_SPEECH_SUBSCRIPTION_KEY"):
+                missing_vars.append("AZURE_SPEECH_SUBSCRIPTION_KEY")
+            if not os.getenv("AZURE_SPEECH_API_VERSION"):
+                missing_vars.append("AZURE_SPEECH_API_VERSION")
+            if not os.getenv("AZURE_SPEECH_CANDIDATE_LANGUAGES"):
+                missing_vars.append("AZURE_SPEECH_CANDIDATE_LANGUAGES")
+            if not os.getenv("AZURE_SPEECH_ENDPOINT") and not os.getenv("AZURE_SPEECH_REGION"):
+                missing_vars.append("AZURE_SPEECH_ENDPOINT (or AZURE_SPEECH_REGION)")
+            
+            if missing_vars:
+                raise serializers.ValidationError({
+                    "transcription_settings": f"Azure transcription requires the following environment variables to be set: {', '.join(missing_vars)}"
+                })
 
         return value
 
