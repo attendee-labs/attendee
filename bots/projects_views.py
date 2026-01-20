@@ -149,6 +149,8 @@ def get_partial_for_credential_type(credential_type, request, context):
         return render(request, "projects/partials/kyutai_credentials.html", context)
     elif credential_type == Credentials.CredentialTypes.EXTERNAL_MEDIA_STORAGE:
         return render(request, "projects/partials/external_media_storage_credentials.html", context)
+    elif credential_type == Credentials.CredentialTypes.AZURE:
+        return render(request, "projects/partials/azure_credentials.html", context)
     else:
         return HttpResponse("Cannot render the partial for this credential type", status=400)
 
@@ -362,6 +364,30 @@ class CreateCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 
                 if not credentials_data.get("access_key_id") or not credentials_data.get("access_key_secret") or (not credentials_data.get("endpoint_url") and not credentials_data.get("region_name")):
                     return HttpResponse("Missing required credentials data", status=400)
+            elif credential_type == Credentials.CredentialTypes.AZURE:
+                subscription_key = request.POST.get("subscription_key")
+                api_version = request.POST.get("api_version")
+                endpoint = request.POST.get("endpoint")
+                region = request.POST.get("region")
+                
+                # Validate required fields
+                if not subscription_key or not api_version:
+                    return HttpResponse("Missing required credentials data: subscription_key and api_version are required", status=400)
+                
+                # Require either endpoint or region
+                if not endpoint and not region:
+                    return HttpResponse("Missing required credentials data: either endpoint or region must be provided", status=400)
+                
+                # Build endpoint from region if not provided
+                if not endpoint and region:
+                    endpoint = f"https://{region}.api.cognitive.microsoft.com/speechtotext/transcriptions:transcribe"
+                
+                credentials_data = {
+                    "subscription_key": subscription_key,
+                    "api_version": api_version,
+                    "endpoint": endpoint,
+                    "region": region,
+                }
             else:
                 return HttpResponse("Unsupported credential type", status=400)
 
@@ -442,6 +468,8 @@ class ProjectCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 
         external_media_storage_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.EXTERNAL_MEDIA_STORAGE).first()
 
+        azure_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.AZURE).first()
+
         context = self.get_project_context(object_id, project)
         context.update(
             {
@@ -469,6 +497,8 @@ class ProjectCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
                 "teams_bot_login_credential_type": Credentials.CredentialTypes.TEAMS_BOT_LOGIN,
                 "external_media_storage_credentials": external_media_storage_credentials.get_credentials() if external_media_storage_credentials else None,
                 "external_media_storage_credential_type": Credentials.CredentialTypes.EXTERNAL_MEDIA_STORAGE,
+                "azure_credentials": azure_credentials.get_credentials() if azure_credentials else None,
+                "azure_credential_type": Credentials.CredentialTypes.AZURE,
             }
         )
 

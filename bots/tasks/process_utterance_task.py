@@ -748,87 +748,86 @@ def get_transcription_via_custom_async(utterance):
 def get_transcription_via_azure(utterance):
     """
     Transcribe audio using Azure Fast Transcription API.
-
-    Required environment variables:
-    - AZURE_SPEECH_ENDPOINT: Full endpoint URL (e.g., https://eastus.api.cognitive.microsoft.com/speechtotext/transcriptions:transcribe)
-    - AZURE_SPEECH_API_VERSION: API version (e.g., 2025-10-15)
-    - AZURE_SPEECH_SUBSCRIPTION_KEY: Azure Speech service subscription key
-    - AZURE_SPEECH_CANDIDATE_LANGUAGES: Comma-separated list of BCP-47 locale codes (e.g., en-US,fr-FR,es-ES)
-
-    Optional environment variables:
-    - AZURE_SPEECH_REGION: Region for the endpoint (used if AZURE_SPEECH_ENDPOINT is not set)
-    - AZURE_SPEECH_PHRASE_LIST: Comma-separated list of phrases for vocabulary hints
-    - AZURE_SPEECH_PROFANITY_FILTER: Profanity filter mode (None, Masked, Removed) - default: Masked
+    
+    Credentials (subscription_key, endpoint, api_version) are retrieved from the Credentials model (stored per-project, encrypted).
+    Configuration (candidate_languages, phrase_list, profanity_option) comes from transcription_settings.
 
     Returns:
         tuple: (transcription dict, failure_data dict or None)
     """
     recording = utterance.recording
     transcription_settings = utterance.transcription_settings
+    
+    # skip very short audio clips (likely silence/noise)
+    if utterance.duration_ms < 200:
+        logger.info(f"Azure transcription skipped for utterance {utterance.id} because it's less than 200ms in duration (likely silence/noise)")
+        return {"transcript": "", "words": []}, None
 
-    # Get required environment variables
-    endpoint = os.getenv("AZURE_SPEECH_ENDPOINT")
-    api_version = os.getenv("AZURE_SPEECH_API_VERSION")
-    subscription_key = os.getenv("AZURE_SPEECH_SUBSCRIPTION_KEY")
-    candidate_languages_env = os.getenv("AZURE_SPEECH_CANDIDATE_LANGUAGES")
-
-    # Validate required environment variables
-    missing_vars = []
-    if not subscription_key:
-        missing_vars.append("AZURE_SPEECH_SUBSCRIPTION_KEY")
-    if not api_version:
-        missing_vars.append("AZURE_SPEECH_API_VERSION")
-    if not candidate_languages_env:
-        missing_vars.append("AZURE_SPEECH_CANDIDATE_LANGUAGES")
-
-    # If endpoint is not set, try to build it from region
+    # Get Azure credentials from Credentials model
+    azure_credentials_record = recording.bot.project.credentials.filter(
+        credential_type=Credentials.CredentialTypes.AZURE
+    ).first()
+    
+    if not azure_credentials_record:
+        return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND}
+    
+    azure_credentials = azure_credentials_record.get_credentials()
+    if not azure_credentials:
+        return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND}
+    
+    # Get credentials from Credentials model
+    subscription_key = azure_credentials.get("subscription_key")
+    endpoint = azure_credentials.get("endpoint")
+    api_version = azure_credentials.get("api_version")
+    
+    if not subscription_key or not api_version:
+        return None, {
+            "reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND, 
+            "error": "Missing subscription_key or api_version in Azure credentials"
+        }
+    
+    # Build endpoint if not provided (use region from credentials)
     if not endpoint:
-        region = os.getenv("AZURE_SPEECH_REGION") or transcription_settings.azure_region()
+        region = azure_credentials.get("region")
         if region:
             endpoint = f"https://{region}.api.cognitive.microsoft.com/speechtotext/transcriptions:transcribe"
         else:
-            missing_vars.append("AZURE_SPEECH_ENDPOINT (or AZURE_SPEECH_REGION)")
-
-    if missing_vars:
-        error_msg = f"Missing required Azure environment variables: {', '.join(missing_vars)}"
-        logger.error(error_msg)
-        return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND, "error": error_msg}
-
+            return None, {
+                "reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND,
+                "error": "Missing endpoint or region in Azure credentials"
+            }
+    
     # Build request params and headers
     params = {"api-version": api_version}
     headers = {"Ocp-Apim-Subscription-Key": subscription_key}
 
-    # Parse candidate languages from environment variable
-    # Format: "en-US,fr-FR,es-ES,ar-AE"
-    candidate_languages = [lang.strip() for lang in candidate_languages_env.split(",") if lang.strip()]
-    
+    # Get candidate_languages from transcription_settings, with sensible defaults
+    candidate_languages = transcription_settings.azure_candidate_languages()
     if not candidate_languages:
-        error_msg = "AZURE_SPEECH_CANDIDATE_LANGUAGES is empty or invalid"
-        logger.error(error_msg)
-        return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND, "error": error_msg}
-
-    logger.info(f"Azure Speech candidate languages: {candidate_languages}")
+        # Default to common languages if not specified
+        candidate_languages = ["en-US", "es-ES", "fr-FR", "ar-SA", "ar-TN"]
+        logger.info(f"Azure Speech: No candidate_languages specified, using defaults: {candidate_languages}")
+    else:
+        logger.info(f"Azure Speech candidate languages: {candidate_languages}")
 
     # Build definition (transcription config)
     definition = {
         "locales": candidate_languages
     }
 
-    # Add phrase list if configured via environment variable
-    phrase_list_env = os.getenv("AZURE_SPEECH_PHRASE_LIST")
-    if phrase_list_env:
-        phrases = [phrase.strip() for phrase in phrase_list_env.split(",") if phrase.strip()]
-        if phrases:
-            definition["phraseList"] = {"phrases": phrases}
-            logger.info(f"Azure Speech phrase list: {len(phrases)} phrases")
+    # Add phrase list if configured in transcription_settings
+    phrase_list = transcription_settings.azure_phrase_list()
+    if phrase_list:
+        definition["phraseList"] = {"phrases": phrase_list}
+        logger.info(f"Azure Speech phrase list: {len(phrase_list)} phrases")
 
-    # Add profanity filter if configured via environment variable
-    profanity_filter_env = os.getenv("AZURE_SPEECH_PROFANITY_FILTER", "Masked")
-    profanity_map = {"None": "None", "Masked": "Masked", "Removed": "Removed"}
-    if profanity_filter_env in profanity_map:
-        definition["profanityFilterMode"] = profanity_map[profanity_filter_env]
+    # Add profanity filter if configured in transcription_settings
+    profanity_option = transcription_settings.azure_profanity_option()
+    profanity_map = {"Raw": "None", "Masked": "Masked", "Removed": "Removed"}
+    if profanity_option and profanity_option in profanity_map:
+        definition["profanityFilterMode"] = profanity_map[profanity_option]
     else:
-        logger.warning(f"Invalid AZURE_SPEECH_PROFANITY_FILTER value: {profanity_filter_env}, using default: Masked")
+        # Default to Masked if not specified
         definition["profanityFilterMode"] = "Masked"
 
     # Convert PCM to WAV format (Azure expects proper audio format)

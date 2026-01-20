@@ -159,48 +159,57 @@ $5 in free credits per month for new users, then pay-as-you-go pricing.
 
 #### Configuration
 
-Azure Speech-to-Text is configured entirely through environment variables. All configuration must be set before using Azure as a transcription provider.
+Azure Speech-to-Text is configured via API request. Credentials are stored encrypted per-project and can be different for each project.
 
-**Required environment variables:**
+**Required fields in `transcription_settings.azure`:**
+- `subscription_key` (string): Azure Speech service subscription key
+- `api_version` (string): API version (e.g., `"2024-11-15"`)
+- `endpoint` OR `region` (string): Either full endpoint URL or Azure region (e.g., `"eastus"`). At least one is required.
+
+**Optional fields:**
+- `candidate_languages` (array): List of BCP-47 locale codes for automatic language detection (2-10 languages). Defaults to `["en-US", "es-ES", "fr-FR", "ar-SA", "ar-TN"]` if not specified.
+- `phrase_list` (array): List of phrases for vocabulary hints
+- `profanity_option` (string): `"Raw"`, `"Masked"` (default), or `"Removed"`
+- `enable_disfluency_removal` (boolean): Remove filler words like "um", "uh"
+- `custom_endpoint_id` (string): Endpoint ID for custom speech models
+
+**Example API request (with all credentials):**
 ```bash
-# Azure Speech service subscription key
-AZURE_SPEECH_SUBSCRIPTION_KEY=your-subscription-key-here
-
-# API version (use 2025-10-15 for latest features)
-AZURE_SPEECH_API_VERSION=2025-10-15
-
-# Candidate languages - comma-separated BCP-47 locale codes
-# Azure will automatically detect which language is being spoken from this list
-# Example: en-US,fr-FR,es-ES,ar-AE,de-DE
-AZURE_SPEECH_CANDIDATE_LANGUAGES=en-US,fr-FR,es-ES
-
-# Endpoint configuration (choose one):
-# Option 1: Full endpoint URL
-AZURE_SPEECH_ENDPOINT=https://eastus.api.cognitive.microsoft.com/speechtotext/transcriptions:transcribe
-
-# Option 2: Region (endpoint will be auto-built)
-AZURE_SPEECH_REGION=eastus
+curl -X POST https://api.attendee.ai/v1/bots \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "meeting_url": "https://meet.google.com/abc-defg-hij",
+    "bot_name": "My Bot",
+    "transcription_settings": {
+      "azure": {
+        "subscription_key": "your-azure-subscription-key",
+        "api_version": "2024-11-15",
+        "region": "eastus",
+        "candidate_languages": ["en-US", "fr-FR", "es-ES", "ar-AE"],
+        "phrase_list": ["Microsoft", "Azure", "Attendee"],
+        "profanity_option": "Masked"
+      }
+    }
+  }'
 ```
 
-**Optional environment variables:**
+**Example API request (minimal - after credentials are stored):**
 ```bash
-# Phrase list for vocabulary hints (comma-separated)
-# Helps Azure recognize specific terms or domain-specific vocabulary
-AZURE_SPEECH_PHRASE_LIST=Microsoft,Azure,Attendee,WebSocket
-
-# Profanity filter mode: None, Masked (default), or Removed
-AZURE_SPEECH_PROFANITY_FILTER=Masked
+curl -X POST https://api.attendee.ai/v1/bots \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "meeting_url": "https://meet.google.com/abc-defg-hij",
+    "bot_name": "My Bot",
+    "transcription_settings": {
+      "azure": {}
+    }
+  }'
 ```
+*Note: This uses stored credentials and default candidate_languages.*
 
-**Example configuration:**
-```bash
-AZURE_SPEECH_SUBSCRIPTION_KEY=abc123def456ghi789
-AZURE_SPEECH_API_VERSION=2025-10-15
-AZURE_SPEECH_REGION=eastus
-AZURE_SPEECH_CANDIDATE_LANGUAGES=en-US,ar-AE,fr-FR,es-ES
-AZURE_SPEECH_PHRASE_LIST=Attendee,WebSocket,gRPC,Azure
-AZURE_SPEECH_PROFANITY_FILTER=Masked
-```
+**Note:** Credentials (subscription_key, endpoint, api_version) are stored encrypted in the project's Credentials model and will be reused for all bots in the same project. You only need to provide them once per project.
 
 **Supported locales:**
 Common supported locales include:

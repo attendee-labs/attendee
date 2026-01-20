@@ -417,18 +417,30 @@ TRANSCRIPTION_SETTINGS_SCHEMA = {
         "azure": {
             "type": "object",
             "properties": {
-                "language": {
+                "subscription_key": {
                     "type": "string",
-                    "description": "The BCP-47 language code for transcription (e.g., 'en-US', 'ar-AE', 'fr-FR'). Defaults to 'en-US' if not specified.",
+                    "description": "Azure Speech service subscription key (required). This will be stored encrypted in the project's credentials.",
+                },
+                "api_version": {
+                    "type": "string",
+                    "description": "Azure Speech API version (e.g., '2024-11-15') (required).",
+                },
+                "endpoint": {
+                    "type": "string",
+                    "description": "Full endpoint URL for Azure Speech service (e.g., 'https://eastus.api.cognitive.microsoft.com/speechtotext/transcriptions:transcribe'). Either 'endpoint' or 'region' is required.",
+                },
+                "region": {
+                    "type": "string",
+                    "description": "The Azure region for the Speech service (e.g., 'eastus', 'westus'). Used to build endpoint if 'endpoint' is not provided. Either 'endpoint' or 'region' is required.",
                 },
                 "candidate_languages": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "List of BCP-47 locale codes for automatic language detection (2-10 languages). If provided, enables automatic language detection. Azure will detect which language is being spoken from this list.",
+                    "description": "List of BCP-47 locale codes for automatic language detection (2-10 languages). Azure will detect which language is being spoken from this list. Defaults to ['en-US', 'es-ES', 'fr-FR', 'de-DE', 'it-IT'] if not specified.",
                 },
-                "region": {
+                "language": {
                     "type": "string",
-                    "description": "The Azure region for the Speech service (e.g., 'eastus', 'westus'). Defaults to 'eastus' if not specified.",
+                    "description": "The BCP-47 language code for transcription (e.g., 'en-US', 'ar-AE', 'fr-FR'). Use 'candidate_languages' for automatic detection instead.",
                 },
                 "profanity_option": {
                     "type": "string",
@@ -448,12 +460,8 @@ TRANSCRIPTION_SETTINGS_SCHEMA = {
                     "type": "string",
                     "description": "Endpoint ID for custom speech models. If provided, uses a custom trained model instead of the base model.",
                 },
-                "custom_endpoint": {
-                    "type": "string",
-                    "description": "Custom endpoint URL for the Speech service. If provided, overrides the region-based endpoint.",
-                },
             },
-            "required": [],
+            "required": ["subscription_key", "api_version"],
             "additionalProperties": False,
         },
         "custom_async": {
@@ -1272,20 +1280,26 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
             raise serializers.ValidationError({"transcription_settings": "CUSTOM_ASYNC_TRANSCRIPTION_URL environment variable is not set. Please set the CUSTOM_ASYNC_TRANSCRIPTION_URL environment variable to the URL of your custom async transcription service."})
 
         if "azure" in value:
-            missing_vars = []
-            if not os.getenv("AZURE_SPEECH_SUBSCRIPTION_KEY"):
-                missing_vars.append("AZURE_SPEECH_SUBSCRIPTION_KEY")
-            if not os.getenv("AZURE_SPEECH_API_VERSION"):
-                missing_vars.append("AZURE_SPEECH_API_VERSION")
-            if not os.getenv("AZURE_SPEECH_CANDIDATE_LANGUAGES"):
-                missing_vars.append("AZURE_SPEECH_CANDIDATE_LANGUAGES")
-            if not os.getenv("AZURE_SPEECH_ENDPOINT") and not os.getenv("AZURE_SPEECH_REGION"):
-                missing_vars.append("AZURE_SPEECH_ENDPOINT (or AZURE_SPEECH_REGION)")
+            azure_settings = value["azure"]
+            missing_fields = []
             
-            if missing_vars:
+            if not azure_settings.get("subscription_key"):
+                missing_fields.append("subscription_key")
+            if not azure_settings.get("api_version"):
+                missing_fields.append("api_version")
+            
+            # Require either endpoint or region
+            if not azure_settings.get("endpoint") and not azure_settings.get("region"):
+                missing_fields.append("endpoint or region (at least one is required)")
+            
+            if missing_fields:
                 raise serializers.ValidationError({
-                    "transcription_settings": f"Azure transcription requires the following environment variables to be set: {', '.join(missing_vars)}"
+                    "transcription_settings": f"Azure transcription requires the following fields in transcription_settings.azure: {', '.join(missing_fields)}"
                 })
+            
+            # Set default candidate_languages if not provided
+            if not azure_settings.get("candidate_languages"):
+                value["azure"]["candidate_languages"] = ["en-US", "es-ES", "fr-FR", "ar-SA", "ar-TN"]
 
         return value
 
