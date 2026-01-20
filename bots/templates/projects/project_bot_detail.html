@@ -9,7 +9,7 @@
     }
     .timeline-item {
         padding: 1rem;
-        border-left: 2px solid #dee2e6;
+        border-left: 2px solid var(--border-color);
         margin-left: 1rem;
         position: relative;
     }
@@ -20,8 +20,8 @@
         top: 1.5rem;
         width: 1rem;
         height: 1rem;
-        background: #fff;
-        border: 2px solid #007bff;
+        background: var(--bg-card);
+        border: 2px solid var(--accent-blue);
         border-radius: 50%;
     }
     .timeline-container {
@@ -41,8 +41,9 @@
         flex: 1;
         overflow-y: auto;
         padding: 1rem;
-        border: 1px solid #dee2e6;
+        border: 1px solid var(--border-color);
         border-radius: 0.25rem;
+        background-color: var(--bg-card);
     }
     .video-column {
         flex: 1;
@@ -50,7 +51,7 @@
     .utterance-item {
         margin-bottom: 1rem;
         padding: 0.5rem;
-        border-bottom: 1px solid #eee;
+        border-bottom: 1px solid var(--border-color);
         display: flex;
     }
     .speaker-bar {
@@ -62,14 +63,14 @@
         flex: 1;
     }
     .utterance-timestamp {
-        font-size: 0.8rem;
-        color: #666;
+        font-size: var(--font-size-sm);
+        color: var(--text-muted);
     }
     .utterance-text {
         margin-top: 0.25rem;
     }
     .highlighted {
-        background-color: #e2f0ff;
+        background-color: var(--accent-blue-bg);
     }
     .word {
         display: inline;
@@ -79,13 +80,13 @@
     }
     /* Override Bootstrap tab colors */
     .nav-tabs .nav-link {
-        color: #6c757d !important; /* Light grey for non-active tabs */
-        border-right: 1px solid #dee2e6 !important; /* Add vertical separator */
+        color: var(--text-muted) !important; /* Light grey for non-active tabs */
+        border-right: 1px solid var(--border-color) !important; /* Add vertical separator */
         border-radius: 0 !important; /* Remove rounded corners for cleaner separation */
     }
     .nav-tabs .nav-link.active {
-        color: #2e2f31 !important; /* Keep blue for active tab */
-        border-right: 1px solid #dee2e6 !important; /* Keep separator on active tab too */
+        color: var(--text-primary) !important; /* Keep primary text color for active tab */
+        border-right: 1px solid var(--border-color) !important; /* Keep separator on active tab too */
     }
     .nav-tabs .nav-item:last-child .nav-link {
         border-right: none !important; /* Remove border from last tab */
@@ -240,7 +241,7 @@
                                 <span class="badge bg-primary">{{ event.get_new_state_display }}</span>
                             </p>
                             {% if event.metadata %}
-                                <pre class="small mt-3"><span class="small">metadata: </span>{{ event.metadata|pprint }}</pre>
+                                <pre class="small mt-3" style="background-color: var(--bg-secondary); color: var(--text-primary);"><span class="small">metadata: </span>{{ event.metadata|pprint }}</pre>
                             {% endif %}
                             {% if event.debug_screenshots.all %}
                                 <div class="mt-2">
@@ -264,7 +265,7 @@
                                                 style="max-width: 300px;">
                                         {% endif %}
                                         {% if screenshot.metadata %}
-                                            <pre class="small">{{ screenshot.metadata|pprint }}</pre>
+                                            <pre class="small" style="background-color: var(--bg-secondary); color: var(--text-primary);">{{ screenshot.metadata|pprint }}</pre>
                                         {% endif %}
                                     {% endfor %}
                                 </div>
@@ -283,16 +284,16 @@
             {% if chat_messages %}
                 <div class="chat-messages-log">
                     {% for message in chat_messages %}
-                        <div class="chat-message-item border rounded p-3 mb-3 bg-light">
+                        <div class="chat-message-item border rounded p-3 mb-3" style="background-color: var(--bg-secondary);">
                             <div class="d-flex align-items-start gap-3">
                                 <div class="speaker-bar" style="background-color: {{ message.participant.uuid|participant_color }}; width: 4px; height: 100%; min-height: 40px; border-radius: 2px; flex-shrink: 0;"></div>
                                 <div class="message-content flex-grow-1">
                                     <div class="message-header d-flex justify-content-between align-items-center mb-2">
-                                        <span class="fw-semibold">{{ message.participant.full_name }}</span>
+                                        <span class="fw-semibold" style="color: var(--text-primary);">{{ message.participant.full_name }}</span>
                                         <span class="text-muted small">{{ message.created_at|date:"M d, Y H:i:s" }}</span>
                                     </div>
                                     <div class="message-text">
-                                        <div class="font-monospace" style="white-space: pre-wrap; line-height: 1.4;">{{ message.text }}</div>
+                                        <div class="font-monospace" style="white-space: pre-wrap; line-height: 1.4; color: var(--text-primary);">{{ message.text }}</div>
                                     </div>
                                 </div>
                             </div>
@@ -385,7 +386,7 @@
                                                             <div class="tab-content">
                                                                 <div class="tab-pane fade show active" id="payload-{{ attempt.id }}" role="tabpanel">
                                                                     {% if attempt.payload %}
-                                                                        <pre class="small mb-0">{{ attempt.payload|pprint }}</pre>
+                                                                        <pre class="small mb-0" style="background-color: var(--bg-secondary); color: var(--text-primary);">{{ attempt.payload|pprint }}</pre>
                                                                     {% else %}
                                                                         <div class="alert alert-info">No payload data available.</div>
                                                                     {% endif %}
@@ -395,7 +396,7 @@
                                                                         <ul class="list-group">
                                                                             {% for response in attempt.response_body_list %}
                                                                                 <li class="list-group-item">
-                                                                                    <pre class="small mb-0">{{ response|pprint }}</pre>
+                                                                                    <pre class="small mb-0" style="background-color: var(--bg-secondary); color: var(--text-primary);">{{ response|pprint }}</pre>
                                                                                 </li>
                                                                             {% endfor %}
                                                                         </ul>
@@ -453,12 +454,12 @@
         <div class="tab-pane fade" id="participants" role="tabpanel">
             <div class="participants-list">
                 {% for participant in participants %}
-                    <div class="participant-item border rounded p-3 mb-3 bg-light">
+                    <div class="participant-item border rounded p-3 mb-3" style="background-color: var(--bg-secondary);">
                         <div class="d-flex align-items-start gap-3">
                             <div class="speaker-bar" style="background-color: {{ participant.uuid|participant_color }}; width: 4px; height: 100%; min-height: 40px; border-radius: 2px; flex-shrink: 0;"></div>
                             <div class="participant-content flex-grow-1">
                                 <div class="participant-header d-flex justify-content-between align-items-center mb-2">
-                                    <span class="fw-semibold">
+                                    <span class="fw-semibold" style="color: var(--text-primary);">
                                         {{ participant.full_name|default:participant.uuid }}
                                     </span>
                                     <span class="text-muted small">{{ participant.created_at|date:"M d, Y H:i:s" }}</span>
@@ -467,7 +468,7 @@
                                     <div class="participant-events">
                                         <div class="participant-events-timeline mt-3">
                                             {% for event in participant.events.all %}
-                                                <div class="event-item d-flex align-items-start gap-3 py-2 border-bottom">
+                                                <div class="event-item d-flex align-items-start gap-3 py-2 border-bottom" style="border-bottom-color: var(--border-color) !important;">
                                                     <div class="event-icon">
                                                         {% if event.event_type == ParticipantEventTypes.JOIN %}
                                                             <i class="bi bi-box-arrow-in-right text-success"></i>
@@ -476,7 +477,7 @@
                                                         {% endif %}
                                                     </div>
                                                     <div class="event-content flex-grow-1">
-                                                        <div class="event-type fw-semibold">
+                                                        <div class="event-type fw-semibold" style="color: var(--text-primary);">
                                                             {% if event.event_type == ParticipantEventTypes.JOIN %}
                                                                 Joined
                                                             {% elif event.event_type == ParticipantEventTypes.LEAVE %}
@@ -487,7 +488,7 @@
                                                         {% if event.event_data %}
                                                             <div class="event-data mt-1">
                                                                 <small class="text-muted">
-                                                                    <pre class="small mb-0">{{ event.event_data|pprint }}</pre>
+                                                                    <pre class="small mb-0" style="background-color: var(--bg-secondary); color: var(--text-primary);">{{ event.event_data|pprint }}</pre>
                                                                 </small>
                                                             </div>
                                                         {% endif %}

@@ -1,12 +1,14 @@
 {% load static %}
 <!DOCTYPE html>
-<html>
+<html data-bs-theme="light">
 <head>
     <link rel="icon" href="{% static 'images/logo.svg' %}">
     <title>Attendee</title>
     <!-- Bootstrap CSS -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+    <!-- Theme CSS -->
+    <link rel="stylesheet" href="{% static 'css/theme.css' %}">
     <!-- HTMX -->
     <!--  <script src="https://unpkg.com/htmx.org@2.0.3"></script>  -->
     <script src="https://unpkg.com/htmx.org@2.0.3/dist/htmx.js"></script>
@@ -14,19 +16,19 @@
     <style>
         .sidebar {
             min-height: 100vh;
-            background-color: #f8f9fa;
-            border-right: 1px solid #dee2e6;
+            background-color: var(--bg-sidebar);
+            border-right: 1px solid var(--border-color);
         }
         .sidebar .nav-link {
-            color: #333;
+            color: var(--text-primary);
             padding: 0.5rem 1rem;
             cursor: pointer;
         }
         .sidebar .nav-link:hover {
-            background-color: #e9ecef;
+            background-color: var(--bg-hover);
         }
         .sidebar .nav-link.active {
-            background-color: #0d6efd;
+            background-color: var(--accent-blue);
             color: white;
         }
     </style>
