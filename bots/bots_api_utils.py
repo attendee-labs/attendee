@@ -267,33 +267,22 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
                 f"for meeting {meeting_url}, project {project.id}"
             )
             
-            # Save Azure credentials to Credentials model if Azure is selected
-            if transcription_provider == TranscriptionProviders.AZURE and transcription_settings:
-                azure_settings = transcription_settings.get("azure", {})
-                if azure_settings:
-                    # Get or create Azure credentials for this project
-                    azure_credentials, created = Credentials.objects.get_or_create(
-                        project=project,
-                        credential_type=Credentials.CredentialTypes.AZURE,
-                        defaults={}
+            # Validate Azure credentials exist if Azure is selected
+            if transcription_provider == TranscriptionProviders.AZURE:
+                azure_credentials = Credentials.objects.filter(
+                    project=project,
+                    credential_type=Credentials.CredentialTypes.AZURE
+                ).first()
+                
+                if not azure_credentials:
+                    relative_url = reverse("bots:project-credentials", kwargs={"object_id": project.object_id})
+                    settings_url = build_site_url(relative_url)
+                    raise ValidationError(
+                        f"Azure Speech credentials are required to use Azure transcription. "
+                        f"Please add Azure credentials at {settings_url}"
                     )
-                    
-                    # Build endpoint if region is provided instead of full endpoint
-                    endpoint = azure_settings.get("endpoint")
-                    if not endpoint and azure_settings.get("region"):
-                        region = azure_settings["region"]
-                        endpoint = f"https://{region}.api.cognitive.microsoft.com/speechtotext/transcriptions:transcribe"
-                    
-                    # Save credentials (encrypted)
-                    azure_credentials.set_credentials({
-                        "subscription_key": azure_settings["subscription_key"],
-                        "api_version": azure_settings["api_version"],
-                        "endpoint": endpoint,
-                        "region": azure_settings.get("region"),  # Store region for reference
-                    })
-                    
-                    action = "Created" if created else "Updated"
-                    logger.info(f"{action} Azure credentials for project {project.id}")
+                
+                logger.info(f"Using existing Azure credentials for project {project.id}")
             
             Recording.objects.create(
                 bot=bot,

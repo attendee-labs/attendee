@@ -159,42 +159,28 @@ $5 in free credits per month for new users, then pay-as-you-go pricing.
 
 #### Configuration
 
-Azure Speech-to-Text is configured via API request. Credentials are stored encrypted per-project and can be different for each project.
+Azure Speech-to-Text requires credentials to be set up separately via the Credentials API. Configuration options can be provided per-bot in the API request.
 
-**Required fields in `transcription_settings.azure`:**
-- `subscription_key` (string): Azure Speech service subscription key
-- `api_version` (string): API version (e.g., `"2024-11-15"`)
-- `endpoint` OR `region` (string): Either full endpoint URL or Azure region (e.g., `"eastus"`). At least one is required.
+**Step 1: Add Azure Credentials** (One-time setup per project)
 
-**Optional fields:**
+Via Web Dashboard:
+1. Go to Project Settings → Credentials
+2. Click "Add Credentials" for Azure Speech-to-Text
+3. Provide:
+   - **Subscription Key** (required)
+   - **API Version** (required, e.g., "2024-11-15")
+   - **Region** (required, e.g., "eastus")
+
+**Step 2: Create Bots with Azure**
+
+Optional fields in `transcription_settings.azure`:
 - `candidate_languages` (array): List of BCP-47 locale codes for automatic language detection (2-10 languages). Defaults to `["en-US", "es-ES", "fr-FR", "ar-SA", "ar-TN"]` if not specified.
 - `phrase_list` (array): List of phrases for vocabulary hints
 - `profanity_option` (string): `"Raw"`, `"Masked"` (default), or `"Removed"`
 - `enable_disfluency_removal` (boolean): Remove filler words like "um", "uh"
 - `custom_endpoint_id` (string): Endpoint ID for custom speech models
 
-**Example API request (with all credentials):**
-```bash
-curl -X POST https://api.attendee.ai/v1/bots \
-  -H "Authorization: Bearer YOUR_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "meeting_url": "https://meet.google.com/abc-defg-hij",
-    "bot_name": "My Bot",
-    "transcription_settings": {
-      "azure": {
-        "subscription_key": "your-azure-subscription-key",
-        "api_version": "2024-11-15",
-        "region": "eastus",
-        "candidate_languages": ["en-US", "fr-FR", "es-ES", "ar-AE"],
-        "phrase_list": ["Microsoft", "Azure", "Attendee"],
-        "profanity_option": "Masked"
-      }
-    }
-  }'
-```
-
-**Example API request (minimal - after credentials are stored):**
+**Example API request (minimal - uses defaults):**
 ```bash
 curl -X POST https://api.attendee.ai/v1/bots \
   -H "Authorization: Bearer YOUR_API_KEY" \
@@ -207,9 +193,27 @@ curl -X POST https://api.attendee.ai/v1/bots \
     }
   }'
 ```
-*Note: This uses stored credentials and default candidate_languages.*
 
-**Note:** Credentials (subscription_key, endpoint, api_version) are stored encrypted in the project's Credentials model and will be reused for all bots in the same project. You only need to provide them once per project.
+**Example API request (with custom configuration):**
+```bash
+curl -X POST https://api.attendee.ai/v1/bots \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "meeting_url": "https://meet.google.com/abc-defg-hij",
+    "bot_name": "My Bot",
+    "transcription_settings": {
+      "azure": {
+        "candidate_languages": ["en-US", "fr-FR", "es-ES", "ar-AE"],
+        "phrase_list": ["Microsoft", "Azure", "Attendee"],
+        "profanity_option": "Masked",
+        "enable_disfluency_removal": true
+      }
+    }
+  }'
+```
+
+**Note:** Credentials (subscription_key, endpoint, api_version, region) must be set up via the Credentials API before creating bots with Azure transcription. They cannot be passed in the bot creation request.
 
 **Supported locales:**
 Common supported locales include:

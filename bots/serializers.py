@@ -417,26 +417,10 @@ TRANSCRIPTION_SETTINGS_SCHEMA = {
         "azure": {
             "type": "object",
             "properties": {
-                "subscription_key": {
-                    "type": "string",
-                    "description": "Azure Speech service subscription key (required). This will be stored encrypted in the project's credentials.",
-                },
-                "api_version": {
-                    "type": "string",
-                    "description": "Azure Speech API version (e.g., '2024-11-15') (required).",
-                },
-                "endpoint": {
-                    "type": "string",
-                    "description": "Full endpoint URL for Azure Speech service (e.g., 'https://eastus.api.cognitive.microsoft.com/speechtotext/transcriptions:transcribe'). Either 'endpoint' or 'region' is required.",
-                },
-                "region": {
-                    "type": "string",
-                    "description": "The Azure region for the Speech service (e.g., 'eastus', 'westus'). Used to build endpoint if 'endpoint' is not provided. Either 'endpoint' or 'region' is required.",
-                },
                 "candidate_languages": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "List of BCP-47 locale codes for automatic language detection (2-10 languages). Azure will detect which language is being spoken from this list. Defaults to ['en-US', 'es-ES', 'fr-FR', 'de-DE', 'it-IT'] if not specified.",
+                    "description": "List of BCP-47 locale codes for automatic language detection (2-10 languages). Azure will detect which language is being spoken from this list. Defaults to ['en-US', 'es-ES', 'fr-FR', 'ar-SA', 'ar-TN'] if not specified.",
                 },
                 "language": {
                     "type": "string",
@@ -461,7 +445,7 @@ TRANSCRIPTION_SETTINGS_SCHEMA = {
                     "description": "Endpoint ID for custom speech models. If provided, uses a custom trained model instead of the base model.",
                 },
             },
-            "required": ["subscription_key", "api_version"],
+            "required": [],
             "additionalProperties": False,
         },
         "custom_async": {
@@ -1281,21 +1265,10 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
 
         if "azure" in value:
             azure_settings = value["azure"]
-            missing_fields = []
             
-            if not azure_settings.get("subscription_key"):
-                missing_fields.append("subscription_key")
-            if not azure_settings.get("api_version"):
-                missing_fields.append("api_version")
-            
-            # Require either endpoint or region
-            if not azure_settings.get("endpoint") and not azure_settings.get("region"):
-                missing_fields.append("endpoint or region (at least one is required)")
-            
-            if missing_fields:
-                raise serializers.ValidationError({
-                    "transcription_settings": f"Azure transcription requires the following fields in transcription_settings.azure: {', '.join(missing_fields)}"
-                })
+            # Check if Azure credentials exist for this project
+            # Note: We can't access the project here in validation, so we'll check in create_bot
+            # For now, just validate the structure and set defaults
             
             # Set default candidate_languages if not provided
             if not azure_settings.get("candidate_languages"):
