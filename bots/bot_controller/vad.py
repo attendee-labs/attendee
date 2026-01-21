@@ -118,13 +118,16 @@ class SileroVAD(BaseVAD):
     # Target sample rate for Silero VAD (only supports 8000 and 16000)
     _TARGET_SAMPLE_RATE = 16000
 
-    def __init__(self, sample_rate: int, threshold: float = 0.5):
+    def __init__(self, sample_rate: int, threshold: float = 0.65):
         """
         Initialize Silero VAD.
 
         Args:
             sample_rate: Audio sample rate (any rate, will be resampled to 16kHz)
-            threshold: Speech probability threshold (0.0-1.0)
+            threshold: Speech probability threshold (0.0-1.0). Higher = more strict.
+                       Default 0.65 is tuned for meeting audio with some background noise.
+                       Lower values (0.5) may detect noise as speech, causing utterances
+                       to not split properly. Higher values (0.8) may miss quiet speech.
         """
         super().__init__(sample_rate)
         self._threshold = threshold
@@ -148,6 +151,15 @@ class SileroVAD(BaseVAD):
                 trust_repo=True,
             )
         self._initialized = True
+
+    def reset_state(self):
+        """Reset the internal state of the Silero model.
+        
+        Important: Silero VAD is stateful and maintains context between calls.
+        Call this method when starting to process a new audio stream.
+        """
+        if SileroVAD._model is not None:
+            SileroVAD._model.reset_states()
 
     def _resample_audio(self, samples: np.ndarray) -> np.ndarray:
         """Resample audio to 16kHz if needed."""

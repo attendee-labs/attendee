@@ -46,8 +46,8 @@ class PerParticipantNonStreamingAudioInputManager:
         self.diagnostic_info = {
             "total_chunks_added": 0,
             "total_chunks_marked_as_silent_due_to_vad": 0,
-            "total_chunks_marked_as_silent_due_to_rms_being_small": 0,
             "total_chunks_marked_as_silent_due_to_rms_being_zero": 0,
+            "total_chunks_marked_as_silent_due_to_rms_being_small": 0,
             "total_audio_chunks_sent": 0,
             "total_audio_chunks_not_sent_because_participant_not_found": 0,
             "total_audio_chunks_discarded_low_speech_ratio": 0,
@@ -91,9 +91,11 @@ class PerParticipantNonStreamingAudioInputManager:
         if rms_value == 0:
             self.diagnostic_info["total_chunks_marked_as_silent_due_to_rms_being_zero"] += 1
             return True
-        if rms_value < 0.01:
+        if rms_value < 0.005:
             self.diagnostic_info["total_chunks_marked_as_silent_due_to_rms_being_small"] += 1
             return True
+        
+        # VAD for actual speech detection
         if not self.is_speech(chunk_bytes):
             self.diagnostic_info["total_chunks_marked_as_silent_due_to_vad"] += 1
             return True
