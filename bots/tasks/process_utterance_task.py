@@ -821,13 +821,12 @@ def get_transcription_via_azure(utterance):
         logger.info(f"Azure Speech phrase list: {len(phrase_list)} phrases")
 
     # Add profanity filter if configured in transcription_settings
+    # Azure defaults to "Masked" if not specified, so we only set it when user provides a value
     profanity_option = transcription_settings.azure_profanity_option()
-    profanity_map = {"Raw": "None", "Masked": "Masked", "Removed": "Removed"}
-    if profanity_option and profanity_option in profanity_map:
-        definition["profanityFilterMode"] = profanity_map[profanity_option]
-    else:
-        # Default to Masked if not specified
-        definition["profanityFilterMode"] = "Masked"
+    if profanity_option:
+        profanity_map = {"Raw": "None", "Masked": "Masked", "Removed": "Removed"}
+        if profanity_option in profanity_map:
+            definition["profanityFilterMode"] = profanity_map[profanity_option]
 
     # Convert PCM to WAV format (Azure expects proper audio format)
     audio_blob = utterance.get_audio_blob().tobytes()
