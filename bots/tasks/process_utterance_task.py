@@ -801,15 +801,14 @@ def get_transcription_via_azure(utterance):
     params = {"api-version": api_version}
     headers = {"Ocp-Apim-Subscription-Key": subscription_key}
 
-    # Get candidate_languages from transcription_settings, with sensible defaults
+    # Get candidate_languages from transcription_settings (required field)
     candidate_languages = transcription_settings.azure_candidate_languages()
     if not candidate_languages:
-        # Default to common languages if not specified
-        candidate_languages = ["en-US", "es-ES", "fr-FR", "ar-SA", "ar-TN"]
-        logger.info(f"Azure Speech: No candidate_languages specified, using defaults: {candidate_languages}")
-    else:
-        logger.info(f"Azure Speech candidate languages: {candidate_languages}")
-
+        return None, {
+            "reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND,
+            "error": "candidate_languages is required in transcription_settings.azure"
+        }
+    
     # Build definition (transcription config)
     definition = {
         "locales": candidate_languages

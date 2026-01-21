@@ -173,28 +173,16 @@ Via Web Dashboard:
 
 **Step 2: Create Bots with Azure**
 
+Required fields in `transcription_settings.azure`:
+- `candidate_languages` (array): List of BCP-47 locale codes for automatic language detection (2-10 languages). Azure will detect which language is being spoken from this list.
+
 Optional fields in `transcription_settings.azure`:
-- `candidate_languages` (array): List of BCP-47 locale codes for automatic language detection (2-10 languages). Defaults to `["en-US", "es-ES", "fr-FR", "ar-SA", "ar-TN"]` if not specified.
 - `phrase_list` (array): List of phrases for vocabulary hints
 - `profanity_option` (string): `"Raw"`, `"Masked"` (default), or `"Removed"`
 - `enable_disfluency_removal` (boolean): Remove filler words like "um", "uh"
 - `custom_endpoint_id` (string): Endpoint ID for custom speech models
 
-**Example API request (minimal - uses defaults):**
-```bash
-curl -X POST https://api.attendee.ai/v1/bots \
-  -H "Authorization: Bearer YOUR_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "meeting_url": "https://meet.google.com/abc-defg-hij",
-    "bot_name": "My Bot",
-    "transcription_settings": {
-      "azure": {}
-    }
-  }'
-```
-
-**Example API request (with custom configuration):**
+**Example API request:**
 ```bash
 curl -X POST https://api.attendee.ai/v1/bots \
   -H "Authorization: Bearer YOUR_API_KEY" \

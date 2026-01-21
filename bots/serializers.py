@@ -420,7 +420,7 @@ TRANSCRIPTION_SETTINGS_SCHEMA = {
                 "candidate_languages": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "List of BCP-47 locale codes for automatic language detection (2-10 languages). Azure will detect which language is being spoken from this list. Defaults to ['en-US', 'es-ES', 'fr-FR', 'ar-SA', 'ar-TN'] if not specified.",
+                    "description": "List of BCP-47 locale codes for automatic language detection (2-10 languages). Azure will detect which language is being spoken from this list. Required.",
                 },
                 "language": {
                     "type": "string",
@@ -445,7 +445,7 @@ TRANSCRIPTION_SETTINGS_SCHEMA = {
                     "description": "Endpoint ID for custom speech models. If provided, uses a custom trained model instead of the base model.",
                 },
             },
-            "required": [],
+            "required": ["candidate_languages"],
             "additionalProperties": False,
         },
         "custom_async": {
@@ -1268,11 +1268,11 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
             
             # Check if Azure credentials exist for this project
             # Note: We can't access the project here in validation, so we'll check in create_bot
-            # For now, just validate the structure and set defaults
-            
-            # Set default candidate_languages if not provided
+            # Validate that candidate_languages is provided (required field)
             if not azure_settings.get("candidate_languages"):
-                value["azure"]["candidate_languages"] = ["en-US", "es-ES", "fr-FR", "ar-SA", "ar-TN"]
+                raise serializers.ValidationError({
+                    "transcription_settings": "candidate_languages is required in transcription_settings.azure"
+                })
 
         return value
 
