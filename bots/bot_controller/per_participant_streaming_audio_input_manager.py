@@ -72,7 +72,15 @@ class PerParticipantStreamingAudioInputManager:
         else:
             self.SILENCE_DURATION_LIMIT = 300  # 5 minutes of inactivity
 
-        self.vad = webrtcvad.Vad()
+        # Only create WebRTC VAD for providers that need it (not Kyutai)
+        # Kyutai has its own semantic VAD, we just filter obvious silence via RMS
+        self.vad = None
+        if transcription_provider != TranscriptionProviders.KYUTAI:
+            self.vad = webrtcvad.Vad()
+        
+        # RMS threshold for filtering pure silence (muted mic, digital silence)
+        self.RMS_SILENCE_THRESHOLD = 0.0025
+        
         self.transcription_provider = transcription_provider
         self.streaming_transcribers = {}
         self.last_nonsilent_audio_time = {}
@@ -103,6 +111,14 @@ class PerParticipantStreamingAudioInputManager:
         """Flush all audio chunk buffers. Called when the meeting ends."""
         if self.audio_chunk_buffer_manager:
             self.audio_chunk_buffer_manager.flush_utterances()
+
+    def is_pure_silence(self, chunk_bytes):
+        """
+        Simple RMS energy check to detect pure silence (muted mic, digital silence).
+        This is NOT VAD - just filters out chunks with near-zero energy.
+        Used for Kyutai to avoid sending empty audio over the network.
+        """
+        return calculate_normalized_rms(chunk_bytes) < self.RMS_SILENCE_THRESHOLD
 
     def silence_detected(self, chunk_bytes):
         if calculate_normalized_rms(chunk_bytes) < 0.0025:
@@ -198,28 +214,28 @@ class PerParticipantStreamingAudioInputManager:
         if self.audio_chunk_buffer_manager:
             self.audio_chunk_buffer_manager.process_chunk(speaker_id, chunk_time, chunk_bytes)
 
-        # For Kyutai: Send all audio continuously, let semantic VAD handle it
-        # For Deepgram: Use pre-filtering to reduce API costs
+        # For Kyutai: Use simple RMS filter to skip pure silence, send everything else
+        # Kyutai has its own semantic VAD on the server side
+        # For Deepgram: Use full VAD pre-filtering to reduce API costs
         if self.transcription_provider == TranscriptionProviders.KYUTAI:
-            # Still detect silence for monitoring purposes, but send all audio
-            audio_is_silent = self.silence_detected(chunk_bytes)
+            # Simple energy check - just filter out muted mic / digital silence
+            audio_is_silent = self.is_pure_silence(chunk_bytes)
 
             if not audio_is_silent:
                 self.last_nonsilent_audio_time[speaker_id] = time.time()
-
-            # Create transcriber if needed
-            streaming_transcriber = self.find_or_create_streaming_transcriber_for_speaker(speaker_id)
-            if streaming_transcriber:
-                # Send audio
-                try:
-                    streaming_transcriber.send(chunk_bytes)
-                except Exception as e:
-                    participant_info = self.get_participant_callback(speaker_id)
-                    participant_name = participant_info.get("participant_full_name", speaker_id) if participant_info else speaker_id
-                    logger.info(f"Recreating transcriber for speaker {speaker_id} ({participant_name}) after connection failure: {e}")
-                    # Remove failed transcriber so it will be recreated on next chunk
-                    if speaker_id in self.streaming_transcribers:
-                        del self.streaming_transcribers[speaker_id]
+                
+                # Only send non-silent audio to Kyutai
+                streaming_transcriber = self.find_or_create_streaming_transcriber_for_speaker(speaker_id)
+                if streaming_transcriber:
+                    try:
+                        streaming_transcriber.send(chunk_bytes)
+                    except Exception as e:
+                        participant_info = self.get_participant_callback(speaker_id)
+                        participant_name = participant_info.get("participant_full_name", speaker_id) if participant_info else speaker_id
+                        logger.info(f"Recreating transcriber for speaker {speaker_id} ({participant_name}) after connection failure: {e}")
+                        # Remove failed transcriber so it will be recreated on next chunk
+                        if speaker_id in self.streaming_transcribers:
+                            del self.streaming_transcribers[speaker_id]
         else:
             # Deepgram and other providers: use VAD pre-filtering
             audio_is_silent = self.silence_detected(chunk_bytes)
