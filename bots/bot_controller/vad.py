@@ -111,27 +111,33 @@ class WebRTCVAD(BaseVAD):
 
 
 class SileroVAD(BaseVAD):
-    """Silero-based Voice Activity Detection."""
+    """Silero-based Voice Activity Detection with hysteresis."""
 
     # Lazy-loaded model (shared across instances)
     _model = None
     # Target sample rate for Silero VAD (only supports 8000 and 16000)
     _TARGET_SAMPLE_RATE = 16000
+    # Hysteresis offset: require probability to drop this much below threshold to end speech
+    # This prevents oscillation at speech boundaries.
+    _HYSTERESIS_OFFSET = 0.15
 
-    def __init__(self, sample_rate: int, threshold: float = 0.65):
+    def __init__(self, sample_rate: int, threshold: float = 0.5):
         """
-        Initialize Silero VAD.
+        Initialize Silero VAD with hysteresis.
 
         Args:
             sample_rate: Audio sample rate (any rate, will be resampled to 16kHz)
             threshold: Speech probability threshold (0.0-1.0). Higher = more strict.
-                       Default 0.65 is tuned for meeting audio with some background noise.
-                       Lower values (0.5) may detect noise as speech, causing utterances
-                       to not split properly. Higher values (0.8) may miss quiet speech.
+                       Default 0.5 matches Silero's recommendation for most datasets.
+                       Speech starts when probability >= threshold.
+                       Speech ends when probability < (threshold - 0.15) due to hysteresis.
+                       This prevents rapid toggling at speech boundaries.
         """
         super().__init__(sample_rate)
         self._threshold = threshold
         self._initialized = False
+        # Hysteresis state: tracks whether we're currently in speech
+        self._is_speaking = False
         # Calculate resampling ratio
         self._resample_ratio = self._TARGET_SAMPLE_RATE / sample_rate if sample_rate != self._TARGET_SAMPLE_RATE else 1.0
 
@@ -153,11 +159,12 @@ class SileroVAD(BaseVAD):
         self._initialized = True
 
     def reset_state(self):
-        """Reset the internal state of the Silero model.
+        """Reset the internal state of the Silero model and hysteresis.
         
         Important: Silero VAD is stateful and maintains context between calls.
         Call this method when starting to process a new audio stream.
         """
+        self._is_speaking = False
         if SileroVAD._model is not None:
             SileroVAD._model.reset_states()
 
@@ -171,6 +178,27 @@ class SileroVAD(BaseVAD):
             return samples
         indices = np.linspace(0, len(samples) - 1, target_length)
         return np.interp(indices, np.arange(len(samples)), samples).astype(np.float32)
+
+    def _apply_hysteresis(self, speech_prob: float) -> bool:
+        """
+        Apply hysteresis to speech probability to prevent oscillation.
+        
+        Uses different thresholds for starting vs ending speech:
+        - Start speech: probability >= threshold
+        - End speech: probability < (threshold - hysteresis_offset)
+        
+        This prevents rapid toggling when probability hovers near the threshold.
+        """
+        if self._is_speaking:
+            # Currently speaking: require probability to drop significantly to end
+            if speech_prob < (self._threshold - self._HYSTERESIS_OFFSET):
+                self._is_speaking = False
+        else:
+            # Not speaking: require probability to exceed threshold to start
+            if speech_prob >= self._threshold:
+                self._is_speaking = True
+        
+        return self._is_speaking
 
     def is_speech(self, audio_bytes: bytes) -> bool:
         try:
@@ -203,7 +231,7 @@ class SileroVAD(BaseVAD):
                     chunk = samples[i * required_samples : (i + 1) * required_samples]
                     audio_tensor = torch.from_numpy(chunk.copy())
                     speech_prob = SileroVAD._model(audio_tensor, self._TARGET_SAMPLE_RATE).item()
-                    if speech_prob >= self._threshold:
+                    if self._apply_hysteresis(speech_prob):
                         return True
                 return False
 
@@ -213,7 +241,7 @@ class SileroVAD(BaseVAD):
             # Get speech probability from Silero (always use 16kHz since we resampled)
             speech_prob = SileroVAD._model(audio_tensor, self._TARGET_SAMPLE_RATE).item()
 
-            return speech_prob >= self._threshold
+            return self._apply_hysteresis(speech_prob)
         except Exception as e:
             logger.exception(f"Error in Silero VAD: {e}")
             return True  # Assume speech on error
