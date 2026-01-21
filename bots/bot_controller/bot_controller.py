@@ -743,10 +743,7 @@ class BotController:
         if self.get_recording_transcription_provider() == TranscriptionProviders.SARVAM:
             return 1  # seconds
         else:
-            # For async transcription, use longer silence threshold to accumulate larger chunks
-            # This prevents sending very short clips (<2s) that can cause hallucination in OpenAI
-            # For streaming transcription during the meeting, the streaming manager uses its own 3s limit
-            return 5  # seconds
+            return 3  # seconds
 
     def run(self):
         if self.run_called:
