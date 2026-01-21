@@ -366,26 +366,14 @@ class CreateCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
                     return HttpResponse("Missing required credentials data", status=400)
             elif credential_type == Credentials.CredentialTypes.AZURE:
                 subscription_key = request.POST.get("subscription_key")
-                api_version = request.POST.get("api_version")
-                endpoint = request.POST.get("endpoint")
                 region = request.POST.get("region")
                 
-                # Validate required fields
-                if not subscription_key or not api_version:
-                    return HttpResponse("Missing required credentials data: subscription_key and api_version are required", status=400)
-                
-                # Require either endpoint or region
-                if not endpoint and not region:
-                    return HttpResponse("Missing required credentials data: either endpoint or region must be provided", status=400)
-                
-                # Build endpoint from region if not provided
-                if not endpoint and region:
-                    endpoint = f"https://{region}.api.cognitive.microsoft.com/speechtotext/transcriptions:transcribe"
+                # Validate required fields (SDK requires subscription_key and region)
+                if not subscription_key or not region:
+                    return HttpResponse("Missing required credentials data: subscription_key and region are required", status=400)
                 
                 credentials_data = {
                     "subscription_key": subscription_key,
-                    "api_version": api_version,
-                    "endpoint": endpoint,
                     "region": region,
                 }
             else:

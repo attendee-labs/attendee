@@ -145,10 +145,10 @@ Example: `OPENAI_BASE_URL=https://your-proxy.com/v1` and `OPENAI_MODEL_NAME=whis
 
 ### Azure Speech-to-Text
 
-Microsoft's enterprise-grade speech recognition with support for 140+ languages.
+Microsoft's enterprise-grade speech recognition with support for 140+ languages. Uses the Azure Speech SDK which provides better handling for silence/noise detection - when no speech is detected, it gracefully returns an empty transcript without errors.
 
 **Setup:**
-1. Add Azure credentials in Project Settings → Credentials (Subscription Key, API Version, Region)
+1. Add Azure credentials in Project Settings → Credentials (Subscription Key, Region)
 2. Create bot with `transcription_settings.azure` containing required `candidate_languages` array
 
 See the [API reference](https://docs.attendee.dev/api-reference#tag/bots/POST/api/v1/bots) for all Azure configuration options.
