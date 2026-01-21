@@ -145,88 +145,15 @@ Example: `OPENAI_BASE_URL=https://your-proxy.com/v1` and `OPENAI_MODEL_NAME=whis
 
 ### Azure Speech-to-Text
 
-Microsoft's enterprise-grade speech recognition with support for 140+ languages. Uses Azure Fast Transcription API for synchronous, high-quality transcription of audio segments.
+Microsoft's enterprise-grade speech recognition with support for 140+ languages.
 
-**Features:**
-- Fast synchronous transcription (typically 15 seconds for 10 minutes of audio)
-- Automatic language detection from candidate languages
-- Profanity filtering options
-- Phrase lists for vocabulary hints
-- Word-level timestamps
-- Support for audio files up to 2 hours / 300 MB
+**Setup:**
+1. Add Azure credentials in Project Settings → Credentials (Subscription Key, API Version, Region)
+2. Create bot with `transcription_settings.azure` containing required `candidate_languages` array
 
-$5 in free credits per month for new users, then pay-as-you-go pricing.
+See the [API reference](https://docs.attendee.dev/api-reference#tag/bots/POST/api/v1/bots) for all Azure configuration options.
 
-#### Configuration
-
-Azure Speech-to-Text requires credentials to be set up separately via the Credentials API. Configuration options can be provided per-bot in the API request.
-
-**Step 1: Add Azure Credentials** (One-time setup per project)
-
-Via Web Dashboard:
-1. Go to Project Settings → Credentials
-2. Click "Add Credentials" for Azure Speech-to-Text
-3. Provide:
-   - **Subscription Key** (required)
-   - **API Version** (required, e.g., "2024-11-15")
-   - **Region** (required, e.g., "eastus")
-
-**Step 2: Create Bots with Azure**
-
-Required fields in `transcription_settings.azure`:
-- `candidate_languages` (array): List of BCP-47 locale codes for automatic language detection (2-10 languages). Azure will detect which language is being spoken from this list.
-
-Optional fields in `transcription_settings.azure`:
-- `phrase_list` (array): List of phrases for vocabulary hints
-- `profanity_option` (string): `"Raw"`, `"Masked"` (default), or `"Removed"`
-- `enable_disfluency_removal` (boolean): Remove filler words like "um", "uh"
-- `custom_endpoint_id` (string): Endpoint ID for custom speech models
-
-**Example API request:**
-```bash
-curl -X POST https://api.attendee.ai/v1/bots \
-  -H "Authorization: Bearer YOUR_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "meeting_url": "https://meet.google.com/abc-defg-hij",
-    "bot_name": "My Bot",
-    "transcription_settings": {
-      "azure": {
-        "candidate_languages": ["en-US", "fr-FR", "es-ES", "ar-AE"],
-        "phrase_list": ["Microsoft", "Azure", "Attendee"],
-        "profanity_option": "Masked",
-        "enable_disfluency_removal": true
-      }
-    }
-  }'
-```
-
-**Note:** Credentials (subscription_key, endpoint, api_version, region) must be set up via the Credentials API before creating bots with Azure transcription. They cannot be passed in the bot creation request.
-
-**Supported locales:**
-Common supported locales include:
-- `en-US` (English - US)
-- `fr-FR` (French - France)
-- `es-ES`, `es-MX` (Spanish)
-- `ar-AE`, `ar-BH`, `ar-EG` (Arabic)
-- `de-DE` (German)
-- `it-IT` (Italian)
-- `ja-JP` (Japanese)
-- `ko-KR` (Korean)
-- `pt-BR` (Portuguese - Brazil)
-- `hi-IN` (Hindi)
-
-See [Azure's language support documentation](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/language-support) for the complete list of supported locales.
-
-**Validation:**
-All required environment variables are validated when Azure is selected as the transcription provider. If any required variable is missing, transcription will fail with a clear error message listing all missing variables.
-
-**How it works:**
-1. Audio segments are accumulated per participant (from speech start until 3 seconds of silence or max size limit)
-2. Each segment is sent to Azure Fast Transcription API as a WAV file
-3. Azure detects the language from your candidate languages list
-4. Transcription results are returned synchronously with word-level timestamps
-5. Results are saved and webhooks are triggered (if configured)
+**Note:** Credentials must be set up via the Credentials API before creating bots. They cannot be passed in the bot creation request.
 
 ### Custom Async (Bring Your Own Platform)
 

@@ -1223,13 +1223,7 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
 
         # Set a default transcription_settings value if nothing given
         if value is None:
-            # Check for default provider from environment variable first
-            from bots.transcription_provider_utils import get_default_transcription_settings_from_env
-            
-            default_settings = get_default_transcription_settings_from_env()
-            if default_settings:
-                return default_settings
-            # Fall back to platform-specific defaults if no env var is set or invalid
+            # Fall back to platform-specific defaults
             if meeting_type == MeetingTypes.ZOOM:
                 if use_zoom_web_adapter:
                     value = {"meeting_closed_captions": {}}

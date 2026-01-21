@@ -780,22 +780,11 @@ def get_transcription_via_azure(utterance):
     endpoint = azure_credentials.get("endpoint")
     api_version = azure_credentials.get("api_version")
     
-    if not subscription_key or not api_version:
+    if not subscription_key or not api_version or not endpoint:
         return None, {
             "reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND, 
-            "error": "Missing subscription_key or api_version in Azure credentials"
+            "error": "Missing subscription_key, api_version, or endpoint in Azure credentials"
         }
-    
-    # Build endpoint if not provided (use region from credentials)
-    if not endpoint:
-        region = azure_credentials.get("region")
-        if region:
-            endpoint = f"https://{region}.api.cognitive.microsoft.com/speechtotext/transcriptions:transcribe"
-        else:
-            return None, {
-                "reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND,
-                "error": "Missing endpoint or region in Azure credentials"
-            }
     
     # Build request params and headers
     params = {"api-version": api_version}
@@ -871,11 +860,7 @@ def get_transcription_via_azure(utterance):
         response_summary = json.dumps(result)
         if len(response_summary) > 1000:
             response_summary = response_summary[:1000] + "... (truncated)"
-        logger.info(
-            f"Azure Fast Transcription completed successfully for utterance {utterance.id}, "
-            f"recording {utterance.recording.id}, bot {utterance.recording.bot.id}. "
-            f"Response summary: {response_summary}"
-        )
+
 
         # Extract transcript from combinedPhrases
         combined_phrases = result.get("combinedPhrases", [])

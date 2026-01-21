@@ -267,23 +267,6 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
                 f"for meeting {meeting_url}, project {project.id}"
             )
             
-            # Validate Azure credentials exist if Azure is selected
-            if transcription_provider == TranscriptionProviders.AZURE:
-                azure_credentials = Credentials.objects.filter(
-                    project=project,
-                    credential_type=Credentials.CredentialTypes.AZURE
-                ).first()
-                
-                if not azure_credentials:
-                    relative_url = reverse("bots:project-credentials", kwargs={"object_id": project.object_id})
-                    settings_url = build_site_url(relative_url)
-                    raise ValidationError(
-                        f"Azure Speech credentials are required to use Azure transcription. "
-                        f"Please add Azure credentials at {settings_url}"
-                    )
-                
-                logger.info(f"Using existing Azure credentials for project {project.id}")
-            
             Recording.objects.create(
                 bot=bot,
                 recording_type=bot.recording_type(),
