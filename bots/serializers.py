@@ -1223,7 +1223,6 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
 
         # Set a default transcription_settings value if nothing given
         if value is None:
-            # Fall back to platform-specific defaults
             if meeting_type == MeetingTypes.ZOOM:
                 if use_zoom_web_adapter:
                     value = {"meeting_closed_captions": {}}
