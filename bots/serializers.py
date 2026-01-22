@@ -1256,17 +1256,6 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
         if "custom_async" in value and not os.getenv("CUSTOM_ASYNC_TRANSCRIPTION_URL"):
             raise serializers.ValidationError({"transcription_settings": "CUSTOM_ASYNC_TRANSCRIPTION_URL environment variable is not set. Please set the CUSTOM_ASYNC_TRANSCRIPTION_URL environment variable to the URL of your custom async transcription service."})
 
-        if "azure" in value:
-            azure_settings = value["azure"]
-            
-            # Check if Azure credentials exist for this project
-            # Note: We can't access the project here in validation, so we'll check in create_bot
-            # Validate that candidate_languages is provided (required field)
-            if not azure_settings.get("candidate_languages"):
-                raise serializers.ValidationError({
-                    "transcription_settings": "candidate_languages is required in transcription_settings.azure"
-                })
-
         return value
 
     websocket_settings = WebsocketSettingsJSONField(help_text="The websocket settings for the bot, e.g. {'audio': {'url': 'wss://example.com/audio', 'sample_rate': 16000}}", required=False, default=None)

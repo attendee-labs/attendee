@@ -59,12 +59,6 @@ def is_retryable_failure(failure_data):
 
 def get_transcription(utterance):
     try:
-        # Log which transcription provider is being used
-        provider_name = TranscriptionProviders(utterance.transcription_provider).label if utterance.transcription_provider else "Unknown"
-        logger.info(
-            f"Using transcription provider: {provider_name} (ID: {utterance.transcription_provider}) "
-            f"for utterance {utterance.id}, recording {utterance.recording.id}, bot {utterance.recording.bot.id}"
-        )
         
         # Regular transcription providers that support async transcription
         if utterance.transcription_provider == TranscriptionProviders.DEEPGRAM:
