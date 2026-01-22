@@ -18,6 +18,7 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
         google_meet_bot_login_is_available: bool,
         google_meet_bot_login_should_be_used: bool,
         create_google_meet_bot_login_session_callback: Callable[[], dict],
+        modify_dom_for_video_recording: bool,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -26,6 +27,7 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
         self.google_meet_bot_login_should_be_used = google_meet_bot_login_should_be_used and google_meet_bot_login_is_available
         self.create_google_meet_bot_login_session_callback = create_google_meet_bot_login_session_callback
         self.google_meet_bot_login_session = None
+        self.modify_dom_for_video_recording = modify_dom_for_video_recording
 
     def should_retry_joining_meeting_that_requires_login_by_logging_in(self):
         # If we don't have the ability to login, we can't retry
@@ -83,6 +85,13 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
     def get_staged_bot_join_delay_seconds(self):
         return 5
 
+    def subclass_specific_initial_data_code(self):
+        return f"""
+            window.googleMeetInitialData = {{
+                modifyDomForVideoRecording: {"true" if self.modify_dom_for_video_recording else "false"},
+            }}
+        """
+
     def subclass_specific_after_bot_joined_meeting(self):
         self.after_bot_can_record_meeting()
 
@@ -96,4 +105,4 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
             try:
                 self.driver.get("https://www.google.com/accounts/logout")
             except Exception as e:
-                logger.info(f"Error navigating to the logout page to sign out of the Google account: {e}")
+                logger.warning(f"Error navigating to the logout page to sign out of the Google account: {e}")

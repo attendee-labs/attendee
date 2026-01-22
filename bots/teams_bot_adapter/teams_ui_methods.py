@@ -44,7 +44,7 @@ class TeamsUIMethods:
         try:
             element.click()
         except Exception as e:
-            logger.info(f"Error occurred when clicking element {step}, will retry. Error: {e}")
+            logger.warning(f"Error occurred when clicking element {step}, will retry. Error: {e}")
             raise UiCouldNotClickElementException("Error occurred when clicking element", step, e)
 
     def look_for_waiting_to_be_admitted_element(self, step):

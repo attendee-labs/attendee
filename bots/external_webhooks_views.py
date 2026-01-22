@@ -10,11 +10,106 @@ from django.utils.decorators import method_decorator
 from django.views import View
 from django.views.decorators.csrf import csrf_exempt
 
-from .models import ZoomOAuthApp, ZoomOAuthConnection
+from .models import CalendarNotificationChannel, ZoomOAuthApp, ZoomOAuthConnection
 from .stripe_utils import process_checkout_session_completed, process_customer_updated, process_payment_intent_succeeded
 from .zoom_oauth_connections_utils import _upsert_zoom_meeting_to_zoom_oauth_connection_mapping, _verify_zoom_webhook_signature, compute_zoom_webhook_validation_response
 
 logger = logging.getLogger(__name__)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class ExternalWebhookMicrosoftCalendarView(View):
+    """
+    View to handle Microsoft Calendar webhook events.
+    This endpoint is called by Microsoft when events occur (calendar notifications, etc.)
+    """
+
+    def post(self, request, *args, **kwargs):
+        logger.info(f"Received Microsoft Calendar webhook event. Headers: {request.headers} Body: {request.body}")
+
+        # Handle validation request - Microsoft sends a validationToken parameter
+        # when setting up the webhook subscription
+        validation_token = request.GET.get("validationToken")
+        if validation_token:
+            logger.info(f"Received Microsoft Calendar webhook validation request with token: {validation_token}")
+            return HttpResponse(validation_token, content_type="text/plain", status=200)
+
+        # Parse the webhook payload
+        try:
+            body = json.loads(request.body)
+            notifications = body.get("value", [])
+
+            if not notifications:
+                logger.warning("No notifications found in Microsoft Calendar webhook payload")
+                return HttpResponse(status=200)
+
+            # Process the first notification
+            for notification in notifications:
+                subscription_id = notification.get("subscriptionId")
+
+                if not subscription_id:
+                    logger.warning("No subscription ID found in Microsoft Calendar webhook notification")
+                    return HttpResponse(status=200)
+
+                # Look up the calendar notification channel by subscription ID
+                calendar_notification_channel = CalendarNotificationChannel.objects.filter(platform_uuid=subscription_id).first()
+                if not calendar_notification_channel:
+                    logger.warning(f"No calendar notification channel found for subscription ID: {subscription_id}")
+                    # TODO make request to stop the subscription in Microsoft Graph API
+                    return HttpResponse(status=200)
+
+                # Update the last received timestamp
+                calendar_notification_channel.notification_last_received_at = timezone.now()
+                calendar_notification_channel.save()
+
+                # Request a sync task for the calendar. Don't request immediately to provide debouncing.
+                calendar_notification_channel.calendar.sync_task_requested_at = timezone.now()
+                calendar_notification_channel.calendar.save()
+
+                logger.info(f"Requested sync task for calendar {calendar_notification_channel.calendar.object_id}")
+
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse Microsoft Calendar webhook payload: {e}")
+            return HttpResponse(status=400)
+        except Exception as e:
+            logger.exception(f"Error processing Microsoft Calendar webhook: {e}")
+            return HttpResponse(status=500)
+
+        return HttpResponse(status=200)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class ExternalWebhookGoogleCalendarView(View):
+    """
+    View to handle Google Calendar webhook events.
+    This endpoint is called by Google when events occur (calendar notifications, etc.)
+    """
+
+    def post(self, request, *args, **kwargs):
+        logger.info(f"Received Google Calendar webhook event. Headers: {request.headers}")
+        resource_state = request.headers.get("X-Goog-Resource-State")
+        # If the resource state is sync, then this is just a notification that the channel is active. We don't need to do anything.
+        if resource_state == "sync":
+            logger.info("Ignoring Google Calendar webhook event because resource state is sync.")
+            return HttpResponse(status=200)
+
+        channel_id = request.headers.get("X-Goog-Channel-ID")
+        calendar_notification_channel = CalendarNotificationChannel.objects.filter(platform_uuid=channel_id).first()
+        if not calendar_notification_channel:
+            logger.warning(f"No calendar notification channel found for channel ID: {channel_id}")
+            # TODO make request to stop the channel in Google API
+            return HttpResponse(status=200)
+
+        calendar_notification_channel.notification_last_received_at = timezone.now()
+        calendar_notification_channel.save()
+
+        # Request a sync task for the calendar. Don't request immediately to provide debouncing.
+        calendar_notification_channel.calendar.sync_task_requested_at = timezone.now()
+        calendar_notification_channel.calendar.save()
+
+        logger.info(f"Requested sync task for calendar {calendar_notification_channel.calendar.object_id}")
+
+        return HttpResponse(status=200)
 
 
 @method_decorator(csrf_exempt, name="dispatch")

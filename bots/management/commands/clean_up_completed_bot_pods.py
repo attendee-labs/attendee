@@ -42,7 +42,7 @@ class Command(BaseCommand):
                     self.v1.delete_namespaced_pod(name=pod_name, namespace=namespace, grace_period_seconds=60)
                     logger.info(f"Deleted pod: {pod_name}")
                 except client.ApiException as e:
-                    logger.info(f"Error deleting pod {pod_name}: {str(e)}")
+                    logger.warning(f"Error deleting pod {pod_name}: {str(e)}")
 
             logger.info(f"Bot pod cleanup completed. Deleted {len(completed_pods)} pods")
 

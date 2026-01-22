@@ -555,9 +555,10 @@ class StyleManager {
 
         await this.openChatPanel();
 
-        await this.onlyShowSubsetofGMeetUI();
+        if (window.googleMeetInitialData.modifyDomForVideoRecording) {
+            await this.onlyShowSubsetofGMeetUI();
+        }
         
-
         if (window.initialData.recordingView === 'gallery_view')
         {
             this.unpinInterval = setInterval(() => {

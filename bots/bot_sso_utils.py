@@ -58,7 +58,7 @@ def get_bot_login_for_google_meet_sign_in_session(session_id):
     try:
         session_data = json.loads(session_data_raw)
     except Exception as e:
-        logger.info(f"Error loading session data for google_meet_sign_in_session: {session_id}. Data: {session_data}. Error: {e}")
+        logger.warning(f"Error loading session data for google_meet_sign_in_session: {session_id}. Data: {session_data}. Error: {e}")
         return None
 
     bot_object_id = session_data.get("bot_object_id")

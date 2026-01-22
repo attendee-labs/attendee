@@ -222,7 +222,7 @@ class ZoomBotAdapter(BotAdapter):
                 logger.info("Re-requesting recording privilege since host just joined.")
                 self.recording_ctrl.RequestLocalRecordingPrivilege()
         except Exception as e:
-            logger.info(f"Error retrieving user in request_permission_to_record_if_joined_user_is_host: {e}")
+            logger.warning(f"Error retrieving user in request_permission_to_record_if_joined_user_is_host: {e}")
 
     def on_user_join_callback(self, joined_user_ids, _):
         logger.info(f"on_user_join_callback called. joined_user_ids = {joined_user_ids}")
@@ -421,7 +421,7 @@ class ZoomBotAdapter(BotAdapter):
             self._participant_cache[participant_id] = participant_info
             return participant_info
         except:
-            logger.info(f"Error getting participant {participant_id}, falling back to cache")
+            logger.warning(f"Error getting participant {participant_id}, falling back to cache")
             return self._participant_cache.get(participant_id)
 
     def number_of_participants_ever_in_meeting_excluding_other_bots(self):
@@ -812,7 +812,7 @@ class ZoomBotAdapter(BotAdapter):
 
         send_result = self.audio_raw_data_sender.send(bytes, sample_rate, zoom.ZoomSDKAudioChannel_Mono)
         if send_result != zoom.SDKERR_SUCCESS:
-            logger.info(f"error with send_raw_audio send_result = {send_result}")
+            logger.warning(f"error with send_raw_audio send_result = {send_result}")
 
     def on_mic_start_send_callback(self):
         self.on_mic_start_send_callback_called = True
@@ -844,7 +844,7 @@ class ZoomBotAdapter(BotAdapter):
         stop_raw_recording_result = self.recording_ctrl.StopRawRecording()
         # SDKERR_TOO_FREQUENT_CALL means it was already called recently
         if stop_raw_recording_result != zoom.SDKERR_SUCCESS and stop_raw_recording_result != zoom.SDKERR_TOO_FREQUENT_CALL:
-            logger.info(f"Error with stop_raw_recording_result = {stop_raw_recording_result}")
+            logger.warning(f"Error with stop_raw_recording_result = {stop_raw_recording_result}")
         else:
             self.raw_recording_active = False
             logger.info(f"Raw recording stopped stop_raw_recording_result = {stop_raw_recording_result}")
@@ -855,7 +855,7 @@ class ZoomBotAdapter(BotAdapter):
         logger.info("Starting raw recording")
         start_raw_recording_result = self.recording_ctrl.StartRawRecording()
         if start_raw_recording_result != zoom.SDKERR_SUCCESS:
-            logger.info(f"Error with start_raw_recording_result = {start_raw_recording_result}")
+            logger.warning(f"Error with start_raw_recording_result = {start_raw_recording_result}")
         else:
             self.raw_recording_active = True
             logger.info("Raw recording started")

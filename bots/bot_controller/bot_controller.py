@@ -114,6 +114,9 @@ class BotController:
     def disable_incoming_video_for_web_bots(self):
         return not (self.pipeline_configuration.record_video or self.pipeline_configuration.rtmp_stream_video)
 
+    def should_modify_dom_for_video_recording_for_web_bots(self):
+        return self.pipeline_configuration.record_video or self.pipeline_configuration.rtmp_stream_video
+
     def create_google_meet_bot_login_session(self):
         if not self.bot_in_db.google_meet_use_bot_login():
             return None
@@ -163,6 +166,7 @@ class BotController:
             video_frame_size=self.bot_in_db.recording_dimensions(),
             record_chat_messages_when_paused=self.bot_in_db.record_chat_messages_when_paused(),
             disable_incoming_video=self.disable_incoming_video_for_web_bots(),
+            modify_dom_for_video_recording=self.should_modify_dom_for_video_recording_for_web_bots(),
             google_meet_bot_login_is_available=self.google_meet_bot_login_is_available(),
             google_meet_bot_login_should_be_used=self.bot_in_db.google_meet_login_mode_is_always(),
             create_google_meet_bot_login_session_callback=self.create_google_meet_bot_login_session,
@@ -854,7 +858,7 @@ class BotController:
                     self.connect_to_redis()
                     break
                 except Exception as e:
-                    logger.info(f"Error reconnecting to Redis: {e} Attempt {num_attempts} / 30.")
+                    logger.warning(f"Error reconnecting to Redis: {e} Attempt {num_attempts} / 30.")
                     time.sleep(reconnect_delay_seconds)
                     num_attempts += 1
                     if num_attempts > 30:
@@ -875,7 +879,7 @@ class BotController:
 
                     else:
                         # log the type of exception
-                        logger.info(f"Error in Redis listener: {type(e)} {e}")
+                        logger.warning(f"Error in Redis listener: {type(e)} {e}")
                         break
 
         redis_thread = threading.Thread(target=redis_listener, daemon=True)
@@ -893,7 +897,7 @@ class BotController:
         try:
             self.main_loop.run()
         except Exception as e:
-            logger.info(f"Error in bot {self.bot_in_db.id}: {str(e)}")
+            logger.warning(f"Error in bot {self.bot_in_db.id}: {str(e)}")
             self.cleanup()
         finally:
             # Clean up Redis subscription
@@ -964,7 +968,7 @@ class BotController:
             BotMediaRequestManager.set_media_request_playing(oldest_enqueued_media_request)
             self.audio_output_manager.start_playing_audio_media_request(oldest_enqueued_media_request)
         except Exception as e:
-            logger.info(f"Error sending raw audio: {e}")
+            logger.warning(f"Error sending raw audio: {e}")
             BotMediaRequestManager.set_media_request_failed_to_play(oldest_enqueued_media_request)
 
     def take_action_based_on_image_media_requests_in_db(self):
@@ -985,7 +989,7 @@ class BotController:
             self.adapter.send_raw_image(most_recent_request.media_blob.blob)
             BotMediaRequestManager.set_media_request_finished(most_recent_request)
         except Exception as e:
-            logger.info(f"Error sending raw image: {e}")
+            logger.warning(f"Error sending raw image: {e}")
             BotMediaRequestManager.set_media_request_failed_to_play(most_recent_request)
 
         # Mark all other enqueued requests as DROPPED
@@ -1006,7 +1010,7 @@ class BotController:
             BotMediaRequestManager.set_media_request_playing(oldest_enqueued_media_request)
             self.video_output_manager.start_playing_video_media_request(oldest_enqueued_media_request)
         except Exception as e:
-            logger.info(f"Error playing video media request: {e}")
+            logger.warning(f"Error playing video media request: {e}")
             BotMediaRequestManager.set_media_request_failed_to_play(oldest_enqueued_media_request)
 
     def take_action_based_on_chat_message_requests_in_db(self):
@@ -1058,7 +1062,7 @@ class BotController:
                 event_sub_type=BotEventSubTypes.FATAL_ERROR_PROCESS_TERMINATED,
             )
         except Exception as e:
-            logger.info(f"Error creating FATAL_ERROR event: {e}")
+            logger.warning(f"Error creating FATAL_ERROR event: {e}")
 
         self.cleanup()
         return False
@@ -1216,7 +1220,7 @@ class BotController:
             return True
 
         except Exception as e:
-            logger.info(f"Error in timeout callback: {e}")
+            logger.warning(f"Error in timeout callback: {e}")
             logger.info("Traceback:")
             logger.info(traceback.format_exc())
             self.handle_exception_in_timeout_callback(e)
@@ -1231,7 +1235,7 @@ class BotController:
                 event_metadata={"error": str(e)},
             )
         except Exception as e:
-            logger.info(f"Error in handle_exception_in_timeout_callback: {e}")
+            logger.warning(f"Error in handle_exception_in_timeout_callback: {e}")
             logger.info("Traceback:")
             logger.info(traceback.format_exc())
         self.cleanup()

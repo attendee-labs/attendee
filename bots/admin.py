@@ -1,4 +1,5 @@
 import datetime
+import json
 import os
 
 from django.contrib import admin
@@ -8,7 +9,7 @@ from django.db.models.functions import Extract
 from django.utils import timezone
 from django.utils.html import format_html
 
-from .models import Bot, BotEvent, Calendar, CalendarEvent, Utterance, WebhookDeliveryAttempt, WebhookSubscription
+from .models import Bot, BotEvent, Calendar, CalendarEvent, CalendarNotificationChannel, Utterance, WebhookDeliveryAttempt, WebhookSubscription
 
 
 # Create an inline for BotEvent to show on the Bot admin page
@@ -294,6 +295,42 @@ class CalendarEventInline(admin.TabularInline):
         return False
 
 
+# Create an inline for CalendarNotificationChannel to show on the Calendar admin page
+class CalendarNotificationChannelInline(admin.TabularInline):
+    model = CalendarNotificationChannel
+    extra = 0
+    readonly_fields = ("platform_uuid", "expires_at", "notification_last_received_at", "created_at", "updated_at", "channel_status", "raw_compact")
+    fields = ("platform_uuid", "expires_at", "notification_last_received_at", "channel_status", "created_at", "raw_compact")
+    can_delete = False
+    max_num = 0  # Don't allow adding new channels through admin
+    ordering = ("-created_at",)  # Show most recent channels first
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+    def channel_status(self, obj):
+        if obj.expires_at < timezone.now():
+            return format_html('<span style="color: red;">Expired</span>')
+        elif obj.expires_at < timezone.now() + datetime.timedelta(hours=24):
+            return format_html('<span style="color: orange;">Expiring soon</span>')
+        else:
+            return format_html('<span style="color: green;">Active</span>')
+
+    channel_status.short_description = "Status"
+
+    def raw_compact(self, obj):
+        if obj.raw:
+            raw_str = json.dumps(obj.raw, separators=(",", ":"))
+            return format_html(
+                '<span style="display:inline-block; max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; vertical-align:middle;" title="{}">{}</span>',
+                raw_str,
+                raw_str,
+            )
+        return "-"
+
+    raw_compact.short_description = "Raw"
+
+
 class HasMeetingUrlFilter(admin.SimpleListFilter):
     title = "has meeting URL"
     parameter_name = "has_meeting_url"
@@ -318,7 +355,7 @@ class CalendarAdmin(admin.ModelAdmin):
     list_filter = ("platform", "state", "project")
     search_fields = ("object_id", "project__name", "client_id", "platform_uuid")
     readonly_fields = ("object_id", "created_at", "updated_at", "version", "sync_status")
-    inlines = [CalendarEventInline]
+    inlines = [CalendarNotificationChannelInline, CalendarEventInline]
 
     def has_add_permission(self, request):
         return False

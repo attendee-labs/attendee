@@ -1546,6 +1546,10 @@ function handleConversationEnd(eventDataObject) {
     }
 
     realConsole?.log('handleConversationEnd, eventDataObjectBody', eventDataObjectBody);
+    window.ws?.sendJson({
+        type: 'ConversationEndPayload',
+        body: eventDataObjectBody
+    });
 
     const subCode = eventDataObjectBody?.subCode;
     const subCodeValueForDeniedRequestToJoin = 5854;
