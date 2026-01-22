@@ -366,14 +366,16 @@ class CreateCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
                     return HttpResponse("Missing required credentials data", status=400)
             elif credential_type == Credentials.CredentialTypes.AZURE:
                 subscription_key = request.POST.get("subscription_key")
+                api_version = request.POST.get("api_version")
+                endpoint = request.POST.get("endpoint")
                 region = request.POST.get("region")
-                
-                # Validate required fields (SDK requires subscription_key and region)
-                if not subscription_key or not region:
-                    return HttpResponse("Missing required credentials data: subscription_key and region are required", status=400)
+                if not subscription_key or not api_version or not endpoint or not region:
+                    return HttpResponse("Missing required credentials data: subscription_key, api_version, region, and endpoint are required", status=400)
                 
                 credentials_data = {
                     "subscription_key": subscription_key,
+                    "api_version": api_version,
+                    "endpoint": endpoint,
                     "region": region,
                 }
             else:

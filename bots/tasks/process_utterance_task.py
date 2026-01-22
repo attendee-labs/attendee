@@ -747,20 +747,17 @@ def get_transcription_via_custom_async(utterance):
 
 def get_transcription_via_azure(utterance):
     """
-    Transcribe audio using Azure Speech SDK.
+    Transcribe audio using Azure Fast Transcription REST API.
     
-    Uses the Python SDK which provides better handling for no-speech detection via result.reason.
-    When no speech is detected (ResultReason.NoMatch), returns empty transcript without error/retry.
+    When Azure returns 422 "No language identified" (silence/noise), 
+    returns empty transcript gracefully without triggering retries.
     
-    Credentials (subscription_key, region) are retrieved from the Credentials model (stored per-project, encrypted).
+    Credentials (subscription_key, api_version, endpoint) are retrieved from the Credentials model (stored per-project, encrypted).
     Configuration (candidate_languages, phrase_list, profanity_option) comes from transcription_settings.
 
     Returns:
         tuple: (transcription dict, failure_data dict or None)
     """
-    import tempfile
-    import azure.cognitiveservices.speech as speechsdk
-    
     recording = utterance.recording
     transcription_settings = utterance.transcription_settings
     
@@ -783,13 +780,18 @@ def get_transcription_via_azure(utterance):
     
     # Get credentials from Credentials model
     subscription_key = azure_credentials.get("subscription_key")
-    region = azure_credentials.get("region")
+    endpoint = azure_credentials.get("endpoint")
+    api_version = azure_credentials.get("api_version")
     
-    if not subscription_key or not region:
+    if not subscription_key or not api_version or not endpoint:
         return None, {
             "reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND, 
-            "error": "Missing subscription_key or region in Azure credentials"
+            "error": "Missing subscription_key, api_version, or endpoint in Azure credentials"
         }
+    
+    # Build request params and headers
+    params = {"api-version": api_version}
+    headers = {"Ocp-Apim-Subscription-Key": subscription_key}
 
     # Get candidate_languages from transcription_settings (required field)
     candidate_languages = transcription_settings.azure_candidate_languages()
@@ -798,174 +800,129 @@ def get_transcription_via_azure(utterance):
             "reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND,
             "error": "candidate_languages is required in transcription_settings.azure"
         }
+    
+    # Build definition (transcription config)
+    definition = {
+        "locales": candidate_languages
+    }
 
-    # Convert PCM to WAV format and save to temp file (SDK requires file path)
+    # Add phrase list if configured in transcription_settings
+    phrase_list = transcription_settings.azure_phrase_list()
+    if phrase_list:
+        definition["phraseList"] = {"phrases": phrase_list}
+        logger.info(f"Azure Speech phrase list: {len(phrase_list)} phrases")
+
+    # Add profanity filter if configured in transcription_settings
+    profanity_option = transcription_settings.azure_profanity_option()
+    if profanity_option:
+        profanity_map = {"Raw": "None", "Masked": "Masked", "Removed": "Removed"}
+        if profanity_option in profanity_map:
+            definition["profanityFilterMode"] = profanity_map[profanity_option]
+
+    # Convert PCM to WAV format (Azure expects proper audio format)
     audio_blob = utterance.get_audio_blob().tobytes()
     sample_rate = utterance.get_sample_rate()
 
+    # Create WAV file in memory
+    wav_buffer = io.BytesIO()
+    with wave.open(wav_buffer, 'wb') as wav_file:
+        wav_file.setnchannels(1)  # mono
+        wav_file.setsampwidth(2)  # 16-bit
+        wav_file.setframerate(sample_rate)
+        wav_file.writeframes(audio_blob)
+    wav_buffer.seek(0)
+
+    # Prepare multipart request
+    files = {
+        "audio": ("audio.wav", wav_buffer, "audio/wav"),
+        "definition": (None, json.dumps(definition), "application/json")
+    }
+
     try:
-        # Create temp WAV file
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
-            temp_filename = temp_file.name
-            with wave.open(temp_file, 'wb') as wav_file:
-                wav_file.setnchannels(1)  # mono
-                wav_file.setsampwidth(2)  # 16-bit
-                wav_file.setframerate(sample_rate)
-                wav_file.writeframes(audio_blob)
+        logger.info(f"Sending audio to Azure Fast Transcription at {endpoint}")
+        response = requests.post(endpoint, headers=headers, params=params, files=files, timeout=120)
 
-        # Configure Azure Speech SDK
-        speech_config = speechsdk.SpeechConfig(subscription=subscription_key, region=region)
-        
-        # Set up auto language detection with candidate languages
-        auto_detect_config = speechsdk.languageconfig.AutoDetectSourceLanguageConfig(
-            languages=candidate_languages
-        )
-        
-        # Request word-level timestamps and detailed output
-        speech_config.request_word_level_timestamps()
-        speech_config.output_format = speechsdk.OutputFormat.Detailed
-        
-        # Add phrase list if configured
-        phrase_list = transcription_settings.azure_phrase_list()
-        phrase_list_grammar = None
-        if phrase_list:
-            phrase_list_grammar = speechsdk.PhraseListGrammar.from_recognizer(None)
-            # Note: PhraseListGrammar needs to be added after recognizer is created
-        
-        # Set profanity filter if configured
-        profanity_option = transcription_settings.azure_profanity_option()
-        if profanity_option:
-            profanity_map = {
-                "Raw": speechsdk.ProfanityOption.Raw,
-                "Masked": speechsdk.ProfanityOption.Masked,
-                "Removed": speechsdk.ProfanityOption.Removed
-            }
-            if profanity_option in profanity_map:
-                speech_config.set_profanity(profanity_map[profanity_option])
-        
-        # Set custom endpoint ID if configured (for custom trained models)
-        custom_endpoint_id = transcription_settings.azure_custom_endpoint_id()
-        if custom_endpoint_id:
-            speech_config.set_service_property(
-                name="SpeechServiceResponse_CustomModelEndpointId",
-                value=custom_endpoint_id,
-                channel=speechsdk.ServicePropertyChannel.UriQueryParameter
-            )
-        
-        # Enable disfluency removal (TrueText) if configured
-        # This removes filler words like "um", "uh" from transcripts
-        enable_disfluency_removal = transcription_settings.azure_enable_disfluency_removal()
-        if enable_disfluency_removal:
-            speech_config.set_property(
-                property_id=speechsdk.PropertyId.SpeechServiceResponse_PostProcessingOption,
-                value="TrueText"
-            )
-        
-        # Configure audio input from file
-        audio_config = speechsdk.audio.AudioConfig(filename=temp_filename)
-        
-        # Create recognizer with auto language detection
-        speech_recognizer = speechsdk.SpeechRecognizer(
-            speech_config=speech_config,
-            audio_config=audio_config,
-            auto_detect_source_language_config=auto_detect_config
-        )
-        
-        # Add phrase list to recognizer if configured
-        if phrase_list:
-            phrase_list_grammar = speechsdk.PhraseListGrammar.from_recognizer(speech_recognizer)
-            for phrase in phrase_list:
-                phrase_list_grammar.addPhrase(phrase)
-        
-        # Recognize speech (single shot - good for utterances up to ~30 seconds)
-        logger.info(f"Sending audio to Azure Speech SDK for utterance {utterance.id}")
-        result = speech_recognizer.recognize_once_async().get()
-        
-        # Handle result based on reason
-        if result.reason == speechsdk.ResultReason.RecognizedSpeech:
-            # Speech recognized successfully
-            transcript_text = result.text
-            
-            # Extract word-level timestamps from JSON result
-            words = []
-            detected_language = None
-            
+        # Handle 422 "No language identified" - this is NOT an error, just silence/noise
+        if response.status_code == 422:
             try:
-                json_result = json.loads(result.json)
-                if "NBest" in json_result and len(json_result["NBest"]) > 0:
-                    best = json_result["NBest"][0]
-                    detected_language = best.get("Locale") or json_result.get("PrimaryLanguage", {}).get("Language")
-                    
-                    for w in best.get("Words", []):
-                        # Offset and Duration are in 100-nanosecond ticks (10 million = 1 second)
-                        offset_ticks = w.get("Offset", 0)
-                        duration_ticks = w.get("Duration", 0)
-                        words.append({
-                            "word": w.get("Word", ""),
-                            "start": offset_ticks / 10_000_000.0,  # Convert to seconds
-                            "end": (offset_ticks + duration_ticks) / 10_000_000.0
-                        })
-            except (json.JSONDecodeError, KeyError) as e:
-                logger.warning(f"Could not parse word timestamps from Azure response: {e}")
-            
-            transcription = {"transcript": transcript_text}
-            if words:
-                transcription["words"] = words
-            if detected_language:
-                transcription["language"] = detected_language
-            
-            return transcription, None
-            
-        elif result.reason == speechsdk.ResultReason.NoMatch:
-            # No speech detected - this is NOT an error, just silence/noise
-            # Return empty transcript without failure (no retry needed)
-            no_match_details = result.no_match_details
-            logger.info(
-                f"Azure Speech SDK detected no speech for utterance {utterance.id} "
-                f"(reason: {no_match_details.reason if no_match_details else 'unknown'}). "
-                f"Returning empty transcript."
-            )
-            return {"transcript": "", "words": []}, None
-            
-        elif result.reason == speechsdk.ResultReason.Canceled:
-            # Recognition was canceled (error)
-            cancellation = result.cancellation_details
-            error_msg = f"Canceled: {cancellation.reason}"
-            
-            if cancellation.reason == speechsdk.CancellationReason.Error:
-                error_msg = f"Error {cancellation.error_code}: {cancellation.error_details}"
-                logger.error(
-                    f"Azure Speech SDK recognition canceled for utterance {utterance.id}: {error_msg}"
-                )
+                error_data = response.json()
+                error_message = error_data.get("message", "")
+                inner_error = error_data.get("innerError", {})
+                inner_message = inner_error.get("message", "")
                 
-                # Check for specific error types
-                if cancellation.error_code == speechsdk.CancellationErrorCode.AuthenticationFailure:
-                    return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_INVALID, "error": error_msg}
-                elif cancellation.error_code == speechsdk.CancellationErrorCode.TooManyRequests:
-                    return None, {"reason": TranscriptionFailureReasons.RATE_LIMIT_EXCEEDED, "error": error_msg}
-                elif cancellation.error_code == speechsdk.CancellationErrorCode.ConnectionFailure:
-                    return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "error": error_msg}
-                else:
-                    return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "error": error_msg}
-            else:
-                logger.warning(f"Azure Speech SDK recognition canceled for utterance {utterance.id}: {error_msg}")
-                return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "error": error_msg}
-        else:
-            # Unknown result reason
-            logger.warning(f"Azure Speech SDK unexpected result reason for utterance {utterance.id}: {result.reason}")
-            return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "error": f"Unexpected result reason: {result.reason}"}
+                # Check if it's the "No language identified" error (silence/noise)
+                if "no language" in error_message.lower() or "no language" in inner_message.lower():
+                    logger.info(
+                        f"Azure detected no speech for utterance {utterance.id} "
+                        f"(422: No language identified). Returning empty transcript."
+                    )
+                    # Return empty transcript - NOT a failure, so no retry
+                    return {"transcript": "", "words": []}, None
+            except (json.JSONDecodeError, KeyError):
+                pass  # Fall through to normal 422 handling below
 
+        if response.status_code == 401:
+            return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_INVALID}
+
+        if response.status_code == 429:
+            return None, {"reason": TranscriptionFailureReasons.RATE_LIMIT_EXCEEDED}
+
+        if response.status_code != 200:
+            logger.error(
+                f"Azure Fast Transcription failed with status code {response.status_code} "
+                f"for utterance {utterance.id}, recording {utterance.recording.id}, bot {utterance.recording.bot.id}. "
+                f"Response: {response.text}"
+            )
+            return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED,
+                          "status_code": response.status_code, "response_text": response.text}
+
+        result = response.json()
+
+        # Extract transcript from combinedPhrases
+        combined_phrases = result.get("combinedPhrases", [])
+        transcript_text = " ".join([p.get("text", "") for p in combined_phrases])
+
+        # Extract words with timestamps
+        words = []
+        for phrase in result.get("phrases", []):
+            for word in phrase.get("words", []):
+                words.append({
+                    "word": word.get("text", ""),
+                    "start": word.get("offsetMilliseconds", 0) / 1000.0,
+                    "end": (word.get("offsetMilliseconds", 0) + word.get("durationMilliseconds", 0)) / 1000.0
+                })
+
+        transcription = {"transcript": transcript_text}
+        if words:
+            transcription["words"] = words
+
+        # Add detected language if available
+        if combined_phrases and "locale" in combined_phrases[0]:
+            transcription["language"] = combined_phrases[0]["locale"]
+
+        return transcription, None
+
+    except requests.exceptions.Timeout:
+        logger.error(
+            f"Azure Fast Transcription request timed out for utterance {utterance.id}, "
+            f"recording {utterance.recording.id}, bot {utterance.recording.bot.id}"
+        )
+        return None, {"reason": TranscriptionFailureReasons.TIMED_OUT}
+    except requests.exceptions.RequestException as e:
+        logger.error(
+            f"Azure Fast Transcription request failed for utterance {utterance.id}, "
+            f"recording {utterance.recording.id}, bot {utterance.recording.bot.id}: {str(e)}"
+        )
+        return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "error": str(e)}
+    except (json.JSONDecodeError, ValueError) as e:
+        logger.error(
+            f"Azure Fast Transcription response parsing failed for utterance {utterance.id}, "
+            f"recording {utterance.recording.id}, bot {utterance.recording.bot.id}: {str(e)}"
+        )
+        return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "error": f"Invalid JSON response: {str(e)}"}
     except Exception as e:
         logger.error(
-            f"Azure Speech SDK unexpected error for utterance {utterance.id}, "
+            f"Azure Fast Transcription unexpected error for utterance {utterance.id}, "
             f"recording {utterance.recording.id}, bot {utterance.recording.bot.id}: {str(e)}"
         )
         return None, {"reason": TranscriptionFailureReasons.INTERNAL_ERROR, "error": str(e)}
-    finally:
-        # Clean up temp file
-        try:
-            import os
-            if 'temp_filename' in locals():
-                os.unlink(temp_filename)
-        except Exception:
-            pass
