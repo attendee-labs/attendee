@@ -262,10 +262,6 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
 
             transcription_provider = transcription_provider_from_bot_creation_data(serializer.validated_data)
             provider_name = TranscriptionProviders(transcription_provider).label if transcription_provider else "Unknown"
-            logger.info(
-                f"Bot {bot.id} created with transcription provider: {provider_name} (ID: {transcription_provider}) "
-                f"for meeting {meeting_url}, project {project.id}"
-            )
             
             Recording.objects.create(
                 bot=bot,
