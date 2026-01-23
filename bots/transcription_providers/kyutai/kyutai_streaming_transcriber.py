@@ -411,7 +411,7 @@ class KyutaiStreamingTranscriber:
         See: https://github.com/kyutai-labs/delayed-streams-modeling/issues/116
         """
         MONITOR_INTERVAL = 0.03  # 30ms - fast for realtime
-        SILENCE_BEFORE_FLUSH = 0.8  # 800ms of no words before sending flush
+        SILENCE_BEFORE_FLUSH = 1.0  # 1s of no words before sending flush
         
         try:
             while not self.should_stop:
