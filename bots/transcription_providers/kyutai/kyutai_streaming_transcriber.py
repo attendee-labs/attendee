@@ -70,7 +70,7 @@ FRAME_SIZE = 1920  # Fixed frame size for sending (80ms at 24kHz)
 # Index 0: 0.5s, Index 1: 1.0s, Index 2: 2.0s, Index 3: 3.0s
 # We use 0.5 seconds as a good balance for natural speech segmentation
 PAUSE_PREDICTION_HEAD_INDEX = 0
-PAUSE_THRESHOLD = 0.4  # Higher threshold = only emit on confident pauses
+PAUSE_THRESHOLD = 0.3  # Threshold for semantic VAD pause detection
 
 
 def _sanitize_text(text):
@@ -197,6 +197,14 @@ class KyutaiStreamingTranscriber:
         # Semantic VAD tracking (from Step messages)
         self.semantic_vad_detected_pause = False
         self.speech_started = False  # Track if we've received any words
+
+        # Emission metrics - track which trigger caused each emission
+        self._emission_counts = {
+            "semantic_vad": 0,
+            "flush": 0,
+            "fallback": 0,
+            "other": 0,  # e.g., end of stream, finish()
+        }
 
         # Track when audio was last sent (used for monitoring/cleanup)
         self.last_send_time = time.time()
@@ -403,7 +411,7 @@ class KyutaiStreamingTranscriber:
         See: https://github.com/kyutai-labs/delayed-streams-modeling/issues/116
         """
         MONITOR_INTERVAL = 0.03  # 30ms - fast for realtime
-        SILENCE_BEFORE_FLUSH = 0.15  # 150ms of no audio before we flush
+        SILENCE_BEFORE_FLUSH = 0.8  # 800ms of no words before sending flush
         
         try:
             while not self.should_stop:
@@ -490,12 +498,13 @@ class KyutaiStreamingTranscriber:
         time_since_last_word = current_time - self.last_word_received_time
         
         # After flush is sent, wait for pending words, then emit
-        # 400ms gives time for words to accumulate, reducing fragmentation
+        # 400ms gives time for words to accumulate after flush
         EMIT_DELAY_AFTER_FLUSH = 0.40
         
         # If flush was sent and we've waited long enough, emit
         if self._flush_sent and time_since_last_word >= EMIT_DELAY_AFTER_FLUSH:
             word_count = len(self.current_transcript)
+            self._emission_counts["flush"] += 1
             logger.info(
                 f"Kyutai [{self._participant_name}]: Emitting after flush "
                 f"({time_since_last_word:.2f}s since last word, {word_count} words)"
@@ -508,6 +517,7 @@ class KyutaiStreamingTranscriber:
         FALLBACK_SILENCE = 0.5
         if time_since_last_word >= FALLBACK_SILENCE:
             word_count = len(self.current_transcript)
+            self._emission_counts["fallback"] += 1
             logger.info(
                 f"Kyutai [{self._participant_name}]: Emitting on fallback silence "
                 f"({time_since_last_word:.2f}s, {word_count} words)"
@@ -629,7 +639,7 @@ class KyutaiStreamingTranscriber:
                         if not self.semantic_vad_detected_pause:  # Log only on first detection
                             logger.info(
                                 f"Kyutai [{self._participant_name}]: Semantic VAD pause detected "
-                                f"(prob={pause_prediction:.3f}, words={len(self.current_transcript)})"
+                                f"(prob={pause_prediction:.3f}, threshold={PAUSE_THRESHOLD}, words={len(self.current_transcript)})"
                             )
                         self.semantic_vad_detected_pause = True
                         # Emit utterance on natural pause
@@ -639,6 +649,8 @@ class KyutaiStreamingTranscriber:
                 # End of stream marker received
                 logger.info(f"[{self._participant_name}] Kyutai: End of stream marker received")
                 # Emit any remaining transcript
+                if self.current_transcript:
+                    self._emission_counts["other"] += 1
                 self._emit_current_utterance()
 
             elif msg_type == "Ready":
@@ -774,6 +786,7 @@ class KyutaiStreamingTranscriber:
         MIN_WORDS_FOR_SEMANTIC_VAD = 2
         
         if word_count >= MIN_WORDS_FOR_SEMANTIC_VAD:
+            self._emission_counts["semantic_vad"] += 1
             logger.info(
                 f"Kyutai [{self._participant_name}]: Emitting on semantic VAD "
                 f"({word_count} words, {utterance_duration:.1f}s)"
@@ -871,7 +884,22 @@ class KyutaiStreamingTranscriber:
         logger.info(f"Finishing Kyutai transcriber [{self._participant_name}]")
 
         # Emit any remaining transcript before closing
+        if self.current_transcript:
+            self._emission_counts["other"] += 1
         self._emit_current_utterance()
+        
+        # Log emission statistics summary
+        total_emissions = sum(self._emission_counts.values())
+        if total_emissions > 0:
+            logger.info(
+                f"Kyutai [{self._participant_name}]: Emission stats - "
+                f"semantic_vad={self._emission_counts['semantic_vad']}, "
+                f"flush={self._emission_counts['flush']}, "
+                f"fallback={self._emission_counts['fallback']}, "
+                f"other={self._emission_counts['other']} "
+                f"(total={total_emissions})"
+            )
+        
         self.should_stop = True
 
         try:
