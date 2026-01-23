@@ -215,6 +215,10 @@ class KyutaiStreamingTranscriber:
         self._flush_sent = False  # Whether we've sent the silence flush for current utterance
         self._flush_duration_seconds = 0.5  # 500ms of silence to flush model buffer
 
+        # Health check: detect silent connection failures (audio sent but no words received)
+        self._frames_sent_since_ready = 0  # Count frames sent since Ready signal
+        self._ever_received_word = False  # Have we received any word from this connection?
+
         # WebSocket connection state
         self.ws = None
         self.connected = False  # True when WebSocket is actively connected
@@ -409,13 +413,25 @@ class KyutaiStreamingTranscriber:
         Uses the "flushing trick" from Kyutai: when speech stops, send 500ms
         of silence to force the model to output any pending transcription.
         See: https://github.com/kyutai-labs/delayed-streams-modeling/issues/116
+        
+        Also monitors for silent connection failures: if we send a lot of audio
+        but never receive any words, the connection is likely dead.
         """
         MONITOR_INTERVAL = 0.03  # 30ms - fast for realtime
         SILENCE_BEFORE_FLUSH = 1.0  # 1s of no words before sending flush
         
+        # Health check: if we've sent 10s of audio with no words, connection is dead
+        # 10s at 24kHz with 1920 samples/frame = 125 frames
+        HEALTH_CHECK_FRAMES_THRESHOLD = 125
+        
         try:
             while not self.should_stop:
                 await asyncio.sleep(MONITOR_INTERVAL)
+                
+                # Health check: detect silent connection failure
+                if await self._check_connection_health(HEALTH_CHECK_FRAMES_THRESHOLD):
+                    # Connection is unhealthy, will reconnect
+                    break
                 
                 # Check if we should send flush silence
                 await self._check_and_flush(SILENCE_BEFORE_FLUSH)
@@ -427,6 +443,42 @@ class KyutaiStreamingTranscriber:
             pass
         except Exception as e:
             logger.error(f"[{self._participant_name}] Silence monitor error: {e}", exc_info=True)
+
+    async def _check_connection_health(self, frames_threshold: int) -> bool:
+        """
+        Check if connection is healthy by detecting silent failures.
+        
+        A silent failure is when we've sent a lot of audio but never received
+        any words back from Kyutai. This can happen when the WebSocket appears
+        connected but Kyutai's internal state is broken.
+        
+        Returns True if connection is unhealthy and should be closed.
+        """
+        # Only check if we've sent enough audio to expect words
+        if self._frames_sent_since_ready < frames_threshold:
+            return False
+        
+        # If we've received at least one word, connection is working
+        if self._ever_received_word:
+            return False
+        
+        # Connection is unhealthy: sent lots of audio but no words received
+        audio_seconds = (self._frames_sent_since_ready * FRAME_SIZE) / KYUTAI_SAMPLE_RATE
+        logger.error(
+            f"🔴 [{self._participant_name}] Kyutai connection unhealthy: "
+            f"sent {audio_seconds:.1f}s of audio but received 0 words. "
+            f"Forcing reconnection..."
+        )
+        
+        # Close the WebSocket to trigger reconnection
+        if self._ws_connection:
+            try:
+                await self._ws_connection.close()
+            except Exception as e:
+                logger.warning(f"[{self._participant_name}] Error closing unhealthy connection: {e}")
+        
+        self.connected = False
+        return True
 
     async def _check_and_flush(self, silence_threshold: float):
         """
@@ -588,7 +640,8 @@ class KyutaiStreamingTranscriber:
                     current_words = " ".join([w["text"] for w in self.current_transcript]) + " " + text if self.current_transcript else text
                     logger.info(f"Kyutai [{self._participant_name}]: Word received: '{text}' → [{current_words}]")
                     
-                    # Track valid word reception
+                    # Track valid word reception (for health check)
+                    self._ever_received_word = True
                     self.last_valid_word_time = time.time()
 
                     # Check for significant gap - emit previous utterance
@@ -658,6 +711,9 @@ class KyutaiStreamingTranscriber:
                 # calculations
                 # All audio timestamps will be relative to this moment
                 self.audio_stream_anchor_time = time.time()
+                # Reset health check counters for this connection
+                self._frames_sent_since_ready = 0
+                self._ever_received_word = False
                 logger.info(f"🎯 [{self._participant_name}] Kyutai: Audio stream anchor set (Ready signal)")
 
             else:
@@ -727,6 +783,9 @@ class KyutaiStreamingTranscriber:
                     use_bin_type=True,
                     use_single_float=True,
                 )
+
+                # Track frames sent for health check
+                self._frames_sent_since_ready += 1
 
                 # Queue for sending with timing in sender loop
                 # Use call_soon_threadsafe for thread-safe queue operations
