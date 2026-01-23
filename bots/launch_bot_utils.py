@@ -36,6 +36,12 @@ def launch_bot(bot):
                 )
             except Exception as e:
                 logger.error(f"Failed to create fatal error bot not launched event for bot {bot.object_id} ({bot.id}): {str(e)}")
+    elif os.getenv("LAUNCH_BOT_METHOD") == "dedicated_celery":
+        # Launch bot via dedicated Celery app (bot_launcher)
+        from bot_launcher.tasks import launch_bot_from_queue
+
+        launch_bot_from_queue.delay(bot.id)
+        logger.info(f"Bot {bot.object_id} ({bot.id}) launched via dedicated Celery (bot_launcher)")
     else:
         # Default to launching bot via celery
         from .tasks.run_bot_task import run_bot
