@@ -48,9 +48,14 @@ def build_site_url(path=""):
     """
     Build a full URL using SITE_DOMAIN setting.
     Automatically uses http:// for localhost, https:// for everything else.
+    
+    If WEBHOOK_SITE_DOMAIN is set, it takes priority (useful for webhooks that need
+    to be accessible from external services like Microsoft/Google).
     """
-    protocol = "http" if settings.SITE_DOMAIN.startswith("localhost") else "https"
-    return f"{protocol}://{settings.SITE_DOMAIN}{path}"
+    # Use WEBHOOK_SITE_DOMAIN if set (for external webhooks), otherwise use SITE_DOMAIN
+    site_domain = os.getenv("WEBHOOK_SITE_DOMAIN") or settings.SITE_DOMAIN
+    protocol = "http" if site_domain.startswith("localhost") else "https"
+    return f"{protocol}://{site_domain}{path}"
 
 
 def send_sync_command(bot, command="sync"):

@@ -5,7 +5,7 @@ from celery import shared_task
 logger = logging.getLogger(__name__)
 
 
-@shared_task(bind=True, name="bot_launcher.launch_bot_from_queue")
+@shared_task(bind=True, name="bot_launcher.launch_bot_from_queue", queue="bot_launcher")
 def launch_bot_from_queue(self, bot_id: int):
     """
     Tâche Celery dédiée qui lance run_bot pour un bot_id donné.

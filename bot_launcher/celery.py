@@ -4,7 +4,6 @@ import ssl
 
 import django
 from celery import Celery
-from celery.signals import worker_ready
 
 logger = logging.getLogger(__name__)
 
