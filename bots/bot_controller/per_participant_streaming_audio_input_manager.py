@@ -238,7 +238,7 @@ class PerParticipantStreamingAudioInputManager:
                 streaming_transcriber = self.find_or_create_streaming_transcriber_for_speaker(speaker_id)
                 if streaming_transcriber:
                     try:
-                        streaming_transcriber.send(chunk_bytes)
+                        streaming_transcriber.send(chunk_bytes, chunk_time=chunk_time)
                     except Exception as e:
                         participant_info = self.get_participant_callback(speaker_id)
                         participant_name = participant_info.get("participant_full_name", speaker_id) if participant_info else speaker_id

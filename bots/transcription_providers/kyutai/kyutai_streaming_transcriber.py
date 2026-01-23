@@ -187,6 +187,11 @@ class KyutaiStreamingTranscriber:
         self.audio_stream_anchor_time = None
         # Track when last word was received (wall clock, for silence detection)
         self.last_word_received_time = None
+        # Track when first word of current utterance was received (wall clock, for timestamp)
+        self.first_word_wall_clock_time = None
+        # Track when first audio chunk was received for current utterance
+        # This is used for timestamp (like non-streaming Deepgram's first_nonsilent_audio_time)
+        self.first_audio_chunk_time = None
         # Track problematic character occurrences for health monitoring
         self.invalid_text_count = 0
         self.last_valid_word_time = None
@@ -654,6 +659,8 @@ class KyutaiStreamingTranscriber:
                     # Track first word's start_time for this utterance
                     if not self.current_transcript:
                         self.current_utterance_first_word_start_time = start_time
+                        # Track wall-clock time of first word for cross-participant ordering
+                        self.first_word_wall_clock_time = time.time()
 
                     # Track when this word was received (wall clock)
                     self.last_word_received_time = time.time()
@@ -723,7 +730,7 @@ class KyutaiStreamingTranscriber:
             logger.error(f"[{self._participant_name}] Error processing Kyutai message: {e}")
             logger.debug(f"Raw message: {message}")
 
-    def send(self, audio_data):
+    def send(self, audio_data, chunk_time=None):
         """
         Send audio data to the Kyutai server with buffering.
 
@@ -733,6 +740,8 @@ class KyutaiStreamingTranscriber:
 
         Args:
             audio_data: Audio data as bytes (int16 PCM)
+            chunk_time: Optional timestamp when this audio chunk was received
+                       (for accurate utterance timestamps, like non-streaming Deepgram)
 
         Raises:
             ConnectionError: If connection failed permanently (gave up reconnecting)
@@ -744,6 +753,11 @@ class KyutaiStreamingTranscriber:
         if not self.connected or self.should_stop:
             # Silently drop audio during shutdown, reconnection, or when disconnected
             return
+
+        # Track when we first received audio for the current utterance
+        # This is used for timestamp calculation (like non-streaming Deepgram's first_nonsilent_audio_time)
+        if self.first_audio_chunk_time is None and chunk_time is not None:
+            self.first_audio_chunk_time = chunk_time
 
         # Update last send time for monitoring/cleanup
         self.last_send_time = time.time()
@@ -859,38 +873,35 @@ class KyutaiStreamingTranscriber:
             # Convert list of word objects to text efficiently
             transcript_text = " ".join([w["text"] for w in self.current_transcript])
 
-            # Calculate timestamp and duration using audio stream positions
-            if self.audio_stream_anchor_time is not None and self.current_utterance_first_word_start_time is not None:
-                # Timestamp: When utterance started in wall-clock time
-                timestamp_ms = int((self.audio_stream_anchor_time + self.current_utterance_first_word_start_time) * 1000)
-
-                # Duration: Speaking duration from first to last word
-                if self.current_utterance_last_word_stop_time is not None:
-                    # Have EndWord timing - use it
-                    duration_seconds = self.current_utterance_last_word_stop_time - self.current_utterance_first_word_start_time
-                    duration_ms = int(duration_seconds * 1000)
-                else:
-                    # EndWord not received - estimate minimum duration
-                    # Use elapsed time since word started as a minimum estimate
-                    current_time = time.time()
-                    elapsed_since_utterance_start = current_time - (self.audio_stream_anchor_time + self.current_utterance_first_word_start_time)
-
-                    # For multi-word utterances, use last word's start time if available
-                    if len(self.current_transcript) > 1 and self.current_transcript:
-                        last_word_start = self.current_transcript[-1]["timestamp"][0]
-                        duration_from_timestamps = last_word_start - self.current_utterance_first_word_start_time
-                        # Use the larger of: timestamp-based duration or elapsed time estimate
-                        duration_seconds = max(duration_from_timestamps, elapsed_since_utterance_start)
-                    else:
-                        # Single word - use elapsed time since word started
-                        duration_seconds = elapsed_since_utterance_start
-
-                    duration_ms = max(int(duration_seconds * 1000), 1)  # Ensure at least 1ms
+            # Calculate timestamp using audio chunk time (when speech was received)
+            # This matches non-streaming Deepgram which uses first_nonsilent_audio_time
+            # Falls back to first word time, then current time
+            if self.first_audio_chunk_time is not None:
+                # Use actual audio arrival time (same approach as non-streaming Deepgram)
+                timestamp_ms = int(self.first_audio_chunk_time.timestamp() * 1000)
+            elif self.first_word_wall_clock_time is not None:
+                # Fallback: use when first word was received
+                timestamp_ms = int(self.first_word_wall_clock_time * 1000)
             else:
-                # Fallback if we don't have proper anchoring
-                if self.debug_logging:
-                    logger.warning(f"[{self._participant_name}] Kyutai: Missing timing anchors")
+                # Last resort: use current time
                 timestamp_ms = int(time.time() * 1000)
+
+            # Calculate duration from audio stream positions (relative timing is accurate)
+            if (self.current_utterance_first_word_start_time is not None 
+                    and self.current_utterance_last_word_stop_time is not None):
+                # Have EndWord timing - use it
+                duration_seconds = self.current_utterance_last_word_stop_time - self.current_utterance_first_word_start_time
+                duration_ms = int(duration_seconds * 1000)
+            elif self.current_utterance_first_word_start_time is not None:
+                # EndWord not received - estimate from transcript
+                if len(self.current_transcript) > 1:
+                    last_word_start = self.current_transcript[-1]["timestamp"][0]
+                    duration_seconds = last_word_start - self.current_utterance_first_word_start_time
+                    duration_ms = max(int(duration_seconds * 1000), 1)
+                else:
+                    # Single word - estimate ~300ms
+                    duration_ms = 300
+            else:
                 duration_ms = 0
 
             # Always log emitted utterances (important for monitoring)
@@ -925,6 +936,8 @@ class KyutaiStreamingTranscriber:
             self.current_utterance_first_word_start_time = None
             self.current_utterance_last_word_stop_time = None
             self.last_word_received_time = None
+            self.first_word_wall_clock_time = None
+            self.first_audio_chunk_time = None
             # Reset semantic VAD state
             self.semantic_vad_detected_pause = False
             self.speech_started = False
