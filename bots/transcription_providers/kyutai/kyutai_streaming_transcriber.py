@@ -581,9 +581,6 @@ class KyutaiStreamingTranscriber:
                     # Track valid word reception
                     self.last_valid_word_time = time.time()
 
-                    # Reset flush flag - we got a word, so next silence we can flush again
-                    self._flush_sent = False
-
                     # Check for significant gap - emit previous utterance
                     if self.current_transcript and self.current_utterance_last_word_stop_time is not None and start_time - self.current_utterance_last_word_stop_time > 1.0:
                         if self.debug_logging:
