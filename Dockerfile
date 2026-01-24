@@ -102,6 +102,17 @@ FROM base AS deps
 
 # Copy only requirements.txt first to leverage Docker cache
 COPY requirements.txt .
+
+# Install PyTorch CPU-only version first (much smaller than CUDA version)
+# This avoids pulling ~2GB of NVIDIA/CUDA dependencies
+# 1. Pre-install torch dependencies from PyPI
+RUN pip install networkx sympy jinja2 fsspec
+# 2. Install torch and torchaudio CPU-only from PyTorch index only (not PyPI)
+RUN pip install torch==2.5.1+cpu torchaudio==2.5.1+cpu --index-url https://download.pytorch.org/whl/cpu
+
+# Install remaining dependencies
+# --no-deps for silero-vad to prevent it from pulling CUDA torch
+RUN pip install silero-vad==5.1.2 --no-deps
 RUN pip install -r requirements.txt
 
 ENV TINI_VERSION=v0.19.0

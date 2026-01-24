@@ -103,6 +103,10 @@ class BotController:
             return self.per_participant_non_streaming_audio_input_manager
 
     def save_utterances_for_individual_audio_chunks(self):
+        # Don't create utterances for streaming transcription providers (they handle transcription directly)
+        # Audio chunks are still saved for async transcription but processed later, not during the meeting
+        if self.use_streaming_transcription():
+            return False
         return self.get_recording_transcription_provider() != TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM
 
     def save_utterances_for_closed_captions(self):
@@ -752,20 +756,26 @@ class BotController:
         # Initialize core objects
         # Only used for adapters that can provide per-participant audio
 
-        self.per_participant_non_streaming_audio_input_manager = PerParticipantNonStreamingAudioInputManager(
-            save_audio_chunk_callback=self.process_individual_audio_chunk,
-            get_participant_callback=self.get_participant,
-            sample_rate=self.get_per_participant_audio_sample_rate(),
-            utterance_size_limit=self.non_streaming_audio_utterance_size_limit(),
-            silence_duration_limit=self.non_streaming_audio_silence_duration_limit(),
-            should_print_diagnostic_info=self.should_capture_audio_chunks(),
-        )
+        # Only create non-streaming manager when NOT using streaming transcription
+        # Streaming providers (Deepgram, Kyutai) have their own VAD in the streaming manager
+        # Async transcription uses audio_chunk_buffer_manager inside the streaming manager
+        self.per_participant_non_streaming_audio_input_manager = None
+        if not self.use_streaming_transcription():
+            self.per_participant_non_streaming_audio_input_manager = PerParticipantNonStreamingAudioInputManager(
+                save_audio_chunk_callback=self.process_individual_audio_chunk,
+                get_participant_callback=self.get_participant,
+                sample_rate=self.get_per_participant_audio_sample_rate(),
+                utterance_size_limit=self.non_streaming_audio_utterance_size_limit(),
+                silence_duration_limit=self.non_streaming_audio_silence_duration_limit(),
+                should_print_diagnostic_info=self.should_capture_audio_chunks(),
+            )
 
         self.per_participant_streaming_audio_input_manager = PerParticipantStreamingAudioInputManager(
             get_participant_callback=self.get_participant,
             sample_rate=self.get_per_participant_audio_sample_rate(),
             transcription_provider=self.get_recording_transcription_provider(),
             bot=self.bot_in_db,
+            save_audio_chunk_callback=self.process_individual_audio_chunk,
         )
 
         # Only used for adapters that can provide closed captions
@@ -1194,8 +1204,9 @@ class BotController:
             # Set heartbeat
             self.set_bot_heartbeat()
 
-            # Process audio chunks
-            self.per_participant_non_streaming_audio_input_manager.process_chunks()
+            # Process audio chunks (only for non-streaming transcription)
+            if self.per_participant_non_streaming_audio_input_manager:
+                self.per_participant_non_streaming_audio_input_manager.process_chunks()
 
             # Monitor transcription
             self.per_participant_streaming_audio_input_manager.monitor_transcription()
@@ -1449,6 +1460,9 @@ class BotController:
         if self.per_participant_non_streaming_audio_input_manager:
             logger.info("Flushing utterances...")
             self.per_participant_non_streaming_audio_input_manager.flush_utterances()
+        if self.per_participant_streaming_audio_input_manager:
+            logger.info("Flushing streaming audio chunks for async transcription...")
+            self.per_participant_streaming_audio_input_manager.flush_all_audio_chunk_buffers()
         if self.closed_caption_manager:
             logger.info("Flushing captions...")
             self.closed_caption_manager.flush_captions()

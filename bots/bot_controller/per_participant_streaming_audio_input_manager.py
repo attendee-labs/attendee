@@ -1,9 +1,12 @@
 import logging
 import time
 
-import numpy as np
 import webrtcvad
 
+from bots.bot_controller.per_participant_non_streaming_audio_input_manager import (
+    PerParticipantNonStreamingAudioInputManager,
+)
+from bots.bot_controller.vad import calculate_normalized_rms
 from bots.models import (
     Credentials,
     TranscriptionProviders,
@@ -19,41 +22,8 @@ from bots.transcription_providers.utterance_handler import DefaultUtteranceHandl
 logger = logging.getLogger(__name__)
 
 
-def calculate_normalized_rms(audio_bytes):
-    if not audio_bytes or len(audio_bytes) < 2:
-        return 0.0
-
-    try:
-        samples = np.frombuffer(audio_bytes, dtype=np.int16)
-        if len(samples) == 0:
-            return 0.0
-
-        # Check for any NaN or infinite values in samples
-        if not np.isfinite(samples).all():
-            return 0.0
-
-        # Calculate mean of squares first
-        mean_square = np.mean(np.square(samples.astype(np.float64)))
-
-        # Check if mean_square is valid before sqrt
-        if not np.isfinite(mean_square) or mean_square < 0:
-            return 0.0
-
-        rms = np.sqrt(mean_square)
-
-        # Handle NaN case (shouldn't happen with valid data, but be safe)
-        if not np.isfinite(rms):
-            return 0.0
-
-        # Normalize by max possible value for 16-bit audio (32768)
-        return rms / 32768
-    except (ValueError, TypeError, BufferError, FloatingPointError):
-        # If there's any issue with the audio data, treat as silence
-        return 0.0
-
-
 class PerParticipantStreamingAudioInputManager:
-    def __init__(self, *, get_participant_callback, sample_rate, transcription_provider, bot):
+    def __init__(self, *, get_participant_callback, sample_rate, transcription_provider, bot, save_audio_chunk_callback=None):
         self.get_participant_callback = get_participant_callback
 
         self.utterances = {}
@@ -69,7 +39,19 @@ class PerParticipantStreamingAudioInputManager:
         else:
             self.SILENCE_DURATION_LIMIT = 300  # 5 minutes of inactivity
 
-        self.vad = webrtcvad.Vad()
+        # Only create WebRTC VAD for providers that need it (not Kyutai)
+        # Kyutai has its own semantic VAD, we just filter obvious silence via RMS
+        self.vad = None
+        if transcription_provider != TranscriptionProviders.KYUTAI:
+            self.vad = webrtcvad.Vad()
+        
+        # RMS threshold for filtering pure silence (muted mic, digital silence)
+        self.RMS_SILENCE_THRESHOLD = 0.0025
+        
+        # RMS monitoring stats for Kyutai (tracks silence filtering effectiveness)
+        self.rms_stats = {}  # speaker_id -> {sent: int, skipped: int, last_log_time: float}
+        self.RMS_STATS_LOG_INTERVAL = 30  # Log stats every 30 seconds
+        
         self.transcription_provider = transcription_provider
         self.streaming_transcribers = {}
         self.last_nonsilent_audio_time = {}
@@ -81,6 +63,69 @@ class PerParticipantStreamingAudioInputManager:
 
         # Create utterance handler for providers that need it (like Kyutai)
         self.utterance_handler = DefaultUtteranceHandler(bot=bot, get_participant_callback=get_participant_callback, sample_rate=sample_rate)
+
+        # Audio chunk saving for async transcription support
+        # Reuse PerParticipantNonStreamingAudioInputManager for buffering and saving audio chunks
+        self.should_save_audio_chunks = save_audio_chunk_callback is not None and bot.record_async_transcription_audio_chunks()
+        self.audio_chunk_buffer_manager = None
+        if self.should_save_audio_chunks:
+            self.audio_chunk_buffer_manager = PerParticipantNonStreamingAudioInputManager(
+                save_audio_chunk_callback=save_audio_chunk_callback,
+                get_participant_callback=get_participant_callback,
+                sample_rate=sample_rate,
+                utterance_size_limit=19200000,  # ~300 seconds of audio at 32kHz
+                silence_duration_limit=3,  # seconds of silence before flushing
+                should_print_diagnostic_info=True,
+            )
+
+    def flush_all_audio_chunk_buffers(self):
+        """Flush all audio chunk buffers. Called when the meeting ends."""
+        if self.audio_chunk_buffer_manager:
+            self.audio_chunk_buffer_manager.flush_utterances()
+
+    def is_pure_silence(self, chunk_bytes):
+        """
+        Simple RMS energy check to detect pure silence (muted mic, digital silence).
+        This is NOT VAD - just filters out chunks with near-zero energy.
+        Used for Kyutai to avoid sending empty audio over the network.
+        """
+        return calculate_normalized_rms(chunk_bytes) < self.RMS_SILENCE_THRESHOLD
+
+    def _init_rms_stats(self, speaker_id):
+        """Initialize RMS stats for a speaker."""
+        if speaker_id not in self.rms_stats:
+            self.rms_stats[speaker_id] = {
+                "sent": 0,
+                "skipped": 0,
+                "last_log_time": time.time(),
+            }
+
+    def _update_rms_stats(self, speaker_id, was_silent):
+        """Update RMS stats and log periodically."""
+        self._init_rms_stats(speaker_id)
+        stats = self.rms_stats[speaker_id]
+        
+        if was_silent:
+            stats["skipped"] += 1
+        else:
+            stats["sent"] += 1
+        
+        # Log stats periodically
+        now = time.time()
+        if now - stats["last_log_time"] >= self.RMS_STATS_LOG_INTERVAL:
+            total = stats["sent"] + stats["skipped"]
+            if total > 0:
+                skip_pct = (stats["skipped"] / total) * 100
+                participant_info = self.get_participant_callback(speaker_id)
+                participant_name = participant_info.get("participant_full_name", speaker_id) if participant_info else speaker_id
+                logger.info(
+                    f"Kyutai RMS filter [{participant_name}]: "
+                    f"sent={stats['sent']}, skipped={stats['skipped']} ({skip_pct:.1f}% silent)"
+                )
+            # Reset counters for next interval
+            stats["sent"] = 0
+            stats["skipped"] = 0
+            stats["last_log_time"] = now
 
     def silence_detected(self, chunk_bytes):
         if calculate_normalized_rms(chunk_bytes) < 0.0025:
@@ -171,28 +216,36 @@ class PerParticipantStreamingAudioInputManager:
                 logger.warning("No Kyutai server URL available")
                 return
 
-        # For Kyutai: Send all audio continuously, let semantic VAD handle it
-        # For Deepgram: Use pre-filtering to reduce API costs
+        # Buffer audio chunks for async transcription if enabled
+        # Uses the same logic as PerParticipantNonStreamingAudioInputManager
+        if self.audio_chunk_buffer_manager:
+            self.audio_chunk_buffer_manager.process_chunk(speaker_id, chunk_time, chunk_bytes)
+
+        # For Kyutai: Use simple RMS filter to skip pure silence, send everything else
+        # Kyutai has its own semantic VAD on the server side
+        # For Deepgram: Use full VAD pre-filtering to reduce API costs
         if self.transcription_provider == TranscriptionProviders.KYUTAI:
-            # Still detect silence for monitoring purposes, but send all audio
-            audio_is_silent = self.silence_detected(chunk_bytes)
+            # Simple energy check - just filter out muted mic / digital silence
+            audio_is_silent = self.is_pure_silence(chunk_bytes)
+            
+            # Track RMS filtering stats
+            self._update_rms_stats(speaker_id, audio_is_silent)
 
             if not audio_is_silent:
                 self.last_nonsilent_audio_time[speaker_id] = time.time()
-
-            # Create transcriber if needed
-            streaming_transcriber = self.find_or_create_streaming_transcriber_for_speaker(speaker_id)
-            if streaming_transcriber:
-                # Send audio
-                try:
-                    streaming_transcriber.send(chunk_bytes)
-                except Exception as e:
-                    participant_info = self.get_participant_callback(speaker_id)
-                    participant_name = participant_info.get("participant_full_name", speaker_id) if participant_info else speaker_id
-                    logger.info(f"Recreating transcriber for speaker {speaker_id} ({participant_name}) after connection failure: {e}")
-                    # Remove failed transcriber so it will be recreated on next chunk
-                    if speaker_id in self.streaming_transcribers:
-                        del self.streaming_transcribers[speaker_id]
+                
+                # Only send non-silent audio to Kyutai
+                streaming_transcriber = self.find_or_create_streaming_transcriber_for_speaker(speaker_id)
+                if streaming_transcriber:
+                    try:
+                        streaming_transcriber.send(chunk_bytes)
+                    except Exception as e:
+                        participant_info = self.get_participant_callback(speaker_id)
+                        participant_name = participant_info.get("participant_full_name", speaker_id) if participant_info else speaker_id
+                        logger.info(f"Recreating transcriber for speaker {speaker_id} ({participant_name}) after connection failure: {e}")
+                        # Remove failed transcriber so it will be recreated on next chunk
+                        if speaker_id in self.streaming_transcribers:
+                            del self.streaming_transcribers[speaker_id]
         else:
             # Deepgram and other providers: use VAD pre-filtering
             audio_is_silent = self.silence_detected(chunk_bytes)
