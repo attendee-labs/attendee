@@ -175,13 +175,13 @@ class TestGoogleMeetBot(TransactionTestCase):
 
             # Simulate audio frame from participant
             sample_rate = 48000  # 48kHz sample rate
-            duration_ms = 10  # 10 milliseconds
+            duration_ms = 250  # 250 milliseconds (must be >= MIN_DURATION_MS threshold)
             num_samples = int(sample_rate * duration_ms / 1000)  # Calculate number of samples
 
             # Create buffer with the right number of samples
             audio_data = np.zeros(num_samples, dtype=np.float32)
 
-            # Generate a sine wave (440Hz = A note) for 10ms
+            # Generate a sine wave (440Hz = A note)
             t = np.arange(0, duration_ms / 1000, 1 / sample_rate)
             sine_wave = 0.5 * np.sin(2 * np.pi * 440 * t)
 
