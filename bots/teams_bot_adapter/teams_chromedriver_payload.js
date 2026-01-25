@@ -1,3 +1,108 @@
+
+class FetchInterceptor {
+    constructor(requestCallback) {
+        this.originalFetch = window.fetch;
+        this.requestCallback = requestCallback;
+        window.fetch = (...args) => this.interceptFetch(...args);
+    }
+
+    interceptFetch(...args) {
+        // args is either: [input, init] or [Request]
+        try {
+        const request = new Request(...args); // normalizes into a Request object
+        // fire-and-forget so we don't block fetch; callback can be async if it wants
+        Promise.resolve(this.requestCallback(request)).catch(err =>
+            console.error("Error in requestCallback:", err)
+        );
+        } catch (err) {
+        console.error("Error building Request from fetch args:", err);
+        }
+
+        // Always return the real fetch promise unchanged
+        return this.originalFetch.apply(window, args);
+    }
+}
+
+class ChatMessagePoller {
+    constructor() {
+        this.ms_teams_region = null;
+        this.skype_token = null;
+        this.lastFetchTime = null;
+    }
+
+    setMsTeamsRegion(ms_teams_region) {
+        if (this.ms_teams_region)
+            return;
+        this.ms_teams_region = ms_teams_region;
+    }
+
+    setSkypeToken(skype_token) {
+        if (this.skype_token)
+            return;
+        this.skype_token = skype_token;
+    }
+
+    async fetchChatMessages() {
+        if (!this.skype_token || !this.ms_teams_region) {
+            console.log('ChatMessagePoller: Missing required params', {
+                hasSkypeToken: !!this.skype_token,
+                hasRegion: !!this.ms_teams_region,
+            });
+            return null;
+        }
+
+        const threadId = window.callManager.getThreadId();
+        if (!threadId) {
+            console.log('ChatMessagePoller: Missing threadId');
+            return null;
+        }
+
+        const startTime = this.lastFetchTime || 0;
+        const params = new URLSearchParams({
+            'view': 'msnp24Equivalent|supportsMessageProperties',
+            'pageSize': '20',
+            'startTime': startTime.toString()
+        });
+
+        const fetchTime = Date.now();
+
+        const url = `https://teams.microsoft.com/api/chatsvc/${this.ms_teams_region}/v1/users/ME/conversations/${threadId}/messages?${params.toString()}`;
+
+        const response = await fetch(url, {
+            method: 'GET',
+            headers: {
+                'authentication': `skypetoken=${this.skype_token}`,
+            },
+        });
+
+        if (!response.ok) {
+            console.error('ChatMessagePoller: Failed to fetch messages', response.status, response.statusText);
+            return null;
+        }
+
+        // Record the fetch time if it was successful
+        this.lastFetchTime = fetchTime;
+
+        const data = await response.json();
+        
+        return data;
+    }
+}
+
+new FetchInterceptor((req) => {
+    console.log("FETCH INTERCEPTED", req.method, req.url, [...req.headers.entries()], req.body);
+
+    const msTeamsRegion = req.headers.get('ms-teams-region');
+    if (msTeamsRegion) {
+        window.chatMessagePoller.setMsTeamsRegion(msTeamsRegion);
+    }
+
+    const skypeToken = req.headers.get('x-skypetoken');
+    if (skypeToken) {
+        window.chatMessagePoller.setSkypeToken(skypeToken);
+    }    
+});
+
 class StyleManager {
     constructor() {
         this.audioContext = null;
@@ -1731,6 +1836,9 @@ window.styleManager = styleManager;
 const receiverManager = new ReceiverManager();
 window.receiverManager = receiverManager;
 
+const chatMessagePoller = new ChatMessagePoller();
+window.chatMessagePoller = chatMessagePoller;
+
 if (!realConsole) {
     if (document.readyState === 'complete') {
         createIframe();
@@ -2738,6 +2846,15 @@ class CallManager {
         return this.activeCall.callerMri;
         // We're using callerMri because it includes the 8: prefix. If callerMri stops working, we can easily use the thing below.
         // return this.activeCall.currentUserSkypeIdentity?.id;
+    }
+
+    getThreadId() {
+        this.setActiveCall();
+        if (!this.activeCall) {
+            return;
+        }
+
+        return this.activeCall.threadId;
     }
 
 
