@@ -135,6 +135,7 @@ class WebBotAdapter(BotAdapter):
                 "participant_is_host": self.participants_info[participant_id].get("isHost", False),
             }
 
+        logger.warning(f"Received audio for unknown participant {participant_id} before join event was captured")
         return None
 
     def meeting_uuid_mismatch(self, user):
