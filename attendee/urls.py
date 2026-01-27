@@ -35,15 +35,17 @@ def health_check(request):
     return HttpResponse(status=200)
 
 def version_view(request):
-    version = os.getenv("ATTENDEE_VERSION", "DEVELOPMENT")
+    version_path = os.path.join(settings.BASE_DIR, "version.json")
+    with open(version_path, "r", encoding="utf-8") as version_file:
+        version_data = json.load(version_file)
     return JsonResponse(
-        {"version": version},
-        status=200
+        {"version": version_data.get("version"),},
+        status=200,
     )
 
 urlpatterns = [
     path("health/", health_check, name="health-check"),
-    path("api/v1/version/", version_view, name="api-version"),
+    path("version/", version_view, name="api-version"),
 ]
 
 if not os.environ.get("DISABLE_ADMIN"):
