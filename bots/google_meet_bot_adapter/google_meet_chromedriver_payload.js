@@ -923,9 +923,18 @@ class WebSocketClient {
   };
 
   constructor() {
-      const url = `ws://localhost:${window.initialData.websocketPort}`;
-      console.log('WebSocketClient url', url);
-      this.ws = new WebSocket(url);
+      this.wsUrl = `ws://localhost:${window.initialData.websocketPort}`;
+      console.log('WebSocketClient url', this.wsUrl);
+      this.ws = null;
+      this.mediaSendingEnabled = false;
+  }
+
+  ensureConnected() {
+      if (this.ws !== null) {
+          return;
+      }
+
+      this.ws = new WebSocket(this.wsUrl);
       this.ws.binaryType = 'arraybuffer';
       
       this.ws.onopen = () => {
@@ -943,8 +952,6 @@ class WebSocketClient {
       this.ws.onclose = () => {
           console.log('WebSocket Disconnected');
       };
-
-      this.mediaSendingEnabled = false;
       
       /*
       We no longer need this because we're not using MediaStreamTrackProcessor's
@@ -1045,6 +1052,7 @@ class WebSocketClient {
   }
   
   sendJson(data) {
+      this.ensureConnected();
       if (this.ws.readyState !== WebSocket.OPEN) {
           console.error('WebSocket is not connected');
           return;
@@ -1083,6 +1091,7 @@ class WebSocketClient {
   }
 
   sendEncodedMP4Chunk(encodedMP4Data) {
+    this.ensureConnected();
     if (this.ws.readyState !== WebSocket.OPEN) {
       console.error('WebSocket is not connected for video chunk send', this.ws.readyState);
       return;
@@ -1109,6 +1118,7 @@ class WebSocketClient {
   }
 
   sendPerParticipantAudio(participantId, audioData) {
+    this.ensureConnected();
     if (this.ws.readyState !== WebSocket.OPEN) {
       console.error('WebSocket is not connected for per participant audio send', this.ws.readyState);
       return;
@@ -1147,6 +1157,7 @@ class WebSocketClient {
   }
 
   sendMixedAudio(timestamp, audioData) {
+      this.ensureConnected();
       if (this.ws.readyState !== WebSocket.OPEN) {
           console.error('WebSocket is not connected for audio send', this.ws.readyState);
           return;
@@ -1175,6 +1186,7 @@ class WebSocketClient {
   }
 
   sendVideo(timestamp, streamId, width, height, videoData) {
+      this.ensureConnected();
       if (this.ws.readyState !== WebSocket.OPEN) {
           console.error('WebSocket is not connected for video send', this.ws.readyState);
           return;
