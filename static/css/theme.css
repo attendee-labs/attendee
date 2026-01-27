@@ -1,0 +1,39 @@
+/* Sidebar base styles */
+.sidebar {
+    min-height: 100vh;
+    background-color: #f8f9fa;
+    border-right: 1px solid #dee2e6;
+}
+
+.sidebar .nav-link {
+    color: #333;
+    padding: 0.5rem 1rem;
+    cursor: pointer;
+}
+
+.sidebar .nav-link:hover {
+    background-color: #e9ecef;
+}
+
+.sidebar .nav-link.active {
+    background-color: #0d6efd;
+    color: white;
+}
+/* Dark mode sidebar styles (Bootstrap 5.3 compatible) */
+[data-bs-theme="dark"] .sidebar {
+    background-color: #1e1e1e;
+    border-right: 1px solid #2a2a2a;
+}
+
+[data-bs-theme="dark"] .sidebar .nav-link {
+    color: #e0e0e0;
+}
+
+[data-bs-theme="dark"] .sidebar .nav-link:hover {
+    background-color: #2a2a2a;
+}
+
+[data-bs-theme="dark"] .sidebar .nav-link.active {
+    background-color: #0d6efd;
+    color: #ffffff;
+}
