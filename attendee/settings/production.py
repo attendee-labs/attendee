@@ -6,7 +6,7 @@ import dj_database_url
 from .base import *
 from .base import LOG_FORMATTERS
 
-DEBUG = True
+DEBUG = False
 ALLOWED_HOSTS = ["*"]
 
 DATABASES = {
