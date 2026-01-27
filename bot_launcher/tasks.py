@@ -70,6 +70,9 @@ def launch_bot_from_queue(self, bot_id: int):
             "BOT_CPU_PERIOD",  # Only needed by launcher
             "BOT_MAX_EXECUTION_SECONDS",  # Only needed by launcher
             "BOT_MAX_SIMULTANEOUS_BOTS",  # Only needed by launcher
+            "PULSE_SERVER",  # Each ephemeral container should start its own PulseAudio server
+            "PULSE_RUNTIME_PATH",  # Each container has its own runtime path
+            "XDG_RUNTIME_DIR",  # Each container has its own runtime dir
         }
         env_vars = {k: v for k, v in env_vars.items() if k not in vars_to_exclude}
 
@@ -112,28 +115,68 @@ def launch_bot_from_queue(self, bot_id: int):
             "attendee.bot_id": str(bot_id),
         }
 
+        # Check if we should keep containers for debugging
+        auto_remove = os.getenv("BOT_CONTAINER_AUTO_REMOVE", "true").lower() != "false"
+        
+        # Mount volumes (same as worker for code access)
+        # Get the host path - if we're in a container, use env var or detect from mounted volume
+        # The worker runs with .:/attendee mounted, so we need the host path
+        host_code_path = os.getenv("BOT_HOST_CODE_PATH", "/opt/attendee")
+        volumes = {
+            host_code_path: {
+                'bind': '/attendee',
+                'mode': 'rw'
+            }
+        }
+        
         # Launch ephemeral container
         container = client.containers.run(
             image=image,
             command=command,
             name=container_name,
             detach=True,  # Detached so task returns quickly
-            remove=True,  # Auto-remove on exit
+            remove=auto_remove,  # Auto-remove on exit (can be disabled for debugging)
             environment=env_vars,
             labels=labels,
+            volumes=volumes,
             mem_limit=mem_limit,
             cpu_quota=cpu_quota,
             cpu_period=cpu_period,
             network_mode="host",  # Same network mode as workers
             security_opt=["seccomp=unconfined"],  # Same config as workers
-            stop_timeout=max_execution_seconds + 60,  # Stop timeout (max_execution + 1min margin)
             # Container will automatically stop after max_execution_seconds thanks to timeout in command
         )
 
+        # Log container info and how to view logs
+        log_instruction = (
+            f"View logs with: docker logs -f {container_name}" if not auto_remove
+            else f"Container will auto-remove when done. To keep containers, set BOT_CONTAINER_AUTO_REMOVE=false"
+        )
+        
         logger.info(
             f"Ephemeral container {container_name} (ID: {container.short_id}) started for bot {bot_id}. "
-            f"Container will auto-remove when bot execution completes."
+            f"{log_instruction}"
         )
+        
+        # Try to capture and log initial container output (first few lines)
+        try:
+            # Wait a moment for container to start producing output
+            import time
+            time.sleep(0.5)
+            logs = container.logs(tail=20, stdout=True, stderr=True).decode('utf-8', errors='replace')
+            if logs.strip():
+                logger.info(f"Initial logs from {container_name}:\n{logs}")
+        except Exception as e:
+            # If we can't get logs yet, that's okay - container might not have started outputting
+            logger.debug(f"Could not retrieve initial logs from {container_name}: {e}")
+        
+        # If auto-remove is enabled, start a background task to periodically capture logs
+        # This helps see logs even if container is removed
+        if auto_remove:
+            logger.info(
+                f"💡 Tip: To see full logs, run: sudo docker logs -f {container_name} "
+                f"(while container is running) or set BOT_CONTAINER_AUTO_REMOVE=false to keep containers"
+            )
 
         return {
             "container_id": container.short_id,
