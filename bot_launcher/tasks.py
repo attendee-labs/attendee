@@ -61,7 +61,7 @@ def launch_bot_from_queue(self, bot_id: int):
         # Copy all environment variables from worker to container
         # This ensures all env vars (DB, Redis, AWS, Deepgram, etc.) are automatically passed
         env_vars = os.environ.copy()
-        
+
         # Remove Docker-specific or worker-specific vars that shouldn't be in the bot container
         vars_to_exclude = {
             "BOT_CONTAINER_IMAGE",  # Only needed by launcher
@@ -89,7 +89,7 @@ def launch_bot_from_queue(self, bot_id: int):
             bot = Bot.objects.get(id=bot_id)
             automatic_leave_settings = bot.automatic_leave_settings()
             bot_max_uptime = automatic_leave_settings.get("max_uptime_seconds")
-            
+
             # Calculate timeout = max_uptime_seconds + 1h (3600s) if defined, otherwise use default
             if bot_max_uptime is not None:
                 max_execution_seconds = bot_max_uptime + 3600  # + 1h margin
@@ -117,7 +117,7 @@ def launch_bot_from_queue(self, bot_id: int):
 
         # Check if we should keep containers for debugging
         auto_remove = os.getenv("BOT_CONTAINER_AUTO_REMOVE", "true").lower() != "false"
-        
+
         # Mount volumes (same as worker for code access)
         # Get the host path - if we're in a container, use env var or detect from mounted volume
         # The worker runs with .:/attendee mounted, so we need the host path
@@ -128,7 +128,7 @@ def launch_bot_from_queue(self, bot_id: int):
                 'mode': 'rw'
             }
         }
-        
+
         # Launch ephemeral container
         container = client.containers.run(
             image=image,
@@ -152,12 +152,12 @@ def launch_bot_from_queue(self, bot_id: int):
             f"View logs with: docker logs -f {container_name}" if not auto_remove
             else f"Container will auto-remove when done. To keep containers, set BOT_CONTAINER_AUTO_REMOVE=false"
         )
-        
+
         logger.info(
             f"Ephemeral container {container_name} (ID: {container.short_id}) started for bot {bot_id}. "
             f"{log_instruction}"
         )
-        
+
         # Try to capture and log initial container output (first few lines)
         try:
             # Wait a moment for container to start producing output
@@ -169,7 +169,7 @@ def launch_bot_from_queue(self, bot_id: int):
         except Exception as e:
             # If we can't get logs yet, that's okay - container might not have started outputting
             logger.debug(f"Could not retrieve initial logs from {container_name}: {e}")
-        
+
         # If auto-remove is enabled, start a background task to periodically capture logs
         # This helps see logs even if container is removed
         if auto_remove:
