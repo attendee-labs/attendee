@@ -457,25 +457,51 @@ class KyutaiStreamingTranscriber:
         any words back from Kyutai. This can happen when the WebSocket appears
         connected but Kyutai's internal state is broken.
         
+        We detect two types of failures:
+        1. Initial failure: Sent lots of audio but never received any words
+        2. Mid-session stall: Was working but stopped producing words while
+           we're still sending non-silent audio
+        
         Returns True if connection is unhealthy and should be closed.
         """
-        # Only check if we've sent enough audio to expect words
-        if self._frames_sent_since_ready < frames_threshold:
-            return False
+        # Check 1: Initial connection failure (never received any words)
+        if self._frames_sent_since_ready >= frames_threshold and not self._ever_received_word:
+            audio_seconds = (self._frames_sent_since_ready * FRAME_SIZE) / KYUTAI_SAMPLE_RATE
+            logger.error(
+                f"🔴 [{self._participant_name}] Kyutai connection unhealthy: "
+                f"sent {audio_seconds:.1f}s of audio but received 0 words. "
+                f"Forcing reconnection..."
+            )
+            await self._force_reconnection()
+            return True
         
-        # If we've received at least one word, connection is working
-        if self._ever_received_word:
-            return False
+        # Check 2: Mid-session stall (was working but stopped)
+        # If we've been sending non-silent audio for 15s+ but no words received,
+        # the connection is likely stalled
+        STALL_THRESHOLD_SECONDS = 15.0
         
-        # Connection is unhealthy: sent lots of audio but no words received
-        audio_seconds = (self._frames_sent_since_ready * FRAME_SIZE) / KYUTAI_SAMPLE_RATE
-        logger.error(
-            f"🔴 [{self._participant_name}] Kyutai connection unhealthy: "
-            f"sent {audio_seconds:.1f}s of audio but received 0 words. "
-            f"Forcing reconnection..."
-        )
+        if (self._ever_received_word 
+            and self._last_nonsilent_send_time is not None 
+            and self.last_valid_word_time is not None):
+            
+            time_since_last_word = time.time() - self.last_valid_word_time
+            time_since_nonsilent_audio = time.time() - self._last_nonsilent_send_time
+            
+            # Only trigger if we're actively sending non-silent audio (within last 2s)
+            # AND it's been a long time since we received a word
+            if time_since_nonsilent_audio < 2.0 and time_since_last_word >= STALL_THRESHOLD_SECONDS:
+                logger.error(
+                    f"🔴 [{self._participant_name}] Kyutai connection stalled: "
+                    f"sending non-silent audio but no words for {time_since_last_word:.1f}s. "
+                    f"Forcing reconnection..."
+                )
+                await self._force_reconnection()
+                return True
         
-        # Close the WebSocket to trigger reconnection
+        return False
+
+    async def _force_reconnection(self):
+        """Force close the WebSocket to trigger reconnection."""
         if self._ws_connection:
             try:
                 await self._ws_connection.close()
@@ -483,7 +509,6 @@ class KyutaiStreamingTranscriber:
                 logger.warning(f"[{self._participant_name}] Error closing unhealthy connection: {e}")
         
         self.connected = False
-        return True
 
     async def _check_and_flush(self, silence_threshold: float):
         """
