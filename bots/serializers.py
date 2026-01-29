@@ -668,20 +668,27 @@ class GoogleMeetSettingsJSONField(serializers.JSONField):
     pass
 
 
-@extend_schema_field(
-    {
-        "type": "object",
-        "properties": {
-            "use_login": {
-                "type": "boolean",
-                "description": "Whether to use Teams bot login credentials to sign in before joining the meeting. Requires Teams bot login credentials to be set for the project.",
-                "default": False,
-            },
+TEAMS_SETTINGS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "use_login": {
+            "type": "boolean",
+            "description": "Whether to use Teams bot login credentials to sign in before joining the meeting. Requires Teams bot login credentials to be set for the project.",
+            "default": False,
         },
-        "required": [],
-        "additionalProperties": False,
-    }
-)
+        "login_mode": {
+            "type": "string",
+            "enum": ["always", "only_if_required"],
+            "description": "The mode to use for the Teams bot login. 'always' means the bot will always login, 'only_if_required' means the bot will only login if the meeting requires authentication.",
+            "default": "always",
+        },
+    },
+    "required": [],
+    "additionalProperties": False,
+}
+
+
+@extend_schema_field(TEAMS_SETTINGS_SCHEMA)
 class TeamsSettingsJSONField(serializers.JSONField):
     pass
 
@@ -1389,27 +1396,18 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
     teams_settings = TeamsSettingsJSONField(
         help_text="The Microsoft Teams-specific settings for the bot.",
         required=False,
-        default={"use_login": False},
+        default={"use_login": False, "login_mode": "always"},
     )
-
-    TEAMS_SETTINGS_SCHEMA = {
-        "type": "object",
-        "properties": {
-            "use_login": {"type": "boolean"},
-        },
-        "required": [],
-        "additionalProperties": False,
-    }
 
     def validate_teams_settings(self, value):
         if value is None:
             return value
 
         # Define defaults
-        defaults = {"use_login": False}
+        defaults = {"use_login": False, "login_mode": "always"}
 
         try:
-            jsonschema.validate(instance=value, schema=self.TEAMS_SETTINGS_SCHEMA)
+            jsonschema.validate(instance=value, schema=TEAMS_SETTINGS_SCHEMA)
         except jsonschema.exceptions.ValidationError as e:
             raise serializers.ValidationError(e.message)
 

@@ -181,6 +181,102 @@ class BotVideoOutputStream {
 
 
 
+    /**
+     * Play a video by fetching it first and using a blob URL.
+     *
+     * Useful for environments with restrictive CSP (e.g., Teams).
+     *
+     * @param {string} videoUrl - URL of the video to play.
+     * @returns {Promise<void>}
+     */
+    async playVideoWithBlobUrl(videoUrl) {
+        if (!videoUrl) {
+            throw new Error("playVideoWithBlobUrl: videoUrl is required.");
+        }
+
+        this._stopVideoPlayback();
+        this._stopImageRedrawInterval();
+
+        if (!this.videoElement) {
+            this.videoElement = document.createElement("video");
+            this.videoElement.playsInline = true;
+        }
+
+        // Fetch video and create a blob URL to avoid CSP violations.
+        let videoBlobUrl = null;
+        try {
+            const response = await fetch(videoUrl);
+            if (!response.ok) {
+                throw new Error(`Failed to fetch video: ${response.status} ${response.statusText}`);
+            }
+
+            const contentLength = response.headers.get("content-length");
+            if (contentLength) {
+                const sizeMB = parseInt(contentLength, 10) / 1024 / 1024;
+                if (sizeMB > 100) {
+                    console.warn(
+                        `Large video detected (${Math.round(sizeMB * 100) / 100} MB). ` +
+                        "This will be loaded entirely into memory."
+                    );
+                    window.ws.sendJson({
+                        type: 'LargeVideoDetectedWarning',
+                        message: `In playVideoWithBlobUrl large video detected (${Math.round(sizeMB * 100) / 100} MB). This will be loaded entirely into memory.`
+                    });
+                }
+            }
+
+            const blob = await response.blob();
+            videoBlobUrl = URL.createObjectURL(blob);
+        } catch (fetchError) {
+            throw new Error(`Failed to fetch video for playback: ${fetchError.message}`);
+        }
+
+        this.videoBlobUrl = videoBlobUrl;
+
+        this.videoElement.muted = false;
+        this.videoElement.src = videoBlobUrl;
+        this.videoElement.loop = false;
+        this.videoElement.autoplay = true;
+        this.videoElement.crossOrigin = "anonymous";
+
+        if (!this.videoAudioSource) {
+            // Create a Web Audio source for the video element
+            this.videoAudioSource =
+                this.getAudioContext().createMediaElementSource(this.videoElement);
+            this.videoAudioSource.connect(this.getGainNode());
+            // (Optional) also connect to speakers:
+            // this.videoAudioSource.connect(this.audioContext.destination);
+        }
+
+        if (this.getAudioContext().state === "suspended") {
+            await this.getAudioContext().resume();
+        }
+
+        await this.videoElement.play();
+        this.ensureInputOn();
+        this.ensureMicOn();
+
+        this._startVideoDrawingLoop();
+
+        // Add event listener for when video ends to display the last image
+        this.videoEndedHandler = () => {
+            // If we had an image, display it again keep the input on if not turn it off
+            if (this.lastImageBytes) {
+                this.displayImage(this.lastImageBytes);
+            }
+            else {
+                this.ensureInputOff();
+            }
+            if (this.videoBlobUrl) {
+                URL.revokeObjectURL(this.videoBlobUrl);
+                this.videoBlobUrl = null;
+            }
+        };
+        this.videoElement.addEventListener("ended", this.videoEndedHandler);
+    }
+
+
+
     _startVideoDrawingLoop() {
         if (!this.videoElement) return;
 
@@ -228,6 +324,10 @@ class BotVideoOutputStream {
         if (this.videoRafId != null) {
             cancelAnimationFrame(this.videoRafId);
             this.videoRafId = null;
+        }
+        if (this.videoBlobUrl) {
+            URL.revokeObjectURL(this.videoBlobUrl);
+            this.videoBlobUrl = null;
         }
         if (this.videoElement) {
             this.videoElement.pause();
@@ -559,6 +659,10 @@ class BotOutputManager {
 
     async playVideo(videoUrl) {
         return this.webcamVideoOutputStream.playVideo(videoUrl);
+    }
+
+    async playVideoWithBlobUrl(videoUrl) {
+        return this.webcamVideoOutputStream.playVideoWithBlobUrl(videoUrl);
     }
 
     /**

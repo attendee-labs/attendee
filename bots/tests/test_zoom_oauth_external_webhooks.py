@@ -29,7 +29,7 @@ class TestZoomOAuthWebhooks(TestCase):
             user_id="test_user_123",
             account_id="test_account_id",
         )
-        self.url = reverse("external-webhook-zoom-oauth-app", kwargs={"object_id": self.zoom_oauth_app.object_id})
+        self.url = reverse("external_webhooks:external-webhook-zoom-oauth-app", kwargs={"object_id": self.zoom_oauth_app.object_id})
 
     def _generate_zoom_signature(self, body: str, timestamp: str, secret: str) -> str:
         """Generate a valid Zoom webhook signature."""
@@ -316,7 +316,7 @@ class TestZoomOAuthWebhooks(TestCase):
         signature = self._generate_zoom_signature(body, timestamp, "test_webhook_secret")
 
         # Use non-existent object_id
-        invalid_url = reverse("external-webhook-zoom-oauth-app", kwargs={"object_id": "zoa_nonexistent"})
+        invalid_url = reverse("external_webhooks:external-webhook-zoom-oauth-app", kwargs={"object_id": "zoa_nonexistent"})
 
         response = self.client.post(
             invalid_url,

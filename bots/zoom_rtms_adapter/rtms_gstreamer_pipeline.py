@@ -276,7 +276,7 @@ class RTMSGstreamerPipeline:
                 self.last_reported_drops[queue_name] = self.queue_drops[queue_name]
 
         except Exception as e:
-            logger.info(f"Error getting pipeline stats: {e}")
+            logger.warning(f"Error getting pipeline stats: {e}")
 
         return True  # Continue timer
 
@@ -329,7 +329,7 @@ class RTMSGstreamerPipeline:
             if ret != Gst.FlowReturn.OK:
                 logger.info(f"Warning: Failed to push audio buffer to pipeline: {ret}")
         except Exception as e:
-            logger.info(f"Error processing audio data: {e}")
+            logger.warning(f"Error processing audio data: {e}")
 
     def wants_any_video_frames(self):
         if not self.audio_recording_active or not self.audio_appsrcs[0] or not self.recording_active or not self.appsrc:
@@ -362,7 +362,7 @@ class RTMSGstreamerPipeline:
                 logger.info(f"Warning: Failed to push buffer to pipeline: {ret}")
 
         except Exception as e:
-            logger.info(f"Error processing video frame: {e}")
+            logger.warning(f"Error processing video frame: {e}")
 
         if overlay_text:
             self.update_overlay_text(overlay_text)
@@ -415,7 +415,7 @@ class RTMSGstreamerPipeline:
 
         if msg and msg.type == Gst.MessageType.ERROR:
             err, debug = msg.parse_error()
-            logger.info(f"Error during pipeline shutdown: {err}, {debug}")
+            logger.warning(f"Error during pipeline shutdown: {err}, {debug}")
 
         self.pipeline.set_state(Gst.State.NULL)
         logger.info("GStreamer pipeline shut down")

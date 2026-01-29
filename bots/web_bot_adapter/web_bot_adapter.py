@@ -135,6 +135,7 @@ class WebBotAdapter(BotAdapter):
                 "participant_is_host": self.participants_info[participant_id].get("isHost", False),
             }
 
+        logger.warning(f"Received audio for unknown participant {participant_id} before join event was captured")
         return None
 
     def meeting_uuid_mismatch(self, user):
@@ -325,13 +326,17 @@ class WebBotAdapter(BotAdapter):
 
                 if message_type == 1:  # JSON
                     json_data = json.loads(message[4:].decode("utf-8"))
-                    if json_data.get("type") == "CaptionUpdate":
-                        logger.info("Received JSON message: %s", self.mask_transcript_if_required(json_data))
-                    else:
-                        logger.info("Received JSON message: %s", json_data)
+                    json_data_is_dict = isinstance(json_data, dict)
 
-                    # Handle audio format information
-                    if isinstance(json_data, dict):
+                    if not json_data_is_dict:
+                        logger.warning("Received non-dict JSON message: %s (type: %s)", json_data, type(json_data).__name__)
+
+                    if json_data_is_dict:
+                        if json_data.get("type") == "CaptionUpdate":
+                            logger.info("Received JSON message: %s", self.mask_transcript_if_required(json_data))
+                        else:
+                            logger.info("Received JSON message: %s", json_data)
+
                         if json_data.get("type") == "AudioFormatUpdate":
                             audio_format = json_data["format"]
                             logger.info(f"audio format {audio_format}")
@@ -447,7 +452,7 @@ class WebBotAdapter(BotAdapter):
         try:
             self.driver.save_screenshot(screenshot_path)
         except Exception as e:
-            logger.info(f"Error saving screenshot: {e}")
+            logger.warning(f"Error saving screenshot: {e}")
             screenshot_path = None
 
         mhtml_file_path = f"/tmp/page_snapshot_{timestamp}.mhtml"
@@ -457,7 +462,7 @@ class WebBotAdapter(BotAdapter):
             with open(mhtml_file_path, "w", encoding="utf-8") as f:
                 f.write(mhtml_bytes)
         except Exception as e:
-            logger.info(f"Error saving mhtml: {e}")
+            logger.warning(f"Error saving mhtml: {e}")
             mhtml_file_path = None
 
         return screenshot_path, mhtml_file_path, current_time
@@ -490,7 +495,7 @@ class WebBotAdapter(BotAdapter):
         try:
             self.driver.save_screenshot(screenshot_path)
         except Exception as e:
-            logger.info(f"Error saving screenshot: {e}")
+            logger.warning(f"Error saving screenshot: {e}")
             screenshot_path = None
 
         mhtml_file_path = f"/tmp/page_snapshot_{timestamp}.mhtml"
@@ -500,7 +505,7 @@ class WebBotAdapter(BotAdapter):
             with open(mhtml_file_path, "w", encoding="utf-8") as f:
                 f.write(mhtml_bytes)
         except Exception as e:
-            logger.info(f"Error saving mhtml: {e}")
+            logger.warning(f"Error saving mhtml: {e}")
             mhtml_file_path = None
 
         self.send_message_callback(
@@ -556,12 +561,12 @@ class WebBotAdapter(BotAdapter):
             try:
                 self.driver.close()
             except Exception as e:
-                logger.info(f"Error closing driver: {e}")
+                logger.warning(f"Error closing driver: {e}")
 
             try:
                 self.driver.quit()
             except Exception as e:
-                logger.info(f"Error closing existing driver: {e}")
+                logger.warning(f"Error closing existing driver: {e}")
             self.driver = None
 
         self.driver = webdriver.Chrome(options=options, service=Service(executable_path="/usr/local/bin/chromedriver"))
@@ -748,6 +753,7 @@ class WebBotAdapter(BotAdapter):
         self.send_message_callback({"message": self.Messages.BOT_JOINED_MEETING})
         self.joined_at = time.time()
         self.update_only_one_participant_in_meeting_at()
+        self.stop_debug_screen_recording()
 
     def after_bot_recording_permission_denied(self):
         self.send_message_callback({"message": self.Messages.BOT_RECORDING_PERMISSION_DENIED, "denied_reason": BotAdapter.BOT_RECORDING_PERMISSION_DENIED_REASON.HOST_DENIED_PERMISSION})
@@ -764,11 +770,13 @@ class WebBotAdapter(BotAdapter):
 
         if self.start_recording_screen_callback:
             sleep(2)
-            if self.debug_screen_recorder:
-                self.debug_screen_recorder.stop()
             self.start_recording_screen_callback(self.display_var_for_debug_recording)
 
         self.media_sending_enable_timestamp_ms = time.time() * 1000
+
+    def stop_debug_screen_recording(self):
+        if self.debug_screen_recorder:
+            self.debug_screen_recorder.stop()
 
     def leave(self):
         if self.left_meeting:
@@ -784,7 +792,7 @@ class WebBotAdapter(BotAdapter):
 
             self.click_leave_button()
         except Exception as e:
-            logger.info(f"Error during leave: {e}")
+            logger.warning(f"Error during leave: {e}")
         finally:
             self.send_message_callback({"message": self.Messages.MEETING_ENDED})
             self.left_meeting = True
@@ -793,7 +801,7 @@ class WebBotAdapter(BotAdapter):
         try:
             self.driver.close()
         except Exception as e:
-            logger.info(f"Error closing driver: {e}")
+            logger.warning(f"Error closing driver: {e}")
 
     def cleanup(self):
         if self.stop_recording_screen_callback:
@@ -803,7 +811,7 @@ class WebBotAdapter(BotAdapter):
             logger.info("disable media sending")
             self.driver.execute_script("window.ws?.disableMediaSending();")
         except Exception as e:
-            logger.info(f"Error during media sending disable: {e}")
+            logger.warning(f"Error during media sending disable: {e}")
 
         # Wait for websocket buffers to be processed
         if self.last_websocket_message_processed_time:
@@ -819,15 +827,15 @@ class WebBotAdapter(BotAdapter):
                     self.subclass_specific_before_driver_close()
                     self.driver.close()
                 except Exception as e:
-                    logger.info(f"Error closing driver: {e}")
+                    logger.warning(f"Error closing driver: {e}")
 
                 # Then quit the driver
                 try:
                     self.driver.quit()
                 except Exception as e:
-                    logger.info(f"Error quitting driver: {e}")
+                    logger.warning(f"Error quitting driver: {e}")
         except Exception as e:
-            logger.info(f"Error during cleanup: {e}")
+            logger.warning(f"Error during cleanup: {e}")
 
         if self.debug_screen_recorder:
             self.debug_screen_recorder.stop()
@@ -837,7 +845,7 @@ class WebBotAdapter(BotAdapter):
             try:
                 self.websocket_server.shutdown()
             except Exception as e:
-                logger.info(f"Error shutting down websocket server: {e}")
+                logger.warning(f"Error shutting down websocket server: {e}")
 
         self.cleaned_up = True
 

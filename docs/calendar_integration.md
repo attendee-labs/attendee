@@ -79,7 +79,7 @@ See the `handleCalendarStateChange` function in the [example app](https://github
 
 ### How often does Attendee sync calendar events?
 
-Currently, Attendee syncs calendar events every 30 minutes. This a temporary solution. In the near future we will use webhook-based syncing to sync events as soon as the Google or Microsoft Calendar APIs notifies us of changes. There will be no changes required to your implementation once we move to webhook-based syncing.
+Attendee uses webhooks to sync calendar events from Google and Microsoft nearly instantly. We apply debouncing to webhook updates to reduce server load, so changes can take up to a minute to sync to Attendee. 
 
 ### Which events does Attendee sync?
 

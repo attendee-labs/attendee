@@ -1049,6 +1049,13 @@ class ResendWebhookDeliveryAttemptView(LoginRequiredMixin, View):
             idempotency_key=idempotency_key,
         )
 
+        # Don't resend if the attempt count is greater than 49
+        if webhook_delivery_attempt.attempt_count > 49:
+            return HttpResponse(
+                '<span class="badge bg-secondary">Attempts exhausted</span>',
+                content_type="text/html",
+            )
+
         # Only resend if the attempt is not pending
         if webhook_delivery_attempt.status != WebhookDeliveryAttemptStatus.PENDING:
             # Reset status to pending and queue for redelivery

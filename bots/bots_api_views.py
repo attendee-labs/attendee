@@ -180,6 +180,22 @@ class BotListCreateView(GenericAPIView):
                 required=False,
             ),
             OpenApiParameter(
+                name="join_at_after",
+                type={"type": "string", "format": "ISO 8601 datetime"},
+                location=OpenApiParameter.QUERY,
+                description="Only return bots with join_at after this time.",
+                required=False,
+                examples=[OpenApiExample("DateTime Example", value="2024-01-18T12:34:56Z")],
+            ),
+            OpenApiParameter(
+                name="join_at_before",
+                type={"type": "string", "format": "ISO 8601 datetime"},
+                location=OpenApiParameter.QUERY,
+                description="Only return bots with join_at before this time.",
+                required=False,
+                examples=[OpenApiExample("DateTime Example", value="2024-01-18T13:34:56Z")],
+            ),
+            OpenApiParameter(
                 name="cursor",
                 type=str,
                 location=OpenApiParameter.QUERY,
@@ -217,6 +233,36 @@ class BotListCreateView(GenericAPIView):
 
             if state_values:
                 bots_query = bots_query.filter(state__in=state_values)
+
+        # Filter by join_at_after if provided
+        join_at_after = request.query_params.get("join_at_after")
+        if join_at_after:
+            try:
+                join_at_after_datetime = parse_datetime(str(join_at_after))
+            except Exception:
+                join_at_after_datetime = None
+
+            if not join_at_after_datetime:
+                return Response(
+                    {"error": "Invalid join_at_after format. Use ISO 8601 format (e.g., 2024-01-18T12:34:56Z)"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            bots_query = bots_query.filter(join_at__gt=join_at_after_datetime)
+
+        # Filter by join_at_before if provided
+        join_at_before = request.query_params.get("join_at_before")
+        if join_at_before:
+            try:
+                join_at_before_datetime = parse_datetime(str(join_at_before))
+            except Exception:
+                join_at_before_datetime = None
+
+            if not join_at_before_datetime:
+                return Response(
+                    {"error": "Invalid join_at_before format. Use ISO 8601 format (e.g., 2024-01-18T12:34:56Z)"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            bots_query = bots_query.filter(join_at__lt=join_at_before_datetime)
 
         # Apply ordering for cursor pagination
         bots = bots_query.order_by("created_at")
@@ -374,9 +420,6 @@ class OutputVideoView(APIView):
 
         # Get which type of meeting the bot is in
         meeting_type = meeting_type_from_url(bot.meeting_url)
-        if meeting_type != MeetingTypes.GOOGLE_MEET and meeting_type != MeetingTypes.ZOOM:
-            # Video output is not supported in this meeting type
-            return Response({"error": "Video output is not supported in this meeting type"}, status=status.HTTP_400_BAD_REQUEST)
         if meeting_type == MeetingTypes.ZOOM and os.getenv("ENABLE_ZOOM_VIDEO_OUTPUT") != "true":
             return Response({"error": "Video output is not supported in this meeting type"}, status=status.HTTP_400_BAD_REQUEST)
 
