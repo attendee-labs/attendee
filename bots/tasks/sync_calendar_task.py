@@ -702,6 +702,7 @@ class MicrosoftCalendarSyncHandler(CalendarSyncHandler):
             if new_refresh and new_refresh != refresh_token:
                 credentials["refresh_token"] = new_refresh
                 self.calendar.set_credentials(credentials)
+                self.calendar.refresh_from_db()
                 logger.info("Stored rotated Microsoft refresh_token for calendar %s", self.calendar.object_id)
 
             return access_token
