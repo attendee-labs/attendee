@@ -2,205 +2,296 @@
 {% load static %}
 
 {% block body_content %}
-<div class="container-fluid">
+<!-- Header -->
+<header class="app-header" style="position: fixed; top: 0; left: 0; right: 0; height: 56px; background: var(--bg-primary); border-bottom: 1px solid var(--border-color); z-index: 1000; display: flex; align-items: center; padding: 0 1rem;">
+    <div class="d-flex align-items-center justify-content-between w-100">
+        <!-- Logo -->
+        <div class="d-flex align-items-center">
+            <img src="{% static 'images/logo_with_text.svg' %}" alt="Attendee Logo" class="img-fluid app-logo" style="max-width: 180px; height: auto;">
+        </div>
+        
+        <!-- Right side controls -->
+        <div class="d-flex align-items-center gap-3">
+            <!-- Project selector -->
+            <div class="project-selector">
+                <div class="dropdown">
+                    <button class="btn project-dropdown-toggle d-flex align-items-center" type="button" id="currentProjectDropdown" data-bs-toggle="dropdown" aria-expanded="false" style="padding: 0.375rem 0.75rem; border-radius: 4px; border: none; background: transparent; color: var(--text-primary); font-size: var(--font-size-sm);">
+                        <i class="bi bi-folder-fill" style="color: var(--text-muted); margin-right: 6px; font-size: var(--font-size-sm);"></i>
+                        <span id="currentProjectName" class="project-name-multiline" style="max-width: 200px; color: var(--text-primary); font-size: var(--font-size-sm); font-weight: var(--font-weight-medium);">{{ project.name }}</span>
+                        <i class="bi bi-chevron-down" style="color: var(--text-muted); margin-left: 6px; font-size: var(--font-size-xs);"></i>
+                    </button>
+                    <ul class="dropdown-menu dropdown-menu-end shadow-sm" aria-labelledby="currentProjectDropdown" style="min-width: 250px;">
+                        {% for proj in user_projects|dictsort:"id" %}
+                            <li>
+                                {% if proj.object_id == project.object_id %}
+                                <a class="dropdown-item text-truncate active" style="background: var(--bg-nav-active); color: var(--text-primary); font-weight: var(--font-weight-medium); font-size: var(--font-size-sm);">{{ proj.name }}</a>
+                                {% else %}
+                                <a class="dropdown-item text-truncate" onclick="selectProject('{{ proj.object_id }}')" style="color: var(--text-primary); font-size: var(--font-size-sm);">{{ proj.name }}</a>
+                                {% endif %}
+                            </li>
+                        {% endfor %}
+                        {% if user.role == UserRole.ADMIN %}
+                            <li><hr class="dropdown-divider" style="margin: 0.5rem 0;"></li>
+                            <li>
+                                <a class="dropdown-item d-flex align-items-center" style="color: var(--accent-blue); font-weight: var(--font-weight-normal); font-size: var(--font-size-sm);" onclick="createNewProject()">
+                                    <i class="bi bi-plus-lg" style="margin-right: 8px; font-size: var(--font-size-sm);"></i>
+                                    <span>Create new project</span>
+                                </a>
+                            </li>
+                        {% endif %}
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Help dropdown -->
+            <div class="help-dropdown">
+                <div class="dropdown">
+                    <button class="btn d-flex align-items-center" type="button" id="helpDropdown" data-bs-toggle="dropdown" aria-expanded="false" style="padding: 0.375rem 0.75rem; border-radius: 4px; border: none; background: transparent; color: var(--text-primary); font-size: var(--font-size-sm);">
+                        <i class="bi bi-question-circle" style="margin-right: 6px; font-size: var(--font-size-sm);"></i>
+                        <span>Help</span>
+                        <i class="bi bi-chevron-down" style="margin-left: 6px; font-size: var(--font-size-xs); color: var(--text-muted);"></i>
+                    </button>
+                    <ul class="dropdown-menu dropdown-menu-end shadow-sm" aria-labelledby="helpDropdown" style="min-width: 280px;">
+                        <li>
+                            <a class="dropdown-item d-flex align-items-start" 
+                               href="https://docs.attendee.dev"
+                               target="_blank"
+                               rel="noopener noreferrer"
+                               style="color: var(--text-primary); font-size: var(--font-size-sm); padding: 0.75rem;">
+                                <div class="flex-grow-1">
+                                    <div class="d-flex align-items-center mb-1">
+                                        <i class="bi bi-book" style="margin-right: 8px; font-size: var(--font-size-sm);"></i>
+                                        <span style="font-weight: var(--font-weight-medium);">Documentation</span>
+                                        <i class="bi bi-box-arrow-up-right" style="margin-left: auto; font-size: var(--font-size-xs); color: var(--text-muted);"></i>
+                                    </div>
+                                    <div style="font-size: var(--font-size-xs); color: var(--text-muted); margin-left: 24px;">Browse guides and API reference</div>
+                                </div>
+                            </a>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Theme Toggle Button -->
+            <button class="btn theme-toggle-icon" onclick="toggleTheme()" aria-label="Toggle theme" title="Toggle dark mode" style="padding: 0; width: 32px; height: 32px; border: 1px solid var(--border-color); border-radius: 4px; display: flex; align-items: center; justify-content: center;">
+                <i class="bi bi-moon-stars-fill" id="theme-icon"></i>
+            </button>
+
+            <!-- User Avatar Dropdown -->
+            <div class="user-dropdown">
+                <div class="dropdown">
+                    <button class="btn d-flex align-items-center justify-content-center" type="button" id="userDropdown" data-bs-toggle="dropdown" aria-expanded="false" style="padding: 0; width: 32px; height: 32px; border-radius: 50%; border: 1px solid var(--border-color); background: var(--bg-secondary); color: var(--text-primary);">
+                        <span style="font-size: var(--font-size-sm); font-weight: var(--font-weight-medium);">
+                            {{ user.email|first|upper }}
+                        </span>
+                    </button>
+                    <ul class="dropdown-menu dropdown-menu-end shadow-sm" aria-labelledby="userDropdown" style="min-width: 220px;">
+                        <li class="px-3 py-2" style="border-bottom: 1px solid var(--border-color);">
+                            <div style="font-size: var(--font-size-sm); font-weight: var(--font-weight-medium); color: var(--text-primary);">{{ user.email }}</div>
+                            {% if user.role == UserRole.ADMIN %}
+                            <div style="font-size: var(--font-size-xs); color: var(--text-muted);">Admin</div>
+                            {% endif %}
+                        </li>
+                        {% if user.role == UserRole.ADMIN %}
+                        <li>
+                            <a class="dropdown-item d-flex align-items-center" 
+                               hx-get="{% url 'projects:project-team' project.object_id %}" 
+                               hx-select="#content"
+                               hx-target="#content"
+                               hx-swap="outerHTML"
+                               hx-push-url="true"
+                               onclick="setActiveLink(this); bootstrap.Dropdown.getInstance(document.getElementById('userDropdown')).hide();"
+                               style="color: var(--text-primary); font-size: var(--font-size-sm); user-select: none; -webkit-user-select: none; -moz-user-select: none; -ms-user-select: none; cursor: pointer;">
+                                <i class="bi bi-people" style="margin-right: 8px; font-size: var(--font-size-sm);"></i>
+                                <span>Team</span>
+                            </a>
+                        </li>
+                        {% if charge_credits_for_bots_setting %}
+                        <li>
+                            <a class="dropdown-item d-flex align-items-center"
+                               hx-get="{% url 'projects:project-billing' project.object_id %}"
+                               hx-select="#content"
+                               hx-target="#content"
+                               hx-swap="outerHTML"
+                               hx-push-url="true"
+                               onclick="setActiveLink(this); bootstrap.Dropdown.getInstance(document.getElementById('userDropdown')).hide();"
+                               style="color: var(--text-primary); font-size: var(--font-size-sm); user-select: none; -webkit-user-select: none; -moz-user-select: none; -ms-user-select: none; cursor: pointer;">
+                                <i class="bi bi-credit-card" style="margin-right: 8px; font-size: var(--font-size-sm);"></i>
+                                <span>Billing</span>
+                            </a>
+                        </li>
+                        {% endif %}
+                        <li><hr class="dropdown-divider" style="margin: 0;"></li>
+                        {% endif %}
+                        <li>
+                            <form method="post" action="{% url 'account_logout' %}" class="m-0">
+                                {% csrf_token %}
+                                <button type="submit" class="dropdown-item d-flex align-items-center w-100 border-0 bg-transparent text-start" style="color: var(--accent-red); font-size: var(--font-size-sm);">
+                                    <i class="bi bi-box-arrow-right" style="margin-right: 8px; font-size: var(--font-size-sm);"></i>
+                                    <span>Logout</span>
+                                </button>
+                            </form>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+</header>
+
+<div class="container-fluid" style="margin-top: 56px;">
     <div class="row">
         <!-- Sidebar -->
-        <div class="col-md-3 col-lg-2 sidebar py-3 position-fixed overflow-auto" style="height: 100vh;">
+        <div class="col-md-3 col-lg-2 sidebar py-3 position-fixed overflow-auto" style="height: calc(100vh - 56px); top: 56px;">
             <div class="d-flex flex-column h-100">
-                <h5 class="px-3 mb-3">
-                    <img src="{% static 'images/logo_with_text.svg' %}" alt="Attendee Logo" class="img-fluid" style="max-width: 250px;">
-                </h5>
 
-                <!-- Project selector -->
-                <div class="project-selector px-3">
-                    <div class="dropdown w-100">
-                        <button class="btn project-dropdown-toggle w-100 d-flex align-items-center" type="button" id="currentProjectDropdown" data-bs-toggle="dropdown" aria-expanded="false">
-                            <div class="d-flex align-items-center">
-                                <span id="currentProjectName" class="project-name-multiline" style="font-size: 0.9rem; max-width: 100%;">{{ project.name }}</span>
-                                <i class="bi bi-chevron-down ms-2"></i>
-                            </div>
-                        </button>
-                        <ul class="dropdown-menu w-100 shadow-sm" aria-labelledby="currentProjectDropdown">
-                            {% for proj in user_projects|dictsort:"id" %}
-                                <li>
-                                    {% if proj.object_id == project.object_id %}
-                                    <a class="dropdown-item text-truncate active" style="font-size: 0.9rem; max-width: 100%; background-color: rgba(0, 0, 0, 0.09);">{{ proj.name }}</a>
-                                    {% else %}
-                                    <a class="dropdown-item text-truncate" onclick="selectProject('{{ proj.object_id }}')" style="font-size: 0.9rem; max-width: 100%;">{{ proj.name }}</a>
-                                    {% endif %}
-                                </li>
-                            {% endfor %}
-                            {% if user.role == UserRole.ADMIN %}
-                                <li><hr class="dropdown-divider"></li>
-                                <li>
-                                    <a class="dropdown-item d-flex align-items-center" style="font-size: 0.9rem; max-width: 100%;" onclick="createNewProject()">
-                                        <i class="bi bi-plus-lg me-2"></i> Create new project
-                                    </a>
-                                </li>
-                            {% endif %}
-                        </ul>
-                    </div>
-                </div>
-
-                <hr class="my-2">
-
-                <nav class="nav flex-column">
-                    <a class="nav-link" 
+                <nav class="nav flex-column sidebar-nav">
+                    <a class="nav-link sidebar-nav-link" 
                        hx-get="{% url 'projects:project-dashboard' project.object_id %}" 
                        hx-select="#content"
                        hx-target="#content"
                        hx-swap="outerHTML"
                        hx-push-url="true"
-                       onclick="setActiveLink(this)">
-                        <i class="bi bi-speedometer2"></i> Quick start
+                       onclick="setActiveLink(this)"
+                       title="Dashboard">
+                        <div class="d-flex align-items-center">
+                            <div class="sidebar-icon-wrapper">
+                                <i class="bi bi-speedometer2"></i>
+                            </div>
+                            <span>Dashboard</span>
+                        </div>
                     </a>
-                    <a class="nav-link" 
-                       hx-get="{% url 'projects:project-api-keys' project.object_id %}" 
+
+                    <a class="nav-link sidebar-nav-link" 
+                       hx-get="{% url 'projects:project-bots' project.object_id %}" 
                        hx-select="#content"
                        hx-target="#content"
                        hx-swap="outerHTML"
                        hx-push-url="true"
-                       onclick="setActiveLink(this)">
-                        <i class="bi bi-key"></i> API Keys
+                       onclick="setActiveLink(this)"
+                       title="Bots">
+                        <div class="d-flex align-items-center">
+                            <div class="sidebar-icon-wrapper">
+                                <i class="bi bi-robot"></i>
+                            </div>
+                            <span>Bots</span>
+                        </div>
                     </a>
-                    <a class="nav-link" 
-                        href="https://docs.attendee.dev"
-                        target="_blank"
-                        rel="noopener noreferrer">
-                        <i class="bi bi-book"></i> Docs
+
+                    <a class="nav-link sidebar-nav-link" 
+                       hx-get="{% url 'projects:project-calendars' project.object_id %}" 
+                       hx-select="#content"
+                       hx-target="#content"
+                       hx-swap="outerHTML"
+                       hx-push-url="true"
+                       onclick="setActiveLink(this)"
+                       title="Calendars">
+                        <div class="d-flex align-items-center">
+                            <div class="sidebar-icon-wrapper">
+                                <i class="bi bi-calendar3"></i>
+                            </div>
+                            <span>Calendars</span>
+                        </div>
                     </a>
-                    
+
+                    {% if project.organization.is_app_sessions_enabled %}
+                    <a class="nav-link sidebar-nav-link" 
+                       hx-get="{% url 'projects:project-app-sessions' project.object_id %}" 
+                       hx-select="#content"
+                       hx-target="#content"
+                       hx-swap="outerHTML"
+                       hx-push-url="true"
+                       onclick="setActiveLink(this)"
+                       title="App Sessions">
+                        <div class="d-flex align-items-center">
+                            <div class="sidebar-icon-wrapper">
+                                <i class="bi bi-app-indicator"></i>
+                            </div>
+                            <span>App Sessions</span>
+                        </div>
+                    </a>
+                    {% endif %}
+
                     <!-- Settings dropdown menu -->
-                    <div class="settings-dropdown">
-                        <a class="nav-link" href="#" 
-                           onclick="toggleSettingsMenu(event)">
-                            <i class="bi bi-gear"></i> Settings <span style="margin-left: 1px;" class="settings-caret-container">
-                              <svg width="21" height="21" viewBox="0 0 14 14" fill="none" class="settings-caret">
-                                <path d="M4.3225 5.0108L7 7.68247L9.6775 5.0108L10.5 5.8333L7 9.3333L3.5 5.8333L4.3225 5.0108Z" fill="currentcolor"></path>
-                              </svg>
-                            </span>
+                    <div class="settings-dropdown mt-2">
+                        <a class="nav-link sidebar-nav-link sidebar-dropdown-toggle" href="#" 
+                           onclick="toggleSettingsMenu(event)"
+                           title="Settings">
+                            <div class="d-flex align-items-center justify-content-between w-100">
+                                <div class="d-flex align-items-center">
+                                    <div class="sidebar-icon-wrapper">
+                                        <i class="bi bi-gear"></i>
+                                    </div>
+                                    <span>Settings</span>
+                                </div>
+                                <i class="bi bi-chevron-down settings-chevron" style="font-size: var(--font-size-xs); transition: transform 0.3s ease;"></i>
+                            </div>
                         </a>
                         <div class="settings-submenu" style="display: none;">
-                            <a class="nav-link ps-4" 
+                            <a class="nav-link sidebar-nav-link sidebar-submenu-link" 
+                               hx-get="{% url 'projects:project-api-keys' project.object_id %}" 
+                               hx-select="#content"
+                               hx-target="#content"
+                               hx-swap="outerHTML"
+                               hx-push-url="true"
+                               onclick="setActiveLink(this)">
+                                <div class="d-flex align-items-center">
+                                    <div class="sidebar-icon-wrapper sidebar-submenu-icon">
+                                        <i class="bi bi-key"></i>
+                                    </div>
+                                    <span>API Keys</span>
+                                </div>
+                            </a>
+                            <a class="nav-link sidebar-nav-link sidebar-submenu-link" 
                                hx-get="{% url 'projects:project-credentials' project.object_id %}" 
                                hx-select="#content"
                                hx-target="#content"
                                hx-swap="outerHTML"
                                hx-push-url="true"
                                onclick="setActiveLink(this)">
-                                <i class="bi bi-lock"></i> Credentials
+                                <div class="d-flex align-items-center">
+                                    <div class="sidebar-icon-wrapper sidebar-submenu-icon">
+                                        <i class="bi bi-lock"></i>
+                                    </div>
+                                    <span>Credentials</span>
+                                </div>
                             </a>
                             {% if project.organization.is_webhooks_enabled %}
-                            <a class="nav-link ps-4"
+                            <a class="nav-link sidebar-nav-link sidebar-submenu-link"
                                hx-get="{% url 'projects:project-webhooks' project.object_id %}"
                                hx-select="#content"
                                hx-target="#content"
                                hx-swap="outerHTML"
                                hx-push-url="true"
                                onclick="setActiveLink(this)">
-                                <i class="bi bi-link"></i> Webhooks
+                                <div class="d-flex align-items-center">
+                                    <div class="sidebar-icon-wrapper sidebar-submenu-icon">
+                                        <i class="bi bi-link"></i>
+                                    </div>
+                                    <span>Webhooks</span>
+                                </div>
                             </a>
                             {% endif %}
                             {% if user.role == UserRole.ADMIN %}
-                                <a class="nav-link ps-4" 
+                                <a class="nav-link sidebar-nav-link sidebar-submenu-link" 
                                 hx-get="{% url 'projects:project-project' project.object_id %}" 
                                 hx-select="#content"
                                 hx-target="#content"
                                 hx-swap="outerHTML"
                                 hx-push-url="true"
                                 onclick="setActiveLink(this)">
-                                    <i class="bi bi-card-text"></i> Project
+                                    <div class="d-flex align-items-center">
+                                        <div class="sidebar-icon-wrapper sidebar-submenu-icon">
+                                            <i class="bi bi-card-text"></i>
+                                        </div>
+                                        <span>Project</span>
+                                    </div>
                                 </a>
                             {% endif %}
                         </div>
                     </div>
-                    {% if project.organization.is_app_sessions_enabled %}
-                    <hr>
-                    {% endif %}
 
-                    <a class="nav-link" 
-                       hx-get="{% url 'projects:project-bots' project.object_id %}" 
-                       hx-select="#content"
-                       hx-target="#content"
-                       hx-swap="outerHTML"
-                       hx-push-url="true"
-                       onclick="setActiveLink(this)">
-                        <i class="bi bi-robot"></i> Bots
-                    </a>
-
-                    <a class="nav-link" 
-                       hx-get="{% url 'projects:project-calendars' project.object_id %}" 
-                       hx-select="#content"
-                       hx-target="#content"
-                       hx-swap="outerHTML"
-                       hx-push-url="true"
-                       onclick="setActiveLink(this)">
-                        <i class="bi bi-calendar3"></i> Calendars
-                    </a>
-
-                    {% if project.organization.is_app_sessions_enabled %}
-                    <a class="nav-link" 
-                       hx-get="{% url 'projects:project-app-sessions' project.object_id %}" 
-                       hx-select="#content"
-                       hx-target="#content"
-                       hx-swap="outerHTML"
-                       hx-push-url="true"
-                       onclick="setActiveLink(this)">
-                        <i class="bi bi-app-indicator"></i> App Sessions
-                    </a>
-                    {% endif %}
                 </nav>
-                
-                <!-- Added logout link at bottom -->
-                <div class="mt-auto">
-
-                    <hr>
-
-                    {% if user.role == UserRole.ADMIN %}
-                        <!-- Account dropdown menu -->
-                        <div class="account-dropdown">
-                            <a class="nav-link" href="#" 
-                            onclick="toggleAccountMenu(event)">
-                                <i class="bi bi-x-diamond-fill"></i> Account <span style="margin-left: 1px;" class="account-caret-container">
-                                <svg width="21" height="21" viewBox="0 0 14 14" fill="none" class="account-caret">
-                                    <path d="M4.3225 5.0108L7 7.68247L9.6775 5.0108L10.5 5.8333L7 9.3333L3.5 5.8333L4.3225 5.0108Z" fill="currentcolor"></path>
-                                </svg>
-                                </span>
-                            </a>
-                            <div class="account-submenu" style="display: none;">
-                                <a class="nav-link ps-4" 
-                                hx-get="{% url 'projects:project-team' project.object_id %}" 
-                                hx-select="#content"
-                                hx-target="#content"
-                                hx-swap="outerHTML"
-                                hx-push-url="true"
-                                onclick="setActiveLink(this)">
-                                    <i class="bi bi-people"></i> Team
-                                </a>
-                                {% if charge_credits_for_bots_setting %}
-                                <a class="nav-link ps-4"
-                                hx-get="{% url 'projects:project-billing' project.object_id %}"
-                                hx-select="#content"
-                                hx-target="#content"
-                                hx-swap="outerHTML"
-                                hx-push-url="true"
-                                onclick="setActiveLink(this)">
-                                    <i class="bi bi-credit-card"></i> Billing
-                                </a>
-                                {% endif %}
-                            </div>
-                        </div>
-
-                        <hr>
-                    {% endif %}
-
-                    <form method="post" action="{% url 'account_logout' %}" class="m-0">
-                        {% csrf_token %}
-                        <button type="submit" class="nav-link border-0 bg-transparent w-100 text-start">
-                            <i class="bi bi-box-arrow-right"></i> Logout
-                        </button>
-                    </form>
-                </div>
             </div>
         </div>
 
@@ -208,7 +299,7 @@
         <div class="col-md-3 col-lg-2"></div>
 
         <!-- Main Content -->
-        <div class="col-md-9 col-lg-10 py-3">
+        <div class="col-md-9 col-lg-10 py-3" style="margin-top: 0;">
             {% if project.organization.credits < 0 %}
             <div class="alert alert-danger mb-3" role="alert">
                 <strong>Your account has a negative credit balance.</strong> Please <a href="{% url 'projects:project-billing' project.object_id %}" class="alert-link">top up your credits</a> to continue creating bots.
@@ -250,11 +341,6 @@
                 if (link.closest('.settings-submenu')) {
                     toggleSettingsMenu();
                 }
-                
-                // Check if this is an account submenu item
-                if (link.closest('.account-submenu')) {
-                    toggleAccountMenu();
-                }
             }
         });
     });
@@ -263,31 +349,17 @@
     function toggleSettingsMenu(event) {
         event?.preventDefault();
         const submenu = document.querySelector('.settings-submenu');
-        const caret = document.querySelector('.settings-caret');
+        const chevron = document.querySelector('.settings-chevron');
         
         if (submenu.style.display === 'none') {
             submenu.style.display = 'block';
-            caret.style.transform = 'rotate(180deg)';
+            if (chevron) chevron.style.transform = 'rotate(180deg)';
         } else {
             submenu.style.display = 'none';
-            caret.style.transform = 'rotate(0deg)';
+            if (chevron) chevron.style.transform = 'rotate(0deg)';
         }
     }
     
-    // Toggle account dropdown menu
-    function toggleAccountMenu(event) {
-        event?.preventDefault();
-        const submenu = document.querySelector('.account-submenu');
-        const caret = document.querySelector('.account-caret');
-        
-        if (submenu.style.display === 'none') {
-            submenu.style.display = 'block';
-            caret.style.transform = 'rotate(180deg)';
-        } else {
-            submenu.style.display = 'none';
-            caret.style.transform = 'rotate(0deg)';
-        }
-    }
 
     // Project selection handler (updated to use string replacement)
     function selectProject(projectId) {
@@ -303,6 +375,46 @@
         const createProjectModal = new bootstrap.Modal(document.getElementById('createProjectModal'));
         createProjectModal.show();
     }
+    
+    // Theme Toggle Function
+    function toggleTheme() {
+        const html = document.documentElement;
+        const currentTheme = html.getAttribute('data-bs-theme');
+        const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+        
+        html.setAttribute('data-bs-theme', newTheme);
+        localStorage.setItem('theme', newTheme);
+        
+        updateThemeIcon(newTheme);
+    }
+    
+    function updateThemeIcon(theme) {
+        const icon = document.getElementById('theme-icon');
+        
+        if (theme === 'dark') {
+            icon.className = 'bi bi-sun-fill';
+        } else {
+            icon.className = 'bi bi-moon-stars-fill';
+        }
+    }
+    
+    // Initialize theme on page load
+    function initTheme() {
+        const savedTheme = localStorage.getItem('theme') || 'light';
+        const html = document.documentElement;
+        html.setAttribute('data-bs-theme', savedTheme);
+        updateThemeIcon(savedTheme);
+    }
+    
+    document.addEventListener('DOMContentLoaded', initTheme);
+    
+    // Re-initialize theme when HTMX swaps content (for dynamic content)
+    document.body.addEventListener('htmx:afterSwap', function() {
+        // Update theme icon if it exists in the swapped content
+        const savedTheme = localStorage.getItem('theme') || 'light';
+        updateThemeIcon(savedTheme);
+    });
+    
 </script>
 
 <!-- Add this style block -->
@@ -320,14 +432,96 @@
         transition-duration: 0s !important;
     }
 
-    .sidebar .nav-link.active {
-        background-color: rgba(0, 0, 0, 0.09);
-        color: inherit;
+    .sidebar {
+        top: 56px;
+        z-index: 100;
+        background: var(--bg-sidebar);
     }
     
-    .sidebar {
-        top: 0;
-        z-index: 100;
+    .sidebar-nav-link {
+        padding: 0.5rem 0.75rem !important;
+        margin: 0.125rem 0;
+        border-radius: 6px;
+        color: var(--text-secondary) !important;
+        font-size: var(--font-size-sm);
+        font-weight: var(--font-weight-normal);
+        transition: background-color 0.15s ease;
+        text-decoration: none;
+        display: flex;
+        align-items: center;
+    }
+    
+    .sidebar-nav-link:hover {
+        background: var(--bg-nav-hover);
+        color: var(--text-primary) !important;
+    }
+    
+    .sidebar-nav-link.active {
+        background: var(--bg-nav-active);
+        color: var(--text-primary) !important;
+        font-weight: var(--font-weight-medium);
+    }
+    
+    .sidebar-icon-wrapper {
+        width: 20px;
+        height: 20px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin-right: 10px;
+        border-radius: 0;
+        background: transparent;
+        transition: none;
+    }
+    
+    .sidebar-nav-link:hover .sidebar-icon-wrapper {
+        background: transparent;
+    }
+    
+    .sidebar-nav-link.active .sidebar-icon-wrapper {
+        background: transparent;
+    }
+    
+    .sidebar-nav-link.active .sidebar-icon-wrapper i {
+        color: var(--text-primary) !important;
+    }
+    
+    .sidebar-icon-wrapper i {
+        font-size: var(--font-size-base);
+        color: var(--text-muted);
+    }
+    
+    .sidebar-nav-link:hover .sidebar-icon-wrapper i {
+        color: var(--text-primary);
+    }
+    
+    /* Submenu Links - Clean */
+    .sidebar-submenu-link {
+        padding-left: 2.5rem !important;
+        font-size: var(--font-size-sm);
+    }
+    
+    .sidebar-submenu-icon {
+        width: 18px;
+        height: 18px;
+        background: transparent;
+    }
+    
+    .sidebar-submenu-link:hover .sidebar-submenu-icon {
+        background: transparent;
+    }
+    
+    .sidebar-submenu-link.active .sidebar-submenu-icon {
+        background: transparent;
+    }
+    
+    .sidebar-submenu-link.active .sidebar-submenu-icon i {
+        color: var(--text-primary) !important;
+    }
+    
+    /* Dropdown Toggles */
+    .sidebar-dropdown-toggle {
+        cursor: pointer;
     }
     
     .settings-dropdown {
@@ -336,64 +530,160 @@
     
     .settings-submenu {
         transition: all 0.3s ease;
+        margin-left: 0.5rem;
+        margin-top: 0.25rem;
     }
     
-    .settings-submenu .nav-link {
-        font-size: 0.95em;
-    }
-    
-    .settings-caret {
-        transform: rotate(0deg);
-    }
-    
-    .settings-caret-container {
-        display: inline-flex;
-        align-items: center;
-        transform: translateY(5px);
-    }
-    
+    /* Account Dropdown */
     .account-dropdown {
         position: relative;
     }
     
     .account-submenu {
         transition: all 0.3s ease;
+        margin-left: 0.5rem;
+        margin-top: 0.25rem;
     }
     
-    .account-submenu .nav-link {
-        font-size: 0.95em;
+    /* Header styles */
+    .app-header .btn {
+        transition: background-color 0.15s ease, border-color 0.15s ease;
     }
     
-    .account-caret {
-        transform: rotate(0deg);
+    .app-header .btn:hover {
+        background: var(--bg-nav-hover) !important;
     }
     
-    .account-caret-container {
-        display: inline-flex;
-        align-items: center;
-        transform: translateY(5px);
+    /* Project selector */
+    .project-dropdown-toggle:hover {
+        background: var(--bg-nav-hover) !important;
     }
     
-    /* Project selector custom styling */
-    .project-dropdown-toggle {
-        background-color: transparent;
-        border: none;
-        padding: 0.5rem 0;
-        font-weight: 500;
-    }
     .project-dropdown-toggle:focus {
-        box-shadow: none;
-    }
-    .project-selector .dropdown-menu {
-        border-radius: 0.5rem;
-    }
-    .project-selector .dropdown-item {
-        cursor: pointer;
+        box-shadow: none !important;
     }
     
-    /* Fix for active dropdown item text color */
+    /* Help dropdown */
+    #helpDropdown:hover {
+        background: var(--bg-nav-hover) !important;
+    }
+    
+    #helpDropdown:focus {
+        box-shadow: none !important;
+    }
+    
+    .project-selector .dropdown-menu {
+        border-radius: 8px;
+        border: 1px solid var(--border-color);
+        box-shadow: 0 1px 3px var(--shadow-sm);
+        margin-top: 0.25rem;
+        background-color: var(--bg-card);
+        padding: 0.5rem;
+    }
+    
+    .project-selector .dropdown-item {
+        padding: 0.5rem 0.75rem;
+        border-radius: 4px;
+        margin: 0.125rem 0;
+        transition: background-color 0.15s ease;
+        color: var(--text-primary);
+        font-size: var(--font-size-sm);
+        cursor: pointer;
+        background-color: transparent;
+    }
+    
+    .project-selector .dropdown-item:hover {
+        background-color: var(--bg-nav-hover) !important;
+        color: var(--text-primary) !important;
+    }
+    
     .project-selector .dropdown-item.active {
-        color: #212529; /* Dark text color to ensure visibility */
+        color: var(--accent-blue);
+        background-color: var(--bg-nav-active) !important;
+    }
+    
+    /* Help dropdown in header */
+    #helpDropdown + .dropdown-menu {
+        border-radius: 8px;
+        border: 1px solid var(--border-color);
+        box-shadow: 0 1px 3px var(--shadow-sm);
+        margin-top: 0.25rem;
+        background-color: var(--bg-card);
+        padding: 0.5rem;
+    }
+    
+    #helpDropdown + .dropdown-menu .dropdown-item {
+        padding: 0.5rem 0.75rem;
+        font-size: var(--font-size-sm);
+        color: var(--text-primary);
+        transition: background-color 0.15s ease;
+        background-color: transparent;
+        cursor: pointer;
+        border-radius: 4px;
+    }
+    
+    #helpDropdown + .dropdown-menu .dropdown-item:hover {
+        background-color: var(--bg-nav-hover) !important;
+        color: var(--text-primary) !important;
+    }
+    
+    #userDropdown + .dropdown-menu {
+        border-radius: 8px;
+        border: 1px solid var(--border-color);
+        box-shadow: 0 1px 3px var(--shadow-sm);
+        margin-top: 0.25rem;
+        background-color: var(--bg-card);
+        padding: 0.5rem;
+    }
+    
+    #userDropdown + .dropdown-menu .dropdown-item {
+        padding: 0.5rem 0.75rem;
+        font-size: var(--font-size-sm);
+        color: var(--text-primary);
+        user-select: none;
+        -webkit-user-select: none;
+        -moz-user-select: none;
+        -ms-user-select: none;
+        cursor: pointer;
+        transition: background-color 0.15s ease;
+        background-color: transparent;
+        border-radius: 4px;
+    }
+    
+    #userDropdown + .dropdown-menu .dropdown-divider {
+        margin: 0;
+        border-color: var(--border-color);
+    }
+    
+    #userDropdown + .dropdown-menu .dropdown-item:hover {
+        background-color: var(--bg-nav-hover) !important;
+        color: var(--text-primary) !important;
+    }
+    
+    #userDropdown + .dropdown-menu .dropdown-item button {
+        width: 100%;
+        text-align: left;
+        user-select: none;
+        -webkit-user-select: none;
+        -moz-user-select: none;
+        -ms-user-select: none;
+        cursor: pointer;
+        transition: background-color 0.15s ease;
+        background-color: transparent;
+    }
+    
+    #userDropdown + .dropdown-menu .dropdown-item button:hover {
+        background-color: var(--bg-nav-hover) !important;
+        color: var(--accent-red) !important;
+    }
+    
+    #helpDropdown + .dropdown-menu .dropdown-item {
+        padding: 0;
+    }
+    
+    #helpDropdown + .dropdown-menu .dropdown-item:hover {
+        background-color: var(--bg-nav-hover) !important;
+        color: var(--text-primary) !important;
     }
 </style>
 

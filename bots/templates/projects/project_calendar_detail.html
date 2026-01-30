@@ -9,7 +9,7 @@
     }
     .timeline-item {
         padding: 1rem;
-        border-left: 2px solid #dee2e6;
+        border-left: 2px solid var(--border-color);
         margin-left: 1rem;
         position: relative;
     }
@@ -20,8 +20,8 @@
         top: 1.5rem;
         width: 1rem;
         height: 1rem;
-        background: #fff;
-        border: 2px solid #007bff;
+        background: var(--bg-card);
+        border: 2px solid var(--accent-blue);
         border-radius: 50%;
     }
     .timeline-container {
@@ -30,39 +30,31 @@
     }
     /* Override Bootstrap tab colors */
     .nav-tabs .nav-link {
-        color: #6c757d !important; /* Light grey for non-active tabs */
-        border-right: 1px solid #dee2e6 !important; /* Add vertical separator */
+        color: var(--text-muted) !important; /* Light grey for non-active tabs */
+        border-right: 1px solid var(--border-color) !important; /* Add vertical separator */
         border-radius: 0 !important; /* Remove rounded corners for cleaner separation */
     }
     .nav-tabs .nav-link.active {
-        color: #2e2f31 !important; /* Keep blue for active tab */
-        border-right: 1px solid #dee2e6 !important; /* Keep separator on active tab too */
+        color: var(--text-primary) !important; /* Keep primary text color for active tab */
+        border-right: 1px solid var(--border-color) !important; /* Keep separator on active tab too */
     }
     .nav-tabs .nav-item:last-child .nav-link {
         border-right: none !important; /* Remove border from last tab */
     }
     .status-badge {
-        font-size: 0.875rem;
+        font-size: var(--font-size-sm);
     }
     .connection-detail {
         margin-bottom: 0.75rem;
     }
     .sync-info {
-        background-color: #f8f9fa;
+        background-color: var(--bg-secondary);
         border-radius: 0.375rem;
         padding: 1rem;
         margin-bottom: 1rem;
     }
     
-    /* Clickable row styles for HTMX navigation */
-    .clickable-row {
-        cursor: pointer;
-        transition: background-color 0.15s ease-in-out;
-    }
-    /* Apply hover effect to td elements */
-    table tbody tr.clickable-row:hover td {
-        background-color: #f8f9fa;  /* Using Bootstrap's light gray */
-    }
+    /* Table styles are now in theme.css */
 </style>
 
 <div class="container mt-4">
@@ -108,7 +100,7 @@
     {% if calendar.connection_failure_data %}
         <div class="alert alert-warning">
             <h6>Connection Failure Information</h6>
-            <pre class="mb-0">{{ calendar.connection_failure_data|pprint }}</pre>
+            <pre class="mb-0" style="background-color: var(--bg-secondary); color: var(--text-primary);">{{ calendar.connection_failure_data|pprint }}</pre>
         </div>
     {% endif %}
 
@@ -289,7 +281,7 @@
                                                         <div class="tab-content">
                                                             <div class="tab-pane fade show active" id="payload-{{ attempt.id }}" role="tabpanel">
                                                                 {% if attempt.payload %}
-                                                                    <pre class="small mb-0">{{ attempt.payload|pprint }}</pre>
+                                                                    <pre class="small mb-0" style="background-color: var(--bg-secondary); color: var(--text-primary);">{{ attempt.payload|pprint }}</pre>
                                                                 {% else %}
                                                                     <div class="alert alert-info">No payload data available.</div>
                                                                 {% endif %}
@@ -299,7 +291,7 @@
                                                                     <ul class="list-group">
                                                                         {% for response in attempt.response_body_list %}
                                                                             <li class="list-group-item">
-                                                                                <pre class="small mb-0">{{ response|pprint }}</pre>
+                                                                                <pre class="small mb-0" style="background-color: var(--bg-secondary); color: var(--text-primary);">{{ response|pprint }}</pre>
                                                                             </li>
                                                                         {% endfor %}
                                                                     </ul>
@@ -343,7 +335,7 @@
                                             Show Value ({{ value|length }} chars)
                                         </button>
                                         <div class="collapse mt-2" id="metadata-{{ forloop.counter }}">
-                                            <pre class="small">{{ value }}</pre>
+                                            <pre class="small" style="background-color: var(--bg-secondary); color: var(--text-primary);">{{ value }}</pre>
                                         </div>
                                     {% else %}
                                         {{ value }}

@@ -17,19 +17,11 @@
         display: block;
     }
     
-    /* Updated styles for clickable rows */
-    .clickable-row {
-        cursor: pointer;
-        transition: background-color 0.15s ease-in-out;
-    }
-    /* Apply hover effect to td elements */
-    table tbody tr.clickable-row:hover td {
-        background-color: #f8f9fa;  /* Using Bootstrap's light gray */
-    }
+    /* Table styles are now in theme.css */
     
     /* Filter styles */
     .filter-container {
-        background-color: #f8f9fa;
+        background-color: var(--bg-secondary);
         padding: 15px;
         border-radius: 5px;
         margin-bottom: 20px;
@@ -75,7 +67,7 @@
     {% if filter_params.start_date or filter_params.end_date or filter_params.join_at_start or filter_params.join_at_end or filter_params.states or filter_params.search or bots %}
     <div class="filter-panel mb-3">
         <div class="filter-header p-2 rounded d-flex align-items-center" 
-             style="background-color: #f8f9fa; cursor: pointer;" 
+             style="background-color: var(--bg-secondary); cursor: pointer; color: var(--text-primary);" 
              onclick="toggleFilterPanel(event)">
             <i class="bi bi-funnel me-2"></i>
             <span>Filters</span>
