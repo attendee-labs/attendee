@@ -131,7 +131,12 @@ class BotPodAssigner:
                 bot_id,
                 num_subscribers,
             )
-            return num_subscribers > 0
+            any_subscribers = num_subscribers > 0
+            if not any_subscribers:
+                logger.error("No subscribers found for channel %s", channel_name)
+                return False
+
+            return True
 
         except redis.RedisError as e:
             logger.error("Failed to send assignment command: %s", e)
