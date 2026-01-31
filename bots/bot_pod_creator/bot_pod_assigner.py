@@ -1,6 +1,7 @@
 import logging
 import os
 import random
+import time
 from typing import Dict
 
 import requests
@@ -118,7 +119,32 @@ class BotPodAssigner:
 
     def assign_bot(self, bot_id: int) -> Dict:
         """
-        Assign a bot to an available bot runner pod.
+        Assign a bot to an available bot runner pod with one retry.
+
+        Makes an initial attempt, and if it fails, waits 1 second and tries again.
+
+        Args:
+            bot_id: The ID of the bot to assign
+
+        Returns:
+            A dict with assignment result:
+            - assigned: True if assignment was successful
+            - pod_name: Name of the assigned pod (if successful)
+            - pod_ip: IP address of the assigned pod (if successful)
+            - error: Error message (if failed)
+        """
+        result = self._attempt_to_assign_bot(bot_id)
+        if result["assigned"]:
+            return result
+
+        logger.info("First assignment attempt failed for bot %s, retrying in 1 second...", bot_id)
+        time.sleep(1)
+
+        return self._attempt_to_assign_bot(bot_id)
+
+    def _attempt_to_assign_bot(self, bot_id: int) -> Dict:
+        """
+        Single attempt to assign a bot to an available bot runner pod.
 
         Args:
             bot_id: The ID of the bot to assign
