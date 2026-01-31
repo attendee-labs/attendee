@@ -76,17 +76,19 @@ def _find_bot_runner_pod_for_bot(v1: client.CoreV1Api, bot_id: int, namespace: s
         The pod name if found, None otherwise
     """
     try:
-        # Use label selector to efficiently find the pod assigned to this bot
         pods = v1.list_namespaced_pod(
             namespace=namespace,
-            label_selector=f"is-bot-runner=true,assigned-bot-id={bot_id}",
+            label_selector="is-bot-runner=true",
         )
 
-        if pods.items:
-            return pods.items[0].metadata.name
+        for pod in pods.items:
+            annotations = pod.metadata.annotations or {}
+            assigned_bot_id = annotations.get("assigned-bot-id")
+            if assigned_bot_id == str(bot_id):
+                return pod.metadata.name
 
         return None
 
     except client.ApiException as e:
-        logger.error("Failed to find bot runner pod for bot %s: %s", bot_id, e)
+        logger.error("Failed to list bot runner pods: %s", e)
         return None
