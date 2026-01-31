@@ -148,20 +148,30 @@ class Command(BaseCommand):
             logger.error("Failed to list stale bot runner pods: %s", e)
             return []
 
-    def _delete_pod(self, pod_name: str) -> bool:
-        """
-        Delete a pod by name.
-
-        Returns True if successful, False otherwise.
-        """
+    def _delete_pod_if_unchanged(self, pod) -> bool:
+        pod_name = pod.metadata.name
+        opts = client.V1DeleteOptions(
+            preconditions=client.V1Preconditions(
+                uid=pod.metadata.uid,
+                resource_version=pod.metadata.resource_version,
+            )
+        )
         try:
             self.v1.delete_namespaced_pod(
                 name=pod_name,
                 namespace=self.namespace,
+                body=opts,
             )
-            logger.info("Deleted pod %s", pod_name)
+            logger.info("Deleted pod %s (rv=%s)", pod_name, pod.metadata.resource_version)
             return True
         except client.ApiException as e:
+            # 409 Conflict is typical for failed preconditions
+            if e.status == 409:
+                logger.info("Skip deleting %s: pod changed since list (precondition failed)", pod_name)
+                return False
+            if e.status == 404:
+                logger.info("Pod %s already gone", pod_name)
+                return False
             logger.error("Failed to delete pod %s: %s", pod_name, e)
             return False
 
@@ -182,7 +192,7 @@ class Command(BaseCommand):
                 pod_name = pod.metadata.name
                 pod_version = (pod.metadata.labels or {}).get("app.kubernetes.io/version", "unknown")
                 logger.info("Deleting stale unassigned pod %s (version: %s, current: %s)", pod_name, pod_version, self.app_version)
-                self._delete_pod(pod_name)
+                self._delete_pod_if_unchanged(pod)
 
         unassigned_pods = self._get_unassigned_bot_runner_pods()
         current_count = len(unassigned_pods)
