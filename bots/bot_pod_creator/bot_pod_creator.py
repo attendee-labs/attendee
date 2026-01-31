@@ -211,7 +211,7 @@ class BotPodCreator:
         ephemeral_storage_request = os.getenv("BOT_EPHEMERAL_STORAGE_REQUEST", "10Gi")
 
         if self.bot_runner_uuid:
-            args = ["python", "manage.py", "run_bot", "--botrunneruuid", str(self.bot_runner_uuid)]
+            args = ["python", "manage.py", "wait_for_bot_runner_assignment"]
         else:
             args = ["python", "manage.py", "run_bot", "--botid", str(self.bot_id)]
 
