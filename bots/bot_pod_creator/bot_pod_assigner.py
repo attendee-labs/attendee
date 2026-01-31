@@ -104,10 +104,10 @@ class BotPodAssigner:
                 name=pod_name,
                 namespace=self.namespace,
                 body=patch,
-                _content_type="application/json-patch+json",
             )
             return True
         except client.ApiException as e:
+            logger.error("Failed to assign pod %s to bot %s: %s", pod_name, bot_id, e)
             # If someone else claimed it first, the "test" fails and the API rejects the patch.
             # Status can vary by k8s/proxy (commonly 409/422). Treat as "not claimed".
             if e.status in (409, 422):
@@ -207,10 +207,10 @@ class BotPodAssigner:
                 name=pod_name,
                 namespace=self.namespace,
                 body=patch,
-                _content_type="application/json-patch+json",
             )
             return True
         except client.ApiException as e:
+            logger.error("Failed to release pod %s: %s", pod_name, e)
             if e.status in (409, 422):
                 return False
             raise
