@@ -105,33 +105,17 @@ class Command(BaseCommand):
 
         A pod is considered an unassigned bot runner if:
         - It has the label "is-bot-runner=true"
-        - It has the annotation "assigned-bot-id" set to empty string
+        - It has the label "assigned-bot-id" set to "none"
         - It is in a Running or Pending phase (not completed/failed)
         - It has the same app.kubernetes.io/version label as this command
         """
         try:
             pods = self.v1.list_namespaced_pod(
                 namespace=self.namespace,
-                label_selector="is-bot-runner=true",
+                label_selector=f"is-bot-runner=true,assigned-bot-id=none,app.kubernetes.io/version={self.app_version}",
             )
 
-            unassigned_pods = []
-            for pod in pods.items:
-                # Only consider pods that have the same release version
-                labels = pod.metadata.labels or {}
-                pod_version = labels.get("app.kubernetes.io/version")
-                if pod_version != self.app_version:
-                    continue
-
-                # Check if the pod has an empty assigned-bot-id annotation
-                annotations = pod.metadata.annotations or {}
-                assigned_bot_id = annotations.get("assigned-bot-id", None)
-
-                # Pod is unassigned if annotation exists and is empty
-                if assigned_bot_id == "":
-                    unassigned_pods.append(pod)
-
-            return unassigned_pods
+            return pods.items
 
         except client.ApiException as e:
             logger.error("Failed to list bot runner pods: %s", e)
@@ -144,9 +128,10 @@ class Command(BaseCommand):
         These pods should be cleaned up during rolling deployments.
         """
         try:
+            # Get all unassigned bot runner pods, then filter out current version
             pods = self.v1.list_namespaced_pod(
                 namespace=self.namespace,
-                label_selector="is-bot-runner=true",
+                label_selector="is-bot-runner=true,assigned-bot-id=none",
             )
 
             stale_pods = []
@@ -154,15 +139,7 @@ class Command(BaseCommand):
                 # Only consider pods that have a different release version
                 labels = pod.metadata.labels or {}
                 pod_version = labels.get("app.kubernetes.io/version")
-                if pod_version == self.app_version:
-                    continue
-
-                # Check if the pod has an empty assigned-bot-id annotation (unassigned)
-                annotations = pod.metadata.annotations or {}
-                assigned_bot_id = annotations.get("assigned-bot-id", None)
-
-                # Pod is unassigned if annotation exists and is empty
-                if assigned_bot_id == "":
+                if pod_version != self.app_version:
                     stale_pods.append(pod)
 
             return stale_pods

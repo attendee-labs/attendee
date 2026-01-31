@@ -46,14 +46,14 @@ class BotPodAssigner:
 
         A pod is considered an unassigned bot runner if:
         - It has the label "is-bot-runner=true"
-        - It has the annotation "assigned-bot-id" set to empty string
+        - It has the label "assigned-bot-id" set to "none"
         - It is in Running phase (ready to accept assignments)
         - It has the same app.kubernetes.io/version label as this pod assigner
         """
         try:
             pods = self.v1.list_namespaced_pod(
                 namespace=self.namespace,
-                label_selector="is-bot-runner=true",
+                label_selector=f"is-bot-runner=true,assigned-bot-id=none,app.kubernetes.io/version={self.app_version}",
             )
 
             unassigned_pods = []
@@ -62,19 +62,7 @@ class BotPodAssigner:
                 if pod.status.phase != "Running":
                     continue
 
-                # Only consider pods that have the same release version as this pod assigner
-                labels = pod.metadata.labels or {}
-                pod_version = labels.get("app.kubernetes.io/version")
-                if pod_version != self.app_version:
-                    continue
-
-                # Check if the pod has an empty assigned-bot-id annotation
-                annotations = pod.metadata.annotations or {}
-                assigned_bot_id = annotations.get("assigned-bot-id", None)
-
-                # Pod is unassigned if annotation exists and is empty
-                if assigned_bot_id == "":
-                    unassigned_pods.append(pod)
+                unassigned_pods.append(pod)
 
             return unassigned_pods
 
@@ -95,8 +83,8 @@ class BotPodAssigner:
 
     def _claim_pod_if_unassigned(self, pod_name: str, bot_id: int) -> bool:
         patch = [
-            {"op": "test", "path": "/metadata/annotations/assigned-bot-id", "value": ""},
-            {"op": "replace", "path": "/metadata/annotations/assigned-bot-id", "value": str(bot_id)},
+            {"op": "test", "path": "/metadata/labels/assigned-bot-id", "value": "none"},
+            {"op": "replace", "path": "/metadata/labels/assigned-bot-id", "value": str(bot_id)},
         ]
 
         try:
@@ -204,8 +192,8 @@ class BotPodAssigner:
 
     def _release_pod_if_owned(self, pod_name: str, bot_id: int) -> bool:
         patch = [
-            {"op": "test", "path": "/metadata/annotations/assigned-bot-id", "value": str(bot_id)},
-            {"op": "replace", "path": "/metadata/annotations/assigned-bot-id", "value": ""},
+            {"op": "test", "path": "/metadata/labels/assigned-bot-id", "value": str(bot_id)},
+            {"op": "replace", "path": "/metadata/labels/assigned-bot-id", "value": "none"},
         ]
         try:
             self.v1.patch_namespaced_pod(

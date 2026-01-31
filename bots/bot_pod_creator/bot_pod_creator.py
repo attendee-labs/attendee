@@ -328,6 +328,7 @@ class BotPodCreator:
         }
         if bot_runner_uuid:
             bot_pod_labels["is-bot-runner"] = "true"
+            bot_pod_labels["assigned-bot-id"] = "none"
 
         if add_webpage_streamer:
             bot_pod_labels["network-role"] = "attendee-webpage-streamer-receiver"
@@ -342,9 +343,6 @@ class BotPodCreator:
         if os.getenv("USING_KARPENTER", "false").lower() == "true":
             annotations["karpenter.sh/do-not-disrupt"] = "true"
             annotations["karpenter.sh/do-not-evict"] = "true"
-
-        if bot_runner_uuid:
-            annotations["assigned-bot-id"] = ""
 
         if bot_runner_uuid:
             bot_pod_name = f"bot-runner-{bot_runner_uuid}"

@@ -24,7 +24,7 @@ def locate_pod_for_bot(v1: client.CoreV1Api, bot) -> Optional[PodInfo]:
 
     A bot can run on either:
     1. A bot-specific pod: Named "bot-pod-{bot.id}-{bot.object_id}"
-    2. A bot runner pod: Named "bot-runner-{uuid}" with annotation "assigned-bot-id" set to the bot's id
+    2. A bot runner pod: Named "bot-runner-{uuid}" with label "assigned-bot-id" set to the bot's id
 
     Args:
         v1: Kubernetes CoreV1Api client
@@ -78,14 +78,11 @@ def _find_bot_runner_pod_for_bot(v1: client.CoreV1Api, bot_id: int, namespace: s
     try:
         pods = v1.list_namespaced_pod(
             namespace=namespace,
-            label_selector="is-bot-runner=true",
+            label_selector=f"is-bot-runner=true,assigned-bot-id={bot_id}",
         )
 
-        for pod in pods.items:
-            annotations = pod.metadata.annotations or {}
-            assigned_bot_id = annotations.get("assigned-bot-id")
-            if assigned_bot_id == str(bot_id):
-                return pod.metadata.name
+        if pods.items:
+            return pods.items[0].metadata.name
 
         return None
 
