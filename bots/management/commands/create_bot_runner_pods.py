@@ -26,7 +26,13 @@ class Command(BaseCommand):
             config.load_kube_config()
         self.v1 = client.CoreV1Api()
         self.namespace = settings.BOT_POD_NAMESPACE
-        logger.info("Initialized kubernetes client for namespace %s", self.namespace)
+
+        # Get the current release version to filter pods by matching version
+        self.app_version = os.getenv("CUBER_RELEASE_VERSION")
+        if not self.app_version:
+            raise ValueError("CUBER_RELEASE_VERSION environment variable is required")
+
+        logger.info("Initialized kubernetes client for namespace %s with version %s", self.namespace, self.app_version)
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -95,12 +101,13 @@ class Command(BaseCommand):
 
     def _get_unassigned_bot_runner_pods(self):
         """
-        Get all unassigned bot runner pods in the namespace.
+        Get all unassigned bot runner pods in the namespace that match the current version.
 
         A pod is considered an unassigned bot runner if:
         - It has the label "is-bot-runner=true"
         - It has the annotation "assigned-bot-id" set to empty string
         - It is in a Running or Pending phase (not completed/failed)
+        - It has the same app.kubernetes.io/version label as this command
         """
         try:
             pods = self.v1.list_namespaced_pod(
@@ -110,6 +117,12 @@ class Command(BaseCommand):
 
             unassigned_pods = []
             for pod in pods.items:
+                # Only consider pods that have the same release version
+                labels = pod.metadata.labels or {}
+                pod_version = labels.get("app.kubernetes.io/version")
+                if pod_version != self.app_version:
+                    continue
+
                 # Check if the pod has an empty assigned-bot-id annotation
                 annotations = pod.metadata.annotations or {}
                 assigned_bot_id = annotations.get("assigned-bot-id", None)
@@ -124,16 +137,81 @@ class Command(BaseCommand):
             logger.error("Failed to list bot runner pods: %s", e)
             return []
 
+    def _get_stale_unassigned_bot_runner_pods(self):
+        """
+        Get all unassigned bot runner pods that are on a different version than the current release.
+
+        These pods should be cleaned up during rolling deployments.
+        """
+        try:
+            pods = self.v1.list_namespaced_pod(
+                namespace=self.namespace,
+                label_selector="is-bot-runner=true",
+            )
+
+            stale_pods = []
+            for pod in pods.items:
+                # Only consider pods that have a different release version
+                labels = pod.metadata.labels or {}
+                pod_version = labels.get("app.kubernetes.io/version")
+                if pod_version == self.app_version:
+                    continue
+
+                # Check if the pod has an empty assigned-bot-id annotation (unassigned)
+                annotations = pod.metadata.annotations or {}
+                assigned_bot_id = annotations.get("assigned-bot-id", None)
+
+                # Pod is unassigned if annotation exists and is empty
+                if assigned_bot_id == "":
+                    stale_pods.append(pod)
+
+            return stale_pods
+
+        except client.ApiException as e:
+            logger.error("Failed to list stale bot runner pods: %s", e)
+            return []
+
+    def _delete_pod(self, pod_name: str) -> bool:
+        """
+        Delete a pod by name.
+
+        Returns True if successful, False otherwise.
+        """
+        try:
+            self.v1.delete_namespaced_pod(
+                name=pod_name,
+                namespace=self.namespace,
+            )
+            logger.info("Deleted pod %s", pod_name)
+            return True
+        except client.ApiException as e:
+            logger.error("Failed to delete pod %s: %s", pod_name, e)
+            return False
+
     def _maintain_bot_runner_pool(self, desired_count: int):
         """
         Ensure there are at least `desired_count` unassigned bot runner pods.
         Creates new pods if the current count is below the desired count.
+        Also cleans up stale unassigned pods from previous versions.
         """
+        # First, clean up stale unassigned pods from previous versions
+        stale_pods = self._get_stale_unassigned_bot_runner_pods()
+        if stale_pods:
+            logger.info("Found %s stale unassigned bot runner pods from previous versions", len(stale_pods))
+            for pod in stale_pods:
+                if not self._keep_running:
+                    logger.info("Shutdown requested, stopping stale pod cleanup")
+                    break
+                pod_name = pod.metadata.name
+                pod_version = (pod.metadata.labels or {}).get("app.kubernetes.io/version", "unknown")
+                logger.info("Deleting stale unassigned pod %s (version: %s, current: %s)", pod_name, pod_version, self.app_version)
+                self._delete_pod(pod_name)
+
         unassigned_pods = self._get_unassigned_bot_runner_pods()
         current_count = len(unassigned_pods)
 
         logger.info(
-            "Bot runner pool status: %s unassigned pods, desired: %s",
+            "Bot runner pool status: %s unassigned pods (current version), desired: %s",
             current_count,
             desired_count,
         )

@@ -28,11 +28,16 @@ class BotPodAssigner:
         self.v1 = client.CoreV1Api()
         self.namespace = settings.BOT_POD_NAMESPACE
 
+        # Get the current release version to filter pods by matching version
+        self.app_version = os.getenv("CUBER_RELEASE_VERSION")
+        if not self.app_version:
+            raise ValueError("CUBER_RELEASE_VERSION environment variable is required")
+
         # Initialize Redis client
         redis_url = os.getenv("REDIS_URL") + ("?ssl_cert_reqs=none" if os.getenv("DISABLE_REDIS_SSL") else "")
         self.redis_client = redis.from_url(redis_url)
 
-        logger.info("BotPodAssigner initialized for namespace %s", self.namespace)
+        logger.info("BotPodAssigner initialized for namespace %s with version %s", self.namespace, self.app_version)
 
     def _get_unassigned_bot_runner_pods(self) -> list:
         """
@@ -42,6 +47,7 @@ class BotPodAssigner:
         - It has the label "is-bot-runner=true"
         - It has the annotation "assigned-bot-id" set to empty string
         - It is in Running phase (ready to accept assignments)
+        - It has the same app.kubernetes.io/version label as this pod assigner
         """
         try:
             pods = self.v1.list_namespaced_pod(
@@ -53,6 +59,12 @@ class BotPodAssigner:
             for pod in pods.items:
                 # Only consider pods that are Running
                 if pod.status.phase != "Running":
+                    continue
+
+                # Only consider pods that have the same release version as this pod assigner
+                labels = pod.metadata.labels or {}
+                pod_version = labels.get("app.kubernetes.io/version")
+                if pod_version != self.app_version:
                     continue
 
                 # Check if the pod has an empty assigned-bot-id annotation
