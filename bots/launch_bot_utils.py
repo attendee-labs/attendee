@@ -13,7 +13,8 @@ def launch_bot(bot):
     if os.getenv("LAUNCH_BOT_METHOD") == "kubernetes":
         # Check if we should use the bot runner pool instead of creating new pods
         # We can't create webpage streamer bots using the bot runner pool either
-        if os.getenv("USE_BOT_RUNNER_POOL", "false").lower() == "true" and not bot.should_launch_webpage_streamer():
+        # And we shouldn't use them for scheduled bots either
+        if os.getenv("USE_BOT_RUNNER_POOL", "false").lower() == "true" and not bot.should_launch_webpage_streamer() and bot.join_at is None:
             _launch_bot_via_runner_pool(bot)
         else:
             _launch_bot_via_pod_creator(bot)
