@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import random
 from typing import Dict, Optional
 
 import redis
@@ -92,25 +93,26 @@ class BotPodAssigner:
             return pod_name[len(prefix) :]
         return None
 
-    def _update_pod_annotation(self, pod_name: str, bot_id: int) -> bool:
-        """
-        Update the assigned-bot-id annotation on a pod.
+    def _claim_pod_if_unassigned(self, pod_name: str, bot_id: int) -> bool:
+        patch = [
+            {"op": "test", "path": "/metadata/annotations/assigned-bot-id", "value": ""},
+            {"op": "replace", "path": "/metadata/annotations/assigned-bot-id", "value": str(bot_id)},
+        ]
 
-        Returns True if successful, False otherwise.
-        """
         try:
-            body = {"metadata": {"annotations": {"assigned-bot-id": str(bot_id)}}}
             self.v1.patch_namespaced_pod(
                 name=pod_name,
                 namespace=self.namespace,
-                body=body,
+                body=patch,
+                _content_type="application/json-patch+json",
             )
-            logger.info("Updated pod %s annotation assigned-bot-id to %s", pod_name, bot_id)
             return True
-
         except client.ApiException as e:
-            logger.error("Failed to update pod %s annotation: %s", pod_name, e)
-            return False
+            # If someone else claimed it first, the "test" fails and the API rejects the patch.
+            # Status can vary by k8s/proxy (commonly 409/422). Treat as "not claimed".
+            if e.status in (409, 422):
+                return False
+            raise
 
     def _send_assignment_command(self, bot_runner_uuid: str, bot_id: int) -> bool:
         """
@@ -159,8 +161,8 @@ class BotPodAssigner:
                 "error": "No unassigned bot runner pods available",
             }
 
-        # Use the first available pod
-        pod = unassigned_pods[0]
+        # Use a random unassigned pod
+        pod = random.choice(unassigned_pods)
         pod_name = pod.metadata.name
         bot_runner_uuid = self._extract_runner_uuid_from_pod_name(pod_name)
 
@@ -172,7 +174,7 @@ class BotPodAssigner:
             }
 
         # Update the pod annotation to mark it as assigned
-        if not self._update_pod_annotation(pod_name, bot_id):
+        if not self._claim_pod_if_unassigned(pod_name, bot_id):
             return {
                 "assigned": False,
                 "error": f"Failed to update pod annotation for {pod_name}",
@@ -182,7 +184,7 @@ class BotPodAssigner:
         if not self._send_assignment_command(bot_runner_uuid, bot_id):
             # Rollback the annotation update
             logger.warning("Rolling back annotation update for pod %s", pod_name)
-            self._update_pod_annotation_to_unassigned(pod_name)
+            self._release_pod_if_owned(pod_name, bot_id)
             return {
                 "assigned": False,
                 "error": f"Failed to send assignment command to {bot_runner_uuid}",
@@ -195,28 +197,20 @@ class BotPodAssigner:
             "bot_runner_uuid": bot_runner_uuid,
         }
 
-    def _update_pod_annotation_to_unassigned(self, pod_name: str) -> bool:
-        """
-        Reset the assigned-bot-id annotation on a pod to empty (unassigned).
-
-        Returns True if successful, False otherwise.
-        """
+    def _release_pod_if_owned(self, pod_name: str, bot_id: int) -> bool:
+        patch = [
+            {"op": "test", "path": "/metadata/annotations/assigned-bot-id", "value": str(bot_id)},
+            {"op": "replace", "path": "/metadata/annotations/assigned-bot-id", "value": ""},
+        ]
         try:
-            body = {"metadata": {"annotations": {"assigned-bot-id": ""}}}
             self.v1.patch_namespaced_pod(
                 name=pod_name,
                 namespace=self.namespace,
-                body=body,
+                body=patch,
+                _content_type="application/json-patch+json",
             )
-            logger.info("Reset pod %s annotation assigned-bot-id to empty", pod_name)
             return True
-
         except client.ApiException as e:
-            logger.error("Failed to reset pod %s annotation: %s", pod_name, e)
-            return False
-
-    def get_available_runner_count(self) -> int:
-        """
-        Get the count of available (unassigned) bot runner pods.
-        """
-        return len(self._get_unassigned_bot_runner_pods())
+            if e.status in (409, 422):
+                return False
+            raise
