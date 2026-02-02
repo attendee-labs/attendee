@@ -849,7 +849,30 @@ class WebBotAdapter(BotAdapter):
 
         self.cleaned_up = True
 
+    def log_browser_url(self):
+        try:
+            logger.info(f"Browser URL: {self.driver.current_url}")
+        except Exception as e:
+            logger.warning(f"Error logging browser URL: {e}")
+
+        try:
+            nav_history = self.driver.execute_cdp_cmd("Page.getNavigationHistory", {})
+            entries = nav_history.get("entries", [])
+            urls = [entry.get("url") for entry in entries]
+            logger.info(f"Browser navigation history ({len(urls)} entries): {urls}")
+        except Exception as e:
+            logger.warning(f"Error logging browser navigation history: {e}")
+
+        try:
+            tab_count = len(self.driver.window_handles)
+            logger.info(f"Browser open tabs: {tab_count}")
+        except Exception as e:
+            logger.warning(f"Error logging browser tab count: {e}")
+
     def check_auto_leave_conditions(self) -> None:
+
+        self.log_browser_url()
+        
         if self.left_meeting:
             return
         if self.cleaned_up:

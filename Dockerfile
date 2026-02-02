@@ -127,6 +127,22 @@ COPY --chown=app:app . .
 # Make STATIC_ROOT writeable for the non-root user so collectstatic can run at startup
 RUN mkdir -p "$cwd/staticfiles" && chown -R app:app "$cwd/staticfiles"
 
+RUN mkdir -p /etc/opt/chrome/policies/managed \
+  && cat > /etc/opt/chrome/policies/managed/99-browser-switcher.json <<'EOF'
+{
+  "BrowserSwitcherEnabled": true,
+  "AlternativeBrowserPath": "/nonexistent-browser",
+  "AlternativeBrowserParameters": [],
+  "BrowserSwitcherDelay": 0,
+  "BrowserSwitcherParsingMode": 1,
+  "BrowserSwitcherUrlList": [
+    "*",
+    "!google.com",
+    "!sattendee.dev"
+  ]
+}
+EOF
+
 # Switch to non-root AFTER copies to avoid permission flakiness
 USER app
 
