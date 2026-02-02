@@ -525,7 +525,40 @@ class WebBotAdapter(BotAdapter):
     def add_subclass_specific_chrome_options(self, options):
         pass
 
+    def get_chrome_policy(self):
+        """
+        Returns the Chrome browser switcher policy as a dictionary.
+        Subclasses can override this to customize the policy.
+        """
+        return {
+            "BrowserSwitcherEnabled": True,
+            "AlternativeBrowserPath": "/nonexistent-browser",
+            "AlternativeBrowserParameters": [],
+            "BrowserSwitcherDelay": 0,
+            "BrowserSwitcherParsingMode": 1,
+            "BrowserSwitcherUrlList": [
+                "*",
+                "!google.com",
+                "!microsoft.com",
+                "!office.com",
+                "!cloud.microsoft",
+                "!microsoftonline.com"
+            ]
+        }
+
+    def write_chrome_policy_file(self):
+        """
+        Writes the Chrome policy file to /tmp/chrome-policies.json.
+        This file is symlinked from /etc/opt/chrome/policies/managed/99-browser-switcher.json.
+        """
+        policy = self.get_chrome_policy()
+        with open("/tmp/chrome-policies.json", "w") as f:
+            json.dump(policy, f, indent=2)
+        logger.info("Chrome policy file written to /tmp/chrome-policies.json")
+
     def init_driver(self):
+        self.write_chrome_policy_file()
+
         options = webdriver.ChromeOptions()
 
         options.add_argument("--autoplay-policy=no-user-gesture-required")
