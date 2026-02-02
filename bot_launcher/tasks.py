@@ -1,6 +1,7 @@
 import logging
 import os
 
+import docker
 import django
 from celery import shared_task
 
@@ -13,7 +14,18 @@ from bots.models import Bot
 logger = logging.getLogger(__name__)
 
 
-@shared_task(bind=True, name="bot_launcher.launch_bot_from_queue", queue="bot_launcher")
+class BotLauncherCapacityError(Exception):
+    """Raised when the maximum number of simultaneous bots is reached."""
+
+
+@shared_task(
+    bind=True,
+    name="bot_launcher.launch_bot_from_queue",
+    queue="bot_launcher",
+    autoretry_for=(BotLauncherCapacityError,),
+    retry_backoff=True,
+    max_retries=6,
+)
 def launch_bot_from_queue(self, bot_id: int):
     """
     Launches an ephemeral Docker container to execute a bot.
@@ -22,13 +34,6 @@ def launch_bot_from_queue(self, bot_id: int):
     Container auto-removes on exit.
     Celery task returns in ~2 seconds.
     """
-    # Lazy import of docker to avoid import errors in workers that don't need it
-    try:
-        import docker
-    except ImportError:
-        logger.error("docker module not available. Cannot launch ephemeral containers.")
-        raise ImportError("docker module is required for ephemeral bot containers. Install it with: pip install docker==7.1.0")
-
     logger.info(f"Launching ephemeral Docker container for bot {bot_id}")
 
     try:
@@ -48,7 +53,7 @@ def launch_bot_from_queue(self, bot_id: int):
                 f"Cannot launch bot {bot_id}"
             )
             logger.error(error_msg)
-            raise Exception(error_msg)
+            raise BotLauncherCapacityError(error_msg)
 
         logger.info(
             f"Current running bots: {current_running_count}/{max_simultaneous_bots}. "
@@ -84,26 +89,19 @@ def launch_bot_from_queue(self, bot_id: int):
         cpu_quota = int(os.getenv("BOT_CPU_QUOTA", "100000"))  # 1 CPU default (100000 = 1 core)
         cpu_period = int(os.getenv("BOT_CPU_PERIOD", "100000"))
 
-        # Get bot to retrieve max_uptime_seconds
-        try:
-            bot = Bot.objects.get(id=bot_id)
-            automatic_leave_settings = bot.automatic_leave_settings()
-            bot_max_uptime = automatic_leave_settings.get("max_uptime_seconds")
+        # Get bot to retrieve max_uptime_seconds (Bot.DoesNotExist propagates)
+        bot = Bot.objects.get(id=bot_id)
+        automatic_leave_settings = bot.automatic_leave_settings()
+        bot_max_uptime = automatic_leave_settings.get("max_uptime_seconds")
 
-            # Calculate timeout = max_uptime_seconds + 1h (3600s) if defined, otherwise use default
-            if bot_max_uptime is not None:
-                max_execution_seconds = bot_max_uptime + 3600  # + 1h margin
-                logger.info(f"Bot {bot_id} has max_uptime_seconds={bot_max_uptime}, setting container timeout to {max_execution_seconds}s")
-            else:
-                # No max_uptime defined, use default (4h)
-                max_execution_seconds = int(os.getenv("BOT_MAX_EXECUTION_SECONDS", "14400"))
-                logger.info(f"Bot {bot_id} has no max_uptime_seconds, using default timeout {max_execution_seconds}s")
-        except Bot.DoesNotExist:
-            logger.warning(f"Bot {bot_id} not found in database, using default timeout")
+        # Calculate timeout = max_uptime_seconds + 1h (3600s) if defined, otherwise use default
+        if bot_max_uptime is not None:
+            max_execution_seconds = bot_max_uptime + 3600  # + 1h margin
+            logger.info(f"Bot {bot_id} has max_uptime_seconds={bot_max_uptime}, setting container timeout to {max_execution_seconds}s")
+        else:
+            # No max_uptime defined, use default (4h)
             max_execution_seconds = int(os.getenv("BOT_MAX_EXECUTION_SECONDS", "14400"))
-        except Exception as e:
-            logger.error(f"Error retrieving bot {bot_id} for timeout calculation: {e}, using default")
-            max_execution_seconds = int(os.getenv("BOT_MAX_EXECUTION_SECONDS", "14400"))
+            logger.info(f"Bot {bot_id} has no max_uptime_seconds, using default timeout {max_execution_seconds}s")
 
         # Command to execute in container with timeout
         # timeout forces stop after max_execution_seconds

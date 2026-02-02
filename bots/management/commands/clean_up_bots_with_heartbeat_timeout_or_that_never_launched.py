@@ -1,6 +1,7 @@
 import logging
 import os
 
+import docker
 from django.conf import settings
 from django.core.management.base import BaseCommand
 from django.db import models
@@ -30,9 +31,12 @@ class Command(BaseCommand):
             logger.error(f"Failed to create fatal error {event_sub_type} event for bot {bot.id}: {str(e)}")
 
         # There isn't really a safe way to terminate the bot if it's running as a celery task
-        if not os.getenv("LAUNCH_BOT_METHOD") == "kubernetes":
-            return
+        if os.getenv("LAUNCH_BOT_METHOD") == "kubernetes":
+            self._terminate_kubernetes_pod(bot)
+        elif os.getenv("LAUNCH_BOT_METHOD") == "docker-compose-multi-host":
+            self._terminate_ephemeral_docker_container(bot)
 
+    def _terminate_kubernetes_pod(self, bot):
         # Initialize kubernetes client
         try:
             config.load_incluster_config()
@@ -54,6 +58,25 @@ class Command(BaseCommand):
             # 404 means pod doesn't exist, which is fine
             if pod_error.status != 404:
                 logger.warning(f"Error deleting pod {pod_name}: {str(pod_error)}")
+
+    def _terminate_ephemeral_docker_container(self, bot):
+        """Remove the ephemeral Docker container for this bot (container name: bot-{id})."""
+        try:
+            client = docker.from_env()
+        except Exception as e:
+            logger.warning(f"Cannot connect to Docker to terminate bot {bot.id}: {e}")
+            return
+
+        container_name = f"bot-{bot.id}"
+        try:
+            container = client.containers.get(container_name)
+            container.remove(force=True)
+            logger.info(f"Removed ephemeral container: {container_name}")
+        except docker.errors.NotFound:
+            # Container already gone, which is fine
+            pass
+        except Exception as e:
+            logger.warning(f"Error removing container {container_name}: {e}")
 
     def handle(self, *args, **options):
         self.terminate_bots_with_heartbeat_timeout()
