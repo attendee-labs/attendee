@@ -92,6 +92,7 @@ class WebBotAdapter(BotAdapter):
         self.last_audio_message_processed_time = None
         self.first_buffer_timestamp_ms_offset = time.time() * 1000
         self.media_sending_enable_timestamp_ms = None
+        self.last_domain_allow_list_violation_check_time = time.time()
 
         self.participants_info = {}
         self.only_one_participant_in_meeting_at = None
@@ -523,10 +524,21 @@ class WebBotAdapter(BotAdapter):
             }
         )
 
+    def subclass_specific_chrome_policies(self):
+        return {}
+
+    def write_chrome_policies_file(self):
+        policy = self.subclass_specific_chrome_policies()
+        with open("/tmp/chrome-policies.json", "w") as f:
+            json.dump(policy, f, indent=2)
+        logger.info("Chrome policy file written to /tmp/chrome-policies.json: %s", policy)
+
     def add_subclass_specific_chrome_options(self, options):
         pass
 
     def init_driver(self):
+        self.write_chrome_policies_file()
+
         options = webdriver.ChromeOptions()
 
         options.add_argument("--autoplay-policy=no-user-gesture-required")
@@ -861,11 +873,39 @@ class WebBotAdapter(BotAdapter):
 
         self.cleaned_up = True
 
+    def check_domain_allow_list_violation(self):
+        if not settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:
+            return
+        if time.time() - self.last_domain_allow_list_violation_check_time < 30:
+            return
+        if not self.driver:
+            return
+
+        self.last_domain_allow_list_violation_check_time = time.time()
+
+        nav_history_urls = []
+        try:
+            nav_history = self.driver.execute_cdp_cmd("Page.getNavigationHistory", {})
+            nav_history_entries = nav_history.get("entries", [])
+            nav_history_urls = [entry.get("url", "") for entry in nav_history_entries]
+
+        except Exception as e:
+            logger.warning(f"Error getting navigation history: {e}")
+            return
+
+        # If any of the navigation urls start with chrome://browser-switch, then the url was blocked.
+        for url in nav_history_urls:
+            if url.startswith("chrome://browser-switch"):
+                logger.error(f"Domain allow list violation detected: {url}")
+                raise Exception(f"Domain allow list violation detected: {url}")
+
     def check_auto_leave_conditions(self) -> None:
         if self.left_meeting:
             return
         if self.cleaned_up:
             return
+
+        self.check_domain_allow_list_violation()
 
         if self.only_one_participant_in_meeting_at is not None:
             if time.time() - self.only_one_participant_in_meeting_at > self.automatic_leave_configuration.only_participant_in_meeting_timeout_seconds:

@@ -127,6 +127,11 @@ COPY --chown=app:app . .
 # Make STATIC_ROOT writeable for the non-root user so collectstatic can run at startup
 RUN mkdir -p "$cwd/staticfiles" && chown -R app:app "$cwd/staticfiles"
 
+# Create a chrome policies file that is symlinked to a file we can edit.
+# The path is hardcoded, so we can't use the /tmp file directly.
+RUN mkdir -p /etc/opt/chrome/policies/managed \
+  && ln -s /tmp/chrome-policies.json /etc/opt/chrome/policies/managed/chrome-policies.json
+
 # Switch to non-root AFTER copies to avoid permission flakiness
 USER app
 
