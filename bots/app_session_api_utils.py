@@ -54,6 +54,12 @@ def create_app_session(data: dict, source: BotCreationSource, project: Project) 
         "zoom_rtms": zoom_rtms,
     }
 
+    # Flip the feature flag on if they create an app session
+    organization = project.organization
+    if not organization.is_app_sessions_enabled:
+        organization.is_app_sessions_enabled = True
+        organization.save()
+
     try:
         with transaction.atomic():
             app_session = Bot.objects.create(
