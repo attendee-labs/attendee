@@ -161,9 +161,9 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
             "BrowserSwitcherParsingMode": 1,
             "BrowserSwitcherUrlList": [
                 "*",
-                # "!microsoft.com",
-                # "!office.com",
-                # "!cloud.microsoft",
-                # "!microsoftonline.com"
+                "!microsoft.com",
+                "!office.com",
+                "!cloud.microsoft",
+                "!microsoftonline.com"
             ],
         }
