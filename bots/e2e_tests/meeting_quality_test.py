@@ -436,12 +436,23 @@ class AttendeeClient:
         except Exception:
             return []
 
-    def get_recording_url(self, bot_id: str) -> Optional[str]:
-        """Get the recording URL from the bot data."""
-        bot = self.get_bot(bot_id)
-        recordings = bot.get("recordings", [])
-        if recordings:
-            return recordings[0].get("url")
+    def get_recording_url(self, bot_id: str, timeout_s: int = 60) -> Optional[str]:
+        """Get the recording URL, waiting for it to be available."""
+        start = time.time()
+        while (time.time() - start) < timeout_s:
+            try:
+                r = self.session.get(
+                    self._url(f"/api/v1/bots/{bot_id}/recording"),
+                    timeout=self.timeout,
+                )
+                if r.status_code == 200:
+                    data = r.json()
+                    url = data.get("url")
+                    if url:
+                        return url
+            except Exception:
+                pass
+            time.sleep(2)
         return None
 
     def download_recording(self, url: str, output_path: Path) -> bool:
@@ -741,7 +752,6 @@ def run_meeting_quality_test(
                         str(ground_truth.combined_audio_file),
                         str(tmp_path),
                     )
-
                     # Cleanup
                     tmp_path.unlink(missing_ok=True)
 
