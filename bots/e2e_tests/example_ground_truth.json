@@ -1,0 +1,24 @@
+{
+    "speakers": [
+        {
+            "name": "Speaker 1",
+            "audio_file": "speaker1.mp3",
+            "audio_duration_seconds": 11.0,
+            "transcript": "Hello everyone. Welcome to today's meeting. I wanted to discuss our quarterly results and the upcoming product launch."
+        },
+        {
+            "name": "Speaker 2",
+            "audio_file": "speaker2.mp3",
+            "audio_duration_seconds": 13.0,
+            "transcript": "Thanks for the introduction. I've prepared a brief overview of our sales numbers. We exceeded our targets by fifteen percent this quarter."
+        },
+        {
+            "name": "Speaker 3",
+            "audio_file": "speaker3.mp3",
+            "audio_duration_seconds": 14.0,
+            "transcript": "That's great news. On the product side, we're on track for the launch next month. The engineering team has completed all major features."
+        }
+    ],
+    "combined_transcript": "Hello everyone. Welcome to today's meeting. I wanted to discuss our quarterly results and the upcoming product launch. Thanks for the introduction. I've prepared a brief overview of our sales numbers. We exceeded our targets by fifteen percent this quarter. That's great news. On the product side, we're on track for the launch next month. The engineering team has completed all major features.",
+    "combined_audio_file": "combined_ground_truth.wav"
+}
