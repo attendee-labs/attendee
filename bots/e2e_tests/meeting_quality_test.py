@@ -473,16 +473,11 @@ def wait_for_state(
     desc: str,
     timeout_s: int,
     poll_s: float = 2.0,
-    verbose: bool = False,
 ) -> Dict:
     start = time.time()
-    last_logged_state = None
     while True:
         bot = client.get_bot(bot_id)
         state = str(bot.get("state", ""))
-        if verbose and state != last_logged_state:
-            print(f"    [{bot_id}] state: {state}")
-            last_logged_state = state
         if predicate(state, bot):
             return bot
         if (time.time() - start) > timeout_s:
@@ -571,7 +566,7 @@ def run_meeting_quality_test(
     try:
         # 1. Create bots
         if verbose:
-            print(f"Creating {len(ground_truth.speakers)} speaker bots and 1 recorder bot...")
+            print(f"Creating {len(ground_truth.speakers) + 1} bots...", end=" ", flush=True)
 
         for speaker in ground_truth.speakers:
             bot = client.create_bot(
@@ -580,8 +575,6 @@ def run_meeting_quality_test(
                 enable_transcription=False,
             )
             speaker_bots.append((bot["id"], speaker.name, speaker))
-            if verbose:
-                print(f"  Created speaker bot: {bot['id']} ({speaker.name})")
 
         recorder = client.create_bot(
             meeting_url=meeting_url,
@@ -590,70 +583,63 @@ def run_meeting_quality_test(
         )
         recorder_bot_id = recorder["id"]
         if verbose:
-            print(f"  Created recorder bot: {recorder_bot_id}")
+            print("done")
 
         # 2. Wait for all bots to join
         if verbose:
-            print("Waiting for all bots to join...")
+            print("Waiting for bots to join...", end=" ", flush=True)
 
         def _pred_joined(state: str, bot_obj: Dict) -> bool:
             return state_is_joined_recording(state)
 
         for bot_id, bot_name, _ in speaker_bots:
-            wait_for_state(client, bot_id, _pred_joined, "joined_recording", join_timeout, verbose=verbose)
-            if verbose:
-                print(f"  {bot_name} joined")
+            wait_for_state(client, bot_id, _pred_joined, "joined_recording", join_timeout)
 
-        wait_for_state(client, recorder_bot_id, _pred_joined, "joined_recording", join_timeout, verbose=verbose)
+        wait_for_state(client, recorder_bot_id, _pred_joined, "joined_recording", join_timeout)
         if verbose:
-            print("  Recorder Bot joined")
+            print("done")
 
         # Wait a bit for stable recording
         if speak_wait > 0:
-            if verbose:
-                print(f"Waiting {speak_wait:.1f}s before speaking...")
             time.sleep(speak_wait)
 
         # 3. Play audio from speaker bots SEQUENTIALLY (realistic turn-taking)
         if verbose:
-            print("Playing audio from speakers sequentially (simulating turn-taking)...")
+            print("Playing audio sequentially:")
 
         audio_start_time = time.time()
 
         for bot_id, bot_name, config in speaker_bots:
             if verbose:
-                print(f"  {bot_name} speaking: {config.audio_file} ({config.audio_duration_seconds}s)")
+                print(f"  {bot_name} ({config.audio_duration_seconds:.0f}s)...", end=" ", flush=True)
 
             try:
                 client.output_audio(bot_id, config.audio_file)
             except Exception as e:
                 report.failure_reasons.append(f"Failed to play audio for {bot_name}: {e}")
+                if verbose:
+                    print("failed")
                 continue
 
             # Wait for this speaker's audio to finish + pause before next speaker
             wait_time = config.audio_duration_seconds + pause_between_speakers
-            if verbose:
-                print(f"    Waiting {wait_time:.1f}s (duration + pause)...")
             time.sleep(wait_time)
+            if verbose:
+                print("done")
 
         # 4. Additional wait after all speakers are done (if specified)
         if leave_after:
-            if verbose:
-                print(f"Waiting additional {leave_after:.1f}s before leaving...")
             time.sleep(leave_after)
 
         # 5. Tell all bots to leave
         if verbose:
-            print("Telling all bots to leave...")
+            print("Waiting for bots to leave...", end=" ", flush=True)
 
         for bot_id, bot_name, _ in speaker_bots:
             client.tell_bot_to_leave(bot_id)
         client.tell_bot_to_leave(recorder_bot_id)
 
         # 6. Wait for all bots to end
-        if verbose:
-            print("Waiting for all bots to reach terminal state...")
-
         # Terminal states for speaker bots (don't need to wait for full processing)
         speaker_terminal_states = {"ended", "fatal_error", "data_deleted", "post_processing"}
         # Recorder bot must reach 'ended' to have complete transcript
@@ -669,14 +655,11 @@ def run_meeting_quality_test(
 
         for bot_id, bot_name, _ in speaker_bots:
             try:
-                final_bot = wait_for_state(client, bot_id, _pred_speaker_terminal, "terminal", end_timeout, verbose=verbose)
+                final_bot = wait_for_state(client, bot_id, _pred_speaker_terminal, "terminal", end_timeout)
                 final_state = final_bot.get("state", "unknown")
-                if verbose:
-                    print(f"  {bot_name} reached state: {final_state}")
                 if final_state == "fatal_error":
                     report.failure_reasons.append(f"{bot_name} ended with fatal_error")
             except TimeoutError as e:
-                # Log current state for debugging
                 try:
                     current = client.get_bot(bot_id)
                     current_state = current.get("state", "unknown")
@@ -685,13 +668,9 @@ def run_meeting_quality_test(
                     report.failure_reasons.append(f"{bot_name} did not end: {e}")
 
         # Recorder bot must wait for 'ended' to have complete transcript
-        if verbose:
-            print("  Waiting for Recorder Bot to finish processing transcript...")
         try:
-            final_bot = wait_for_state(client, recorder_bot_id, _pred_recorder_terminal, "ended", end_timeout, verbose=verbose)
+            final_bot = wait_for_state(client, recorder_bot_id, _pred_recorder_terminal, "ended", end_timeout)
             final_state = final_bot.get("state", "unknown")
-            if verbose:
-                print(f"  Recorder Bot reached state: {final_state}")
             if final_state == "fatal_error":
                 report.failure_reasons.append("Recorder Bot ended with fatal_error")
         except TimeoutError as e:
@@ -702,16 +681,14 @@ def run_meeting_quality_test(
             except Exception:
                 report.failure_reasons.append(f"Recorder Bot did not end: {e}")
 
+        if verbose:
+            print("done")
+
         # 7. Fetch and analyze transcript
         if verbose:
-            print("Fetching transcript...")
+            print("Analyzing transcript...", end=" ", flush=True)
 
         transcript_data = client.get_transcript(recorder_bot_id)
-
-        if verbose:
-            print(f"  Retrieved {len(transcript_data)} utterances")
-            if transcript_data:
-                print(f"  Sample utterance: {json.dumps(transcript_data[0], indent=2)}")
 
         # Build actual transcript and utterances
         actual_utterances = []
@@ -727,24 +704,11 @@ def run_meeting_quality_test(
         actual_transcript = " ".join(actual_transcript_parts)
         report.raw_transcript = actual_transcript
 
-        # Debug: show unique speakers found
-        unique_speakers = set(utt.get("speaker") for utt in actual_utterances)
-        if verbose:
-            print(f"  Unique speakers found: {unique_speakers}")
-            print(f"  Actual transcript: {actual_transcript[:200] if actual_transcript else '(empty)'}...")
-
         # 8. Calculate transcript metrics
-        if verbose:
-            print("Calculating transcript metrics...")
-
         report.transcript_metrics = calculate_transcript_metrics(
             ground_truth.combined_transcript,
             actual_transcript,
         )
-
-        if verbose:
-            print(f"  WER: {report.transcript_metrics.wer:.2%}")
-            print(f"  CER: {report.transcript_metrics.cer:.2%}")
 
         # 9. Calculate per-speaker WER
         for speaker in ground_truth.speakers:
@@ -752,27 +716,20 @@ def run_meeting_quality_test(
             if speaker_actual:
                 metrics = calculate_transcript_metrics(speaker.transcript, speaker_actual)
                 report.per_speaker_wer[speaker.name] = metrics.wer
-                if verbose:
-                    print(f"  {speaker.name} WER: {metrics.wer:.2%}")
 
         # 10. Calculate diarization metrics
-        if verbose:
-            print("Calculating diarization metrics...")
-
         report.diarization_metrics = calculate_diarization_metrics(
             expected_speaker_count=len(ground_truth.speakers),
             actual_utterances=actual_utterances,
         )
 
         if verbose:
-            print(f"  Speaker count accuracy: {1 - report.diarization_metrics.der:.2%}")
-            print(f"  Fragmentation score: {report.diarization_metrics.wder:.2%} (lower is better)")
-            print(f"  Speakers detected: {report.diarization_metrics.correct_speakers} (expected: {report.diarization_metrics.total_speakers})")
+            print("done")
 
         # 11. Calculate audio metrics (if ground truth audio available)
         if ground_truth.combined_audio_file and ground_truth.combined_audio_file.exists():
             if verbose:
-                print("Calculating audio metrics...")
+                print("Calculating audio metrics...", end=" ", flush=True)
 
             recording_url = client.get_recording_url(recorder_bot_id)
             if recording_url:
@@ -785,14 +742,11 @@ def run_meeting_quality_test(
                         str(tmp_path),
                     )
 
-                    if verbose:
-                        if report.audio_metrics.pesq_score:
-                            print(f"  PESQ: {report.audio_metrics.pesq_score:.2f}")
-                        if report.audio_metrics.stoi_score:
-                            print(f"  STOI: {report.audio_metrics.stoi_score:.2%}")
-
                     # Cleanup
                     tmp_path.unlink(missing_ok=True)
+
+            if verbose:
+                print("done")
 
         # 12. Determine pass/fail
         speakers_detected_correctly = (
@@ -848,14 +802,8 @@ def main():
             sys.exit(2)
 
     if args.verbose:
-        print("=" * 60)
-        print("Meeting Quality E2E Test")
-        print("=" * 60)
-        print(f"Speakers: {len(ground_truth.speakers)}")
-        for s in ground_truth.speakers:
-            print(f"  - {s.name}: {s.audio_file}")
-        print(f"Expected transcript length: {len(ground_truth.combined_transcript)} chars")
-        print("=" * 60)
+        total_duration = sum(s.audio_duration_seconds for s in ground_truth.speakers)
+        print(f"Meeting Quality Test: {len(ground_truth.speakers)} speakers, {total_duration:.0f}s audio")
 
     client = AttendeeClient(args.base_url, args.api_key)
 

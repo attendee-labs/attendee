@@ -8,7 +8,7 @@ celery==5.4.0
 certifi==2024.8.30
 cffi==1.17.1
 charset-normalizer==3.4.0
-click==8.1.7
+click==8.1.8
 click-didyoumean==0.3.1
 click-plugins==1.1.1
 click-repl==0.3.0
@@ -102,3 +102,7 @@ jsonpointer==3.0.0
 
 # E2E test metrics
 jiwer==3.1.0
+# Audio quality metrics for e2e tests
+librosa==0.10.2
+pesq==0.0.4
+pystoi==0.4.1
