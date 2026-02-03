@@ -528,10 +528,14 @@ class WebBotAdapter(BotAdapter):
         return {}
 
     def write_chrome_policies_file(self):
+        # Check if the /etc/.../attendee-chrome-policies.json symlink exists. If not, skip this, we are not running in the docker container.
+        if not os.path.islink("/etc/opt/chrome/policies/managed/attendee-chrome-policies.json"):
+            logger.warning("Attendee chrome policy file symlink does not exist, skipping writing chrome policies.")
+            return
         policy = self.subclass_specific_chrome_policies()
-        with open("/tmp/chrome-policies.json", "w") as f:
+        with open("/tmp/attendee-chrome-policies.json", "w") as f:
             json.dump(policy, f, indent=2)
-        logger.info("Chrome policy file written to /tmp/chrome-policies.json: %s", policy)
+        logger.info("Chrome policy file written to /tmp/attendee-chrome-policies.json: %s", policy)
 
     def add_subclass_specific_chrome_options(self, options):
         pass

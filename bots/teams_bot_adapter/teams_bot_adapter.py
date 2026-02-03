@@ -165,6 +165,6 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
                 "!office.com",
                 "!cloud.microsoft",
                 "!microsoftonline.com",
-                "!live.com"
+                "!live.com",
             ],
         }
