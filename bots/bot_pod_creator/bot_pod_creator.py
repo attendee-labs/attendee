@@ -46,6 +46,16 @@ def apply_json6902_patch(json_to_patch: dict, patch_str: str) -> dict:
         logger.error("Failed to apply patch: %s", e)
         return json_to_patch
 
+# Fetch bot pod spec from environment variable.
+def fetch_bot_pod_spec(bot_pod_spec_type: str) -> str:
+    # Out of caution ensure bot_pod_spec_type is purely alphabetical and all uppercase
+    if not bot_pod_spec_type.isalpha() or not bot_pod_spec_type.isupper():
+        raise ValueError(f"bot_pod_spec_type must be purely alphabetical and all uppercase: {bot_pod_spec_type}")
+    # Make sure it is in the BotPodSpecType enum or the custom allowlist.
+    if bot_pod_spec_type not in BotPodSpecType.__members__ and bot_pod_spec_type not in settings.CUSTOM_BOT_POD_SPEC_TYPES:
+        raise ValueError(f"bot_pod_spec_type must be in the BotPodSpecType enum or the custom allowlist: {bot_pod_spec_type}")
+    return os.getenv(f"BOT_POD_SPEC_{bot_pod_spec_type}")
+
 class BotPodCreator:
     def __init__(self):
         try:
@@ -273,8 +283,8 @@ class BotPodCreator:
         ]
 
     def apply_spec_to_bot_pod(self, bot_pod: client.V1Pod) -> dict:
-        bot_pod_spec_data = self.api_client.sanitize_for_serialization(bot_pod)
-        return apply_json6902_patch(bot_pod_spec_data, self.bot_pod_spec)
+        bot_pod_data = self.api_client.sanitize_for_serialization(bot_pod)
+        return apply_json6902_patch(bot_pod_data, self.bot_pod_spec)
 
     def create_bot_pod(
         self,
@@ -283,7 +293,7 @@ class BotPodCreator:
         bot_cpu_request: Optional[int] = None,
         add_webpage_streamer: Optional[bool] = False,
         add_persistent_storage: Optional[bool] = False,
-        bot_pod_spec_type: Optional[BotPodSpecType] = BotPodSpecType.DEFAULT,
+        bot_pod_spec_type: Optional[str] = BotPodSpecType.DEFAULT,
     ) -> Dict:
         """
         Create a bot pod with configuration from environment.
@@ -291,6 +301,11 @@ class BotPodCreator:
         Args:
             bot_id: Integer ID of the bot to run
             bot_name: Optional name for the bot (will generate if not provided)
+            bot_cpu_request: Optional CPU request override for the bot
+            add_webpage_streamer: Whether to create a webpage streamer pod
+            add_persistent_storage: Whether to add persistent storage to the bot pod
+            bot_pod_spec_type: Name of the bot pod spec to use (e.g. DEFAULT, SCHEDULED, or any custom name).
+                              Will look up BOT_POD_SPEC_{name} from environment variables.
         """
         if bot_name is None:
             bot_name = f"bot-{bot_id}-{uuid.uuid4().hex[:8]}"
@@ -299,11 +314,8 @@ class BotPodCreator:
         self.bot_cpu_request = bot_cpu_request
         self.add_persistent_storage = add_persistent_storage
 
-        # Out of caution ensure bot_pod_spec_type is purely alphabetical and all uppercase
-        if not bot_pod_spec_type.isalpha() or not bot_pod_spec_type.isupper():
-            raise ValueError(f"bot_pod_spec_type must be purely alphabetical and all uppercase: {bot_pod_spec_type}")
-        # Fetch bot pod spec from environment variable, falling back to default if not defined
-        self.bot_pod_spec = os.getenv(f"BOT_POD_SPEC_{bot_pod_spec_type}") or os.getenv(f"BOT_POD_SPEC_{BotPodSpecType.DEFAULT}")
+        # Fetch bot pod spec from the bot_pod_spec_type passed in. Fall back to BotPodSpecType.DEFAULT if the type in the argument is not defined.
+        self.bot_pod_spec = fetch_bot_pod_spec(bot_pod_spec_type) or fetch_bot_pod_spec(BotPodSpecType.DEFAULT)
 
         # Metadata labels matching the deployment
         bot_pod_labels = {
@@ -313,6 +325,7 @@ class BotPodCreator:
             "app.kubernetes.io/managed-by": "cuber",
             "app.kubernetes.io/component": "bot-proc",
             "app": "bot-proc",
+            "bot-pod-spec-type": bot_pod_spec_type,
         }
         if add_webpage_streamer:
             bot_pod_labels["network-role"] = "attendee-webpage-streamer-receiver"
@@ -347,7 +360,7 @@ class BotPodCreator:
             )
         )
 
-        bot_pod_spec_data = self.apply_spec_to_bot_pod(bot_pod)
+        bot_pod_data = self.apply_spec_to_bot_pod(bot_pod)
 
         if add_webpage_streamer:
             # Create specific labels for the webpage streamer pod
@@ -377,7 +390,7 @@ class BotPodCreator:
         try:
             bot_pod_api_response = self.v1.create_namespaced_pod(
                 namespace=self.namespace,
-                body=bot_pod_spec_data
+                body=bot_pod_data
             )
 
             if add_webpage_streamer:
