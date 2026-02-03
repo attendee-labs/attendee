@@ -876,9 +876,9 @@ class WebBotAdapter(BotAdapter):
     def check_domain_allow_list_violation(self):
         if not settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:
             return
-        if time.time() - self.last_domain_allow_list_violation_check_time < 30:
-            return
         if not self.driver:
+            return
+        if time.time() - self.last_domain_allow_list_violation_check_time < 30:
             return
 
         self.last_domain_allow_list_violation_check_time = time.time()
