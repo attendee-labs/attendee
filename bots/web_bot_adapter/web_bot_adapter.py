@@ -8,7 +8,7 @@ import os
 import threading
 import time
 from time import sleep
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 import numpy as np
 import requests
@@ -820,15 +820,6 @@ class WebBotAdapter(BotAdapter):
         except Exception as e:
             logger.warning(f"Error closing driver: {e}")
 
-    def log_browser_history(self):
-        try:
-            nav_history = self.driver.execute_cdp_cmd("Page.getNavigationHistory", {})
-            nav_history_entries = nav_history.get("entries", [])
-            nav_history_hosts = list(set([urlparse(entry.get("url", "")).netloc for entry in nav_history_entries]))
-            logger.info(f"Browser navigation history {nav_history_hosts}")
-        except Exception as e:
-            logger.warning(f"Error logging browser navigation history: {e}")
-
     def cleanup(self):
         if self.stop_recording_screen_callback:
             self.stop_recording_screen_callback()
@@ -877,6 +868,41 @@ class WebBotAdapter(BotAdapter):
 
         self.cleaned_up = True
 
+    def domain_for_history_entry_url(self, url):
+        try:
+            if url.startswith("chrome://browser-switch"):
+                url_normalized = unquote(url.removeprefix("chrome://browser-switch/?url="))
+            else:
+                url_normalized = url
+
+            return str(urlparse(url_normalized).netloc)
+        except Exception as e:
+            logger.warning(f"Error normalizing history entry url: {e}")
+            return url
+
+    def get_navigation_history_urls(self):
+        if not self.driver:
+            return []
+        try:
+            nav_history = self.driver.execute_cdp_cmd("Page.getNavigationHistory", {})
+            nav_history_entries = nav_history.get("entries", [])
+            return [entry.get("url", "") for entry in nav_history_entries]
+        except Exception as e:
+            logger.warning(f"Error getting navigation history: {e}")
+            return []
+
+    def log_browser_history(self):
+        try:
+            nav_history_urls = self.get_navigation_history_urls()
+            nav_history_hosts = list(set([self.domain_for_history_entry_url(url) for url in nav_history_urls]))
+            logger.info(f"Browser navigation history {nav_history_hosts}")
+            # If any of the navigation urls start with chrome://browser-switch, then the url was blocked.
+            for url in nav_history_urls:
+                if url.startswith("chrome://browser-switch"):
+                    logger.error(f"Domain allow list violation detected after leave: {url}")
+        except Exception as e:
+            logger.warning(f"Error logging browser navigation history: {e}")
+
     def check_domain_allow_list_violation(self):
         if not settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:
             return
@@ -887,21 +913,13 @@ class WebBotAdapter(BotAdapter):
 
         self.last_domain_allow_list_violation_check_time = time.time()
 
-        nav_history_urls = []
-        try:
-            nav_history = self.driver.execute_cdp_cmd("Page.getNavigationHistory", {})
-            nav_history_entries = nav_history.get("entries", [])
-            nav_history_urls = [entry.get("url", "") for entry in nav_history_entries]
-
-        except Exception as e:
-            logger.warning(f"Error getting navigation history: {e}")
-            return
+        nav_history_urls = self.get_navigation_history_urls()
 
         # If any of the navigation urls start with chrome://browser-switch, then the url was blocked.
         for url in nav_history_urls:
             if url.startswith("chrome://browser-switch"):
                 logger.error(f"Domain allow list violation detected: {url}")
-                raise Exception(f"Domain allow list violation detected: {url}")
+                raise Exception(f"Domain allow list violation detected: {self.domain_for_history_entry_url(url)}")
 
     def check_auto_leave_conditions(self) -> None:
         if self.left_meeting:
