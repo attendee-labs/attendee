@@ -39,10 +39,11 @@ def launch_bot(bot):
                 logger.error(f"Failed to create fatal error bot not launched event for bot {bot.object_id} ({bot.id}): {str(e)}")
     elif os.getenv("LAUNCH_BOT_METHOD") == "docker-compose-multi-host":
         # Launch bot via dedicated Celery app (bot_launcher) which uses ephemeral Docker containers
-        from bot_launcher.tasks import launch_bot_from_queue
+        from .tasks.run_bot_in_ephemeral_container_task import run_bot_in_ephemeral_container
 
-        launch_bot_from_queue.delay(bot.id)
-        logger.info(f"Bot {bot.object_id} ({bot.id}) launched via dedicated Celery (bot_launcher) -> ephemeral container")
+        # Assign task to specific queue so that it gets picked up by a worker running in a bot launcher VM.
+        run_bot_in_ephemeral_container.apply_async(args=[bot.id], queue="bot_launcher_vm")
+        logger.info(f"Bot {bot.object_id} ({bot.id}) launched via run_bot_in_ephemeral_container task in queue bot_launcher_vm")
     else:
         # Default to launching bot via celery
         from .tasks.run_bot_task import run_bot
