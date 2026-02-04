@@ -38,7 +38,6 @@ INSTALLED_APPS = [
     "allauth.socialaccount",
     "accounts",
     "bots",
-    "bot_launcher",
     "rest_framework",
     "concurrency",
     "allauth.socialaccount.providers.google",

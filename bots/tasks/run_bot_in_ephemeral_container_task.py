@@ -2,12 +2,7 @@ import logging
 import os
 
 import docker
-import django
 from celery import shared_task
-
-# Setup Django to access models
-os.environ.setdefault("DJANGO_SETTINGS_MODULE", "attendee.settings")
-django.setup()
 
 from bots.models import Bot
 
@@ -20,13 +15,11 @@ class BotLauncherCapacityError(Exception):
 
 @shared_task(
     bind=True,
-    name="bot_launcher.launch_bot_from_queue",
-    queue="bot_launcher",
     autoretry_for=(BotLauncherCapacityError,),
     retry_backoff=True,
     max_retries=6,
 )
-def launch_bot_from_queue(self, bot_id: int):
+def run_bot_in_ephemeral_container(self, bot_id: int):
     """
     Launches an ephemeral Docker container to execute a bot.
     Timeout is calculated from bot's max_uptime_seconds + 1h margin.
@@ -42,23 +35,15 @@ def launch_bot_from_queue(self, bot_id: int):
 
         # Check maximum simultaneous bots limit
         max_simultaneous_bots = int(os.getenv("BOT_MAX_SIMULTANEOUS_BOTS", "100"))
-        running_containers = client.containers.list(
-            filters={"label": "attendee.type=ephemeral-bot", "status": "running"}
-        )
+        running_containers = client.containers.list(filters={"label": "attendee.type=ephemeral-bot", "status": "running"})
         current_running_count = len(running_containers)
 
         if current_running_count >= max_simultaneous_bots:
-            error_msg = (
-                f"Maximum simultaneous bots limit reached: {current_running_count}/{max_simultaneous_bots}. "
-                f"Cannot launch bot {bot_id}"
-            )
+            error_msg = f"Maximum simultaneous bots limit reached: {current_running_count}/{max_simultaneous_bots}. Cannot launch bot {bot_id}"
             logger.error(error_msg)
             raise BotLauncherCapacityError(error_msg)
 
-        logger.info(
-            f"Current running bots: {current_running_count}/{max_simultaneous_bots}. "
-            f"Launching bot {bot_id}"
-        )
+        logger.info(f"Current running bots: {current_running_count}/{max_simultaneous_bots}. Launching bot {bot_id}")
 
         # Image to use (same as worker)
         image = os.getenv("BOT_CONTAINER_IMAGE", "attendee-attendee-worker-local:latest")
@@ -120,12 +105,7 @@ def launch_bot_from_queue(self, bot_id: int):
         # Get the host path - if we're in a container, use env var or detect from mounted volume
         # The worker runs with .:/attendee mounted, so we need the host path
         host_code_path = os.getenv("BOT_HOST_CODE_PATH", "/opt/attendee")
-        volumes = {
-            host_code_path: {
-                'bind': '/attendee',
-                'mode': 'rw'
-            }
-        }
+        volumes = {host_code_path: {"bind": "/attendee", "mode": "rw"}}
 
         # Launch ephemeral container
         container = client.containers.run(
@@ -146,22 +126,17 @@ def launch_bot_from_queue(self, bot_id: int):
         )
 
         # Log container info and how to view logs
-        log_instruction = (
-            f"View logs with: docker logs -f {container_name}" if not auto_remove
-            else f"Container will auto-remove when done. To keep containers, set BOT_CONTAINER_AUTO_REMOVE=false"
-        )
+        log_instruction = f"View logs with: docker logs -f {container_name}" if not auto_remove else "Container will auto-remove when done. To keep containers, set BOT_CONTAINER_AUTO_REMOVE=false"
 
-        logger.info(
-            f"Ephemeral container {container_name} (ID: {container.short_id}) started for bot {bot_id}. "
-            f"{log_instruction}"
-        )
+        logger.info(f"Ephemeral container {container_name} (ID: {container.short_id}) started for bot {bot_id}. {log_instruction}")
 
         # Try to capture and log initial container output (first few lines)
         try:
             # Wait a moment for container to start producing output
             import time
+
             time.sleep(0.5)
-            logs = container.logs(tail=20, stdout=True, stderr=True).decode('utf-8', errors='replace')
+            logs = container.logs(tail=20, stdout=True, stderr=True).decode("utf-8", errors="replace")
             if logs.strip():
                 logger.info(f"Initial logs from {container_name}:\n{logs}")
         except Exception as e:
@@ -171,10 +146,7 @@ def launch_bot_from_queue(self, bot_id: int):
         # If auto-remove is enabled, start a background task to periodically capture logs
         # This helps see logs even if container is removed
         if auto_remove:
-            logger.info(
-                f"💡 Tip: To see full logs, run: sudo docker logs -f {container_name} "
-                f"(while container is running) or set BOT_CONTAINER_AUTO_REMOVE=false to keep containers"
-            )
+            logger.info(f"💡 Tip: To see full logs, run: sudo docker logs -f {container_name} (while container is running) or set BOT_CONTAINER_AUTO_REMOVE=false to keep containers")
 
         return {
             "container_id": container.short_id,
