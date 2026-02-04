@@ -1,7 +1,8 @@
 import base64
+import json
 import threading
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, mock_open, patch
 
 from django.db import connection
 from django.test import TransactionTestCase
@@ -693,3 +694,121 @@ class TestTeamsBot(TransactionTestCase):
             MockDisplay=MockDisplay,
             MockSaveDebugRecording=MockSaveDebugRecording,
         )
+
+    @patch.dict("os.environ", {"ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME": "true"})
+    @patch("bots.web_bot_adapter.web_bot_adapter.settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME", True)
+    @patch("bots.teams_bot_adapter.teams_bot_adapter.settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME", True)
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
+    def test_domain_allow_list_violation_raises_error(
+        self,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+    ):
+        """Test that navigating to a URL not in the allow list raises an exception.
+
+        When Chrome's BrowserSwitcher policy blocks a URL, it redirects to
+        chrome://browser-switch?url=<blocked_url>. The check_domain_allow_list_violation()
+        method detects this in the navigation history and raises an exception.
+
+        Also verifies that the Chrome policy file would be written with the correct
+        BrowserSwitcher configuration for Teams.
+        """
+        # Configure the mock uploader
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        # Mock the Chrome driver
+        mock_driver = create_mock_teams_driver()
+        MockChromeDriver.return_value = mock_driver
+
+        # Mock virtual display
+        mock_display = MagicMock()
+        MockDisplay.return_value = mock_display
+
+        # Create bot controller
+        controller = BotController(self.bot.id)
+
+        # Mock the attempt_to_join_meeting to succeed immediately
+        with patch("bots.teams_bot_adapter.teams_ui_methods.TeamsUIMethods.attempt_to_join_meeting") as mock_attempt_to_join:
+            mock_attempt_to_join.return_value = None  # Successful join
+
+            # Run the bot in a separate thread since it has an event loop
+            bot_thread = threading.Thread(target=controller.run)
+            bot_thread.daemon = True
+            bot_thread.start()
+
+            # Wait for the bot to join and adapter to be created
+            time.sleep(3)
+
+            # --- Verify the Chrome policy file would be written correctly ---
+            # Mock os.path.islink to return True so policy file writing code runs
+            # and mock open() to capture what would be written without touching filesystem
+            m = mock_open()
+            with patch("bots.web_bot_adapter.web_bot_adapter.os.path.islink", return_value=True):
+                with patch("builtins.open", m):
+                    controller.adapter.write_chrome_policies_file()
+
+            # Verify open was called with the correct path
+            m.assert_called_once_with("/tmp/attendee-chrome-policies.json", "w")
+
+            # Get the data that would have been written via json.dump
+            # json.dump calls write() on the file handle, so we get what was written
+            write_calls = m().write.call_args_list
+            written_data = "".join(call[0][0] for call in write_calls)
+            policy = json.loads(written_data)
+
+            # Verify the BrowserSwitcher policy is correctly configured
+            self.assertTrue(policy.get("BrowserSwitcherEnabled"), "BrowserSwitcherEnabled should be True")
+            self.assertEqual(policy.get("AlternativeBrowserPath"), "/nonexistent-browser")
+
+            # Verify the URL allow list contains the expected domains
+            url_list = policy.get("BrowserSwitcherUrlList", [])
+            self.assertIn("*", url_list, "URL list should block all URLs by default")
+            self.assertIn("!microsoft.com", url_list, "microsoft.com should be allowed")
+            self.assertIn("!office.com", url_list, "office.com should be allowed")
+            self.assertIn("!cloud.microsoft", url_list, "cloud.microsoft should be allowed")
+            self.assertIn("!microsoftonline.com", url_list, "microsoftonline.com should be allowed")
+            self.assertIn("!live.com", url_list, "live.com should be allowed")
+
+            # --- Now test the domain allow list violation detection ---
+
+            # Simulate the bot having joined and being in the meeting
+            controller.adapter.joined_at = time.time()
+
+            # Mock the navigation history to include a disallowed URL
+            blocked_url = "chrome://browser-switch/?url=https%3A%2F%2Fbadmicrosoft.com"
+            mock_driver.execute_cdp_cmd.return_value = {
+                "entries": [
+                    {"url": "https://teams.microsoft.com/meet/123"},
+                    {"url": blocked_url},
+                ]
+            }
+
+            # Reset the last check time so the check runs immediately
+            controller.adapter.last_domain_allow_list_violation_check_time = 0
+
+            # Verify that check_domain_allow_list_violation raises an exception
+            with self.assertRaises(Exception) as context:
+                controller.adapter.check_domain_allow_list_violation()
+
+            # Verify the exception message contains the blocked domain
+            self.assertIn("Domain allow list violation detected", str(context.exception))
+            self.assertIn("badmicrosoft.com", str(context.exception))
+
+            # Clean up: simulate meeting ending to trigger cleanup
+            controller.adapter.left_meeting = True
+            controller.adapter.send_message_callback({"message": controller.adapter.Messages.MEETING_ENDED})
+            time.sleep(1)
+
+            # Now wait for the thread to finish naturally
+            bot_thread.join(timeout=5)
+
+            # If thread is still running after timeout, that's a problem to report
+            if bot_thread.is_alive():
+                print("WARNING: Bot thread did not terminate properly after cleanup")
+
+            # Close the database connection since we're in a thread
+            connection.close()
