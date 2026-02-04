@@ -2602,7 +2602,7 @@ class BotMediaRequest(models.Model):
 
     media_url = models.URLField(null=True, blank=True)
 
-    loop = models.BooleanField(default=False)
+    loop = models.BooleanField(default=False, db_default=False)
 
     media_blob = models.ForeignKey(
         MediaBlob,

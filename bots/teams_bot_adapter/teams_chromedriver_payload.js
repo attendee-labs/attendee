@@ -1,3 +1,19 @@
+(() => {
+    if (globalThis.__realConsole) return;
+  
+    const c = window.console;
+    const bind = Function.prototype.bind;
+  
+    // Save bound methods so later overwrites don't matter
+    globalThis.__realConsole = {
+      log:   c?.log   ? bind.call(c.log, c)   : () => {},
+      info:  c?.info  ? bind.call(c.info, c)  : () => {},
+      warn:  c?.warn  ? bind.call(c.warn, c)  : () => {},
+      error: c?.error ? bind.call(c.error, c) : () => {},
+      debug: c?.debug ? bind.call(c.debug, c) : () => {},
+    };
+  })();
+
 class StyleManager {
     constructor() {
         this.audioContext = null;
@@ -1092,7 +1108,7 @@ class UserManager {
         }
     }
 }
-var realConsole;
+var realConsole = globalThis.__realConsole;
 // Websocket client
 class WebSocketClient {
     // Message types
@@ -1741,20 +1757,6 @@ window.styleManager = styleManager;
 
 const receiverManager = new ReceiverManager();
 window.receiverManager = receiverManager;
-
-if (!realConsole) {
-    if (document.readyState === 'complete') {
-        createIframe();
-    } else {
-        document.addEventListener('DOMContentLoaded', createIframe);
-    }
-    function createIframe() {
-        const iframe = document.createElement('iframe');
-        iframe.src = 'about:blank';
-        document.body.appendChild(iframe);
-        realConsole = iframe.contentWindow.console;
-    }
-}
 
 const processDominantSpeakerHistoryMessage = (item) => {
     realConsole?.log('processDominantSpeakerHistoryMessage', item);
