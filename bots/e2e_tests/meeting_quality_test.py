@@ -41,7 +41,7 @@ Ground truth JSON format:
         }
     ],
     "combined_transcript": "Hello, this is speaker one. How are you today? I'm doing well, thank you for asking.",
-    "combined_audio_file": "/path/to/combined_ground_truth.wav"  # optional, for audio quality metrics
+    "combined_audio_file": "/path/to/combined_ground_truth.mp3"  # optional, for audio quality metrics
 }
 """
 
@@ -60,39 +60,14 @@ from typing import Dict, List, Optional, Tuple
 import requests
 
 # ----------------------------
-# Optional dependencies for metrics
+# Dependencies for metrics
 # ----------------------------
 
-try:
-    import jiwer
-
-    HAS_JIWER = True
-except ImportError:
-    HAS_JIWER = False
-    print("Warning: jiwer not installed. Install with: pip install jiwer", file=sys.stderr)
-
-try:
-    import numpy as np
-    import scipy.io.wavfile as wavfile
-    from pesq import pesq
-
-    HAS_PESQ = True
-except ImportError:
-    HAS_PESQ = False
-
-try:
-    from pystoi import stoi
-
-    HAS_STOI = True
-except ImportError:
-    HAS_STOI = False
-
-try:
-    import librosa
-
-    HAS_LIBROSA = True
-except ImportError:
-    HAS_LIBROSA = False
+import jiwer
+import librosa
+import numpy as np
+from pesq import pesq
+from pystoi import stoi
 
 
 # ----------------------------
@@ -206,10 +181,6 @@ def normalize_text(text: str) -> str:
 
 def calculate_transcript_metrics(reference: str, hypothesis: str) -> TranscriptMetrics:
     """Calculate WER, CER, and related metrics."""
-    if not HAS_JIWER:
-        print("Warning: jiwer not available, skipping transcript metrics", file=sys.stderr)
-        return TranscriptMetrics()
-
     ref_normalized = normalize_text(reference)
     hyp_normalized = normalize_text(hypothesis)
 
@@ -301,44 +272,31 @@ def calculate_audio_metrics(
     metrics = AudioMetrics()
 
     if not os.path.exists(reference_audio_path) or not os.path.exists(hypothesis_audio_path):
-        print("Warning: Audio files not found, skipping audio metrics", file=sys.stderr)
-        return metrics
+        raise FileNotFoundError(f"Audio files not found: {reference_audio_path} or {hypothesis_audio_path}")
 
-    try:
-        if HAS_LIBROSA:
-            # Load and resample audio files
-            ref_audio, _ = librosa.load(reference_audio_path, sr=sample_rate, mono=True)
-            hyp_audio, _ = librosa.load(hypothesis_audio_path, sr=sample_rate, mono=True)
+    # Load and resample audio files
+    ref_audio, _ = librosa.load(reference_audio_path, sr=sample_rate, mono=True)
+    hyp_audio, _ = librosa.load(hypothesis_audio_path, sr=sample_rate, mono=True)
 
-            # Align lengths (truncate to shorter)
-            min_len = min(len(ref_audio), len(hyp_audio))
-            ref_audio = ref_audio[:min_len]
-            hyp_audio = hyp_audio[:min_len]
+    # Align lengths (truncate to shorter)
+    min_len = min(len(ref_audio), len(hyp_audio))
+    ref_audio = ref_audio[:min_len]
+    hyp_audio = hyp_audio[:min_len]
 
-            # Calculate SNR
-            signal_power = np.mean(ref_audio**2)
-            noise = hyp_audio - ref_audio
-            noise_power = np.mean(noise**2)
-            if noise_power > 0:
-                metrics.snr_db = 10 * np.log10(signal_power / noise_power)
+    # Calculate SNR
+    signal_power = np.mean(ref_audio**2)
+    noise = hyp_audio - ref_audio
+    noise_power = np.mean(noise**2)
+    if noise_power > 0:
+        metrics.snr_db = 10 * np.log10(signal_power / noise_power)
 
-            # Calculate PESQ (requires 8kHz or 16kHz)
-            if HAS_PESQ and sample_rate in (8000, 16000):
-                try:
-                    mode = "wb" if sample_rate == 16000 else "nb"
-                    metrics.pesq_score = pesq(sample_rate, ref_audio, hyp_audio, mode)
-                except Exception as e:
-                    print(f"Warning: PESQ calculation failed: {e}", file=sys.stderr)
+    # Calculate PESQ (requires 8kHz or 16kHz)
+    if sample_rate in (8000, 16000):
+        mode = "wb" if sample_rate == 16000 else "nb"
+        metrics.pesq_score = pesq(sample_rate, ref_audio, hyp_audio, mode)
 
-            # Calculate STOI
-            if HAS_STOI:
-                try:
-                    metrics.stoi_score = stoi(ref_audio, hyp_audio, sample_rate, extended=False)
-                except Exception as e:
-                    print(f"Warning: STOI calculation failed: {e}", file=sys.stderr)
-
-    except Exception as e:
-        print(f"Warning: Audio metrics calculation failed: {e}", file=sys.stderr)
+    # Calculate STOI
+    metrics.stoi_score = stoi(ref_audio, hyp_audio, sample_rate, extended=False)
 
     return metrics
 
@@ -415,12 +373,7 @@ class AttendeeClient:
 
     def output_audio(self, bot_id: str, audio_path: Path) -> None:
         b64_data = base64.b64encode(audio_path.read_bytes()).decode("ascii")
-
-        # Determine MIME type
-        suffix = audio_path.suffix.lower()
-        mime_type = "audio/mp3" if suffix == ".mp3" else "audio/wav"
-
-        json_payload = {"type": mime_type, "data": b64_data}
+        json_payload = {"type": "audio/mp3", "data": b64_data}
         url = self._url(f"/api/v1/bots/{bot_id}/output_audio")
         r = self.session.post(url, data=json.dumps(json_payload), timeout=self.timeout)
         r.raise_for_status()
@@ -571,21 +524,23 @@ def run_meeting_quality_test(
     report.expected_transcript = ground_truth.combined_transcript
 
     # Track created bots for cleanup
-    speaker_bots: List[Tuple[str, str, SpeakerConfig]] = []  # (bot_id, bot_name, config)
     recorder_bot_id: Optional[str] = None
 
     try:
-        # 1. Create bots
-        if verbose:
-            print(f"Creating {len(ground_truth.speakers) + 1} bots...", end=" ", flush=True)
+        # 1. Create bots - one per unique speaker name
+        unique_speakers = list(dict.fromkeys(s.name for s in ground_truth.speakers))
+        speaker_bot_ids: Dict[str, str] = {}  # speaker_name -> bot_id
 
-        for speaker in ground_truth.speakers:
+        if verbose:
+            print(f"Creating {len(unique_speakers) + 1} bots...", end=" ", flush=True)
+
+        for speaker_name in unique_speakers:
             bot = client.create_bot(
                 meeting_url=meeting_url,
-                bot_name=speaker.name,
+                bot_name=speaker_name,
                 enable_transcription=False,
             )
-            speaker_bots.append((bot["id"], speaker.name, speaker))
+            speaker_bot_ids[speaker_name] = bot["id"]
 
         recorder = client.create_bot(
             meeting_url=meeting_url,
@@ -603,7 +558,7 @@ def run_meeting_quality_test(
         def _pred_joined(state: str, bot_obj: Dict) -> bool:
             return state_is_joined_recording(state)
 
-        for bot_id, bot_name, _ in speaker_bots:
+        for speaker_name, bot_id in speaker_bot_ids.items():
             wait_for_state(client, bot_id, _pred_joined, "joined_recording", join_timeout)
 
         wait_for_state(client, recorder_bot_id, _pred_joined, "joined_recording", join_timeout)
@@ -614,31 +569,32 @@ def run_meeting_quality_test(
         if speak_wait > 0:
             time.sleep(speak_wait)
 
-        # 3. Play audio from speaker bots SEQUENTIALLY (realistic turn-taking)
+        # 3. Play audio turns in order (each speaker may have multiple turns)
         if verbose:
             print("Playing audio sequentially:")
 
         audio_start_time = time.time()
 
-        for bot_id, bot_name, config in speaker_bots:
+        for turn in ground_truth.speakers:
+            bot_id = speaker_bot_ids[turn.name]
             if verbose:
-                print(f"  {bot_name} ({config.audio_duration_seconds:.0f}s)...", end=" ", flush=True)
+                print(f"  {turn.name} ({turn.audio_duration_seconds:.0f}s)...", end=" ", flush=True)
 
             try:
-                client.output_audio(bot_id, config.audio_file)
+                client.output_audio(bot_id, turn.audio_file)
             except Exception as e:
-                report.failure_reasons.append(f"Failed to play audio for {bot_name}: {e}")
+                report.failure_reasons.append(f"Failed to play audio for {turn.name}: {e}")
                 if verbose:
                     print("failed")
                 continue
 
-            # Wait for this speaker's audio to finish + pause before next speaker
-            wait_time = config.audio_duration_seconds + pause_between_speakers
+            # Wait for this turn's audio to finish + pause before next turn
+            wait_time = turn.audio_duration_seconds + pause_between_speakers
             time.sleep(wait_time)
             if verbose:
                 print("done")
 
-        # 4. Additional wait after all speakers are done (if specified)
+        # 4. Additional wait after all turns are done (if specified)
         if leave_after:
             time.sleep(leave_after)
 
@@ -646,7 +602,7 @@ def run_meeting_quality_test(
         if verbose:
             print("Waiting for bots to leave...", end=" ", flush=True)
 
-        for bot_id, bot_name, _ in speaker_bots:
+        for bot_id in speaker_bot_ids.values():
             client.tell_bot_to_leave(bot_id)
         client.tell_bot_to_leave(recorder_bot_id)
 
@@ -664,19 +620,19 @@ def run_meeting_quality_test(
             s = (state or "").strip().lower()
             return s in recorder_terminal_states
 
-        for bot_id, bot_name, _ in speaker_bots:
+        for speaker_name, bot_id in speaker_bot_ids.items():
             try:
                 final_bot = wait_for_state(client, bot_id, _pred_speaker_terminal, "terminal", end_timeout)
                 final_state = final_bot.get("state", "unknown")
                 if final_state == "fatal_error":
-                    report.failure_reasons.append(f"{bot_name} ended with fatal_error")
+                    report.failure_reasons.append(f"{speaker_name} ended with fatal_error")
             except TimeoutError as e:
                 try:
                     current = client.get_bot(bot_id)
                     current_state = current.get("state", "unknown")
-                    report.failure_reasons.append(f"{bot_name} stuck in state '{current_state}': {e}")
+                    report.failure_reasons.append(f"{speaker_name} stuck in state '{current_state}': {e}")
                 except Exception:
-                    report.failure_reasons.append(f"{bot_name} did not end: {e}")
+                    report.failure_reasons.append(f"{speaker_name} did not end: {e}")
 
         # Recorder bot must wait for 'ended' to have complete transcript
         try:
@@ -722,41 +678,78 @@ def run_meeting_quality_test(
         )
 
         # 9. Calculate per-speaker WER
-        for speaker in ground_truth.speakers:
-            speaker_actual = " ".join(utt["text"] for utt in actual_utterances if utt["speaker"] == speaker.name)
-            if speaker_actual:
-                metrics = calculate_transcript_metrics(speaker.transcript, speaker_actual)
-                report.per_speaker_wer[speaker.name] = metrics.wer
+        # Combine ground truth transcripts for each unique speaker
+        gt_speaker_transcripts: Dict[str, str] = {}
+        for turn in ground_truth.speakers:
+            if turn.name not in gt_speaker_transcripts:
+                gt_speaker_transcripts[turn.name] = turn.transcript
+            else:
+                gt_speaker_transcripts[turn.name] += " " + turn.transcript
+
+        # Get transcripts for each detected speaker
+        detected_speakers = set(utt["speaker"] for utt in actual_utterances)
+        detected_speaker_transcripts: Dict[str, str] = {}
+        for speaker in detected_speakers:
+            detected_speaker_transcripts[speaker] = " ".join(
+                utt["text"] for utt in actual_utterances if utt["speaker"] == speaker
+            )
+
+        # Match detected speakers to ground truth by finding best WER match
+        gt_to_detected: Dict[str, str] = {}
+        used_detected = set()
+        for gt_name, gt_text in gt_speaker_transcripts.items():
+            best_wer = float("inf")
+            best_match = None
+            for det_name, det_text in detected_speaker_transcripts.items():
+                if det_name in used_detected:
+                    continue
+                wer = calculate_transcript_metrics(gt_text, det_text).wer
+                if wer < best_wer:
+                    best_wer = wer
+                    best_match = det_name
+            if best_match:
+                gt_to_detected[gt_name] = best_match
+                used_detected.add(best_match)
+                report.per_speaker_wer[gt_name] = best_wer
 
         # 10. Calculate diarization metrics
+        unique_speaker_count = len(set(s.name for s in ground_truth.speakers))
         report.diarization_metrics = calculate_diarization_metrics(
-            expected_speaker_count=len(ground_truth.speakers),
+            expected_speaker_count=unique_speaker_count,
             actual_utterances=actual_utterances,
         )
 
         if verbose:
             print("done")
 
-        # 11. Calculate audio metrics (if ground truth audio available)
-        if ground_truth.combined_audio_file and ground_truth.combined_audio_file.exists():
-            if verbose:
-                print("Calculating audio metrics...", end=" ", flush=True)
+        # 11. Calculate audio metrics
+        if verbose:
+            print("Calculating audio metrics...", end=" ", flush=True)
 
-            recording_url = client.get_recording_url(recorder_bot_id)
-            if recording_url:
-                with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
-                    tmp_path = Path(tmp.name)
+        if not ground_truth.combined_audio_file:
+            raise ValueError("Ground truth combined_audio_file is required")
+        if not ground_truth.combined_audio_file.exists():
+            raise FileNotFoundError(f"Ground truth audio file not found: {ground_truth.combined_audio_file}")
 
-                if client.download_recording(recording_url, tmp_path):
-                    report.audio_metrics = calculate_audio_metrics(
-                        str(ground_truth.combined_audio_file),
-                        str(tmp_path),
-                    )
-                    # Cleanup
-                    tmp_path.unlink(missing_ok=True)
+        recording_url = client.get_recording_url(recorder_bot_id)
+        if not recording_url:
+            raise RuntimeError("Failed to get recording URL from API")
 
-            if verbose:
-                print("done")
+        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
+            tmp_path = Path(tmp.name)
+
+        if not client.download_recording(recording_url, tmp_path):
+            raise RuntimeError("Failed to download recording")
+
+        report.audio_metrics = calculate_audio_metrics(
+            str(ground_truth.combined_audio_file),
+            str(tmp_path),
+        )
+        # Cleanup
+        tmp_path.unlink(missing_ok=True)
+
+        if verbose:
+            print("done")
 
         # 12. Determine pass/fail
         speakers_detected_correctly = (
@@ -813,7 +806,8 @@ def main():
 
     if args.verbose:
         total_duration = sum(s.audio_duration_seconds for s in ground_truth.speakers)
-        print(f"Meeting Quality Test: {len(ground_truth.speakers)} speakers, {total_duration:.0f}s audio")
+        unique_speakers = len(set(s.name for s in ground_truth.speakers))
+        print(f"Meeting Quality Test: {unique_speakers} speakers, {len(ground_truth.speakers)} turns, {total_duration:.0f}s audio")
 
     client = AttendeeClient(args.base_url, args.api_key)
 
