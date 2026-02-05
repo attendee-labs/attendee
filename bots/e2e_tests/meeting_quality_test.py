@@ -55,20 +55,17 @@ import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
-
-import requests
+from typing import Dict, List, Optional
 
 # ----------------------------
 # Dependencies for metrics
 # ----------------------------
-
 import jiwer
 import librosa
 import numpy as np
+import requests
 from pesq import pesq
 from pystoi import stoi
-
 
 # ----------------------------
 # Data classes for results
@@ -614,8 +611,6 @@ def run_meeting_quality_test(
         if verbose:
             print("Playing audio sequentially:")
 
-        audio_start_time = time.time()
-
         for turn in ground_truth.speakers:
             bot_id = speaker_bot_ids[turn.name]
             if verbose:
@@ -741,9 +736,7 @@ def run_meeting_quality_test(
         detected_speakers = set(utt["speaker"] for utt in actual_utterances)
         detected_speaker_transcripts: Dict[str, str] = {}
         for speaker in detected_speakers:
-            detected_speaker_transcripts[speaker] = " ".join(
-                utt["text"] for utt in actual_utterances if utt["speaker"] == speaker
-            )
+            detected_speaker_transcripts[speaker] = " ".join(utt["text"] for utt in actual_utterances if utt["speaker"] == speaker)
 
         # Match detected speakers to ground truth by finding best WER match
         gt_to_detected: Dict[str, str] = {}
@@ -814,9 +807,7 @@ def run_meeting_quality_test(
             print("done")
 
         # 12. Determine pass/fail
-        speakers_detected_correctly = (
-            report.diarization_metrics.correct_speakers == report.diarization_metrics.total_speakers
-        )
+        speakers_detected_correctly = report.diarization_metrics.correct_speakers == report.diarization_metrics.total_speakers
         report.passed = (
             len(report.failure_reasons) == 0
             and report.transcript_metrics.wer < 0.30  # 30% WER threshold
@@ -824,10 +815,7 @@ def run_meeting_quality_test(
         )
 
         if not speakers_detected_correctly:
-            report.failure_reasons.append(
-                f"Speaker count mismatch: expected {report.diarization_metrics.total_speakers}, "
-                f"detected {report.diarization_metrics.correct_speakers}"
-            )
+            report.failure_reasons.append(f"Speaker count mismatch: expected {report.diarization_metrics.total_speakers}, detected {report.diarization_metrics.correct_speakers}")
 
     except Exception as e:
         report.failure_reasons.append(f"Test execution error: {e}")
