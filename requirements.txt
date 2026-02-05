@@ -102,7 +102,6 @@ jsonpointer==3.0.0
 
 # E2E test metrics
 jiwer==3.1.0
-# Audio quality metrics for e2e tests
 librosa==0.10.2
 pesq==0.0.4
 pystoi==0.4.1

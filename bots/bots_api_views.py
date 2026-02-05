@@ -529,7 +529,6 @@ class OutputAudioView(APIView):
                 bot=bot,
                 media_blob=media_blob,
                 media_type=BotMediaRequestMediaTypes.AUDIO,
-                loop=False,
             )
 
             # Send sync command
