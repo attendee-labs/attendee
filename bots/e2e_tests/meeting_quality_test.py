@@ -117,6 +117,7 @@ class AudioMetrics:
 class MeetingQualityReport:
     """Complete quality report for the meeting test."""
 
+    platform: str = ""
     transcript_metrics: TranscriptMetrics = field(default_factory=TranscriptMetrics)
     diarization_metrics: DiarizationMetrics = field(default_factory=DiarizationMetrics)
     audio_metrics: AudioMetrics = field(default_factory=AudioMetrics)
@@ -128,6 +129,7 @@ class MeetingQualityReport:
 
     def to_dict(self) -> Dict:
         return {
+            "platform": self.platform,
             "transcript_metrics": {
                 "wer": self.transcript_metrics.wer,
                 "cer": self.transcript_metrics.cer,
@@ -179,6 +181,24 @@ def normalize_text(text: str) -> str:
 # ----------------------------
 
 
+def format_word_alignment(output, ref_words: List[str], hyp_words: List[str]) -> str:
+    """Format word-level alignment showing substitutions, insertions, and deletions."""
+    lines = []
+    for alignment in output.alignments:
+        for chunk in alignment:
+            if chunk.type == "equal":
+                continue
+            ref_slice = ref_words[chunk.ref_start_idx : chunk.ref_end_idx]
+            hyp_slice = hyp_words[chunk.hyp_start_idx : chunk.hyp_end_idx]
+            if chunk.type == "substitute":
+                lines.append(f"  SUB: '{' '.join(ref_slice)}' -> '{' '.join(hyp_slice)}'")
+            elif chunk.type == "delete":
+                lines.append(f"  DEL: '{' '.join(ref_slice)}'")
+            elif chunk.type == "insert":
+                lines.append(f"  INS: '{' '.join(hyp_slice)}'")
+    return "\n".join(lines) if lines else "  (no differences)"
+
+
 def calculate_transcript_metrics(reference: str, hypothesis: str) -> TranscriptMetrics:
     """Calculate WER, CER, and related metrics."""
     ref_normalized = normalize_text(reference)
@@ -209,18 +229,11 @@ def calculate_transcript_metrics(reference: str, hypothesis: str) -> TranscriptM
 
 def calculate_diarization_metrics(
     expected_speaker_count: int,
+    expected_turn_count: int,
     actual_utterances: List[Dict[str, str]],
 ) -> DiarizationMetrics:
     """
     Calculate diarization metrics based on speaker count and utterance grouping.
-
-    This is a practical approach that:
-    1. Checks if the correct number of distinct speakers were detected
-    2. Measures how well utterances are grouped by speaker (not fragmented)
-
-    Note: We don't try to match speaker names since the transcription service
-    assigns its own labels (e.g., "Speaker A", "Speaker B") that won't match
-    our bot names ("Speaker 1", "Speaker 2").
     """
     if not actual_utterances:
         return DiarizationMetrics(
@@ -232,32 +245,29 @@ def calculate_diarization_metrics(
     actual_speakers = set(utt.get("speaker") for utt in actual_utterances if utt.get("speaker"))
     detected_speaker_count = len(actual_speakers)
 
-    # Calculate speaker fragmentation score
-    # Lower fragmentation = better (speakers talking in contiguous blocks)
-    # Count speaker transitions (how often the speaker changes between utterances)
+    # Count speaker transitions in the actual transcript
     transitions = 0
     for i in range(1, len(actual_utterances)):
         if actual_utterances[i].get("speaker") != actual_utterances[i - 1].get("speaker"):
             transitions += 1
 
-    # Ideal transitions for N speakers speaking sequentially = N-1
-    # More transitions than expected suggests fragmentation or overlapping detection
-    expected_transitions = max(0, expected_speaker_count - 1)
+    # Expected transitions based on ground truth turn order
+    expected_transitions = max(0, expected_turn_count - 1)
+
+    # Fragmentation: ratio of extra transitions beyond what's expected
+    # 0 = matches expected pattern, higher = more fragmented
     extra_transitions = max(0, transitions - expected_transitions)
+    fragmentation = extra_transitions / max(1, expected_transitions) if expected_transitions > 0 else 0
 
-    # Fragmentation ratio: 0 = perfect sequential, higher = more fragmented
-    fragmentation = extra_transitions / len(actual_utterances) if actual_utterances else 0
-
-    # Simple DER approximation based on speaker count accuracy
-    # If we detected wrong number of speakers, that's an error
+    # Speaker count accuracy
     speaker_count_error = abs(detected_speaker_count - expected_speaker_count) / expected_speaker_count if expected_speaker_count > 0 else 0
 
     return DiarizationMetrics(
-        der=speaker_count_error,  # Simplified: based on speaker count accuracy
-        wder=fragmentation,  # Repurposed: measures fragmentation
+        der=speaker_count_error,
+        wder=fragmentation,
         speaker_confusion=fragmentation,
-        missed_speech=0.0,  # Can't measure without timestamps
-        false_alarm=0.0,  # Can't measure without timestamps
+        missed_speech=0.0,
+        false_alarm=0.0,
         correct_speakers=min(detected_speaker_count, expected_speaker_count),
         total_speakers=expected_speaker_count,
     )
@@ -421,6 +431,32 @@ class AttendeeClient:
 
 
 # ----------------------------
+# Platform detection
+# ----------------------------
+
+
+def detect_platform(meeting_url: str, zoom_sdk: Optional[str] = None) -> str:
+    """Detect meeting platform from URL. Returns e.g. 'zoom_native', 'zoom_web', 'google_meet', 'teams'."""
+    url_lower = meeting_url.lower()
+    if "zoom.us" in url_lower:
+        sdk = zoom_sdk or "native"
+        return f"zoom_{sdk}"
+    elif "meet.google.com" in url_lower:
+        return "google_meet"
+    elif "teams.microsoft.com" in url_lower or "teams.live.com" in url_lower:
+        return "teams"
+    return "unknown"
+
+
+def get_platform_audio_file(base_file: Path, platform: str) -> Path:
+    """Convert base audio file path to platform-specific path.
+
+    e.g. combined_ground_truth.mp3 + zoom_native -> combined_ground_truth_zoom_native.mp3
+    """
+    return base_file.with_name(f"{base_file.stem}_{platform}{base_file.suffix}")
+
+
+# ----------------------------
 # State helpers
 # ----------------------------
 
@@ -502,11 +538,13 @@ def run_meeting_quality_test(
     client: AttendeeClient,
     meeting_url: str,
     ground_truth: GroundTruth,
+    platform: str = "",
     join_timeout: int = 180,
     end_timeout: int = 300,
     speak_wait: float = 5.0,
     pause_between_speakers: float = 2.0,
     leave_after: Optional[float] = None,
+    extra_bot_settings: Optional[Dict] = None,
     verbose: bool = False,
 ) -> MeetingQualityReport:
     """
@@ -521,6 +559,7 @@ def run_meeting_quality_test(
     7. Optionally compare audio recording
     """
     report = MeetingQualityReport()
+    report.platform = platform
     report.expected_transcript = ground_truth.combined_transcript
 
     # Track created bots for cleanup
@@ -539,6 +578,7 @@ def run_meeting_quality_test(
                 meeting_url=meeting_url,
                 bot_name=speaker_name,
                 enable_transcription=False,
+                extra=extra_bot_settings,
             )
             speaker_bot_ids[speaker_name] = bot["id"]
 
@@ -546,6 +586,7 @@ def run_meeting_quality_test(
             meeting_url=meeting_url,
             bot_name="Recorder Bot",
             enable_transcription=True,
+            extra=extra_bot_settings,
         )
         recorder_bot_id = recorder["id"]
         if verbose:
@@ -677,6 +718,16 @@ def run_meeting_quality_test(
             actual_transcript,
         )
 
+        # Show word-level differences in verbose mode
+        if verbose:
+            ref_normalized = normalize_text(ground_truth.combined_transcript)
+            hyp_normalized = normalize_text(actual_transcript)
+            ref_words = ref_normalized.split()
+            hyp_words = hyp_normalized.split()
+            alignment_output = jiwer.process_words(ref_normalized, hyp_normalized)
+            alignment_str = format_word_alignment(alignment_output, ref_words, hyp_words)
+            print(f"Word differences:\n{alignment_str}")
+
         # 9. Calculate per-speaker WER
         # Combine ground truth transcripts for each unique speaker
         gt_speaker_transcripts: Dict[str, str] = {}
@@ -716,6 +767,7 @@ def run_meeting_quality_test(
         unique_speaker_count = len(set(s.name for s in ground_truth.speakers))
         report.diarization_metrics = calculate_diarization_metrics(
             expected_speaker_count=unique_speaker_count,
+            expected_turn_count=len(ground_truth.speakers),
             actual_utterances=actual_utterances,
         )
 
@@ -728,8 +780,18 @@ def run_meeting_quality_test(
 
         if not ground_truth.combined_audio_file:
             raise ValueError("Ground truth combined_audio_file is required")
-        if not ground_truth.combined_audio_file.exists():
-            raise FileNotFoundError(f"Ground truth audio file not found: {ground_truth.combined_audio_file}")
+
+        # Select platform-specific audio file if available
+        audio_ref_file = ground_truth.combined_audio_file
+        if platform:
+            platform_file = get_platform_audio_file(ground_truth.combined_audio_file, platform)
+            if platform_file.exists():
+                audio_ref_file = platform_file
+            elif verbose:
+                print(f"\n  (no platform-specific file {platform_file.name}, using {audio_ref_file.name})", end=" ", flush=True)
+
+        if not audio_ref_file.exists():
+            raise FileNotFoundError(f"Ground truth audio file not found: {audio_ref_file}")
 
         recording_url = client.get_recording_url(recorder_bot_id)
         if not recording_url:
@@ -742,7 +804,7 @@ def run_meeting_quality_test(
             raise RuntimeError("Failed to download recording")
 
         report.audio_metrics = calculate_audio_metrics(
-            str(ground_truth.combined_audio_file),
+            str(audio_ref_file),
             str(tmp_path),
         )
         # Cleanup
@@ -785,6 +847,7 @@ def main():
     parser.add_argument("--speak-wait", type=float, default=5.0, help="Seconds to wait before speaking")
     parser.add_argument("--pause-between-speakers", type=float, default=2.0, help="Seconds to pause between speakers")
     parser.add_argument("--leave-after", type=float, default=None, help="Seconds after speaking before leaving")
+    parser.add_argument("--zoom-sdk", choices=["native", "web"], default=None, help="Zoom SDK to use (native or web)")
     parser.add_argument("--output", "-o", help="Output JSON file for results")
     parser.add_argument("--wer-threshold", type=float, default=0.30, help="Max acceptable WER (default: 0.30)")
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose output")
@@ -811,15 +874,23 @@ def main():
 
     client = AttendeeClient(args.base_url, args.api_key)
 
+    extra_bot_settings = None
+    if args.zoom_sdk:
+        extra_bot_settings = {"zoom_settings": {"sdk": args.zoom_sdk}}
+
+    platform = detect_platform(args.meeting_url, args.zoom_sdk)
+
     report = run_meeting_quality_test(
         client=client,
         meeting_url=args.meeting_url,
         ground_truth=ground_truth,
+        platform=platform,
         join_timeout=args.join_timeout,
         end_timeout=args.end_timeout,
         speak_wait=args.speak_wait,
         pause_between_speakers=args.pause_between_speakers,
         leave_after=args.leave_after,
+        extra_bot_settings=extra_bot_settings,
         verbose=args.verbose,
     )
 
@@ -827,7 +898,8 @@ def main():
     print("\n" + "=" * 60)
     print("RESULTS SUMMARY")
     print("=" * 60)
-    print(f"Overall: {'PASSED' if report.passed else 'FAILED'}")
+    print(f"Platform: {report.platform}")
+    print(f"Overall:  {'PASSED' if report.passed else 'FAILED'}")
     print("\nTranscript Metrics:")
     print(f"  Word Error Rate (WER):      {report.transcript_metrics.wer:.2%}")
     print(f"  Character Error Rate (CER): {report.transcript_metrics.cer:.2%}")
