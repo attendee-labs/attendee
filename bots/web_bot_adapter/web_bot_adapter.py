@@ -8,6 +8,7 @@ import os
 import threading
 import time
 from time import sleep
+from urllib.parse import urlparse
 
 import numpy as np
 import requests
@@ -803,6 +804,15 @@ class WebBotAdapter(BotAdapter):
         except Exception as e:
             logger.warning(f"Error closing driver: {e}")
 
+    def log_browser_history(self):
+        try:
+            nav_history = self.driver.execute_cdp_cmd("Page.getNavigationHistory", {})
+            nav_history_entries = nav_history.get("entries", [])
+            nav_history_hosts = list(set([urlparse(entry.get("url", "")).netloc for entry in nav_history_entries]))
+            logger.info(f"Browser navigation history {nav_history_hosts}")
+        except Exception as e:
+            logger.warning(f"Error logging browser navigation history: {e}")
+
     def cleanup(self):
         if self.stop_recording_screen_callback:
             self.stop_recording_screen_callback()
@@ -822,6 +832,8 @@ class WebBotAdapter(BotAdapter):
 
         try:
             if self.driver:
+                self.log_browser_history()
+
                 # Simulate closing browser window
                 try:
                     self.subclass_specific_before_driver_close()

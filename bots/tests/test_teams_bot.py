@@ -595,6 +595,7 @@ class TestTeamsBot(TransactionTestCase):
             patch.object(TeamsUIMethods, "click_show_more_button", return_value=None),
             patch.object(TeamsUIMethods, "click_captions_button", return_value=None),
             patch.object(TeamsUIMethods, "set_layout", return_value=None),
+            patch.object(TeamsUIMethods, "disable_incoming_video_in_ui", return_value=None),
             patch("bots.web_bot_adapter.web_bot_adapter.WebBotAdapter.ready_to_show_bot_image", return_value=None),
             patch.object(TeamsUIMethods, "login_to_microsoft_account", return_value=None) as mock_login,
         ):

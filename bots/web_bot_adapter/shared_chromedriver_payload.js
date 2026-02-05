@@ -126,9 +126,10 @@ class BotVideoOutputStream {
      * Play a video (with audio) through the virtual webcam/mic.
      *
      * @param {string} videoUrl - URL of the video to play.
+     * @param {boolean} loop - Whether to loop the video.
      * @returns {Promise<void>}
      */
-    async playVideo(videoUrl) {
+    async playVideo(videoUrl, loop) {
         if (!videoUrl) {
             throw new Error("playVideo: videoUrl is required.");
         }
@@ -143,7 +144,7 @@ class BotVideoOutputStream {
 
         this.videoElement.muted = false;
         this.videoElement.src = videoUrl;
-        this.videoElement.loop = false;
+        this.videoElement.loop = loop;
         this.videoElement.autoplay = true;
         this.videoElement.crossOrigin = "anonymous";
 
@@ -187,9 +188,10 @@ class BotVideoOutputStream {
      * Useful for environments with restrictive CSP (e.g., Teams).
      *
      * @param {string} videoUrl - URL of the video to play.
+     * @param {boolean} loop - Whether to loop the video.
      * @returns {Promise<void>}
      */
-    async playVideoWithBlobUrl(videoUrl) {
+    async playVideoWithBlobUrl(videoUrl, loop) {
         if (!videoUrl) {
             throw new Error("playVideoWithBlobUrl: videoUrl is required.");
         }
@@ -235,7 +237,7 @@ class BotVideoOutputStream {
 
         this.videoElement.muted = false;
         this.videoElement.src = videoBlobUrl;
-        this.videoElement.loop = false;
+        this.videoElement.loop = loop;
         this.videoElement.autoplay = true;
         this.videoElement.crossOrigin = "anonymous";
 
@@ -657,12 +659,12 @@ class BotOutputManager {
         return this.webcamVideoOutputStream.isVideoPlaying();
     }
 
-    async playVideo(videoUrl) {
-        return this.webcamVideoOutputStream.playVideo(videoUrl);
+    async playVideo(videoUrl, loop) {
+        return this.webcamVideoOutputStream.playVideo(videoUrl, loop);
     }
 
-    async playVideoWithBlobUrl(videoUrl) {
-        return this.webcamVideoOutputStream.playVideoWithBlobUrl(videoUrl);
+    async playVideoWithBlobUrl(videoUrl, loop) {
+        return this.webcamVideoOutputStream.playVideoWithBlobUrl(videoUrl, loop);
     }
 
     /**

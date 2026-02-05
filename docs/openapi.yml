@@ -629,15 +629,16 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                url:
-                  type: string
-                  description: URL of the video to output. Must be a valid URL to
-                    an mp4 file.
-              required:
-              - url
-              additionalProperties: false
+              $ref: '#/components/schemas/OutputVideoRequestRequest'
+            examples:
+              VideoOutputRequest:
+                value:
+                  url: https://example.com/video.mp4
+                  loop: true
+                summary: Video output request
+                description: Example of a looping mp4 video output request. Set loop
+                  to false or omit for a non-looping request.
+        required: true
       security:
       - {}
       responses:
@@ -2768,6 +2769,21 @@ components:
       - client_secret
       - platform
       - refresh_token
+    OutputVideoRequestRequest:
+      type: object
+      properties:
+        url:
+          type: string
+          format: uri
+          minLength: 1
+          description: URL of the video to output. Must be a valid URL to an mp4 file
+            and start with https://.
+        loop:
+          type: boolean
+          default: false
+          description: Whether to loop the video. Defaults to false.
+      required:
+      - url
     PaginatedBotList:
       type: object
       required:
