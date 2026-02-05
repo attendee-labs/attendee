@@ -1,12 +1,12 @@
 import logging
 import os
 
-from django.conf import settings
 from django.core.management.base import BaseCommand
 from django.db import models
 from django.utils import timezone
 from kubernetes import client, config
 
+from bots.bot_pod_creator.bot_pod_utils import locate_pod_for_bot
 from bots.models import Bot, BotEventManager, BotEventSubTypes, BotEventTypes
 
 logger = logging.getLogger(__name__)
@@ -14,10 +14,6 @@ logger = logging.getLogger(__name__)
 
 class Command(BaseCommand):
     help = "Terminates bots that have not sent a heartbeat in the last ten minutes or that never launched"
-
-    def __init__(self):
-        super().__init__()
-        self.namespace = settings.BOT_POD_NAMESPACE
 
     def terminate_bot(self, bot, event_sub_type):
         try:
@@ -39,21 +35,26 @@ class Command(BaseCommand):
         except config.ConfigException:
             config.load_kube_config()
         v1 = client.CoreV1Api()
-        logger.info("initialized kubernetes client")
 
-        # Try to delete the pod if it exists
+        # Locate the pod (checks both bot-specific and bot runner pods)
+        pod_info = locate_pod_for_bot(v1, bot)
+
+        if not pod_info:
+            logger.info(f"No pod found for bot {bot.id}, skipping pod deletion")
+            return
+
+        # Try to delete the pod
         try:
-            pod_name = bot.k8s_pod_name()
             v1.delete_namespaced_pod(
-                name=pod_name,
-                namespace=self.namespace,
+                name=pod_info.pod_name,
+                namespace=pod_info.namespace,
                 grace_period_seconds=0,
             )
-            logger.info(f"Deleted pod: {pod_name}")
+            logger.info(f"Deleted pod: {pod_info.pod_name}")
         except client.ApiException as pod_error:
             # 404 means pod doesn't exist, which is fine
             if pod_error.status != 404:
-                logger.warning(f"Error deleting pod {pod_name}: {str(pod_error)}")
+                logger.warning(f"Error deleting pod {pod_info.pod_name}: {str(pod_error)}")
 
     def handle(self, *args, **options):
         self.terminate_bots_with_heartbeat_timeout()
