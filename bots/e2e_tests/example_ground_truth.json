@@ -2,23 +2,41 @@
     "speakers": [
         {
             "name": "Speaker 1",
-            "audio_file": "speaker1.mp3",
-            "audio_duration_seconds": 19.0,
-            "transcript": "Good morning everyone. Thanks for joining the Q4 planning sync. I want to cover three things today: the customer migration timeline, the API versioning strategy, and our infrastructure budget for next year. Sarah, can you start us off with an update on the migration? Last I heard we had about two hundred customers still on the legacy platform."
+            "audio_file": "speaker1_turn1.mp3",
+            "audio_duration_seconds": 6.0,
+            "transcript": "Hey team, are we ready to ship the new API? I want to get it out before the end of the week."
         },
         {
             "name": "Speaker 2",
-            "audio_file": "speaker2.mp3",
-            "audio_duration_seconds": 28.0,
-            "transcript": "Sure thing. So we've actually made good progress since last week. We're now down to one hundred and forty seven customers on the legacy system. The biggest blocker has been the Acme Corporation account. They have some custom integrations with our old REST API that don't translate cleanly to GraphQL. I've scheduled a call with their engineering team for Thursday, December twelfth, to walk through the migration path. Assuming that goes well, I think we can hit our January fifteenth deadline."
+            "audio_file": "speaker2_turn1.mp3",
+            "audio_duration_seconds": 5.0,
+            "transcript": "Almost there. We're just waiting on the security review to finish up."
+        },
+        {
+            "name": "Speaker 1",
+            "audio_file": "speaker1_turn2.mp3",
+            "audio_duration_seconds": 3.0,
+            "transcript": "Got it. When is that scheduled for?"
         },
         {
             "name": "Speaker 3",
-            "audio_file": "speaker3.mp3",
-            "audio_duration_seconds": 41.0,
-            "transcript": "That's helpful context. On the API versioning side, I want to propose we adopt semantic versioning starting with version two point zero. The current approach of date-based versions like twenty twenty three dash eleven is causing confusion with our enterprise clients. They keep asking which version is newer. I've drafted an RFC and shared it in the engineering Slack channel. The main trade-off is that we'd need to maintain backwards compatibility for at least eighteen months per major version, which means more testing overhead. But I think the developer experience improvement is worth it. Can everyone review the RFC by end of week and add comments?"
+            "audio_file": "speaker3_turn1.mp3",
+            "audio_duration_seconds": 6.0,
+            "transcript": "Tomorrow at two PM. I already coordinated with the security team last week."
+        },
+        {
+            "name": "Speaker 2",
+            "audio_file": "speaker2_turn2.mp3",
+            "audio_duration_seconds": 4.0,
+            "transcript": "Perfect. So we should be good for a Thursday release then?"
+        },
+        {
+            "name": "Speaker 1",
+            "audio_file": "speaker1_turn3.mp3",
+            "audio_duration_seconds": 6.0,
+            "transcript": "Yeah that works for me. Let's sync again after the review to confirm everything looks good."
         }
     ],
-    "combined_transcript": "Good morning everyone. Thanks for joining the Q4 planning sync. I want to cover three things today: the customer migration timeline, the API versioning strategy, and our infrastructure budget for next year. Sarah, can you start us off with an update on the migration? Last I heard we had about two hundred customers still on the legacy platform. Sure thing. So we've actually made good progress since last week. We're now down to one hundred and forty seven customers on the legacy system. The biggest blocker has been the Acme Corporation account. They have some custom integrations with our old REST API that don't translate cleanly to GraphQL. I've scheduled a call with their engineering team for Thursday, December twelfth, to walk through the migration path. Assuming that goes well, I think we can hit our January fifteenth deadline. That's helpful context. On the API versioning side, I want to propose we adopt semantic versioning starting with version two point zero. The current approach of date-based versions like twenty twenty three dash eleven is causing confusion with our enterprise clients. They keep asking which version is newer. I've drafted an RFC and shared it in the engineering Slack channel. The main trade-off is that we'd need to maintain backwards compatibility for at least eighteen months per major version, which means more testing overhead. But I think the developer experience improvement is worth it. Can everyone review the RFC by end of week and add comments?",
-    "combined_audio_file": "combined_ground_truth.wav"
+    "combined_transcript": "Hey team, are we ready to ship the new API? I want to get it out before the end of the week. Almost there. We're just waiting on the security review to finish up. Got it. When is that scheduled for? Tomorrow at two PM. I already coordinated with the security team last week. Perfect. So we should be good for a Thursday release then? Yeah that works for me. Let's sync again after the review to confirm everything looks good.",
+    "combined_audio_file": "combined_ground_truth.mp3"
 }
