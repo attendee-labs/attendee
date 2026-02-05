@@ -38,5 +38,5 @@
         }
     ],
     "combined_transcript": "Hey team, are we ready to ship the new API? I want to get it out before the end of the week. Almost there. We're just waiting on the security review to finish up. Got it. When is that scheduled for? Tomorrow at 2pm. I already coordinated with the security team last week. Perfect. So we should be good for a Thursday release then? Yeah that works for me. Let's sync again after the review to confirm everything looks good.",
-    "combined_audio_file": "combined_ground_truth.mp3"
+    "combined_audio_file": "ground_truth.mp3"
 }
