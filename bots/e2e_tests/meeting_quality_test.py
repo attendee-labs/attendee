@@ -41,7 +41,7 @@ Ground truth JSON format:
         }
     ],
     "combined_transcript": "Hello, this is speaker one. How are you today? I'm doing well, thank you for asking.",
-    "combined_audio_file": "/path/to/combined_ground_truth.mp3"  # optional, for audio quality metrics
+    "combined_audio_file": "/path/to/ground_truth.mp3"  # optional, for audio quality metrics
 }
 """
 
@@ -93,10 +93,7 @@ class DiarizationMetrics:
     """Metrics for speaker diarization quality."""
 
     der: float = 0.0  # Diarization Error Rate (lower is better)
-    wder: float = 0.0  # Word Diarization Error Rate
-    speaker_confusion: float = 0.0  # % words assigned to wrong speaker
-    missed_speech: float = 0.0  # % speech not attributed to any speaker
-    false_alarm: float = 0.0  # % non-speech labeled as speech
+    wder: float = 0.0  # Word Diarization Error Rate (fragmentation)
     correct_speakers: int = 0  # Number of correctly identified speakers
     total_speakers: int = 0
 
@@ -119,8 +116,6 @@ class MeetingQualityReport:
     diarization_metrics: DiarizationMetrics = field(default_factory=DiarizationMetrics)
     audio_metrics: AudioMetrics = field(default_factory=AudioMetrics)
     per_speaker_wer: Dict[str, float] = field(default_factory=dict)
-    raw_transcript: str = ""
-    expected_transcript: str = ""
     passed: bool = False
     failure_reasons: List[str] = field(default_factory=list)
 
@@ -142,7 +137,6 @@ class MeetingQualityReport:
             "diarization_metrics": {
                 "der": self.diarization_metrics.der,
                 "wder": self.diarization_metrics.wder,
-                "speaker_confusion": self.diarization_metrics.speaker_confusion,
                 "correct_speakers": self.diarization_metrics.correct_speakers,
                 "total_speakers": self.diarization_metrics.total_speakers,
             },
@@ -262,9 +256,6 @@ def calculate_diarization_metrics(
     return DiarizationMetrics(
         der=speaker_count_error,
         wder=fragmentation,
-        speaker_confusion=fragmentation,
-        missed_speech=0.0,
-        false_alarm=0.0,
         correct_speakers=min(detected_speaker_count, expected_speaker_count),
         total_speakers=expected_speaker_count,
     )
@@ -448,8 +439,9 @@ def detect_platform(meeting_url: str, zoom_sdk: Optional[str] = None) -> str:
 def get_platform_audio_file(base_file: Path, platform: str) -> Path:
     """Convert base audio file path to platform-specific path.
 
-    e.g. combined_ground_truth.mp3 + zoom_native -> combined_ground_truth_zoom_native.mp3
+    e.g. ground_truth.mp3 + zoom_native -> ground_truth_zoom_native.mp3
     """
+    print(f"base_file: {base_file}, platform: {platform}")
     return base_file.with_name(f"{base_file.stem}_{platform}{base_file.suffix}")
 
 
@@ -557,7 +549,6 @@ def run_meeting_quality_test(
     """
     report = MeetingQualityReport()
     report.platform = platform
-    report.expected_transcript = ground_truth.combined_transcript
 
     # Track created bots for cleanup
     recorder_bot_id: Optional[str] = None
@@ -705,7 +696,6 @@ def run_meeting_quality_test(
                 actual_transcript_parts.append(text)
 
         actual_transcript = " ".join(actual_transcript_parts)
-        report.raw_transcript = actual_transcript
 
         # 8. Calculate transcript metrics
         report.transcript_metrics = calculate_transcript_metrics(
@@ -757,9 +747,8 @@ def run_meeting_quality_test(
                 report.per_speaker_wer[gt_name] = best_wer
 
         # 10. Calculate diarization metrics
-        unique_speaker_count = len(set(s.name for s in ground_truth.speakers))
         report.diarization_metrics = calculate_diarization_metrics(
-            expected_speaker_count=unique_speaker_count,
+            expected_speaker_count=len(unique_speakers),
             expected_turn_count=len(ground_truth.speakers),
             actual_utterances=actual_utterances,
         )
@@ -837,7 +826,6 @@ def main():
     parser.add_argument("--leave-after", type=float, default=None, help="Seconds after speaking before leaving")
     parser.add_argument("--zoom-sdk", choices=["native", "web"], default=None, help="Zoom SDK to use (native or web)")
     parser.add_argument("--output", "-o", help="Output JSON file for results")
-    parser.add_argument("--wer-threshold", type=float, default=0.30, help="Max acceptable WER (default: 0.30)")
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose output")
     args = parser.parse_args()
 
