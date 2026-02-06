@@ -689,7 +689,12 @@ class ChatMessageManager {
                 type: 'ChatMessage',
                 message_uuid: chatMessage.messageId,
                 participant_uuid: chatMessage.deviceId,
-                timestamp: Math.floor(chatMessage.timestamp / 1000),
+                // We are not using chatMessage.timestamp, because it seems to correspond to the start of the meeting
+                // not the creation time of the chat message. So we're just taking the current time for now.
+                // It could be off if there is significant latency between the chat message being created and
+                // our client receiving the chat message, but this seems unlikely in practice.
+                // In the future we can see if the payload contains the creation time of the chat message.
+                timestamp: Math.floor(Date.now() / 1000),
                 text: chatMessage.chatMessageContent.text,
             });
         }

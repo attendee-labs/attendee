@@ -6,9 +6,43 @@ from django.test import TestCase
 from django.utils import timezone
 
 from accounts.models import Organization
-from bots.bots_api_utils import BotCreationSource, create_bot, create_webhook_subscription, validate_bot_concurrency_limit, validate_meeting_url_and_credentials
+from bots.bots_api_utils import BotCreationSource, build_site_url, create_bot, create_webhook_subscription, validate_bot_concurrency_limit, validate_meeting_url_and_credentials
 from bots.calendars_api_utils import create_calendar
 from bots.models import Bot, BotEventManager, BotEventTypes, BotStates, CalendarEvent, CalendarPlatform, Project, TranscriptionProviders, WebhookSubscription, WebhookTriggerTypes, ZoomOAuthApp
+
+
+class TestBuildSiteUrl(TestCase):
+    @patch("bots.bots_api_utils.settings")
+    @patch.dict("os.environ", {}, clear=True)
+    def test_build_site_url_with_localhost(self, mock_settings):
+        """Test that localhost domains use http protocol."""
+        mock_settings.SITE_DOMAIN = "localhost:8000"
+        result = build_site_url("/test/path")
+        self.assertEqual(result, "http://localhost:8000/test/path")
+
+    @patch("bots.bots_api_utils.settings")
+    @patch.dict("os.environ", {}, clear=True)
+    def test_build_site_url_with_production_domain(self, mock_settings):
+        """Test that non-localhost domains use https protocol."""
+        mock_settings.SITE_DOMAIN = "example.com"
+        result = build_site_url("/api/webhook")
+        self.assertEqual(result, "https://example.com/api/webhook")
+
+    @patch("bots.bots_api_utils.settings")
+    @patch.dict("os.environ", {"EXTERNAL_WEBHOOK_SITE_DOMAIN": "external.example.com"}, clear=True)
+    def test_build_site_url_uses_external_webhook_domain_when_set(self, mock_settings):
+        """Test that EXTERNAL_WEBHOOK_SITE_DOMAIN takes priority over SITE_DOMAIN."""
+        mock_settings.SITE_DOMAIN = "internal.example.com"
+        result = build_site_url("/webhook")
+        self.assertEqual(result, "https://external.example.com/webhook")
+
+    @patch("bots.bots_api_utils.settings")
+    @patch.dict("os.environ", {"EXTERNAL_WEBHOOK_SITE_DOMAIN": "localhost:9000"}, clear=True)
+    def test_build_site_url_external_domain_localhost_uses_http(self, mock_settings):
+        """Test that localhost external webhook domain uses http protocol."""
+        mock_settings.SITE_DOMAIN = "production.example.com"
+        result = build_site_url("/callback")
+        self.assertEqual(result, "http://localhost:9000/callback")
 
 
 class TestValidateMeetingUrlAndCredentials(TestCase):

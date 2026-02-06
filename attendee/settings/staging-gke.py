@@ -44,7 +44,7 @@ ADMINS = []
 
 SERVER_EMAIL = "noreply@mail.attendee.dev"
 
-CSRF_TRUSTED_ORIGINS = ["https://*.attendee.dev"]
+CSRF_TRUSTED_ORIGINS = os.getenv("CSRF_TRUSTED_ORIGINS", "https://*.attendee.dev").split(",")
 
 LOGGING = {
     "version": 1,

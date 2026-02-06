@@ -1128,8 +1128,8 @@ class ZoomBotAdapter(BotAdapter):
             return False
         return self.mp4_demuxer.is_playing()
 
-    def send_video(self, video_url):
-        logger.info(f"send_video called with video_url = {video_url}")
+    def send_video(self, video_url, loop=False):
+        logger.info(f"send_video called with video_url = {video_url}, loop = {loop}")
         if not self.unmute_webcam():
             return
 
@@ -1148,6 +1148,7 @@ class ZoomBotAdapter(BotAdapter):
             output_video_dimensions=(self.suggested_video_cap.width, self.suggested_video_cap.height),
             on_video_sample=self.mp4_demuxer_on_video_sample,
             on_audio_sample=self.mp4_demuxer_on_audio_sample,
+            loop=loop,
         )
         self.mp4_demuxer.start()
         return

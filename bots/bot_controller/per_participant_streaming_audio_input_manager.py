@@ -151,7 +151,11 @@ class PerParticipantStreamingAudioInputManager:
             return self.streaming_transcribers[speaker_id]
 
         # Create new transcriber
-        metadata = {"bot_id": self.bot.object_id, **(self.bot.metadata or {}), **self.get_participant_callback(speaker_id)}
+        participant_info = self.get_participant_callback(speaker_id)
+        if participant_info is None:
+            # Audio arrived before participant join was captured - skip creating transcriber for now
+            return None
+        metadata = {"bot_id": self.bot.object_id, **(self.bot.metadata or {}), **participant_info}
         participant_name = metadata.get("participant_full_name", speaker_id)
 
         logger.info(f"Creating streaming transcriber for speaker {speaker_id} ({participant_name})")

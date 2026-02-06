@@ -16,7 +16,7 @@ class VideoOutputManager:
 
     def start_playing_video_media_request(self, video_media_request):
         self.currently_playing_video_media_request = video_media_request
-        self.play_video_callback(video_media_request.media_url)
+        self.play_video_callback(video_media_request.media_url, loop=video_media_request.loop)
 
     def monitor_currently_playing_video_media_request(self):
         if not self.currently_playing_video_media_request:
