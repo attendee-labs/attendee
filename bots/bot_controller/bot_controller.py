@@ -114,7 +114,7 @@ class BotController:
         return self.get_recording_transcription_provider() == TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM
 
     def should_capture_audio_chunks(self):
-        return self.save_utterances_for_individual_audio_chunks() or self.bot_in_db.record_async_transcription_audio_chunks()
+        return self.save_utterances_for_individual_audio_chunks() or self.use_streaming_transcription() or self.bot_in_db.record_async_transcription_audio_chunks()
 
     def disable_incoming_video_for_web_bots(self):
         return not (self.pipeline_configuration.record_video or self.pipeline_configuration.rtmp_stream_video)
