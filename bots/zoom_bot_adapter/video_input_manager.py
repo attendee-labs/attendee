@@ -174,9 +174,10 @@ class VideoInputStream:
             self.black_frame_timer_id = None
 
         if self.renderer:
-            logger.info(f"starting renderer unsubscription for user {self.user_id} and share source id {self.share_source_id}")
+            logger.info(f"starting renderer unsubscription + destroy for user {self.user_id} and share source id {self.share_source_id}")
             self.renderer.unSubscribe()
-            logger.info(f"finished renderer unsubscription for user {self.user_id} and share source id {self.share_source_id}")
+            zoom.destroyRenderer(self.renderer)
+            logger.info(f"finished renderer unsubscription + destroy for user {self.user_id} and share source id {self.share_source_id}")
 
     def on_renderer_destroyed_callback(self):
         self.renderer_destroyed = True
