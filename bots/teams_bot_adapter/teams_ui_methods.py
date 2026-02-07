@@ -1,7 +1,7 @@
 import logging
 import time
 
-from selenium.common.exceptions import NoSuchElementException, TimeoutException
+from selenium.common.exceptions import ElementClickInterceptedException, ElementNotInteractableException, NoSuchElementException, StaleElementReferenceException, TimeoutException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
@@ -300,10 +300,19 @@ class TeamsUIMethods:
         logger.info("Waiting for the turn off incoming video button...")
         for attempt_index in range(num_attempts):
             try:
-                turn_off_incoming_video_button = WebDriverWait(self.driver, 1).until(EC.presence_of_element_located((By.CSS_SELECTOR, "[aria-label='Turn off incoming video'], #incoming-video-button")))
+                turn_off_incoming_video_button = WebDriverWait(self.driver, 1).until(EC.element_to_be_clickable((By.CSS_SELECTOR, "[aria-label='Turn off incoming video'], #incoming-video-button")))
                 logger.info("Turn off incoming video button found")
                 turn_off_incoming_video_button.click()
                 return
+
+            except (StaleElementReferenceException, ElementClickInterceptedException, ElementNotInteractableException, NoSuchElementException) as e:
+                last_attempt_failed = attempt_index == num_attempts - 1
+                if last_attempt_failed:
+                    logger.error("Turn off incoming video button was unclickable with error {e} of type {type(e)}. Timed out. Raising UiCouldNotLocateElementException")
+                    raise UiCouldNotLocateElementException("Turn off incoming video button was unclickable with error {e} of type {type(e)}. Timed out.", "disable_incoming_video:turn_off_incoming_video_button")
+
+                logger.warning(f"Turn off incoming video button was unclickable with error {e} of type {type(e)}. Retrying. Attempt #{attempt_index}...")
+
             except TimeoutException as e:
                 more_options_button = self.find_element_by_selector(By.CSS_SELECTOR, "#ViewModeMoreOptionsMenuControl-id")
                 if more_options_button:
