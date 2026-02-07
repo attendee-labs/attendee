@@ -67,7 +67,7 @@ class Command(BaseCommand):
             logger.warning(f"Cannot connect to Docker to terminate bot {bot.id}: {e}")
             return
 
-        container_name = f"bot-{bot.id}"
+        container_name = bot.ephemeral_container_name()
         try:
             container = client.containers.get(container_name)
             container.remove(force=True)

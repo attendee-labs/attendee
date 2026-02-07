@@ -66,9 +66,6 @@ def run_bot_in_ephemeral_container(self, bot_id: int):
         }
         env_vars = {k: v for k, v in env_vars.items() if k not in vars_to_exclude}
 
-        # Container name
-        container_name = f"bot-{bot_id}"
-
         # Resource limits per bot (configurable)
         mem_limit = os.getenv("BOT_MEMORY_LIMIT", "2g")  # 2GB default
         cpu_quota = int(os.getenv("BOT_CPU_QUOTA", "100000"))  # 1 CPU default (100000 = 1 core)
@@ -78,6 +75,9 @@ def run_bot_in_ephemeral_container(self, bot_id: int):
         bot = Bot.objects.get(id=bot_id)
         automatic_leave_settings = bot.automatic_leave_settings()
         bot_max_uptime = automatic_leave_settings.get("max_uptime_seconds")
+
+        # Container name
+        container_name = bot.ephemeral_container_name()
 
         # Calculate timeout = max_uptime_seconds + 1h (3600s) if defined, otherwise use default
         if bot_max_uptime is not None:
