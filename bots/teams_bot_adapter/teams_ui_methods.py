@@ -1,13 +1,13 @@
 import logging
 import time
 
-from selenium.common.exceptions import NoSuchElementException, TimeoutException
+from selenium.common.exceptions import ElementClickInterceptedException, ElementNotInteractableException, NoSuchElementException, StaleElementReferenceException, TimeoutException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
 from bots.models import RecordingViews
-from bots.web_bot_adapter.ui_methods import UiCouldNotClickElementException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableExpectedException
+from bots.web_bot_adapter.ui_methods import UiBlockedByCaptchaException, UiCouldNotClickElementException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableExpectedException
 
 logger = logging.getLogger(__name__)
 
@@ -156,6 +156,7 @@ class TeamsUIMethods:
                 return
             except TimeoutException:
                 self.look_for_sign_in_required_element("click_show_more_button")
+                self.check_if_blocked_by_captcha("click_show_more_button")
                 self.look_for_denied_your_request_element("click_show_more_button")
                 self.look_for_we_could_not_connect_you_element("click_show_more_button")
 
@@ -183,6 +184,12 @@ class TeamsUIMethods:
         if sign_in_required_element:
             logger.info("Sign in required. Raising UiLoginRequiredException")
             raise UiLoginRequiredException("Sign in required", step)
+
+    def check_if_blocked_by_captcha(self, step):
+        captcha_element = self.find_element_by_selector(By.XPATH, '//*[contains(text(), "Verify you\'re a real person")]')
+        if captcha_element:
+            logger.info("Captcha detected. Raising UiBlockedByCaptchaException")
+            raise UiBlockedByCaptchaException("Captcha detected", step)
 
     def look_for_microsoft_login_form_element(self, step):
         # Check for Microsoft login form (email input)
@@ -293,10 +300,19 @@ class TeamsUIMethods:
         logger.info("Waiting for the turn off incoming video button...")
         for attempt_index in range(num_attempts):
             try:
-                turn_off_incoming_video_button = WebDriverWait(self.driver, 1).until(EC.presence_of_element_located((By.CSS_SELECTOR, "[aria-label='Turn off incoming video'], #incoming-video-button")))
+                turn_off_incoming_video_button = WebDriverWait(self.driver, 1).until(EC.element_to_be_clickable((By.CSS_SELECTOR, "[aria-label='Turn off incoming video'], #incoming-video-button")))
                 logger.info("Turn off incoming video button found")
                 turn_off_incoming_video_button.click()
                 return
+
+            except (StaleElementReferenceException, ElementClickInterceptedException, ElementNotInteractableException, NoSuchElementException) as e:
+                last_attempt_failed = attempt_index == num_attempts - 1
+                if last_attempt_failed:
+                    logger.error("Turn off incoming video button was unclickable with error {e} of type {type(e)}. Timed out. Raising UiCouldNotLocateElementException")
+                    raise UiCouldNotLocateElementException("Turn off incoming video button was unclickable with error {e} of type {type(e)}. Timed out.", "disable_incoming_video:turn_off_incoming_video_button")
+
+                logger.warning(f"Turn off incoming video button was unclickable with error {e} of type {type(e)}. Retrying. Attempt #{attempt_index}...")
+
             except TimeoutException as e:
                 more_options_button = self.find_element_by_selector(By.CSS_SELECTOR, "#ViewModeMoreOptionsMenuControl-id")
                 if more_options_button:

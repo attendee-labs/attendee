@@ -62,7 +62,7 @@ trio-websocket==0.11.1
 typing_extensions==4.13.0
 tzdata==2024.2
 uritemplate==4.1.1
-urllib3==2.6.1
+urllib3==2.6.3
 vine==5.1.0
 watchdog==6.0.0
 wcwidth==0.2.13
@@ -81,7 +81,7 @@ grpcio==1.70.0
 grpcio-status==1.70.0
 proto-plus==1.26.0
 protobuf==5.29.3
-pyasn1==0.6.1
+pyasn1==0.6.2
 pyasn1_modules==0.4.1
 rsa==4.9
 ruff==0.9.6

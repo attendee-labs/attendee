@@ -48,7 +48,6 @@ def build_site_url(path=""):
     """
     Build a full URL using SITE_DOMAIN setting.
     Automatically uses http:// for localhost, https:// for everything else.
-    
     If EXTERNAL_WEBHOOK_SITE_DOMAIN is set, it takes priority (useful for webhooks that need
     to be accessible from external services like Microsoft/Google).
     """

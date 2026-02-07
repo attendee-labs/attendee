@@ -384,8 +384,8 @@ class CalendarEvent(models.Model):
 
     meeting_url = models.CharField(max_length=511, null=True, blank=True)
 
-    start_time = models.DateTimeField()
-    end_time = models.DateTimeField()
+    start_time = models.DateTimeField(db_index=True)
+    end_time = models.DateTimeField(db_index=True)
     is_deleted = models.BooleanField(default=False)
     attendees = models.JSONField(null=True, blank=True)
     ical_uid = models.CharField(max_length=1024, null=True, blank=True)
@@ -2601,6 +2601,8 @@ class BotMediaRequest(models.Model):
     text_to_speech_settings = models.JSONField(null=True, default=None)
 
     media_url = models.URLField(null=True, blank=True)
+
+    loop = models.BooleanField(default=False, db_default=False)
 
     media_blob = models.ForeignKey(
         MediaBlob,

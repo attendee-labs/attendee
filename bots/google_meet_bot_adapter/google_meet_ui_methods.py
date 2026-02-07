@@ -1,11 +1,13 @@
 import logging
 import os
 import time
+from urllib.parse import urlparse
 
+import requests
+from django.conf import settings
 from selenium.common.exceptions import ElementNotInteractableException, NoSuchElementException, TimeoutException
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
@@ -499,6 +501,54 @@ class GoogleMeetUIMethods:
         logger.info("Timed out waiting for URL stability (>%.2fs). Last URL: %s", stable_for, last_url)
         return False
 
+    def login_to_google_meet_account_with_retries(self):
+        # Blanket guard against transient errors on Google's side
+        num_attempts = 3
+        for attempt_index in range(num_attempts):
+            try:
+                self.login_to_google_meet_account()
+                return
+            except UiLoginAttemptFailedException as e:
+                last_attempt = attempt_index == num_attempts - 1
+                if last_attempt:
+                    raise e
+                logger.warning(f"Error logging in to Google Meet account. Clearing cookies and retrying... Attempts remaining: {num_attempts - attempt_index - 1}")
+                self.driver.delete_all_cookies()
+
+    # This is safer because it prevents the browser from navigating to an untrusted url.
+    # It is a bit less robust though and requires SITE_DOMAIN to be set correctly.
+    # So not making it the default, as self-hosters don't need it.
+    def safely_navigate_to_gmail_domain_url(self):
+        gmail_service_url = f"https://www.google.com/a/{self.google_meet_bot_login_session.get('login_domain')}/ServiceLogin?service=mail"
+        # Make a request to this url and get the redirect header
+        logger.info(f"Making request to gmail service url: {gmail_service_url}")
+        response = requests.get(gmail_service_url, allow_redirects=False)
+        redirect_url_from_google = response.headers.get("Location")
+
+        # If the redirect url's host is not SITE_DOMAIN, the login failed
+        redirect_url_from_google_host = None
+        try:
+            redirect_url_from_google_host = urlparse(redirect_url_from_google).hostname
+        except Exception:
+            pass
+
+        if redirect_url_from_google_host != settings.SITE_DOMAIN:
+            logger.error(f"Redirect url's host is not SITE_DOMAIN. Redirect url: {redirect_url_from_google}. Redirect url's host: {redirect_url_from_google_host}. SITE_DOMAIN: {settings.SITE_DOMAIN}")
+            raise UiLoginAttemptFailedException("Redirect url's host is not SITE_DOMAIN", "safe_navigate_to_gmail_domain_url")
+
+        logger.info(f"redirect_url_from_google_host = {redirect_url_from_google_host}")
+
+        self.driver.get(redirect_url_from_google)
+
+    def navigate_to_gmail_domain_url(self):
+        if os.getenv("USE_SAFE_NAVIGATION_FOR_SIGNED_IN_GOOGLE_MEET_BOTS", "false") == "true":
+            self.safely_navigate_to_gmail_domain_url()
+            return
+
+        gmail_domain_url = f"https://mail.google.com/a/{self.google_meet_bot_login_session.get('login_domain')}"
+        logger.info(f"Navigating to gmail domain url: {gmail_domain_url}")
+        self.driver.get(gmail_domain_url)
+
     def login_to_google_meet_account(self):
         self.google_meet_bot_login_session = self.create_google_meet_bot_login_session_callback()
         logger.info("Logging in to Google Meet account")
@@ -506,49 +556,45 @@ class GoogleMeetUIMethods:
         google_meet_set_cookie_url = get_google_meet_set_cookie_url(session_id)
         logger.info(f"Navigating to Google Meet set cookie URL: {google_meet_set_cookie_url}")
         self.driver.get(google_meet_set_cookie_url)
-        # Then you need to navigate to http://accounts.google.com/
-        logger.info("Navigating to http://accounts.google.com/")
-        self.driver.get("http://accounts.google.com/")
 
-        # Then you need to fill in the email input
-        logger.info("Filling in the email input...")
-        # Look for input type = email and fill it in
-        session_email = self.google_meet_bot_login_session.get("login_email")
-        email_input = self.locate_element(step="email_input_for_google_account_sign_in", condition=EC.presence_of_element_located((By.CSS_SELECTOR, 'input[type="email"]')), wait_time_seconds=10)
-        email_input.send_keys(session_email)
+        self.navigate_to_gmail_domain_url()
 
-        url_before_signin = self.driver.current_url
-        # Press the enter key to submit the email input
-        email_input.send_keys(Keys.ENTER)
-
-        logger.info("Login attempted, waiting for redirect...")
-        logger.info(f"Current URL: {self.driver.current_url}")
-
-        ## Wait until the url changes to something other than the login page or too much time has passed
+        # Wait for cookies indicating that we have logged in successfully
         start_waiting_at = time.time()
-        while self.driver.current_url == url_before_signin:
+        while not self.has_google_cookies_that_indicate_logged_in(self.driver):
             time.sleep(1)
-            if time.time() - start_waiting_at > 120:
-                logger.info("Login timed out, redirecting to meeting page")
-                # TODO Replace with error message for login failed
-                break
-
-        logger.info(f"Redirected to {self.driver.current_url}")
-
-        # Wait for the URL to include https://myaccount.google.com, this indicates that we have logged in successfully
-        start_waiting_at = time.time()
-        while "https://myaccount.google.com" not in self.driver.current_url:
-            time.sleep(1)
-            if time.time() - start_waiting_at > 120:
-                # We'll raise an exception if it's not logged in after 120 seconds
-                raise UiLoginAttemptFailedException("My Account page was not loaded", "login_to_google_meet_account")
+            logger.info(f"Waiting for cookies indicating that we have logged in successfully. Current URL: {self.driver.current_url}")
+            if time.time() - start_waiting_at > 30:
+                # We'll raise an exception if it's not logged in after 30 seconds
+                logger.warning(f"Login timed out, after 30 seconds, no Google auth cookies were present. Current URL: {self.driver.current_url}")
+                raise UiLoginAttemptFailedException("No Google auth cookies were present", "login_to_google_meet_account")
 
         logger.info(f"After waiting, URL is {self.driver.current_url}")
+
+    def has_google_cookies_that_indicate_logged_in(self, driver) -> bool:
+        google_auth_cookie_names = {
+            "SID",
+            "HSID",
+            "SSID",
+            "APISID",
+            "SAPISID",
+            "__Secure-1PSID",
+            "__Secure-3PSID",
+            "__Secure-1PAPISID",
+            "__Secure-3PAPISID",
+            "SIDCC",
+        }
+
+        cookies = driver.get_cookies()
+        names = {c.get("name") for c in cookies if c.get("name")}
+        any_google_auth_cookies_present = bool(names & google_auth_cookie_names)
+        logger.warning(f"Cookie names: {names}. Any Google auth cookies present: {any_google_auth_cookies_present}.")
+        return any_google_auth_cookies_present
 
     # returns nothing if succeeded, raises an exception if failed
     def attempt_to_join_meeting(self):
         if self.google_meet_bot_login_is_available and self.google_meet_bot_login_should_be_used:
-            self.login_to_google_meet_account()
+            self.login_to_google_meet_account_with_retries()
 
         layout_to_select = self.get_layout_to_select()
 

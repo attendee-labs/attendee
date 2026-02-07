@@ -1,4 +1,5 @@
 import hashlib
+from datetime import datetime
 
 from django import template
 
@@ -59,6 +60,17 @@ def participant_color(uuid):
 @register.filter
 def md5(value):
     return hashlib.md5(str(value).encode()).hexdigest()
+
+
+@register.filter
+def epoch_to_datetime(value):
+    """Convert epoch timestamp (seconds) to datetime object for use with date filter"""
+    if value is None:
+        return None
+    try:
+        return datetime.fromtimestamp(float(value))
+    except (ValueError, TypeError, OSError):
+        return None
 
 
 @register.filter
