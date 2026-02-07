@@ -24,11 +24,11 @@ class PerParticipantNonStreamingAudioInputManager:
 
         self.UTTERANCE_SIZE_LIMIT = utterance_size_limit
         self.SILENCE_DURATION_LIMIT = silence_duration_limit
-        
+
         # Minimum speech ratio to save an utterance (discard if below this threshold)
         # e.g., 0.15 means at least 15% of chunks must be speech
         self.MIN_SPEECH_RATIO = 0.15
-        
+
         # Minimum duration in ms to save an utterance (filters clicks/taps)
         self.MIN_DURATION_MS = 200
 
@@ -94,7 +94,7 @@ class PerParticipantNonStreamingAudioInputManager:
         if rms_value < 0.005:
             self.diagnostic_info["total_chunks_marked_as_silent_due_to_rms_being_small"] += 1
             return True
-        
+
         # VAD for actual speech detection
         if not self.is_speech(chunk_bytes):
             self.diagnostic_info["total_chunks_marked_as_silent_due_to_vad"] += 1
@@ -141,12 +141,12 @@ class PerParticipantNonStreamingAudioInputManager:
         # Flush buffer if needed
         if should_flush and len(self.utterance_chunks[speaker_id]) > 0:
             chunks = self.utterance_chunks[speaker_id]
-            
+
             # Find the last non-silent chunk (for trimming calculation)
             last_non_silent_idx = len(chunks) - 1
             while last_non_silent_idx >= 0 and chunks[last_non_silent_idx][1]:  # [1] is is_silent
                 last_non_silent_idx -= 1
-            
+
             # Calculate speech ratio on TRIMMED utterance (excluding trailing silence)
             trimmed_chunk_count = last_non_silent_idx + 1
             if trimmed_chunk_count <= 0:
@@ -155,40 +155,32 @@ class PerParticipantNonStreamingAudioInputManager:
                 del self.first_nonsilent_audio_time[speaker_id]
                 del self.last_nonsilent_audio_time[speaker_id]
                 return
-            
+
             speech_chunks = sum(1 for i in range(trimmed_chunk_count) if not chunks[i][1])
             speech_ratio = speech_chunks / trimmed_chunk_count
-            
+
             # Calculate duration on trimmed utterance
             trimmed_bytes = sum(len(chunks[i][0]) for i in range(trimmed_chunk_count))
             duration_ms = (trimmed_bytes / 2) / self.sample_rate * 1000
-            
+
             if speech_ratio < self.MIN_SPEECH_RATIO:
                 # Discard utterance with too little speech (likely noise)
-                logger.info(
-                    f"Discarding low-speech utterance for speaker {speaker_id}: "
-                    f"speech ratio {speech_ratio:.1%} ({speech_chunks}/{trimmed_chunk_count} chunks after trim), "
-                    f"{trimmed_bytes / 1024:.1f}KB / {duration_ms:.0f}ms"
-                )
+                logger.info(f"Discarding low-speech utterance for speaker {speaker_id}: speech ratio {speech_ratio:.1%} ({speech_chunks}/{trimmed_chunk_count} chunks after trim), {trimmed_bytes / 1024:.1f}KB / {duration_ms:.0f}ms")
                 self.diagnostic_info["total_audio_chunks_discarded_low_speech_ratio"] += 1
                 self.utterance_chunks[speaker_id] = []
                 del self.first_nonsilent_audio_time[speaker_id]
                 del self.last_nonsilent_audio_time[speaker_id]
                 return
-            
+
             if duration_ms < self.MIN_DURATION_MS:
                 # Discard utterance that's too short (likely click/tap)
-                logger.info(
-                    f"Discarding short utterance for speaker {speaker_id}: "
-                    f"{duration_ms:.0f}ms < {self.MIN_DURATION_MS}ms minimum, "
-                    f"speech ratio {speech_ratio:.1%}"
-                )
+                logger.info(f"Discarding short utterance for speaker {speaker_id}: {duration_ms:.0f}ms < {self.MIN_DURATION_MS}ms minimum, speech ratio {speech_ratio:.1%}")
                 self.diagnostic_info["total_audio_chunks_discarded_too_short"] += 1
                 self.utterance_chunks[speaker_id] = []
                 del self.first_nonsilent_audio_time[speaker_id]
                 del self.last_nonsilent_audio_time[speaker_id]
                 return
-            
+
             participant = self.get_participant_callback(speaker_id)
             if participant:
                 # Trim trailing silence before sending
@@ -231,23 +223,18 @@ class PerParticipantNonStreamingAudioInputManager:
         # Count trimmed chunks for diagnostics
         trimmed_count = len(chunks) - 1 - last_non_silent_idx
         total_chunks = len(chunks)
-        
+
         # Calculate bytes before and after trimming
         original_bytes = sum(len(chunk) for chunk, _ in chunks)
         trimmed_bytes = sum(len(chunks[i][0]) for i in range(last_non_silent_idx + 1)) if last_non_silent_idx >= 0 else 0
         bytes_trimmed = original_bytes - trimmed_bytes
-        
+
         if trimmed_count > 0:
             self.diagnostic_info["total_trailing_silent_chunks_trimmed"] += trimmed_count
             # Calculate duration trimmed (2 bytes per sample for 16-bit audio)
             duration_trimmed_ms = (bytes_trimmed / 2) / self.sample_rate * 1000
             duration_original_ms = (original_bytes / 2) / self.sample_rate * 1000
-            logger.info(
-                f"Trimmed trailing silence for speaker {speaker_id}: "
-                f"{trimmed_count}/{total_chunks} chunks removed, "
-                f"{bytes_trimmed / 1024:.1f}KB / {duration_trimmed_ms:.0f}ms trimmed "
-                f"(original: {original_bytes / 1024:.1f}KB / {duration_original_ms:.0f}ms)"
-            )
+            logger.info(f"Trimmed trailing silence for speaker {speaker_id}: {trimmed_count}/{total_chunks} chunks removed, {bytes_trimmed / 1024:.1f}KB / {duration_trimmed_ms:.0f}ms trimmed (original: {original_bytes / 1024:.1f}KB / {duration_original_ms:.0f}ms)")
 
         # Concatenate all chunks up to and including the last non-silent chunk
         result = bytearray()

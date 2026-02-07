@@ -85,7 +85,7 @@ class TestTrailingSilenceTrimming(TestCase):
             should_print_diagnostic_info=False,
         )
 
-    @patch.object(PerParticipantNonStreamingAudioInputManager, 'is_speech')
+    @patch.object(PerParticipantNonStreamingAudioInputManager, "is_speech")
     def test_trailing_silence_is_trimmed(self, mock_is_speech):
         """Test that trailing silent chunks are removed from the output."""
         # Mock VAD to return True for first 3 chunks (speech), False for last 3 (silence)
@@ -126,7 +126,7 @@ class TestTrailingSilenceTrimming(TestCase):
         # Check diagnostic info
         self.assertEqual(self.manager.diagnostic_info["total_trailing_silent_chunks_trimmed"], 3)
 
-    @patch.object(PerParticipantNonStreamingAudioInputManager, 'is_speech')
+    @patch.object(PerParticipantNonStreamingAudioInputManager, "is_speech")
     def test_interleaved_speech_and_silence_preserves_middle_silence(self, mock_is_speech):
         """Test that silence between speech segments is preserved."""
         # Pattern: [SPEECH][SILENCE][SPEECH][SILENCE][SILENCE]
@@ -160,7 +160,7 @@ class TestTrailingSilenceTrimming(TestCase):
         # 2 trailing silent chunks should have been trimmed
         self.assertEqual(self.manager.diagnostic_info["total_trailing_silent_chunks_trimmed"], 2)
 
-    @patch.object(PerParticipantNonStreamingAudioInputManager, 'is_speech')
+    @patch.object(PerParticipantNonStreamingAudioInputManager, "is_speech")
     def test_all_speech_no_trimming(self, mock_is_speech):
         """Test that nothing is trimmed when there's no trailing silence."""
         mock_is_speech.return_value = True
@@ -216,10 +216,7 @@ class TestSileroVADIntegration(TestCase):
         is_silent = self.manager.silence_detected(low_noise_chunk)
         self.assertTrue(is_silent)
         # Either zero or small RMS
-        total_rms_silent = (
-            self.manager.diagnostic_info["total_chunks_marked_as_silent_due_to_rms_being_zero"] +
-            self.manager.diagnostic_info["total_chunks_marked_as_silent_due_to_rms_being_small"]
-        )
+        total_rms_silent = self.manager.diagnostic_info["total_chunks_marked_as_silent_due_to_rms_being_zero"] + self.manager.diagnostic_info["total_chunks_marked_as_silent_due_to_rms_being_small"]
         self.assertGreater(total_rms_silent, 0)
 
 
@@ -237,7 +234,7 @@ class TestFlushBehavior(TestCase):
             should_print_diagnostic_info=False,
         )
 
-    @patch.object(PerParticipantNonStreamingAudioInputManager, 'is_speech')
+    @patch.object(PerParticipantNonStreamingAudioInputManager, "is_speech")
     def test_flush_on_buffer_full(self, mock_is_speech):
         """Test that buffer is flushed when size limit is reached."""
         mock_is_speech.return_value = True
@@ -261,7 +258,7 @@ class TestFlushBehavior(TestCase):
         self.assertGreater(len(self.saved_chunks), 0)
         self.assertEqual(self.saved_chunks[0]["flush_reason"], "buffer_full")
 
-    @patch.object(PerParticipantNonStreamingAudioInputManager, 'is_speech')
+    @patch.object(PerParticipantNonStreamingAudioInputManager, "is_speech")
     def test_flush_on_silence_timeout(self, mock_is_speech):
         """Test that buffer is flushed after silence duration limit."""
         mock_is_speech.side_effect = [True, True, False, False, False]
@@ -299,7 +296,7 @@ class TestFlushBehavior(TestCase):
         self.assertEqual(len(self.saved_chunks), 1)
         self.assertEqual(self.saved_chunks[0]["flush_reason"], "silence_limit")
 
-    @patch.object(PerParticipantNonStreamingAudioInputManager, 'is_speech')
+    @patch.object(PerParticipantNonStreamingAudioInputManager, "is_speech")
     def test_flush_utterances_flushes_all_speakers(self, mock_is_speech):
         """Test that flush_utterances clears all pending utterances."""
         mock_is_speech.return_value = True
@@ -351,7 +348,7 @@ class TestParticipantNotFound(TestCase):
             vad_provider="webrtc",
         )
 
-    @patch.object(PerParticipantNonStreamingAudioInputManager, 'is_speech')
+    @patch.object(PerParticipantNonStreamingAudioInputManager, "is_speech")
     def test_participant_not_found_logs_and_discards(self, mock_is_speech):
         """Test that chunks are discarded when participant is not found."""
         mock_is_speech.return_value = True
@@ -376,7 +373,7 @@ class TestParticipantNotFound(TestCase):
         for i in range(25):
             chunk_time = base_time + timedelta(milliseconds=i * 10)
             manager.add_chunk(speaker_id, chunk_time, speech_chunk)
-        
+
         manager.process_chunks()
         manager.flush_utterances()
 
@@ -520,7 +517,7 @@ class TestTrailingSilenceTrimmingWithWebRTC(TestCase):
             vad_provider="webrtc",
         )
 
-    @patch.object(PerParticipantNonStreamingAudioInputManager, 'is_speech')
+    @patch.object(PerParticipantNonStreamingAudioInputManager, "is_speech")
     def test_trailing_silence_trimmed_webrtc(self, mock_is_speech):
         """Test trailing silence trimming with WebRTC VAD."""
         mock_is_speech.side_effect = [True, True, True, False, False, False]
@@ -559,7 +556,7 @@ class TestTrailingSilenceTrimmingWithSilero(TestCase):
             vad_provider="silero",
         )
 
-    @patch.object(PerParticipantNonStreamingAudioInputManager, 'is_speech')
+    @patch.object(PerParticipantNonStreamingAudioInputManager, "is_speech")
     def test_trailing_silence_trimmed_silero(self, mock_is_speech):
         """Test trailing silence trimming with Silero VAD."""
         mock_is_speech.side_effect = [True, True, True, False, False, False]

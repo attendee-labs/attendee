@@ -44,14 +44,14 @@ class PerParticipantStreamingAudioInputManager:
         self.vad = None
         if transcription_provider != TranscriptionProviders.KYUTAI:
             self.vad = webrtcvad.Vad()
-        
+
         # RMS threshold for filtering pure silence (muted mic, digital silence)
         self.RMS_SILENCE_THRESHOLD = 0.0025
-        
+
         # RMS monitoring stats for Kyutai (tracks silence filtering effectiveness)
         self.rms_stats = {}  # speaker_id -> {sent: int, skipped: int, last_log_time: float}
         self.RMS_STATS_LOG_INTERVAL = 30  # Log stats every 30 seconds
-        
+
         self.transcription_provider = transcription_provider
         self.streaming_transcribers = {}
         self.last_nonsilent_audio_time = {}
@@ -104,12 +104,12 @@ class PerParticipantStreamingAudioInputManager:
         """Update RMS stats and log periodically."""
         self._init_rms_stats(speaker_id)
         stats = self.rms_stats[speaker_id]
-        
+
         if was_silent:
             stats["skipped"] += 1
         else:
             stats["sent"] += 1
-        
+
         # Log stats periodically
         now = time.time()
         if now - stats["last_log_time"] >= self.RMS_STATS_LOG_INTERVAL:
@@ -118,10 +118,7 @@ class PerParticipantStreamingAudioInputManager:
                 skip_pct = (stats["skipped"] / total) * 100
                 participant_info = self.get_participant_callback(speaker_id)
                 participant_name = participant_info.get("participant_full_name", speaker_id) if participant_info else speaker_id
-                logger.info(
-                    f"Kyutai RMS filter [{participant_name}]: "
-                    f"sent={stats['sent']}, skipped={stats['skipped']} ({skip_pct:.1f}% silent)"
-                )
+                logger.info(f"Kyutai RMS filter [{participant_name}]: sent={stats['sent']}, skipped={stats['skipped']} ({skip_pct:.1f}% silent)")
             # Reset counters for next interval
             stats["sent"] = 0
             stats["skipped"] = 0
@@ -231,13 +228,13 @@ class PerParticipantStreamingAudioInputManager:
         if self.transcription_provider == TranscriptionProviders.KYUTAI:
             # Simple energy check - just filter out muted mic / digital silence
             audio_is_silent = self.is_pure_silence(chunk_bytes)
-            
+
             # Track RMS filtering stats
             self._update_rms_stats(speaker_id, audio_is_silent)
 
             if not audio_is_silent:
                 self.last_nonsilent_audio_time[speaker_id] = time.time()
-                
+
                 # Only send non-silent audio to Kyutai
                 streaming_transcriber = self.find_or_create_streaming_transcriber_for_speaker(speaker_id)
                 if streaming_transcriber:

@@ -160,7 +160,7 @@ class SileroVAD(BaseVAD):
 
     def reset_state(self):
         """Reset the internal state of the Silero model and hysteresis.
-        
+
         Important: Silero VAD is stateful and maintains context between calls.
         Call this method when starting to process a new audio stream.
         """
@@ -182,11 +182,11 @@ class SileroVAD(BaseVAD):
     def _apply_hysteresis(self, speech_prob: float) -> bool:
         """
         Apply hysteresis to speech probability to prevent oscillation.
-        
+
         Uses different thresholds for starting vs ending speech:
         - Start speech: probability >= threshold
         - End speech: probability < (threshold - hysteresis_offset)
-        
+
         This prevents rapid toggling when probability hovers near the threshold.
         """
         if self._is_speaking:
@@ -197,7 +197,7 @@ class SileroVAD(BaseVAD):
             # Not speaking: require probability to exceed threshold to start
             if speech_prob >= self._threshold:
                 self._is_speaking = True
-        
+
         return self._is_speaking
 
     def is_speech(self, audio_bytes: bytes) -> bool:

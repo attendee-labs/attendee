@@ -72,6 +72,7 @@ import requests
 @dataclass
 class UtteranceData:
     """Data about a single utterance."""
+
     speaker_name: str
     start_timestamp_ms: Optional[int]
     end_timestamp_ms: Optional[int]
@@ -83,6 +84,7 @@ class UtteranceData:
 @dataclass
 class VADTestResult:
     """Complete result from a VAD test run."""
+
     vad_label: str
     timestamp: str
     audio_file: str
@@ -156,24 +158,20 @@ class AttendeeClient:
 
     def tell_bot_to_leave(self, bot_id: str) -> None:
         try:
-            r = self.session.post(
-                self._url(f"/api/v1/bots/{bot_id}/leave"), timeout=self.timeout
-            )
+            r = self.session.post(self._url(f"/api/v1/bots/{bot_id}/leave"), timeout=self.timeout)
             if r.status_code in (200, 202, 204):
                 return
         except requests.RequestException:
             pass
 
         try:
-            r = self.session.delete(
-                self._url(f"/api/v1/bots/{bot_id}"), timeout=self.timeout
-            )
+            r = self.session.delete(self._url(f"/api/v1/bots/{bot_id}"), timeout=self.timeout)
         except requests.RequestException:
             pass
 
     def output_audio(self, bot_id: str, audio_path: Path) -> None:
         b64_data = base64.b64encode(audio_path.read_bytes()).decode("ascii")
-        
+
         # Determine content type from extension
         ext = audio_path.suffix.lower()
         content_type = {
@@ -181,7 +179,7 @@ class AttendeeClient:
             ".wav": "audio/wav",
             ".ogg": "audio/ogg",
         }.get(ext, "audio/mp3")
-        
+
         json_payload = {"type": content_type, "data": b64_data}
         url = self._url(f"/api/v1/bots/{bot_id}/output_audio")
 
@@ -189,9 +187,7 @@ class AttendeeClient:
         r.raise_for_status()
 
     def get_transcript(self, bot_id: str) -> List[Dict]:
-        r = self.session.get(
-            self._url(f"/api/v1/bots/{bot_id}/transcript"), timeout=self.timeout
-        )
+        r = self.session.get(self._url(f"/api/v1/bots/{bot_id}/transcript"), timeout=self.timeout)
         r.raise_for_status()
         try:
             return r.json()
@@ -199,9 +195,7 @@ class AttendeeClient:
             return []
 
     def get_participant_events(self, bot_id: str) -> Dict:
-        r = self.session.get(
-            self._url(f"/api/v1/bots/{bot_id}/participant_events"), timeout=self.timeout
-        )
+        r = self.session.get(self._url(f"/api/v1/bots/{bot_id}/participant_events"), timeout=self.timeout)
         r.raise_for_status()
         return r.json()
 
@@ -240,9 +234,7 @@ def wait_for_state(
         if predicate(state):
             return bot
         if (time.time() - start) > timeout_s:
-            raise TimeoutError(
-                f"Timed out waiting for state '{desc}'. Last state={state!r}"
-            )
+            raise TimeoutError(f"Timed out waiting for state '{desc}'. Last state={state!r}")
         time.sleep(poll_s)
 
 
@@ -250,6 +242,7 @@ def get_audio_duration_ms(audio_path: Path) -> int:
     """Get duration of audio file in milliseconds."""
     try:
         from pydub import AudioSegment
+
         audio = AudioSegment.from_file(str(audio_path))
         return len(audio)
     except ImportError:
@@ -274,28 +267,28 @@ def run_vad_test(
 ) -> VADTestResult:
     """
     Run a VAD test by creating bots, playing audio, and collecting results.
-    
+
     Args:
         audio_files: List of audio files. Each gets its own speaker bot.
     """
     num_speakers = len(audio_files)
-    speaker_names = [f"Speaker {i+1} ({vad_label})" for i in range(num_speakers)]
+    speaker_names = [f"Speaker {i + 1} ({vad_label})" for i in range(num_speakers)]
     recorder_name = f"Recorder ({vad_label})"
-    
+
     # Get max audio duration to know how long to wait
     max_duration_ms = max(get_audio_duration_ms(p) for p in audio_files)
     if leave_after is None:
         # Wait for longest audio to finish plus 10 seconds buffer
         leave_after = (max_duration_ms / 1000) + 10
-    
+
     if verbose:
         print(f"Max audio duration: {max_duration_ms / 1000:.1f}s")
         print(f"Will leave after: {leave_after:.1f}s")
-    
+
     # 1) Create bots
     if verbose:
         print("\nCreating bots...")
-    
+
     speaker_bots = []
     for i, (name, audio_path) in enumerate(zip(speaker_names, audio_files)):
         bot = client.create_bot(
@@ -306,53 +299,47 @@ def run_vad_test(
         speaker_bots.append((bot["id"], name, audio_path))
         if verbose:
             print(f"  {name}: {bot['id']}")
-    
+
     recorder_bot = client.create_bot(
         meeting_url=meeting_url,
         bot_name=recorder_name,
         enable_transcription=True,
     )
     recorder_id = recorder_bot["id"]
-    
+
     if verbose:
         print(f"  {recorder_name}: {recorder_id}")
-    
+
     all_bot_ids = [bot_id for bot_id, _, _ in speaker_bots] + [recorder_id]
-    
+
     try:
         # 2) Wait for all bots to join
         if verbose:
             print("\nWaiting for bots to join...")
-        
+
         for bot_id, name, _ in speaker_bots:
-            wait_for_state(
-                client, bot_id, state_is_joined_recording,
-                "joined_recording", join_timeout, verbose=verbose
-            )
-        wait_for_state(
-            client, recorder_id, state_is_joined_recording,
-            "joined_recording", join_timeout, verbose=verbose
-        )
-        
+            wait_for_state(client, bot_id, state_is_joined_recording, "joined_recording", join_timeout, verbose=verbose)
+        wait_for_state(client, recorder_id, state_is_joined_recording, "joined_recording", join_timeout, verbose=verbose)
+
         # Small delay to ensure everything is ready
         time.sleep(2)
-        
+
         # 3) Play audio from all speakers concurrently
         if verbose:
             print(f"\nPlaying audio from {num_speakers} speaker(s)...")
-        
+
         import concurrent.futures
-        
+
         def play_audio(bot_id: str, audio_path: Path):
             client.output_audio(bot_id, audio_path)
-        
+
         with concurrent.futures.ThreadPoolExecutor(max_workers=num_speakers) as pool:
             futures = []
             for bot_id, name, audio_path in speaker_bots:
                 if verbose:
                     print(f"  {name}: {audio_path.name}")
                 futures.append(pool.submit(play_audio, bot_id, audio_path))
-            
+
             # Wait for all to complete and check for errors
             errors = []
             for fut in futures:
@@ -362,47 +349,44 @@ def run_vad_test(
                     errors.append(e)
             if errors:
                 raise RuntimeError(f"Failed to play audio: {errors}")
-        
+
         # 4) Wait for audio to finish
         if verbose:
             print(f"\nWaiting {leave_after:.1f}s for audio to complete...")
-        
+
         time.sleep(leave_after)
-        
+
         # 5) Tell bots to leave
         if verbose:
             print("\nTelling bots to leave...")
-        
+
         for bot_id in all_bot_ids:
             client.tell_bot_to_leave(bot_id)
-        
+
         # 6) Wait for bots to end
         if verbose:
             print("\nWaiting for bots to end...")
-        
+
         for bot_id in all_bot_ids:
-            wait_for_state(
-                client, bot_id, state_is_ended,
-                "ended", end_timeout, verbose=verbose
-            )
-        
+            wait_for_state(client, bot_id, state_is_ended, "ended", end_timeout, verbose=verbose)
+
         # 7) Collect results
         if verbose:
             print("\nCollecting results...")
-        
+
         transcript = client.get_transcript(recorder_id)
         participant_events = client.get_participant_events(recorder_id)
-        
+
         # Process utterances
         utterances = []
         total_words = 0
         total_speech_duration = 0
-        
+
         for utt in transcript:
             transcription = utt.get("transcription", {})
             transcript_text = transcription.get("transcript", "")
             words = transcript_text.split()
-            
+
             # Try to get timing info
             start_ts = utt.get("start_timestamp_ms")
             end_ts = utt.get("end_timestamp_ms")
@@ -410,7 +394,7 @@ def run_vad_test(
             if start_ts is not None and end_ts is not None:
                 duration = end_ts - start_ts
                 total_speech_duration += duration
-            
+
             utterance_data = {
                 "speaker_name": utt.get("speaker_name", ""),
                 "start_timestamp_ms": start_ts,
@@ -421,14 +405,11 @@ def run_vad_test(
             }
             utterances.append(utterance_data)
             total_words += len(words)
-        
+
         # Filter to only speech events from participant events
         events = participant_events.get("results", [])
-        speech_events = [
-            e for e in events
-            if e.get("event_type") in ("speech_start", "speech_stop")
-        ]
-        
+        speech_events = [e for e in events if e.get("event_type") in ("speech_start", "speech_stop")]
+
         result = VADTestResult(
             vad_label=vad_label,
             timestamp=datetime.now().isoformat(),
@@ -443,34 +424,34 @@ def run_vad_test(
             participant_events=speech_events,
             raw_transcript=transcript,
         )
-        
+
         return result
-        
+
     except Exception as e:
         # Clean up on error
         if verbose:
             print(f"\nError occurred: {e}")
             print("Cleaning up bots...")
-        
+
         for bot_id in all_bot_ids:
             try:
                 client.tell_bot_to_leave(bot_id)
             except Exception:
                 pass
-        
+
         raise
 
 
 def save_result(result: VADTestResult, output_dir: Path):
     """Save test result to JSON file."""
     output_dir.mkdir(parents=True, exist_ok=True)
-    
+
     filename = f"vad_result_{result.vad_label}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
     filepath = output_dir / filename
-    
+
     with open(filepath, "w") as f:
         json.dump(asdict(result), f, indent=2)
-    
+
     print(f"Results saved to: {filepath}")
     return filepath
 
@@ -489,12 +470,12 @@ def load_results(output_dir: Path) -> List[VADTestResult]:
 def compare_results(output_dir: Path):
     """Compare VAD results from different test runs."""
     results = load_results(output_dir)
-    
+
     if len(results) < 2:
         print("ERROR: Need at least 2 result files to compare")
         print(f"Found {len(results)} result(s) in {output_dir}")
         return
-    
+
     # Group by VAD label
     by_label = {}
     for r in results:
@@ -502,85 +483,85 @@ def compare_results(output_dir: Path):
         if label not in by_label:
             by_label[label] = []
         by_label[label].append(r)
-    
+
     print("\n" + "=" * 70)
     print("VAD LIVE COMPARISON REPORT")
     print("=" * 70)
-    
+
     print(f"\nFound {len(results)} test results across {len(by_label)} VAD configurations:")
     for label, runs in by_label.items():
         print(f"  - {label}: {len(runs)} run(s)")
-    
+
     # Compare the most recent run from each VAD type
     print("\n" + "-" * 70)
     print("Comparing most recent run from each VAD type:")
     print("-" * 70)
-    
+
     latest = {}
     for label, runs in by_label.items():
         # Sort by timestamp and get most recent
         runs.sort(key=lambda x: x["timestamp"], reverse=True)
         latest[label] = runs[0]
-    
+
     if len(latest) < 2:
         print("Need results from at least 2 different VAD types to compare")
         return
-    
+
     # Print comparison table
     labels = sorted(latest.keys())
-    
+
     header = f"{'Metric':<35}"
     for label in labels:
         header += f" {label:>15}"
     print(header)
     print("-" * 70)
-    
+
     # Utterance count
     row = f"{'Total Utterances':<35}"
     for label in labels:
         row += f" {latest[label]['total_utterances']:>15}"
     print(row)
-    
+
     # Word count
     row = f"{'Total Words Transcribed':<35}"
     for label in labels:
         row += f" {latest[label]['total_words']:>15}"
     print(row)
-    
+
     # Speech duration
     row = f"{'Total Speech Duration (ms)':<35}"
     for label in labels:
         row += f" {latest[label]['total_speech_duration_ms']:>15}"
     print(row)
-    
+
     # Speech events
     row = f"{'Speech Events (start/stop)':<35}"
     for label in labels:
         row += f" {len(latest[label]['participant_events']):>15}"
     print(row)
-    
+
     print("-" * 70)
-    
+
     # Detailed utterance comparison
     print("\nUtterance Details:")
-    
+
     for label in labels:
         result = latest[label]
         print(f"\n  {label.upper()} ({result['timestamp'][:10]}):")
-        
+
         if result["utterances"]:
             for i, utt in enumerate(result["utterances"][:10]):  # Limit to first 10
                 duration = utt.get("duration_ms", "?")
                 transcript = utt.get("transcript", "")[:50]
                 if len(utt.get("transcript", "")) > 50:
                     transcript += "..."
-                print(f"    {i+1}. [{duration}ms] {transcript}")
-            
+                print(f"    {i + 1}. [{duration}ms] {transcript}")
+
             if len(result["utterances"]) > 10:
                 print(f"    ... and {len(result['utterances']) - 10} more")
         else:
             print("    (no utterances)")
-    
+
     print("\n" + "=" * 70)
 
 
@@ -597,7 +578,7 @@ def print_result_summary(result: VADTestResult):
     print(f"Total Words: {result.total_words}")
     print(f"Total Speech Duration: {result.total_speech_duration_ms}ms")
     print(f"Speech Events: {len(result.participant_events)}")
-    
+
     if result.utterances:
         print("\nUtterances:")
         for i, utt in enumerate(result.utterances[:5]):
@@ -605,10 +586,10 @@ def print_result_summary(result: VADTestResult):
             transcript = utt.get("transcript", "")[:60]
             if len(utt.get("transcript", "")) > 60:
                 transcript += "..."
-            print(f"  {i+1}. [{duration}ms] {transcript}")
+            print(f"  {i + 1}. [{duration}ms] {transcript}")
         if len(result.utterances) > 5:
             print(f"  ... and {len(result.utterances) - 5} more")
-    
+
     print("=" * 70)
 
 
@@ -623,7 +604,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    
+
     # Test execution arguments
     parser.add_argument("--api-key", help="Attendee API key")
     parser.add_argument("--base-url", help="Attendee base URL")
@@ -660,7 +641,7 @@ def main():
         help="Seconds to wait for bots to end (default: 300)",
     )
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
-    
+
     # Comparison mode
     parser.add_argument(
         "--compare",
@@ -668,14 +649,14 @@ def main():
         metavar="DIR",
         help="Compare results in the specified directory instead of running a test",
     )
-    
+
     args = parser.parse_args()
-    
+
     # Comparison mode
     if args.compare:
         compare_results(args.compare)
         return
-    
+
     # Validation for test mode
     if not args.api_key:
         print("ERROR: --api-key is required", file=sys.stderr)
@@ -695,17 +676,17 @@ def main():
     if args.speaker2 and not args.speaker2.exists():
         print(f"ERROR: Speaker 2 audio file not found: {args.speaker2}", file=sys.stderr)
         sys.exit(1)
-    
+
     audio_files = [args.speaker1]
     if args.speaker2:
         audio_files.append(args.speaker2)
-    
+
     print(f"Running VAD test with label: {args.vad_label}")
     print(f"Server: {args.base_url}")
     print(f"Audio files: {[str(f) for f in audio_files]}")
-    
+
     client = AttendeeClient(args.base_url, args.api_key)
-    
+
     result = run_vad_test(
         client=client,
         meeting_url=args.meeting_url,
@@ -716,13 +697,13 @@ def main():
         leave_after=args.leave_after,
         end_timeout=args.end_timeout,
     )
-    
+
     # Print summary
     print_result_summary(result)
-    
+
     # Save result
     save_result(result, args.output_dir)
-    
+
     print("\nTo compare with another VAD configuration:")
     print("  1. Change your server's VAD_PROVIDER environment variable")
     print("  2. Run this test again with a different --vad-label")
