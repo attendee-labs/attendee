@@ -118,12 +118,6 @@ For more details, follow [this guide](https://developers.zoom.us/docs/meeting-sd
 - Paste the link into your browser to confirm your account.
 - You should now be able to log in, input your credentials and obtain an API key. API calls should be directed to http://localhost:8000 instead of https://app.attendee.dev.
 
-## Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `VAD_PROVIDER` | Voice Activity Detection provider. Options: `webrtc` (fast, lightweight) or `silero` (more accurate, uses PyTorch) | `webrtc` |
-
 
 ## Contribute 
 
