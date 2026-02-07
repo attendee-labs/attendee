@@ -3506,13 +3506,6 @@ class TestZoomBot(TransactionTestCase):
             # Simulate video frame received
             adapter.video_input_manager.input_streams[0].renderer_delegate.onRawDataFrameReceivedCallback(MockVideoFrame())
 
-            # Simulate audio frame received
-            adapter.audio_source.onOneWayAudioRawDataReceivedCallback(
-                MockPCMAudioFrame(),
-                2,  # Simulated participant ID that's not the bot
-            )
-            adapter.audio_source.onMixedAudioRawDataReceivedCallback(MockPCMAudioFrame())
-
             # simulate audio mic initialized
             adapter.virtual_audio_mic_event_passthrough.onMicInitializeCallback(MagicMock())
 
@@ -3520,6 +3513,13 @@ class TestZoomBot(TransactionTestCase):
             adapter.virtual_audio_mic_event_passthrough.onMicStartSendCallback()
 
             time.sleep(2)
+
+            # Simulate audio frame received
+            adapter.audio_source.onOneWayAudioRawDataReceivedCallback(
+                MockPCMAudioFrame(),
+                2,  # Simulated participant ID that's not the bot
+            )
+            adapter.audio_source.onMixedAudioRawDataReceivedCallback(MockPCMAudioFrame())
 
             # Simulate chat message received
             adapter.on_chat_msg_notification_callback(mock_chat_msg_info, mock_chat_msg_info.GetContent())
@@ -3548,6 +3548,9 @@ class TestZoomBot(TransactionTestCase):
 
         # Give the bot some time to process
         bot_thread.join(timeout=11)
+
+        # Sleep for a tiny bit
+        time.sleep(2)
 
         # Verify that we received some data
         self.assertGreater(len(uploaded_data), 100, "Uploaded data length is not correct")
@@ -3856,6 +3859,9 @@ class TestZoomBot(TransactionTestCase):
 
         bot_thread.join(timeout=12)
 
+        # Sleep for a tiny bit
+        time.sleep(2)
+
         # Validate adapter resumed recording
         self.assertFalse(controller.adapter.recording_is_paused)
 
@@ -3987,6 +3993,9 @@ class TestZoomBot(TransactionTestCase):
 
         # Validate adapter resumed recording
         self.assertFalse(controller.adapter.recording_is_paused)
+
+        # Sleep for a tiny bit
+        time.sleep(2)
 
         self.bot.refresh_from_db()
 

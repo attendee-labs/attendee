@@ -358,6 +358,18 @@ class Calendar(models.Model):
         ]
 
 
+class CalendarNotificationChannel(models.Model):
+    calendar = models.ForeignKey(Calendar, on_delete=models.CASCADE, related_name="notification_channels")
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    expires_at = models.DateTimeField()
+    notification_last_received_at = models.DateTimeField(null=True, blank=True)
+    platform_uuid = models.CharField(max_length=1024, unique=True)
+    unique_key = models.CharField(max_length=256, unique=True)
+    raw = models.JSONField()
+
+
 class CalendarEvent(models.Model):
     OBJECT_ID_PREFIX = "evt_"
 
@@ -372,8 +384,8 @@ class CalendarEvent(models.Model):
 
     meeting_url = models.CharField(max_length=511, null=True, blank=True)
 
-    start_time = models.DateTimeField()
-    end_time = models.DateTimeField()
+    start_time = models.DateTimeField(db_index=True)
+    end_time = models.DateTimeField(db_index=True)
     is_deleted = models.BooleanField(default=False)
     attendees = models.JSONField(null=True, blank=True)
     ical_uid = models.CharField(max_length=1024, null=True, blank=True)
@@ -816,6 +828,9 @@ class Bot(models.Model):
 
     def teams_use_bot_login(self):
         return self.settings.get("teams_settings", {}).get("use_login", False)
+
+    def teams_login_mode_is_always(self):
+        return self.settings.get("teams_settings", {}).get("login_mode", "always") == "always"
 
     def use_zoom_web_adapter(self):
         return self.settings.get("zoom_settings", {}).get("sdk", "native") == "web"
@@ -2586,6 +2601,8 @@ class BotMediaRequest(models.Model):
     text_to_speech_settings = models.JSONField(null=True, default=None)
 
     media_url = models.URLField(null=True, blank=True)
+
+    loop = models.BooleanField(default=False, db_default=False)
 
     media_blob = models.ForeignKey(
         MediaBlob,

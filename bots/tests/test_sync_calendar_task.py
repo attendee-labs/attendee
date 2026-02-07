@@ -7,11 +7,13 @@ from django.test import TestCase, TransactionTestCase
 from django.utils import timezone
 
 from accounts.models import Organization
+from bots.management.commands.run_scheduler import CALENDAR_SYNC_THRESHOLD_HOURS
 from bots.models import (
     Bot,
     BotStates,
     Calendar,
     CalendarEvent,
+    CalendarNotificationChannel,
     CalendarPlatform,
     CalendarStates,
     Project,
@@ -422,6 +424,7 @@ class TestCalendarSyncHandlerSyncEvents(TransactionTestCase):
         handler._list_events = Mock(return_value=[{"id": "event_1", "test": "data1"}, {"id": "event_2", "test": "data2"}])
         handler._get_event_by_id = Mock(return_value=None)
         handler._remote_event_to_calendar_event_data = Mock(side_effect=[{"platform_uuid": "event_1", "meeting_url": "https://zoom.us/j/111", "start_time": timezone.now(), "end_time": timezone.now() + timedelta(hours=1), "raw": {"event": "1"}}, {"platform_uuid": "event_2", "meeting_url": "https://zoom.us/j/222", "start_time": timezone.now() + timedelta(hours=2), "end_time": timezone.now() + timedelta(hours=3), "raw": {"event": "2"}}])
+        handler._refresh_notification_channels = Mock()
 
         result = handler.sync_events()
 
@@ -441,11 +444,70 @@ class TestCalendarSyncHandlerSyncEvents(TransactionTestCase):
         mock_trigger_webhook.assert_called_once_with(webhook_trigger_type=WebhookTriggerTypes.CALENDAR_EVENTS_UPDATE, calendar=self.calendar, payload=calendar_webhook_payload(self.calendar))
 
     @patch("bots.tasks.sync_calendar_task.trigger_webhook")
+    def test_sync_events_no_webhook_when_no_changes(self, mock_trigger_webhook):
+        """Test that no webhook is triggered when sync finds no changes."""
+        now = timezone.now()
+        # Pre-create an existing event that matches what will be returned from remote
+        existing_event = CalendarEvent.objects.create(
+            calendar=self.calendar,
+            platform_uuid="existing_event_1",
+            meeting_url="https://zoom.us/j/111",
+            start_time=now,
+            end_time=now + timedelta(hours=1),
+            raw={"event": "1"},
+        )
+
+        handler = CalendarSyncHandler(self.calendar.id)
+
+        # Mock abstract methods - return the same event data as already exists
+        handler._get_access_token = Mock(return_value="mock_token")
+        handler._list_events = Mock(return_value=[{"id": "existing_event_1", "test": "data1"}])
+        handler._get_event_by_id = Mock(return_value=None)
+        handler._remote_event_to_calendar_event_data = Mock(
+            return_value={
+                "platform_uuid": "existing_event_1",
+                "meeting_url": "https://zoom.us/j/111",  # Same as existing
+                "start_time": existing_event.start_time,
+                "end_time": existing_event.end_time,
+                "raw": {"event": "1"},  # Same as existing
+            }
+        )
+        handler._refresh_notification_channels = Mock()
+
+        result = handler.sync_events()
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["created_count"], 0)
+        self.assertEqual(result["updated_count"], 0)
+        self.assertEqual(result["deleted_count"], 0)
+
+        # Verify webhook is NOT triggered since nothing changed
+        mock_trigger_webhook.assert_not_called()
+
+    @patch("bots.tasks.sync_calendar_task.trigger_webhook")
     @patch("bots.tasks.sync_calendar_task.remove_bots_from_calendar")
     def test_sync_events_authentication_error(self, mock_remove_bots, mock_trigger_webhook):
         """Test sync_events handles authentication errors properly."""
+        # Create notification channels that should be deleted on auth error
+        CalendarNotificationChannel.objects.create(
+            calendar=self.calendar,
+            platform_uuid="channel_1",
+            unique_key="first_channel_" + self.calendar.object_id,
+            expires_at=timezone.now() + timedelta(days=7),
+            raw={"test": "data"},
+        )
+        CalendarNotificationChannel.objects.create(
+            calendar=self.calendar,
+            platform_uuid="channel_2",
+            unique_key="channel_1",
+            expires_at=timezone.now() + timedelta(days=14),
+            raw={"test": "data"},
+        )
+        self.assertEqual(CalendarNotificationChannel.objects.filter(calendar=self.calendar).count(), 2)
+
         handler = CalendarSyncHandler(self.calendar.id)
         handler._get_access_token = Mock(side_effect=CalendarAPIAuthenticationError("Auth failed"))
+        handler._refresh_notification_channels = Mock()
 
         result = handler.sync_events()
 
@@ -460,6 +522,9 @@ class TestCalendarSyncHandlerSyncEvents(TransactionTestCase):
         # Verify bots are removed and webhook is triggered
         mock_remove_bots.assert_called_once_with(calendar=self.calendar, project=self.calendar.project)
         mock_trigger_webhook.assert_called_once_with(webhook_trigger_type=WebhookTriggerTypes.CALENDAR_STATE_CHANGE, calendar=self.calendar, payload=calendar_webhook_payload(self.calendar))
+
+        # Verify notification channels are deleted
+        self.assertEqual(CalendarNotificationChannel.objects.filter(calendar=self.calendar).count(), 0)
 
     def test_sync_events_general_exception(self):
         """Test sync_events handles general exceptions properly."""
@@ -791,3 +856,247 @@ class TestMicrosoftCalendarSyncHandler(TestCase):
         self.assertEqual(result[0]["id"], "event_1")
         self.assertEqual(result[2]["id"], "event_3")
         self.assertEqual(mock_session.send.call_count, 2)
+
+
+class TestNotificationChannelRefreshWithScheduler(TransactionTestCase):
+    """Test that notification channels are refreshed correctly even in worst-case scenarios."""
+
+    def setUp(self):
+        self.organization = Organization.objects.create(name="Test Org")
+        self.project = Project.objects.create(name="Test Project", organization=self.organization)
+        self.calendar = Calendar.objects.create(
+            project=self.project,
+            platform=CalendarPlatform.GOOGLE,
+            client_id="test_client_id",
+            state=CalendarStates.CONNECTED,
+        )
+        self.calendar.set_credentials({"client_secret": "test_secret", "refresh_token": "test_refresh_token"})
+        from django.conf import settings
+
+        settings.CELERY_TASK_ALWAYS_EAGER = True
+        settings.CELERY_TASK_EAGER_PROPAGATES = True
+
+    @patch("bots.tasks.sync_calendar_task.GoogleCalendarSyncHandler._list_events")
+    @patch("bots.tasks.sync_calendar_task.GoogleCalendarSyncHandler._get_event_by_id")
+    @patch("bots.tasks.sync_calendar_task.GoogleCalendarSyncHandler._get_access_token")
+    @patch("bots.tasks.sync_calendar_task.GoogleCalendarSyncHandler._make_gcal_request")
+    @patch("bots.tasks.sync_calendar_task.trigger_webhook")
+    def test_worst_case_notification_channel_refresh_before_26_hour_threshold(self, mock_trigger_webhook, mock_make_gcal_request, mock_get_access_token, mock_get_event, mock_list_events):
+        """
+        Test that even in the worst-case scenario where a sync happens right before
+        the 26-hour mark, the scheduler will still trigger a sync that creates a new
+        notification channel before the existing one expires.
+        """
+        # Set up the timeline
+        now = timezone.now()
+
+        # Step 1: Create a notification channel with an expiration time that is just before the renewal threshold
+        # so that if we run the sync task right now, it will just miss creating a new channel
+        expiration_time = now + timedelta(hours=GoogleCalendarSyncHandler.NOTIFICATION_CHANNEL_RENEWAL_THRESHOLD_HOURS, minutes=1)
+        initial_channel = CalendarNotificationChannel.objects.create(
+            calendar=self.calendar,
+            platform_uuid="initial_channel_uuid",
+            unique_key="first_channel_" + self.calendar.object_id,
+            expires_at=expiration_time,
+            raw={"test": "data"},
+        )
+
+        # Step 2: Run the sync task and verify that we did not create a new channel.
+        # Mock the API calls to avoid actual HTTP requests
+        mock_get_access_token.return_value = "mock_token"
+        mock_list_events.return_value = []  # No events to sync
+        mock_get_event.return_value = None
+        mock_make_gcal_request.return_value = {
+            "expiration": (datetime.now() + timedelta(days=7)).timestamp() * 1000,
+        }
+
+        enqueue_sync_calendar_task(self.calendar)
+
+        # Verify that count did not change
+        self.assertEqual(CalendarNotificationChannel.objects.filter(calendar=self.calendar).count(), 1)
+        # Verify that the id of the notification channel is the same as the initial channel
+        first_notification_channel = CalendarNotificationChannel.objects.filter(calendar=self.calendar).first()
+        self.assertEqual(first_notification_channel.platform_uuid, initial_channel.platform_uuid)
+
+        # Step 3: Run the scheduler's periodic calendar sync logic
+        # Import here to avoid circular imports
+        from bots.management.commands.run_scheduler import Command
+
+        command = Command()
+
+        # Mock timezone.now() to return our test time
+        with patch("django.utils.timezone.now", return_value=self.calendar.sync_task_enqueued_at + timedelta(hours=CALENDAR_SYNC_THRESHOLD_HOURS)):
+            # Assert that the latest notification channel for the calendar has NOT expired yet
+            self.assertGreater(CalendarNotificationChannel.objects.filter(calendar=self.calendar).order_by("-expires_at").first().expires_at, timezone.now())
+            command._run_periodic_calendar_syncs()
+
+        # Step 4: Verify that a new notification channel was created
+        # There should now be 2 channels total (initial + newly created)
+        all_channels = CalendarNotificationChannel.objects.filter(calendar=self.calendar).order_by("created_at")
+        self.assertEqual(all_channels.count(), 2, "A new notification channel should have been created")
+
+        # Verify the initial channel is still there
+        self.assertEqual(all_channels[0].platform_uuid, "initial_channel_uuid")
+
+        # Now switch to the time that the original notification channel will expire + the cleanup threshold and make sure that it is deleted
+        with patch("django.utils.timezone.now", return_value=initial_channel.expires_at + timedelta(hours=GoogleCalendarSyncHandler.NOTIFICATION_CHANNEL_CLEANUP_THRESHOLD_HOURS, minutes=1)):
+            command._run_periodic_calendar_syncs()
+            self.assertEqual(CalendarNotificationChannel.objects.filter(calendar=self.calendar).count(), 1, "The initial notification channel should be deleted")
+            self.assertFalse(CalendarNotificationChannel.objects.filter(calendar=self.calendar, platform_uuid="initial_channel_uuid").exists(), "The initial notification channel should be deleted")
+
+
+class TestMicrosoftNotificationChannelLifecycle(TransactionTestCase):
+    """Test Microsoft calendar notification channel creation, extension, and deletion."""
+
+    def setUp(self):
+        self.organization = Organization.objects.create(name="Test Org")
+        self.project = Project.objects.create(name="Test Project", organization=self.organization)
+        self.calendar = Calendar.objects.create(
+            project=self.project,
+            platform=CalendarPlatform.MICROSOFT,
+            client_id="test_client_id",
+            state=CalendarStates.CONNECTED,
+        )
+        self.calendar.set_credentials({"client_secret": "test_secret", "refresh_token": "test_refresh_token"})
+        from django.conf import settings
+
+        settings.CELERY_TASK_ALWAYS_EAGER = True
+        settings.CELERY_TASK_EAGER_PROPAGATES = True
+
+    @patch("bots.tasks.sync_calendar_task.MicrosoftCalendarSyncHandler._list_events")
+    @patch("bots.tasks.sync_calendar_task.MicrosoftCalendarSyncHandler._get_event_by_id")
+    @patch("bots.tasks.sync_calendar_task.MicrosoftCalendarSyncHandler._get_access_token")
+    @patch("bots.tasks.sync_calendar_task.MicrosoftCalendarSyncHandler._make_graph_request")
+    @patch("bots.tasks.sync_calendar_task.trigger_webhook")
+    def test_first_sync_creates_notification_channel(self, mock_trigger_webhook, mock_make_graph_request, mock_get_access_token, mock_get_event, mock_list_events):
+        """Test that the first sync creates a notification channel for Microsoft calendars."""
+        # Verify no notification channels exist initially
+        self.assertEqual(CalendarNotificationChannel.objects.filter(calendar=self.calendar).count(), 0)
+
+        # Mock the API calls
+        mock_get_access_token.return_value = "mock_token"
+        mock_list_events.return_value = []
+        mock_get_event.return_value = None
+
+        # Mock the subscription creation response
+        new_expires_at = timezone.now() + timedelta(days=7)
+        mock_make_graph_request.return_value = {
+            "id": "microsoft_subscription_uuid_123",
+            "expirationDateTime": new_expires_at.isoformat(),
+        }
+
+        # Run the sync task
+        enqueue_sync_calendar_task(self.calendar)
+
+        # Verify a notification channel was created
+        self.assertEqual(CalendarNotificationChannel.objects.filter(calendar=self.calendar).count(), 1)
+        notification_channel = CalendarNotificationChannel.objects.get(calendar=self.calendar)
+        self.assertEqual(notification_channel.platform_uuid, "microsoft_subscription_uuid_123")
+
+    @patch("bots.tasks.sync_calendar_task.MicrosoftCalendarSyncHandler._list_events")
+    @patch("bots.tasks.sync_calendar_task.MicrosoftCalendarSyncHandler._get_event_by_id")
+    @patch("bots.tasks.sync_calendar_task.MicrosoftCalendarSyncHandler._get_access_token")
+    @patch("bots.tasks.sync_calendar_task.MicrosoftCalendarSyncHandler._make_graph_request")
+    @patch("bots.tasks.sync_calendar_task.trigger_webhook")
+    def test_notification_channel_extended_after_24_hours(self, mock_trigger_webhook, mock_make_graph_request, mock_get_access_token, mock_get_event, mock_list_events):
+        """Test that Microsoft notification channels are extended when sync happens over 24 hours later."""
+        from bots.tasks.sync_calendar_task import MicrosoftCalendarSyncHandler
+
+        # Create an existing notification channel that was created over 24 hours ago
+        original_expires_at = timezone.now() + timedelta(minutes=MicrosoftCalendarSyncHandler.NOTIFICATION_CHANNEL_EXPIRATION_TIME_MINUTES - 60 * 25)  # Will need extension
+        notification_channel = CalendarNotificationChannel.objects.create(
+            calendar=self.calendar,
+            platform_uuid="existing_subscription_uuid",
+            unique_key=f"notification_channel_{self.calendar.object_id}",
+            expires_at=original_expires_at,
+            raw={"id": "existing_subscription_uuid"},
+        )
+
+        # Verify notification channel exists
+        self.assertEqual(CalendarNotificationChannel.objects.filter(calendar=self.calendar).count(), 1)
+
+        # Mock the API calls
+        mock_get_access_token.return_value = "mock_token"
+        mock_list_events.return_value = []
+        mock_get_event.return_value = None
+
+        # Mock the subscription extension response (PATCH request)
+        new_expires_at = timezone.now() + timedelta(minutes=MicrosoftCalendarSyncHandler.NOTIFICATION_CHANNEL_EXPIRATION_TIME_MINUTES)
+        mock_make_graph_request.return_value = {
+            "id": "existing_subscription_uuid",
+            "expirationDateTime": new_expires_at.isoformat(),
+        }
+
+        # Run the sync task
+        enqueue_sync_calendar_task(self.calendar)
+
+        # Verify the notification channel was extended, not replaced
+        self.assertEqual(CalendarNotificationChannel.objects.filter(calendar=self.calendar).count(), 1)
+        notification_channel.refresh_from_db()
+        self.assertEqual(notification_channel.platform_uuid, "existing_subscription_uuid")
+
+        # Verify the expiration time was updated
+        self.assertGreater(notification_channel.expires_at, original_expires_at)
+
+        # Verify the PATCH request was made to extend the subscription
+        mock_make_graph_request.assert_called()
+        # Find the PATCH call (should be for extending the subscription)
+        patch_calls = [call for call in mock_make_graph_request.call_args_list if call.kwargs.get("method") == "PATCH"]
+        self.assertEqual(len(patch_calls), 1)
+        patch_call = patch_calls[0]
+        self.assertIn("existing_subscription_uuid", patch_call.args[0])
+
+    @patch("bots.tasks.sync_calendar_task.MicrosoftCalendarSyncHandler._list_events")
+    @patch("bots.tasks.sync_calendar_task.MicrosoftCalendarSyncHandler._get_event_by_id")
+    @patch("bots.tasks.sync_calendar_task.MicrosoftCalendarSyncHandler._get_access_token")
+    @patch("bots.tasks.sync_calendar_task.MicrosoftCalendarSyncHandler._make_graph_request")
+    @patch("bots.tasks.sync_calendar_task.trigger_webhook")
+    def test_notification_channel_deleted_when_not_found_in_graph_api(self, mock_trigger_webhook, mock_make_graph_request, mock_get_access_token, mock_get_event, mock_list_events):
+        """Test that if the notification channel is not found in Graph API (404), it gets deleted in the DB."""
+        from bots.tasks.sync_calendar_task import MicrosoftCalendarSyncHandler
+
+        # Create an existing notification channel that needs extension
+        original_expires_at = timezone.now() + timedelta(minutes=MicrosoftCalendarSyncHandler.NOTIFICATION_CHANNEL_EXPIRATION_TIME_MINUTES - 60 * 25)  # Will need extension
+        CalendarNotificationChannel.objects.create(
+            calendar=self.calendar,
+            platform_uuid="orphaned_subscription_uuid",
+            unique_key=f"notification_channel_{self.calendar.object_id}",
+            expires_at=original_expires_at,
+            raw={"id": "orphaned_subscription_uuid"},
+        )
+
+        # Verify notification channel exists
+        self.assertEqual(CalendarNotificationChannel.objects.filter(calendar=self.calendar).count(), 1)
+
+        # Mock the API calls
+        mock_get_access_token.return_value = "mock_token"
+        mock_list_events.return_value = []
+        mock_get_event.return_value = None
+
+        # Create a 404 HTTPError to simulate the subscription not found in Graph API
+        response_404 = requests.Response()
+        response_404.status_code = 404
+        response_404._content = b'{"error": {"code": "ResourceNotFound", "message": "The subscription was not found."}}'
+        response_404.headers["content-type"] = "application/json"
+
+        http_error_404 = requests.HTTPError(
+            "404 Client Error: Not Found for url: https://graph.microsoft.com/v1.0/subscriptions/orphaned_subscription_uuid",
+            response=response_404,
+        )
+
+        # Make the PATCH request raise a 404 error
+        mock_make_graph_request.side_effect = http_error_404
+
+        # Run the sync task
+        enqueue_sync_calendar_task(self.calendar)
+
+        # Verify the notification channel was deleted from the database
+        self.assertEqual(
+            CalendarNotificationChannel.objects.filter(calendar=self.calendar).count(),
+            0,
+            "The orphaned notification channel should be deleted when Graph API returns 404",
+        )
+        self.assertFalse(
+            CalendarNotificationChannel.objects.filter(platform_uuid="orphaned_subscription_uuid").exists(),
+            "The notification channel with orphaned_subscription_uuid should not exist",
+        )

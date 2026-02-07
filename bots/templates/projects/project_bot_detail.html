@@ -289,7 +289,7 @@
                                 <div class="message-content flex-grow-1">
                                     <div class="message-header d-flex justify-content-between align-items-center mb-2">
                                         <span class="fw-semibold">{{ message.participant.full_name }}</span>
-                                        <span class="text-muted small">{{ message.created_at|date:"M d, Y H:i:s" }}</span>
+                                        <span class="text-muted small">{{ message.timestamp|epoch_to_datetime|date:"M d, Y H:i:s" }}</span>
                                     </div>
                                     <div class="message-text">
                                         <div class="font-monospace" style="white-space: pre-wrap; line-height: 1.4;">{{ message.text }}</div>
@@ -513,6 +513,7 @@
             <div class="mb-3">
                 <p><strong>Maximum RAM Usage:</strong> {{ max_ram_usage }} MB</p>
                 <p><strong>Maximum CPU Usage:</strong> {{ max_cpu_usage }} millicores</p>
+                <p><strong>Maximum DB Connection Count:</strong> {{ max_db_connection_count }}</p>
             </div>
             <div class="table-responsive">
                 <table class="table table-striped">
