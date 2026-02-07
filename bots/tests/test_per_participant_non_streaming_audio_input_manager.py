@@ -1,12 +1,13 @@
 import os
+import unittest
 from datetime import datetime, timedelta
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import numpy as np
 from django.test import TestCase
 
-from bots.bot_controller.vad import calculate_normalized_rms, create_vad, WebRTCVAD, SileroVAD
 from bots.bot_controller.per_participant_non_streaming_audio_input_manager import PerParticipantNonStreamingAudioInputManager
+from bots.bot_controller.vad import SileroVAD, WebRTCVAD, calculate_normalized_rms
 
 
 def create_audio_chunk(frequency=440, duration_ms=100, sample_rate=16000, amplitude=0.5):

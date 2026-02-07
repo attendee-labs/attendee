@@ -55,7 +55,6 @@ The test:
 import argparse
 import base64
 import json
-import os
 import sys
 import time
 from dataclasses import asdict, dataclass
@@ -725,8 +724,8 @@ def main():
     save_result(result, args.output_dir)
     
     print("\nTo compare with another VAD configuration:")
-    print(f"  1. Change your server's VAD_PROVIDER environment variable")
-    print(f"  2. Run this test again with a different --vad-label")
+    print("  1. Change your server's VAD_PROVIDER environment variable")
+    print("  2. Run this test again with a different --vad-label")
     print(f"  3. Run: python {Path(__file__).name} --compare {args.output_dir}")
 
 
