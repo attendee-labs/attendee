@@ -1,13 +1,15 @@
 import io
+import logging
 import subprocess
 import threading
 import time
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Sequence
 
 import requests
 
-from bots.logger import logger
 from bots.models import Credentials, TranscriptionFailureReasons, Utterance
+
+logger = logging.getLogger(__name__)
 
 
 def is_retryable_failure(failure_data):
@@ -30,7 +32,7 @@ def get_mp3_for_utterance_group(
     *,
     silence_seconds: float = 5.0,
     channels: int = 1,
-    sample_rate: Optional[int] = None,
+    sample_rate: int,
     sample_width_bytes: int = 2,  # 2 => 16-bit PCM (s16le)
     bitrate_kbps: int = 128,
     io_chunk_bytes: int = 256 * 1024,
@@ -257,7 +259,7 @@ def get_transcription_via_assemblyai_for_utterance_group(utterances):
     headers = {"authorization": api_key}
     base_url = transcription_settings.assemblyai_base_url()
 
-    payload_mp3 = get_mp3_for_utterance_group(utterances)
+    payload_mp3 = get_mp3_for_utterance_group(utterances, sample_rate=utterances[0].get_sample_rate())
 
     upload_response = requests.post(f"{base_url}/upload", headers=headers, data=payload_mp3)
 
