@@ -4,6 +4,7 @@ from celery import shared_task
 from django.utils import timezone
 
 from bots.models import AsyncTranscription, AsyncTranscriptionManager, AsyncTranscriptionStates, TranscriptionFailureReasons, Utterance
+from bots.tasks.process_utterance_group_task import process_utterance_group_for_async_transcription
 from bots.tasks.process_utterance_task import process_utterance
 
 logger = logging.getLogger(__name__)
@@ -31,6 +32,58 @@ def create_utterances_for_transcription(async_transcription):
         # Spread out the utterance tasks a bit
         process_utterance.apply_async(args=[utterance.id], countdown=utterance_task_delay_seconds)
         utterance_task_delay_seconds += 1
+
+    # After the utterances have been created and queued for transcription, set the recording artifact to in progress
+    AsyncTranscriptionManager.set_async_transcription_in_progress(async_transcription)
+
+
+def create_utterances_for_transcription_using_groups(async_transcription):
+    recording = async_transcription.recording
+
+    # Get all the audio chunks for the recording, sorted by start time
+    # Use defer() to exclude large audio_blob field
+    audio_chunks = list(recording.audio_chunks.defer("audio_blob").order_by("timestamp_ms"))
+
+    # Create all utterances first
+    utterances = []
+    for audio_chunk in audio_chunks:
+        utterance = Utterance.objects.create(
+            source=Utterance.Sources.PER_PARTICIPANT_AUDIO,
+            recording=recording,
+            async_transcription=async_transcription,
+            participant=audio_chunk.participant,
+            audio_chunk=audio_chunk,
+            timestamp_ms=audio_chunk.timestamp_ms,
+            duration_ms=audio_chunk.duration_ms,
+        )
+        utterances.append(utterance)
+
+    # Group utterances by duration (max 30 minutes per group)
+    max_group_duration_ms = 30 * 60 * 1000  # 30 minutes in milliseconds
+    groups = []
+    current_group = []
+    current_group_duration_ms = 0
+
+    for utterance in utterances:
+        if current_group_duration_ms + utterance.duration_ms > max_group_duration_ms and current_group:
+            # Current group would exceed 30 min, start a new group
+            groups.append(current_group)
+            current_group = [utterance]
+            current_group_duration_ms = utterance.duration_ms
+        else:
+            current_group.append(utterance)
+            current_group_duration_ms += utterance.duration_ms
+
+    # Don't forget the last group
+    if current_group:
+        groups.append(current_group)
+
+    # Queue each group for processing
+    group_task_delay_seconds = 0
+    for group in groups:
+        utterance_ids = [u.id for u in group]
+        process_utterance_group_for_async_transcription.apply_async(args=[utterance_ids], countdown=group_task_delay_seconds)
+        group_task_delay_seconds += 1
 
     # After the utterances have been created and queued for transcription, set the recording artifact to in progress
     AsyncTranscriptionManager.set_async_transcription_in_progress(async_transcription)
@@ -76,7 +129,7 @@ def process_async_transcription(self, async_transcription_id):
             return
 
         if async_transcription.state == AsyncTranscriptionStates.NOT_STARTED:
-            create_utterances_for_transcription(async_transcription)
+            create_utterances_for_transcription_using_groups(async_transcription)
 
         check_for_transcription_completion(async_transcription)
 

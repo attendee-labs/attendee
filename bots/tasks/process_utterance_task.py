@@ -9,6 +9,7 @@ from celery import shared_task
 logger = logging.getLogger(__name__)
 
 from bots.models import Credentials, RecordingManager, TranscriptionFailureReasons, TranscriptionProviders, Utterance, WebhookTriggerTypes
+from bots.transcription_utils import is_retryable_failure
 from bots.utils import pcm_to_mp3
 from bots.webhook_payloads import utterance_webhook_payload
 from bots.webhook_utils import trigger_webhook
@@ -43,16 +44,6 @@ def transform_diarized_json_to_schema(result):
         transcription["words"] = words
 
     return transcription
-
-
-def is_retryable_failure(failure_data):
-    return failure_data.get("reason") in [
-        TranscriptionFailureReasons.AUDIO_UPLOAD_FAILED,
-        TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED,
-        TranscriptionFailureReasons.TIMED_OUT,
-        TranscriptionFailureReasons.RATE_LIMIT_EXCEEDED,
-        TranscriptionFailureReasons.INTERNAL_ERROR,
-    ]
 
 
 def get_transcription(utterance):
