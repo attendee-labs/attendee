@@ -11,6 +11,13 @@ logger = logging.getLogger(__name__)
 
 
 def create_utterances_for_transcription(async_transcription):
+    if async_transcription.use_grouped_utterances:
+        return create_utterances_for_transcription_using_groups(async_transcription)
+
+    return create_utterances_for_transcription_without_using_groups(async_transcription)
+
+
+def create_utterances_for_transcription_without_using_groups(async_transcription):
     recording = async_transcription.recording
 
     # Get all the audio chunks for the recording
@@ -129,7 +136,7 @@ def process_async_transcription(self, async_transcription_id):
             return
 
         if async_transcription.state == AsyncTranscriptionStates.NOT_STARTED:
-            create_utterances_for_transcription_using_groups(async_transcription)
+            create_utterances_for_transcription(async_transcription)
 
         check_for_transcription_completion(async_transcription)
 

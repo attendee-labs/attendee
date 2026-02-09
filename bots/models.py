@@ -2299,6 +2299,10 @@ class AsyncTranscription(models.Model):
 
         return transcription_provider_from_bot_creation_data({**self.recording.bot.settings, **self.settings})
 
+    @property
+    def use_grouped_utterances(self):
+        return self.transcription_provider == TranscriptionProviders.ASSEMBLY_AI
+
 
 class AsyncTranscriptionManager:
     @classmethod
