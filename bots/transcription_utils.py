@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Sequence
 
 import requests
 
-from bots.models import Credentials, TranscriptionFailureReasons, Utterance
+from bots.models import Credentials, Recording, TranscriptionFailureReasons, TranscriptionSettings, Utterance
 
 logger = logging.getLogger(__name__)
 
@@ -233,8 +233,31 @@ def split_transcription_by_utterance(
 
 
 def get_transcription_via_assemblyai_for_utterance_group(utterances):
-    recording = utterances[0].recording
-    transcription_settings = utterances[0].transcription_settings
+    first_utterance = utterances[0]
+    total_duration_ms = sum(utterance.duration_ms for utterance in utterances)
+    payload_mp3 = get_mp3_for_utterance_group(utterances, sample_rate=first_utterance.get_sample_rate())
+
+    transcription, error = get_transcription_via_assemblyai_from_mp3(
+        mp3_data=payload_mp3,
+        duration_ms=total_duration_ms,
+        identifier=f"utterances {[utterance.id for utterance in utterances]}",
+        transcription_settings=first_utterance.transcription_settings,
+        recording=first_utterance.recording,
+    )
+
+    if error:
+        return None, error
+
+    return split_transcription_by_utterance(transcription, utterances), None
+
+
+def get_transcription_via_assemblyai_from_mp3(
+    mp3_data: bytes,
+    duration_ms: int,
+    identifier: str,
+    transcription_settings: TranscriptionSettings,
+    recording: Recording,
+):
     assemblyai_credentials_record = recording.bot.project.credentials.filter(credential_type=Credentials.CredentialTypes.ASSEMBLY_AI).first()
     if not assemblyai_credentials_record:
         return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND}
@@ -250,18 +273,14 @@ def get_transcription_via_assemblyai_for_utterance_group(utterances):
     # If the audio blob is less than 175ms in duration, just return an empty transcription
     # Audio clips this short are almost never generated, it almost certainly didn't have any speech
     # and if we send it to the assemblyai api, the upload will fail
-    total_duration_ms = sum(utterance.duration_ms for utterance in utterances)
-    utterance_ids = [utterance.id for utterance in utterances]
-    if total_duration_ms < 175:
-        logger.info(f"AssemblyAI transcription skipped for utterances {utterance_ids} because it's less than 175ms in duration")
-        return get_empty_transcript_for_utterance_group(utterances), None
+    if duration_ms < 175:
+        logger.info(f"AssemblyAI transcription skipped for {identifier} because it's less than 175ms in duration")
+        return {"transcript": "", "words": []}, None
 
     headers = {"authorization": api_key}
     base_url = transcription_settings.assemblyai_base_url()
 
-    payload_mp3 = get_mp3_for_utterance_group(utterances, sample_rate=utterances[0].get_sample_rate())
-
-    upload_response = requests.post(f"{base_url}/upload", headers=headers, data=payload_mp3)
+    upload_response = requests.post(f"{base_url}/upload", headers=headers, data=mp3_data)
 
     if upload_response.status_code == 401:
         return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_INVALID}
@@ -348,14 +367,14 @@ def get_transcription_via_assemblyai_for_utterance_group(utterances):
                     formatted_words.append(formatted_word)
 
             transcription = {"transcript": transcript_text, "words": formatted_words, "language": transcription_result.get("language_code", None)}
-            return split_transcription_by_utterance(transcription, utterances), None
+            return transcription, None
 
         elif transcription_result["status"] == "error":
             error = transcription_result.get("error")
 
             if error and "language_detection cannot be performed on files with no spoken audio" in error:
-                logger.info(f"AssemblyAI transcription skipped for utterances {utterance_ids} because it did not have any spoken audio and we tried to detect language")
-                return get_empty_transcript_for_utterance_group(utterances), None
+                logger.info(f"AssemblyAI transcription skipped for {identifier} because it did not have any spoken audio and we tried to detect language")
+                return {"transcript": "", "words": []}, None
 
             return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "step": "transcribe_result_poll", "error": error}
 
