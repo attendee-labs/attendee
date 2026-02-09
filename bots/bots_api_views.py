@@ -858,8 +858,9 @@ class TranscriptView(APIView):
                 recording=recording,
             ).count()
             # We only allow a max of 4 async transcriptions per recording
-            if existing_async_transcription_count >= 4:
-                return Response({"error": "You cannot have more than 4 async transcriptions per bot."}, status=status.HTTP_400_BAD_REQUEST)
+            max_async_transcription_count = int(os.getenv("MAX_ASYNC_TRANSCRIPTIONS_PER_RECORDING", 4))
+            if existing_async_transcription_count >= max_async_transcription_count:
+                return Response({"error": f"You cannot have more than {max_async_transcription_count} async transcriptions per bot."}, status=status.HTTP_400_BAD_REQUEST)
 
             serializer = CreateAsyncTranscriptionSerializer(data={"transcription_settings": request.data.get("transcription_settings")})
             if not serializer.is_valid():

@@ -60,8 +60,11 @@ def process_utterance_group_for_async_transcription(self, utterance_ids):
                 first_utterance.save()
                 raise Exception(f"Retryable failure when transcribing utterances {utterance_ids}: {failure_data}")
             else:
-                first_utterance.failure_data = failure_data
                 first_utterance.save()
+                # Set the failure data for all the utterances
+                for utterance in utterances:
+                    utterance.failure_data = failure_data
+                    utterance.save()
                 logger.info(f"Transcription failed for utterances {utterance_ids}, failure data: {failure_data}")
                 return
 
