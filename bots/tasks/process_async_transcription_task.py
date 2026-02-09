@@ -1,4 +1,5 @@
 import logging
+import math
 
 from celery import shared_task
 from django.utils import timezone
@@ -65,25 +66,38 @@ def create_utterances_for_transcription_using_groups(async_transcription):
         )
         utterances.append(utterance)
 
-    # Group utterances by duration (max 30 minutes per group)
+    # Group utterances into evenly-sized groups based on total duration
+    # Calculate number of groups needed, then divide duration evenly.
+    # This avoids creating tiny groups.
     max_group_duration_ms = 30 * 60 * 1000  # 30 minutes in milliseconds
+    total_duration_ms = sum(u.duration_ms for u in utterances)
+    if total_duration_ms == 0:
+        total_duration_ms = 1
+
+    num_groups = math.ceil(total_duration_ms / max_group_duration_ms)
+    target_group_duration_ms = total_duration_ms / num_groups
+
     groups = []
     current_group = []
     current_group_duration_ms = 0
 
     for utterance in utterances:
-        if current_group_duration_ms + utterance.duration_ms > max_group_duration_ms and current_group:
-            # Current group would exceed 30 min, start a new group
+        current_group.append(utterance)
+        current_group_duration_ms += utterance.duration_ms
+
+        # Start a new group if we've reached the target duration (unless this is the last group)
+        if current_group_duration_ms >= target_group_duration_ms and len(groups) < num_groups - 1:
             groups.append(current_group)
-            current_group = [utterance]
-            current_group_duration_ms = utterance.duration_ms
-        else:
-            current_group.append(utterance)
-            current_group_duration_ms += utterance.duration_ms
+            current_group = []
+            current_group_duration_ms = 0
 
     # Don't forget the last group
     if current_group:
         groups.append(current_group)
+
+    # Log all the group total durations
+    for group_index, group in enumerate(groups):
+        logger.info(f"Group {group_index} total duration: {sum(u.duration_ms for u in group)}ms")
 
     # Queue each group for processing
     group_task_delay_seconds = 0
