@@ -990,6 +990,9 @@ class Bot(models.Model):
     def __str__(self):
         return f"{self.object_id} - {self.project.name} in {self.meeting_url}"
 
+    def ephemeral_container_name(self):
+        return f"bot-{self.id}-{self.object_id}".lower().replace("_", "-")
+
     def k8s_pod_name(self):
         return f"bot-pod-{self.id}-{self.object_id}".lower().replace("_", "-")
 
