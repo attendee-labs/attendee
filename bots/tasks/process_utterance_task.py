@@ -360,9 +360,8 @@ def get_transcription_via_openai(utterance):
 
 
 def get_transcription_via_assemblyai(utterance):
-    mp3_data = pcm_to_mp3(utterance.get_audio_blob().tobytes(), sample_rate=utterance.get_sample_rate())
     return get_transcription_via_assemblyai_from_mp3(
-        mp3_data=mp3_data,
+        retrieve_mp3_data=lambda: pcm_to_mp3(utterance.get_audio_blob().tobytes(), sample_rate=utterance.get_sample_rate()),
         duration_ms=utterance.duration_ms,
         identifier=f"utterance {utterance.id}",
         transcription_settings=utterance.transcription_settings,
