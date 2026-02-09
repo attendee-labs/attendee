@@ -237,7 +237,7 @@ def get_transcription_via_assemblyai_for_utterance_group(utterances):
     total_duration_ms = sum(utterance.duration_ms for utterance in utterances)
 
     transcription, error = get_transcription_via_assemblyai_from_mp3(
-        retrieve_mp3_data=lambda: get_mp3_for_utterance_group(utterances, sample_rate=first_utterance.get_sample_rate()),
+        retrieve_mp3_data_callback=lambda: get_mp3_for_utterance_group(utterances, sample_rate=first_utterance.get_sample_rate()),
         duration_ms=total_duration_ms,
         identifier=f"utterances {[utterance.id for utterance in utterances]}",
         transcription_settings=first_utterance.transcription_settings,
@@ -251,7 +251,7 @@ def get_transcription_via_assemblyai_for_utterance_group(utterances):
 
 
 def get_transcription_via_assemblyai_from_mp3(
-    retrieve_mp3_data: Callable[[], bytes],
+    retrieve_mp3_data_callback: Callable[[], bytes],
     duration_ms: int,
     identifier: str,
     transcription_settings: TranscriptionSettings,
@@ -279,7 +279,7 @@ def get_transcription_via_assemblyai_from_mp3(
     headers = {"authorization": api_key}
     base_url = transcription_settings.assemblyai_base_url()
 
-    mp3_data = retrieve_mp3_data()
+    mp3_data = retrieve_mp3_data_callback()
     upload_response = requests.post(f"{base_url}/upload", headers=headers, data=mp3_data)
 
     if upload_response.status_code == 401:
