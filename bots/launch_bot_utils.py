@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 def launch_bot(bot):
     # If this instance is running in Kubernetes, use the Kubernetes pod creator
     # which spins up a new pod for the bot
-    logger.info(f"Launching bot {bot.object_id} ({bot.id}) with method {os.getenv('LAUNCH_BOT_METHOD')}")
+    logger.info(f"Launching bot {bot.object_id} ({bot.id}) with method {os.getenv('LAUNCH_BOT_METHOD', 'celery')}")
     if os.getenv("LAUNCH_BOT_METHOD") == "kubernetes":
         from .bot_pod_creator import BotPodCreator
 
