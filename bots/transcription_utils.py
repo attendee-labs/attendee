@@ -30,7 +30,7 @@ def get_empty_transcript_for_utterance_group(utterances):
 def get_mp3_for_utterance_group(
     utterances: Sequence[Utterance],
     *,
-    silence_seconds: float = 5.0,
+    silence_seconds: float = 3.0,
     channels: int = 1,
     sample_rate: int,
     sample_width_bytes: int = 2,  # 2 => 16-bit PCM (s16le)
@@ -174,7 +174,7 @@ def split_transcription_by_utterance(
     transcription_result: Dict[str, Any],
     utterances: Sequence[Utterance],
     *,
-    silence_seconds: float = 5.0,
+    silence_seconds: float = 3.0,
 ) -> Dict[int, Dict[str, Any]]:
     """
     Split transcription result from a combined MP3 back into per-utterance results.

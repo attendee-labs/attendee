@@ -489,7 +489,7 @@ def transcription_provider_from_bot_creation_data(data):
 
 
 def generate_async_transcriptions_json_for_bot_detail_view(recording):
-    async_transcriptions = recording.async_transcriptions.all()
+    async_transcriptions = recording.async_transcriptions.all().order_by("created_at")
     async_transcriptions_data = []
     for async_transcription in async_transcriptions:
         async_transcriptions_data.append(
