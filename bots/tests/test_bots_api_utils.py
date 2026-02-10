@@ -661,7 +661,8 @@ class TestPatchBot(TestCase):
         # Patch with bot_image (same format as POST /api/v1/bots)
         red_pixel_png_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
         updated_bot, patch_error = patch_bot(
-            bot, {"bot_image": {"type": "image/png", "data": red_pixel_png_b64}},
+            bot,
+            {"bot_image": {"type": "image/png", "data": red_pixel_png_b64}},
         )
         self.assertIsNotNone(updated_bot)
         self.assertIsNone(patch_error)
