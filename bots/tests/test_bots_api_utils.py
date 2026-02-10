@@ -638,6 +638,38 @@ class TestPatchBot(TestCase):
         self.assertEqual(updated_bot.join_at, original_join_at)
         self.assertEqual(updated_bot.meeting_url, original_meeting_url)
 
+    def test_patch_bot_name_and_image(self):
+        """Test patching bot_name and bot_image (any state)."""
+        from bots.bots_api_utils import patch_bot
+        from bots.models import BotMediaRequestMediaTypes
+
+        # Create a bot (any state)
+        bot, error = create_bot(
+            data={"meeting_url": "https://meet.google.com/abc-defg-hij", "bot_name": "Original Name"},
+            source=BotCreationSource.API,
+            project=self.project,
+        )
+        self.assertIsNotNone(bot)
+        self.assertEqual(bot.name, "Original Name")
+
+        # Patch only bot_name
+        updated_bot, patch_error = patch_bot(bot, {"bot_name": "Updated Bot Name"})
+        self.assertIsNotNone(updated_bot)
+        self.assertIsNone(patch_error)
+        self.assertEqual(updated_bot.name, "Updated Bot Name")
+
+        # Patch with bot_image (same format as POST /api/v1/bots)
+        red_pixel_png_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+        updated_bot, patch_error = patch_bot(
+            bot, {"bot_image": {"type": "image/png", "data": red_pixel_png_b64}}
+        )
+        self.assertIsNotNone(updated_bot)
+        self.assertIsNone(patch_error)
+        self.assertTrue(
+            updated_bot.media_requests.filter(media_type=BotMediaRequestMediaTypes.IMAGE).exists(),
+            "BotMediaRequest for image should have been created",
+        )
+
 
 class TestConcurrentBotLimit(TestCase):
     def setUp(self):

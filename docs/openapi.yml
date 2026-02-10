@@ -219,9 +219,9 @@ paths:
           description: Bot not found
     patch:
       operationId: Patch Bot
-      description: Updates a bot. Currently only the join_at and metadata fields can
-        be updated. The join_at field can only be updated when the bot is in the scheduled
-        state. The metadata field can be updated at any time.
+      description: Updates a bot. You can update join_at (scheduled bots only),
+        meeting_url (scheduled bots only), metadata, bot_name, and bot_image. The
+        metadata, bot_name and bot_image fields can be updated at any time.
       summary: Update a bot
       parameters:
       - in: header
@@ -262,6 +262,14 @@ paths:
                 summary: Update join_at
                 description: Example of updating the join_at time for a scheduled
                   bot
+              UpdateNameAndImage:
+                value:
+                  bot_name: My Updated Bot
+                  bot_image:
+                    type: image/png
+                    data: iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==
+                summary: Update name and image
+                description: Example of updating the bot name and/or image
       security:
       - {}
       responses:
@@ -3011,6 +3019,17 @@ components:
           type: string
           minLength: 1
           description: The URL of the meeting to join, e.g. https://zoom.us/j/123?pwd=456
+        metadata:
+          type: object
+          description: JSON object containing metadata to associate with the bot
+        bot_name:
+          type: string
+          minLength: 1
+          description: The name of the bot, e.g. 'My Bot'
+        bot_image:
+          allOf:
+          - $ref: '#/components/schemas/BotImageRequest'
+          description: The image for the bot
     PatchedPatchBotVoiceAgentSettingsRequest:
       type: object
       properties:

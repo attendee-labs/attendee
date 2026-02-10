@@ -1893,16 +1893,33 @@ class PatchBotTranscriptionSettingsSerializer(serializers.Serializer):
                 "join_at": "2025-06-13T12:00:00Z",
             },
             description="Example of updating the join_at time for a scheduled bot",
-        )
+        ),
+        OpenApiExample(
+            "Update name and image",
+            value={
+                "bot_name": "My Updated Bot",
+                "bot_image": {"type": "image/png", "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="},
+            },
+            description="Example of updating the bot name and/or image",
+        ),
     ]
 )
 class PatchBotSerializer(BotValidationMixin, serializers.Serializer):
     join_at = serializers.DateTimeField(help_text="The time the bot should join the meeting. ISO 8601 format, e.g. 2025-06-13T12:00:00Z", required=False)
     meeting_url = serializers.CharField(help_text="The URL of the meeting to join, e.g. https://zoom.us/j/123?pwd=456", required=False)
     metadata = serializers.JSONField(help_text="JSON object containing metadata to associate with the bot", required=False)
+    bot_name = serializers.CharField(help_text="The name of the bot, e.g. 'My Bot'", required=False, allow_blank=False)
+    bot_image = BotImageSerializer(help_text="The image for the bot", required=False, default=None)
 
     def validate_metadata(self, value):
         return _validate_metadata_attribute(value)
+
+    def validate_bot_name(self, value):
+        if value is not None and value:
+            for char in value:
+                if ord(char) > 0xFFFF:
+                    raise serializers.ValidationError("Bot name cannot contain emojis or rare script characters.")
+        return value
 
 
 @extend_schema_serializer(
