@@ -639,17 +639,23 @@ class TestPatchBot(TestCase):
         self.assertEqual(updated_bot.meeting_url, original_meeting_url)
 
     def test_patch_bot_name_and_image(self):
-        """Test patching bot_name and bot_image (any state)."""
+        """Test patching bot_name and bot_image when bot is scheduled."""
         from bots.bots_api_utils import patch_bot
         from bots.models import BotMediaRequestMediaTypes
 
-        # Create a bot (any state)
+        # Create a scheduled bot
+        future_time = timezone.now() + timedelta(hours=1)
         bot, error = create_bot(
-            data={"meeting_url": "https://meet.google.com/abc-defg-hij", "bot_name": "Original Name"},
+            data={
+                "meeting_url": "https://meet.google.com/abc-defg-hij",
+                "bot_name": "Original Name",
+                "join_at": future_time.isoformat(),
+            },
             source=BotCreationSource.API,
             project=self.project,
         )
         self.assertIsNotNone(bot)
+        self.assertEqual(bot.state, BotStates.SCHEDULED)
         self.assertEqual(bot.name, "Original Name")
 
         # Patch only bot_name

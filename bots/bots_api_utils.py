@@ -398,7 +398,7 @@ def patch_bot(bot: Bot, data: dict) -> tuple[Bot | None, dict | None]:
         )
         if updating_name_or_image and bot.state != BotStates.SCHEDULED:
             return None, {
-                "error": f"Bot is in state {BotStates.state_to_api_code(bot.state)}. bot_name and bot_image can only be updated when the bot is in the scheduled state. To update the bot's image during a meeting, use the POST /api/v1/bots/{{object_id}}/output_image endpoint."
+                "error": f"Bot is in state {BotStates.state_to_api_code(bot.state)}. bot_name and bot_image can only be updated when the bot is in the scheduled state."
             }
 
         # Update the bot
