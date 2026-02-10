@@ -341,8 +341,8 @@ class AggregatedUtterance:
         self.duration_ms += utterance.duration_ms
 
 
-def generate_aggregated_utterances(recording):
-    utterances_sorted = sorted(recording.utterances.filter(async_transcription=None).all(), key=lambda x: x.timestamp_ms)
+def generate_aggregated_utterances(recording, async_transcription=None):
+    utterances_sorted = sorted(recording.utterances.filter(async_transcription=async_transcription).all(), key=lambda x: x.timestamp_ms)
 
     aggregated_utterances = []
     current_aggregated_utterance = None
@@ -366,8 +366,8 @@ def generate_aggregated_utterances(recording):
     return aggregated_utterances
 
 
-def generate_failed_utterance_json_for_bot_detail_view(recording):
-    failed_utterances = recording.utterances.filter(async_transcription=None).filter(failure_data__isnull=False).order_by("timestamp_ms")[:10]
+def generate_failed_utterance_json_for_bot_detail_view(recording, async_transcription=None):
+    failed_utterances = recording.utterances.filter(async_transcription=async_transcription).filter(failure_data__isnull=False).order_by("timestamp_ms")[:10]
 
     failed_utterances_data = []
 
@@ -381,11 +381,11 @@ def generate_failed_utterance_json_for_bot_detail_view(recording):
     return failed_utterances_data
 
 
-def generate_utterance_json_for_bot_detail_view(recording):
+def generate_utterance_json_for_bot_detail_view(recording, async_transcription=None):
     utterances_data = []
     recording_first_buffer_timestamp_ms = recording.first_buffer_timestamp_ms
 
-    aggregated_utterances = generate_aggregated_utterances(recording)
+    aggregated_utterances = generate_aggregated_utterances(recording, async_transcription)
     for utterance in aggregated_utterances:
         if not utterance.transcription:
             continue
@@ -488,19 +488,46 @@ def transcription_provider_from_bot_creation_data(data):
     return TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM
 
 
+def generate_async_transcriptions_json_for_bot_detail_view(recording):
+    async_transcriptions = recording.async_transcriptions.all()
+    async_transcriptions_data = []
+    for async_transcription in async_transcriptions:
+        async_transcriptions_data.append(
+            {
+                "label": "Async (" + async_transcription.created_at.strftime("%Y-%m-%d %H:%M:%S") + ")",
+                "is_async": True,
+                "state": async_transcription.state,
+                "recording_state": recording.state,
+                "provider_display": async_transcription.transcription_provider.label if async_transcription.transcription_provider else None,
+                "utterances": generate_utterance_json_for_bot_detail_view(recording, async_transcription),
+                "failed_utterances": generate_failed_utterance_json_for_bot_detail_view(recording, async_transcription),
+            }
+        )
+    return async_transcriptions_data
+
+
 def generate_recordings_json_for_bot_detail_view(bot):
     # Process recordings and utterances
     recordings_data = []
     for recording in bot.recordings.all():
+        realtime_transcription = {
+            "label": "Realtime",
+            "state": recording.transcription_state,
+            "recording_state": recording.state,
+            "provider_display": recording.get_transcription_provider_display() if recording.transcription_provider else None,
+            "utterances": generate_utterance_json_for_bot_detail_view(recording),
+            "failed_utterances": generate_failed_utterance_json_for_bot_detail_view(recording),
+        }
+        async_transcriptions = generate_async_transcriptions_json_for_bot_detail_view(recording)
         recordings_data.append(
             {
                 "state": recording.state,
                 "recording_type": recording.bot.recording_type(),
-                "transcription_state": recording.transcription_state,
-                "transcription_provider_display": recording.get_transcription_provider_display() if recording.transcription_provider else None,
                 "url": recording.url,
-                "utterances": generate_utterance_json_for_bot_detail_view(recording),
-                "failed_utterances": generate_failed_utterance_json_for_bot_detail_view(recording),
+                "transcriptions": [
+                    realtime_transcription,
+                    *async_transcriptions,
+                ],
             }
         )
 
