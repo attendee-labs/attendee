@@ -1,5 +1,6 @@
 import logging
 import math
+import os
 
 from celery import shared_task
 from django.utils import timezone
@@ -134,8 +135,9 @@ def check_for_transcription_completion(async_transcription):
         return
 
     # An in progress utterance exists and we haven't timed out, so we need to check again in 1 minute
-    logger.info(f"Checking for transcription completion for recording artifact {async_transcription.id} again in 1 minute")
-    process_async_transcription.apply_async(args=[async_transcription.id], countdown=60)
+    next_check_wait_time_seconds = int(os.getenv("ASYNC_TRANSCRIPTION_CHECK_INTERVAL_SECONDS", 60))
+    logger.info(f"Checking for transcription completion for recording artifact {async_transcription.id} again in {next_check_wait_time_seconds} seconds")
+    process_async_transcription.apply_async(args=[async_transcription.id], countdown=next_check_wait_time_seconds)
 
 
 @shared_task(

@@ -41,14 +41,23 @@
         {% endif %}
     {% endfor %}
 
-    {% if transcription.state == RecordingTranscriptionStates.IN_PROGRESS or transcription.state == RecordingTranscriptionStates.NOT_STARTED %}
-        <div class="alert alert-info mt-3">
-            {% if transcription.is_async %}
-                Async transcription in progress. Refresh to see the latest updates.
-            {% else %}
-                Real-time transcription in progress. Refresh to see the latest updates.
+
+    {% if not transcription.is_async %}
+        {% if transcription.recording_state != RecordingStates.COMPLETE and transcription.recording_state != RecordingStates.FAILED %}
+            {% if transcription.state == RecordingTranscriptionStates.IN_PROGRESS or transcription.state == RecordingTranscriptionStates.NOT_STARTED %}
+                <div class="alert alert-info mt-3">
+                    Real-time transcription in progress. Refresh to see the latest updates.
+                </div>
             {% endif %}
-        </div>
+        {% endif %}
+    {% endif %}
+
+    {% if transcription.is_async %}
+        {% if transcription.state == RecordingTranscriptionStates.IN_PROGRESS or transcription.state == RecordingTranscriptionStates.NOT_STARTED %}
+            <div class="alert alert-info mt-3">
+                Async transcription in progress. Refresh to see the latest updates.
+            </div>
+        {% endif %}
     {% endif %}
 
     {% if transcription.failed_utterances %}
