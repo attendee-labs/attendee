@@ -222,10 +222,11 @@ def split_transcription_by_utterance(
                 if next_start is not None and w["end"] > next_start:
                     logger.warning(f"Word overlaps with subsequent window, skipping: {w}")
                 else:
-                    w2 = dict(w)
-                    w2["start"] = w2["start"] - start
-                    w2["end"] = w2["end"] - start
-                    utterance_words.append(w2)
+                    # Create a new word object with the start and end times adjusted to the current window
+                    word_adjusted = dict(w)
+                    word_adjusted["start"] = word_adjusted["start"] - start
+                    word_adjusted["end"] = word_adjusted["end"] - start
+                    utterance_words.append(word_adjusted)
             word_index += 1
 
         output[utterance_id]["words"] = utterance_words
