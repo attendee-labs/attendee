@@ -415,7 +415,7 @@ def patch_bot(bot: Bot, data: dict) -> tuple[Bot | None, dict | None]:
                 # See if the bot had an existing image request
                 existing_bot_image_request = bot.media_requests.filter(media_type=BotMediaRequestMediaTypes.IMAGE, state=BotMediaRequestStates.ENQUEUED).first()
                 create_bot_media_request_for_image(bot, validated_data["bot_image"])
-                # If we reached here, we successfully created a new image request for the bot. If there was an existing one, we deleted it.
+                # If we reached here, we successfully created a new image request for the bot. If there was an existing one, we should delete it.
                 if existing_bot_image_request:
                     existing_bot_image_request.delete()
 

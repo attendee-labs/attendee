@@ -426,6 +426,14 @@ TRANSCRIPTION_SETTINGS_SCHEMA = {
 }
 
 
+def _validate_bot_name_attribute(value):
+    if value is not None and value:
+        for char in value:
+            if ord(char) > 0xFFFF:
+                raise serializers.ValidationError("Bot name cannot contain emojis or rare script characters.")
+    return value
+
+
 def _validate_metadata_attribute(value):
     if value is None:
         return value
@@ -1563,11 +1571,7 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
         return value
 
     def validate_bot_name(self, value):
-        """Validate that the bot name only contains characters in the Basic Multilingual Plane (BMP)."""
-        for char in value:
-            if ord(char) > 0xFFFF:
-                raise serializers.ValidationError("Bot name cannot contain emojis or rare script characters.")
-        return value
+        return _validate_bot_name_attribute(value)
 
     def validate(self, data):
         """Validate that no unexpected fields are provided."""
@@ -1915,11 +1919,7 @@ class PatchBotSerializer(BotValidationMixin, serializers.Serializer):
         return _validate_metadata_attribute(value)
 
     def validate_bot_name(self, value):
-        if value is not None and value:
-            for char in value:
-                if ord(char) > 0xFFFF:
-                    raise serializers.ValidationError("Bot name cannot contain emojis or rare script characters.")
-        return value
+        return _validate_bot_name_attribute(value)
 
 
 @extend_schema_serializer(
