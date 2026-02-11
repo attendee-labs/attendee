@@ -219,9 +219,9 @@ paths:
           description: Bot not found
     patch:
       operationId: Patch Bot
-      description: Updates a bot. join_at, meeting_url, bot_name and bot_image can
-        only be updated when the bot is in the scheduled state. metadata can be updated at any
-        time.
+      description: Updates a bot. The join_at, meeting_url, bot_name and bot_image
+        fields can only be updated when the bot is in the scheduled state. The metadata
+        field can be updated at any time.
       summary: Update a bot
       parameters:
       - in: header
