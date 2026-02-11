@@ -205,26 +205,23 @@ def split_transcription_by_utterance(
 
     out = {utterance.id: {"transcript": "", "words": [], "language": language} for utterance in utterances}
 
-    # Assign each word to the window that contains its midpoint timestamp.
+    # Assign each word to the first window it overlaps with.
     w_idx = 0
     for utt_id, start, end in windows:
         utt_words = []
-        # advance w_idx to first word that could overlap
-        while w_idx < len(words) and (words[w_idx]["end"] <= start):
-            w_idx += 1
 
-        j = w_idx
-        while j < len(words):
-            w = words[j]
-            mid = (w["start"] + w["end"]) / 2.0
-            if mid >= end:
+        while w_idx < len(words):
+            w = words[w_idx]
+            # If word starts at or after window end, stop (no overlap with this window)
+            if w["start"] >= end:
                 break
-            if mid >= start:
+            # If word ends after window start, it overlaps
+            if w["end"] > start:
                 w2 = dict(w)
                 w2["start"] = w2["start"] - start
                 w2["end"] = w2["end"] - start
                 utt_words.append(w2)
-            j += 1
+            w_idx += 1
 
         out[utt_id]["words"] = utt_words
         out[utt_id]["transcript"] = " ".join(w["word"] for w in utt_words)
