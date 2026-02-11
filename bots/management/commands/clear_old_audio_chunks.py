@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 
 class Command(BaseCommand):
-    help = "Clears out audio chunks that are older than 1 day. Audio chunks are storing raw pcm audio in the database, so we don't want to keep them around for too long."
+    help = "Clears out audio chunks that are older than 1 day. Audio chunks are storing raw pcm audio in the database, so we don't want to keep them around for too long. If audio chunks were stored remotely, this does NOT clear them out."
 
     def handle(self, *args, **options):
         expired_audio_chunks = AudioChunk.objects.exclude(audio_blob=b"").filter(created_at__lt=timezone.now() - timezone.timedelta(days=1))
