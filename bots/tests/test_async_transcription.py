@@ -194,6 +194,11 @@ class TestUtteranceGrouping(AsyncTranscriptionTestCase):
             # Should have created 2 groups (40 min / 30 min max = ceil(1.33) = 2 groups)
             self.assertEqual(mock_group_task.apply_async.call_count, 2)
 
+            # Verify each group has 4 utterances (evenly split)
+            for call in mock_group_task.apply_async.call_args_list:
+                utterance_ids = call.kwargs["args"][0]
+                self.assertEqual(len(utterance_ids), 4)
+
     @mock.patch("bots.tasks.deliver_webhook_task.deliver_webhook")
     def test_single_group_for_short_meetings(self, mock_deliver_webhook):
         """Verify that short meetings (< 30 min) result in a single group."""
