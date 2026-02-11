@@ -2390,9 +2390,9 @@ class AudioChunk(models.Model):
     source = models.IntegerField(choices=Sources.choices, default=Sources.PER_PARTICIPANT_AUDIO)
     participant = models.ForeignKey(Participant, on_delete=models.PROTECT, related_name="audio_chunks")
 
-    def get_audio_data(self) -> bytes:
+    def get_audio_data(self) -> memoryview:
         if self.is_stored_remotely:
-            return self.audio_blob_remote_file.read()
+            return memoryview(self.audio_blob_remote_file.read())
         return self.audio_blob
 
     def clear_audio_data(self):

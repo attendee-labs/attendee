@@ -5,6 +5,7 @@ import signal
 import threading
 import time
 import traceback
+import uuid
 from base64 import b64decode
 from datetime import timedelta
 
@@ -62,6 +63,7 @@ from bots.websocket_payloads import mixed_audio_websocket_payload
 from bots.zoom_oauth_connections_utils import get_zoom_tokens_via_zoom_oauth_app
 from bots.zoom_rtms_adapter.rtms_gstreamer_pipeline import RTMSGstreamerPipeline
 
+from .audio_chunk_uploader import AudioChunkUploader
 from .audio_output_manager import AudioOutputManager
 from .azure_file_uploader import AzureFileUploader
 from .bot_resource_snapshot_taker import BotResourceSnapshotTaker
@@ -595,6 +597,9 @@ class BotController:
         if self.bot_in_db.create_debug_recording():
             self.save_debug_recording()
 
+        if self.audio_chunk_uploader:
+            self.audio_chunk_uploader.shutdown()
+
         if self.bot_in_db.state == BotStates.POST_PROCESSING:
             self.wait_until_all_utterances_are_terminated()
             BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.POST_PROCESSING_COMPLETED)
@@ -755,7 +760,7 @@ class BotController:
         # Only used for adapters that can provide per-participant audio
 
         self.per_participant_non_streaming_audio_input_manager = PerParticipantNonStreamingAudioInputManager(
-            save_audio_chunk_callback=self.process_individual_audio_chunk,
+            save_audio_chunk_callback=self.upload_then_process_individual_audio_chunk,
             get_participant_callback=self.get_participant,
             sample_rate=self.get_per_participant_audio_sample_rate(),
             utterance_size_limit=self.non_streaming_audio_utterance_size_limit(),
@@ -849,6 +854,10 @@ class BotController:
             self.webpage_streamer_manager.init()
 
         self.bot_resource_snapshot_taker = BotResourceSnapshotTaker(self.bot_in_db)
+
+        self.audio_chunk_uploader = None
+        if settings.USE_REMOTE_STORAGE_FOR_AUDIO_CHUNKS:
+            self.audio_chunk_uploader = AudioChunkUploader()
 
         # Create GLib main loop
         self.main_loop = GLib.MainLoop()
@@ -1286,6 +1295,16 @@ class BotController:
 
         RecordingManager.set_recording_transcription_in_progress(recording_in_progress)
 
+    def upload_then_process_individual_audio_chunk(self, message):
+        audio_chunk_filename = f"{self.bot_in_db.object_id}-audio-chunk-{uuid.uuid4()}.bin"
+        message["audio_chunk_filename"] = audio_chunk_filename
+        self.audio_chunk_uploader.upload(
+            filename=audio_chunk_filename,
+            data=message["audio_data"],
+            on_success=lambda n: self.on_successfully_uploaded_audio_chunk(message),
+            on_error=lambda e: logger.error(f"Error uploading audio chunk for bot {self.bot_in_db.object_id}: {e}"),
+        )
+
     def process_individual_audio_chunk(self, message):
         from bots.tasks.process_utterance_task import process_utterance
 
@@ -1308,16 +1327,28 @@ class BotController:
             logger.warning("Warning: No recording in progress found so cannot save individual audio utterance.")
             return
 
-        audio_chunk = AudioChunk.objects.create(
-            recording=recording_in_progress,
-            audio_blob=message["audio_data"],
-            audio_format=AudioChunk.AudioFormat.PCM,
-            timestamp_ms=message["timestamp_ms"] - self.get_per_participant_audio_utterance_delay_ms(),
-            duration_ms=len(message["audio_data"]) / ((message["sample_rate"] / 1000) * 2),
-            sample_rate=message["sample_rate"],
-            source=AudioChunk.Sources.PER_PARTICIPANT_AUDIO,
-            participant=participant,
-        )
+        if message.get("audio_chunk_filename"):
+            audio_chunk = AudioChunk.objects.create(
+                recording=recording_in_progress,
+                audio_blob_remote_file=message["audio_chunk_filename"],
+                audio_format=AudioChunk.AudioFormat.PCM,
+                timestamp_ms=message["timestamp_ms"] - self.get_per_participant_audio_utterance_delay_ms(),
+                duration_ms=len(message["audio_data"]) / ((message["sample_rate"] / 1000) * 2),
+                sample_rate=message["sample_rate"],
+                source=AudioChunk.Sources.PER_PARTICIPANT_AUDIO,
+                participant=participant,
+            )
+        else:
+            audio_chunk = AudioChunk.objects.create(
+                recording=recording_in_progress,
+                audio_blob=message["audio_data"],
+                audio_format=AudioChunk.AudioFormat.PCM,
+                timestamp_ms=message["timestamp_ms"] - self.get_per_participant_audio_utterance_delay_ms(),
+                duration_ms=len(message["audio_data"]) / ((message["sample_rate"] / 1000) * 2),
+                sample_rate=message["sample_rate"],
+                source=AudioChunk.Sources.PER_PARTICIPANT_AUDIO,
+                participant=participant,
+            )
 
         if not self.save_utterances_for_individual_audio_chunks():
             return
@@ -1339,6 +1370,10 @@ class BotController:
         # Process the utterance immediately
         process_utterance.delay(utterance.id)
         return
+
+    def on_successfully_uploaded_audio_chunk(self, message):
+        logger.info(f"Successfully uploaded audio chunk for bot {self.bot_in_db.object_id}: {message.get('audio_chunk_filename')}")
+        GLib.idle_add(lambda: self.process_individual_audio_chunk(message))
 
     def on_new_chat_message(self, chat_message):
         GLib.idle_add(lambda: self.upsert_chat_message(chat_message))
