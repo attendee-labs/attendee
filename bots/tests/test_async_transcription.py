@@ -8,7 +8,7 @@ which uses the grouped utterances approach rather than individual utterance proc
 import os
 from unittest import mock
 
-from django.conf import settings
+from django.test import override_settings
 from django.test.testcases import TransactionTestCase
 
 from bots.models import (
@@ -41,20 +41,11 @@ from bots.tasks.process_utterance_group_task import process_utterance_group_for_
 from bots.transcription_utils import split_transcription_by_utterance
 
 
+@mock.patch.dict(os.environ, {"AWS_RECORDING_STORAGE_BUCKET_NAME": "test-bucket", "CHARGE_CREDITS_FOR_BOTS": "false"})
 class AsyncTranscriptionTestCase(TransactionTestCase):
     """Base test case with common setup for Assembly AI async transcription tests."""
 
-    @classmethod
-    def setUpClass(cls):
-        super().setUpClass()
-        os.environ["AWS_RECORDING_STORAGE_BUCKET_NAME"] = "test-bucket"
-        os.environ["CHARGE_CREDITS_FOR_BOTS"] = "false"
-
     def setUp(self):
-        # Configure Celery to run tasks eagerly (synchronously)
-        settings.CELERY_TASK_ALWAYS_EAGER = True
-        settings.CELERY_TASK_EAGER_PROPAGATES = True
-
         # Create organization and project
         self.organization = Organization.objects.create(
             name="Test Org",
@@ -429,6 +420,7 @@ class TestProcessUtteranceGroup(AsyncTranscriptionTestCase):
         process_utterance_group_for_async_transcription([])
 
 
+@override_settings(CELERY_TASK_ALWAYS_EAGER=True, CELERY_TASK_EAGER_PROPAGATES=True)
 class TestEndToEndAsyncTranscriptionAssemblyAI(AsyncTranscriptionTestCase):
     """End-to-end tests for async transcription with Assembly AI."""
 
