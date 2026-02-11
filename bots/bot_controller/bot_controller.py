@@ -57,6 +57,7 @@ from bots.models import (
     Utterance,
     WebhookTriggerTypes,
 )
+from bots.tasks.process_utterance_task import process_utterance
 from bots.webhook_payloads import chat_message_webhook_payload, participant_event_webhook_payload, utterance_webhook_payload
 from bots.webhook_utils import trigger_webhook
 from bots.websocket_payloads import mixed_audio_websocket_payload
@@ -1300,8 +1301,6 @@ class BotController:
         RecordingManager.set_recording_transcription_in_progress(recording_in_progress)
 
     def upload_audio_chunk_to_remote_storage(self, audio_chunk: AudioChunk, audio_data: bytes, utterance: Utterance):
-        from bots.tasks.process_utterance_task import process_utterance
-
         if not self.audio_chunk_uploader:
             logger.error(f"No audio chunk uploader found for bot {self.bot_in_db.object_id}")
             return
@@ -1325,8 +1324,6 @@ class BotController:
         )
 
     def process_individual_audio_chunk(self, message):
-        from bots.tasks.process_utterance_task import process_utterance
-
         logger.info("Received message that new individual audio chunk was detected")
 
         # Create participant record if it doesn't exist
@@ -1366,9 +1363,21 @@ class BotController:
             **audio_chunk_storage_attributes,
         )
 
+        # If audio chunks are being stored remotely, we need to upload them async, then take the follow up actions
+        if settings.USE_REMOTE_STORAGE_FOR_AUDIO_CHUNKS:
+            self.audio_chunk_uploader.upload(
+                filename=audio_chunk.audio_blob_remote_file.name,
+                data=message["audio_data"],
+                on_success=lambda n: GLib.idle_add(lambda: self.take_action_after_saving_audio_chunk(audio_chunk=audio_chunk, participant=participant, recording_in_progress=recording_in_progress)),
+                on_error=lambda e: logger.error(f"Error uploading audio chunk to remote storage for bot {self.bot_in_db.object_id}: {e}"),
+            )
+            return
+
+        # If audio chunks are being stored in the DB, we can take the follow up actions immediately
+        self.take_action_after_saving_audio_chunk(audio_chunk=audio_chunk, participant=participant, recording_in_progress=recording_in_progress)
+
+    def take_action_after_saving_audio_chunk(self, audio_chunk: AudioChunk, participant: Participant, recording_in_progress: Recording):
         if not self.save_utterances_for_individual_audio_chunks():
-            if settings.USE_REMOTE_STORAGE_FOR_AUDIO_CHUNKS:
-                self.upload_audio_chunk_to_remote_storage(audio_chunk=audio_chunk, audio_data=message["audio_data"])
             return
 
         # Create new utterance record
@@ -1384,10 +1393,6 @@ class BotController:
 
         # Set the recording transcription in progress
         RecordingManager.set_recording_transcription_in_progress(recording_in_progress)
-
-        if settings.USE_REMOTE_STORAGE_FOR_AUDIO_CHUNKS:
-            self.upload_audio_chunk_to_remote_storage(audio_chunk=audio_chunk, utterance=utterance, audio_data=message["audio_data"])
-            return
 
         # Process the utterance immediately
         process_utterance.delay(utterance.id)
