@@ -20,6 +20,7 @@ from django.utils.crypto import get_random_string
 
 from accounts.models import Organization, User, UserRole
 from bots.bot_pod_creator.bot_pod_spec import BotPodSpecType
+from bots.storage import StorageAlias
 from bots.webhook_utils import trigger_webhook
 
 # Create your models here.
@@ -2034,16 +2035,6 @@ class RecordingStorage(Storage):
         return storages["recordings"]
 
 
-class AudioChunkStorage(Storage):
-    """
-    Returns the configured 'audio_chunks' storage from Django's registry.
-    """
-
-    def __new__(cls, *args, **kwargs):
-        # return the actual storage instance
-        return storages["audio_chunks"]
-
-
 class Recording(models.Model):
     bot = models.ForeignKey(Bot, on_delete=models.CASCADE, related_name="recordings")
 
@@ -2388,7 +2379,7 @@ class AudioChunk(models.Model):
 
     recording = models.ForeignKey(Recording, on_delete=models.CASCADE, related_name="audio_chunks")
     audio_blob = models.BinaryField()
-    audio_blob_remote_file = models.FileField(storage=AudioChunkStorage(), null=True, blank=True)
+    audio_blob_remote_file = models.FileField(storage=StorageAlias("audio_chunks"), null=True, blank=True)
     audio_format = models.IntegerField(choices=AudioFormat.choices, default=AudioFormat.PCM)
     timestamp_ms = models.BigIntegerField()
     duration_ms = models.IntegerField()
