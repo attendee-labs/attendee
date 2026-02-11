@@ -522,7 +522,7 @@ class TestPatchBot(TestCase):
 
         self.assertIsNone(updated_bot)
         self.assertIsNotNone(patch_error)
-        self.assertEqual(patch_error["error"], "Bot is in state joining but the join_at or meeting_url can only be updated when in the scheduled state")
+        self.assertEqual(patch_error["error"], "Bot is in state joining but join_at, meeting_url, bot_name and bot_image can only be updated when in the scheduled state")
 
     def test_patch_bot_meeting_url_not_in_scheduled_state(self):
         """Test that patching a bot not in scheduled state fails."""
@@ -670,11 +670,140 @@ class TestPatchBot(TestCase):
             bot,
             {"bot_image": {"type": "image/png", "data": red_pixel_png_b64}},
         )
-        self.assertIsNotNone(updated_bot)
         self.assertIsNone(patch_error)
+        self.assertIsNotNone(updated_bot)
         self.assertTrue(
             updated_bot.media_requests.filter(media_type=BotMediaRequestMediaTypes.IMAGE).exists(),
             "BotMediaRequest for image should have been created",
+        )
+
+    def test_patch_bot_with_invalid_image_preserves_existing_image_and_other_fields(self):
+        """Test that patching with an invalid bot_image preserves the existing image and doesn't apply other updates."""
+        from bots.bots_api_utils import patch_bot
+        from bots.models import BotMediaRequestMediaTypes, BotMediaRequestStates
+
+        # Create a scheduled bot with an existing valid image
+        future_time = timezone.now() + timedelta(hours=1)
+        valid_red_pixel_png_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+        bot, error = create_bot(
+            data={
+                "meeting_url": "https://meet.google.com/abc-defg-hij",
+                "bot_name": "Original Name",
+                "join_at": future_time.isoformat(),
+                "bot_image": {"type": "image/png", "data": valid_red_pixel_png_b64},
+            },
+            source=BotCreationSource.API,
+            project=self.project,
+        )
+        self.assertIsNotNone(bot)
+        self.assertIsNone(error)
+        self.assertEqual(bot.state, BotStates.SCHEDULED)
+        self.assertEqual(bot.name, "Original Name")
+
+        # Verify the original image request exists
+        original_image_request = bot.media_requests.filter(
+            media_type=BotMediaRequestMediaTypes.IMAGE,
+            state=BotMediaRequestStates.ENQUEUED,
+        ).first()
+        self.assertIsNotNone(original_image_request, "Original image request should exist")
+        original_image_request_id = original_image_request.id
+
+        # Attempt to patch with an invalid bot_image AND a new bot_name
+        invalid_png_b64 = "iVBORAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+        updated_bot, patch_error = patch_bot(
+            bot,
+            {
+                "bot_name": "Should Not Be Applied",
+                "bot_image": {"type": "image/png", "data": invalid_png_b64},
+            },
+        )
+
+        # Verify the patch failed
+        self.assertIsNone(updated_bot)
+        self.assertIsNotNone(patch_error)
+        self.assertIn("bot_image", patch_error)
+
+        # Refresh the bot from the database
+        bot.refresh_from_db()
+
+        # Verify the bot_name was NOT updated
+        self.assertEqual(bot.name, "Original Name", "Bot name should not have been updated")
+
+        # Verify the original image request still exists
+        self.assertTrue(
+            bot.media_requests.filter(
+                id=original_image_request_id,
+                media_type=BotMediaRequestMediaTypes.IMAGE,
+                state=BotMediaRequestStates.ENQUEUED,
+            ).exists(),
+            "Original image request should still exist after failed patch",
+        )
+
+        # Verify there's still exactly one image request
+        image_request_count = bot.media_requests.filter(
+            media_type=BotMediaRequestMediaTypes.IMAGE,
+        ).count()
+        self.assertEqual(image_request_count, 1, "Should still have exactly one image request")
+
+    def test_patch_bot_with_valid_image_deletes_existing_image(self):
+        """Test that patching with a valid new bot_image deletes the existing image."""
+        from bots.bots_api_utils import patch_bot
+        from bots.models import BotMediaRequestMediaTypes, BotMediaRequestStates
+
+        # Create a scheduled bot with an existing valid image
+        future_time = timezone.now() + timedelta(hours=1)
+        valid_red_pixel_png_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+        bot, error = create_bot(
+            data={
+                "meeting_url": "https://meet.google.com/abc-defg-hij",
+                "bot_name": "Original Name",
+                "join_at": future_time.isoformat(),
+                "bot_image": {"type": "image/png", "data": valid_red_pixel_png_b64},
+            },
+            source=BotCreationSource.API,
+            project=self.project,
+        )
+        self.assertIsNotNone(bot)
+        self.assertIsNone(error)
+
+        # Verify the original image request exists
+        original_image_request = bot.media_requests.filter(
+            media_type=BotMediaRequestMediaTypes.IMAGE,
+            state=BotMediaRequestStates.ENQUEUED,
+        ).first()
+        self.assertIsNotNone(original_image_request, "Original image request should exist")
+        original_image_request_id = original_image_request.id
+
+        # Patch with a different valid image (blue pixel instead of red)
+        valid_blue_pixel_png_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPj/HwADBwIAMCbHYQAAAABJRU5ErkJggg=="
+        updated_bot, patch_error = patch_bot(
+            bot,
+            {"bot_image": {"type": "image/png", "data": valid_blue_pixel_png_b64}},
+        )
+
+        # Verify the patch succeeded
+        self.assertIsNotNone(updated_bot)
+        self.assertIsNone(patch_error)
+
+        # Verify the original image request was deleted
+        self.assertFalse(
+            bot.media_requests.filter(id=original_image_request_id).exists(),
+            "Original image request should have been deleted",
+        )
+
+        # Verify there's exactly one image request (the new one)
+        image_requests = bot.media_requests.filter(
+            media_type=BotMediaRequestMediaTypes.IMAGE,
+            state=BotMediaRequestStates.ENQUEUED,
+        )
+        self.assertEqual(image_requests.count(), 1, "Should have exactly one image request")
+
+        # Verify it's a new image request (different ID)
+        new_image_request = image_requests.first()
+        self.assertNotEqual(
+            new_image_request.id,
+            original_image_request_id,
+            "New image request should have a different ID than the original",
         )
 
 
