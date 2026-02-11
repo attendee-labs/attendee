@@ -1355,7 +1355,16 @@ class BotController:
                 "audio_blob": message["audio_data"],
             }
 
-        audio_chunk = AudioChunk.objects.create(recording=recording_in_progress, audio_format=AudioChunk.AudioFormat.PCM, timestamp_ms=message["timestamp_ms"] - self.get_per_participant_audio_utterance_delay_ms(), duration_ms=len(message["audio_data"]) / ((message["sample_rate"] / 1000) * 2), sample_rate=message["sample_rate"], source=AudioChunk.Sources.PER_PARTICIPANT_AUDIO, participant=participant, **audio_chunk_storage_attributes)
+        audio_chunk = AudioChunk.objects.create(
+            recording=recording_in_progress,
+            audio_format=AudioChunk.AudioFormat.PCM,
+            timestamp_ms=message["timestamp_ms"] - self.get_per_participant_audio_utterance_delay_ms(),
+            duration_ms=len(message["audio_data"]) / ((message["sample_rate"] / 1000) * 2),
+            sample_rate=message["sample_rate"],
+            source=AudioChunk.Sources.PER_PARTICIPANT_AUDIO,
+            participant=participant,
+            **audio_chunk_storage_attributes,
+        )
 
         if not self.save_utterances_for_individual_audio_chunks():
             if settings.USE_REMOTE_STORAGE_FOR_AUDIO_CHUNKS:
