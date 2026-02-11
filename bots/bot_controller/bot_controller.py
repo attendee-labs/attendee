@@ -458,6 +458,10 @@ class BotController:
         recording = Recording.objects.get(bot=self.bot_in_db, is_default_recording=True)
         return recording.transcription_provider
 
+    def generate_audio_blob_remote_filename(self):
+        recording = Recording.objects.get(bot=self.bot_in_db, is_default_recording=True)
+        return f"audio-blobs/{self.bot_in_db.object_id}-{recording.object_id}-{uuid.uuid4()}.bin"
+
     def get_recording_filename(self):
         recording = Recording.objects.get(bot=self.bot_in_db, is_default_recording=True)
         return f"{self.bot_in_db.object_id}-{recording.object_id}.{self.bot_in_db.recording_format()}"
@@ -760,7 +764,7 @@ class BotController:
         # Only used for adapters that can provide per-participant audio
 
         self.per_participant_non_streaming_audio_input_manager = PerParticipantNonStreamingAudioInputManager(
-            save_audio_chunk_callback=self.upload_then_process_individual_audio_chunk,
+            save_audio_chunk_callback=self.process_individual_audio_chunk,
             get_participant_callback=self.get_participant,
             sample_rate=self.get_per_participant_audio_sample_rate(),
             utterance_size_limit=self.non_streaming_audio_utterance_size_limit(),
@@ -1295,14 +1299,29 @@ class BotController:
 
         RecordingManager.set_recording_transcription_in_progress(recording_in_progress)
 
-    def upload_then_process_individual_audio_chunk(self, message):
-        audio_chunk_filename = f"{self.bot_in_db.object_id}-audio-chunk-{uuid.uuid4()}.bin"
-        message["audio_chunk_filename"] = audio_chunk_filename
+    def upload_audio_chunk_to_remote_storage(self, audio_chunk: AudioChunk, audio_data: bytes, utterance: Utterance):
+        from bots.tasks.process_utterance_task import process_utterance
+
+        if not self.audio_chunk_uploader:
+            logger.error(f"No audio chunk uploader found for bot {self.bot_in_db.object_id}")
+            return
+        if not audio_chunk.audio_blob_remote_file.name:
+            logger.error(f"No audio blob remote file name found for audio chunk {audio_chunk.object_id} for bot {self.bot_in_db.object_id}")
+            return
+        if not utterance:
+            self.audio_chunk_uploader.upload(
+                filename=audio_chunk.audio_blob_remote_file.name,
+                data=audio_data,
+                on_success=lambda: logger.info(f"Successfully uploaded audio chunk to remote storage for bot {self.bot_in_db.object_id}"),
+                on_error=lambda e: logger.error(f"Error uploading audio chunk to remote storage for bot {self.bot_in_db.object_id}: {e}"),
+            )
+            return
+
         self.audio_chunk_uploader.upload(
-            filename=audio_chunk_filename,
-            data=message["audio_data"],
-            on_success=lambda n: self.on_successfully_uploaded_audio_chunk(message),
-            on_error=lambda e: logger.error(f"Error uploading audio chunk for bot {self.bot_in_db.object_id}: {e}"),
+            filename=audio_chunk.audio_blob_remote_file.name,
+            data=audio_data,
+            on_success=lambda: process_utterance.delay(utterance.id),
+            on_error=lambda e: logger.error(f"Error uploading audio chunk to remote storage for bot {self.bot_in_db.object_id}: {e}"),
         )
 
     def process_individual_audio_chunk(self, message):
@@ -1327,30 +1346,20 @@ class BotController:
             logger.warning("Warning: No recording in progress found so cannot save individual audio utterance.")
             return
 
-        if message.get("audio_chunk_filename"):
-            audio_chunk = AudioChunk.objects.create(
-                recording=recording_in_progress,
-                audio_blob_remote_file=message["audio_chunk_filename"],
-                audio_format=AudioChunk.AudioFormat.PCM,
-                timestamp_ms=message["timestamp_ms"] - self.get_per_participant_audio_utterance_delay_ms(),
-                duration_ms=len(message["audio_data"]) / ((message["sample_rate"] / 1000) * 2),
-                sample_rate=message["sample_rate"],
-                source=AudioChunk.Sources.PER_PARTICIPANT_AUDIO,
-                participant=participant,
-            )
+        if settings.USE_REMOTE_STORAGE_FOR_AUDIO_CHUNKS:
+            audio_chunk_storage_attributes = {
+                "audio_blob_remote_file": self.generate_audio_blob_remote_filename(),
+            }
         else:
-            audio_chunk = AudioChunk.objects.create(
-                recording=recording_in_progress,
-                audio_blob=message["audio_data"],
-                audio_format=AudioChunk.AudioFormat.PCM,
-                timestamp_ms=message["timestamp_ms"] - self.get_per_participant_audio_utterance_delay_ms(),
-                duration_ms=len(message["audio_data"]) / ((message["sample_rate"] / 1000) * 2),
-                sample_rate=message["sample_rate"],
-                source=AudioChunk.Sources.PER_PARTICIPANT_AUDIO,
-                participant=participant,
-            )
+            audio_chunk_storage_attributes = {
+                "audio_blob": message["audio_data"],
+            }
+
+        audio_chunk = AudioChunk.objects.create(recording=recording_in_progress, audio_format=AudioChunk.AudioFormat.PCM, timestamp_ms=message["timestamp_ms"] - self.get_per_participant_audio_utterance_delay_ms(), duration_ms=len(message["audio_data"]) / ((message["sample_rate"] / 1000) * 2), sample_rate=message["sample_rate"], source=AudioChunk.Sources.PER_PARTICIPANT_AUDIO, participant=participant, **audio_chunk_storage_attributes)
 
         if not self.save_utterances_for_individual_audio_chunks():
+            if settings.USE_REMOTE_STORAGE_FOR_AUDIO_CHUNKS:
+                self.upload_audio_chunk_to_remote_storage(audio_chunk=audio_chunk, audio_data=message["audio_data"])
             return
 
         # Create new utterance record
@@ -1367,13 +1376,13 @@ class BotController:
         # Set the recording transcription in progress
         RecordingManager.set_recording_transcription_in_progress(recording_in_progress)
 
+        if settings.USE_REMOTE_STORAGE_FOR_AUDIO_CHUNKS:
+            self.upload_audio_chunk_to_remote_storage(audio_chunk=audio_chunk, utterance=utterance, audio_data=message["audio_data"])
+            return
+
         # Process the utterance immediately
         process_utterance.delay(utterance.id)
         return
-
-    def on_successfully_uploaded_audio_chunk(self, message):
-        logger.info(f"Successfully uploaded audio chunk for bot {self.bot_in_db.object_id}: {message.get('audio_chunk_filename')}")
-        GLib.idle_add(lambda: self.process_individual_audio_chunk(message))
 
     def on_new_chat_message(self, chat_message):
         GLib.idle_add(lambda: self.upsert_chat_message(chat_message))
