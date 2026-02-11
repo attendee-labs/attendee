@@ -333,6 +333,49 @@ class TestSplitTranscriptionByUtterance(AsyncTranscriptionTestCase):
         # 4.8 - 4.0 = 0.8
         self.assertAlmostEqual(second_utterance_words[0]["end"], 0.8, places=2)
 
+    def test_word_overlapping_multiple_windows_is_skipped(self):
+        """Verify that a word overlapping with both current and next window is skipped."""
+        chunks = self._create_audio_chunks(count=2, duration_ms=2000)
+
+        utterances = []
+        for chunk in chunks:
+            utterance = Utterance.objects.create(
+                recording=self.recording,
+                participant=self.participant,
+                audio_chunk=chunk,
+                timestamp_ms=chunk.timestamp_ms,
+                duration_ms=chunk.duration_ms,
+            )
+            utterances.append(utterance)
+
+        # With silence_seconds=3.0:
+        # Utterance 0: 0-2s
+        # Utterance 1: 5-7s (0+2+3=5)
+        # A word spanning from 1.0 to 6.0 overlaps both windows and should be skipped
+        transcription_result = {
+            "words": [
+                {"word": "normal", "start": 0.0, "end": 0.5},  # Only in first window
+                {"word": "spanning", "start": 1.0, "end": 6.0},  # Overlaps both, should be skipped
+                {"word": "test", "start": 5.5, "end": 6.5},  # Only in second window
+            ],
+        }
+
+        with self.assertLogs("bots.transcription_utils", level="WARNING") as log:
+            result = split_transcription_by_utterance(transcription_result, utterances, silence_seconds=3.0)
+
+        # Verify warning was logged
+        self.assertTrue(any("overlaps with subsequent window" in msg for msg in log.output))
+
+        # First utterance should only have "normal", not "spanning"
+        self.assertEqual(result[utterances[0].id]["transcript"], "normal")
+        self.assertEqual(len(result[utterances[0].id]["words"]), 1)
+        self.assertEqual(result[utterances[0].id]["words"][0]["word"], "normal")
+
+        # Second utterance should only have "test"
+        self.assertEqual(result[utterances[1].id]["transcript"], "test")
+        self.assertEqual(len(result[utterances[1].id]["words"]), 1)
+        self.assertEqual(result[utterances[1].id]["words"][0]["word"], "test")
+
 
 class TestProcessUtteranceGroup(AsyncTranscriptionTestCase):
     """Tests for the process_utterance_group_for_async_transcription task."""

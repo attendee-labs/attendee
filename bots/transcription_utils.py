@@ -203,30 +203,35 @@ def split_transcription_by_utterance(
         windows.append((u.id, start, end))
         t = end + silence_seconds
 
-    out = {utterance.id: {"transcript": "", "words": [], "language": language} for utterance in utterances}
+    output = {utterance.id: {"transcript": "", "words": [], "language": language} for utterance in utterances}
 
     # Assign each word to the first window it overlaps with.
-    w_idx = 0
-    for utt_id, start, end in windows:
-        utt_words = []
+    word_index = 0
+    for window_index, (utterance_id, start, end) in enumerate(windows):
+        utterance_words = []
+        next_start = windows[window_index + 1][1] if window_index + 1 < len(windows) else None
 
-        while w_idx < len(words):
-            w = words[w_idx]
+        while word_index < len(words):
+            w = words[word_index]
             # If word starts at or after window end, stop (no overlap with this window)
             if w["start"] >= end:
                 break
             # If word ends after window start, it overlaps
             if w["end"] > start:
-                w2 = dict(w)
-                w2["start"] = w2["start"] - start
-                w2["end"] = w2["end"] - start
-                utt_words.append(w2)
-            w_idx += 1
+                # Check that word doesn't also overlap with next window (unexpected)
+                if next_start is not None and w["end"] > next_start:
+                    logger.warning(f"Word overlaps with subsequent window, skipping: {w}")
+                else:
+                    w2 = dict(w)
+                    w2["start"] = w2["start"] - start
+                    w2["end"] = w2["end"] - start
+                    utterance_words.append(w2)
+            word_index += 1
 
-        out[utt_id]["words"] = utt_words
-        out[utt_id]["transcript"] = " ".join(w["word"] for w in utt_words)
+        output[utterance_id]["words"] = utterance_words
+        output[utterance_id]["transcript"] = " ".join(w["word"] for w in utterance_words)
 
-    return out
+    return output
 
 
 def get_transcription_via_assemblyai_for_utterance_group(utterances):
