@@ -2034,6 +2034,16 @@ class RecordingStorage(Storage):
         return storages["recordings"]
 
 
+class AudioChunkStorage(Storage):
+    """
+    Returns the configured 'audio_chunks' storage from Django's registry.
+    """
+
+    def __new__(cls, *args, **kwargs):
+        # return the actual storage instance
+        return storages["audio_chunks"]
+
+
 class Recording(models.Model):
     bot = models.ForeignKey(Bot, on_delete=models.CASCADE, related_name="recordings")
 
@@ -2378,6 +2388,7 @@ class AudioChunk(models.Model):
 
     recording = models.ForeignKey(Recording, on_delete=models.CASCADE, related_name="audio_chunks")
     audio_blob = models.BinaryField()
+    audio_blob_remote_file = models.FileField(storage=AudioChunkStorage(), null=True, blank=True)
     audio_format = models.IntegerField(choices=AudioFormat.choices, default=AudioFormat.PCM)
     timestamp_ms = models.BigIntegerField()
     duration_ms = models.IntegerField()
@@ -2387,6 +2398,21 @@ class AudioChunk(models.Model):
 
     source = models.IntegerField(choices=Sources.choices, default=Sources.PER_PARTICIPANT_AUDIO)
     participant = models.ForeignKey(Participant, on_delete=models.PROTECT, related_name="audio_chunks")
+
+    def get_audio_data(self) -> bytes:
+        if self.is_stored_remotely:
+            return self.audio_blob_remote_file.read()
+        return self.audio_blob
+
+    def clear_audio_data(self):
+        if self.is_stored_remotely:
+            self.audio_blob_remote_file.delete()
+        self.audio_blob = b""
+        self.save()
+
+    @property
+    def is_stored_remotely(self) -> bool:
+        return bool(self.audio_blob_remote_file.name)
 
 
 class Utterance(models.Model):
@@ -2433,7 +2459,7 @@ class Utterance(models.Model):
     # on the utterance model and not using the separate audio chunk model.
     def get_audio_blob(self):
         if self.audio_chunk:
-            return self.audio_chunk.audio_blob
+            return self.audio_chunk.get_audio_data()
         return self.audio_blob
 
     def get_sample_rate(self):
