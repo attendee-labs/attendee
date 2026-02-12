@@ -990,6 +990,9 @@ class Bot(models.Model):
     def __str__(self):
         return f"{self.object_id} - {self.project.name} in {self.meeting_url}"
 
+    def ephemeral_container_name(self):
+        return f"bot-{self.id}-{self.object_id}".lower().replace("_", "-")
+
     def k8s_pod_name(self):
         return f"bot-pod-{self.id}-{self.object_id}".lower().replace("_", "-")
 
@@ -2298,6 +2301,10 @@ class AsyncTranscription(models.Model):
         from .utils import transcription_provider_from_bot_creation_data
 
         return transcription_provider_from_bot_creation_data({**self.recording.bot.settings, **self.settings})
+
+    @property
+    def use_grouped_utterances(self):
+        return self.transcription_provider == TranscriptionProviders.ASSEMBLY_AI
 
 
 class AsyncTranscriptionManager:

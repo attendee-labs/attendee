@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 def launch_bot(bot):
     # If this instance is running in Kubernetes, use the Kubernetes pod creator
     # which spins up a new pod for the bot
+    logger.info(f"Launching bot {bot.object_id} ({bot.id}) with method {os.getenv('LAUNCH_BOT_METHOD', 'celery')}")
     if os.getenv("LAUNCH_BOT_METHOD") == "kubernetes":
         from .bot_pod_creator import BotPodCreator
 
@@ -36,6 +37,13 @@ def launch_bot(bot):
                 )
             except Exception as e:
                 logger.error(f"Failed to create fatal error bot not launched event for bot {bot.object_id} ({bot.id}): {str(e)}")
+    elif os.getenv("LAUNCH_BOT_METHOD") == "docker-compose-multi-host":
+        # Launch bot via dedicated Celery app (bot_launcher) which uses ephemeral Docker containers
+        from .tasks.run_bot_in_ephemeral_container_task import run_bot_in_ephemeral_container
+
+        # Assign task to specific queue so that it gets picked up by a worker running in a bot launcher VM.
+        run_bot_in_ephemeral_container.apply_async(args=[bot.id], queue="bot_launcher_vm")
+        logger.info(f"Bot {bot.object_id} ({bot.id}) launched via run_bot_in_ephemeral_container task in queue bot_launcher_vm")
     else:
         # Default to launching bot via celery
         from .tasks.run_bot_task import run_bot
