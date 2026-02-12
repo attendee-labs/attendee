@@ -2,11 +2,11 @@
 
 Zoom [Real-Time Media Streams (RTMS)](https://developers.zoom.us/docs/rtms/) is a Zoom-native data pipeline that gives your app access to live audio, video, transcript, and screenshare data from Zoom meetings. Unlike meeting bots which join as visible participants, RTMS streams meeting data directly to your application without adding anyone to the call.
 
-Attendee provides support for RTMS through a new API entity called **App Sessions**. When a user activates an RTMS app during a meeting, Zoom sends a webhook to your application, and you forward that payload to Attendee to create an app session. Attendee then handles connecting to the RTMS stream, processing the media, and delivering transcripts and recordings through the same webhook and API patterns you're already familiar with from Attendee's bot API.
+Attendee provides support for RTMS through a new API entity called **App Sessions**. When a user activates an RTMS app during a meeting, Zoom sends a webhook to your application, and you forward that payload to Attendee to create an app session. Attendee then handles connecting to the RTMS stream, processing the media, and delivering transcripts and recordings.
 
 For reference implementations, see the example programs for building a [notetaker](https://github.com/attendee-labs/rtms-notetaker-example) and [sales coach](https://github.com/attendee-labs/rtms-sales-coach-example) with Attendee and RTMS. For quick demo of an RTMS app built with Attendee, see the video [here](https://www.youtube.com/watch?v=56DzvzJHSv4).
 
-## RTMS vs Bots (Zoom Meeting SDK)
+## RTMS vs Bots
 
 There are two key differences between RTMS and bots:
 
