@@ -96,7 +96,6 @@ class GstreamerPipeline:
             "appsrc name=audio_source_1 do-timestamp=false stream-type=0 format=time ! "
             "queue name=q5 leaky=downstream max-size-buffers=1000000 max-size-bytes=100000000 max-size-time=0 ! "
             "audioconvert ! "
-            "audiorate ! "
             "queue name=q6 leaky=downstream max-size-buffers=1000000 max-size-bytes=100000000 max-size-time=0 ! "
         )
 
@@ -255,14 +254,11 @@ class GstreamerPipeline:
 
         try:
             current_time_ns = timestamp if timestamp else time.time_ns()
-            buffer_bytes = data
-            buffer = Gst.Buffer.new_wrapped(buffer_bytes)
-
-            # Initialize start time if not set
             if self.start_time_ns is None:
                 self.start_time_ns = current_time_ns
 
-            # Calculate timestamp relative to same start time as video
+            buffer_bytes = data
+            buffer = Gst.Buffer.new_wrapped(buffer_bytes)
             buffer.pts = current_time_ns - self.start_time_ns
 
             ret = audio_appsrc.emit("push-buffer", buffer)
