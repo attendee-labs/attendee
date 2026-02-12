@@ -35,7 +35,13 @@ def get_google_meet_set_cookie_url(session_id):
 def create_google_meet_sign_in_session(bot: Bot, google_meet_bot_login: GoogleMeetBotLogin):
     session_id = str(uuid.uuid4())
     redis_key = f"google_meet_sign_in_session:{session_id}"
-    redis_url = os.getenv("REDIS_URL") + ("?ssl_cert_reqs=none" if os.getenv("DISABLE_REDIS_SSL") else "")
+    redis_params = {}
+    if os.getenv("DISABLE_REDIS_SSL"): # backward compatibility
+        redis_params["ssl_cert_reqs"] = "none"
+    elif os.getenv("REDIS_SSL_REQUIREMENTS") is not None and os.getenv("REDIS_SSL_REQUIREMENTS") != "":
+        redis_params["ssl_cert_reqs"] = os.getenv("REDIS_SSL_REQUIREMENTS")
+    redis_params_query_string = "&".join([f"{key}={value}" for key, value in redis_params.items()])
+    redis_url = os.getenv("REDIS_URL") + ("?" + redis_params_query_string if redis_params_query_string else "")
     redis_client = redis.from_url(redis_url)
     # Save for 30 minutes
     session_data = {
@@ -48,7 +54,13 @@ def create_google_meet_sign_in_session(bot: Bot, google_meet_bot_login: GoogleMe
 
 def get_bot_login_for_google_meet_sign_in_session(session_id):
     redis_key = f"google_meet_sign_in_session:{session_id}"
-    redis_url = os.getenv("REDIS_URL") + ("?ssl_cert_reqs=none" if os.getenv("DISABLE_REDIS_SSL") else "")
+    redis_params = {}
+    if os.getenv("DISABLE_REDIS_SSL"): # backward compatibility
+        redis_params["ssl_cert_reqs"] = "none"
+    elif os.getenv("REDIS_SSL_REQUIREMENTS") is not None and os.getenv("REDIS_SSL_REQUIREMENTS") != "":
+        redis_params["ssl_cert_reqs"] = os.getenv("REDIS_SSL_REQUIREMENTS")
+    redis_params_query_string = "&".join([f"{key}={value}" for key, value in redis_params.items()])
+    redis_url = os.getenv("REDIS_URL") + ("?" + redis_params_query_string if redis_params_query_string else "")
     redis_client = redis.from_url(redis_url)
     session_data_raw = redis_client.get(redis_key)
     if not session_data_raw:
@@ -58,7 +70,7 @@ def get_bot_login_for_google_meet_sign_in_session(session_id):
     try:
         session_data = json.loads(session_data_raw)
     except Exception as e:
-        logger.warning(f"Error loading session data for google_meet_sign_in_session: {session_id}. Data: {session_data}. Error: {e}")
+        logger.warning(f"Error loading session data for google_meet_sign_in_session: {session_id}. Data: {session_data_raw}. Error: {e}")
         return None
 
     bot_object_id = session_data.get("bot_object_id")
