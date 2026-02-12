@@ -109,12 +109,12 @@ class GstreamerPipeline:
         else:
             pipeline_str = (
                 "appsrc name=video_source do-timestamp=false stream-type=0 format=time ! "
-                "queue name=q1 max-size-buffers=1000 max-size-bytes=100000000 max-size-time=0 ! "  # q1 can contain 100mb of video before it drops
+                "queue name=q1 leaky=downstream max-size-buffers=1000 max-size-bytes=100000000 max-size-time=0 ! "
                 "videoconvert ! "
                 "videorate ! "
-                "queue name=q2 max-size-buffers=5000 max-size-bytes=500000000 max-size-time=0 ! "  # q2 can contain 100mb of video before it drops
+                "queue name=q2 leaky=downstream max-size-buffers=5000 max-size-bytes=500000000 max-size-time=0 ! "
                 "x264enc tune=zerolatency speed-preset=ultrafast ! "
-                "queue name=q3 max-size-buffers=1000 max-size-bytes=100000000 max-size-time=0 ! "
+                "queue name=q3 leaky=downstream max-size-buffers=1000 max-size-bytes=100000000 max-size-time=0 ! "
                 f"{muxer_string} ! queue name=q4 ! {sink_string} "
                 f"{audio_source_string} "
                 "voaacenc bitrate=128000 ! "
@@ -135,7 +135,7 @@ class GstreamerPipeline:
             self.appsrc.set_property("is-live", True)
             self.appsrc.set_property("do-timestamp", False)
             self.appsrc.set_property("stream-type", 0)  # GST_APP_STREAM_TYPE_STREAM
-            self.appsrc.set_property("block", True)
+            self.appsrc.set_property("block", False)
         else:
             self.appsrc = None
 
@@ -149,7 +149,7 @@ class GstreamerPipeline:
             audio_appsrc.set_property("is-live", True)
             audio_appsrc.set_property("do-timestamp", False)
             audio_appsrc.set_property("stream-type", 0)  # GST_APP_STREAM_TYPE_STREAM
-            audio_appsrc.set_property("block", True)
+            audio_appsrc.set_property("block", False)
             self.audio_appsrcs.append(audio_appsrc)
 
         # Set up bus
