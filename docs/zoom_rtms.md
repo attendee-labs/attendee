@@ -1,6 +1,6 @@
 # Zoom RTMS
 
-Zoom [Real-Time Media Streams (RTMS)](https://developers.zoom.us/docs/rtms/) is a Zoom-native data pipeline that gives your app access to live audio, video, transcript, and screenshare data from Zoom meetings. Unlike meeting bots which join as visible participants, RTMS streams meeting data directly to your application without adding anyone to the call.
+Zoom [Realtime Media Streams (RTMS)](https://developers.zoom.us/docs/rtms/) is a Zoom-native data pipeline that gives your app access to live audio, video, transcript, and screenshare data from Zoom meetings. Unlike meeting bots which join as visible participants, RTMS streams meeting data directly to your application without adding anyone to the call.
 
 Attendee provides support for RTMS through a new API entity called **App Sessions**. When a user activates an RTMS app during a meeting, Zoom sends a webhook to your application, and you forward that payload to Attendee to create an app session. Attendee then handles connecting to the RTMS stream, processing the media, and delivering transcripts and recordings.
 
@@ -96,9 +96,9 @@ Returns participant join/leave events for the app session.
 
 ## FAQ
 
-### Does RTMS require the onbehalf token?
+### Does RTMS require the On Behalf Of (OBF) token?
 
-No. RTMS is a separate integration path from the Meeting SDK and is not affected by Zoom's [February 2026 onbehalf token deadline](https://developers.zoom.us/blog/transition-to-obf-token-meetingsdk-apps/). If you switch your Zoom integration from bots to RTMS, you do not need to implement the onbehalf token or any of the other Zoom tokens used in the Meeting SDK.
+No. RTMS is a separate integration path from the Meeting SDK and is not affected by Zoom's [March 2, 2026 OBF token deadline](https://developers.zoom.us/blog/transition-to-obf-token-meetingsdk-apps/). If you switch your Zoom integration from bots to RTMS, you do not need to implement the On Behalf Of (OBF) token token or any of the other Zoom tokens used in the Meeting SDK.
 
 ### What happens if the host doesn't have RTMS enabled?
 
