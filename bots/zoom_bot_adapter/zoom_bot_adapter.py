@@ -1,3 +1,5 @@
+import collections
+import threading
 import time
 from datetime import datetime, timedelta
 
@@ -168,6 +170,14 @@ class ZoomBotAdapter(BotAdapter):
         self.cannot_send_video_error_ticker = 0
         self.cannot_send_audio_error_ticker = 0
         self.send_raw_audio_unmute_ticker = 0
+
+        # Decoupled mixed audio buffer: SDK callback appends here, drain thread pushes to GStreamer.
+        # This prevents GIL contention between the SDK's audio and video callback threads
+        # from dropping audio frames (the root cause of micro-gaps in recordings).
+        self._mixed_audio_queue = collections.deque()
+        self._mixed_audio_drain_event = threading.Event()
+        self._mixed_audio_drain_running = False
+        self._mixed_audio_drain_thread = None
 
         # The Zoom Linux SDK has a bug where if the meeting password is incorrect, it will not return an error
         # it will just get stuck in the connecting state. So we assume if we have been in the connecting state for
@@ -353,6 +363,8 @@ class ZoomBotAdapter(BotAdapter):
         self.set_video_input_manager_based_on_state()
 
     def cleanup(self):
+        self._stop_mixed_audio_drain()
+
         if self.audio_source:
             performance_data = self.audio_source.getPerformanceData()
             logger.info(f"totalProcessingTimeMicroseconds = {performance_data.totalProcessingTimeMicroseconds}")
@@ -830,9 +842,54 @@ class ZoomBotAdapter(BotAdapter):
         self.add_audio_chunk_callback(node_id, current_time, data.GetBuffer())
 
     def add_mixed_audio_chunk_convert_to_bytes(self, data):
+        """Called by the Zoom SDK on its audio thread every ~10ms.
+        Must return as fast as possible to avoid the SDK dropping the next frame.
+        We buffer the data and let a separate drain thread push it to GStreamer."""
         if self.recording_is_paused:
             return
-        self.add_mixed_audio_chunk_callback(chunk=data.GetBuffer())
+        chunk = data.GetBuffer()
+        timestamp = time.time_ns()
+        self._mixed_audio_queue.append((chunk, timestamp))
+        self._mixed_audio_drain_event.set()
+
+    def _drain_mixed_audio_loop(self):
+        """Consumer thread that pushes buffered audio chunks to GStreamer/WebSocket.
+        This decouples the SDK callback thread from GStreamer push-buffer and the GIL
+        contention caused by the video callback thread doing scale_i420()."""
+        while self._mixed_audio_drain_running:
+            self._mixed_audio_drain_event.wait(timeout=0.5)
+            self._mixed_audio_drain_event.clear()
+            while self._mixed_audio_queue:
+                try:
+                    chunk, timestamp = self._mixed_audio_queue.popleft()
+                    self.add_mixed_audio_chunk_callback(chunk=chunk, timestamp=timestamp)
+                except IndexError:
+                    break
+
+    def _start_mixed_audio_drain(self):
+        if self._mixed_audio_drain_thread is not None:
+            return
+        self._mixed_audio_drain_running = True
+        self._mixed_audio_drain_thread = threading.Thread(
+            target=self._drain_mixed_audio_loop, daemon=True, name="mixed-audio-drain"
+        )
+        self._mixed_audio_drain_thread.start()
+        logger.info("Started mixed audio drain thread")
+
+    def _stop_mixed_audio_drain(self):
+        self._mixed_audio_drain_running = False
+        self._mixed_audio_drain_event.set()  # Wake up thread so it can exit
+        if self._mixed_audio_drain_thread:
+            self._mixed_audio_drain_thread.join(timeout=2)
+            self._mixed_audio_drain_thread = None
+        # Drain any remaining audio
+        while self._mixed_audio_queue:
+            try:
+                chunk, timestamp = self._mixed_audio_queue.popleft()
+                self.add_mixed_audio_chunk_callback(chunk=chunk, timestamp=timestamp)
+            except IndexError:
+                break
+        logger.info("Stopped mixed audio drain thread")
 
     def handle_recording_permission_granted(self):
         if not self.recording_permission_granted:
@@ -853,6 +910,7 @@ class ZoomBotAdapter(BotAdapter):
 
     def start_raw_recording(self):
         logger.info("Starting raw recording")
+        self._start_mixed_audio_drain()
         start_raw_recording_result = self.recording_ctrl.StartRawRecording()
         if start_raw_recording_result != zoom.SDKERR_SUCCESS:
             logger.warning(f"Error with start_raw_recording_result = {start_raw_recording_result}")

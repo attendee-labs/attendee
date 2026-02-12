@@ -339,9 +339,9 @@ class BotController:
             video_frame_size=self.bot_in_db.recording_dimensions(),
         )
 
-    def add_mixed_audio_chunk_callback(self, chunk: bytes):
+    def add_mixed_audio_chunk_callback(self, chunk: bytes, timestamp=None):
         if self.gstreamer_pipeline:
-            self.gstreamer_pipeline.on_mixed_audio_raw_data_received_callback(chunk)
+            self.gstreamer_pipeline.on_mixed_audio_raw_data_received_callback(chunk, timestamp=timestamp)
 
         if not self.websocket_audio_client:
             return

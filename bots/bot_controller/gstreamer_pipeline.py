@@ -135,7 +135,7 @@ class GstreamerPipeline:
             self.appsrc.set_property("is-live", True)
             self.appsrc.set_property("do-timestamp", False)
             self.appsrc.set_property("stream-type", 0)  # GST_APP_STREAM_TYPE_STREAM
-            self.appsrc.set_property("block", True)  # This helps with synchronization
+            self.appsrc.set_property("block", True)
         else:
             self.appsrc = None
 
