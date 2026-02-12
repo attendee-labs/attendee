@@ -1,4 +1,4 @@
-# Zoom RTMS
+# Attendee-managed Zoom RTMS
 
 Zoom [Realtime Media Streams (RTMS)](https://developers.zoom.us/docs/rtms/) is a Zoom-native data pipeline that gives your app access to live audio, video, transcript, and screenshare data from Zoom meetings. Unlike meeting bots which join as visible participants, RTMS streams meeting data directly to your application without adding anyone to the call.
 
@@ -16,7 +16,7 @@ There are two key differences between RTMS and bots:
 
 Other advantages of RTMS:
 
-- **No onbehalf token required.** RTMS is not affected by Zoom's [February 2026 deadline](https://developers.zoom.us/blog/transition-to-obf-token-meetingsdk-apps/) requiring onbehalf tokens for Meeting SDK bots joining external meetings. You also do not need to implement join tokens or any OAuth flow logic in your app.
+- **No onbehalf token required.** RTMS is not affected by Zoom's [March 2, 2026 deadline](https://developers.zoom.us/blog/transition-to-obf-token-meetingsdk-apps/) requiring onbehalf tokens for Meeting SDK bots joining external meetings. You also do not need to implement join tokens or any OAuth flow logic in your app.
 - **Less CPU usage.** RTMS sends encoded video frames, which is less CPU-intensive to process than the raw video frames sent when using the Zoom Meeting SDK.
 
 Limitations of RTMS:
@@ -98,7 +98,7 @@ Returns participant join/leave events for the app session.
 
 ### Does RTMS require the On Behalf Of (OBF) token?
 
-No. RTMS is a separate integration path from the Meeting SDK and is not affected by Zoom's [March 2, 2026 OBF token deadline](https://developers.zoom.us/blog/transition-to-obf-token-meetingsdk-apps/). If you switch your Zoom integration from bots to RTMS, you do not need to implement the On Behalf Of (OBF) token token or any of the other Zoom tokens used in the Meeting SDK.
+No. RTMS is a separate integration path from the Meeting SDK and is not affected by Zoom's [March 2, 2026 OBF token deadline](https://developers.zoom.us/blog/transition-to-obf-token-meetingsdk-apps/). If you switch your Zoom integration from bots to RTMS, you do not need to implement the On Behalf Of (OBF) token or any of the other Zoom tokens used in the Meeting SDK.
 
 ### What happens if the host doesn't have RTMS enabled?
 
