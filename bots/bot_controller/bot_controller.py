@@ -57,7 +57,6 @@ from bots.models import (
     Utterance,
     WebhookTriggerTypes,
 )
-from bots.tasks.process_utterance_task import process_utterance
 from bots.webhook_payloads import chat_message_webhook_payload, participant_event_webhook_payload, utterance_webhook_payload
 from bots.webhook_utils import trigger_webhook
 from bots.websocket_payloads import mixed_audio_websocket_payload
@@ -1360,6 +1359,8 @@ class BotController:
         self.create_utterance_from_audio_chunk(audio_chunk=audio_chunk, participant=participant, recording_in_progress=recording_in_progress)
 
     def create_utterance_from_audio_chunk(self, audio_chunk: AudioChunk, participant: Participant, recording_in_progress: Recording):
+        from bots.tasks.process_utterance_task import process_utterance
+
         if not self.save_utterances_for_individual_audio_chunks():
             return
 

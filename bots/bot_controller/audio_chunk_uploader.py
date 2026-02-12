@@ -5,7 +5,6 @@ from typing import Callable, Dict, Optional
 
 from django.core.files.base import ContentFile
 from django.core.files.storage import storages
-from django.db import close_old_connections
 
 
 class AudioChunkUploader:
@@ -96,13 +95,8 @@ class AudioChunkUploader:
                         self.log.exception("on_error callback failed for audio_chunk_id=%s", audio_chunk_id)
 
     def _upload_one(self, filename: str, data: bytes) -> str:
-        # Django DB connections are thread-local; be safe if anything touches ORM indirectly
-        close_old_connections()
-        try:
-            # storage.save may alter the name (avoid collisions), so use return value
-            return self.storage.save(filename, ContentFile(data))
-        finally:
-            close_old_connections()
+        # storage.save may alter the name (avoid collisions), so use return value
+        return self.storage.save(filename, ContentFile(data))
 
     def shutdown(self, wait: bool = True, cancel_futures: bool = False):
         self._pool.shutdown(wait=wait, cancel_futures=cancel_futures)
