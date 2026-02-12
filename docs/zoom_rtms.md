@@ -10,13 +10,13 @@ For reference implementations, see the example programs for building a [notetake
 
 There are two key differences between RTMS and bots:
 
-**No bot participant in the meeting.** RTMS does not add a participant to the call. The meeting data is streamed to your app through Zoom's infrastructure, so there is no "bot has joined" notification and no extra attendee in the participant list.
+**No bot participant in the meeting.** RTMS does not add a participant to the call. The meeting data is streamed to your app through Zoom's infrastructure, so there is no "bot has joined" notification and no extra attendee in the participant list. See [here](https://youtu.be/YKeVFXSFRGg?si=Vgkl50hOnz4VlnQi&t=149) for a video showing how RTMS apps appear within the Zoom client:
 
 **The user controls when your app connects to the meeting.** With a bot, you are in control of when the bot attempts to join the meeting — you make an API call and Attendee sends the bot in. With RTMS, the user is in control. When the user opens your RTMS app, Zoom sends your app a webhook that it must respond to. The user can also pause the RTMS app's recording at any time.
 
 Other advantages of RTMS:
 
-- **No onbehalf token required.** RTMS is not affected by Zoom's [March 2, 2026 deadline](https://developers.zoom.us/blog/transition-to-obf-token-meetingsdk-apps/) requiring onbehalf tokens for Meeting SDK bots joining external meetings. You also do not need to implement join tokens or any OAuth flow logic in your app.
+- **No OBF token required.** RTMS is not affected by Zoom's [March 2, 2026 deadline](https://developers.zoom.us/blog/transition-to-obf-token-meetingsdk-apps/) requiring OBF tokens for Meeting SDK bots joining external meetings. You also do not need to implement join tokens or any OAuth flow logic in your app.
 - **Less CPU usage.** RTMS sends encoded video frames, which is less CPU-intensive to process than the raw video frames sent when using the Zoom Meeting SDK.
 
 Limitations of RTMS:
