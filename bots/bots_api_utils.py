@@ -19,6 +19,7 @@ from .models import (
     BotEventTypes,
     BotMediaRequest,
     BotMediaRequestMediaTypes,
+    BotMediaRequestStates,
     BotStates,
     CalendarEvent,
     Credentials,
@@ -392,21 +393,33 @@ def patch_bot(bot: Bot, data: dict) -> tuple[Bot | None, dict | None]:
     validated_data = serializer.validated_data
 
     try:
-        # Update the bot
-        previous_join_at = bot.join_at
-        bot.join_at = validated_data.get("join_at", bot.join_at)
-        previous_meeting_url = bot.meeting_url
-        bot.meeting_url = validated_data.get("meeting_url", bot.meeting_url)
-        bot.metadata = validated_data.get("metadata", bot.metadata)
+        with transaction.atomic():
+            # Update the bot
+            previous_join_at = bot.join_at
+            bot.join_at = validated_data.get("join_at", bot.join_at)
+            previous_meeting_url = bot.meeting_url
+            bot.meeting_url = validated_data.get("meeting_url", bot.meeting_url)
+            previous_bot_name = bot.name
+            bot.name = validated_data.get("bot_name", bot.name)
+            bot.metadata = validated_data.get("metadata", bot.metadata)
 
-        # If the join_at or meeting_url is being updated, the state must be scheduled. If it isn't error out.
-        update_only_legal_for_scheduled_bots = bot.join_at != previous_join_at or bot.meeting_url != previous_meeting_url
-        if update_only_legal_for_scheduled_bots and bot.state != BotStates.SCHEDULED:
-            return None, {"error": f"Bot is in state {BotStates.state_to_api_code(bot.state)} but the join_at or meeting_url can only be updated when in the scheduled state"}
+            # join_at, meeting_url, bot_name and bot_image can only be updated when the bot is scheduled state. For updating image after the bot is in a meeting, use the output_image endpoint.
+            update_only_legal_for_scheduled_bots = bot.join_at != previous_join_at or bot.meeting_url != previous_meeting_url or bot.name != previous_bot_name or validated_data.get("bot_image")
+            if bot.state != BotStates.SCHEDULED:
+                if update_only_legal_for_scheduled_bots:
+                    return None, {"error": f"Bot is in state {BotStates.state_to_api_code(bot.state)} but join_at, meeting_url, bot_name and bot_image can only be updated when in the scheduled state"}
 
-        bot.save()
+            bot.save()
 
-        return bot, None
+            if validated_data.get("bot_image"):
+                # See if the bot had an existing image request
+                existing_bot_image_request = bot.media_requests.filter(media_type=BotMediaRequestMediaTypes.IMAGE, state=BotMediaRequestStates.ENQUEUED).first()
+                create_bot_media_request_for_image(bot, validated_data["bot_image"])
+                # If we reached here, we successfully created a new image request for the bot. If there was an existing one, we should delete it.
+                if existing_bot_image_request:
+                    existing_bot_image_request.delete()
+
+            return bot, None
 
     except ValidationError as e:
         logger.error(f"ValidationError patching bot: {e}")
