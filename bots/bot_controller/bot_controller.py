@@ -862,7 +862,9 @@ class BotController:
 
         self.audio_chunk_uploader = None
         if settings.USE_REMOTE_STORAGE_FOR_AUDIO_CHUNKS:
-            self.audio_chunk_uploader = AudioChunkUploader()
+            self.audio_chunk_uploader = AudioChunkUploader(
+                on_success=self.on_audio_chunk_upload_success,
+            )
 
         # Create GLib main loop
         self.main_loop = GLib.MainLoop()
@@ -1213,6 +1215,10 @@ class BotController:
             # Process audio chunks
             self.per_participant_non_streaming_audio_input_manager.process_chunks()
 
+            # Process completed audio chunk uploads
+            if self.audio_chunk_uploader:
+                self.audio_chunk_uploader.process_uploads()
+
             # Monitor transcription
             self.per_participant_streaming_audio_input_manager.monitor_transcription()
 
@@ -1300,29 +1306,6 @@ class BotController:
 
         RecordingManager.set_recording_transcription_in_progress(recording_in_progress)
 
-    def upload_audio_chunk_to_remote_storage(self, audio_chunk: AudioChunk, audio_data: bytes, utterance: Utterance):
-        if not self.audio_chunk_uploader:
-            logger.error(f"No audio chunk uploader found for bot {self.bot_in_db.object_id}")
-            return
-        if not audio_chunk.audio_blob_remote_file.name:
-            logger.error(f"No audio blob remote file name found for audio chunk {audio_chunk.object_id} for bot {self.bot_in_db.object_id}")
-            return
-        if not utterance:
-            self.audio_chunk_uploader.upload(
-                filename=audio_chunk.audio_blob_remote_file.name,
-                data=audio_data,
-                on_success=lambda: logger.info(f"Successfully uploaded audio chunk to remote storage for bot {self.bot_in_db.object_id}"),
-                on_error=lambda e: logger.error(f"Error uploading audio chunk to remote storage for bot {self.bot_in_db.object_id}: {e}"),
-            )
-            return
-
-        self.audio_chunk_uploader.upload(
-            filename=audio_chunk.audio_blob_remote_file.name,
-            data=audio_data,
-            on_success=lambda: process_utterance.delay(utterance.id),
-            on_error=lambda e: logger.error(f"Error uploading audio chunk to remote storage for bot {self.bot_in_db.object_id}: {e}"),
-        )
-
     def process_individual_audio_chunk(self, message):
         logger.info("Received message that new individual audio chunk was detected")
 
@@ -1363,20 +1346,20 @@ class BotController:
             **audio_chunk_storage_attributes,
         )
 
-        # If audio chunks are being stored remotely, we need to upload them async, then take the follow up actions
+        # If audio chunks are being stored remotely, we need to upload them async. The utterance
+        # will be created later when process_uploads is called from the main loop.
         if settings.USE_REMOTE_STORAGE_FOR_AUDIO_CHUNKS:
             self.audio_chunk_uploader.upload(
+                audio_chunk_id=audio_chunk.id,
                 filename=audio_chunk.audio_blob_remote_file.name,
                 data=message["audio_data"],
-                on_success=lambda n: GLib.idle_add(lambda: self.take_action_after_saving_audio_chunk(audio_chunk=audio_chunk, participant=participant, recording_in_progress=recording_in_progress)),
-                on_error=lambda e: logger.error(f"Error uploading audio chunk to remote storage for bot {self.bot_in_db.object_id}: {e}"),
             )
             return
 
         # If audio chunks are being stored in the DB, we can take the follow up actions immediately
-        self.take_action_after_saving_audio_chunk(audio_chunk=audio_chunk, participant=participant, recording_in_progress=recording_in_progress)
+        self.create_utterance_from_audio_chunk(audio_chunk=audio_chunk, participant=participant, recording_in_progress=recording_in_progress)
 
-    def take_action_after_saving_audio_chunk(self, audio_chunk: AudioChunk, participant: Participant, recording_in_progress: Recording):
+    def create_utterance_from_audio_chunk(self, audio_chunk: AudioChunk, participant: Participant, recording_in_progress: Recording):
         if not self.save_utterances_for_individual_audio_chunks():
             return
 
@@ -1397,6 +1380,16 @@ class BotController:
         # Process the utterance immediately
         process_utterance.delay(utterance.id)
         return
+
+    def on_audio_chunk_upload_success(self, audio_chunk_id: int, stored_name: str):
+        """
+        Callback for when an audio chunk upload completes successfully.
+        Called from the main thread via process_uploads.
+        """
+        audio_chunk = AudioChunk.objects.get(id=audio_chunk_id)
+        participant = audio_chunk.participant
+        recording = audio_chunk.recording
+        self.create_utterance_from_audio_chunk(audio_chunk, participant, recording)
 
     def on_new_chat_message(self, chat_message):
         GLib.idle_add(lambda: self.upsert_chat_message(chat_message))
@@ -1515,6 +1508,9 @@ class BotController:
         if self.closed_caption_manager:
             logger.info("Flushing captions...")
             self.closed_caption_manager.flush_captions()
+        if self.audio_chunk_uploader:
+            logger.info("Flushing audio chunk uploads...")
+            self.audio_chunk_uploader.wait_for_uploads()
 
     def save_debug_recording(self):
         # Only save if the file exists
