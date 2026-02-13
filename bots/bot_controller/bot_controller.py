@@ -5,7 +5,6 @@ import signal
 import threading
 import time
 import traceback
-import uuid
 from base64 import b64decode
 from datetime import timedelta
 
@@ -1395,14 +1394,47 @@ class BotController:
         recording = audio_chunk.recording
         self.create_utterance_from_audio_chunk(audio_chunk, participant, recording)
 
-    def on_audio_chunk_upload_error(self, audio_chunk_id: int, exception: Exception):
+    def on_audio_chunk_upload_error(self, audio_chunk_id: int, exception: Exception, data: bytes):
         """
         Callback for when an audio chunk upload fails.
         Called from the main thread via process_uploads.
         """
+
+        if settings.FALLBACK_TO_DB_STORAGE_FOR_AUDIO_CHUNKS_IF_REMOTE_STORAGE_FAILS:
+            self.on_audio_chunk_upload_error_with_fallback_to_db(audio_chunk_id, exception, data)
+            return
+
         audio_chunk = AudioChunk.objects.get(id=audio_chunk_id)
-        audio_chunk.blob_upload_failure_data = {"error": str(exception), "exception_type": e.__class__.__name__}
+        audio_chunk.blob_upload_failure_data = {
+            "error": str(exception),
+            "exception_type": exception.__class__.__name__,
+        }
         audio_chunk.save()
+
+    def on_audio_chunk_upload_error_with_fallback_to_db(self, audio_chunk_id: int, exception: Exception, data: bytes):
+        """
+        Callback for when an audio chunk upload fails and we want to fallback to DB storage.
+        Saves the failure data, stores the audio in the database, and proceeds as normal.
+        """
+        logger.warning(f"Audio chunk {audio_chunk_id} upload failed, falling back to DB storage: {exception}")
+
+        audio_chunk = AudioChunk.objects.get(id=audio_chunk_id)
+
+        # Save the failure data
+        audio_chunk.blob_upload_failure_data = {
+            "error": str(exception),
+            "exception_type": exception.__class__.__name__,
+        }
+
+        # Store the audio data in the database
+        audio_chunk.audio_blob = data
+        audio_chunk.is_blob_stored_remotely = False
+        audio_chunk.save()
+
+        # Proceed as if the upload succeeded - create the utterance
+        participant = audio_chunk.participant
+        recording = audio_chunk.recording
+        self.create_utterance_from_audio_chunk(audio_chunk, participant, recording)
 
     def on_new_chat_message(self, chat_message):
         GLib.idle_add(lambda: self.upsert_chat_message(chat_message))

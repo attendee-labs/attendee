@@ -18,14 +18,14 @@ class AudioChunkUploader:
     def __init__(
         self,
         on_success: Callable[[int, str], None],
-        on_error: Optional[Callable[[int, Exception], None]] = None,
+        on_error: Optional[Callable[[int, Exception, bytes], None]] = None,
         max_workers: int = 4,
         logger: Optional[logging.Logger] = None,
     ):
         """
         Args:
             on_success: Called with (audio_chunk_id, stored_name) for each successful upload
-            on_error: Called with (audio_chunk_id, exception) for each failed upload
+            on_error: Called with (audio_chunk_id, exception, data) for each failed upload
             max_workers: Maximum number of concurrent upload threads
             logger: Optional logger instance
         """
@@ -57,6 +57,7 @@ class AudioChunkUploader:
             self._pending_uploads[audio_chunk_id] = {
                 "future": fut,
                 "filename": filename,
+                "data": data,
             }
             inflight = len(self._pending_uploads)
 
@@ -90,7 +91,7 @@ class AudioChunkUploader:
                 self.log.exception("Upload failed for audio_chunk_id=%s, filename=%s", audio_chunk_id, upload_info["filename"])
                 if self._on_error:
                     try:
-                        self._on_error(audio_chunk_id, e)
+                        self._on_error(audio_chunk_id=audio_chunk_id, exception=e, data=upload_info["data"])
                     except Exception:
                         self.log.exception("on_error callback failed for audio_chunk_id=%s", audio_chunk_id)
 
@@ -128,7 +129,7 @@ class AudioChunkUploader:
                 for audio_chunk_id, upload_info in self._pending_uploads.items():
                     if self._on_error:
                         try:
-                            self._on_error(audio_chunk_id, Exception("In wait_for_uploads, upload timed out"))
+                            self._on_error(audio_chunk_id=audio_chunk_id, exception=Exception("In wait_for_uploads, upload timed out"), data=upload_info["data"])
                         except Exception:
                             self.log.exception("on_error callback failed for audio_chunk_id=%s", audio_chunk_id)
                 return
