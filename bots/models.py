@@ -2397,7 +2397,10 @@ class AudioChunk(models.Model):
 
     def get_audio_data(self) -> memoryview:
         if self.is_blob_stored_remotely:
-            return memoryview(self.audio_blob_remote_file.read())
+            if not self.audio_blob_remote_file:
+                return memoryview(b"")
+            with self.audio_blob_remote_file.storage.open(self.audio_blob_remote_file.name, "rb") as f:
+                return memoryview(f.read())
         return self.audio_blob
 
     def clear_audio_data(self):
