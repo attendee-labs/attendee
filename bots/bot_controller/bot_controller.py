@@ -458,9 +458,8 @@ class BotController:
         recording = Recording.objects.get(bot=self.bot_in_db, is_default_recording=True)
         return recording.transcription_provider
 
-    def generate_audio_blob_remote_filename(self):
-        recording = Recording.objects.get(bot=self.bot_in_db, is_default_recording=True)
-        return f"audio-blobs/{self.bot_in_db.object_id}-{recording.object_id}-{uuid.uuid4()}.bin"
+    def generate_audio_blob_remote_filename(self, audio_chunk: AudioChunk, recording: Recording):
+        return f"audio-blobs/{self.bot_in_db.object_id}-{recording.object_id}-audio-chunk-{audio_chunk.id}.pcm"
 
     def get_recording_filename(self):
         recording = Recording.objects.get(bot=self.bot_in_db, is_default_recording=True)
@@ -863,6 +862,7 @@ class BotController:
         if settings.USE_REMOTE_STORAGE_FOR_AUDIO_CHUNKS:
             self.audio_chunk_uploader = AudioChunkUploader(
                 on_success=self.on_audio_chunk_upload_success,
+                on_error=self.on_audio_chunk_upload_error,
             )
 
         # Create GLib main loop
@@ -1327,10 +1327,11 @@ class BotController:
 
         if settings.USE_REMOTE_STORAGE_FOR_AUDIO_CHUNKS:
             audio_chunk_storage_attributes = {
-                "audio_blob_remote_file": self.generate_audio_blob_remote_filename(),
+                "is_blob_stored_remotely": True,
             }
         else:
             audio_chunk_storage_attributes = {
+                "is_blob_stored_remotely": False,
                 "audio_blob": message["audio_data"],
             }
 
@@ -1346,11 +1347,11 @@ class BotController:
         )
 
         # If audio chunks are being stored remotely, we need to upload them async. The utterance
-        # will be created later when process_uploads is called from the main loop.
+        # will be created later when process_uploads is called from the main loop and calls on_audio_chunk_upload_success
         if settings.USE_REMOTE_STORAGE_FOR_AUDIO_CHUNKS:
             self.audio_chunk_uploader.upload(
                 audio_chunk_id=audio_chunk.id,
-                filename=audio_chunk.audio_blob_remote_file.name,
+                filename=self.generate_audio_blob_remote_filename(audio_chunk=audio_chunk, recording=recording_in_progress),
                 data=message["audio_data"],
             )
             return
@@ -1388,9 +1389,20 @@ class BotController:
         Called from the main thread via process_uploads.
         """
         audio_chunk = AudioChunk.objects.get(id=audio_chunk_id)
+        audio_chunk.audio_blob_remote_file = stored_name
+        audio_chunk.save()
         participant = audio_chunk.participant
         recording = audio_chunk.recording
         self.create_utterance_from_audio_chunk(audio_chunk, participant, recording)
+
+    def on_audio_chunk_upload_error(self, audio_chunk_id: int, exception: Exception):
+        """
+        Callback for when an audio chunk upload fails.
+        Called from the main thread via process_uploads.
+        """
+        audio_chunk = AudioChunk.objects.get(id=audio_chunk_id)
+        audio_chunk.blob_upload_failure_data = {"error": str(exception), "exception_type": e.__class__.__name__}
+        audio_chunk.save()
 
     def on_new_chat_message(self, chat_message):
         GLib.idle_add(lambda: self.upsert_chat_message(chat_message))

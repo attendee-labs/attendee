@@ -124,6 +124,13 @@ class AudioChunkUploader:
             elapsed = time.time() - start_time
             if elapsed >= timeout:
                 self.log.warning("wait_for_uploads: timeout after %.1fs with %d uploads still pending", elapsed, pending_count)
+                # Call on_error for all pending uploads
+                for audio_chunk_id, upload_info in self._pending_uploads.items():
+                    if self._on_error:
+                        try:
+                            self._on_error(audio_chunk_id, Exception("In wait_for_uploads, upload timed out"))
+                        except Exception:
+                            self.log.exception("on_error callback failed for audio_chunk_id=%s", audio_chunk_id)
                 return
 
             time.sleep(0.1)

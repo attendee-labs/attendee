@@ -2367,7 +2367,10 @@ class AsyncTranscriptionManager:
 
         cls.delivery_webhook(async_transcription)
 
-
+# If is_blob_stored_remotely is True:
+# If audio_blob_remote_file is null and blob_upload_failure_data is null: audio blob is in process of being uploaded
+# If audio_blob_remote_file is not null and blob_upload_failure_data is null: audio blob is uploaded successfully
+# If audio_blob_remote_file is null and blob_upload_failure_data is not null: audio blob upload failed
 class AudioChunk(models.Model):
     class Sources(models.IntegerChoices):
         PER_PARTICIPANT_AUDIO = 1, "Per Participant Audio"
@@ -2380,6 +2383,8 @@ class AudioChunk(models.Model):
     recording = models.ForeignKey(Recording, on_delete=models.CASCADE, related_name="audio_chunks")
     audio_blob = models.BinaryField()
     audio_blob_remote_file = models.FileField(storage=StorageAlias("audio_chunks"), null=True, blank=True)
+    is_blob_stored_remotely = models.BooleanField(default=False, db_default=False,)
+    blob_upload_failure_data = models.JSONField(null=True, default=None)
     audio_format = models.IntegerField(choices=AudioFormat.choices, default=AudioFormat.PCM)
     timestamp_ms = models.BigIntegerField()
     duration_ms = models.IntegerField()
@@ -2391,19 +2396,15 @@ class AudioChunk(models.Model):
     participant = models.ForeignKey(Participant, on_delete=models.PROTECT, related_name="audio_chunks")
 
     def get_audio_data(self) -> memoryview:
-        if self.is_stored_remotely:
+        if self.is_blob_stored_remotely:
             return memoryview(self.audio_blob_remote_file.read())
         return self.audio_blob
 
     def clear_audio_data(self):
-        if self.is_stored_remotely:
+        if self.is_blob_stored_remotely:
             self.audio_blob_remote_file.delete()
         self.audio_blob = b""
         self.save()
-
-    @property
-    def is_stored_remotely(self) -> bool:
-        return bool(self.audio_blob_remote_file.name)
 
 
 class Utterance(models.Model):
