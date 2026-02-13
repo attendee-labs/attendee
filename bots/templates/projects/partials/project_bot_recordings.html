@@ -5,70 +5,24 @@
         <div class="recording-item">
             {% if recording.state == RecordingStates.COMPLETE or recording.state == RecordingStates.IN_PROGRESS or recording.state == RecordingStates.PAUSED %}
                 <div class="recording-container">
+                    
                     <div class="transcript-column">
-                        {% if recording.transcription_provider_display %}
-                            <div class="mb-3 text-muted">
-                                <small>Transcribed by {{ recording.transcription_provider_display }}</small>
-                                <a href="https://docs.attendee.dev/guides/transcription" target="_blank" rel="noopener noreferrer" class="ms-1 text-muted" title="Learn more about transcription">
-                                    <i class="bi bi-info-circle"></i>
-                                </a>
-                            </div>
-                        {% endif %}
-                        
-                        {% for utterance in recording.utterances %}
-                            <div class="utterance-item">
-                                <div class="speaker-bar" style="background-color: {{ utterance.participant.uuid|participant_color }}"></div>
-                                <div class="utterance-content">
-                                    <div class="utterance-timestamp" role="button" style="cursor: pointer" 
-                                            onclick="seekVideo(this, {{ utterance.relative_timestamp_ms }})">
-                                        {% if utterance.timestamp_display %}
-                                            {{ utterance.timestamp_display }} | 
-                                        {% endif %}
-                                        {{ utterance.participant.full_name }}
-                                    </div>
-                                    <div class="utterance-text">
-                                        {% if utterance.words %}
-                                            {% for word_data in utterance.words %}
-                                                <span class="{% if word_data.is_space %}word-space{% else %}word{% endif %}" 
-                                                        data-utterance-id="{{ word_data.utterance_id|md5 }}" 
-                                                        data-start="{{ word_data.start }}" 
-                                                        data-end="{{ word_data.end }}">{{ word_data.word }}
-                                                </span>
-                                            {% endfor %}
-                                        {% else %}
-                                            {{ utterance.transcript }}
-                                        {% endif %}
-                                    </div>
-                                </div>
-                            </div>
-                        {% empty %}
-                            {% if not recording.failed_utterances and recording.state == RecordingStates.COMPLETE %}
-                                <div class="alert alert-info">No transcripts available.</div>
-                            {% endif %}
-                        {% endfor %}
-
-                        {% if recording.transcription_state == RecordingTranscriptionStates.IN_PROGRESS or recording.transcription_state == RecordingTranscriptionStates.NOT_STARTED %}
-                            <div class="alert alert-info mt-3">
-                                Real-time transcription in progress. Refresh to see the latest updates.
-                            </div>
-                        {% endif %}
-
-                        {% if recording.failed_utterances %}
-                            <div class="failed-utterances-column">
-                                <h5>Transcription errors</h5>
-                                <div class="alert alert-danger" role="alert">
-                                    {% for failed_utterance in recording.failed_utterances %}
-                                        <dl class="row mb-0">
-                                        {% for key, value in failed_utterance.failure_data.items %}
-                                            <dt class="col-sm-3">{{ key }}</dt>
-                                            <dd class="col-sm-9"><code>{{ value }}</code></dd>
-                                        {% endfor %}
-                                        </dl>
-                                        {% if not forloop.last %}<hr>{% endif %}
+                        {% if recording.transcriptions|length > 1 %}
+                            <div class="transcription-selector-wrapper mb-3">
+                                <select class="form-select form-select-sm transcription-selector" style="max-width: 300px;" onchange="switchTranscription(this)">
+                                    {% for transcription in recording.transcriptions %}
+                                        <option value="{{ forloop.counter0 }}">
+                                            {{ transcription.label }}
+                                        </option>
                                     {% endfor %}
-                                </div>
+                                </select>
                             </div>
                         {% endif %}
+                        {% for transcription in recording.transcriptions %}
+                            <div class="transcription-content" data-transcription-index="{{ forloop.counter0 }}" {% if not forloop.first %}style="display: none;"{% endif %}>
+                                {% include 'projects/partials/project_bot_recording_transcription.html' with transcription=transcription %}
+                            </div>
+                        {% endfor %}
                     </div>
                                                     
                     {% if recording.recording_type != RecordingTypes.NO_RECORDING %}
@@ -117,6 +71,20 @@
 <div class="alert alert-info">No recordings available.</div>
 {% endif %}
 <script>
+    function switchTranscription(selectElement) {
+        const selectedIndex = selectElement.value;
+        const container = selectElement.closest('.recording-container');
+        const transcriptionContents = container.querySelectorAll('.transcription-content');
+        
+        transcriptionContents.forEach(content => {
+            if (content.dataset.transcriptionIndex === selectedIndex) {
+                content.style.display = 'block';
+            } else {
+                content.style.display = 'none';
+            }
+        });
+    }
+
     function seekVideo(element, timestamp_ms) {
         const container = element.closest('.recording-container');
         const video = container.querySelector('video');
@@ -130,7 +98,9 @@
     document.querySelectorAll('video').forEach(video => {
         video.addEventListener('timeupdate', function() {
             const container = this.closest('.recording-container');
-            const words = container.querySelectorAll('.word, .word-space');
+            // Only query visible transcription content
+            const visibleTranscription = container.querySelector('.transcription-content:not([style*="display: none"])') || container;
+            const words = visibleTranscription.querySelectorAll('.word, .word-space');
             let lastHighlightedUtteranceId = null;
             
             // Find utterance bounds

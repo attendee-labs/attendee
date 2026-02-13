@@ -96,3 +96,6 @@ local_settings.py
 
 .env
 db.sqlite3
+
+custom/
+docker-compose.yaml
