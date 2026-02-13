@@ -277,9 +277,7 @@ class VideoInputManager:
         self._video_deque = collections.deque()
         self._video_event = threading.Event()
         self._video_drain_stop = False
-        self._video_drain_thread = threading.Thread(
-            target=self._drain_video_loop, daemon=True, name="video-drain"
-        )
+        self._video_drain_thread = threading.Thread(target=self._drain_video_loop, daemon=True, name="video-drain")
         self._video_drain_thread.start()
 
     def has_any_video_input_streams(self):

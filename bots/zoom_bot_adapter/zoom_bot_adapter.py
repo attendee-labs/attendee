@@ -870,9 +870,7 @@ class ZoomBotAdapter(BotAdapter):
         if self._mixed_audio_drain_thread is not None:
             return
         self._mixed_audio_drain_running = True
-        self._mixed_audio_drain_thread = threading.Thread(
-            target=self._drain_mixed_audio_loop, daemon=True, name="mixed-audio-drain"
-        )
+        self._mixed_audio_drain_thread = threading.Thread(target=self._drain_mixed_audio_loop, daemon=True, name="mixed-audio-drain")
         self._mixed_audio_drain_thread.start()
         logger.info("Started mixed audio drain thread")
 
