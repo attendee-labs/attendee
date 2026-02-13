@@ -50,6 +50,7 @@ from .serializers import (
     ChatMessageSerializer,
     CreateAsyncTranscriptionSerializer,
     CreateBotSerializer,
+    OutputVideoRequestSerializer,
     ParticipantEventSerializer,
     ParticipantSerializer,
     PatchBotSerializer,
@@ -180,6 +181,22 @@ class BotListCreateView(GenericAPIView):
                 required=False,
             ),
             OpenApiParameter(
+                name="join_at_after",
+                type={"type": "string", "format": "ISO 8601 datetime"},
+                location=OpenApiParameter.QUERY,
+                description="Only return bots with join_at after this time.",
+                required=False,
+                examples=[OpenApiExample("DateTime Example", value="2024-01-18T12:34:56Z")],
+            ),
+            OpenApiParameter(
+                name="join_at_before",
+                type={"type": "string", "format": "ISO 8601 datetime"},
+                location=OpenApiParameter.QUERY,
+                description="Only return bots with join_at before this time.",
+                required=False,
+                examples=[OpenApiExample("DateTime Example", value="2024-01-18T13:34:56Z")],
+            ),
+            OpenApiParameter(
                 name="cursor",
                 type=str,
                 location=OpenApiParameter.QUERY,
@@ -217,6 +234,36 @@ class BotListCreateView(GenericAPIView):
 
             if state_values:
                 bots_query = bots_query.filter(state__in=state_values)
+
+        # Filter by join_at_after if provided
+        join_at_after = request.query_params.get("join_at_after")
+        if join_at_after:
+            try:
+                join_at_after_datetime = parse_datetime(str(join_at_after))
+            except Exception:
+                join_at_after_datetime = None
+
+            if not join_at_after_datetime:
+                return Response(
+                    {"error": "Invalid join_at_after format. Use ISO 8601 format (e.g., 2024-01-18T12:34:56Z)"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            bots_query = bots_query.filter(join_at__gt=join_at_after_datetime)
+
+        # Filter by join_at_before if provided
+        join_at_before = request.query_params.get("join_at_before")
+        if join_at_before:
+            try:
+                join_at_before_datetime = parse_datetime(str(join_at_before))
+            except Exception:
+                join_at_before_datetime = None
+
+            if not join_at_before_datetime:
+                return Response(
+                    {"error": "Invalid join_at_before format. Use ISO 8601 format (e.g., 2024-01-18T12:34:56Z)"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            bots_query = bots_query.filter(join_at__lt=join_at_before_datetime)
 
         # Apply ordering for cursor pagination
         bots = bots_query.order_by("created_at")
@@ -335,19 +382,7 @@ class OutputVideoView(APIView):
         operation_id="Output video",
         summary="Output video",
         description="Causes the bot to output a video in the meeting.",
-        request={
-            "application/json": {
-                "type": "object",
-                "properties": {
-                    "url": {
-                        "type": "string",
-                        "description": "URL of the video to output. Must be a valid URL to an mp4 file.",
-                    },
-                },
-                "required": ["url"],
-                "additionalProperties": False,
-            }
-        },
+        request=OutputVideoRequestSerializer,
         responses={
             200: OpenApiResponse(description="Video request created successfully"),
             400: OpenApiResponse(description="Invalid input"),
@@ -372,22 +407,13 @@ class OutputVideoView(APIView):
         except Bot.DoesNotExist:
             return Response({"error": "Bot not found"}, status=status.HTTP_404_NOT_FOUND)
 
+        serializer = OutputVideoRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
         # Get which type of meeting the bot is in
         meeting_type = meeting_type_from_url(bot.meeting_url)
-        if meeting_type != MeetingTypes.GOOGLE_MEET and meeting_type != MeetingTypes.ZOOM:
-            # Video output is not supported in this meeting type
-            return Response({"error": "Video output is not supported in this meeting type"}, status=status.HTTP_400_BAD_REQUEST)
         if meeting_type == MeetingTypes.ZOOM and os.getenv("ENABLE_ZOOM_VIDEO_OUTPUT") != "true":
             return Response({"error": "Video output is not supported in this meeting type"}, status=status.HTTP_400_BAD_REQUEST)
-
-        # Validate the request data
-        url = request.data.get("url")
-        if not url:
-            return Response({"error": "URL is required"}, status=status.HTTP_400_BAD_REQUEST)
-        if not url.startswith("https://"):
-            return Response({"error": "URL must start with https://"}, status=status.HTTP_400_BAD_REQUEST)
-        if not url.endswith(".mp4"):
-            return Response({"error": "URL must end with .mp4"}, status=status.HTTP_400_BAD_REQUEST)
 
         # Check if bot is in a state that can play media
         if not BotEventManager.is_state_that_can_play_media(bot.state):
@@ -403,7 +429,8 @@ class OutputVideoView(APIView):
         BotMediaRequest.objects.create(
             bot=bot,
             media_type=BotMediaRequestMediaTypes.VIDEO,
-            media_url=url,
+            media_url=serializer.validated_data["url"],
+            loop=serializer.validated_data["loop"],
         )
 
         # Send sync command to notify bot of new media request
@@ -831,8 +858,9 @@ class TranscriptView(APIView):
                 recording=recording,
             ).count()
             # We only allow a max of 4 async transcriptions per recording
-            if existing_async_transcription_count >= 4:
-                return Response({"error": "You cannot have more than 4 async transcriptions per bot."}, status=status.HTTP_400_BAD_REQUEST)
+            max_async_transcription_count = int(os.getenv("MAX_ASYNC_TRANSCRIPTIONS_PER_RECORDING", 4))
+            if existing_async_transcription_count >= max_async_transcription_count:
+                return Response({"error": f"You cannot have more than {max_async_transcription_count} async transcriptions per bot."}, status=status.HTTP_400_BAD_REQUEST)
 
             serializer = CreateAsyncTranscriptionSerializer(data={"transcription_settings": request.data.get("transcription_settings")})
             if not serializer.is_valid():
@@ -942,7 +970,7 @@ class BotDetailView(APIView):
     @extend_schema(
         operation_id="Patch Bot",
         summary="Update a bot",
-        description="Updates a bot. Currently only the join_at and metadata fields can be updated. The join_at field can only be updated when the bot is in the scheduled state. The metadata field can be updated at any time.",
+        description="Updates a bot. The join_at, meeting_url, bot_name and bot_image fields can only be updated when the bot is in the scheduled state. The metadata field can be updated at any time.",
         request=PatchBotSerializer,
         responses={
             200: OpenApiResponse(

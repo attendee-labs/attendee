@@ -53,6 +53,10 @@
             {
               "path": "docs/zoom_oauth.md",
               "type": "page"
+            },
+            {
+              "path": "docs/zoom_rtms.md",
+              "type": "page"
             }
           ]
         },

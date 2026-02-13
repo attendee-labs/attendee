@@ -1,0 +1,78 @@
+{% load bot_filters %}
+
+    {% if transcription.provider_display %}
+        <div class="mb-3 text-muted">
+            <small>Transcribed by {{ transcription.provider_display }}</small>
+            <a href="https://docs.attendee.dev/guides/transcription" target="_blank" rel="noopener noreferrer" class="ms-1 text-muted" title="Learn more about transcription">
+                <i class="bi bi-info-circle"></i>
+            </a>
+        </div>
+    {% endif %}
+    
+    {% for utterance in transcription.utterances %}
+        <div class="utterance-item">
+            <div class="speaker-bar" style="background-color: {{ utterance.participant.uuid|participant_color }}"></div>
+            <div class="utterance-content">
+                <div class="utterance-timestamp" role="button" style="cursor: pointer" 
+                        onclick="seekVideo(this, {{ utterance.relative_timestamp_ms }})">
+                    {% if utterance.timestamp_display %}
+                        {{ utterance.timestamp_display }} | 
+                    {% endif %}
+                    {{ utterance.participant.full_name }}
+                </div>
+                <div class="utterance-text">
+                    {% if utterance.words %}
+                        {% for word_data in utterance.words %}
+                            <span class="{% if word_data.is_space %}word-space{% else %}word{% endif %}" 
+                                    data-utterance-id="{{ word_data.utterance_id|md5 }}" 
+                                    data-start="{{ word_data.start }}" 
+                                    data-end="{{ word_data.end }}">{{ word_data.word }}
+                            </span>
+                        {% endfor %}
+                    {% else %}
+                        {{ utterance.transcript }}
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    {% empty %}
+        {% if not transcription.failed_utterances and transcription.recording_state == RecordingStates.COMPLETE %}
+            <div class="alert alert-info">No transcripts available.</div>
+        {% endif %}
+    {% endfor %}
+
+
+    {% if not transcription.is_async %}
+        {% if transcription.recording_state != RecordingStates.COMPLETE and transcription.recording_state != RecordingStates.FAILED %}
+            {% if transcription.state == RecordingTranscriptionStates.IN_PROGRESS or transcription.state == RecordingTranscriptionStates.NOT_STARTED %}
+                <div class="alert alert-info mt-3">
+                    Real-time transcription in progress. Refresh to see the latest updates.
+                </div>
+            {% endif %}
+        {% endif %}
+    {% endif %}
+
+    {% if transcription.is_async %}
+        {% if transcription.state == RecordingTranscriptionStates.IN_PROGRESS or transcription.state == RecordingTranscriptionStates.NOT_STARTED %}
+            <div class="alert alert-info mt-3">
+                Async transcription in progress. Refresh to see the latest updates.
+            </div>
+        {% endif %}
+    {% endif %}
+
+    {% if transcription.failed_utterances %}
+        <div class="failed-utterances-column">
+            <h5>Transcription errors</h5>
+            <div class="alert alert-danger" role="alert">
+                {% for failed_utterance in transcription.failed_utterances %}
+                    <dl class="row mb-0">
+                    {% for key, value in failed_utterance.failure_data.items %}
+                        <dt class="col-sm-3">{{ key }}</dt>
+                        <dd class="col-sm-9"><code>{{ value }}</code></dd>
+                    {% endfor %}
+                    </dl>
+                    {% if not forloop.last %}<hr>{% endif %}
+                {% endfor %}
+            </div>
+        </div>
+    {% endif %}

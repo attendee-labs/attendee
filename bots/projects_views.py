@@ -776,16 +776,20 @@ class ProjectBotDetailView(LoginRequiredMixin, ProjectUrlContextMixin, View):
         # Calculate maximum values from resource snapshots
         max_ram_usage = 0
         max_cpu_usage = 0
+        max_db_connection_count = 0
         if resource_snapshots.exists():
             for snapshot in resource_snapshots:
                 data = snapshot.data
-                ram_usage = data.get("ram_usage_megabytes", 0)
-                cpu_usage = data.get("cpu_usage_millicores", 0)
+                ram_usage = data.get("ram_usage_megabytes") or 0
+                cpu_usage = data.get("cpu_usage_millicores") or 0
+                db_connection_count = data.get("db_connection_count") or 0
 
                 if ram_usage > max_ram_usage:
                     max_ram_usage = ram_usage
                 if cpu_usage > max_cpu_usage:
                     max_cpu_usage = cpu_usage
+                if db_connection_count > max_db_connection_count:
+                    max_db_connection_count = db_connection_count
 
         context = self.get_project_context(object_id, project)
         context.update(
@@ -802,6 +806,7 @@ class ProjectBotDetailView(LoginRequiredMixin, ProjectUrlContextMixin, View):
                 "resource_snapshots": resource_snapshots,
                 "max_ram_usage": max_ram_usage,
                 "max_cpu_usage": max_cpu_usage,
+                "max_db_connection_count": max_db_connection_count,
             }
         )
 

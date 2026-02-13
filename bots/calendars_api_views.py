@@ -1,3 +1,4 @@
+from django.utils.dateparse import parse_datetime
 from drf_spectacular.openapi import OpenApiResponse
 from drf_spectacular.utils import OpenApiExample, OpenApiParameter, extend_schema
 from rest_framework import status
@@ -313,12 +314,52 @@ class CalendarEventListView(GenericAPIView):
                 examples=[OpenApiExample("Deduplication Key Example", value="user-abcd")],
             ),
             OpenApiParameter(
+                name="updated_at_gte",
+                type=str,
+                location=OpenApiParameter.QUERY,
+                description="Filter events updated at or after this timestamp (ISO 8601 format)",
+                required=False,
+                examples=[OpenApiExample("Updated At GTE Example", value="2025-01-13T10:30:00Z")],
+            ),
+            OpenApiParameter(
                 name="updated_after",
                 type=str,
                 location=OpenApiParameter.QUERY,
-                description="Filter events updated after this timestamp (ISO 8601 format)",
+                description="Deprecated: Use updated_at_gte instead. Alias for updated_at_gte, kept for backwards compatibility.",
                 required=False,
-                examples=[OpenApiExample("Updated After Example", value="2025-01-13T10:30:00Z")],
+                deprecated=True,
+            ),
+            OpenApiParameter(
+                name="event_id",
+                type=str,
+                location=OpenApiParameter.QUERY,
+                description="Filter events by event ID",
+                required=False,
+                examples=[OpenApiExample("Event ID Example", value="evt_abcdef1234567890")],
+            ),
+            OpenApiParameter(
+                name="start_time_gte",
+                type=str,
+                location=OpenApiParameter.QUERY,
+                description="Filter events with start_time at or after this timestamp (ISO 8601 format)",
+                required=False,
+                examples=[OpenApiExample("Start Time GTE Example", value="2025-01-13T10:30:00Z")],
+            ),
+            OpenApiParameter(
+                name="end_time_lte",
+                type=str,
+                location=OpenApiParameter.QUERY,
+                description="Filter events with end_time at or before this timestamp (ISO 8601 format)",
+                required=False,
+                examples=[OpenApiExample("End Time LTE Example", value="2025-01-13T18:00:00Z")],
+            ),
+            OpenApiParameter(
+                name="ordering",
+                type=str,
+                location=OpenApiParameter.QUERY,
+                description="Order results by field. Use '-' prefix for descending order. Default: -updated_at.",
+                required=False,
+                enum=["-updated_at", "updated_at", "start_time", "-start_time", "end_time", "-end_time", "created_at", "-created_at"],
             ),
         ],
         tags=["Calendars"],
@@ -337,26 +378,62 @@ class CalendarEventListView(GenericAPIView):
         if calendar_deduplication_key is not None:
             events = events.filter(calendar__deduplication_key=calendar_deduplication_key)
 
-        # Apply updated_after filter if provided
-        updated_after = request.query_params.get("updated_after")
-        if updated_after is not None:
+        # Apply updated_at_gte filter if provided (with updated_after as deprecated alias)
+        updated_at_gte = request.query_params.get("updated_at_gte") or request.query_params.get("updated_after")
+        if updated_at_gte is not None:
             try:
-                from django.utils.dateparse import parse_datetime
-
-                updated_after_dt = parse_datetime(updated_after)
-                if updated_after_dt is None:
-                    return Response({"error": "Invalid updated_after format. Use ISO 8601 format (e.g., 2025-01-13T10:30:00Z)"}, status=status.HTTP_400_BAD_REQUEST)
-                events = events.filter(updated_at__gte=updated_after_dt)
+                updated_at_gte_dt = parse_datetime(updated_at_gte)
+                if updated_at_gte_dt is None:
+                    return Response({"error": "Invalid updated_at_gte format. Use ISO 8601 format (e.g., 2025-01-13T10:30:00Z)"}, status=status.HTTP_400_BAD_REQUEST)
+                events = events.filter(updated_at__gte=updated_at_gte_dt)
             except ValueError:
-                return Response({"error": "Invalid updated_after format. Use ISO 8601 format (e.g., 2025-01-13T10:30:00Z)"}, status=status.HTTP_400_BAD_REQUEST)
+                return Response({"error": "Invalid updated_at_gte format. Use ISO 8601 format (e.g., 2025-01-13T10:30:00Z)"}, status=status.HTTP_400_BAD_REQUEST)
 
-        events = events.order_by("-created_at")
+        # Apply event_id filter if provided
+        event_id = request.query_params.get("event_id")
+        if event_id is not None:
+            events = events.filter(object_id=event_id)
+
+        # Apply start_time_gte filter if provided
+        start_time_gte = request.query_params.get("start_time_gte")
+        if start_time_gte is not None:
+            try:
+                start_time_gte_dt = parse_datetime(start_time_gte)
+                if start_time_gte_dt is None:
+                    return Response({"error": "Invalid start_time_gte format. Use ISO 8601 format (e.g., 2025-01-13T10:30:00Z)"}, status=status.HTTP_400_BAD_REQUEST)
+                events = events.filter(start_time__gte=start_time_gte_dt)
+            except ValueError:
+                return Response({"error": "Invalid start_time_gte format. Use ISO 8601 format (e.g., 2025-01-13T10:30:00Z)"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Apply end_time_lte filter if provided
+        end_time_lte = request.query_params.get("end_time_lte")
+        if end_time_lte is not None:
+            try:
+                end_time_lte_dt = parse_datetime(end_time_lte)
+                if end_time_lte_dt is None:
+                    return Response({"error": "Invalid end_time_lte format. Use ISO 8601 format (e.g., 2025-01-13T18:00:00Z)"}, status=status.HTTP_400_BAD_REQUEST)
+                events = events.filter(end_time__lte=end_time_lte_dt)
+            except ValueError:
+                return Response({"error": "Invalid end_time_lte format. Use ISO 8601 format (e.g., 2025-01-13T18:00:00Z)"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Apply ordering if provided, default to -updated_at
+        ordering = request.query_params.get("ordering", "-updated_at")
+        # Validate ordering field
+        allowed_orderings = ["-updated_at", "updated_at", "start_time", "-start_time", "end_time", "-end_time", "created_at", "-created_at"]
+        if ordering not in allowed_orderings:
+            return Response({"error": f"Invalid ordering. Allowed values: {', '.join(allowed_orderings)}"}, status=status.HTTP_400_BAD_REQUEST)
+
+        events = events.order_by(ordering)
+
+        # Create pagination instance with the requested ordering for cursor pagination
+        pagination_instance = self.pagination_class()
+        pagination_instance.ordering = ordering
 
         # Let the pagination class handle the rest
-        page = self.paginate_queryset(events)
+        page = pagination_instance.paginate_queryset(events, request)
         if page is not None:
             serializer = self.get_serializer(page, many=True)
-            return self.get_paginated_response(serializer.data)
+            return pagination_instance.get_paginated_response(serializer.data)
 
         serializer = self.get_serializer(events, many=True)
         return Response(serializer.data)

@@ -426,6 +426,14 @@ TRANSCRIPTION_SETTINGS_SCHEMA = {
 }
 
 
+def _validate_bot_name_attribute(value):
+    if value is not None and value:
+        for char in value:
+            if ord(char) > 0xFFFF:
+                raise serializers.ValidationError("Bot name cannot contain emojis or rare script characters.")
+    return value
+
+
 def _validate_metadata_attribute(value):
     if value is None:
         return value
@@ -885,6 +893,33 @@ class BotChatMessageRequestSerializer(serializers.Serializer):
         for char in value:
             if ord(char) > 0xFFFF:
                 raise serializers.ValidationError("Message cannot contain emojis or rare script characters.")
+        return value
+
+
+@extend_schema_serializer(
+    examples=[
+        OpenApiExample(
+            "Video output request",
+            value={"url": "https://example.com/video.mp4", "loop": True},
+            description="Example of a looping mp4 video output request. Set loop to false or omit for a non-looping request.",
+        ),
+    ]
+)
+class OutputVideoRequestSerializer(serializers.Serializer):
+    url = serializers.URLField(
+        help_text="URL of the video to output. Must be a valid URL to an mp4 file and start with https://.",
+    )
+    loop = serializers.BooleanField(
+        required=False,
+        default=False,
+        help_text="Whether to loop the video. Defaults to false.",
+    )
+
+    def validate_url(self, value: str) -> str:
+        if not value.startswith("https://"):
+            raise serializers.ValidationError("URL must start with https://")
+        if not value.endswith(".mp4"):
+            raise serializers.ValidationError("URL must end with .mp4")
         return value
 
 
@@ -1536,11 +1571,7 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
         return value
 
     def validate_bot_name(self, value):
-        """Validate that the bot name only contains characters in the Basic Multilingual Plane (BMP)."""
-        for char in value:
-            if ord(char) > 0xFFFF:
-                raise serializers.ValidationError("Bot name cannot contain emojis or rare script characters.")
-        return value
+        return _validate_bot_name_attribute(value)
 
     def validate(self, data):
         """Validate that no unexpected fields are provided."""
@@ -1866,16 +1897,29 @@ class PatchBotTranscriptionSettingsSerializer(serializers.Serializer):
                 "join_at": "2025-06-13T12:00:00Z",
             },
             description="Example of updating the join_at time for a scheduled bot",
-        )
+        ),
+        OpenApiExample(
+            "Update name and image",
+            value={
+                "bot_name": "My Updated Bot",
+                "bot_image": {"type": "image/png", "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="},
+            },
+            description="Example of updating the bot name and/or image",
+        ),
     ]
 )
 class PatchBotSerializer(BotValidationMixin, serializers.Serializer):
     join_at = serializers.DateTimeField(help_text="The time the bot should join the meeting. ISO 8601 format, e.g. 2025-06-13T12:00:00Z", required=False)
     meeting_url = serializers.CharField(help_text="The URL of the meeting to join, e.g. https://zoom.us/j/123?pwd=456", required=False)
     metadata = serializers.JSONField(help_text="JSON object containing metadata to associate with the bot", required=False)
+    bot_name = serializers.CharField(help_text="The name of the bot, e.g. 'My Bot'", required=False, allow_blank=False)
+    bot_image = BotImageSerializer(help_text="The image for the bot", required=False, default=None)
 
     def validate_metadata(self, value):
         return _validate_metadata_attribute(value)
+
+    def validate_bot_name(self, value):
+        return _validate_bot_name_attribute(value)
 
 
 @extend_schema_serializer(

@@ -8,6 +8,7 @@ import os
 import threading
 import time
 from time import sleep
+from urllib.parse import unquote, urlparse
 
 import numpy as np
 import requests
@@ -91,6 +92,7 @@ class WebBotAdapter(BotAdapter):
         self.last_audio_message_processed_time = None
         self.first_buffer_timestamp_ms_offset = time.time() * 1000
         self.media_sending_enable_timestamp_ms = None
+        self.last_domain_allow_list_violation_check_time = time.time()
 
         self.participants_info = {}
         self.only_one_participant_in_meeting_at = None
@@ -521,10 +523,25 @@ class WebBotAdapter(BotAdapter):
             }
         )
 
+    def subclass_specific_chrome_policies(self):
+        return {}
+
+    def write_chrome_policies_file(self):
+        # Check if the /etc/.../attendee-chrome-policies.json symlink exists. If not, skip this, we are not running in the docker container.
+        if not os.path.islink("/etc/opt/chrome/policies/managed/attendee-chrome-policies.json"):
+            logger.warning("Attendee chrome policy file symlink does not exist, skipping writing chrome policies.")
+            return
+        policy = self.subclass_specific_chrome_policies()
+        with open("/tmp/attendee-chrome-policies.json", "w") as f:
+            json.dump(policy, f, indent=2)
+        logger.info("Chrome policy file written to /tmp/attendee-chrome-policies.json: %s", policy)
+
     def add_subclass_specific_chrome_options(self, options):
         pass
 
     def init_driver(self):
+        self.write_chrome_policies_file()
+
         options = webdriver.ChromeOptions()
 
         options.add_argument("--autoplay-policy=no-user-gesture-required")
@@ -821,6 +838,8 @@ class WebBotAdapter(BotAdapter):
 
         try:
             if self.driver:
+                self.log_browser_history()
+
                 # Simulate closing browser window
                 try:
                     self.subclass_specific_before_driver_close()
@@ -848,11 +867,66 @@ class WebBotAdapter(BotAdapter):
 
         self.cleaned_up = True
 
+    def domain_for_history_entry_url(self, url):
+        try:
+            if url.startswith("chrome://browser-switch"):
+                url_normalized = unquote(url.removeprefix("chrome://browser-switch/?url="))
+            else:
+                url_normalized = url
+
+            return str(urlparse(url_normalized).netloc)
+        except Exception as e:
+            logger.warning(f"Error normalizing history entry url: {e}")
+            return url
+
+    def get_navigation_history_urls(self):
+        if not self.driver:
+            return []
+        try:
+            nav_history = self.driver.execute_cdp_cmd("Page.getNavigationHistory", {})
+            nav_history_entries = nav_history.get("entries", [])
+            return [entry.get("url", "") for entry in nav_history_entries]
+        except Exception as e:
+            logger.warning(f"Error getting navigation history: {e}")
+            return []
+
+    def log_browser_history(self):
+        try:
+            nav_history_urls = self.get_navigation_history_urls()
+            nav_history_hosts = list(set([self.domain_for_history_entry_url(url) for url in nav_history_urls]))
+            logger.info(f"Browser navigation history {nav_history_hosts}")
+            # If any of the navigation urls start with chrome://browser-switch, then the url was blocked.
+            for url in nav_history_urls:
+                if url.startswith("chrome://browser-switch"):
+                    logger.error(f"Domain allow list violation detected after leave: {url}")
+        except Exception as e:
+            logger.warning(f"Error logging browser navigation history: {e}")
+
+    def check_domain_allow_list_violation(self):
+        if not settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:
+            return
+        if not self.driver:
+            return
+        if time.time() - self.last_domain_allow_list_violation_check_time < 30:
+            return
+
+        self.last_domain_allow_list_violation_check_time = time.time()
+
+        nav_history_urls = self.get_navigation_history_urls()
+
+        # If any of the navigation urls start with chrome://browser-switch, then the url was blocked.
+        for url in nav_history_urls:
+            if url.startswith("chrome://browser-switch"):
+                logger.error(f"Domain allow list violation detected: {url}")
+                raise Exception(f"Domain allow list violation detected: {self.domain_for_history_entry_url(url)}")
+
     def check_auto_leave_conditions(self) -> None:
         if self.left_meeting:
             return
         if self.cleaned_up:
             return
+
+        self.check_domain_allow_list_violation()
 
         if self.only_one_participant_in_meeting_at is not None:
             if time.time() - self.only_one_participant_in_meeting_at > self.automatic_leave_configuration.only_participant_in_meeting_timeout_seconds:

@@ -1,7 +1,9 @@
 import logging
+import os
 import signal
 import time
 
+import redis
 from django.core.management.base import BaseCommand
 from django.db import connection, models, transaction
 from django.db.models import Q
@@ -33,10 +35,27 @@ class Command(BaseCommand):
 
     # Graceful shutdown flags
     _keep_running = True
+    _redis_client = None
 
     def _graceful_exit(self, signum, frame):
         log.info("Received %s, shutting down after current cycle", signum)
         self._keep_running = False
+
+    def _get_redis_client(self):
+        """Get or create a Redis client connection."""
+        if self._redis_client is None:
+            redis_url = os.getenv("REDIS_URL") + ("?ssl_cert_reqs=none" if os.getenv("DISABLE_REDIS_SSL") else "")
+            self._redis_client = redis.from_url(redis_url)
+        return self._redis_client
+
+    def _log_celery_queue_size(self):
+        """Log the size of the default Celery queue."""
+        try:
+            queue_size = self._get_redis_client().llen("celery")
+            log.info("Celery queue size: %d", queue_size)
+        except Exception:
+            log.exception("Failed to get Celery queue size")
+            self._redis_client = None  # Reset connection on failure
 
     def handle(self, *args, **opts):
         # Trap SIGINT / SIGTERM so Kubernetes or Heroku can stop the container cleanly
@@ -49,6 +68,7 @@ class Command(BaseCommand):
         while self._keep_running:
             began = time.monotonic()
             try:
+                self._log_celery_queue_size()
                 self._run_scheduled_bots()
                 self._run_periodic_calendar_syncs()
                 self._run_periodic_zoom_oauth_connection_syncs()
