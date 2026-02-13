@@ -458,7 +458,7 @@ class BotController:
         return recording.transcription_provider
 
     def generate_audio_blob_remote_filename(self, audio_chunk: AudioChunk, recording: Recording):
-        return f"audio-blobs/{self.bot_in_db.object_id}-{recording.object_id}-audio-chunk-{audio_chunk.id}.pcm"
+        return f"audio-blobs/{self.bot_in_db.object_id}-{recording.object_id}/audio-chunk-{audio_chunk.id}.pcm"
 
     def get_recording_filename(self):
         recording = Recording.objects.get(bot=self.bot_in_db, is_default_recording=True)
