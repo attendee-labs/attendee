@@ -51,7 +51,14 @@ class AudioChunkUploader:
             filename: The target filename in storage
             data: The audio data bytes to upload
         """
-        fut = self._pool.submit(self._upload_one, filename, data)
+        try:
+            fut = self._pool.submit(self._upload_one, filename, data)
+        except Exception as e:
+            # executor is shut down (or broken)
+            self.log.warning("Upload rejected (executor shut down) audio_chunk_id=%s", audio_chunk_id)
+            if self._on_error:
+                self._on_error(audio_chunk_id=audio_chunk_id, exception=e, data=data)
+            return
 
         with self._lock:
             self._pending_uploads[audio_chunk_id] = {
