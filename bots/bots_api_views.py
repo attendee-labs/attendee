@@ -851,7 +851,7 @@ class TranscriptView(APIView):
                     status=status.HTTP_404_NOT_FOUND,
                 )
 
-            if not recording.audio_chunks.exclude(audio_blob=b"").exists():
+            if not recording.audio_chunks.exclude(audio_blob=b"").exists() and not recording.audio_chunks.exclude(audio_blob_remote_file=None).exists():
                 return Response({"error": "Cannot create async transcription because the per-speaker audio data has been deleted or was never created."}, status=status.HTTP_400_BAD_REQUEST)
 
             existing_async_transcription_count = AsyncTranscription.objects.filter(
