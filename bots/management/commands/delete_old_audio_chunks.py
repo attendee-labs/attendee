@@ -48,4 +48,3 @@ class Command(BaseCommand):
                 logger.info(f"Deleted {deleted_count} audio chunks from recording {recording.id}")
 
         logger.info(f"Audio chunk cleanup completed. Deleted {total_deleted} audio chunks.")
-
