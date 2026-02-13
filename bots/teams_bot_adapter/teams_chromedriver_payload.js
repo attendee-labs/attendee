@@ -1864,20 +1864,6 @@ window.receiverManager = receiverManager;
 const chatMessagePoller = new ChatMessagePoller();
 window.chatMessagePoller = chatMessagePoller;
 
-if (!realConsole) {
-    if (document.readyState === 'complete') {
-        createIframe();
-    } else {
-        document.addEventListener('DOMContentLoaded', createIframe);
-    }
-    function createIframe() {
-        const iframe = document.createElement('iframe');
-        iframe.src = 'about:blank';
-        document.body.appendChild(iframe);
-        realConsole = iframe.contentWindow.console;
-    }
-}
-
 const processDominantSpeakerHistoryMessage = (item) => {
     realConsole?.log('processDominantSpeakerHistoryMessage', item);
     const newDominantSpeakerAudioVirtualStreamId = item.history[0];
