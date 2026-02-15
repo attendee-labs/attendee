@@ -12,6 +12,7 @@ from bots.models import (
     BotStates,
     Project,
 )
+from bots.utils import split_utterances_on_turn_taking
 
 
 class BotListViewTest(TransactionTestCase):
@@ -270,3 +271,56 @@ class BotListViewTest(TransactionTestCase):
         bot_ids = [b["id"] for b in results]
 
         self.assertNotIn(bot_no_join_at.object_id, bot_ids)
+
+
+class SplitUtterancesOnTurnTakingTest(TransactionTestCase):
+    """Tests for split_utterances_on_turn_taking utility function."""
+
+    def test_splits_utterance_when_other_speaker_talks_during_pause(self):
+        """Test that an utterance is split when another speaker talks during a pause."""
+        # Speaker A says "Hello" (0-1s), pauses 1s, then says "World" (2-3s)
+        # Speaker B says "Hi" (1.5-1.8s) during Speaker A's pause
+        # Expected: Speaker A's utterance should be split into two
+        utterances = [
+            {
+                "timestamp_ms": 0,
+                "speaker_uuid": "speaker_a",
+                "transcription": {
+                    "words": [
+                        {"word": "Hello", "start": 0.0, "end": 1.0},
+                        {"word": "World", "start": 2.0, "end": 3.0},
+                    ],
+                },
+            },
+            {
+                "timestamp_ms": 1500,
+                "speaker_uuid": "speaker_b",
+                "transcription": {
+                    "words": [
+                        {"word": "Hi", "start": 0.0, "end": 0.3},
+                    ],
+                },
+            },
+        ]
+
+        result = split_utterances_on_turn_taking(utterances, min_pause_ms=300)
+
+        # Should have 3 utterances now: Speaker A part 1, Speaker B, Speaker A part 2
+        self.assertEqual(len(result), 3)
+
+        # First utterance should be Speaker A's "Hello"
+        self.assertEqual(result[0]["speaker_uuid"], "speaker_a")
+        self.assertEqual(len(result[0]["transcription"]["words"]), 1)
+        self.assertEqual(result[0]["transcription"]["words"][0]["word"], "Hello")
+        self.assertEqual(result[0]["timestamp_ms"], 0)
+
+        # Second utterance should be Speaker B's "Hi"
+        self.assertEqual(result[1]["speaker_uuid"], "speaker_b")
+        self.assertEqual(len(result[1]["transcription"]["words"]), 1)
+        self.assertEqual(result[1]["transcription"]["words"][0]["word"], "Hi")
+
+        # Third utterance should be Speaker A's "World"
+        self.assertEqual(result[2]["speaker_uuid"], "speaker_a")
+        self.assertEqual(len(result[2]["transcription"]["words"]), 1)
+        self.assertEqual(result[2]["transcription"]["words"][0]["word"], "World")
+        self.assertEqual(result[2]["timestamp_ms"], 2000)

@@ -61,6 +61,7 @@ from .serializers import (
 )
 from .tasks import process_async_transcription
 from .throttling import ProjectPostThrottle
+from .utils import split_utterances_on_turn_taking
 
 TokenHeaderParameter = [
     OpenApiParameter(
@@ -822,6 +823,9 @@ class TranscriptView(APIView):
                 for utterance in utterances
                 if utterance.transcription.get("transcript", "")
             ]
+
+            if request.query_params.get("split_on_turns") == "true":
+                transcript_data = split_utterances_on_turn_taking(transcript_data)
 
             serializer = TranscriptUtteranceSerializer(transcript_data, many=True)
             return Response(serializer.data)

@@ -558,3 +558,120 @@ def is_valid_png(image_data: bytes) -> bool:
         return img is not None
     except Exception:
         return False
+
+
+"""
+Split transcript utterances at turn-taking boundaries.
+
+When one speaker pauses and another speaker talks during that pause,
+split the first speaker's utterance at the pause point. This produces
+cleaner turn-by-turn conversation ordering.
+"""
+
+import bisect
+import copy
+from typing import Any
+
+
+def split_utterances_on_turn_taking(
+    utterances: list[dict[str, Any]],
+    min_pause_ms: int = 300,
+    slack_ms: int = 60,
+) -> list[dict[str, Any]]:
+    # Step 1: Convert every word to absolute (epoch) milliseconds
+    # so we can compare across speakers on a shared timeline.
+    all_word_events: list[tuple[int, str]] = []  # (abs_start_ms, speaker_uuid)
+    enriched = []
+
+    for u in utterances:
+        t0 = int(u["timestamp_ms"])
+        speaker = u["speaker_uuid"]
+        words = u["transcription"]["words"]
+
+        abs_words = []
+        for w in words:
+            abs_start = t0 + int(round(float(w["start"]) * 1000))
+            abs_end = t0 + int(round(float(w["end"]) * 1000))
+            abs_words.append({**w, "_abs_start": abs_start, "_abs_end": abs_end})
+            all_word_events.append((abs_start, speaker))
+
+        enriched.append({"utterance": u, "speaker": speaker, "abs_words": abs_words})
+
+    # Sort word events for fast range queries
+    all_word_events.sort()
+    event_times = [t for t, _ in all_word_events]
+
+    # Step 2: For each utterance, find internal pauses where another
+    # speaker is talking, and split at those points.
+    results = []
+
+    for item in enriched:
+        u = item["utterance"]
+        speaker = item["speaker"]
+        abs_words = item["abs_words"]
+
+        # Walk consecutive word pairs looking for split points
+        segments: list[list[dict]] = []
+        current_segment: list[dict] = [abs_words[0]]
+
+        for i in range(len(abs_words) - 1):
+            gap_ms = abs_words[i + 1]["_abs_start"] - abs_words[i]["_abs_end"]
+
+            if gap_ms >= min_pause_ms and _other_speaker_in_range_for_split_utterances_on_turn_taking(
+                event_times,
+                all_word_events,
+                start=abs_words[i]["_abs_end"] - slack_ms,
+                end=abs_words[i + 1]["_abs_start"] + slack_ms,
+                exclude_speaker=speaker,
+            ):
+                segments.append(current_segment)
+                current_segment = []
+
+            current_segment.append(abs_words[i + 1])
+
+        segments.append(current_segment)
+
+        # Step 3: Convert each segment back into an utterance
+        for seg_words in segments:
+            results.append(_make_utterance_for_split_utterances_on_turn_taking(u, seg_words))
+
+    results.sort(key=lambda u: (u["timestamp_ms"], u["speaker_uuid"]))
+    return results
+
+
+def _other_speaker_in_range_for_split_utterances_on_turn_taking(
+    event_times: list[int],
+    word_events: list[tuple[int, str]],
+    start: int,
+    end: int,
+    exclude_speaker: str,
+) -> bool:
+    """Check if any other speaker has a word starting in [start, end]."""
+    lo = bisect.bisect_left(event_times, start)
+    hi = bisect.bisect_right(event_times, end)
+    return any(word_events[i][1] != exclude_speaker for i in range(lo, hi))
+
+
+def _make_utterance_for_split_utterances_on_turn_taking(
+    original: dict[str, Any],
+    abs_words: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Build a new utterance from a slice of absolute-timed words."""
+    seg_start = abs_words[0]["_abs_start"]
+    seg_end = abs_words[-1]["_abs_end"]
+
+    # Re-normalize word times relative to the new segment start
+    clean_words = []
+    for w in abs_words:
+        cleaned = {k: v for k, v in w.items() if not k.startswith("_abs_")}
+        cleaned["start"] = (w["_abs_start"] - seg_start) / 1000.0
+        cleaned["end"] = (w["_abs_end"] - seg_start) / 1000.0
+        clean_words.append(cleaned)
+
+    transcript = " ".join(w.get("punctuated_word") or w.get("word") for w in clean_words)
+
+    out = copy.deepcopy(original)
+    out["timestamp_ms"] = seg_start
+    out["duration_ms"] = seg_end - seg_start
+    out["transcription"] = {"words": clean_words, "transcript": transcript}
+    return out
