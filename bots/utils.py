@@ -584,7 +584,7 @@ def split_utterances_on_turn_taking(
     # Check if any utterances do not have words. If so return the original input
     for u in utterances:
         if "words" not in u["transcription"]:
-            logger.warning(f"Utterance {u} does not have words. Skipping split on turn taking.")
+            logger.warning("Utterance does not have words. Skipping split on turn taking.")
             return utterances
 
     # Step 1: Convert every word to absolute (epoch) milliseconds
