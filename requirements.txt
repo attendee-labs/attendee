@@ -6,7 +6,6 @@ boto3==1.35.64
 botocore==1.35.64
 celery==5.4.0
 certifi==2024.8.30
-cffi==1.17.1
 charset-normalizer==3.4.0
 click==8.1.7
 click-didyoumean==0.3.1
