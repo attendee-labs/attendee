@@ -10,9 +10,12 @@ from bots.models import (
     ApiKey,
     Bot,
     BotStates,
+    Participant,
     Project,
+    Recording,
+    TranscriptionTypes,
+    Utterance,
 )
-from bots.utils import split_utterances_on_turn_taking
 
 
 class BotListViewTest(TransactionTestCase):
@@ -273,54 +276,111 @@ class BotListViewTest(TransactionTestCase):
         self.assertNotIn(bot_no_join_at.object_id, bot_ids)
 
 
-class SplitUtterancesOnTurnTakingTest(TransactionTestCase):
-    """Tests for split_utterances_on_turn_taking utility function."""
+class TranscriptSplitOnTurnsViewTest(TransactionTestCase):
+    """Tests for the transcript API view with split_on_turns parameter."""
 
-    def test_splits_utterance_when_other_speaker_talks_during_pause(self):
-        """Test that an utterance is split when another speaker talks during a pause."""
-        # Speaker A says "Hello" (0-1s), pauses 1s, then says "World" (2-3s)
-        # Speaker B says "Hi" (1.5-1.8s) during Speaker A's pause
-        # Expected: Speaker A's utterance should be split into two
-        utterances = [
-            {
-                "timestamp_ms": 0,
-                "speaker_uuid": "speaker_a",
-                "transcription": {
-                    "words": [
-                        {"word": "Hello", "start": 0.0, "end": 1.0},
-                        {"word": "World", "start": 2.0, "end": 3.0},
-                    ],
-                },
+    def setUp(self):
+        # Create organization, project, and API key
+        self.organization = Organization.objects.create(name="Test Organization")
+        self.project = Project.objects.create(name="Test Project", organization=self.organization)
+        self.api_key, self.api_key_plain = ApiKey.create(project=self.project, name="Test API Key")
+
+        # Create bot
+        self.bot = Bot.objects.create(
+            project=self.project,
+            meeting_url="https://meet.google.com/test-meeting",
+            name="Test Bot",
+            state=BotStates.JOINED_RECORDING,
+        )
+
+        # Create recording
+        self.recording = Recording.objects.create(
+            bot=self.bot,
+            is_default_recording=True,
+            recording_type=self.bot.recording_type(),
+            transcription_type=TranscriptionTypes.NON_REALTIME,
+        )
+
+        # Create participants
+        self.participant_a = Participant.objects.create(
+            bot=self.bot,
+            uuid="speaker_a_uuid",
+            full_name="Speaker A",
+        )
+        self.participant_b = Participant.objects.create(
+            bot=self.bot,
+            uuid="speaker_b_uuid",
+            full_name="Speaker B",
+        )
+
+        self.client = Client()
+
+    def _make_authenticated_request(self, method, url, api_key):
+        """Helper method to make authenticated API requests."""
+        headers = {"HTTP_AUTHORIZATION": f"Token {api_key}"}
+        if method.upper() == "GET":
+            return self.client.get(url, **headers)
+
+    def test_transcript_with_split_on_turns(self):
+        """Test that the transcript API splits utterances when split_on_turns=true."""
+        # Create utterances:
+        # Speaker A says "Hello" at 0ms, then "World" at 2000ms (with a pause in between)
+        # Speaker B says "Hi" at 1500ms (during Speaker A's pause)
+
+        # Speaker A's utterance with a long pause between words
+        Utterance.objects.create(
+            recording=self.recording,
+            participant=self.participant_a,
+            timestamp_ms=0,
+            duration_ms=3000,
+            transcription={
+                "transcript": "Hello World",
+                "words": [
+                    {"word": "Hello", "start": 0.0, "end": 1.0},
+                    {"word": "World", "start": 2.0, "end": 3.0},
+                ],
             },
-            {
-                "timestamp_ms": 1500,
-                "speaker_uuid": "speaker_b",
-                "transcription": {
-                    "words": [
-                        {"word": "Hi", "start": 0.0, "end": 0.3},
-                    ],
-                },
+        )
+
+        # Speaker B's utterance during Speaker A's pause
+        Utterance.objects.create(
+            recording=self.recording,
+            participant=self.participant_b,
+            timestamp_ms=1500,
+            duration_ms=300,
+            transcription={
+                "transcript": "Hi",
+                "words": [
+                    {"word": "Hi", "start": 0.0, "end": 0.3},
+                ],
             },
-        ]
+        )
 
-        result = split_utterances_on_turn_taking(utterances, min_pause_ms=300)
+        # Make request WITH split_on_turns=true
+        response = self._make_authenticated_request(
+            "GET",
+            f"/api/v1/bots/{self.bot.object_id}/transcript?split_on_turns=true",
+            self.api_key_plain,
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
 
-        # Should have 3 utterances now: Speaker A part 1, Speaker B, Speaker A part 2
-        self.assertEqual(len(result), 3)
+        results = response.json()
+
+        # Should have 3 utterances: Speaker A part 1, Speaker B, Speaker A part 2
+        self.assertEqual(len(results), 3)
 
         # First utterance should be Speaker A's "Hello"
-        self.assertEqual(result[0]["speaker_uuid"], "speaker_a")
-        self.assertEqual(len(result[0]["transcription"]["words"]), 1)
-        self.assertEqual(result[0]["transcription"]["words"][0]["word"], "Hello")
-        self.assertEqual(result[0]["timestamp_ms"], 0)
+        self.assertEqual(results[0]["speaker_uuid"], "speaker_a_uuid")
+        self.assertEqual(results[0]["transcription"]["transcript"], "Hello")
+        self.assertEqual(len(results[0]["transcription"]["words"]), 1)
+        self.assertEqual(results[0]["transcription"]["words"][0]["word"], "Hello")
 
         # Second utterance should be Speaker B's "Hi"
-        self.assertEqual(result[1]["speaker_uuid"], "speaker_b")
-        self.assertEqual(len(result[1]["transcription"]["words"]), 1)
-        self.assertEqual(result[1]["transcription"]["words"][0]["word"], "Hi")
+        self.assertEqual(results[1]["speaker_uuid"], "speaker_b_uuid")
+        self.assertEqual(results[1]["transcription"]["transcript"], "Hi")
 
         # Third utterance should be Speaker A's "World"
-        self.assertEqual(result[2]["speaker_uuid"], "speaker_a")
-        self.assertEqual(len(result[2]["transcription"]["words"]), 1)
-        self.assertEqual(result[2]["transcription"]["words"][0]["word"], "World")
-        self.assertEqual(result[2]["timestamp_ms"], 2000)
+        self.assertEqual(results[2]["speaker_uuid"], "speaker_a_uuid")
+        self.assertEqual(results[2]["transcription"]["transcript"], "World")
+        self.assertEqual(len(results[2]["transcription"]["words"]), 1)
+        self.assertEqual(results[2]["transcription"]["words"][0]["word"], "World")
