@@ -888,6 +888,11 @@ class ZoomBotAdapter(BotAdapter):
             self.send_message_callback({"message": self.Messages.MEETING_ENDED})
             return
 
+        if self.joined_at is None:
+            logger.warning("Leave called but joined_at is None. This means we were instructed to leave before we could join. Sending Meeting Ended message")
+            self.send_message_callback({"message": self.Messages.MEETING_ENDED})
+            return
+
         status = self.meeting_service.GetMeetingStatus()
         if status == zoom.MEETING_STATUS_IDLE or status == zoom.MEETING_STATUS_ENDED:
             logger.info(f"Aborting leave because meeting status is {status}")
