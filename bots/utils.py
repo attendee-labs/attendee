@@ -1,4 +1,5 @@
 import io
+import logging
 
 import cv2
 import numpy as np
@@ -9,6 +10,8 @@ from .models import (
     MeetingTypes,
     TranscriptionProviders,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def pcm_to_mp3(
@@ -578,6 +581,12 @@ def split_utterances_on_turn_taking(
     min_pause_ms: int = 300,
     slack_ms: int = 60,
 ) -> list[dict[str, Any]]:
+    # Check if any utterances do not have words. If so return the original input
+    for u in utterances:
+        if "words" not in u["transcription"]:
+            logger.warning(f"Utterance {u} does not have words. Skipping split on turn taking.")
+            return utterances
+
     # Step 1: Convert every word to absolute (epoch) milliseconds
     # so we can compare across speakers on a shared timeline.
     all_word_events: list[tuple[int, str]] = []  # (abs_start_ms, speaker_uuid)
