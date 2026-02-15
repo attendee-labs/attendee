@@ -884,6 +884,8 @@ class ZoomBotAdapter(BotAdapter):
 
     def leave(self):
         if self.meeting_service is None:
+            logger.warning("Leave called but meeting_service is None. This means we were instructed to leave before we could join. Sending Meeting Ended message")
+            self.send_message_callback({"message": self.Messages.MEETING_ENDED})
             return
 
         status = self.meeting_service.GetMeetingStatus()
