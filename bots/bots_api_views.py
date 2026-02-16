@@ -974,7 +974,7 @@ class BotDetailView(APIView):
     @extend_schema(
         operation_id="Patch Bot",
         summary="Update a bot",
-        description="Updates a bot. The join_at, meeting_url, bot_name and bot_image fields can only be updated when the bot is in the scheduled state. The metadata field can be updated at any time.",
+        description="Updates a bot. The join_at, meeting_url, bot_name, bot_image and recording_settings fields can only be updated when the bot is in the scheduled state. The metadata field can be updated at any time.",
         request=PatchBotSerializer,
         responses={
             200: OpenApiResponse(
