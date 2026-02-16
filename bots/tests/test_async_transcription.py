@@ -37,7 +37,7 @@ from bots.tasks.process_async_transcription_task import (
     create_utterances_for_transcription_using_groups,
     process_async_transcription,
 )
-from bots.tasks.process_utterance_group_task import process_utterance_group_for_async_transcription
+from bots.tasks.process_utterance_group_for_async_transcription_task import process_utterance_group_for_async_transcription
 from bots.transcription_utils import split_transcription_by_utterance
 
 
@@ -380,7 +380,7 @@ class TestSplitTranscriptionByUtterance(AsyncTranscriptionTestCase):
 class TestProcessUtteranceGroup(AsyncTranscriptionTestCase):
     """Tests for the process_utterance_group_for_async_transcription task."""
 
-    @mock.patch("bots.tasks.process_utterance_group_task.get_transcription_via_assemblyai_for_utterance_group")
+    @mock.patch("bots.tasks.process_utterance_group_for_async_transcription_task.get_transcription_via_assemblyai_for_utterance_group")
     def test_successful_transcription_writes_to_all_utterances(self, mock_get_transcription):
         """Verify successful transcription writes results to all utterances in the group."""
         chunks = self._create_audio_chunks(count=3, duration_ms=1000)
@@ -424,7 +424,7 @@ class TestProcessUtteranceGroup(AsyncTranscriptionTestCase):
         utterances[0].refresh_from_db()
         self.assertEqual(utterances[0].transcription["transcript"], "hello")
 
-    @mock.patch("bots.tasks.process_utterance_group_task.get_transcription_via_assemblyai_for_utterance_group")
+    @mock.patch("bots.tasks.process_utterance_group_for_async_transcription_task.get_transcription_via_assemblyai_for_utterance_group")
     def test_failed_transcription_marks_all_utterances_failed(self, mock_get_transcription):
         """Verify failed transcription marks all utterances in the group as failed."""
         chunks = self._create_audio_chunks(count=2, duration_ms=1000)
