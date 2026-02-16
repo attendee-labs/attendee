@@ -27,6 +27,16 @@ class ChatMessagePoller {
         this.ms_teams_region = null;
         this.skype_token = null;
         this.lastFetchTime = null;
+
+        this.isTeamsConsumerEdition = window.location.hostname.includes('teams.live.com');
+        this.hostnameToQuery = this.isTeamsConsumerEdition ? 'teams.live.com' : 'teams.microsoft.com';
+        if (this.isTeamsConsumerEdition)
+            this.ms_teams_region = 'consumer';
+
+        // Set an interval to fetch every 5 seconds
+        this.fetchInterval = setInterval(() => {
+            this.fetchChatMessages();
+        }, 5000);
     }
 
     setMsTeamsRegion(ms_teams_region) {
@@ -65,7 +75,7 @@ class ChatMessagePoller {
 
         const fetchTime = Date.now();
 
-        const url = `https://teams.microsoft.com/api/chatsvc/${this.ms_teams_region}/v1/users/ME/conversations/${threadId}/messages?${params.toString()}`;
+        const url = `https://${this.hostnameToQuery}/api/chatsvc/${this.ms_teams_region}/v1/users/ME/conversations/${threadId}/messages?${params.toString()}`;
 
         const response = await fetch(url, {
             method: 'GET',
@@ -83,6 +93,8 @@ class ChatMessagePoller {
         this.lastFetchTime = fetchTime;
 
         const data = await response.json();
+
+        console.log('ChatMessagePoller: Fetched messages', data);
         
         return data;
     }
