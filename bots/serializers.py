@@ -426,14 +426,6 @@ TRANSCRIPTION_SETTINGS_SCHEMA = {
 }
 
 
-def _validate_bot_name_attribute(value):
-    if value is not None and value:
-        for char in value:
-            if ord(char) > 0xFFFF:
-                raise serializers.ValidationError("Bot name cannot contain emojis or rare script characters.")
-    return value
-
-
 def _validate_metadata_attribute(value):
     if value is None:
         return value
@@ -465,7 +457,14 @@ def _validate_metadata_attribute(value):
 
 
 class BotValidationMixin:
-    """Mixin class providing meeting URL validation for serializers."""
+    """Mixin class providing validation for common attributes used in both patching and creating bots."""
+
+    def validate_bot_name(self, value):
+        if value is not None and value:
+            for char in value:
+                if ord(char) > 0xFFFF:
+                    raise serializers.ValidationError("Bot name cannot contain emojis or rare script characters.")
+        return value
 
     def validate_meeting_url(self, value):
         meeting_type, normalized_url = normalize_meeting_url(value)
@@ -1570,9 +1569,6 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
 
         return value
 
-    def validate_bot_name(self, value):
-        return _validate_bot_name_attribute(value)
-
     def validate(self, data):
         """Validate that no unexpected fields are provided."""
         # Get all the field names defined in this serializer
@@ -1917,9 +1913,6 @@ class PatchBotSerializer(BotValidationMixin, serializers.Serializer):
 
     def validate_metadata(self, value):
         return _validate_metadata_attribute(value)
-
-    def validate_bot_name(self, value):
-        return _validate_bot_name_attribute(value)
 
 
 @extend_schema_serializer(
