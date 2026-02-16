@@ -633,7 +633,7 @@ BOT_RECORDING_SETTINGS_SCHEMA = {
     "properties": {
         "format": {
             "type": "string",
-            "description": "The format of the recording to save. The supported formats are 'mp4', 'mp3' and 'none'.",
+            "description": "The format of the recording to save. The supported formats are 'mp4', 'mp3' and 'none'. Defaults to 'mp4'.",
         },
         "view": {
             "type": "string",

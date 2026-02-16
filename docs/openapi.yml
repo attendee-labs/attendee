@@ -2550,7 +2550,7 @@ components:
             format:
               type: string
               description: The format of the recording to save. The supported formats
-                are 'mp4', 'mp3' and 'none'.
+                are 'mp4', 'mp3' and 'none'. Defaults to 'mp4'.
             view:
               type: string
               description: The view to use for the recording. The supported views
@@ -3037,7 +3037,7 @@ components:
             format:
               type: string
               description: The format of the recording to save. The supported formats
-                are 'mp4', 'mp3' and 'none'.
+                are 'mp4', 'mp3' and 'none'. Defaults to 'mp4'.
             view:
               type: string
               description: The view to use for the recording. The supported views
