@@ -95,6 +95,20 @@ class ChatMessagePoller {
         const data = await response.json();
 
         console.log('ChatMessagePoller: Fetched messages', data);
+        if (data.messages.length > 0) {
+            for (const message of data.messages) {
+                // To get fromConverted we split on '/' and take the last part,
+                // Because it does stuff like this https://teams.microsoft.com/api/chatsvc/amer/v1/users/ME/contacts/8:orgid:05c82742-xxxx-41c2-a6be-a20201291fec
+                const fromConverted = message.from.split('/').pop();
+                const messageConverted = {
+                    clientMessageId: message.clientmessageid,
+                    from: fromConverted,
+                    content: message.content,
+                    originalArrivalTime: message.originalarrivaltime,
+                };
+                window.chatMessageManager?.handleChatMessage(messageConverted);
+            }
+        }
         
         return data;
     }
