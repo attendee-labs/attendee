@@ -16,6 +16,7 @@ from bots.models import (
     TranscriptionTypes,
     Utterance,
 )
+from bots.serializers import BOT_RECORDING_SETTINGS_DEFAULT_VALUES
 
 
 class BotListViewTest(TransactionTestCase):
@@ -274,6 +275,79 @@ class BotListViewTest(TransactionTestCase):
         bot_ids = [b["id"] for b in results]
 
         self.assertNotIn(bot_no_join_at.object_id, bot_ids)
+
+
+class PatchBotRecordingSettingsTest(TransactionTestCase):
+    """Tests for patching a bot and ensuring recording_settings are preserved."""
+
+    def setUp(self):
+        self.organization = Organization.objects.create(name="Test Organization")
+        self.project = Project.objects.create(name="Test Project", organization=self.organization)
+        self.api_key, self.api_key_plain = ApiKey.create(project=self.project, name="Test API Key")
+
+        self.custom_recording_settings = {
+            "format": "mp3",
+            "view": "gallery_view",
+            "resolution": "720p",
+            "record_chat_messages_when_paused": True,
+            "record_async_transcription_audio_chunks": False,
+            "reserve_additional_storage": False,
+        }
+
+        self.bot = Bot.objects.create(
+            project=self.project,
+            meeting_url="https://meet.google.com/abc-defg-hij",
+            name="Test Bot",
+            state=BotStates.SCHEDULED,
+            settings={"recording_settings": self.custom_recording_settings},
+        )
+        Recording.objects.create(
+            bot=self.bot,
+            is_default_recording=True,
+            recording_type=self.bot.recording_type(),
+            transcription_type=TranscriptionTypes.NON_REALTIME,
+        )
+
+        self.client = Client()
+
+    def _make_authenticated_request(self, method, url, api_key, data=None):
+        """Helper method to make authenticated API requests."""
+        headers = {"HTTP_AUTHORIZATION": f"Token {api_key}", "HTTP_CONTENT_TYPE": "application/json"}
+        if method.upper() == "GET":
+            return self.client.get(url, **headers)
+        elif method.upper() == "PATCH":
+            return self.client.patch(url, data=data, content_type="application/json", **headers)
+
+    def test_patch_bot_without_recording_settings_does_not_change_them(self):
+        """Test that patching a bot without specifying recording_settings does NOT change any of its recording settings."""
+        # Patch only the metadata — do NOT include recording_settings
+        response = self._make_authenticated_request(
+            "PATCH",
+            f"/api/v1/bots/{self.bot.object_id}",
+            self.api_key_plain,
+            data={"metadata": {"key": "value"}, "bot_name": "Updated Bot Name"},
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        # Reload the bot from the database
+        self.bot.refresh_from_db()
+        self.assertEqual(self.bot.settings["recording_settings"], self.custom_recording_settings)
+        self.assertEqual(self.bot.metadata, {"key": "value"})
+        self.assertEqual(self.bot.name, "Updated Bot Name")
+
+    def test_patch_bot_with_recording_settings_updates_them(self):
+        """Test that patching a bot with recording_settings updates the recording settings."""
+        response = self._make_authenticated_request(
+            "PATCH",
+            f"/api/v1/bots/{self.bot.object_id}",
+            self.api_key_plain,
+            data={"recording_settings": {"record_async_transcription_audio_chunks": True}},
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        # Reload the bot from the database
+        self.bot.refresh_from_db()
+        self.assertEqual(self.bot.settings["recording_settings"], {**BOT_RECORDING_SETTINGS_DEFAULT_VALUES, "record_async_transcription_audio_chunks": True})
 
 
 class TranscriptSplitOnTurnsViewTest(TransactionTestCase):
