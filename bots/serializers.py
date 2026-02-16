@@ -1901,9 +1901,9 @@ class PatchBotSerializer(BotValidationMixin, serializers.Serializer):
     bot_name = serializers.CharField(help_text="The name of the bot, e.g. 'My Bot'", required=False, allow_blank=False)
     bot_image = BotImageSerializer(help_text="The image for the bot", required=False, default=None)
     recording_settings = RecordingSettingsJSONField(
-        help_text="The settings for the bot's recording.",
+        help_text="The settings for the bot's recording. The settings specified here will completely replace the existing settings.",
         required=False,
-        default=BOT_RECORDING_SETTINGS_DEFAULT_VALUES,
+        default=None,
     )
 
     def validate_metadata(self, value):
