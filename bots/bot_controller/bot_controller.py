@@ -1378,8 +1378,11 @@ class BotController:
         # Set the recording transcription in progress
         RecordingManager.set_recording_transcription_in_progress(recording_in_progress)
 
-        # Process the utterance immediately
-        process_utterance.delay(utterance.id)
+        # Process the utterance after 60 seconds to see if Azure storage has a delay between uploaded the file and able to read it
+        if settings.USE_REMOTE_STORAGE_FOR_AUDIO_CHUNKS:
+            process_utterance.apply_async(args=[utterance.id], countdown=60)
+        else:
+            process_utterance.delay(utterance.id)
         return
 
     def on_audio_chunk_upload_success(self, audio_chunk_id: int, stored_name: str):
