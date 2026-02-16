@@ -6,7 +6,7 @@ from django.test import TestCase
 from django.utils import timezone
 
 from accounts.models import Organization
-from bots.bots_api_utils import BotCreationSource, build_site_url, create_bot, create_webhook_subscription, validate_bot_concurrency_limit, validate_meeting_url_and_credentials
+from bots.bots_api_utils import BotCreationSource, build_site_url, create_bot, create_webhook_subscription, patch_bot, validate_bot_concurrency_limit, validate_meeting_url_and_credentials
 from bots.calendars_api_utils import create_calendar
 from bots.models import Bot, BotEventManager, BotEventTypes, BotStates, CalendarEvent, CalendarPlatform, Project, TranscriptionProviders, WebhookSubscription, WebhookTriggerTypes, ZoomOAuthApp
 
@@ -522,7 +522,7 @@ class TestPatchBot(TestCase):
 
         self.assertIsNone(updated_bot)
         self.assertIsNotNone(patch_error)
-        self.assertEqual(patch_error["error"], "Bot is in state joining but join_at, meeting_url, bot_name and bot_image can only be updated when in the scheduled state")
+        self.assertEqual(patch_error["error"], "Bot is in state joining but join_at, meeting_url, bot_name, bot_image and recording_settings can only be updated when in the scheduled state")
 
     def test_patch_bot_meeting_url_not_in_scheduled_state(self):
         """Test that patching a bot not in scheduled state fails."""
@@ -805,6 +805,61 @@ class TestPatchBot(TestCase):
             original_image_request_id,
             "New image request should have a different ID than the original",
         )
+
+    def test_patch_bot_without_recording_settings_preserves_them(self):
+        """Test that patching a bot without specifying recording_settings does NOT change any of its recording settings."""
+        future_time = timezone.now() + timedelta(hours=1)
+        custom_recording_settings = {
+            "format": "mp3",
+            "view": "gallery_view",
+            "resolution": "720p",
+            "record_chat_messages_when_paused": True,
+            "record_async_transcription_audio_chunks": False,
+            "reserve_additional_storage": False,
+        }
+        bot, error = create_bot(
+            data={"meeting_url": "https://meet.google.com/abc-defg-hij", "bot_name": "Test Bot", "join_at": future_time.isoformat(), "recording_settings": custom_recording_settings},
+            source=BotCreationSource.API,
+            project=self.project,
+        )
+        self.assertIsNotNone(bot)
+        self.assertIsNone(error)
+        self.assertEqual(bot.state, BotStates.SCHEDULED)
+
+        # Patch only metadata and bot_name — do NOT include recording_settings
+        updated_bot, patch_error = patch_bot(bot, {"metadata": {"key": "value"}, "bot_name": "Updated Bot Name"})
+        self.assertIsNotNone(updated_bot)
+        self.assertIsNone(patch_error)
+        self.assertEqual(updated_bot.settings["recording_settings"], custom_recording_settings)
+        self.assertEqual(updated_bot.metadata, {"key": "value"})
+        self.assertEqual(updated_bot.name, "Updated Bot Name")
+
+    def test_patch_bot_with_recording_settings_updates_them(self):
+        """Test that patching a bot with recording_settings updates the recording settings."""
+        from bots.serializers import BOT_RECORDING_SETTINGS_DEFAULT_VALUES
+
+        future_time = timezone.now() + timedelta(hours=1)
+        custom_recording_settings = {
+            "format": "mp3",
+            "view": "gallery_view",
+            "resolution": "720p",
+            "record_chat_messages_when_paused": True,
+            "record_async_transcription_audio_chunks": False,
+            "reserve_additional_storage": False,
+        }
+        bot, error = create_bot(
+            data={"meeting_url": "https://meet.google.com/abc-defg-hij", "bot_name": "Test Bot", "join_at": future_time.isoformat(), "recording_settings": custom_recording_settings},
+            source=BotCreationSource.API,
+            project=self.project,
+        )
+        self.assertIsNotNone(bot)
+        self.assertIsNone(error)
+        self.assertEqual(bot.state, BotStates.SCHEDULED)
+
+        updated_bot, patch_error = patch_bot(bot, {"recording_settings": {"record_async_transcription_audio_chunks": True}})
+        self.assertIsNotNone(updated_bot)
+        self.assertIsNone(patch_error)
+        self.assertEqual(updated_bot.settings["recording_settings"], {**BOT_RECORDING_SETTINGS_DEFAULT_VALUES, "record_async_transcription_audio_chunks": True})
 
 
 class TestConcurrentBotLimit(TestCase):

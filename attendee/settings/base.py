@@ -171,6 +171,26 @@ CELERY_RESULT_BACKEND = REDIS_CELERY_URL
 CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
+CELERY_TASK_ROUTES = {
+    "bots.tasks.process_utterance_task.process_utterance": {
+        "queue": os.getenv("PROCESS_UTTERANCE_CELERY_QUEUE", "celery"),
+    },
+    "bots.tasks.process_utterance_group_for_async_transcription_task.process_utterance_group_for_async_transcription": {
+        "queue": os.getenv("PROCESS_UTTERANCE_CELERY_QUEUE", "celery"),
+    },
+    "bots.tasks.process_async_transcription_task.process_async_transcription": {
+        "queue": os.getenv("PROCESS_ASYNC_TRANSCRIPTION_CELERY_QUEUE", "celery"),
+    },
+    "bots.tasks.sync_calendar_task.sync_calendar": {
+        "queue": os.getenv("SYNC_CALENDAR_CELERY_QUEUE", "celery"),
+    },
+    "bots.tasks.launch_scheduled_bot_task.launch_scheduled_bot": {
+        "queue": os.getenv("LAUNCH_SCHEDULED_BOT_CELERY_QUEUE", "celery"),
+    },
+    "bots.tasks.deliver_webhook_task.deliver_webhook": {
+        "queue": os.getenv("DELIVER_WEBHOOK_CELERY_QUEUE", "celery"),
+    },
+}
 
 REST_FRAMEWORK = {
     # YOUR SETTINGS
