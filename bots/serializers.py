@@ -489,6 +489,38 @@ class BotValidationMixin:
 
         return value
 
+    def validate_recording_settings(self, value):
+        if value is None:
+            return value
+
+        # Define defaults
+        try:
+            jsonschema.validate(instance=value, schema=BOT_RECORDING_SETTINGS_SCHEMA)
+        except jsonschema.exceptions.ValidationError as e:
+            raise serializers.ValidationError(e.message)
+
+        # If at least one attribute is provided, apply defaults for any missing attributes
+        if value:
+            for key, default_value in BOT_RECORDING_SETTINGS_DEFAULT_VALUES.items():
+                if key not in value:
+                    value[key] = default_value
+
+        # Validate format if provided
+        format = value.get("format")
+        if format not in [RecordingFormats.MP4, RecordingFormats.MP3, RecordingFormats.NONE, None]:
+            raise serializers.ValidationError({"format": "Format must be mp4 or mp3 or 'none'"})
+
+        # Validate view if provided
+        view = value.get("view")
+        if view not in [RecordingViews.SPEAKER_VIEW, RecordingViews.GALLERY_VIEW, RecordingViews.SPEAKER_VIEW_NO_SIDEBAR, None]:
+            raise serializers.ValidationError({"view": "View must be speaker_view or gallery_view or speaker_view_no_sidebar"})
+
+        # You can only reserve additional storage if you're using Kubernetes to launch the bot
+        if value.get("reserve_additional_storage") and os.getenv("LAUNCH_BOT_METHOD") != "kubernetes":
+            raise serializers.ValidationError({"reserve_additional_storage": "Not supported unless using Kubernetes"})
+
+        return value
+
 
 @extend_schema_field(BOT_IMAGE_SCHEMA)
 class ImageJSONField(serializers.JSONField):
@@ -588,43 +620,52 @@ class RTMPSettingsJSONField(serializers.JSONField):
     pass
 
 
-@extend_schema_field(
-    {
-        "type": "object",
-        "properties": {
-            "format": {
-                "type": "string",
-                "description": "The format of the recording to save. The supported formats are 'mp4', 'mp3' and 'none'.",
-            },
-            "view": {
-                "type": "string",
-                "description": "The view to use for the recording. The supported views are 'speaker_view', 'gallery_view' and 'speaker_view_no_sidebar'.",
-            },
-            "resolution": {
-                "type": "string",
-                "description": "The resolution to use for the recording. The supported resolutions are '1080p' and '720p'. Defaults to '1080p'.",
-                "enum": RecordingResolutions.values,
-            },
-            "record_chat_messages_when_paused": {
-                "type": "boolean",
-                "description": "Whether to record chat messages even when the recording is paused. Defaults to false.",
-                "default": False,
-            },
-            "record_async_transcription_audio_chunks": {
-                "type": "boolean",
-                "description": "Whether to record additional audio data which is needed for creating async (post-meeting) transcriptions. Defaults to false.",
-                "default": False,
-            },
-            "reserve_additional_storage": {
-                "type": "boolean",
-                "description": "Whether to reserve extra space to store the recording. Only needed when the bot will record video for longer than 6 hours. Defaults to false.",
-                "default": False,
-            },
+BOT_RECORDING_SETTINGS_DEFAULT_VALUES = {
+    "format": RecordingFormats.MP4,
+    "view": RecordingViews.SPEAKER_VIEW,
+    "resolution": RecordingResolutions.HD_1080P,
+    "record_chat_messages_when_paused": False,
+    "record_async_transcription_audio_chunks": False,
+    "reserve_additional_storage": False,
+}
+BOT_RECORDING_SETTINGS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "format": {
+            "type": "string",
+            "description": "The format of the recording to save. The supported formats are 'mp4', 'mp3' and 'none'.",
         },
-        "additionalProperties": False,
-        "required": [],
-    }
-)
+        "view": {
+            "type": "string",
+            "description": "The view to use for the recording. The supported views are 'speaker_view', 'gallery_view' and 'speaker_view_no_sidebar'.",
+        },
+        "resolution": {
+            "type": "string",
+            "description": "The resolution to use for the recording. The supported resolutions are '1080p' and '720p'. Defaults to '1080p'.",
+            "enum": RecordingResolutions.values,
+        },
+        "record_chat_messages_when_paused": {
+            "type": "boolean",
+            "description": "Whether to record chat messages even when the recording is paused. Defaults to false.",
+            "default": False,
+        },
+        "record_async_transcription_audio_chunks": {
+            "type": "boolean",
+            "description": "Whether to record additional audio data which is needed for creating async (post-meeting) transcriptions. Defaults to false.",
+            "default": False,
+        },
+        "reserve_additional_storage": {
+            "type": "boolean",
+            "description": "Whether to reserve extra space to store the recording. Only needed when the bot will record video for longer than 6 hours. Defaults to false.",
+            "default": False,
+        },
+    },
+    "additionalProperties": False,
+    "required": [],
+}
+
+
+@extend_schema_field(BOT_RECORDING_SETTINGS_SCHEMA)
 class RecordingSettingsJSONField(serializers.JSONField):
     pass
 
@@ -1347,59 +1388,8 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
     recording_settings = RecordingSettingsJSONField(
         help_text="The settings for the bot's recording.",
         required=False,
-        default={"format": RecordingFormats.MP4, "view": RecordingViews.SPEAKER_VIEW, "resolution": RecordingResolutions.HD_1080P, "record_chat_messages_when_paused": False, "record_async_transcription_audio_chunks": False, "reserve_additional_storage": False},
+        default=BOT_RECORDING_SETTINGS_DEFAULT_VALUES,
     )
-
-    RECORDING_SETTINGS_SCHEMA = {
-        "type": "object",
-        "properties": {
-            "format": {"type": "string"},
-            "view": {"type": "string"},
-            "resolution": {
-                "type": "string",
-                "enum": list(RecordingResolutions.values),
-            },
-            "record_chat_messages_when_paused": {"type": "boolean"},
-            "record_async_transcription_audio_chunks": {"type": "boolean"},
-            "reserve_additional_storage": {"type": "boolean"},
-        },
-        "additionalProperties": False,
-        "required": [],
-    }
-
-    def validate_recording_settings(self, value):
-        if value is None:
-            return value
-
-        # Define defaults
-        defaults = {"format": RecordingFormats.MP4, "view": RecordingViews.SPEAKER_VIEW, "resolution": RecordingResolutions.HD_1080P, "record_chat_messages_when_paused": False}
-
-        try:
-            jsonschema.validate(instance=value, schema=self.RECORDING_SETTINGS_SCHEMA)
-        except jsonschema.exceptions.ValidationError as e:
-            raise serializers.ValidationError(e.message)
-
-        # If at least one attribute is provided, apply defaults for any missing attributes
-        if value:
-            for key, default_value in defaults.items():
-                if key not in value:
-                    value[key] = default_value
-
-        # Validate format if provided
-        format = value.get("format")
-        if format not in [RecordingFormats.MP4, RecordingFormats.MP3, RecordingFormats.NONE, None]:
-            raise serializers.ValidationError({"format": "Format must be mp4 or mp3 or 'none'"})
-
-        # Validate view if provided
-        view = value.get("view")
-        if view not in [RecordingViews.SPEAKER_VIEW, RecordingViews.GALLERY_VIEW, RecordingViews.SPEAKER_VIEW_NO_SIDEBAR, None]:
-            raise serializers.ValidationError({"view": "View must be speaker_view or gallery_view or speaker_view_no_sidebar"})
-
-        # You can only reserve additional storage if you're using Kubernetes to launch the bot
-        if value.get("reserve_additional_storage") and os.getenv("LAUNCH_BOT_METHOD") != "kubernetes":
-            raise serializers.ValidationError({"reserve_additional_storage": "Not supported unless using Kubernetes"})
-
-        return value
 
     google_meet_settings = GoogleMeetSettingsJSONField(
         help_text="The Google Meet-specific settings for the bot.",
@@ -1910,6 +1900,11 @@ class PatchBotSerializer(BotValidationMixin, serializers.Serializer):
     metadata = serializers.JSONField(help_text="JSON object containing metadata to associate with the bot", required=False)
     bot_name = serializers.CharField(help_text="The name of the bot, e.g. 'My Bot'", required=False, allow_blank=False)
     bot_image = BotImageSerializer(help_text="The image for the bot", required=False, default=None)
+    recording_settings = RecordingSettingsJSONField(
+        help_text="The settings for the bot's recording.",
+        required=False,
+        default=BOT_RECORDING_SETTINGS_DEFAULT_VALUES,
+    )
 
     def validate_metadata(self, value):
         return _validate_metadata_attribute(value)
