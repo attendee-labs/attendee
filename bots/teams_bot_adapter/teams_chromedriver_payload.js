@@ -86,6 +86,10 @@ class ChatMessagePoller {
 
         if (!response.ok) {
             console.error('ChatMessagePoller: Failed to fetch messages', response.status, response.statusText);
+            window.ws.sendJson({
+                type: 'chatMessagePollerUpdate',
+                message: `Failed to fetch messages: ${response.status} ${response.statusText}`
+            });
             return null;
         }
 
@@ -100,6 +104,17 @@ class ChatMessagePoller {
                 // To get fromConverted we split on '/' and take the last part,
                 // Because it does stuff like this https://teams.microsoft.com/api/chatsvc/amer/v1/users/ME/contacts/8:orgid:05c82742-xxxx-41c2-a6be-a20201291fec
                 const fromConverted = message.from.split('/').pop();
+                // Check if a user exists in userManager with the deviceId of fromConverted
+                const fromUser = window.userManager.getUserByDeviceId(fromConverted);
+                // If not found, somehowe we didn't detect that this user is in the meeting, so we need to sync the participants list
+                if (!fromUser) {
+                    window.callManager.syncParticipants();
+                    window.ws.sendJson({
+                        type: 'chatMessagePollerUpdate',
+                        message: `User ${fromConverted} not found, syncing participants`,
+                        userNowInParticipantsList: !!window.userManager.getUserByDeviceId(fromConverted)
+                    });
+                }
                 const messageConverted = {
                     clientMessageId: message.clientmessageid,
                     from: fromConverted,
