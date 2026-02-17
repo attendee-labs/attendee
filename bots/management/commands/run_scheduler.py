@@ -4,6 +4,7 @@ import signal
 import time
 
 import redis
+from django.conf import settings
 from django.core.management.base import BaseCommand
 from django.db import connection, models, transaction
 from django.db.models import Q
@@ -48,14 +49,23 @@ class Command(BaseCommand):
             self._redis_client = redis.from_url(redis_url)
         return self._redis_client
 
-    def _log_celery_queue_size(self):
+    def _log_celery_queue_size(self, queue_name):
         """Log the size of the default Celery queue."""
         try:
-            queue_size = self._get_redis_client().llen("celery")
-            log.info("Celery queue size: %d", queue_size)
+            queue_size = self._get_redis_client().llen(queue_name)
+            log.info("Celery queue %s size: %d", queue_name, queue_size)
         except Exception:
-            log.exception("Failed to get Celery queue size")
+            log.exception("Failed to get Celery queue %s size", queue_name)
             self._redis_client = None  # Reset connection on failure
+
+    def _log_celery_queue_sizes(self):
+        try:
+            # Get all the celery queue names from the CELERY_TASK_ROUTES setting
+            queue_names = list({"celery"} | {route.get("queue", "celery") for route in settings.CELERY_TASK_ROUTES.values()})
+            for queue_name in queue_names:
+                self._log_celery_queue_size(queue_name)
+        except Exception:
+            log.exception("Failed to get Celery queue sizes, skipping")
 
     def handle(self, *args, **opts):
         # Trap SIGINT / SIGTERM so Kubernetes or Heroku can stop the container cleanly
@@ -68,7 +78,7 @@ class Command(BaseCommand):
         while self._keep_running:
             began = time.monotonic()
             try:
-                self._log_celery_queue_size()
+                self._log_celery_queue_sizes()
                 self._run_scheduled_bots()
                 self._run_periodic_calendar_syncs()
                 self._run_periodic_zoom_oauth_connection_syncs()
