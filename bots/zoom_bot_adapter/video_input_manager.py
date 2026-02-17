@@ -1,4 +1,6 @@
+import collections
 import logging
+import threading
 import time
 
 import cv2
@@ -9,6 +11,40 @@ from gi.repository import GLib
 logger = logging.getLogger(__name__)
 
 from bots.utils import create_black_i420_frame
+
+
+class RawFrameSnapshot:
+    """Lightweight snapshot of SDK frame data, safe to use after the callback returns.
+
+    Copies Y/U/V buffers out of the SDK ``data`` object so the expensive
+    ``scale_i420`` work can happen on a separate thread without holding the
+    GIL during the SDK callback.
+    """
+
+    __slots__ = ("width", "height", "y_buffer", "u_buffer", "v_buffer")
+
+    def __init__(self, width, height, y_buffer, u_buffer, v_buffer):
+        self.width = width
+        self.height = height
+        self.y_buffer = y_buffer
+        self.u_buffer = u_buffer
+        self.v_buffer = v_buffer
+
+    # Duck-type the SDK frame interface so scale_i420 works unchanged.
+    def GetStreamWidth(self):
+        return self.width
+
+    def GetStreamHeight(self):
+        return self.height
+
+    def GetYBuffer(self):
+        return self.y_buffer
+
+    def GetUBuffer(self):
+        return self.u_buffer
+
+    def GetVBuffer(self):
+        return self.v_buffer
 
 
 def scale_i420(frame, new_size):
@@ -174,9 +210,10 @@ class VideoInputStream:
             self.black_frame_timer_id = None
 
         if self.renderer:
-            logger.info(f"starting renderer unsubscription for user {self.user_id} and share source id {self.share_source_id}")
+            logger.info(f"starting renderer unsubscription + destroy for user {self.user_id} and share source id {self.share_source_id}")
             self.renderer.unSubscribe()
-            logger.info(f"finished renderer unsubscription for user {self.user_id} and share source id {self.share_source_id}")
+            zoom.destroyRenderer(self.renderer)
+            logger.info(f"finished renderer unsubscription + destroy for user {self.user_id} and share source id {self.share_source_id}")
 
     def on_renderer_destroyed_callback(self):
         self.renderer_destroyed = True
@@ -203,8 +240,17 @@ class VideoInputStream:
             logger.debug(f"In VideoInputStream.on_raw_video_frame_received_callback for user {self.user_id} received frame")
             self.last_debug_frame_time = time.time()
 
-        scaled_i420_frame = scale_i420(data, self.video_input_manager.video_frame_size)
-        self.video_input_manager.new_frame_callback(scaled_i420_frame, current_time_ns)
+        # Snapshot the raw buffers (fast memcpy) so scale_i420 can run on
+        # the drain thread without holding the GIL during this SDK callback.
+        snapshot = RawFrameSnapshot(
+            width=data.GetStreamWidth(),
+            height=data.GetStreamHeight(),
+            y_buffer=bytes(data.GetYBuffer()),
+            u_buffer=bytes(data.GetUBuffer()),
+            v_buffer=bytes(data.GetVBuffer()),
+        )
+        self.video_input_manager._video_deque.append((snapshot, current_time_ns))
+        self.video_input_manager._video_event.set()
 
 
 class VideoInputManager:
@@ -224,8 +270,46 @@ class VideoInputManager:
         self.mode = None
         self.input_streams = []
 
+        # ── Video drain thread ───────────────────────────────────────────
+        # SDK video callbacks just snapshot raw buffers into _video_deque.
+        # The drain thread does the expensive scale_i420 + push to GStreamer
+        # without holding the GIL during the SDK callback.
+        self._video_deque = collections.deque()
+        self._video_event = threading.Event()
+        self._video_drain_stop = False
+        self._video_drain_thread = threading.Thread(target=self._drain_video_loop, daemon=True, name="video-drain")
+        self._video_drain_thread.start()
+
     def has_any_video_input_streams(self):
         return len(self.input_streams) > 0
+
+    # ── Video drain thread ───────────────────────────────────────────────
+
+    def _drain_video_loop(self):
+        """Drain thread: scale + push video frames outside the SDK callback."""
+        while not self._video_drain_stop:
+            self._video_event.wait(timeout=0.1)
+            self._video_event.clear()
+            while self._video_deque:
+                snapshot, timestamp_ns = self._video_deque.popleft()
+                try:
+                    scaled = scale_i420(snapshot, self.video_frame_size)
+                    self.new_frame_callback(scaled, timestamp_ns)
+                except Exception:
+                    logger.exception("Error in video drain loop")
+
+    def _stop_video_drain(self):
+        self._video_drain_stop = True
+        self._video_event.set()
+        self._video_drain_thread.join(timeout=2.0)
+        # Flush any remaining frames
+        while self._video_deque:
+            snapshot, timestamp_ns = self._video_deque.popleft()
+            try:
+                scaled = scale_i420(snapshot, self.video_frame_size)
+                self.new_frame_callback(scaled, timestamp_ns)
+            except Exception:
+                logger.exception("Error flushing video drain")
 
     def add_input_streams_if_needed(self, streams_info):
         streams_to_remove = [input_stream for input_stream in self.input_streams if not any(stream_info["user_id"] == input_stream.user_id and stream_info["stream_type"] == input_stream.stream_type and stream_info["share_source_id"] == input_stream.share_source_id for stream_info in streams_info)]
@@ -248,6 +332,7 @@ class VideoInputManager:
             )
 
     def cleanup(self):
+        self._stop_video_drain()
         for input_stream in self.input_streams:
             input_stream.cleanup()
 
