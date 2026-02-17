@@ -244,8 +244,8 @@ class BotPodCreator:
                         env=[],
                         security_context = self.get_bot_container_security_context(),
                         volume_mounts=self.get_bot_container_volume_mounts(),
-                        liveness_probe=client.V1Probe(exec=client.V1ExecAction(command=["true"])),
-                        readiness_probe=client.V1Probe(exec=client.V1ExecAction(command=["true"])),
+                        liveness_probe=client.V1Probe(_exec=client.V1ExecAction(command=["true"])),
+                        readiness_probe=client.V1Probe(_exec=client.V1ExecAction(command=["true"])),
                     )
 
     def get_pod_tolerations(self):
