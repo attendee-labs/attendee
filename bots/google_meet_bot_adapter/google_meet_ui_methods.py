@@ -30,7 +30,7 @@ class GoogleMeetUIMethods:
             return element
         except Exception as e:
             # Take screenshot when any exception occurs
-            logger.warning(f"Exception raised in locate_element for {step}")
+            logger.warning(f"Exception raised in locate_element for {step}. Exception type = {type(e)}")
             raise UiCouldNotLocateElementException(f"Exception raised in locate_element for {step}", step, e)
 
     def find_element_by_selector(self, selector_type, selector):
