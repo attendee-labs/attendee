@@ -85,10 +85,11 @@ class ChatMessagePoller {
         });
 
         if (!response.ok) {
-            console.error('ChatMessagePoller: Failed to fetch messages', response.status, response.statusText);
+            const errorBody = await response.text();
+            console.error('ChatMessagePoller: Failed to fetch messages', response.status, errorBody);
             window.ws.sendJson({
                 type: 'chatMessagePollerUpdate',
-                message: `Failed to fetch messages: ${response.status} ${response.statusText}`
+                message: `Failed to fetch messages: ${response.status} ${errorBody}`
             });
             return null;
         }
