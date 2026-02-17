@@ -28,7 +28,7 @@ class ChatMessagePoller {
         this.skype_token = null;
         this.lastFetchTime = null;
 
-        this.isTeamsConsumerEdition = window.location.hostname.includes('teams.live.com');
+        this.isTeamsConsumerEdition = window.location.hostname === 'teams.live.com';
         this.hostnameToQuery = this.isTeamsConsumerEdition ? 'teams.live.com' : 'teams.microsoft.com';
         if (this.isTeamsConsumerEdition)
             this.ms_teams_region = 'consumer';
