@@ -463,7 +463,7 @@ class GoogleMeetUIMethods:
             logger.info("Waiting for the 'Sidebar' label element")
             sidebar_label = self.locate_element(
                 step="sidebar_label",
-                condition=EC.presence_of_element_located((By.XPATH, '//label[.//span[text()="Sidebar"]]')),
+                condition=EC.element_to_be_clickable((By.XPATH, '//label[.//span[text()="Sidebar"]]')),
                 wait_time_seconds=6,
             )
             logger.info("Clicking the 'Sidebar' label element")
