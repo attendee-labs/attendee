@@ -1389,12 +1389,17 @@ class BotController:
         if participant.is_the_bot:
             return
 
-        # Don't send webhook for non join / leave events
-        if participant_event.event_type != ParticipantEventTypes.JOIN and participant_event.event_type != ParticipantEventTypes.LEAVE:
+        # Set the trigger type based on the event type
+        if participant_event.event_type == ParticipantEventTypes.JOIN or participant_event.event_type == ParticipantEventTypes.LEAVE:
+            webhook_trigger_type = WebhookTriggerTypes.PARTICIPANT_EVENTS_JOIN_LEAVE
+        elif participant_event.event_type == ParticipantEventTypes.SPEECH_START or participant_event.event_type == ParticipantEventTypes.SPEECH_STOP:
+            webhook_trigger_type = WebhookTriggerTypes.PARTICIPANT_EVENTS_SPEECH_START_STOP
+        else:
+            logger.warning(f"Warning: Unknown participant event type: {participant_event.event_type}")
             return
 
         trigger_webhook(
-            webhook_trigger_type=WebhookTriggerTypes.PARTICIPANT_EVENTS_JOIN_LEAVE,
+            webhook_trigger_type=webhook_trigger_type,
             bot=self.bot_in_db,
             payload=participant_event_webhook_payload(participant_event),
         )

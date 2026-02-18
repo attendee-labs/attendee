@@ -626,6 +626,7 @@ BOT_RECORDING_SETTINGS_DEFAULT_VALUES = {
     "resolution": RecordingResolutions.HD_1080P,
     "record_chat_messages_when_paused": False,
     "record_async_transcription_audio_chunks": False,
+    "record_participant_speech_start_stop_events": False,
     "reserve_additional_storage": False,
 }
 BOT_RECORDING_SETTINGS_SCHEMA = {
@@ -652,6 +653,11 @@ BOT_RECORDING_SETTINGS_SCHEMA = {
         "record_async_transcription_audio_chunks": {
             "type": "boolean",
             "description": "Whether to record additional audio data which is needed for creating async (post-meeting) transcriptions. Defaults to false.",
+            "default": False,
+        },
+        "record_participant_speech_start_stop_events": {
+            "type": "boolean",
+            "description": "Whether to record participant speech start and stop events. Defaults to false.",
             "default": False,
         },
         "reserve_additional_storage": {
