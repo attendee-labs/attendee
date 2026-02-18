@@ -32,6 +32,7 @@
                                     <source src="{{ recording.url }}">
                                     Your browser does not support the video tag.
                                 </video>
+                                {% include 'projects/partials/project_bot_recording_speaker_timeline.html' with speaker_timeline=recording.speaker_timeline %}
                             {% else %}
                                 <div class="d-flex align-items-center justify-content-center bg-light border rounded" style="height: 300px;">
                                     <div class="text-center">
@@ -93,6 +94,51 @@
             video.play();
         }
     }
+
+    // Speaker timeline initialization (position bars and wire up interactions once video duration is known)
+    document.querySelectorAll('.speaker-timeline-wrapper').forEach(function(wrapper) {
+        var recordingItem = wrapper.closest('.recording-item');
+        var video = recordingItem ? recordingItem.querySelector('video') : null;
+        if (!video) return;
+
+        var tracksCol = wrapper.querySelector('.speaker-timeline-tracks');
+        var playhead = wrapper.querySelector('.speaker-timeline-playhead');
+        if (!tracksCol) return;
+
+        function initTimeline(durationMs) {
+            // Position bars based on video duration
+            tracksCol.querySelectorAll('.speaker-timeline-bar').forEach(function(bar) {
+                var startMs = parseFloat(bar.dataset.startMs);
+                var endMs = bar.dataset.endMs != null ? parseFloat(bar.dataset.endMs) : durationMs;
+                var startPct = Math.max(0, (startMs / durationMs) * 100);
+                var widthPct = Math.max(0, Math.min(100 - startPct, ((endMs - startMs) / durationMs) * 100));
+                bar.style.left = startPct + '%';
+                bar.style.width = widthPct + '%';
+            });
+
+            // Click anywhere on the tracks area to seek
+            tracksCol.addEventListener('click', function(e) {
+                var rect = tracksCol.getBoundingClientRect();
+                var pct = (e.clientX - rect.left) / rect.width;
+                video.currentTime = (pct * durationMs) / 1000;
+                video.play();
+            });
+
+            // Update playhead position on video timeupdate
+            video.addEventListener('timeupdate', function() {
+                var pct = (video.currentTime * 1000) / durationMs;
+                playhead.style.left = (pct * 100) + '%';
+            });
+        }
+
+        if (video.readyState >= 1) {
+            initTimeline(video.duration * 1000);
+        } else {
+            video.addEventListener('loadedmetadata', function() {
+                initTimeline(video.duration * 1000);
+            });
+        }
+    });
 
     // Add highlighting functionality
     document.querySelectorAll('video').forEach(video => {

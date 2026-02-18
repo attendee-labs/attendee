@@ -77,6 +77,64 @@
     .bold {
         font-weight: bold;
     }
+    /* Speaker timeline */
+    .speaker-timeline-wrapper {
+        margin-top: 0.75rem;
+        border: 1px solid #dee2e6;
+        border-radius: 0.25rem;
+        padding: 0.75rem;
+        background: #fafafa;
+    }
+    .speaker-timeline-labels {
+        flex-shrink: 0;
+        max-width: 60px;
+        overflow: hidden;
+    }
+    .speaker-timeline-tracks {
+        flex: 1;
+        position: relative;
+        min-width: 0;
+    }
+    .speaker-timeline-label {
+        height: 22px;
+        line-height: 22px;
+        font-size: 0.7rem;
+        color: #555;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        padding-right: 6px;
+        margin-bottom: 2px;
+    }
+    .speaker-timeline-track {
+        height: 22px;
+        position: relative;
+        background: #eee;
+        border-radius: 3px;
+        margin-bottom: 2px;
+        cursor: pointer;
+    }
+    .speaker-timeline-bar {
+        position: absolute;
+        top: 2px;
+        height: calc(100% - 4px);
+        border-radius: 2px;
+        opacity: 0.8;
+        transition: opacity 0.15s;
+    }
+    .speaker-timeline-bar:hover {
+        opacity: 1;
+    }
+    .speaker-timeline-playhead {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        width: 2px;
+        background: #dc3545;
+        z-index: 10;
+        pointer-events: none;
+        transition: left 0.1s linear;
+    }
     /* Override Bootstrap tab colors */
     .nav-tabs .nav-link {
         color: #6c757d !important; /* Light grey for non-active tabs */
