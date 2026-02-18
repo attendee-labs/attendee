@@ -305,7 +305,7 @@ class WebBotAdapter(BotAdapter):
         self.upsert_caption_callback(json_data["caption"])
 
     def handle_participant_speech_start_stop_event(self, json_data):
-        self.add_participant_event_callback({"participant_uuid": json_data["participantId"], "event_type": ParticipantEventTypes.SPEECH_START if json_data["isSpeechStart"] else ParticipantEventTypes.SPEECH_STOP, "event_data": {}, "timestamp_ms": int(time.time() * 1000)})
+        self.add_participant_event_callback({"participant_uuid": json_data["participantId"], "event_type": ParticipantEventTypes.SPEECH_START if json_data["isSpeechStart"] else ParticipantEventTypes.SPEECH_STOP, "event_data": {}, "timestamp_ms": int(json_data["timestamp"])})
 
     def handle_chat_message(self, json_data):
         if self.recording_paused and not self.record_chat_messages_when_paused:

@@ -30,20 +30,35 @@ function sendChatMessage(text) {
 
 class ParticipantSpeechStartStopManager {
     constructor() {
+        // Tracks the confirmed speaking state (true = speaking, false = not speaking)
         this.participantSpeechStartStopMap = new Map();
+        // Tracks consecutive samples above/below threshold per participant
+        // Positive values = consecutive samples above threshold
+        // Negative values = consecutive samples below threshold
+        this.participantHysteresisCounters = new Map();
+        // Tracks the timestamp when the current streak (speaking or silent) began
+        // so the event timestamp reflects the true start of the transition
+        this.participantStreakStartTimes = new Map();
+
+        // Number of consecutive samples above threshold required to trigger speech start
+        this.startThresholdSamples = 1;
+        // Number of consecutive samples below threshold required to trigger speech stop
+        // At 500ms sample interval, 4 samples = 2 seconds of silence before stop
+        this.stopThresholdSamples = 4;
     }
 
     start() {
         this.sampleVolumeLevelsInterval = setInterval(() => {
             this.sampleVolumeLevels();
-        }, 250);
+        }, 500);
     }
 
-    sendSpeechStartStopEvent(participantId, isSpeechStart) {
+    sendSpeechStartStopEvent(participantId, isSpeechStart, timestamp) {
         window.ws?.sendJson({
             type: 'ParticipantSpeechStartStopEvent',
             participantId: participantId,
-            isSpeechStart: isSpeechStart
+            isSpeechStart: isSpeechStart,
+            timestamp: timestamp
         });
     }
 
@@ -56,7 +71,7 @@ class ParticipantSpeechStartStopManager {
 
             for (const source of contributingSources) {
                 const audioLevel = source.audioLevel || 0;
-                if (audioLevel >= 0.05) {
+                if (audioLevel >= 0.0125) {
                     const user = window.userManager.getUserByStreamId(source.source.toString());
                     if (user) {
                         currentlySpeaking.add(user.deviceId);
@@ -65,20 +80,48 @@ class ParticipantSpeechStartStopManager {
             }
         }
 
-        // Detect participants who started speaking
+        const now = Date.now();
+
+        // Update hysteresis counters and detect speech start/stop transitions
+        // First, handle participants currently above threshold
         for (const participantId of currentlySpeaking) {
-            const wasSpeaking = this.participantSpeechStartStopMap.get(participantId);
-            if (!wasSpeaking) {
-                this.sendSpeechStartStopEvent(participantId, true);
+            const counter = this.participantHysteresisCounters.get(participantId) || 0;
+            // Increment towards positive (speaking); reset to 1 if was negative
+            const newCounter = counter > 0 ? counter + 1 : 1;
+            this.participantHysteresisCounters.set(participantId, newCounter);
+
+            // Record the timestamp when this speaking streak began
+            if (newCounter === 1) {
+                this.participantStreakStartTimes.set(participantId, now);
             }
-            this.participantSpeechStartStopMap.set(participantId, true);
+
+            const isSpeaking = this.participantSpeechStartStopMap.get(participantId) || false;
+            if (!isSpeaking && newCounter >= this.startThresholdSamples) {
+                const streakStart = this.participantStreakStartTimes.get(participantId) || now;
+                this.participantSpeechStartStopMap.set(participantId, true);
+                this.sendSpeechStartStopEvent(participantId, true, streakStart);
+            }
         }
 
-        // Detect participants who stopped speaking
-        for (const [participantId, wasSpeaking] of this.participantSpeechStartStopMap) {
-            if (wasSpeaking && !currentlySpeaking.has(participantId)) {
-                this.sendSpeechStartStopEvent(participantId, false);
+        // Then, handle participants currently below threshold
+        for (const [participantId] of this.participantHysteresisCounters) {
+            if (currentlySpeaking.has(participantId)) continue;
+
+            const counter = this.participantHysteresisCounters.get(participantId) || 0;
+            // Decrement towards negative (silent); reset to -1 if was positive
+            const newCounter = counter < 0 ? counter - 1 : -1;
+            this.participantHysteresisCounters.set(participantId, newCounter);
+
+            // Record the timestamp when this silent streak began
+            if (newCounter === -1) {
+                this.participantStreakStartTimes.set(participantId, now);
+            }
+
+            const isSpeaking = this.participantSpeechStartStopMap.get(participantId) || false;
+            if (isSpeaking && Math.abs(newCounter) >= this.stopThresholdSamples) {
+                const streakStart = this.participantStreakStartTimes.get(participantId) || now;
                 this.participantSpeechStartStopMap.set(participantId, false);
+                this.sendSpeechStartStopEvent(participantId, false, streakStart);
             }
         }
     }
