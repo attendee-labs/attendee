@@ -50,7 +50,7 @@ class ParticipantSpeechStartStopManager {
     start() {
         this.sampleVolumeLevelsInterval = setInterval(() => {
             this.sampleVolumeLevels();
-        }, 500);
+        }, 250);
     }
 
     sendSpeechStartStopEvent(participantId, isSpeechStart, timestamp) {
@@ -71,7 +71,7 @@ class ParticipantSpeechStartStopManager {
 
             for (const source of contributingSources) {
                 const audioLevel = source.audioLevel || 0;
-                if (audioLevel >= 0.0125) {
+                if (audioLevel >= 0.01) {
                     const user = window.userManager.getUserByStreamId(source.source.toString());
                     if (user) {
                         currentlySpeaking.add(user.deviceId);
