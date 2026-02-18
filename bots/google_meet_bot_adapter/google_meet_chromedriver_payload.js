@@ -28,6 +28,62 @@ function sendChatMessage(text) {
     return true;
 }
 
+class ParticipantSpeechStartStopManager {
+    constructor() {
+        this.participantSpeechStartStopMap = new Map();
+    }
+
+    start() {
+        this.sampleVolumeLevelsInterval = setInterval(() => {
+            this.sampleVolumeLevels();
+        }, 200);
+    }
+
+    sendSpeechStartStopEvent(participantId, isSpeechStart) {
+        window.ws?.sendJson({
+            type: 'ParticipantSpeechStartStopEvent',
+            participantId: participantId,
+            isSpeechStart: isSpeechStart
+        });
+    }
+
+    sampleVolumeLevels() {
+        // Build a set of participant IDs currently speaking above the threshold
+        const currentlySpeaking = new Set();
+
+        for (const [receiver, contributingSources] of window.receiverManager.receiverMap) {
+            if (!contributingSources) continue;
+
+            for (const source of contributingSources) {
+                const audioLevel = source.audioLevel || 0;
+                if (audioLevel >= 0.1) {
+                    const user = window.userManager.getUserByStreamId(source.source.toString());
+                    if (user) {
+                        currentlySpeaking.add(user.deviceId);
+                    }
+                }
+            }
+        }
+
+        // Detect participants who started speaking
+        for (const participantId of currentlySpeaking) {
+            const wasSpeaking = this.participantSpeechStartStopMap.get(participantId);
+            if (!wasSpeaking) {
+                this.sendSpeechStartStopEvent(participantId, true);
+            }
+            this.participantSpeechStartStopMap.set(participantId, true);
+        }
+
+        // Detect participants who stopped speaking
+        for (const [participantId, wasSpeaking] of this.participantSpeechStartStopMap) {
+            if (wasSpeaking && !currentlySpeaking.has(participantId)) {
+                this.sendSpeechStartStopEvent(participantId, false);
+                this.participantSpeechStartStopMap.set(participantId, false);
+            }
+        }
+    }
+}
+
 class StyleManager {
     constructor() {
         this.videoTrackIdToSSRC = new Map();
@@ -570,6 +626,10 @@ class StyleManager {
         //document.addEventListener('keydown', this.handleKeyDown.bind(this));
 
         this.startSilenceDetection();
+
+        if (window.initialData.recordParticipantSpeechStartStopEvents) {
+            participantSpeechStartStopManager.start();
+        }
 
         console.log('Started StyleManager');
     }
@@ -1483,8 +1543,9 @@ const videoTrackManager = new VideoTrackManager(ws);
 const styleManager = new StyleManager();
 const receiverManager = new ReceiverManager();
 const chatMessageManager = new ChatMessageManager(ws);
+const participantSpeechStartStopManager = new ParticipantSpeechStartStopManager();
 let rtpReceiverInterceptor = null;
-if (window.initialData.sendPerParticipantAudio) {
+if (window.initialData.sendPerParticipantAudio || window.initialData.recordParticipantSpeechStartStopEvents) {
     rtpReceiverInterceptor = new RTCRtpReceiverInterceptor((receiver, result, ...args) => {
         receiverManager.updateContributingSources(receiver, result);
     });
@@ -1495,6 +1556,7 @@ window.userManager = userManager;
 window.styleManager = styleManager;
 window.receiverManager = receiverManager;
 window.chatMessageManager = chatMessageManager;
+window.participantSpeechStartStopManager = participantSpeechStartStopManager;
 window.sendChatMessage = sendChatMessage;
 // Create decoders for all message types
 const messageDecoders = {};

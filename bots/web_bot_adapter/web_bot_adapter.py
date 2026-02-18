@@ -53,6 +53,7 @@ class WebBotAdapter(BotAdapter):
         video_frame_size: tuple[int, int],
         record_chat_messages_when_paused: bool,
         disable_incoming_video: bool,
+        record_participant_speech_start_stop_events: bool,
     ):
         self.display_name = display_name
         self.send_message_callback = send_message_callback
@@ -69,6 +70,7 @@ class WebBotAdapter(BotAdapter):
         self.recording_view = recording_view
         self.record_chat_messages_when_paused = record_chat_messages_when_paused
         self.disable_incoming_video = disable_incoming_video
+        self.record_participant_speech_start_stop_events = record_participant_speech_start_stop_events
         self.meeting_url = meeting_url
 
         # This is an internal ID that comes from the platform. It is currently only used for MS Teams.
@@ -302,6 +304,9 @@ class WebBotAdapter(BotAdapter):
         self.last_audio_message_processed_time = time.time()
         self.upsert_caption_callback(json_data["caption"])
 
+    def handle_participant_speech_start_stop_event(self, json_data):
+        self.add_participant_event_callback({"participant_uuid": json_data["participantId"], "event_type": ParticipantEventTypes.SPEECH_START if json_data["isSpeechStart"] else ParticipantEventTypes.SPEECH_STOP, "event_data": {}, "timestamp_ms": int(time.time() * 1000)})
+
     def handle_chat_message(self, json_data):
         if self.recording_paused and not self.record_chat_messages_when_paused:
             return
@@ -347,6 +352,9 @@ class WebBotAdapter(BotAdapter):
 
                         elif json_data.get("type") == "ChatMessage":
                             self.handle_chat_message(json_data)
+
+                        elif json_data.get("type") == "ParticipantSpeechStartStopEvent":
+                            self.handle_participant_speech_start_stop_event(json_data)
 
                         elif json_data.get("type") == "UsersUpdate":
                             for user in json_data["newUsers"]:
@@ -588,7 +596,7 @@ class WebBotAdapter(BotAdapter):
         self.driver = webdriver.Chrome(options=options, service=Service(executable_path="/usr/local/bin/chromedriver"))
         logger.info(f"web driver server initialized at port {self.driver.service.port}")
 
-        initial_data_code = f"window.initialData = {{websocketPort: {self.websocket_port}, videoFrameWidth: {self.video_frame_size[0]}, videoFrameHeight: {self.video_frame_size[1]}, botName: {json.dumps(self.display_name)}, addClickRipple: {'true' if self.should_create_debug_recording else 'false'}, recordingView: '{self.recording_view}', sendMixedAudio: {'true' if self.add_mixed_audio_chunk_callback else 'false'}, sendPerParticipantAudio: {'true' if self.add_audio_chunk_callback else 'false'}, collectCaptions: {'true' if self.upsert_caption_callback else 'false'}}}"
+        initial_data_code = f"window.initialData = {{websocketPort: {self.websocket_port}, videoFrameWidth: {self.video_frame_size[0]}, videoFrameHeight: {self.video_frame_size[1]}, botName: {json.dumps(self.display_name)}, addClickRipple: {'true' if self.should_create_debug_recording else 'false'}, recordingView: '{self.recording_view}', sendMixedAudio: {'true' if self.add_mixed_audio_chunk_callback else 'false'}, sendPerParticipantAudio: {'true' if self.add_audio_chunk_callback else 'false'}, collectCaptions: {'true' if self.upsert_caption_callback else 'false'}, recordParticipantSpeechStartStopEvents: {'true' if self.record_participant_speech_start_stop_events else 'false'}}}"
 
         # Define the CDN libraries needed
         CDN_LIBRARIES = ["https://cdnjs.cloudflare.com/ajax/libs/protobufjs/7.4.0/protobuf.min.js", "https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"]
