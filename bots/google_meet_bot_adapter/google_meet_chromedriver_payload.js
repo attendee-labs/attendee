@@ -671,7 +671,7 @@ class StyleManager {
         this.startSilenceDetection();
 
         if (window.initialData.recordParticipantSpeechStartStopEvents) {
-            participantSpeechStartStopManager.start();
+            window.participantSpeechStartStopManager?.start();
         }
 
         console.log('Started StyleManager');
