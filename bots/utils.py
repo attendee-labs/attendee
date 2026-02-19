@@ -8,8 +8,11 @@ from pydub import AudioSegment
 from .meeting_url_utils import meeting_type_from_url
 from .models import (
     MeetingTypes,
+    ParticipantEvent,
+    ParticipantEventTypes,
     TranscriptionProviders,
 )
+from .templatetags.bot_filters import participant_color as compute_participant_color
 
 logger = logging.getLogger(__name__)
 
@@ -509,6 +512,71 @@ def generate_async_transcriptions_json_for_bot_detail_view(recording):
     return async_transcriptions_data
 
 
+def generate_speaker_timeline_for_bot_detail_view(recording):
+    """Generate speaker timeline data (speech intervals per participant) for a recording."""
+
+    first_buffer_ms = recording.first_buffer_timestamp_ms
+    if not first_buffer_ms:
+        return []
+
+    speech_events = (
+        ParticipantEvent.objects.filter(
+            participant__bot=recording.bot,
+            event_type__in=[ParticipantEventTypes.SPEECH_START, ParticipantEventTypes.SPEECH_STOP],
+        )
+        .select_related("participant")
+        .order_by("timestamp_ms")
+    )
+
+    if not speech_events.exists():
+        return []
+
+    # Group events by participant
+    participants_data = {}
+    for event in speech_events:
+        pid = event.participant.uuid
+        if pid not in participants_data:
+            participants_data[pid] = {
+                "name": event.participant.full_name or event.participant.uuid,
+                "color": compute_participant_color(event.participant.uuid),
+                "events": [],
+            }
+
+        relative_ms = event.timestamp_ms - first_buffer_ms
+        participants_data[pid]["events"].append(
+            {
+                "type": "start" if event.event_type == ParticipantEventTypes.SPEECH_START else "stop",
+                "ms": relative_ms,
+            }
+        )
+
+    # Build intervals from start/stop pairs
+    result = []
+    for pid, data in participants_data.items():
+        intervals = []
+        current_start = None
+        for evt in data["events"]:
+            if evt["type"] == "start":
+                current_start = evt["ms"]
+            elif evt["type"] == "stop" and current_start is not None:
+                intervals.append({"start_ms": current_start, "end_ms": evt["ms"]})
+                current_start = None
+        # If there's a dangling start with no stop, leave end_ms null (JS will use video duration)
+        if current_start is not None:
+            intervals.append({"start_ms": current_start, "end_ms": None})
+
+        if intervals:
+            result.append(
+                {
+                    "name": data["name"],
+                    "color": data["color"],
+                    "intervals": intervals,
+                }
+            )
+
+    return result
+
+
 def generate_recordings_json_for_bot_detail_view(bot):
     # Process recordings and utterances
     recordings_data = []
@@ -522,6 +590,7 @@ def generate_recordings_json_for_bot_detail_view(bot):
             "failed_utterances": generate_failed_utterance_json_for_bot_detail_view(recording),
         }
         async_transcriptions = generate_async_transcriptions_json_for_bot_detail_view(recording)
+        speaker_timeline = generate_speaker_timeline_for_bot_detail_view(recording)
         recordings_data.append(
             {
                 "state": recording.state,
@@ -531,6 +600,7 @@ def generate_recordings_json_for_bot_detail_view(bot):
                     realtime_transcription,
                     *async_transcriptions,
                 ],
+                "speaker_timeline": speaker_timeline,
             }
         )
 

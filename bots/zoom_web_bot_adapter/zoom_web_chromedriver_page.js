@@ -186,6 +186,8 @@ function startMeeting(signature) {
         */
         for (const activeSpeaker of data) {
             window.dominantSpeakerManager.addCaptionAudioTime(Date.now(), activeSpeaker.userId);
+            if (window.initialData.recordParticipantSpeechStartStopEvents)
+                window.participantSpeechStartStopManager?.addActiveSpeaker(activeSpeaker.userId);
         }
         // Use active speaker events to determine if we are silent or not
         window.ws.sendJson({
