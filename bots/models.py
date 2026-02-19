@@ -662,6 +662,14 @@ class TranscriptionSettings:
     def deepgram_replace_settings(self):
         return self._settings.get("deepgram", {}).get("replace", [])
 
+    def deepgram_base_url(self):
+        if os.getenv("DEEPGRAM_BASE_URL"):
+            return os.getenv("DEEPGRAM_BASE_URL")
+        use_eu_server = self._settings.get("deepgram", {}).get("use_eu_server", False)
+        if use_eu_server:
+            return "https://api.eu.deepgram.com"
+        return None
+
     def kyutai_server_url(self):
         return self._settings.get("kyutai", {}).get("server_url", None)
 
