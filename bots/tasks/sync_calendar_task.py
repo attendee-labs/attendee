@@ -659,8 +659,15 @@ class MicrosoftCalendarSyncHandler(CalendarSyncHandler):
         if e.response.json().get("error") == "invalid_grant" or e.response.json().get("error") == "invalid_client":
             raise CalendarAPIAuthenticationError(f"Microsoft Authentication error: {e.response.json()}")
 
-        if "ErrorAccessDenied" in e.response.text:
-            raise CalendarAPIAuthenticationError(f"Microsoft Authentication error: {e.response.json()}")
+        authentication_error_substrings = [
+            "ErrorAccessDenied",
+            "The mailbox is either inactive, soft-deleted, or is hosted on-premise.",
+            "This indicate that a subscription within the tenant has lapsed, or that the administrator for this tenant has disabled the application, preventing tokens from being issued for it",
+        ]
+
+        for substring in authentication_error_substrings:
+            if substring in e.response.text:
+                raise CalendarAPIAuthenticationError(f"Microsoft Authentication error: {e.response.json()}")
         return
 
     # ---------------------------
