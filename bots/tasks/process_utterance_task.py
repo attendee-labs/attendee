@@ -241,6 +241,7 @@ def get_transcription_via_deepgram(utterance):
     from deepgram import (
         DeepgramApiError,
         DeepgramClient,
+        DeepgramClientOptions,
         FileSource,
         PrerecordedOptions,
     )
@@ -274,7 +275,13 @@ def get_transcription_via_deepgram(utterance):
     if not deepgram_credentials:
         return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND}
 
-    deepgram = DeepgramClient(deepgram_credentials["api_key"])
+    deepgram_base_url = transcription_settings.deepgram_base_url()
+    if deepgram_base_url:
+        logger.info(f"Using Deepgram base URL {deepgram_base_url} for transcription")
+        config = DeepgramClientOptions(url=deepgram_base_url)
+        deepgram = DeepgramClient(deepgram_credentials["api_key"], config)
+    else:
+        deepgram = DeepgramClient(deepgram_credentials["api_key"])
 
     try:
         response = deepgram.listen.rest.v("1").transcribe_file(payload, options)
