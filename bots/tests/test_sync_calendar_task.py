@@ -826,6 +826,23 @@ class TestMicrosoftCalendarSyncHandler(TestCase):
         self.assertEqual(updated_credentials["refresh_token"], "new_refresh_token")
         self.assertNotEqual(updated_credentials["refresh_token"], original_credentials["refresh_token"])
 
+    @patch("requests.post")
+    def test_get_access_token_authentication_error_substring(self, mock_post):
+        """Test access token retrieval raises CalendarAPIAuthenticationError for authentication error substrings."""
+        handler = MicrosoftCalendarSyncHandler(self.calendar.id)
+        mock_response = Mock()
+        error_message = "is disabled. This indicate that a subscription within the tenant has lapsed, or that the administrator for this tenant has disabled the application, preventing tokens from being issued for it. Trace ID: f9"
+        mock_response.json.return_value = {"error": {"code": "bad", "message": error_message}}
+        mock_response.text = f'{{"error": {{"code": "bad", "message": "{error_message}"}}}}'
+
+        exception = requests.RequestException()
+        exception.response = mock_response
+        mock_response.raise_for_status.side_effect = exception
+        mock_post.return_value = mock_response
+
+        with self.assertRaises(CalendarAPIAuthenticationError):
+            handler._get_access_token()
+
     @patch("requests.Session")
     def test_list_events_with_pagination(self, mock_session_class):
         """Test listing events with pagination support."""
