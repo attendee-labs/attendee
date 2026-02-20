@@ -62,6 +62,7 @@ from bots.websocket_payloads import mixed_audio_websocket_payload
 from bots.zoom_oauth_connections_utils import get_zoom_tokens_via_zoom_oauth_app
 from bots.zoom_rtms_adapter.rtms_gstreamer_pipeline import RTMSGstreamerPipeline
 
+from .audio_chunk_uploader import AudioChunkUploader
 from .audio_output_manager import AudioOutputManager
 from .azure_file_uploader import AzureFileUploader
 from .bot_resource_snapshot_taker import BotResourceSnapshotTaker
@@ -456,6 +457,9 @@ class BotController:
         recording = Recording.objects.get(bot=self.bot_in_db, is_default_recording=True)
         return recording.transcription_provider
 
+    def generate_audio_blob_remote_filename(self, audio_chunk: AudioChunk, recording: Recording):
+        return f"audio-blobs/{self.bot_in_db.object_id}-{recording.object_id}/audio-chunk-{audio_chunk.id}.pcm"
+
     def get_recording_filename(self):
         recording = Recording.objects.get(bot=self.bot_in_db, is_default_recording=True)
         return f"{self.bot_in_db.object_id}-{recording.object_id}.{self.bot_in_db.recording_format()}"
@@ -594,6 +598,9 @@ class BotController:
 
         if self.bot_in_db.create_debug_recording():
             self.save_debug_recording()
+
+        if self.audio_chunk_uploader:
+            self.audio_chunk_uploader.shutdown()
 
         if self.bot_in_db.state == BotStates.POST_PROCESSING:
             self.wait_until_all_utterances_are_terminated()
@@ -849,6 +856,13 @@ class BotController:
             self.webpage_streamer_manager.init()
 
         self.bot_resource_snapshot_taker = BotResourceSnapshotTaker(self.bot_in_db)
+
+        self.audio_chunk_uploader = None
+        if settings.USE_REMOTE_STORAGE_FOR_AUDIO_CHUNKS:
+            self.audio_chunk_uploader = AudioChunkUploader(
+                on_success=self.on_audio_chunk_upload_success,
+                on_error=self.on_audio_chunk_upload_error,
+            )
 
         # Create GLib main loop
         self.main_loop = GLib.MainLoop()
@@ -1199,6 +1213,10 @@ class BotController:
             # Process audio chunks
             self.per_participant_non_streaming_audio_input_manager.process_chunks()
 
+            # Process completed audio chunk uploads
+            if self.audio_chunk_uploader:
+                self.audio_chunk_uploader.process_uploads()
+
             # Monitor transcription
             self.per_participant_streaming_audio_input_manager.monitor_transcription()
 
@@ -1287,8 +1305,6 @@ class BotController:
         RecordingManager.set_recording_transcription_in_progress(recording_in_progress)
 
     def process_individual_audio_chunk(self, message):
-        from bots.tasks.process_utterance_task import process_utterance
-
         logger.info("Received message that new individual audio chunk was detected")
 
         # Create participant record if it doesn't exist
@@ -1308,16 +1324,42 @@ class BotController:
             logger.warning("Warning: No recording in progress found so cannot save individual audio utterance.")
             return
 
+        if settings.USE_REMOTE_STORAGE_FOR_AUDIO_CHUNKS:
+            audio_chunk_storage_attributes = {
+                "is_blob_stored_remotely": True,
+            }
+        else:
+            audio_chunk_storage_attributes = {
+                "is_blob_stored_remotely": False,
+                "audio_blob": message["audio_data"],
+            }
+
         audio_chunk = AudioChunk.objects.create(
             recording=recording_in_progress,
-            audio_blob=message["audio_data"],
             audio_format=AudioChunk.AudioFormat.PCM,
             timestamp_ms=message["timestamp_ms"] - self.get_per_participant_audio_utterance_delay_ms(),
             duration_ms=len(message["audio_data"]) / ((message["sample_rate"] / 1000) * 2),
             sample_rate=message["sample_rate"],
             source=AudioChunk.Sources.PER_PARTICIPANT_AUDIO,
             participant=participant,
+            **audio_chunk_storage_attributes,
         )
+
+        # If audio chunks are being stored remotely, we need to upload them async. The utterance
+        # will be created later when process_uploads is called from the main loop and calls on_audio_chunk_upload_success
+        if settings.USE_REMOTE_STORAGE_FOR_AUDIO_CHUNKS:
+            self.audio_chunk_uploader.upload(
+                audio_chunk_id=audio_chunk.id,
+                filename=self.generate_audio_blob_remote_filename(audio_chunk=audio_chunk, recording=recording_in_progress),
+                data=message["audio_data"],
+            )
+            return
+
+        # If audio chunks are being stored in the DB, we can take the follow up actions immediately
+        self.create_utterance_from_audio_chunk(audio_chunk=audio_chunk, participant=participant, recording_in_progress=recording_in_progress)
+
+    def create_utterance_from_audio_chunk(self, audio_chunk: AudioChunk, participant: Participant, recording_in_progress: Recording):
+        from bots.tasks.process_utterance_task import process_utterance
 
         if not self.save_utterances_for_individual_audio_chunks():
             return
@@ -1339,6 +1381,60 @@ class BotController:
         # Process the utterance immediately
         process_utterance.delay(utterance.id)
         return
+
+    def on_audio_chunk_upload_success(self, audio_chunk_id: int, stored_name: str):
+        """
+        Callback for when an audio chunk upload completes successfully.
+        Called from the main thread via process_uploads.
+        """
+        audio_chunk = AudioChunk.objects.get(id=audio_chunk_id)
+        audio_chunk.audio_blob_remote_file = stored_name
+        audio_chunk.save()
+        participant = audio_chunk.participant
+        recording = audio_chunk.recording
+        self.create_utterance_from_audio_chunk(audio_chunk, participant, recording)
+
+    def on_audio_chunk_upload_error(self, audio_chunk_id: int, exception: Exception, data: bytes):
+        """
+        Callback for when an audio chunk upload fails.
+        Called from the main thread via process_uploads.
+        """
+
+        if settings.FALLBACK_TO_DB_STORAGE_FOR_AUDIO_CHUNKS_IF_REMOTE_STORAGE_FAILS:
+            self.on_audio_chunk_upload_error_with_fallback_to_db(audio_chunk_id, exception, data)
+            return
+
+        audio_chunk = AudioChunk.objects.get(id=audio_chunk_id)
+        audio_chunk.blob_upload_failure_data = {
+            "error": str(exception),
+            "exception_type": exception.__class__.__name__,
+        }
+        audio_chunk.save()
+
+    def on_audio_chunk_upload_error_with_fallback_to_db(self, audio_chunk_id: int, exception: Exception, data: bytes):
+        """
+        Callback for when an audio chunk upload fails and we want to fallback to DB storage.
+        Saves the failure data, stores the audio in the database, and proceeds as normal.
+        """
+        logger.warning(f"Audio chunk {audio_chunk_id} upload failed, falling back to DB storage: {exception}")
+
+        audio_chunk = AudioChunk.objects.get(id=audio_chunk_id)
+
+        # Save the failure data
+        audio_chunk.blob_upload_failure_data = {
+            "error": str(exception),
+            "exception_type": exception.__class__.__name__,
+        }
+
+        # Store the audio data in the database
+        audio_chunk.audio_blob = data
+        audio_chunk.is_blob_stored_remotely = False
+        audio_chunk.save()
+
+        # Proceed as if the upload succeeded - create the utterance
+        participant = audio_chunk.participant
+        recording = audio_chunk.recording
+        self.create_utterance_from_audio_chunk(audio_chunk, participant, recording)
 
     def on_new_chat_message(self, chat_message):
         GLib.idle_add(lambda: self.upsert_chat_message(chat_message))
@@ -1457,6 +1553,9 @@ class BotController:
         if self.closed_caption_manager:
             logger.info("Flushing captions...")
             self.closed_caption_manager.flush_captions()
+        if self.audio_chunk_uploader:
+            logger.info("Flushing audio chunk uploads...")
+            self.audio_chunk_uploader.wait_for_uploads()
 
     def save_debug_recording(self):
         # Only save if the file exists

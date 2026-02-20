@@ -1,11 +1,14 @@
 import hashlib
 import json
+import logging
 import math
 import os
 import secrets
 import string
 from datetime import timedelta
 
+# Create your models here.
+import requests
 from concurrency.exceptions import RecordModifiedError
 from concurrency.fields import IntegerVersionField
 from cryptography.fernet import Fernet, InvalidToken
@@ -20,9 +23,10 @@ from django.utils.crypto import get_random_string
 
 from accounts.models import Organization, User, UserRole
 from bots.bot_pod_creator.bot_pod_spec import BotPodSpecType
+from bots.storage import StorageAlias
 from bots.webhook_utils import trigger_webhook
 
-# Create your models here.
+logger = logging.getLogger(__name__)
 
 
 class Project(models.Model):
@@ -2375,6 +2379,10 @@ class AsyncTranscriptionManager:
         cls.delivery_webhook(async_transcription)
 
 
+# If is_blob_stored_remotely is True:
+# If audio_blob_remote_file is null and blob_upload_failure_data is null: audio blob is in process of being uploaded
+# If audio_blob_remote_file is not null and blob_upload_failure_data is null: audio blob is uploaded successfully
+# If audio_blob_remote_file is null and blob_upload_failure_data is not null: audio blob upload failed
 class AudioChunk(models.Model):
     class Sources(models.IntegerChoices):
         PER_PARTICIPANT_AUDIO = 1, "Per Participant Audio"
@@ -2386,6 +2394,12 @@ class AudioChunk(models.Model):
 
     recording = models.ForeignKey(Recording, on_delete=models.CASCADE, related_name="audio_chunks")
     audio_blob = models.BinaryField()
+    audio_blob_remote_file = models.FileField(storage=StorageAlias("audio_chunks"), null=True, blank=True)
+    is_blob_stored_remotely = models.BooleanField(
+        default=False,
+        db_default=False,
+    )
+    blob_upload_failure_data = models.JSONField(null=True, default=None)
     audio_format = models.IntegerField(choices=AudioFormat.choices, default=AudioFormat.PCM)
     timestamp_ms = models.BigIntegerField()
     duration_ms = models.IntegerField()
@@ -2395,6 +2409,70 @@ class AudioChunk(models.Model):
 
     source = models.IntegerField(choices=Sources.choices, default=Sources.PER_PARTICIPANT_AUDIO)
     participant = models.ForeignKey(Participant, on_delete=models.PROTECT, related_name="audio_chunks")
+
+    def get_audio_data(self) -> memoryview:
+        if self.is_blob_stored_remotely:
+            if not self.audio_blob_remote_file:
+                return memoryview(b"")
+            return self.download_audio_blob_from_remote_storage()
+        return self.audio_blob
+
+    def download_audio_blob_from_remote_storage(self, max_retries=3):
+        url = self.audio_blob_from_remote_storage_url()
+
+        for attempt in range(max_retries):
+            try:
+                response = requests.get(url)
+            except requests.exceptions.RequestException:
+                logger.warning(
+                    "AudioChunk %s: request failed (attempt %d/%d)",
+                    self.pk,
+                    attempt + 1,
+                    max_retries,
+                )
+                continue
+
+            if not response.ok:
+                logger.warning(
+                    "AudioChunk %s: HTTP %s %s (attempt %d/%d)",
+                    self.pk,
+                    response.status_code,
+                    response.reason,
+                    attempt + 1,
+                    max_retries,
+                )
+                continue
+
+            if not response.content:
+                logger.warning(
+                    "AudioChunk %s: empty response (attempt %d/%d)",
+                    self.pk,
+                    attempt + 1,
+                    max_retries,
+                )
+                continue
+
+            return memoryview(response.content)
+
+        logger.warning("AudioChunk %s: all %d attempts failed", self.pk, max_retries)
+        return memoryview(b"")
+
+    def audio_blob_from_remote_storage_url(self):
+        if settings.STORAGE_PROTOCOL == "azure":
+            return self.audio_blob_remote_file.url
+
+        # Generate a temporary signed URL that expires in 30 minutes (1800 seconds)
+        return self.audio_blob_remote_file.storage.bucket.meta.client.generate_presigned_url(
+            "get_object",
+            Params={"Bucket": self.audio_blob_remote_file.storage.bucket_name, "Key": self.audio_blob_remote_file.name},
+            ExpiresIn=1800,
+        )
+
+    def clear_audio_data(self):
+        if self.is_blob_stored_remotely:
+            self.audio_blob_remote_file.delete()
+        self.audio_blob = b""
+        self.save()
 
 
 class Utterance(models.Model):
@@ -2441,7 +2519,7 @@ class Utterance(models.Model):
     # on the utterance model and not using the separate audio chunk model.
     def get_audio_blob(self):
         if self.audio_chunk:
-            return self.audio_chunk.audio_blob
+            return self.audio_chunk.get_audio_data()
         return self.audio_blob
 
     def get_sample_rate(self):
