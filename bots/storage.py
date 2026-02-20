@@ -18,3 +18,6 @@ class StorageAlias(Storage):
     # since __getattr__ is only called when the attribute isn't found in the MRO
     def delete(self, name):
         return self._wrapped.delete(name)
+
+    def url(self, name):
+        return self._wrapped.url(name)
