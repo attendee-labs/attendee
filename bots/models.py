@@ -1,11 +1,14 @@
 import hashlib
 import json
+import logging
 import math
 import os
 import secrets
 import string
 from datetime import timedelta
 
+# Create your models here.
+import requests
 from concurrency.exceptions import RecordModifiedError
 from concurrency.fields import IntegerVersionField
 from cryptography.fernet import Fernet, InvalidToken
@@ -23,7 +26,7 @@ from bots.bot_pod_creator.bot_pod_spec import BotPodSpecType
 from bots.storage import StorageAlias
 from bots.webhook_utils import trigger_webhook
 
-# Create your models here.
+logger = logging.getLogger(__name__)
 
 
 class Project(models.Model):
@@ -2411,9 +2414,59 @@ class AudioChunk(models.Model):
         if self.is_blob_stored_remotely:
             if not self.audio_blob_remote_file:
                 return memoryview(b"")
-            with self.audio_blob_remote_file.storage.open(self.audio_blob_remote_file.name, "rb") as f:
-                return memoryview(f.read())
+            return self.download_audio_blob_from_remote_storage()
         return self.audio_blob
+
+    def download_audio_blob_from_remote_storage(self, max_retries=3):
+        url = self.audio_blob_from_remote_storage_url()
+
+        for attempt in range(max_retries):
+            try:
+                response = requests.get(url)
+            except requests.exceptions.RequestException:
+                logger.warning(
+                    "AudioChunk %s: request failed (attempt %d/%d)",
+                    self.pk,
+                    attempt + 1,
+                    max_retries,
+                )
+                continue
+
+            if not response.ok:
+                logger.warning(
+                    "AudioChunk %s: HTTP %s %s (attempt %d/%d)",
+                    self.pk,
+                    response.status_code,
+                    response.reason,
+                    attempt + 1,
+                    max_retries,
+                )
+                continue
+
+            if not response.content:
+                logger.warning(
+                    "AudioChunk %s: empty response (attempt %d/%d)",
+                    self.pk,
+                    attempt + 1,
+                    max_retries,
+                )
+                continue
+
+            return memoryview(response.content)
+
+        logger.warning("AudioChunk %s: all %d attempts failed", self.pk, max_retries)
+        return memoryview(b"")
+
+    def audio_blob_from_remote_storage_url(self):
+        if settings.STORAGE_PROTOCOL == "azure":
+            return self.audio_blob_remote_file.url
+
+        # Generate a temporary signed URL that expires in 30 minutes (1800 seconds)
+        return self.audio_blob_remote_file.storage.bucket.meta.client.generate_presigned_url(
+            "get_object",
+            Params={"Bucket": self.audio_blob_remote_file.storage.bucket_name, "Key": self.audio_blob_remote_file.name},
+            ExpiresIn=1800,
+        )
 
     def clear_audio_data(self):
         if self.is_blob_stored_remotely:
