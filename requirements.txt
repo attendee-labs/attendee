@@ -80,7 +80,7 @@ googleapis-common-protos==1.66.0
 grpcio==1.70.0
 grpcio-status==1.70.0
 proto-plus==1.26.0
-protobuf==5.29.3
+protobuf==5.29.6
 pyasn1==0.6.2
 pyasn1_modules==0.4.1
 rsa==4.9
