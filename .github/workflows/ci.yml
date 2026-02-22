@@ -73,8 +73,8 @@ jobs:
           attendee-test:latest bash -lc '
             set -e
             python init_env.py > /tmp/.env
-            python -m dotenv -f /tmp/.env run -- python manage.py test --keepdb --tag zoom_tests
-            python -m dotenv -f /tmp/.env run -- python manage.py test --keepdb --exclude-tag zoom_tests
+            python -m dotenv -f /tmp/.env run -- python manage.py test --keepdb --parallel 2 --tag zoom_tests
+            python -m dotenv -f /tmp/.env run -- python manage.py test --keepdb --parallel 2 --exclude-tag zoom_tests
           '
   lint:
     name: Run linting
