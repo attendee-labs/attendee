@@ -31,20 +31,26 @@ from drf_spectacular.views import (
 from accounts import views
 
 
-def health_check(request):
+def health_check_view(request):
     return HttpResponse(status=200)
+
 
 def version_view(request):
     version_path = os.path.join(settings.BASE_DIR, "version.json")
     with open(version_path, "r", encoding="utf-8") as version_file:
         version_data = json.load(version_file)
+    cuber_release = os.getenv("CUBER_RELEASE_VERSION")
+    response_data = {"version": version_data.get("version")}
+    if cuber_release:
+        response_data["cuber_release"] = cuber_release
     return JsonResponse(
-        {"version": version_data.get("version"),},
+        response_data,
         status=200,
     )
 
+
 urlpatterns = [
-    path("health/", health_check, name="health-check"),
+    path("health/", health_check_view, name="health-check"),
     path("version/", version_view, name="api-version"),
 ]
 
