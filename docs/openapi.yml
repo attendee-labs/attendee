@@ -40,6 +40,26 @@ paths:
             value: my-unique-bot-key
             summary: Deduplication Key Example
       - in: query
+        name: join_at_after
+        schema:
+          type: string
+          format: ISO 8601 datetime
+        description: Only return bots with join_at after this time.
+        examples:
+          DateTimeExample:
+            value: '2024-01-18T12:34:56Z'
+            summary: DateTime Example
+      - in: query
+        name: join_at_before
+        schema:
+          type: string
+          format: ISO 8601 datetime
+        description: Only return bots with join_at before this time.
+        examples:
+          DateTimeExample:
+            value: '2024-01-18T13:34:56Z'
+            summary: DateTime Example
+      - in: query
         name: meeting_url
         schema:
           type: string
@@ -199,8 +219,8 @@ paths:
           description: Bot not found
     patch:
       operationId: Patch Bot
-      description: Updates a bot. Currently only the join_at and metadata fields can
-        be updated. The join_at field can only be updated when the bot is in the scheduled
+      description: Updates a bot. The join_at, meeting_url, bot_name, bot_image and
+        recording_settings fields can only be updated when the bot is in the scheduled
         state. The metadata field can be updated at any time.
       summary: Update a bot
       parameters:
@@ -242,6 +262,14 @@ paths:
                 summary: Update join_at
                 description: Example of updating the join_at time for a scheduled
                   bot
+              UpdateNameAndImage:
+                value:
+                  bot_name: My Updated Bot
+                  bot_image:
+                    type: image/png
+                    data: iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==
+                summary: Update name and image
+                description: Example of updating the bot name and/or image
       security:
       - {}
       responses:
@@ -609,15 +637,16 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                url:
-                  type: string
-                  description: URL of the video to output. Must be a valid URL to
-                    an mp4 file.
-              required:
-              - url
-              additionalProperties: false
+              $ref: '#/components/schemas/OutputVideoRequestRequest'
+            examples:
+              VideoOutputRequest:
+                value:
+                  url: https://example.com/video.mp4
+                  loop: true
+                summary: Video output request
+                description: Example of a looping mp4 video output request. Set loop
+                  to false or omit for a non-looping request.
+        required: true
       security:
       - {}
       responses:
@@ -1166,14 +1195,69 @@ paths:
           type: string
         description: Cursor for pagination
       - in: query
+        name: end_time_lte
+        schema:
+          type: string
+        description: Filter events with end_time at or before this timestamp (ISO
+          8601 format)
+        examples:
+          EndTimeLTEExample:
+            value: '2025-01-13T18:00:00Z'
+            summary: End Time LTE Example
+      - in: query
+        name: event_id
+        schema:
+          type: string
+        description: Filter events by event ID
+        examples:
+          EventIDExample:
+            value: evt_abcdef1234567890
+            summary: Event ID Example
+      - in: query
+        name: ordering
+        schema:
+          type: string
+          enum:
+          - -created_at
+          - -end_time
+          - -start_time
+          - -updated_at
+          - created_at
+          - end_time
+          - start_time
+          - updated_at
+        description: 'Order results by field. Use ''-'' prefix for descending order.
+          Default: -updated_at.'
+        examples:
+          OrderingExample:
+            value: start_time
+            summary: Ordering Example
+      - in: query
+        name: start_time_gte
+        schema:
+          type: string
+        description: Filter events with start_time at or after this timestamp (ISO
+          8601 format)
+        examples:
+          StartTimeGTEExample:
+            value: '2025-01-13T10:30:00Z'
+            summary: Start Time GTE Example
+      - in: query
         name: updated_after
         schema:
           type: string
-        description: Filter events updated after this timestamp (ISO 8601 format)
+        description: 'Deprecated: Use updated_at_gte instead. Alias for updated_at_gte,
+          kept for backwards compatibility.'
+        deprecated: true
+      - in: query
+        name: updated_at_gte
+        schema:
+          type: string
+        description: Filter events updated at or after this timestamp (ISO 8601 format)
         examples:
-          UpdatedAfterExample:
+          UpdatedAtGTEExample:
             value: '2025-01-13T10:30:00Z'
-            summary: Updated After Example
+            summary: Updated At GTE Example
       tags:
       - Calendars
       security:
@@ -2160,6 +2244,10 @@ components:
                     Each string should be in the format ''term_to_find:replacement_term''
                     (e.g., ''kpis:Key Performance Indicators''). See here for details:
                     https://developers.deepgram.com/docs/find-and-replace'
+                use_eu_server:
+                  type: boolean
+                  description: Whether to use the EU server for transcription. Defaults
+                    to false.
               additionalProperties: false
             gladia:
               type: object
@@ -2466,7 +2554,7 @@ components:
             format:
               type: string
               description: The format of the recording to save. The supported formats
-                are 'mp4', 'mp3' and 'none'.
+                are 'mp4', 'mp3' and 'none'. Defaults to 'mp4'.
             view:
               type: string
               description: The view to use for the recording. The supported views
@@ -2531,10 +2619,20 @@ components:
                 joining the meeting. Requires Teams bot login credentials to be set
                 for the project.
               default: false
+            login_mode:
+              type: string
+              enum:
+              - always
+              - only_if_required
+              description: The mode to use for the Teams bot login. 'always' means
+                the bot will always login, 'only_if_required' means the bot will only
+                login if the meeting requires authentication.
+              default: always
           required: []
           additionalProperties: false
           default:
             use_login: false
+            login_mode: always
           description: The Microsoft Teams-specific settings for the bot.
         zoom_settings:
           type: object
@@ -2630,6 +2728,13 @@ components:
                 user is not in the meeting. Only relevant if this is a Zoom bot using
                 the on behalf of token.
               default: 600
+            bot_keywords:
+              type: array
+              items:
+                type: string
+              description: List of keywords to identify bot participants. A participant is considered a bot if any word in their name matches a keyword. Words are found by splitting on spaces, hyphens, and underscores, and the comparison is case-insensitive. Bot participants are excluded when determining if the bot is the only participant in the meeting.
+              nullable: true
+              default: null
           required: []
           additionalProperties: false
       required:
@@ -2676,6 +2781,21 @@ components:
       - client_secret
       - platform
       - refresh_token
+    OutputVideoRequestRequest:
+      type: object
+      properties:
+        url:
+          type: string
+          format: uri
+          minLength: 1
+          description: URL of the video to output. Must be a valid URL to an mp4 file
+            and start with https://.
+        loop:
+          type: boolean
+          default: false
+          description: Whether to loop the video. Defaults to false.
+      required:
+      - url
     PaginatedBotList:
       type: object
       required:
@@ -2892,7 +3012,8 @@ components:
       - timestamp_ms
     PatchedPatchBotRequest:
       type: object
-      description: Mixin class providing meeting URL validation for serializers.
+      description: Mixin class providing validation for common attributes used in
+        both patching and creating bots.
       properties:
         join_at:
           type: string
@@ -2903,6 +3024,55 @@ components:
           type: string
           minLength: 1
           description: The URL of the meeting to join, e.g. https://zoom.us/j/123?pwd=456
+        metadata:
+          type: object
+          description: JSON object containing metadata to associate with the bot
+        bot_name:
+          type: string
+          minLength: 1
+          description: The name of the bot, e.g. 'My Bot'
+        bot_image:
+          allOf:
+          - $ref: '#/components/schemas/BotImageRequest'
+          description: The image for the bot
+        recording_settings:
+          type: object
+          properties:
+            format:
+              type: string
+              description: The format of the recording to save. The supported formats
+                are 'mp4', 'mp3' and 'none'. Defaults to 'mp4'.
+            view:
+              type: string
+              description: The view to use for the recording. The supported views
+                are 'speaker_view', 'gallery_view' and 'speaker_view_no_sidebar'.
+            resolution:
+              type: string
+              description: The resolution to use for the recording. The supported
+                resolutions are '1080p' and '720p'. Defaults to '1080p'.
+              enum:
+              - 1080p
+              - 720p
+            record_chat_messages_when_paused:
+              type: boolean
+              description: Whether to record chat messages even when the recording
+                is paused. Defaults to false.
+              default: false
+            record_async_transcription_audio_chunks:
+              type: boolean
+              description: Whether to record additional audio data which is needed
+                for creating async (post-meeting) transcriptions. Defaults to false.
+              default: false
+            reserve_additional_storage:
+              type: boolean
+              description: Whether to reserve extra space to store the recording.
+                Only needed when the bot will record video for longer than 6 hours.
+                Defaults to false.
+              default: false
+          additionalProperties: false
+          required: []
+          description: The settings for the bot's recording. The settings specified
+            here will completely replace the existing settings.
     PatchedPatchBotVoiceAgentSettingsRequest:
       type: object
       properties:

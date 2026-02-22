@@ -18,6 +18,7 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
         google_meet_bot_login_is_available: bool,
         google_meet_bot_login_should_be_used: bool,
         create_google_meet_bot_login_session_callback: Callable[[], dict],
+        modify_dom_for_video_recording: bool,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -26,6 +27,7 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
         self.google_meet_bot_login_should_be_used = google_meet_bot_login_should_be_used and google_meet_bot_login_is_available
         self.create_google_meet_bot_login_session_callback = create_google_meet_bot_login_session_callback
         self.google_meet_bot_login_session = None
+        self.modify_dom_for_video_recording = modify_dom_for_video_recording
 
     def should_retry_joining_meeting_that_requires_login_by_logging_in(self):
         # If we don't have the ability to login, we can't retry
@@ -54,15 +56,41 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
         logger.info(f"is_sent_video_still_playing result = {result}")
         return result
 
-    def send_video(self, video_url):
-        logger.info(f"send_video called with video_url = {video_url}")
-        self.driver.execute_script(f"window.botOutputManager.playVideo({json.dumps(video_url)})")
+    def send_video(self, video_url, loop=False):
+        logger.info(f"send_video called with video_url = {video_url}, loop = {loop}")
+        self.driver.execute_script(f"window.botOutputManager.playVideo({json.dumps(video_url)}, {json.dumps(loop)})")
 
     def send_chat_message(self, text, to_user_uuid):
-        self.driver.execute_script(f"window?.sendChatMessage({json.dumps(text)})")
+        self.driver.execute_script("window?.sendChatMessage(arguments[0]);", text)
+
+    def update_closed_captions_language(self, language):
+        if self.google_meet_closed_captions_language == language:
+            logger.info(f"In update_closed_captions_language, closed captions language is already set to {language}. Doing nothing.")
+            return
+
+        if not language:
+            logger.info("In update_closed_captions_language, new language is None. Doing nothing.")
+            return
+
+        self.google_meet_closed_captions_language = language
+        closed_caption_set_language_result = self.driver.execute_script(
+            "return setClosedCaptionsLanguage(arguments[0]);",
+            self.google_meet_closed_captions_language,
+        )
+        if closed_caption_set_language_result:
+            logger.info("In update_closed_captions_language, closed captions language set programatically")
+        else:
+            logger.error("In update_closed_captions_language, failed to set closed captions language programatically")
 
     def get_staged_bot_join_delay_seconds(self):
         return 5
+
+    def subclass_specific_initial_data_code(self):
+        return f"""
+            window.googleMeetInitialData = {{
+                modifyDomForVideoRecording: {"true" if self.modify_dom_for_video_recording else "false"},
+            }}
+        """
 
     def subclass_specific_after_bot_joined_meeting(self):
         self.after_bot_can_record_meeting()
@@ -77,4 +105,4 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
             try:
                 self.driver.get("https://www.google.com/accounts/logout")
             except Exception as e:
-                logger.info(f"Error navigating to the logout page to sign out of the Google account: {e}")
+                logger.warning(f"Error navigating to the logout page to sign out of the Google account: {e}")

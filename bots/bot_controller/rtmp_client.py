@@ -74,7 +74,7 @@ class RTMPClient:
             self.is_running = False
             return False
         except Exception as e:
-            logger.info(f"Error writing data to FFmpeg: {e}")
+            logger.warning(f"Error writing data to FFmpeg: {e}")
             self.is_running = False
             return False
 
@@ -88,7 +88,7 @@ class RTMPClient:
                 self.ffmpeg_process.terminate()
                 self.ffmpeg_process.wait(timeout=5.0)
             except Exception as e:
-                logger.info(f"Error stopping FFmpeg process: {e}")
+                logger.warning(f"Error stopping FFmpeg process: {e}")
                 # Force kill if graceful shutdown fails
                 try:
                     self.ffmpeg_process.kill()

@@ -1,13 +1,13 @@
 import logging
 import time
 
-from selenium.common.exceptions import NoSuchElementException, TimeoutException
+from selenium.common.exceptions import ElementClickInterceptedException, ElementNotInteractableException, NoSuchElementException, StaleElementReferenceException, TimeoutException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
 from bots.models import RecordingViews
-from bots.web_bot_adapter.ui_methods import UiCouldNotClickElementException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableExpectedException
+from bots.web_bot_adapter.ui_methods import UiBlockedByCaptchaException, UiCouldNotClickElementException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableExpectedException
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +44,7 @@ class TeamsUIMethods:
         try:
             element.click()
         except Exception as e:
-            logger.info(f"Error occurred when clicking element {step}, will retry. Error: {e}")
+            logger.warning(f"Error occurred when clicking element {step}, will retry. Error: {e}")
             raise UiCouldNotClickElementException("Error occurred when clicking element", step, e)
 
     def look_for_waiting_to_be_admitted_element(self, step):
@@ -87,7 +87,7 @@ class TeamsUIMethods:
             except TimeoutException as e:
                 self.look_for_microsoft_login_form_element("name_input")
 
-                if self.teams_bot_login_credentials and self.join_now_button_is_present():
+                if self.teams_bot_login_credentials and self.teams_bot_login_should_be_used and self.join_now_button_is_present():
                     logger.info("Join now button is present. Assuming name input is not present because we don't need to fill it out, so returning.")
                     return
 
@@ -106,7 +106,7 @@ class TeamsUIMethods:
             logger.info("Closed captions enabled programatically")
 
             if self.teams_closed_captions_language:
-                closed_caption_set_language_result = self.driver.execute_script(f"return window.callManager?.setClosedCaptionsLanguage('{self.teams_closed_captions_language}')")
+                closed_caption_set_language_result = self.driver.execute_script("return window.callManager?.setClosedCaptionsLanguage(arguments[0]);", self.teams_closed_captions_language)
                 if closed_caption_set_language_result:
                     logger.info("Closed captions language set programatically")
                 else:
@@ -156,6 +156,7 @@ class TeamsUIMethods:
                 return
             except TimeoutException:
                 self.look_for_sign_in_required_element("click_show_more_button")
+                self.check_if_blocked_by_captcha("click_show_more_button")
                 self.look_for_denied_your_request_element("click_show_more_button")
                 self.look_for_we_could_not_connect_you_element("click_show_more_button")
 
@@ -166,10 +167,29 @@ class TeamsUIMethods:
                 raise UiCouldNotLocateElementException("Exception raised in locate_element for click_show_more_button", "click_show_more_button", e)
 
     def look_for_sign_in_required_element(self, step):
-        sign_in_required_element = self.find_element_by_selector(By.XPATH, '//*[contains(text(), "We need to verify your info before you can join")]')
+        sign_in_required_messages = [
+            "We need to verify your info before you can join",
+            "To join, sign in or use Teams on the web",
+            "You need to be signed in to Teams to access this meeting. Sign in with a work or school account and try joining again.",
+            "If you're not signed in to a Teams (work or school) account, sign in and try joining again. If you still can't join, contact the organizer.",
+            "Sign in to Teams to join, or contact the meeting organizer",
+            "To join this Teams meeting, you need to be signed in to an account.",
+            "To join this meeting, sign in again or select another account.",
+            "Due to org policy, you need to sign in or use Teams on the web to join this meeting.",
+        ]
+        xpath_conditions = " or ".join([f'contains(text(), "{msg}")' for msg in sign_in_required_messages])
+        xpath_selector = f"//*[{xpath_conditions}]"
+        sign_in_required_element = self.find_element_by_selector(By.XPATH, xpath_selector)
+
         if sign_in_required_element:
             logger.info("Sign in required. Raising UiLoginRequiredException")
             raise UiLoginRequiredException("Sign in required", step)
+
+    def check_if_blocked_by_captcha(self, step):
+        captcha_element = self.find_element_by_selector(By.XPATH, '//*[contains(text(), "Verify you\'re a real person")]')
+        if captcha_element:
+            logger.info("Captcha detected. Raising UiBlockedByCaptchaException")
+            raise UiBlockedByCaptchaException("Captcha detected", step)
 
     def look_for_microsoft_login_form_element(self, step):
         # Check for Microsoft login form (email input)
@@ -228,7 +248,7 @@ class TeamsUIMethods:
 
     # Returns nothing if succeeded, raises an exception if failed
     def attempt_to_join_meeting(self):
-        if self.teams_bot_login_credentials:
+        if self.teams_bot_login_credentials and self.teams_bot_login_should_be_used:
             self.login_to_microsoft_account()
 
         self.driver.get(self.meeting_url)
@@ -280,10 +300,19 @@ class TeamsUIMethods:
         logger.info("Waiting for the turn off incoming video button...")
         for attempt_index in range(num_attempts):
             try:
-                turn_off_incoming_video_button = WebDriverWait(self.driver, 1).until(EC.presence_of_element_located((By.CSS_SELECTOR, "[aria-label='Turn off incoming video'], #incoming-video-button")))
+                turn_off_incoming_video_button = WebDriverWait(self.driver, 1).until(EC.element_to_be_clickable((By.CSS_SELECTOR, "[aria-label='Turn off incoming video'], #incoming-video-button")))
                 logger.info("Turn off incoming video button found")
                 turn_off_incoming_video_button.click()
                 return
+
+            except (StaleElementReferenceException, ElementClickInterceptedException, ElementNotInteractableException, NoSuchElementException) as e:
+                last_attempt_failed = attempt_index == num_attempts - 1
+                if last_attempt_failed:
+                    logger.error("Turn off incoming video button was unclickable with error {e} of type {type(e)}. Timed out. Raising UiCouldNotLocateElementException")
+                    raise UiCouldNotLocateElementException("Turn off incoming video button was unclickable with error {e} of type {type(e)}. Timed out.", "disable_incoming_video:turn_off_incoming_video_button")
+
+                logger.warning(f"Turn off incoming video button was unclickable with error {e} of type {type(e)}. Retrying. Attempt #{attempt_index}...")
+
             except TimeoutException as e:
                 more_options_button = self.find_element_by_selector(By.CSS_SELECTOR, "#ViewModeMoreOptionsMenuControl-id")
                 if more_options_button:

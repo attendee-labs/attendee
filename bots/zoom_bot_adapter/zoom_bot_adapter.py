@@ -7,6 +7,7 @@ import jwt
 import numpy as np
 import zoom_meeting_sdk as zoom
 
+from bots.automatic_leave_utils import participant_is_another_bot
 from bots.bot_adapter import BotAdapter
 from bots.meeting_url_utils import parse_zoom_join_url
 from bots.utils import png_to_yuv420_frame, scale_i420
@@ -221,7 +222,7 @@ class ZoomBotAdapter(BotAdapter):
                 logger.info("Re-requesting recording privilege since host just joined.")
                 self.recording_ctrl.RequestLocalRecordingPrivilege()
         except Exception as e:
-            logger.info(f"Error retrieving user in request_permission_to_record_if_joined_user_is_host: {e}")
+            logger.warning(f"Error retrieving user in request_permission_to_record_if_joined_user_is_host: {e}")
 
     def on_user_join_callback(self, joined_user_ids, _):
         logger.info(f"on_user_join_callback called. joined_user_ids = {joined_user_ids}")
@@ -235,14 +236,25 @@ class ZoomBotAdapter(BotAdapter):
         if not self.joined_at:
             return
 
-        # If nobody other than the bot was ever in the meeting, then don't activate this. We only want to activate if someone else was in the meeting and left
-        if self.number_of_participants_ever_in_meeting() <= 1:
+        # If nobody (excluding other bots) other than the bot was ever in the meeting, then don't activate this. We only want to activate if someone else was in the meeting and left
+        if self.number_of_participants_ever_in_meeting_excluding_other_bots() <= 1:
             return
 
         all_participant_ids = self.participants_ctrl.GetParticipantsList()
-        if len(all_participant_ids) == 1:
+
+        all_participant_ids_excluding_other_bots = []
+        other_bots_in_meeting_names = []
+        for participant_id in all_participant_ids:
+            participant = self.get_participant(participant_id)
+            if not participant_is_another_bot(participant["participant_full_name"], participant["participant_is_the_bot"], self.automatic_leave_configuration):
+                all_participant_ids_excluding_other_bots.append(participant_id)
+            else:
+                other_bots_in_meeting_names.append(participant["participant_full_name"])
+
+        if len(all_participant_ids_excluding_other_bots) == 1:
             if self.only_one_participant_in_meeting_at is None:
                 self.only_one_participant_in_meeting_at = time.time()
+                logger.info(f"only_one_participant_in_meeting_at set to {self.only_one_participant_in_meeting_at}. Ignoring other bots in meeting: {other_bots_in_meeting_names}")
         else:
             self.only_one_participant_in_meeting_at = None
 
@@ -409,11 +421,11 @@ class ZoomBotAdapter(BotAdapter):
             self._participant_cache[participant_id] = participant_info
             return participant_info
         except:
-            logger.info(f"Error getting participant {participant_id}, falling back to cache")
+            logger.warning(f"Error getting participant {participant_id}, falling back to cache")
             return self._participant_cache.get(participant_id)
 
-    def number_of_participants_ever_in_meeting(self):
-        return len(self._participant_cache)
+    def number_of_participants_ever_in_meeting_excluding_other_bots(self):
+        return len([participant for participant in self._participant_cache.values() if not participant_is_another_bot(participant["participant_full_name"], participant["participant_is_the_bot"], self.automatic_leave_configuration)])
 
     def on_sharing_status_callback(self, sharing_info):
         user_id = sharing_info.userid
@@ -800,7 +812,7 @@ class ZoomBotAdapter(BotAdapter):
 
         send_result = self.audio_raw_data_sender.send(bytes, sample_rate, zoom.ZoomSDKAudioChannel_Mono)
         if send_result != zoom.SDKERR_SUCCESS:
-            logger.info(f"error with send_raw_audio send_result = {send_result}")
+            logger.warning(f"error with send_raw_audio send_result = {send_result}")
 
     def on_mic_start_send_callback(self):
         self.on_mic_start_send_callback_called = True
@@ -832,7 +844,7 @@ class ZoomBotAdapter(BotAdapter):
         stop_raw_recording_result = self.recording_ctrl.StopRawRecording()
         # SDKERR_TOO_FREQUENT_CALL means it was already called recently
         if stop_raw_recording_result != zoom.SDKERR_SUCCESS and stop_raw_recording_result != zoom.SDKERR_TOO_FREQUENT_CALL:
-            logger.info(f"Error with stop_raw_recording_result = {stop_raw_recording_result}")
+            logger.warning(f"Error with stop_raw_recording_result = {stop_raw_recording_result}")
         else:
             self.raw_recording_active = False
             logger.info(f"Raw recording stopped stop_raw_recording_result = {stop_raw_recording_result}")
@@ -843,7 +855,7 @@ class ZoomBotAdapter(BotAdapter):
         logger.info("Starting raw recording")
         start_raw_recording_result = self.recording_ctrl.StartRawRecording()
         if start_raw_recording_result != zoom.SDKERR_SUCCESS:
-            logger.info(f"Error with start_raw_recording_result = {start_raw_recording_result}")
+            logger.warning(f"Error with start_raw_recording_result = {start_raw_recording_result}")
         else:
             self.raw_recording_active = True
             logger.info("Raw recording started")
@@ -872,6 +884,8 @@ class ZoomBotAdapter(BotAdapter):
 
     def leave(self):
         if self.meeting_service is None:
+            logger.warning("Leave called but meeting_service is None. This means we were instructed to leave before we could join. Sending Meeting Ended message")
+            self.send_message_callback({"message": self.Messages.MEETING_ENDED})
             return
 
         status = self.meeting_service.GetMeetingStatus()
@@ -1116,8 +1130,8 @@ class ZoomBotAdapter(BotAdapter):
             return False
         return self.mp4_demuxer.is_playing()
 
-    def send_video(self, video_url):
-        logger.info(f"send_video called with video_url = {video_url}")
+    def send_video(self, video_url, loop=False):
+        logger.info(f"send_video called with video_url = {video_url}, loop = {loop}")
         if not self.unmute_webcam():
             return
 
@@ -1136,6 +1150,7 @@ class ZoomBotAdapter(BotAdapter):
             output_video_dimensions=(self.suggested_video_cap.width, self.suggested_video_cap.height),
             on_video_sample=self.mp4_demuxer_on_video_sample,
             on_audio_sample=self.mp4_demuxer_on_audio_sample,
+            loop=loop,
         )
         self.mp4_demuxer.start()
         return

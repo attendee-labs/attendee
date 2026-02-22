@@ -88,7 +88,7 @@ class StyleManager {
         // Check for recording notification dialog
         const recordingDialog = document.querySelector('div[aria-modal="true"][role="dialog"]');
         
-        if (recordingDialog && (recordingDialog.textContent.includes('This video call is being recorded') || recordingDialog.textContent.includes('This video call is being transcribed') || recordingDialog.textContent.includes('Gemini is taking notes'))) {           
+        if (recordingDialog && (recordingDialog.textContent.includes('This video call is being recorded') || recordingDialog.textContent.includes('Others may see your video differently') || recordingDialog.textContent.includes('This video call is being transcribed') || recordingDialog.textContent.includes('Gemini is taking notes'))) {           
             // Find and click the "Join now" button (usually the confirm/OK button)
             const joinNowButton = recordingDialog.querySelector('button[data-mdc-dialog-action="ok"]');
             
@@ -555,9 +555,10 @@ class StyleManager {
 
         await this.openChatPanel();
 
-        await this.onlyShowSubsetofGMeetUI();
+        if (window.googleMeetInitialData.modifyDomForVideoRecording) {
+            await this.onlyShowSubsetofGMeetUI();
+        }
         
-
         if (window.initialData.recordingView === 'gallery_view')
         {
             this.unpinInterval = setInterval(() => {
@@ -688,7 +689,12 @@ class ChatMessageManager {
                 type: 'ChatMessage',
                 message_uuid: chatMessage.messageId,
                 participant_uuid: chatMessage.deviceId,
-                timestamp: Math.floor(chatMessage.timestamp / 1000),
+                // We are not using chatMessage.timestamp, because it seems to correspond to the start of the meeting
+                // not the creation time of the chat message. So we're just taking the current time for now.
+                // It could be off if there is significant latency between the chat message being created and
+                // our client receiving the chat message, but this seems unlikely in practice.
+                // In the future we can see if the payload contains the creation time of the chat message.
+                timestamp: Math.floor(Date.now() / 1000),
                 text: chatMessage.chatMessageContent.text,
             });
         }
@@ -1944,6 +1950,22 @@ new RTCInterceptor({
         }
     }
 });
+
+function setClosedCaptionsLanguage(language) {
+    // Look for an <li> element whose data-value attribute matches the language code
+    // within the Meeting language dropdown
+    const languageList = document.querySelector('ul[aria-label="Meeting language"]');
+    if (!languageList) {
+        return false;
+    }
+    const languageElement = languageList.querySelector(`li[data-value="${language}"]`);
+    if (languageElement) {
+        languageElement.click();
+        return true;
+    } else {
+        return false;
+    }
+}
 
 function addClickRipple() {
     document.addEventListener('click', function(e) {

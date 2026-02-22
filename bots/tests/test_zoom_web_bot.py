@@ -1,3 +1,4 @@
+import os
 import threading
 import time
 from unittest.mock import MagicMock, patch
@@ -7,6 +8,7 @@ from django.db import connection
 from django.test import TransactionTestCase
 from selenium.common.exceptions import NoSuchElementException
 
+from bots.bot_adapter import BotAdapter
 from bots.bot_controller.bot_controller import BotController
 from bots.models import Bot, BotEventManager, BotEventSubTypes, BotEventTypes, BotStates, Credentials, Organization, Project, Recording, RecordingTypes, TranscriptionProviders, TranscriptionTypes, WebhookDeliveryAttempt, WebhookSubscription, WebhookTriggerTypes, ZoomMeetingToZoomOAuthConnectionMapping, ZoomOAuthApp, ZoomOAuthConnection, ZoomOAuthConnectionStates
 
@@ -316,6 +318,28 @@ class TestZoomWebBot(TransactionTestCase):
 
         # Close the database connection since we're in a thread
         connection.close()
+
+    def test_blocked_by_captcha_records_specific_event_subtype(self):
+        """
+        If the adapter reports a captcha/verification gate (Zoom Web SDK "Check Captcha" loop),
+        we should record a dedicated COULD_NOT_JOIN sub-type so it's visible in analytics.
+        """
+        controller = BotController(self.bot.id)
+
+        # Prevent expensive cleanup behavior (uploads, process-kill watchdog, etc.)
+        controller.cleanup = MagicMock()
+
+        controller.take_action_based_on_message_from_adapter(
+            {
+                "message": BotAdapter.Messages.BLOCKED_BY_CAPTCHA,
+            }
+        )
+
+        self.bot.refresh_from_db()
+        last_event = self.bot.bot_events.order_by("-created_at").first()
+        self.assertIsNotNone(last_event, "Expected a bot event to be created")
+        self.assertEqual(last_event.event_type, BotEventTypes.COULD_NOT_JOIN)
+        self.assertEqual(last_event.event_sub_type, BotEventSubTypes.COULD_NOT_JOIN_MEETING_BLOCKED_BY_CAPTCHA)
 
     @patch("bots.zoom_oauth_connections_utils.requests.post")
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
@@ -730,6 +754,297 @@ class TestZoomWebBot(TransactionTestCase):
         # If thread is still running after timeout, that's a problem to report
         if bot_thread.is_alive():
             print("WARNING: Bot thread did not terminate properly after cleanup")
+
+        # Close the database connection since we're in a thread
+        connection.close()
+
+    @patch("bots.zoom_web_bot_adapter.zoom_web_ui_methods.WebDriverWait")
+    @patch("bots.zoom_web_bot_adapter.zoom_web_ui_methods.start_zoom_web_static_server", return_value=8080)
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
+    @patch("time.time")
+    def test_bot_auto_leaves_only_participant_with_bot_keywords(
+        self,
+        mock_time,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+        mock_start_static_server,
+        MockWebDriverWait,
+    ):
+        """
+        Test that the bot auto-leaves when only another bot (identified by bot_keywords) is in the meeting.
+        1. Real participant joins
+        2. Another bot (name matching bot_keywords) joins
+        3. Real participant leaves (timer should start, because the other bot is excluded)
+        4. Wait 8+ seconds - bot should leave (even though the other bot is still in the meeting)
+        """
+        # Configure the mock uploader
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        # Mock the Chrome driver
+        mock_driver = create_mock_zoom_web_driver()
+        MockChromeDriver.return_value = mock_driver
+
+        # Mock virtual display
+        mock_display = MagicMock()
+        MockDisplay.return_value = mock_display
+
+        # Mock WebDriverWait to return mock elements for post-admission UI
+        mock_wait_instance = MagicMock()
+        mock_element = MagicMock()
+        mock_element.is_displayed.return_value = True
+        mock_wait_instance.until.return_value = mock_element
+        MockWebDriverWait.return_value = mock_wait_instance
+
+        # Set initial time
+        current_time = 1000.0
+        mock_time.return_value = current_time
+
+        # Configure the bot with bot_keywords
+        self.bot.name = "Recording Bot"
+        self.bot.settings = {
+            "zoom_settings": {
+                "sdk": "web",
+            },
+            "automatic_leave_settings": {
+                "only_participant_in_meeting_timeout_seconds": 8,
+                "silence_timeout_seconds": 999999,  # Set very high so it doesn't interfere
+                "silence_activate_after_seconds": 999999,  # Set very high so it doesn't interfere
+                "bot_keywords": ["Notetaker", "Recording Bot"],  # Keywords to identify other bots
+            },
+        }
+        self.bot.save()
+
+        # Track the state for the mock
+        call_count = [0]
+
+        # Mock execute_script to handle different script calls
+        def execute_script_side_effect(script, *args):
+            if "userHasEnteredMeeting" in script:
+                call_count[0] += 1
+                # After 2 calls, user has entered the meeting
+                if call_count[0] >= 2:
+                    return True
+                return False
+            if "userHasEncounteredOnBehalfTokenUserNotInMeetingError" in script:
+                return False
+            if "joinMeeting" in script:
+                return None
+            return None
+
+        mock_driver.execute_script.side_effect = execute_script_side_effect
+
+        # Mock find_element to not find the "host to start meeting" text
+        mock_driver.find_element.side_effect = NoSuchElementException("Element not found")
+
+        # Create bot controller
+        controller = BotController(self.bot.id)
+
+        # Run the bot in a separate thread since it has an event loop
+        bot_thread = threading.Thread(target=controller.run)
+        bot_thread.daemon = True
+        bot_thread.start()
+
+        # Allow time for the join process
+        time.sleep(5)
+
+        # Verify bot joined
+        self.bot.refresh_from_db()
+        self.assertEqual(self.bot.state, BotStates.JOINED_NOT_RECORDING)
+
+        adapter = controller.adapter
+
+        # Simulate participants joining via handle_participant_update
+        # The bot itself (device_id = "bot_device")
+        bot_participant = {
+            "deviceId": "bot_device",
+            "fullName": "Recording Bot",
+            "isCurrentUser": True,
+            "active": True,
+            "humanized_status": "in_meeting",
+            "isHost": False,
+        }
+        adapter.handle_participant_update(bot_participant)
+        adapter.update_only_one_participant_in_meeting_at()
+
+        # Step 1: Real participant joins Notetakerz should NOT be counted as a bot
+        real_participant = {
+            "deviceId": "real_user_device",
+            "fullName": "Notetakerz",
+            "isCurrentUser": False,
+            "active": True,
+            "humanized_status": "in_meeting",
+            "isHost": True,
+        }
+        adapter.handle_participant_update(real_participant)
+        adapter.update_only_one_participant_in_meeting_at()
+
+        # Verify only_one_participant_in_meeting_at is None (real participant is there)
+        self.assertIsNone(adapter.only_one_participant_in_meeting_at, "Timer should not start yet")
+
+        # Step 2: Another bot joins (Notetaker - matches bot_keywords)
+        notetaker_participant = {
+            "deviceId": "notetaker_device",
+            "fullName": "NoteTaker",
+            "isCurrentUser": False,
+            "active": True,
+            "humanized_status": "in_meeting",
+            "isHost": False,
+        }
+        adapter.handle_participant_update(notetaker_participant)
+        adapter.update_only_one_participant_in_meeting_at()
+
+        # Verify only_one_participant_in_meeting_at is still None (real participant is there)
+        self.assertIsNone(adapter.only_one_participant_in_meeting_at, "Timer should not start yet (real participant still there)")
+        # Verify that number of participants ever in meeting excluding other bots is 2
+        self.assertEqual(adapter.number_of_participants_ever_in_meeting_excluding_other_bots(), 2)
+
+        # Step 3: Real participant leaves (only our bot and the Notetaker remain)
+        real_participant_leaving = {
+            "deviceId": "real_user_device",
+            "fullName": "Notetakerz",
+            "isCurrentUser": False,
+            "active": False,
+            "humanized_status": "left_meeting",
+            "isHost": True,
+        }
+        adapter.handle_participant_update(real_participant_leaving)
+        adapter.update_only_one_participant_in_meeting_at()
+
+        # Verify only_one_participant_in_meeting_at is now set
+        # (because the Notetaker is excluded from count due to bot_keywords)
+        self.assertIsNotNone(adapter.only_one_participant_in_meeting_at, "Timer should start (Notetaker excluded by bot_keywords)")
+
+        # Step 4: Advance time past the timeout
+        current_time += 10  # 10 seconds, past the 8 second threshold
+        mock_time.return_value = current_time
+
+        # Set only_one_participant_in_meeting_at to a time in the past to trigger auto-leave
+        adapter.only_one_participant_in_meeting_at = current_time - 10
+
+        # Give the bot time to process auto-leave
+        time.sleep(5)
+
+        # Refresh the bot from the database
+        self.bot.refresh_from_db()
+
+        # Verify that the bot auto-left due to being only participant
+        # (the Notetaker bot was excluded from the count)
+        bot_events = self.bot.bot_events.all()
+        auto_leave_events = [event for event in bot_events if event.event_sub_type == BotEventSubTypes.LEAVE_REQUESTED_AUTO_LEAVE_ONLY_PARTICIPANT_IN_MEETING]
+        self.assertEqual(len(auto_leave_events), 1, "Expected exactly one auto-leave event")
+
+        # Clean up
+        bot_thread.join(timeout=5)
+
+        # Close the database connection since we're in a thread
+        connection.close()
+
+    @patch.dict(os.environ, {"ZOOM_WEB_GENERIC_JOIN_ERROR_SLEEP_TIME_SECONDS": "0.5"})
+    @patch("bots.zoom_web_bot_adapter.zoom_web_ui_methods.start_zoom_web_static_server", return_value=8080)
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
+    def test_generic_join_error_retries_then_stops(
+        self,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+        mock_start_static_server,
+    ):
+        """
+        Test that generic join error retries up to max count, then eventually stops.
+
+        The handle_generic_join_error method in ZoomWebBotAdapter:
+        - If generic_join_error_retries < max_retries: raises UiZoomWebGenericJoinErrorException (causes retry)
+        - After max retries exceeded: stops retrying and sends ZOOM_MEETING_STATUS_FAILED message
+
+        This test verifies that:
+        1. The bot retries when encountering generic join error within the retry limit
+        2. After max retries are exhausted, the bot stops retrying and enters FATAL_ERROR state
+
+        Environment variables set for fast test execution:
+        - ZOOM_WEB_GENERIC_JOIN_ERROR_SLEEP_TIME_SECONDS=0.5 (instead of default 5)
+        """
+        # Configure the mock uploader
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        # Mock the Chrome driver
+        mock_driver = create_mock_zoom_web_driver()
+        MockChromeDriver.return_value = mock_driver
+
+        # Mock virtual display
+        mock_display = MagicMock()
+        MockDisplay.return_value = mock_display
+
+        # Track how many times the generic join error check was called
+        generic_join_error_check_count = [0]
+
+        # Mock execute_script to handle different script calls
+        def execute_script_side_effect(script, *args):
+            if "userHasEnteredMeeting" in script:
+                return False  # User has NOT entered the meeting
+            if "userHasEncounteredOnBehalfTokenUserNotInMeetingError" in script:
+                return False  # No onbehalf token error
+            if "userHasEncounteredGenericJoinError" in script:
+                generic_join_error_check_count[0] += 1
+                return True  # Always return true to simulate persistent generic join error
+            return None
+
+        mock_driver.execute_script.side_effect = execute_script_side_effect
+
+        # Mock find_element to not find the "host to start meeting" text
+        mock_driver.find_element.side_effect = NoSuchElementException("Element not found")
+
+        # Create bot controller (adapter is not created yet - it's created in run())
+        controller = BotController(self.bot.id)
+
+        # Run the bot in a separate thread since it has an event loop
+        bot_thread = threading.Thread(target=controller.run)
+        bot_thread.daemon = True
+        bot_thread.start()
+
+        # Give the bot time to retry and then stop
+        # With 2 retries and 0 sleep time, this should complete quickly
+        bot_thread.join(timeout=15)
+
+        # Refresh the bot from the database
+        self.bot.refresh_from_db()
+
+        # Assert that the bot is in the FATAL_ERROR state after retries exhausted
+        self.assertEqual(self.bot.state, BotStates.FATAL_ERROR)
+
+        # Verify that the generic join error check was called multiple times (retried)
+        # With max retries = 3, we expect at least 4 checks (initial + 3 retries)
+        self.assertGreater(generic_join_error_check_count[0], 1, "Generic join error check should have been called multiple times (retries)")
+
+        # Verify bot events in sequence
+        bot_events = self.bot.bot_events.all()
+
+        # Should have at least 2 events: JOIN_REQUESTED and COULD_NOT_JOIN
+        self.assertGreaterEqual(len(bot_events), 2)
+
+        # Verify join_requested_event (Event 1)
+        join_requested_event = bot_events[0]
+        self.assertEqual(join_requested_event.event_type, BotEventTypes.JOIN_REQUESTED)
+        self.assertEqual(join_requested_event.old_state, BotStates.READY)
+        self.assertEqual(join_requested_event.new_state, BotStates.JOINING)
+
+        # Find the COULD_NOT_JOIN event (should be triggered after retries exhausted)
+        could_not_join_events = [e for e in bot_events if e.event_type == BotEventTypes.COULD_NOT_JOIN]
+        self.assertGreaterEqual(len(could_not_join_events), 1, "A COULD_NOT_JOIN event should be created after retries exhausted")
+
+        # Verify the event has the correct subtype for zoom meeting status failed
+        could_not_join_event = could_not_join_events[0]
+        self.assertEqual(could_not_join_event.event_sub_type, BotEventSubTypes.COULD_NOT_JOIN_MEETING_ZOOM_MEETING_STATUS_FAILED)
+
+        # Cleanup
+        controller.cleanup()
+        bot_thread.join(timeout=5)
 
         # Close the database connection since we're in a thread
         connection.close()

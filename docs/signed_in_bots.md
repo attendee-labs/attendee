@@ -60,7 +60,7 @@ Here are the steps to set it up:
 
 #### Create a new Google Workspace account for the bot
 1. Create a new Google Workspace account for the bot to use. The workspace will need to be on a paid plan and be associated with a domain you own. This can be a subdomain of your main workspace account's domain.
-2. Create another user in the Google Workspace account that the bot will sign in as. The name of this user should be the name of the bot.
+2. Create a non-admin user in the Google Workspace account that the bot will sign in as. The name of this user should be the name of the bot. You can also set their avatar to the desired avatar for the bot.
 3. Login as this new user and go through the 'Welcome to Google Workspace' flow. Otherwise, the bot will not be able to sign in as the user.
 4. Navigate to the Admin Console, then to Security -> Set up single sign-on (SSO) with a third party IdP.
 5. On the SSO page, click the "Add SAML Profile" button.
@@ -71,8 +71,8 @@ Here are the steps to set it up:
     ```
 8. In the Legacy SSO profile page, enter the following information:
     - Enable legacy SSO profile - Yes
-    - Sign-in URL - https://app.attendee.dev/bot_sso/google_meet_sign_in
-    - Sign-out URL - https://app.attendee.dev/bot_sso/google_meet_sign_out
+    - Sign-in URL - https://app.attendee.dev/bot_sso/google_meet_sign_in (For self-hosted instances, use the hostname of your instance instead of app.attendee.dev)
+    - Sign-out URL - https://app.attendee.dev/bot_sso/google_meet_sign_out (For self-hosted instances, use the hostname of your instance instead of app.attendee.dev)
     - Use a domain-specific issuer - Yes
     - Certificate - Upload the cert.pem file you generated in the previous step
 9. Click the "Save" button.

@@ -358,6 +358,18 @@ class Calendar(models.Model):
         ]
 
 
+class CalendarNotificationChannel(models.Model):
+    calendar = models.ForeignKey(Calendar, on_delete=models.CASCADE, related_name="notification_channels")
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    expires_at = models.DateTimeField()
+    notification_last_received_at = models.DateTimeField(null=True, blank=True)
+    platform_uuid = models.CharField(max_length=1024, unique=True)
+    unique_key = models.CharField(max_length=256, unique=True)
+    raw = models.JSONField()
+
+
 class CalendarEvent(models.Model):
     OBJECT_ID_PREFIX = "evt_"
 
@@ -372,8 +384,8 @@ class CalendarEvent(models.Model):
 
     meeting_url = models.CharField(max_length=511, null=True, blank=True)
 
-    start_time = models.DateTimeField()
-    end_time = models.DateTimeField()
+    start_time = models.DateTimeField(db_index=True)
+    end_time = models.DateTimeField(db_index=True)
     is_deleted = models.BooleanField(default=False)
     attendees = models.JSONField(null=True, blank=True)
     ical_uid = models.CharField(max_length=1024, null=True, blank=True)
@@ -637,23 +649,26 @@ class TranscriptionSettings:
         if model_from_settings:
             return model_from_settings
 
-        # nova-3 does not have multilingual support yet, so we need to use nova-2 if we're transcribing with a non-default language
-        if (self.deepgram_language() != "en" and self.deepgram_language()) or self.deepgram_detect_language():
-            deepgram_model = "nova-2"
-        else:
-            deepgram_model = "nova-3"
+        # nova-3 doesn't support Chinese and Thai languages yet, fall back to nova-2
+        nova2_only_languages = {"zh", "zh-CN", "zh-Hans", "zh-TW", "zh-Hant", "zh-HK", "th", "th-TH"}
+        if self.deepgram_language() in nova2_only_languages:
+            return "nova-2"
 
-        # Special case: we can use nova-3 for language=multi
-        if self.deepgram_language() == "multi":
-            deepgram_model = "nova-3"
-
-        return deepgram_model
+        return "nova-3"
 
     def deepgram_redaction_settings(self):
         return self._settings.get("deepgram", {}).get("redact", [])
 
     def deepgram_replace_settings(self):
         return self._settings.get("deepgram", {}).get("replace", [])
+
+    def deepgram_base_url(self):
+        if os.getenv("DEEPGRAM_BASE_URL"):
+            return os.getenv("DEEPGRAM_BASE_URL")
+        use_eu_server = self._settings.get("deepgram", {}).get("use_eu_server", False)
+        if use_eu_server:
+            return "https://api.eu.deepgram.com"
+        return None
 
     def kyutai_server_url(self):
         return self._settings.get("kyutai", {}).get("server_url", None)
@@ -822,6 +837,9 @@ class Bot(models.Model):
     def teams_use_bot_login(self):
         return self.settings.get("teams_settings", {}).get("use_login", False)
 
+    def teams_login_mode_is_always(self):
+        return self.settings.get("teams_settings", {}).get("login_mode", "always") == "always"
+
     def use_zoom_web_adapter(self):
         return self.settings.get("zoom_settings", {}).get("sdk", "native") == "web"
 
@@ -979,6 +997,9 @@ class Bot(models.Model):
 
     def __str__(self):
         return f"{self.object_id} - {self.project.name} in {self.meeting_url}"
+
+    def ephemeral_container_name(self):
+        return f"bot-{self.id}-{self.object_id}".lower().replace("_", "-")
 
     def k8s_pod_name(self):
         return f"bot-pod-{self.id}-{self.object_id}".lower().replace("_", "-")
@@ -1214,6 +1235,7 @@ class BotEventSubTypes(models.IntegerChoices):
     BOT_RECORDING_PERMISSION_DENIED_HOST_CLIENT_CANNOT_GRANT_PERMISSION = 25, "Bot recording permission denied - Host client cannot grant permission"
     LEAVE_REQUESTED_AUTO_LEAVE_COULD_NOT_ENABLE_CLOSED_CAPTIONS = 26, "Leave requested - Auto leave could not enable closed captions"
     COULD_NOT_JOIN_MEETING_AUTHORIZED_USER_NOT_IN_MEETING_TIMEOUT_EXCEEDED = 27, "Bot could not join meeting - Authorized user not in meeting timeout exceeded. See https://developers.zoom.us/blog/transition-to-obf-token-meetingsdk-apps/"
+    COULD_NOT_JOIN_MEETING_BLOCKED_BY_CAPTCHA = 28, "Bot could not join meeting - Blocked by captcha (Verification challenge)."
 
     @classmethod
     def sub_type_to_api_code(cls, value):
@@ -1246,6 +1268,7 @@ class BotEventSubTypes(models.IntegerChoices):
             cls.BOT_RECORDING_PERMISSION_DENIED_HOST_CLIENT_CANNOT_GRANT_PERMISSION: "host_client_cannot_grant_permission",
             cls.LEAVE_REQUESTED_AUTO_LEAVE_COULD_NOT_ENABLE_CLOSED_CAPTIONS: "auto_leave_could_not_enable_closed_captions",
             cls.COULD_NOT_JOIN_MEETING_AUTHORIZED_USER_NOT_IN_MEETING_TIMEOUT_EXCEEDED: "authorized_user_not_in_meeting_timeout_exceeded",
+            cls.COULD_NOT_JOIN_MEETING_BLOCKED_BY_CAPTCHA: "blocked_by_captcha",
         }
         return mapping.get(value)
 
@@ -1304,6 +1327,7 @@ class BotEvent(models.Model):
                             | Q(event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_ZOOM_SDK_INTERNAL_ERROR)
                             | Q(event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_REQUEST_TO_JOIN_DENIED)
                             | Q(event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_MEETING_NOT_FOUND)
+                            | Q(event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_BLOCKED_BY_CAPTCHA)
                         )
                     )
                     |
@@ -2286,6 +2310,10 @@ class AsyncTranscription(models.Model):
 
         return transcription_provider_from_bot_creation_data({**self.recording.bot.settings, **self.settings})
 
+    @property
+    def use_grouped_utterances(self):
+        return self.transcription_provider == TranscriptionProviders.ASSEMBLY_AI
+
 
 class AsyncTranscriptionManager:
     @classmethod
@@ -2588,6 +2616,8 @@ class BotMediaRequest(models.Model):
     text_to_speech_settings = models.JSONField(null=True, default=None)
 
     media_url = models.URLField(null=True, blank=True)
+
+    loop = models.BooleanField(default=False, db_default=False)
 
     media_blob = models.ForeignKey(
         MediaBlob,

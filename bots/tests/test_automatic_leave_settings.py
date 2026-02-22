@@ -46,6 +46,7 @@ class AutomaticLeaveSettingsTests(TestCase):
                 "only_participant_in_meeting_timeout_seconds": 30,
                 "wait_for_host_to_start_meeting_timeout_seconds": 900,
                 "silence_activate_after_seconds": 600,
+                "bot_keywords": ["Notetaker", "AI Bot"],
             }
         }
 
@@ -67,6 +68,7 @@ class AutomaticLeaveSettingsTests(TestCase):
             900,
         )
         self.assertEqual(auto_leave_settings.get("silence_activate_after_seconds"), 600)
+        self.assertEqual(auto_leave_settings.get("bot_keywords"), ["Notetaker", "AI Bot"])
 
     def test_automatic_leave_settings_validation(self):
         """
@@ -116,5 +118,54 @@ class AutomaticLeaveSettingsTests(TestCase):
         try:
             serializer.validate_automatic_leave_settings(unexpected_keys)
             self.fail("ValidationError not raised for unexpected keys")
+        except ValidationError:
+            pass  # Exception was correctly raised
+
+    def test_automatic_leave_settings_bot_keywords_validation(self):
+        """
+        Test that the validation correctly handles bot_keywords parameter
+        """
+        from rest_framework.exceptions import ValidationError
+
+        from bots.serializers import CreateBotSerializer
+
+        serializer = CreateBotSerializer()
+
+        # Test with valid bot_keywords (list of strings)
+        valid_settings = {"bot_keywords": ["Notetaker", "AI Bot", "Recording Bot"]}
+        validated_data = serializer.validate_automatic_leave_settings(valid_settings)
+        self.assertEqual(validated_data["bot_keywords"], ["Notetaker", "AI Bot", "Recording Bot"])
+
+        # Test with null bot_keywords (should be valid)
+        null_settings = {"bot_keywords": None}
+        validated_data = serializer.validate_automatic_leave_settings(null_settings)
+        self.assertIsNone(validated_data["bot_keywords"])
+
+        # Test with empty list (should be valid)
+        empty_list_settings = {"bot_keywords": []}
+        validated_data = serializer.validate_automatic_leave_settings(empty_list_settings)
+        self.assertEqual(validated_data["bot_keywords"], [])
+
+        # Test with bot_keywords not a list (should raise ValidationError)
+        invalid_type_settings = {"bot_keywords": "not a list"}
+        try:
+            serializer.validate_automatic_leave_settings(invalid_type_settings)
+            self.fail("ValidationError not raised for bot_keywords not being a list")
+        except ValidationError:
+            pass  # Exception was correctly raised
+
+        # Test with bot_keywords containing non-string items (should raise ValidationError)
+        non_string_items_settings = {"bot_keywords": ["valid", 123, "also valid"]}
+        try:
+            serializer.validate_automatic_leave_settings(non_string_items_settings)
+            self.fail("ValidationError not raised for bot_keywords containing non-string items")
+        except ValidationError:
+            pass  # Exception was correctly raised
+
+        # Test with bot_keywords containing mixed types (should raise ValidationError)
+        mixed_types_settings = {"bot_keywords": ["Notetaker", None, "Bot"]}
+        try:
+            serializer.validate_automatic_leave_settings(mixed_types_settings)
+            self.fail("ValidationError not raised for bot_keywords containing None")
         except ValidationError:
             pass  # Exception was correctly raised

@@ -1,0 +1,166 @@
+import logging
+import os
+
+import docker
+from celery import shared_task
+
+from bots.models import Bot
+
+logger = logging.getLogger(__name__)
+
+
+class BotLauncherCapacityError(Exception):
+    """Raised when the maximum number of simultaneous bots is reached."""
+
+
+@shared_task(
+    bind=True,
+    autoretry_for=(BotLauncherCapacityError,),
+    retry_backoff=True,
+    max_retries=6,
+)
+def run_bot_in_ephemeral_container(self, bot_id: int):
+    """
+    Launches an ephemeral Docker container to execute a bot.
+    Timeout is calculated from bot's max_uptime_seconds + 1h margin.
+    If max_uptime_seconds is not defined, uses default (4h).
+    Container auto-removes on exit.
+    Celery task returns in ~2 seconds.
+    """
+    logger.info(f"Launching ephemeral Docker container for bot {bot_id}")
+
+    try:
+        # Connect to Docker daemon
+        client = docker.from_env()
+
+        # Check maximum simultaneous bots limit
+        max_simultaneous_bots = int(os.getenv("BOT_MAX_SIMULTANEOUS_BOTS", "100"))
+        running_containers = client.containers.list(filters={"label": "attendee.type=ephemeral-bot", "status": "running"})
+        current_running_count = len(running_containers)
+
+        if current_running_count >= max_simultaneous_bots:
+            error_msg = f"Maximum simultaneous bots limit reached: {current_running_count}/{max_simultaneous_bots}. Cannot launch bot {bot_id}"
+            logger.error(error_msg)
+            raise BotLauncherCapacityError(error_msg)
+
+        logger.info(f"Current running bots: {current_running_count}/{max_simultaneous_bots}. Launching bot {bot_id}")
+
+        # Image to use (same as worker)
+        image = os.getenv("BOT_CONTAINER_IMAGE", "attendee-attendee-worker-local:latest")
+
+        # Copy all environment variables from worker to container
+        # This ensures all env vars (DB, Redis, AWS, Deepgram, etc.) are automatically passed
+        env_vars = os.environ.copy()
+
+        # Remove Docker-specific or worker-specific vars that shouldn't be in the bot container
+        vars_to_exclude = {
+            "BOT_CONTAINER_IMAGE",  # Only needed by launcher
+            "BOT_MEMORY_LIMIT",  # Only needed by launcher
+            "BOT_CPU_QUOTA",  # Only needed by launcher
+            "BOT_CPU_PERIOD",  # Only needed by launcher
+            "BOT_MAX_EXECUTION_SECONDS",  # Only needed by launcher
+            "BOT_MAX_SIMULTANEOUS_BOTS",  # Only needed by launcher
+            "PULSE_SERVER",  # Each ephemeral container should start its own PulseAudio server
+            "PULSE_RUNTIME_PATH",  # Each container has its own runtime path
+            "XDG_RUNTIME_DIR",  # Each container has its own runtime dir
+        }
+        env_vars = {k: v for k, v in env_vars.items() if k not in vars_to_exclude}
+
+        # Resource limits per bot (configurable)
+        mem_limit = os.getenv("BOT_MEMORY_LIMIT", "2g")  # 2GB default
+        cpu_quota = int(os.getenv("BOT_CPU_QUOTA", "100000"))  # 1 CPU default (100000 = 1 core)
+        cpu_period = int(os.getenv("BOT_CPU_PERIOD", "100000"))
+
+        # Get bot to retrieve max_uptime_seconds (Bot.DoesNotExist propagates)
+        bot = Bot.objects.get(id=bot_id)
+        automatic_leave_settings = bot.automatic_leave_settings()
+        bot_max_uptime = automatic_leave_settings.get("max_uptime_seconds")
+
+        # Container name
+        container_name = bot.ephemeral_container_name()
+
+        # Calculate timeout = max_uptime_seconds + 1h (3600s) if defined, otherwise use default
+        if bot_max_uptime is not None:
+            max_execution_seconds = bot_max_uptime + 3600  # + 1h margin
+            logger.info(f"Bot {bot_id} has max_uptime_seconds={bot_max_uptime}, setting container timeout to {max_execution_seconds}s")
+        else:
+            # No max_uptime defined, use default (4h)
+            max_execution_seconds = int(os.getenv("BOT_MAX_EXECUTION_SECONDS", "14400"))
+            logger.info(f"Bot {bot_id} has no max_uptime_seconds, using default timeout {max_execution_seconds}s")
+
+        # Command to execute in container with timeout
+        # timeout forces stop after max_execution_seconds
+        command = f"timeout {max_execution_seconds} python manage.py run_bot --botid {bot_id}"
+
+        # Labels for identification
+        labels = {
+            "attendee.type": "ephemeral-bot",
+            "attendee.bot_id": str(bot_id),
+        }
+
+        # Check if we should keep containers for debugging
+        auto_remove = os.getenv("BOT_CONTAINER_AUTO_REMOVE", "true").lower() != "false"
+
+        # Mount volumes (same as worker for code access)
+        # Get the host path - if we're in a container, use env var or detect from mounted volume
+        # The worker runs with .:/attendee mounted, so we need the host path
+        host_code_path = os.getenv("BOT_HOST_CODE_PATH", "/opt/attendee")
+        volumes = {host_code_path: {"bind": "/attendee", "mode": "rw"}}
+
+        # Launch ephemeral container
+        container = client.containers.run(
+            image=image,
+            command=command,
+            name=container_name,
+            detach=True,  # Detached so task returns quickly
+            remove=auto_remove,  # Auto-remove on exit (can be disabled for debugging)
+            environment=env_vars,
+            labels=labels,
+            volumes=volumes,
+            mem_limit=mem_limit,
+            cpu_quota=cpu_quota,
+            cpu_period=cpu_period,
+            network_mode="host",  # Same network mode as workers
+            security_opt=["seccomp=unconfined"],  # Same config as workers
+            # Container will automatically stop after max_execution_seconds thanks to timeout in command
+        )
+
+        # Log container info and how to view logs
+        log_instruction = f"View logs with: docker logs -f {container_name}" if not auto_remove else "Container will auto-remove when done. To keep containers, set BOT_CONTAINER_AUTO_REMOVE=false"
+
+        logger.info(f"Ephemeral container {container_name} (ID: {container.short_id}) started for bot {bot_id}. {log_instruction}")
+
+        # Try to capture and log initial container output (first few lines)
+        try:
+            # Wait a moment for container to start producing output
+            import time
+
+            time.sleep(0.5)
+            logs = container.logs(tail=20, stdout=True, stderr=True).decode("utf-8", errors="replace")
+            if logs.strip():
+                logger.info(f"Initial logs from {container_name}:\n{logs}")
+        except Exception as e:
+            # If we can't get logs yet, that's okay - container might not have started outputting
+            logger.debug(f"Could not retrieve initial logs from {container_name}: {e}")
+
+        # If auto-remove is enabled, start a background task to periodically capture logs
+        # This helps see logs even if container is removed
+        if auto_remove:
+            logger.info(f"💡 Tip: To see full logs, run: sudo docker logs -f {container_name} (while container is running) or set BOT_CONTAINER_AUTO_REMOVE=false to keep containers")
+
+        return {
+            "container_id": container.short_id,
+            "container_name": container_name,
+            "bot_id": bot_id,
+            "status": "started",
+        }
+
+    except docker.errors.ImageNotFound:
+        logger.error(f"Image {image} not found. Cannot launch bot {bot_id}")
+        raise
+    except docker.errors.APIError as e:
+        logger.error(f"Docker API error while launching bot {bot_id}: {str(e)}")
+        raise
+    except Exception as e:
+        logger.error(f"Error launching ephemeral container for bot {bot_id}: {str(e)}", exc_info=True)
+        raise

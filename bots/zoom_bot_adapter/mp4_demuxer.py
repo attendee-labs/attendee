@@ -28,16 +28,19 @@ class MP4Demuxer:
         Called with (pts_seconds, raw_rgba_frame).
     on_audio_sample : Callable[[float, bytes], None]
         Called with (pts_seconds, raw_pcm_block).
+    loop : bool
+        If True, replay the video from the start when it reaches the end.
     """
 
-    def __init__(self, url, output_video_dimensions, on_video_sample, on_audio_sample):
+    def __init__(self, url, output_video_dimensions, on_video_sample, on_audio_sample, loop=False):
         Gst.init(None)
         self._url = url
         self._video_cb = on_video_sample
         self._audio_cb = on_audio_sample
         self._output_video_dimensions = output_video_dimensions
+        self._loop_video = loop
         self._playing = False
-        self._loop = GObject.MainLoop()
+        self._glib_main_loop = GObject.MainLoop()
         self._thread = None
         self._queue_elements = {}  # Store references to queue elements
         self._temp_file_path = None
@@ -78,7 +81,7 @@ class MP4Demuxer:
         if self._playing:
             return
         self._pipeline.set_state(Gst.State.PLAYING)
-        self._thread = threading.Thread(target=self._loop.run, daemon=True)
+        self._thread = threading.Thread(target=self._glib_main_loop.run, daemon=True)
         self._thread.start()
         self._playing = True
 
@@ -93,7 +96,7 @@ class MP4Demuxer:
             return
         self._pipeline.send_event(Gst.Event.new_eos())  # graceful EOS
         self._pipeline.set_state(Gst.State.NULL)
-        self._loop.quit()
+        self._glib_main_loop.quit()
         if self._thread and self._thread.is_alive():
             self._thread.join()
         self._playing = False
@@ -237,9 +240,21 @@ class MP4Demuxer:
     # ------------------------- Bus handler ----------------------------- #
     def _on_bus_message(self, bus, msg):
         t = msg.type
-        if t == Gst.MessageType.EOS or t == Gst.MessageType.ERROR:
-            # Pipeline finished or hit error – shut down cleanly
+        if t == Gst.MessageType.ERROR:
             self.stop()
+            return
+        if t == Gst.MessageType.EOS:
+            if self._loop_video:
+                success = self._pipeline.seek_simple(
+                    Gst.Format.TIME,
+                    Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT,
+                    0,
+                )
+                if not success:
+                    logger.warning("Seek failed, stopping playback")
+                    self.stop()
+            else:
+                self.stop()
 
     def __del__(self):
         """

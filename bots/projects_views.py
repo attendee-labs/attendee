@@ -54,6 +54,7 @@ from .models import (
     ZoomOAuthApp,
 )
 from .stripe_utils import credit_amount_for_purchase_amount_dollars, process_checkout_session_completed
+from .tasks.deliver_webhook_task import deliver_webhook
 from .utils import generate_recordings_json_for_bot_detail_view
 from .zoom_oauth_apps_api_utils import create_or_update_zoom_oauth_app
 
@@ -106,6 +107,14 @@ def get_google_meet_bot_login_for_user(user, google_meet_bot_login_object_id):
     if user.role != UserRole.ADMIN and not ProjectAccess.objects.filter(project=google_meet_bot_login.group.project, user=user).exists():
         raise PermissionDenied
     return google_meet_bot_login
+
+
+def get_webhook_delivery_attempt_for_user(user, idempotency_key):
+    webhook_delivery_attempt = get_object_or_404(WebhookDeliveryAttempt, idempotency_key=idempotency_key, webhook_subscription__project__organization=user.organization)
+    # If you're an admin you can access any webhook delivery attempt in the organization
+    if user.role != UserRole.ADMIN and not ProjectAccess.objects.filter(project=webhook_delivery_attempt.webhook_subscription.project, user=user).exists():
+        raise PermissionDenied
+    return webhook_delivery_attempt
 
 
 def get_webhook_options_for_project(project):
@@ -767,16 +776,20 @@ class ProjectBotDetailView(LoginRequiredMixin, ProjectUrlContextMixin, View):
         # Calculate maximum values from resource snapshots
         max_ram_usage = 0
         max_cpu_usage = 0
+        max_db_connection_count = 0
         if resource_snapshots.exists():
             for snapshot in resource_snapshots:
                 data = snapshot.data
-                ram_usage = data.get("ram_usage_megabytes", 0)
-                cpu_usage = data.get("cpu_usage_millicores", 0)
+                ram_usage = data.get("ram_usage_megabytes") or 0
+                cpu_usage = data.get("cpu_usage_millicores") or 0
+                db_connection_count = data.get("db_connection_count") or 0
 
                 if ram_usage > max_ram_usage:
                     max_ram_usage = ram_usage
                 if cpu_usage > max_cpu_usage:
                     max_cpu_usage = cpu_usage
+                if db_connection_count > max_db_connection_count:
+                    max_db_connection_count = db_connection_count
 
         context = self.get_project_context(object_id, project)
         context.update(
@@ -793,6 +806,7 @@ class ProjectBotDetailView(LoginRequiredMixin, ProjectUrlContextMixin, View):
                 "resource_snapshots": resource_snapshots,
                 "max_ram_usage": max_ram_usage,
                 "max_cpu_usage": max_cpu_usage,
+                "max_db_connection_count": max_db_connection_count,
             }
         )
 
@@ -1027,6 +1041,40 @@ class DeleteWebhookView(LoginRequiredMixin, ProjectUrlContextMixin, View):
         context["webhook_options"] = get_webhook_options_for_project(webhook.project)
         context["REQUIRE_HTTPS_WEBHOOKS"] = settings.REQUIRE_HTTPS_WEBHOOKS
         return render(request, "projects/project_webhooks.html", context)
+
+
+class ResendWebhookDeliveryAttemptView(LoginRequiredMixin, View):
+    def post(self, request, object_id, idempotency_key):
+        # Verify user has access to this project
+        get_project_for_user(user=request.user, project_object_id=object_id)
+
+        # Get and verify access to the webhook delivery attempt
+        webhook_delivery_attempt = get_webhook_delivery_attempt_for_user(
+            user=request.user,
+            idempotency_key=idempotency_key,
+        )
+
+        # Don't resend if the attempt count is greater than 49
+        if webhook_delivery_attempt.attempt_count > 49:
+            return HttpResponse(
+                '<span class="badge bg-secondary">Attempts exhausted</span>',
+                content_type="text/html",
+            )
+
+        # Only resend if the attempt is not pending
+        if webhook_delivery_attempt.status != WebhookDeliveryAttemptStatus.PENDING:
+            # Reset status to pending and queue for redelivery
+            webhook_delivery_attempt.status = WebhookDeliveryAttemptStatus.PENDING
+            webhook_delivery_attempt.save()
+
+            # Queue the webhook for delivery
+            deliver_webhook.delay(webhook_delivery_attempt.id)
+
+        # Return a simple confirmation badge - user can refresh page to see final status
+        return HttpResponse(
+            '<span class="badge bg-warning">Pending</span>',
+            content_type="text/html",
+        )
 
 
 class ProjectBillingView(AdminRequiredMixin, ProjectUrlContextMixin, ListView):

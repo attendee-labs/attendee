@@ -84,7 +84,7 @@ class WebpageStreamerManager:
         try:
             self.send_webpage_streamer_shutdown_request()
         except Exception as e:
-            logger.info(f"Error sending webpage streamer shutdown request: {e}")
+            logger.warning(f"Error sending webpage streamer shutdown request: {e}")
         self.cleaned_up = True
 
     def streaming_service_hostname(self):
