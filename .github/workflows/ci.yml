@@ -8,9 +8,18 @@ on:
 
 jobs:
   test:
-    name: Run test suite
+    name: Run test suite (${{ matrix.suite_name }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite_name: zoom_tests
+            test_args: "--tag zoom_tests"
+          - suite_name: non_zoom_tests
+            test_args: "--exclude-tag zoom_tests"
 
     # Add service containers
     services:
@@ -64,18 +73,20 @@ jobs:
         POSTGRES_HOST: localhost
         REDIS_URL: redis://localhost:6379/5
         DJANGO_SETTINGS_MODULE: attendee.settings.test
+        TEST_ARGS: ${{ matrix.test_args }}
       run: |
         docker run --rm \
           --network host \
           -e POSTGRES_HOST \
           -e REDIS_URL \
           -e DJANGO_SETTINGS_MODULE \
+          -e TEST_ARGS \
           attendee-test:latest bash -lc '
             set -e
             python init_env.py > /tmp/.env
-            python -m dotenv -f /tmp/.env run -- python manage.py test --keepdb --parallel 2 --tag zoom_tests
-            python -m dotenv -f /tmp/.env run -- python manage.py test --keepdb --parallel 2 --exclude-tag zoom_tests
+            python -m dotenv -f /tmp/.env run -- python manage.py test --keepdb $TEST_ARGS
           '
+
   lint:
     name: Run linting
     runs-on: ubuntu-latest
