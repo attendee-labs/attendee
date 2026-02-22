@@ -9,9 +9,9 @@ ALLOWED_HOSTS = ["tendee-stripe-hooks.ngrok.io", "localhost"]
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
-        "NAME": "attendee_development",
-        "USER": "attendee_development_user",
-        "PASSWORD": "attendee_development_user",
+        "NAME": "attendee",
+        "USER": "attendee_user",
+        "PASSWORD": "attendee_user",
         "HOST": os.getenv("POSTGRES_HOST", "localhost"),
         "PORT": "5432",
     }
