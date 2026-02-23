@@ -6,7 +6,6 @@ import secrets
 import string
 from datetime import timedelta
 
-# Create your models here.
 from concurrency.exceptions import RecordModifiedError
 from concurrency.fields import IntegerVersionField
 from cryptography.fernet import Fernet, InvalidToken
