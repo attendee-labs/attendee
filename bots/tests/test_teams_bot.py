@@ -813,3 +813,177 @@ class TestTeamsBot(TransactionTestCase):
 
             # Close the database connection since we're in a thread
             connection.close()
+
+    @patch.dict("os.environ", {"USE_REMOTE_STORAGE_FOR_AUDIO_CHUNKS": "true", "FALLBACK_TO_DB_STORAGE_FOR_AUDIO_CHUNKS_IF_REMOTE_STORAGE_FAILS": "true"})
+    @patch("bots.bot_controller.bot_controller.settings.USE_REMOTE_STORAGE_FOR_AUDIO_CHUNKS", True)
+    @patch("bots.bot_controller.bot_controller.settings.FALLBACK_TO_DB_STORAGE_FOR_AUDIO_CHUNKS_IF_REMOTE_STORAGE_FAILS", True)
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
+    def test_audio_chunk_remote_storage_with_fallback_to_db(
+        self,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+    ):
+        """
+        Test that audio chunks can be uploaded to remote storage, and if an upload fails,
+        the system falls back to DB storage when FALLBACK_TO_DB_STORAGE_FOR_AUDIO_CHUNKS_IF_REMOTE_STORAGE_FAILS is enabled.
+
+        Flow:
+        1. Bot joins meeting with remote audio chunk storage enabled
+        2. First audio chunk upload fails (simulated error)
+        3. System falls back to storing audio in database
+        4. Utterance is still created and processed successfully
+        5. Second audio chunk upload succeeds
+        6. Verify both chunks result in processed utterances
+        """
+        from bots.models import AudioChunk, Participant, Utterance
+
+        # Configure the mock uploader
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        # Mock the Chrome driver
+        mock_driver = create_mock_teams_driver()
+        MockChromeDriver.return_value = mock_driver
+
+        # Mock virtual display
+        mock_display = MagicMock()
+        MockDisplay.return_value = mock_display
+
+        # Create bot controller
+        controller = BotController(self.bot.id)
+
+        # Track upload attempts
+        upload_attempt_count = [0]
+
+        def mock_upload_one(filename: str, data: bytes) -> str:
+            """Mock upload that fails on first attempt, succeeds on second."""
+            upload_attempt_count[0] += 1
+            if upload_attempt_count[0] == 1:
+                # First upload fails
+                raise Exception("Simulated S3 upload failure")
+            # Subsequent uploads succeed
+            return filename
+
+        # Mock the attempt_to_join_meeting to succeed immediately
+        with patch("bots.teams_bot_adapter.teams_ui_methods.TeamsUIMethods.attempt_to_join_meeting") as mock_attempt_to_join:
+            mock_attempt_to_join.return_value = None  # Successful join
+
+            # Run the bot in a separate thread since it has an event loop
+            bot_thread = threading.Thread(target=controller.run)
+            bot_thread.daemon = True
+            bot_thread.start()
+
+            # Wait for the bot to join
+            time.sleep(2)
+
+            # Mock the audio chunk uploader's _upload_one method
+            with patch.object(controller.audio_chunk_uploader, "_upload_one", side_effect=mock_upload_one):
+                # Simulate two audio chunks being received
+                test_audio_data_1 = b"\x00\x01\x02\x03" * 1000  # 4KB of test audio data
+                test_audio_data_2 = b"\x04\x05\x06\x07" * 1000  # Different test audio data
+
+                # Send first audio chunk (this will fail to upload)
+                # The process_individual_audio_chunk will create the participant automatically
+                controller.process_individual_audio_chunk(
+                    {
+                        "audio_data": test_audio_data_1,
+                        "timestamp_ms": 1000,
+                        "duration_ms": 500,
+                        "sample_rate": 16000,
+                        "participant_uuid": "test_device_123",
+                        "participant_user_uuid": None,
+                        "participant_full_name": "Test Participant",
+                        "participant_is_the_bot": False,
+                        "participant_is_host": False,
+                    }
+                )
+
+                # Give time for the upload to be queued and fail
+                time.sleep(0.5)
+
+                # Process uploads to trigger the failure callback
+                controller.audio_chunk_uploader.process_uploads()
+
+                # Wait for fallback processing
+                time.sleep(0.5)
+
+                # Get the participant that was created by process_individual_audio_chunk
+                participant = Participant.objects.get(bot=self.bot, uuid="test_device_123")
+
+                # Verify first audio chunk fallback to DB
+                first_audio_chunk = AudioChunk.objects.filter(participant=participant).first()
+                self.assertIsNotNone(first_audio_chunk, "First audio chunk should be created")
+                self.assertFalse(first_audio_chunk.is_blob_stored_remotely, "First chunk should not be stored remotely")
+                self.assertIsNotNone(first_audio_chunk.blob_upload_failure_data, "First chunk should have failure data")
+                self.assertEqual(first_audio_chunk.blob_upload_failure_data.get("exception_type"), "Exception")
+                self.assertIn("Simulated S3 upload failure", first_audio_chunk.blob_upload_failure_data.get("error"))
+                self.assertEqual(bytes(first_audio_chunk.audio_blob), test_audio_data_1, "First chunk audio should be stored in DB")
+
+                # Verify that an utterance was created for the first chunk despite the upload failure
+                first_utterance = Utterance.objects.filter(audio_chunk=first_audio_chunk).first()
+                self.assertIsNotNone(first_utterance, "Utterance should be created for first chunk despite upload failure")
+                self.assertEqual(first_utterance.participant, participant)
+
+                # Send second audio chunk (this will succeed)
+                controller.process_individual_audio_chunk(
+                    {
+                        "audio_data": test_audio_data_2,
+                        "timestamp_ms": 2000,
+                        "duration_ms": 500,
+                        "sample_rate": 16000,
+                        "participant_uuid": "test_device_123",
+                        "participant_user_uuid": None,
+                        "participant_full_name": "Test Participant",
+                        "participant_is_the_bot": False,
+                        "participant_is_host": False,
+                    }
+                )
+
+                # Give time for the upload to complete
+                time.sleep(0.5)
+
+                # Process uploads to trigger the success callback
+                controller.audio_chunk_uploader.process_uploads()
+
+                # Wait for processing
+                time.sleep(0.5)
+
+                # Verify second audio chunk was uploaded successfully
+                second_audio_chunk = AudioChunk.objects.filter(participant=participant).order_by("created_at").last()
+                self.assertIsNotNone(second_audio_chunk, "Second audio chunk should be created")
+                self.assertTrue(second_audio_chunk.is_blob_stored_remotely, "Second chunk should be stored remotely")
+                self.assertIsNone(second_audio_chunk.blob_upload_failure_data, "Second chunk should not have failure data")
+                self.assertTrue(second_audio_chunk.audio_blob_remote_file, "Second chunk should have remote file reference")
+
+                # Verify that an utterance was created for the second chunk
+                second_utterance = Utterance.objects.filter(audio_chunk=second_audio_chunk).first()
+                self.assertIsNotNone(second_utterance, "Utterance should be created for second chunk")
+                self.assertEqual(second_utterance.participant, participant)
+
+                # Verify that both uploads were attempted
+                self.assertEqual(upload_attempt_count[0], 2, "Should have attempted two uploads")
+
+                # Verify total audio chunks and utterances
+                total_chunks = AudioChunk.objects.filter(participant=participant).count()
+                self.assertEqual(total_chunks, 2, "Should have exactly two audio chunks")
+
+                total_utterances = Utterance.objects.filter(participant=participant).count()
+                self.assertEqual(total_utterances, 2, "Should have exactly two utterances")
+
+            # Clean up: simulate meeting ending to trigger cleanup
+            controller.adapter.left_meeting = True
+            controller.adapter.send_message_callback({"message": controller.adapter.Messages.MEETING_ENDED})
+            time.sleep(1)
+
+            # Now wait for the thread to finish naturally
+            bot_thread.join(timeout=5)
+
+            # If thread is still running after timeout, that's a problem to report
+            if bot_thread.is_alive():
+                print("WARNING: Bot thread did not terminate properly after cleanup")
+
+            # Close the database connection since we're in a thread
+            connection.close()
