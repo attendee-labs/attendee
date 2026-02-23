@@ -551,13 +551,6 @@ class ProjectBotsView(LoginRequiredMixin, ProjectUrlContextMixin, ListView):
         # Apply annotations and ordering
         queryset = queryset.annotate(last_event_type=models.Subquery(latest_event_type), last_event_sub_type=models.Subquery(latest_event_sub_type)).order_by("-created_at")
 
-        # Add display names for the event types
-        for bot in queryset:
-            if bot.last_event_type:
-                bot.last_event_type_display = dict(BotEventTypes.choices).get(bot.last_event_type, str(bot.last_event_type))
-            if bot.last_event_sub_type:
-                bot.last_event_sub_type_display = dict(BotEventSubTypes.choices).get(bot.last_event_sub_type, str(bot.last_event_sub_type))
-
         return queryset
 
     def get_context_data(self, **kwargs):
@@ -580,6 +573,13 @@ class ProjectBotsView(LoginRequiredMixin, ProjectUrlContextMixin, ListView):
 
         # Check if any bots in the current page have a join_at value
         context["has_scheduled_bots"] = any(bot.join_at is not None for bot in context["bots"])
+
+        # Only iterates over the paginated page (<= 20)
+        for bot in context["bots"]:
+            if bot.last_event_type:
+                bot.last_event_type_display = dict(BotEventTypes.choices).get(bot.last_event_type, str(bot.last_event_type))
+            if bot.last_event_sub_type:
+                bot.last_event_sub_type_display = dict(BotEventSubTypes.choices).get(bot.last_event_sub_type, str(bot.last_event_sub_type))
 
         return context
 
