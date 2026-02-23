@@ -11,6 +11,7 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
+from django.conf import settings
 from django.test import Client, TransactionTestCase
 from django.urls import reverse
 
@@ -146,8 +147,7 @@ class BotSsoViewsIntegrationTest(TransactionTestCase):
     def tearDown(self):
         """Clean up Redis after each test"""
         # Clean up any Redis keys created during tests
-        redis_url = os.getenv("REDIS_URL") + ("?ssl_cert_reqs=none" if os.getenv("DISABLE_REDIS_SSL") else "")
-        redis_client = redis.from_url(redis_url)
+        redis_client = redis.from_url(settings.REDIS_URL_WITH_PARAMS)
         # Get all keys matching our pattern and delete them
         keys = redis_client.keys("google_meet_sign_in_session:*")
         if keys:
@@ -333,8 +333,7 @@ class BotSsoViewsIntegrationTest(TransactionTestCase):
         session_id = create_google_meet_sign_in_session(self.bot, self.google_meet_bot_login)
 
         # Verify session is created in Redis
-        redis_url = os.getenv("REDIS_URL") + ("?ssl_cert_reqs=none" if os.getenv("DISABLE_REDIS_SSL") else "")
-        redis_client = redis.from_url(redis_url)
+        redis_client = redis.from_url(settings.REDIS_URL_WITH_PARAMS)
         redis_key = f"google_meet_sign_in_session:{session_id}"
         self.assertTrue(redis_client.exists(redis_key))
 

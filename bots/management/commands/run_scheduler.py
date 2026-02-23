@@ -1,5 +1,4 @@
 import logging
-import os
 import signal
 import time
 
@@ -45,8 +44,7 @@ class Command(BaseCommand):
     def _get_redis_client(self):
         """Get or create a Redis client connection."""
         if self._redis_client is None:
-            redis_url = os.getenv("REDIS_URL") + ("?ssl_cert_reqs=none" if os.getenv("DISABLE_REDIS_SSL") else "")
-            self._redis_client = redis.from_url(redis_url)
+            self._redis_client = redis.from_url(settings.REDIS_URL_WITH_PARAMS)
         return self._redis_client
 
     def _log_celery_queue_size(self, queue_name):

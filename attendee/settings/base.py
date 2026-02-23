@@ -161,13 +161,17 @@ STATIC_URL = "static/"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # Redis/Celery Configuration
-if os.getenv("DISABLE_REDIS_SSL"):
-    REDIS_CELERY_URL = os.getenv("REDIS_URL") + "?ssl_cert_reqs=none"
-else:
-    REDIS_CELERY_URL = os.getenv("REDIS_URL")
+redis_params = {}
+if os.getenv("DISABLE_REDIS_SSL"):  # backward compatibility
+    redis_params["ssl_cert_reqs"] = "none"
+elif os.getenv("REDIS_SSL_REQUIREMENTS"):
+    redis_params["ssl_cert_reqs"] = os.getenv("REDIS_SSL_REQUIREMENTS")
+redis_params_query_string = "&".join([f"{key}={value}" for key, value in redis_params.items()])
 
-CELERY_BROKER_URL = REDIS_CELERY_URL
-CELERY_RESULT_BACKEND = REDIS_CELERY_URL
+REDIS_URL_WITH_PARAMS = os.getenv("REDIS_URL") + ("?" + redis_params_query_string if redis_params_query_string else "")
+
+CELERY_BROKER_URL = REDIS_URL_WITH_PARAMS
+CELERY_RESULT_BACKEND = REDIS_URL_WITH_PARAMS
 CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
