@@ -1,6 +1,5 @@
 import hashlib
 import json
-import logging
 import math
 import os
 import secrets
@@ -24,8 +23,6 @@ from accounts.models import Organization, User, UserRole
 from bots.bot_pod_creator.bot_pod_spec import BotPodSpecType
 from bots.storage import StorageAlias, download_blob_from_remote_storage, remote_storage_url
 from bots.webhook_utils import trigger_webhook
-
-logger = logging.getLogger(__name__)
 
 
 class Project(models.Model):
