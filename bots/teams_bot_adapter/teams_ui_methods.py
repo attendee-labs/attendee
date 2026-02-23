@@ -56,12 +56,12 @@ class TeamsUIMethods:
 
     def turn_off_media_inputs(self):
         logger.info("Waiting for the microphone button...")
-        microphone_button = self.locate_element(step="turn_off_microphone_button", condition=EC.presence_of_element_located((By.CSS_SELECTOR, '[data-tid="toggle-mute"]')), wait_time_seconds=60)
+        microphone_button = self.locate_element(step="turn_off_microphone_button", condition=EC.element_to_be_clickable((By.CSS_SELECTOR, '[data-tid="toggle-mute"]')), wait_time_seconds=60)
         logger.info("Clicking the microphone button...")
         self.click_element(microphone_button, "turn_off_microphone_button")
 
         logger.info("Waiting for the camera button...")
-        camera_button = self.locate_element(step="turn_off_camera_button", condition=EC.presence_of_element_located((By.CSS_SELECTOR, '[data-tid="toggle-video"]')), wait_time_seconds=6)
+        camera_button = self.locate_element(step="turn_off_camera_button", condition=EC.element_to_be_clickable((By.CSS_SELECTOR, '[data-tid="toggle-video"]')), wait_time_seconds=6)
         logger.info("Clicking the camera button...")
         # if the aria-checked attribute of the element is true, then click the element
         if camera_button.get_attribute("aria-checked") == "true" or camera_button.get_attribute("checked") == "true":
