@@ -59,14 +59,7 @@ def build_site_url(path=""):
 
 
 def send_sync_command(bot, command="sync"):
-    redis_params = {}
-    if os.getenv("DISABLE_REDIS_SSL"): # backward compatibility
-        redis_params["ssl_cert_reqs"] = "none"
-    elif os.getenv("REDIS_SSL_REQUIREMENTS") is not None and os.getenv("REDIS_SSL_REQUIREMENTS") != "":
-        redis_params["ssl_cert_reqs"] = os.getenv("REDIS_SSL_REQUIREMENTS")
-    redis_params_query_string = "&".join([f"{key}={value}" for key, value in redis_params.items()])
-    redis_url = os.getenv("REDIS_URL") + ("?" + redis_params_query_string if redis_params_query_string else "")
-    redis_client = redis.from_url(redis_url)
+    redis_client = redis.from_url(settings.REDIS_URL)
     channel = f"bot_{bot.id}"
     message = {"command": command}
     redis_client.publish(channel, json.dumps(message))

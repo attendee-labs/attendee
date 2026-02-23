@@ -2,7 +2,6 @@ import base64
 import html
 import json
 import logging
-import os
 import tempfile
 import uuid
 import xml.etree.ElementTree as ET
@@ -11,6 +10,7 @@ from datetime import timedelta
 from urllib.parse import urlencode
 
 import redis
+from django.conf import settings
 from django.urls import reverse
 from saml2 import BINDING_HTTP_POST
 
@@ -35,14 +35,7 @@ def get_google_meet_set_cookie_url(session_id):
 def create_google_meet_sign_in_session(bot: Bot, google_meet_bot_login: GoogleMeetBotLogin):
     session_id = str(uuid.uuid4())
     redis_key = f"google_meet_sign_in_session:{session_id}"
-    redis_params = {}
-    if os.getenv("DISABLE_REDIS_SSL"): # backward compatibility
-        redis_params["ssl_cert_reqs"] = "none"
-    elif os.getenv("REDIS_SSL_REQUIREMENTS") is not None and os.getenv("REDIS_SSL_REQUIREMENTS") != "":
-        redis_params["ssl_cert_reqs"] = os.getenv("REDIS_SSL_REQUIREMENTS")
-    redis_params_query_string = "&".join([f"{key}={value}" for key, value in redis_params.items()])
-    redis_url = os.getenv("REDIS_URL") + ("?" + redis_params_query_string if redis_params_query_string else "")
-    redis_client = redis.from_url(redis_url)
+    redis_client = redis.from_url(settings.REDIS_URL)
     # Save for 30 minutes
     session_data = {
         "bot_object_id": bot.object_id,
@@ -54,14 +47,7 @@ def create_google_meet_sign_in_session(bot: Bot, google_meet_bot_login: GoogleMe
 
 def get_bot_login_for_google_meet_sign_in_session(session_id):
     redis_key = f"google_meet_sign_in_session:{session_id}"
-    redis_params = {}
-    if os.getenv("DISABLE_REDIS_SSL"): # backward compatibility
-        redis_params["ssl_cert_reqs"] = "none"
-    elif os.getenv("REDIS_SSL_REQUIREMENTS") is not None and os.getenv("REDIS_SSL_REQUIREMENTS") != "":
-        redis_params["ssl_cert_reqs"] = os.getenv("REDIS_SSL_REQUIREMENTS")
-    redis_params_query_string = "&".join([f"{key}={value}" for key, value in redis_params.items()])
-    redis_url = os.getenv("REDIS_URL") + ("?" + redis_params_query_string if redis_params_query_string else "")
-    redis_client = redis.from_url(redis_url)
+    redis_client = redis.from_url(settings.REDIS_URL)
     session_data_raw = redis_client.get(redis_key)
     if not session_data_raw:
         logger.info(f"No session data found for google_meet_sign_in_session: {session_id}")

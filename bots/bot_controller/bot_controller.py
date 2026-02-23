@@ -731,15 +731,7 @@ class BotController:
         if self.redis_client:
             self.redis_client.close()
 
-        redis_params = {}
-        if os.getenv("DISABLE_REDIS_SSL"): # backward compatibility
-            redis_params["ssl_cert_reqs"] = "none"
-        elif os.getenv("REDIS_SSL_REQUIREMENTS") is not None and os.getenv("REDIS_SSL_REQUIREMENTS") != "":
-            redis_params["ssl_cert_reqs"] = os.getenv("REDIS_SSL_REQUIREMENTS")
-        redis_params_query_string = "&".join([f"{key}={value}" for key, value in redis_params.items()])
-
-        redis_url = os.getenv("REDIS_URL") + ("?" + redis_params_query_string if redis_params_query_string else "")
-        self.redis_client = redis.from_url(redis_url)
+        self.redis_client = redis.from_url(settings.REDIS_URL)
         self.pubsub = self.redis_client.pubsub()
         self.pubsub.subscribe(self.pubsub_channel)
         logger.info(f"Redis connection established for bot {self.bot_in_db.id}")
