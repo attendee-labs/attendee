@@ -59,7 +59,7 @@ def build_site_url(path=""):
 
 
 def send_sync_command(bot, command="sync"):
-    redis_client = redis.from_url(settings.REDIS_URL)
+    redis_client = redis.from_url(settings.REDIS_URL_WITH_PARAMS)
     channel = f"bot_{bot.id}"
     message = {"command": command}
     redis_client.publish(channel, json.dumps(message))

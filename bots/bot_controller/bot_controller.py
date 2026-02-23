@@ -731,7 +731,7 @@ class BotController:
         if self.redis_client:
             self.redis_client.close()
 
-        self.redis_client = redis.from_url(settings.REDIS_URL)
+        self.redis_client = redis.from_url(settings.REDIS_URL_WITH_PARAMS)
         self.pubsub = self.redis_client.pubsub()
         self.pubsub.subscribe(self.pubsub_channel)
         logger.info(f"Redis connection established for bot {self.bot_in_db.id}")

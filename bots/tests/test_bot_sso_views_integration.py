@@ -147,7 +147,7 @@ class BotSsoViewsIntegrationTest(TransactionTestCase):
     def tearDown(self):
         """Clean up Redis after each test"""
         # Clean up any Redis keys created during tests
-        redis_client = redis.from_url(settings.REDIS_URL)
+        redis_client = redis.from_url(settings.REDIS_URL_WITH_PARAMS)
         # Get all keys matching our pattern and delete them
         keys = redis_client.keys("google_meet_sign_in_session:*")
         if keys:
@@ -333,7 +333,7 @@ class BotSsoViewsIntegrationTest(TransactionTestCase):
         session_id = create_google_meet_sign_in_session(self.bot, self.google_meet_bot_login)
 
         # Verify session is created in Redis
-        redis_client = redis.from_url(settings.REDIS_URL)
+        redis_client = redis.from_url(settings.REDIS_URL_WITH_PARAMS)
         redis_key = f"google_meet_sign_in_session:{session_id}"
         self.assertTrue(redis_client.exists(redis_key))
 

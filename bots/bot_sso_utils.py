@@ -35,7 +35,7 @@ def get_google_meet_set_cookie_url(session_id):
 def create_google_meet_sign_in_session(bot: Bot, google_meet_bot_login: GoogleMeetBotLogin):
     session_id = str(uuid.uuid4())
     redis_key = f"google_meet_sign_in_session:{session_id}"
-    redis_client = redis.from_url(settings.REDIS_URL)
+    redis_client = redis.from_url(settings.REDIS_URL_WITH_PARAMS)
     # Save for 30 minutes
     session_data = {
         "bot_object_id": bot.object_id,
@@ -47,7 +47,7 @@ def create_google_meet_sign_in_session(bot: Bot, google_meet_bot_login: GoogleMe
 
 def get_bot_login_for_google_meet_sign_in_session(session_id):
     redis_key = f"google_meet_sign_in_session:{session_id}"
-    redis_client = redis.from_url(settings.REDIS_URL)
+    redis_client = redis.from_url(settings.REDIS_URL_WITH_PARAMS)
     session_data_raw = redis_client.get(redis_key)
     if not session_data_raw:
         logger.info(f"No session data found for google_meet_sign_in_session: {session_id}")
