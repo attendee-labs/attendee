@@ -1638,6 +1638,15 @@ class ParticipantSpeakingStateMachine {
         this.samples = [];
     }
 
+    sendSpeechStartStopEvent(participantId, isSpeechStart, timestamp) {
+        window.ws?.sendJson({
+            type: 'ParticipantSpeechStartStopEvent',
+            participantId: participantId,
+            isSpeechStart: isSpeechStart,
+            timestamp: timestamp
+        });
+    }
+
     addSample(sample) {
         this.samples.push(sample);
 
@@ -1661,9 +1670,13 @@ class ParticipantSpeakingStateMachine {
         if (previousState == 'NOT_SPEAKING' && this.state == 'SPEAKING') {
             realConsole?.log('SPEAKING: adding speech start for participant', this.participantId);
             dominantSpeakerManager.addSpeechIntervalStart(firstOfLastFiveSamplesTimestamp, this.participantId);
+            if (window.initialData.recordParticipantSpeechStartStopEvents)
+                this.sendSpeechStartStopEvent(this.participantId, true, firstOfLastFiveSamplesTimestamp);
         } else if (previousState == 'SPEAKING' && this.state == 'NOT_SPEAKING') {
             realConsole?.log('NOT_SPEAKING: adding speech stop for participant', this.participantId);
             dominantSpeakerManager.addSpeechIntervalEnd(firstOfLastFiveSamplesTimestamp - 100, this.participantId);
+            if (window.initialData.recordParticipantSpeechStartStopEvents)
+                this.sendSpeechStartStopEvent(this.participantId, false, firstOfLastFiveSamplesTimestamp - 100);
         }
     }
 }
@@ -2351,6 +2364,10 @@ new RTCInterceptor({
                 window.styleManager.addAudioTrack(event.track);
                 if (window.initialData.sendPerParticipantAudio) {
                     handleAudioTrack(event);
+                }
+                else if (window.initialData.recordParticipantSpeechStartStopEvents) {
+                    // If we are not recording per participant audio but we need speech start events, then we only need to track the receiver.
+                    window.receiverManager?.addReceiver(event.receiver);
                 }
             }
             if (event.track?.kind === 'video') {

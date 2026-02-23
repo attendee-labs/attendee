@@ -346,6 +346,9 @@ class TeamsUIMethods:
         cancel_button = self.locate_element(step="cancel_button", condition=EC.presence_of_element_located((By.CSS_SELECTOR, '[data-tid="prejoin-cancel-button"]')), wait_time_seconds=10)
         logger.info("Clicking the cancel button...")
         self.click_element(cancel_button, "cancel_button")
+        # You need to wait a bit after canceling because we close the browser immediately after this.
+        # If you close the browser immediately, then teams will not show them as leaving
+        time.sleep(1)
 
     def login_to_microsoft_account(self):
         logger.info("Navigate to login screen")
