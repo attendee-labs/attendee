@@ -576,9 +576,9 @@ class ProjectBotsView(LoginRequiredMixin, ProjectUrlContextMixin, ListView):
 
         # Only iterates over the paginated page (<= 20)
         for bot in context["bots"]:
-            if bot.last_event_type is not None:
+            if bot.last_event_type:
                 bot.last_event_type_display = dict(BotEventTypes.choices).get(bot.last_event_type, str(bot.last_event_type))
-            if bot.last_event_sub_type is not None:
+            if bot.last_event_sub_type:
                 bot.last_event_sub_type_display = dict(BotEventSubTypes.choices).get(bot.last_event_sub_type, str(bot.last_event_sub_type))
 
         return context
