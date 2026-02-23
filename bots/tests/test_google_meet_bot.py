@@ -86,6 +86,11 @@ class TestGoogleMeetBot(TransactionTestCase):
         os.environ["CHARGE_CREDITS_FOR_BOTS"] = "false"
 
     def setUp(self):
+        # Mock element_to_be_clickable to always return a truthy mock element
+        patcher = patch("bots.google_meet_bot_adapter.google_meet_ui_methods.EC.element_to_be_clickable", return_value=MagicMock(return_value=MagicMock()))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
         # Recreate organization and project for each test
         self.organization = Organization.objects.create(name="Test Org")
         self.project = Project.objects.create(name="Test Project", organization=self.organization)

@@ -175,6 +175,26 @@ CELERY_RESULT_BACKEND = REDIS_CELERY_URL
 CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
+CELERY_TASK_ROUTES = {
+    "bots.tasks.process_utterance_task.process_utterance": {
+        "queue": os.getenv("PROCESS_UTTERANCE_CELERY_QUEUE", "celery"),
+    },
+    "bots.tasks.process_utterance_group_for_async_transcription_task.process_utterance_group_for_async_transcription": {
+        "queue": os.getenv("PROCESS_UTTERANCE_CELERY_QUEUE", "celery"),
+    },
+    "bots.tasks.process_async_transcription_task.process_async_transcription": {
+        "queue": os.getenv("PROCESS_ASYNC_TRANSCRIPTION_CELERY_QUEUE", "celery"),
+    },
+    "bots.tasks.sync_calendar_task.sync_calendar": {
+        "queue": os.getenv("SYNC_CALENDAR_CELERY_QUEUE", "celery"),
+    },
+    "bots.tasks.launch_scheduled_bot_task.launch_scheduled_bot": {
+        "queue": os.getenv("LAUNCH_SCHEDULED_BOT_CELERY_QUEUE", "celery"),
+    },
+    "bots.tasks.deliver_webhook_task.deliver_webhook": {
+        "queue": os.getenv("DELIVER_WEBHOOK_CELERY_QUEUE", "celery"),
+    },
+}
 
 REST_FRAMEWORK = {
     # YOUR SETTINGS
@@ -214,6 +234,12 @@ STORAGE_PROTOCOL = os.getenv("STORAGE_PROTOCOL", "s3")
 AWS_RECORDING_STORAGE_BUCKET_NAME = os.getenv("AWS_RECORDING_STORAGE_BUCKET_NAME")
 AZURE_RECORDING_STORAGE_CONTAINER_NAME = os.getenv("AZURE_RECORDING_STORAGE_CONTAINER_NAME")
 
+# Audio chunk storage settings
+USE_REMOTE_STORAGE_FOR_AUDIO_CHUNKS = os.getenv("USE_REMOTE_STORAGE_FOR_AUDIO_CHUNKS", "false") == "true"
+FALLBACK_TO_DB_STORAGE_FOR_AUDIO_CHUNKS_IF_REMOTE_STORAGE_FAILS = os.getenv("FALLBACK_TO_DB_STORAGE_FOR_AUDIO_CHUNKS_IF_REMOTE_STORAGE_FAILS", "false") == "true"
+AWS_AUDIO_CHUNK_STORAGE_BUCKET_NAME = os.getenv("AWS_AUDIO_CHUNK_STORAGE_BUCKET_NAME") or AWS_RECORDING_STORAGE_BUCKET_NAME
+AZURE_AUDIO_CHUNK_STORAGE_CONTAINER_NAME = os.getenv("AZURE_AUDIO_CHUNK_STORAGE_CONTAINER_NAME") or AZURE_RECORDING_STORAGE_CONTAINER_NAME
+
 if STORAGE_PROTOCOL == "azure":
     DEFAULT_STORAGE_BACKEND = {
         "BACKEND": "storages.backends.azure_storage.AzureStorage",
@@ -226,6 +252,9 @@ if STORAGE_PROTOCOL == "azure":
     }
     RECORDING_STORAGE_BACKEND = copy.deepcopy(DEFAULT_STORAGE_BACKEND)
     RECORDING_STORAGE_BACKEND["OPTIONS"]["azure_container"] = AZURE_RECORDING_STORAGE_CONTAINER_NAME
+
+    AUDIO_CHUNK_STORAGE_BACKEND = copy.deepcopy(DEFAULT_STORAGE_BACKEND)
+    AUDIO_CHUNK_STORAGE_BACKEND["OPTIONS"]["azure_container"] = AZURE_AUDIO_CHUNK_STORAGE_CONTAINER_NAME
 else:
     DEFAULT_STORAGE_BACKEND = {
         "BACKEND": "storages.backends.s3.S3Storage",
@@ -239,11 +268,15 @@ else:
     RECORDING_STORAGE_BACKEND = copy.deepcopy(DEFAULT_STORAGE_BACKEND)
     RECORDING_STORAGE_BACKEND["OPTIONS"]["bucket_name"] = AWS_RECORDING_STORAGE_BUCKET_NAME
 
+    AUDIO_CHUNK_STORAGE_BACKEND = copy.deepcopy(DEFAULT_STORAGE_BACKEND)
+    AUDIO_CHUNK_STORAGE_BACKEND["OPTIONS"]["bucket_name"] = AWS_AUDIO_CHUNK_STORAGE_BUCKET_NAME
+
 
 STORAGES = {
     "default": DEFAULT_STORAGE_BACKEND,
     "recordings": RECORDING_STORAGE_BACKEND,
     "bot_debug_screenshots": RECORDING_STORAGE_BACKEND,
+    "audio_chunks": AUDIO_CHUNK_STORAGE_BACKEND,
     "staticfiles": {
         "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
     },

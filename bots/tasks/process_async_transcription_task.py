@@ -6,7 +6,7 @@ from celery import shared_task
 from django.utils import timezone
 
 from bots.models import AsyncTranscription, AsyncTranscriptionManager, AsyncTranscriptionStates, TranscriptionFailureReasons, Utterance
-from bots.tasks.process_utterance_group_task import process_utterance_group_for_async_transcription
+from bots.tasks.process_utterance_group_for_async_transcription_task import process_utterance_group_for_async_transcription
 from bots.tasks.process_utterance_task import process_utterance
 
 logger = logging.getLogger(__name__)

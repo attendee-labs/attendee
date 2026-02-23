@@ -184,7 +184,7 @@ class BotPodCreator:
         return client.V1Container(
                 name="webpage-streamer",
                 image=self.image,
-                image_pull_policy="Always",
+                image_pull_policy=os.getenv("WEBPAGE_STREAMER_POD_IMAGE_PULL_POLICY", "Always"),
                 args=args,
                 resources=client.V1ResourceRequirements(
                     requests={
@@ -215,7 +215,7 @@ class BotPodCreator:
         return client.V1Container(
                         name="bot-proc",
                         image=self.image,
-                        image_pull_policy="Always",
+                        image_pull_policy=os.getenv("BOT_POD_IMAGE_PULL_POLICY", "Always"),
                         args=args,
                         resources=client.V1ResourceRequirements(
                             requests={

@@ -408,12 +408,14 @@ def patch_bot(bot: Bot, data: dict) -> tuple[Bot | None, dict | None]:
             previous_bot_name = bot.name
             bot.name = validated_data.get("bot_name", bot.name)
             bot.metadata = validated_data.get("metadata", bot.metadata)
+            if validated_data.get("recording_settings"):
+                bot.settings["recording_settings"] = validated_data.get("recording_settings")
 
             # join_at, meeting_url, bot_name and bot_image can only be updated when the bot is scheduled state. For updating image after the bot is in a meeting, use the output_image endpoint.
-            update_only_legal_for_scheduled_bots = bot.join_at != previous_join_at or bot.meeting_url != previous_meeting_url or bot.name != previous_bot_name or validated_data.get("bot_image")
+            update_only_legal_for_scheduled_bots = bot.join_at != previous_join_at or bot.meeting_url != previous_meeting_url or bot.name != previous_bot_name or validated_data.get("bot_image") or validated_data.get("recording_settings")
             if bot.state != BotStates.SCHEDULED:
                 if update_only_legal_for_scheduled_bots:
-                    return None, {"error": f"Bot is in state {BotStates.state_to_api_code(bot.state)} but join_at, meeting_url, bot_name and bot_image can only be updated when in the scheduled state"}
+                    return None, {"error": f"Bot is in state {BotStates.state_to_api_code(bot.state)} but join_at, meeting_url, bot_name, bot_image and recording_settings can only be updated when in the scheduled state"}
 
             bot.save()
 
