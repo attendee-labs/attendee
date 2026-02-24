@@ -1610,6 +1610,10 @@ class BotController:
         mhtml_file_available = message.get("mhtml_file_path") is not None
 
         if screenshot_available:
+            if not os.path.exists(message.get("screenshot_path")):
+                logger.warning(f"Warning: Screenshot file at {message.get('screenshot_path')} does not exist, not saving")
+                return
+
             # Create debug screenshot
             debug_screenshot = BotDebugScreenshot.objects.create(bot_event=new_bot_event)
 
@@ -1623,6 +1627,10 @@ class BotController:
                 )
 
         if mhtml_file_available:
+            if not os.path.exists(message.get("mhtml_file_path")):
+                logger.warning(f"Warning: MHTML file at {message.get('mhtml_file_path')} does not exist, not saving")
+                return
+
             # Create debug screenshot
             mhtml_debug_screenshot = BotDebugScreenshot.objects.create(bot_event=new_bot_event)
 
