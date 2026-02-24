@@ -1,15 +1,17 @@
 # Participant Events
 
-Attendee tracks all participants in a meeting and when they take certain actions. This information can be used for tracking meeting attendance or triggering actions when a certain number of participants have joined.
+Attendee tracks all participants in a meeting and when they take certain actions. This information can be used for tracking meeting attendance or triggering actions when a certain number of participants have joined. It can also be used to track when participants are speaking.
 
 The bot itself is not considered a participant in the meeting and will not appear in the participant events.
 
 ## Participant Event Types
 
-Currently, there are two types of participant events:
+Currently, there are four types of participant events:
 
 - **Join**: A participant has joined the meeting.
 - **Leave**: A participant has left the meeting.
+- **Speech Start**: A participant has started speaking.
+- **Speech Stop**: A participant has stopped speaking.
 
 ## Fetching Participant Events
 
@@ -19,7 +21,7 @@ For more details on the API, see the [API reference](https://docs.attendee.dev/a
 
 ## Webhooks for Participant Events
 
-You can also receive real-time notifications for participant events by setting up a webhook. To do this, create a webhook in the dashboard and ensure the `participant_events.join_leave` trigger is enabled.
+You can also receive real-time notifications for participant events by setting up a webhook. For participant join/leave events, create a webhook in the dashboard and ensure the `participant_events.join_leave` trigger is enabled. For participant speech start/stop events, create a webhook in the dashboard and ensure the `participant_events.speech_start_stop` trigger is enabled.
 
-When a participant joins or leaves, Attendee will send a webhook payload to your specified URL. For more details on the webhook payload, see the [webhooks documentation](https://docs.attendee.dev/guides/webhooks#webhook-payload__payload-for-participanteventsjoinleave-trigger).
+When a participant joins or leaves or starts or stops speaking, Attendee will send a webhook payload to your specified URL. For more details on the webhook payload, see the [webhooks documentation](https://docs.attendee.dev/guides/webhooks#webhook-payload__payload-for-participanteventsjoinleave-and-participanteventsspeechstartstop-triggers).
 

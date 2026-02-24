@@ -525,32 +525,34 @@
                                     <div class="participant-events">
                                         <div class="participant-events-timeline mt-3">
                                             {% for event in participant.events.all %}
-                                                <div class="event-item d-flex align-items-start gap-3 py-2 border-bottom">
-                                                    <div class="event-icon">
-                                                        {% if event.event_type == ParticipantEventTypes.JOIN %}
-                                                            <i class="bi bi-box-arrow-in-right text-success"></i>
-                                                        {% elif event.event_type == ParticipantEventTypes.LEAVE %}
-                                                            <i class="bi bi-box-arrow-left text-danger"></i>
-                                                        {% endif %}
-                                                    </div>
-                                                    <div class="event-content flex-grow-1">
-                                                        <div class="event-type fw-semibold">
+                                                {% if event.event_type == ParticipantEventTypes.JOIN or event.event_type == ParticipantEventTypes.LEAVE %}
+                                                    <div class="event-item d-flex align-items-start gap-3 py-2 border-bottom">
+                                                        <div class="event-icon">
                                                             {% if event.event_type == ParticipantEventTypes.JOIN %}
-                                                                Joined
+                                                                <i class="bi bi-box-arrow-in-right text-success"></i>
                                                             {% elif event.event_type == ParticipantEventTypes.LEAVE %}
-                                                                Left
+                                                                <i class="bi bi-box-arrow-left text-danger"></i>
                                                             {% endif %}
                                                         </div>
-                                                        <div class="event-timestamp text-muted small">{{ event.created_at|date:"M d, Y H:i:s" }}</div>
-                                                        {% if event.event_data %}
-                                                            <div class="event-data mt-1">
-                                                                <small class="text-muted">
-                                                                    <pre class="small mb-0">{{ event.event_data|pprint }}</pre>
-                                                                </small>
+                                                        <div class="event-content flex-grow-1">
+                                                            <div class="event-type fw-semibold">
+                                                                {% if event.event_type == ParticipantEventTypes.JOIN %}
+                                                                    Joined
+                                                                {% elif event.event_type == ParticipantEventTypes.LEAVE %}
+                                                                    Left
+                                                                {% endif %}
                                                             </div>
-                                                        {% endif %}
+                                                            <div class="event-timestamp text-muted small">{{ event.created_at|date:"M d, Y H:i:s" }}</div>
+                                                            {% if event.event_data %}
+                                                                <div class="event-data mt-1">
+                                                                    <small class="text-muted">
+                                                                        <pre class="small mb-0">{{ event.event_data|pprint }}</pre>
+                                                                    </small>
+                                                                </div>
+                                                            {% endif %}
+                                                        </div>
                                                     </div>
-                                                </div>
+                                                {% endif %}
                                             {% endfor %}
                                         </div>                                       
                                     </div>

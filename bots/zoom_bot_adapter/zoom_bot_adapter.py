@@ -76,6 +76,7 @@ class ZoomBotAdapter(BotAdapter):
         zoom_tokens: dict,
         zoom_meeting_settings: dict,
         record_chat_messages_when_paused: bool,
+        record_participant_speech_start_stop_events: bool,
     ):
         self.use_one_way_audio = use_one_way_audio
         self.use_mixed_audio = use_mixed_audio
@@ -91,6 +92,7 @@ class ZoomBotAdapter(BotAdapter):
         self.zoom_tokens = zoom_tokens
         self.zoom_meeting_settings = zoom_meeting_settings
         self.record_chat_messages_when_paused = record_chat_messages_when_paused
+        self.record_participant_speech_start_stop_events = record_participant_speech_start_stop_events
 
         self._jwt_token = generate_jwt(zoom_client_id, zoom_client_secret)
         self.meeting_id, self.meeting_password = parse_zoom_join_url(meeting_url)
@@ -269,6 +271,19 @@ class ZoomBotAdapter(BotAdapter):
         logger.info("on_host_request_start_audio_callback called. Accepting request.")
         handler.Accept()
 
+    def create_participant_events_for_active_speaker_change(self, new_speaker_id, old_speaker_id):
+        if not self.record_participant_speech_start_stop_events:
+            return
+
+        if new_speaker_id == old_speaker_id:
+            return
+
+        if old_speaker_id:
+            self.send_participant_event(old_speaker_id, event_type=ParticipantEventTypes.SPEECH_STOP)
+
+        if new_speaker_id:
+            self.send_participant_event(new_speaker_id, event_type=ParticipantEventTypes.SPEECH_START)
+
     def on_user_active_audio_change_callback(self, user_ids):
         if len(user_ids) == 0:
             return
@@ -278,6 +293,11 @@ class ZoomBotAdapter(BotAdapter):
 
         if self.active_speaker_id == user_ids[0]:
             return
+
+        self.create_participant_events_for_active_speaker_change(
+            new_speaker_id=user_ids[0],
+            old_speaker_id=self.active_speaker_id,
+        )
 
         self.active_speaker_id = user_ids[0]
         self.set_video_input_manager_based_on_state()
