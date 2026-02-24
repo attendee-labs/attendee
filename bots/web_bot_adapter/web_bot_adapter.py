@@ -487,16 +487,18 @@ class WebBotAdapter(BotAdapter):
             }
         )
 
-    def send_meeting_ended_message(self):
+    def capture_screenshot_info(self):
+        screenshot_path, mhtml_file_path, _ = self.capture_screenshot_and_mhtml_file()
+        return {
+            "mhtml_file_path": mhtml_file_path,
+            "screenshot_path": screenshot_path,
+        }
+
+    def send_meeting_ended_message(self, screenshot_info=None):
         # Take a screenshot of the current page
-        screenshot_path, mhtml_file_path, current_time = self.capture_screenshot_and_mhtml_file()
-        self.send_message_callback(
-            {
-                "message": self.Messages.MEETING_ENDED,
-                "mhtml_file_path": mhtml_file_path,
-                "screenshot_path": screenshot_path,
-            }
-        )
+        if not screenshot_info:
+            screenshot_info = self.capture_screenshot_info()
+        self.send_message_callback({"message": self.Messages.MEETING_ENDED, **screenshot_info})
 
     def send_incorrect_password_message(self):
         self.send_message_callback({"message": self.Messages.COULD_NOT_CONNECT_TO_MEETING})
@@ -821,15 +823,17 @@ class WebBotAdapter(BotAdapter):
         if self.stop_recording_screen_callback:
             self.stop_recording_screen_callback()
 
+        screenshot_info_right_before_leave = None
         try:
             logger.info("disable media sending")
             self.driver.execute_script("window.ws?.disableMediaSending();")
 
+            screenshot_info_right_before_leave = self.capture_screenshot_info()
             self.click_leave_button()
         except Exception as e:
             logger.warning(f"Error during leave: {e}")
         finally:
-            self.send_meeting_ended_message()
+            self.send_meeting_ended_message(screenshot_info=screenshot_info_right_before_leave)
             self.left_meeting = True
 
     def abort_join_attempt(self):
