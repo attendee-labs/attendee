@@ -810,15 +810,25 @@ class WebBotAdapter(BotAdapter):
         if self.stop_recording_screen_callback:
             self.stop_recording_screen_callback()
 
+        # Save a screenshot and mhtml file of the page right before the bot leaves the meeting
+        screenshot_path_right_before_leave = None
+        mhtml_file_path_right_before_leave = None
         try:
             logger.info("disable media sending")
             self.driver.execute_script("window.ws?.disableMediaSending();")
 
+            screenshot_path_right_before_leave, mhtml_file_path_right_before_leave, _ = self.capture_screenshot_and_mhtml_file()
             self.click_leave_button()
         except Exception as e:
             logger.warning(f"Error during leave: {e}")
         finally:
-            self.send_message_callback({"message": self.Messages.MEETING_ENDED})
+            self.send_message_callback(
+                {
+                    "message": self.Messages.MEETING_ENDED,
+                    "mhtml_file_path": mhtml_file_path_right_before_leave,
+                    "screenshot_path": screenshot_path_right_before_leave,
+                }
+            )
             self.left_meeting = True
 
     def abort_join_attempt(self):

@@ -210,6 +210,7 @@ class BotController:
             record_chat_messages_when_paused=self.bot_in_db.record_chat_messages_when_paused(),
             record_participant_speech_start_stop_events=self.bot_in_db.record_participant_speech_start_stop_events(),
             disable_incoming_video=self.disable_incoming_video_for_web_bots(),
+            modify_dom_for_video_recording=self.should_modify_dom_for_video_recording_for_web_bots(),
         )
 
     def get_zoom_oauth_credentials_via_credentials_record(self):
@@ -1609,6 +1610,10 @@ class BotController:
         mhtml_file_available = message.get("mhtml_file_path") is not None
 
         if screenshot_available:
+            if not os.path.exists(message.get("screenshot_path")):
+                logger.warning(f"Warning: Screenshot file at {message.get('screenshot_path')} does not exist, not saving")
+                return
+
             # Create debug screenshot
             debug_screenshot = BotDebugScreenshot.objects.create(bot_event=new_bot_event)
 
@@ -1622,6 +1627,10 @@ class BotController:
                 )
 
         if mhtml_file_available:
+            if not os.path.exists(message.get("mhtml_file_path")):
+                logger.warning(f"Warning: MHTML file at {message.get('mhtml_file_path')} does not exist, not saving")
+                return
+
             # Create debug screenshot
             mhtml_debug_screenshot = BotDebugScreenshot.objects.create(bot_event=new_bot_event)
 
@@ -1811,9 +1820,12 @@ class BotController:
             logger.info("Received message that meeting ended")
             self.flush_utterances()
             if self.bot_in_db.state == BotStates.LEAVING:
-                BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.BOT_LEFT_MEETING)
+                new_bot_event = BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.BOT_LEFT_MEETING)
             else:
-                BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.MEETING_ENDED)
+                new_bot_event = BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.MEETING_ENDED)
+
+            self.save_debug_artifacts(message, new_bot_event)
+
             self.cleanup()
 
             return

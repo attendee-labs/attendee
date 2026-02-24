@@ -51,12 +51,14 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
         teams_closed_captions_language: str | None,
         teams_bot_login_credentials: dict | None,
         teams_bot_login_should_be_used: bool,
+        modify_dom_for_video_recording: bool,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
         self.teams_closed_captions_language = teams_closed_captions_language
         self.teams_bot_login_credentials = teams_bot_login_credentials
         self.teams_bot_login_should_be_used = teams_bot_login_should_be_used and teams_bot_login_credentials
+        self.modify_dom_for_video_recording = modify_dom_for_video_recording
 
     def should_retry_joining_meeting_that_requires_login_by_logging_in(self):
         # If we don't have the ability to login, we can't retry
@@ -148,6 +150,13 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
 
     def subclass_specific_after_bot_joined_meeting(self):
         self.after_bot_can_record_meeting()
+
+    def subclass_specific_initial_data_code(self):
+        return f"""
+            window.teamsInitialData = {{
+                modifyDomForVideoRecording: {"true" if self.modify_dom_for_video_recording else "false"},
+            }}
+        """
 
     def subclass_specific_chrome_policies(self):
         if not settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:
