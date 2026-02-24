@@ -41,7 +41,8 @@ The agent will be loaded once the bot joins the meeting and starts recording.
 
 ## Screen sharing
 
-You can share a screen alongside your voice agent by adding `screenshare_url` to `voice_agent_settings`. The URL should point to a publicly accessible page that renders the content you want to share (e.g. a live browser view, dashboard, or canvas). Attendee will capture and stream that page as the bot's screen share in the meeting.
+You can share a screen alongside your voice agent by adding `screenshare_url` to `voice_agent_settings`.
+
 
 ```json
 {
@@ -53,6 +54,7 @@ You can share a screen alongside your voice agent by adding `screenshare_url` to
   }
 }
 ```
+The URL should point to a publicly accessible page that renders the content you want to share (e.g. a live browser view, dashboard, or canvas). Attendee will capture and stream that page as the bot's screen share in the meeting.
 
 ## Setting up your webpage to be loaded by Attendee
 
