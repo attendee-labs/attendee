@@ -262,6 +262,14 @@
             </button>
         </li>
         {% endif %}
+        {% if network_stats %}
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="network-tab" data-bs-toggle="tab" 
+                    data-bs-target="#network" type="button" role="tab">
+                Network Stats
+            </button>
+        </li>
+        {% endif %}
     </ul>
     <div class="tab-content">
         <!-- Recordings Tab -->
@@ -612,6 +620,87 @@
             </div>
         </div>
         {% endif %}
+
+        <!-- Network Stats Tab -->
+        {% if network_stats %}
+        <div class="tab-pane fade" id="network" role="tabpanel">
+            <div class="mb-3">
+                <div class="row">
+                    <div class="col-md-6">
+                        <p><strong>Peak RX Throughput:</strong> {{ network_stats.max_rx_bytes_per_sec|floatformat:0 }} bytes/sec</p>
+                        <p><strong>Peak TX Throughput:</strong> {{ network_stats.max_tx_bytes_per_sec|floatformat:0 }} bytes/sec</p>
+                        <p><strong>Peak RX Packet Rate:</strong> {{ network_stats.max_rx_packets_per_sec|floatformat:0 }} pkt/sec</p>
+                        <p><strong>Peak TX Packet Rate:</strong> {{ network_stats.max_tx_packets_per_sec|floatformat:0 }} pkt/sec</p>
+                    </div>
+                    <div class="col-md-6">
+                        <p><strong>Total RX Dropped:</strong> 
+                            <span class="{% if network_stats.total_rx_dropped > 0 %}text-danger fw-bold{% endif %}">{{ network_stats.total_rx_dropped }}</span>
+                        </p>
+                        <p><strong>Total TX Dropped:</strong> 
+                            <span class="{% if network_stats.total_tx_dropped > 0 %}text-danger fw-bold{% endif %}">{{ network_stats.total_tx_dropped }}</span>
+                        </p>
+                        <p><strong>Total RX Errors:</strong> 
+                            <span class="{% if network_stats.total_rx_errors > 0 %}text-danger fw-bold{% endif %}">{{ network_stats.total_rx_errors }}</span>
+                        </p>
+                        <p><strong>Total TX Errors:</strong> 
+                            <span class="{% if network_stats.total_tx_errors > 0 %}text-danger fw-bold{% endif %}">{{ network_stats.total_tx_errors }}</span>
+                        </p>
+                    </div>
+                </div>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-striped">
+                    <thead>
+                        <tr>
+                            <th>Timestamp</th>
+                            <th>RX (bytes/sec)</th>
+                            <th>TX (bytes/sec)</th>
+                            <th>RX (pkt/sec)</th>
+                            <th>TX (pkt/sec)</th>
+                            <th>RX Dropped</th>
+                            <th>RX Errors</th>
+                            <th>TX Dropped</th>
+                            <th>TX Errors</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for snapshot in resource_snapshots %}
+                            {% if snapshot.data.network %}
+                            <tr>
+                                <td>{{ snapshot.created_at|date:"M d, Y H:i:s" }}</td>
+                                <td>{{ snapshot.data.network.rx_bytes_per_sec|floatformat:0|default:"-" }}</td>
+                                <td>{{ snapshot.data.network.tx_bytes_per_sec|floatformat:0|default:"-" }}</td>
+                                <td>{{ snapshot.data.network.rx_packets_per_sec|floatformat:0|default:"-" }}</td>
+                                <td>{{ snapshot.data.network.tx_packets_per_sec|floatformat:0|default:"-" }}</td>
+                                <td>
+                                    <span class="{% if snapshot.data.network.rx_dropped_delta > 0 %}text-danger fw-bold{% endif %}">
+                                        {{ snapshot.data.network.rx_dropped_delta|default:"-" }}
+                                    </span>
+                                </td>
+                                <td>
+                                    <span class="{% if snapshot.data.network.rx_errors_delta > 0 %}text-danger fw-bold{% endif %}">
+                                        {{ snapshot.data.network.rx_errors_delta|default:"-" }}
+                                    </span>
+                                </td>
+                                <td>
+                                    <span class="{% if snapshot.data.network.tx_dropped_delta > 0 %}text-danger fw-bold{% endif %}">
+                                        {{ snapshot.data.network.tx_dropped_delta|default:"-" }}
+                                    </span>
+                                </td>
+                                <td>
+                                    <span class="{% if snapshot.data.network.tx_errors_delta > 0 %}text-danger fw-bold{% endif %}">
+                                        {{ snapshot.data.network.tx_errors_delta|default:"-" }}
+                                    </span>
+                                </td>
+                            </tr>
+                            {% endif %}
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
+
     </div>
 </div>
 {% endblock %}
