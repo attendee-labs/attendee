@@ -286,11 +286,11 @@ class WebBotAdapter(BotAdapter):
 
     def handle_removed_from_meeting(self):
         self.left_meeting = True
-        self.send_message_callback({"message": self.Messages.MEETING_ENDED})
+        self.send_meeting_ended_message()
 
     def handle_meeting_ended(self):
         self.left_meeting = True
-        self.send_message_callback({"message": self.Messages.MEETING_ENDED})
+        self.send_meeting_ended_message()
 
     def handle_failed_to_join(self, reason):
         logger.info(f"failed to join meeting with reason {reason}")
@@ -482,6 +482,17 @@ class WebBotAdapter(BotAdapter):
         self.send_message_callback(
             {
                 "message": self.Messages.LOGIN_ATTEMPT_FAILED,
+                "mhtml_file_path": mhtml_file_path,
+                "screenshot_path": screenshot_path,
+            }
+        )
+
+    def send_meeting_ended_message(self):
+        # Take a screenshot of the current page
+        screenshot_path, mhtml_file_path, current_time = self.capture_screenshot_and_mhtml_file()
+        self.send_message_callback(
+            {
+                "message": self.Messages.MEETING_ENDED,
                 "mhtml_file_path": mhtml_file_path,
                 "screenshot_path": screenshot_path,
             }
@@ -818,7 +829,7 @@ class WebBotAdapter(BotAdapter):
         except Exception as e:
             logger.warning(f"Error during leave: {e}")
         finally:
-            self.send_message_callback({"message": self.Messages.MEETING_ENDED})
+            self.send_meeting_ended_message()
             self.left_meeting = True
 
     def abort_join_attempt(self):
