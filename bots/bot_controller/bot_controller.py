@@ -309,6 +309,7 @@ class BotController:
             zoom_tokens=zoom_tokens,
             zoom_meeting_settings=self.bot_in_db.zoom_meeting_settings(),
             record_chat_messages_when_paused=self.bot_in_db.record_chat_messages_when_paused(),
+            record_participant_speech_start_stop_events=self.bot_in_db.record_participant_speech_start_stop_events(),
         )
 
     def get_zoom_rtms_adapter(self):
