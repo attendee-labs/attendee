@@ -210,6 +210,7 @@ class BotController:
             record_chat_messages_when_paused=self.bot_in_db.record_chat_messages_when_paused(),
             record_participant_speech_start_stop_events=self.bot_in_db.record_participant_speech_start_stop_events(),
             disable_incoming_video=self.disable_incoming_video_for_web_bots(),
+            modify_dom_for_video_recording=self.should_modify_dom_for_video_recording_for_web_bots(),
         )
 
     def get_zoom_oauth_credentials_via_credentials_record(self):

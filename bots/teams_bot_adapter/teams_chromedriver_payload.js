@@ -373,7 +373,10 @@ class StyleManager {
 
     start() {
         this.startSilenceDetection();
-        this.makeMainVideoFillFrame();
+
+        if (window.teamsInitialData.modifyDomForVideoRecording) {
+            this.makeMainVideoFillFrame();
+        }
 
         console.log('Started StyleManager');
     }
