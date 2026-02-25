@@ -1765,3 +1765,170 @@ class TestGoogleMeetBot2(TransactionTestCase):
         bot_thread.join(timeout=5)
 
         connection.close()
+
+    @patch("bots.models.Bot.create_debug_recording", return_value=False)
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.AzureFileUploader")
+    @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.check_if_meeting_is_found", return_value=None)
+    @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.wait_for_host_if_needed", return_value=None)
+    @patch("time.time")
+    @patch("bots.tasks.deliver_webhook_task.deliver_webhook")
+    def test_bot_sends_screenshare_start_stop_participant_event_webhooks(
+        self,
+        mock_deliver_webhook,
+        mock_time,
+        mock_wait_for_host_if_needed,
+        mock_check_if_meeting_is_found,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+        mock_create_debug_recording,
+    ):
+        mock_deliver_webhook.return_value = None
+
+        self.webhook_subscription = WebhookSubscription.objects.create(
+            project=self.project,
+            url="https://example.com/webhook",
+            triggers=[
+                WebhookTriggerTypes.BOT_STATE_CHANGE,
+                WebhookTriggerTypes.PARTICIPANT_EVENTS_JOIN_LEAVE,
+                WebhookTriggerTypes.PARTICIPANT_EVENTS_SCREENSHARE_START_STOP,
+            ],
+            is_active=True,
+        )
+
+        current_time = 1000.0
+        mock_time.return_value = current_time
+
+        self.recording.transcription_provider = TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM
+        self.recording.save()
+
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        mock_driver = create_mock_google_meet_driver()
+        MockChromeDriver.return_value = mock_driver
+
+        mock_display = MagicMock()
+        MockDisplay.return_value = mock_display
+
+        controller = BotController(self.bot.id)
+
+        bot_thread = threading.Thread(target=controller.run)
+        bot_thread.daemon = True
+        bot_thread.start()
+
+        def simulate_join_flow():
+            nonlocal current_time
+
+            # Simulate participants joining
+            bot_participant_data = {"deviceId": "bot1", "fullName": "Test Bot", "active": True, "isCurrentUser": True}
+            controller.adapter.handle_participant_update(bot_participant_data)
+
+            participant_data = {"deviceId": "user1", "fullName": "Test User", "active": True, "isCurrentUser": False}
+            controller.adapter.handle_participant_update(participant_data)
+
+            controller.adapter.last_audio_message_processed_time = current_time
+
+            time.sleep(3)
+
+            # Simulate screenshare start event for the user participant
+            controller.adapter.handle_screenshare_start_stop_event(
+                {
+                    "participantId": "user1",
+                    "isScreenshareStart": True,
+                    "timestamp": int(current_time * 1000),
+                }
+            )
+
+            time.sleep(0.5)
+
+            # Simulate screenshare stop event for the user participant
+            controller.adapter.handle_screenshare_start_stop_event(
+                {
+                    "participantId": "user1",
+                    "isScreenshareStart": False,
+                    "timestamp": int(current_time * 1000) + 30000,
+                }
+            )
+
+            # Also simulate a screenshare event for the bot (should NOT produce a webhook)
+            controller.adapter.handle_screenshare_start_stop_event(
+                {
+                    "participantId": "bot1",
+                    "isScreenshareStart": True,
+                    "timestamp": int(current_time * 1000) + 31000,
+                }
+            )
+
+            time.sleep(1)
+
+            # Simulate participant leaving
+            participant_data = {"deviceId": "user1", "fullName": "Test User", "active": False, "isCurrentUser": False}
+            controller.adapter.handle_participant_update(participant_data)
+
+            # Trigger auto-leave
+            controller.adapter.only_one_participant_in_meeting_at = time.time() - 10000000000
+            time.sleep(4)
+
+            connection.close()
+
+        threading.Timer(2, simulate_join_flow).start()
+
+        bot_thread.join(timeout=15)
+
+        self.bot.refresh_from_db()
+        self.assertEqual(self.bot.state, BotStates.ENDED)
+
+        # Verify ParticipantEvent records for screenshare start/stop were created for the user
+        user_participant_events = ParticipantEvent.objects.filter(participant__bot=self.bot, participant__uuid="user1")
+        screenshare_start_event = user_participant_events.filter(event_type=ParticipantEventTypes.SCREENSHARE_START).first()
+        self.assertIsNotNone(screenshare_start_event, "Expected a SCREENSHARE_START participant event for the user")
+        self.assertEqual(screenshare_start_event.participant.full_name, "Test User")
+        self.assertEqual(screenshare_start_event.timestamp_ms, int(current_time * 1000))
+
+        screenshare_stop_event = user_participant_events.filter(event_type=ParticipantEventTypes.SCREENSHARE_STOP).first()
+        self.assertIsNotNone(screenshare_stop_event, "Expected a SCREENSHARE_STOP participant event for the user")
+        self.assertEqual(screenshare_stop_event.participant.full_name, "Test User")
+        self.assertEqual(screenshare_stop_event.timestamp_ms, int(current_time * 1000) + 30000)
+
+        # Verify that a SCREENSHARE_START event was also created for the bot participant
+        bot_screenshare_events = ParticipantEvent.objects.filter(participant__bot=self.bot, participant__uuid="bot1", event_type=ParticipantEventTypes.SCREENSHARE_START)
+        self.assertEqual(bot_screenshare_events.count(), 1, "Expected a SCREENSHARE_START event for the bot participant")
+
+        # Verify webhook delivery attempts for screenshare start/stop
+        screenshare_webhook_attempts = WebhookDeliveryAttempt.objects.filter(
+            bot=self.bot,
+            webhook_trigger_type=WebhookTriggerTypes.PARTICIPANT_EVENTS_SCREENSHARE_START_STOP,
+        )
+        # Only user events should trigger webhooks (bot events are suppressed)
+        self.assertEqual(screenshare_webhook_attempts.count(), 2, "Expected exactly 2 screenshare webhook delivery attempts (screenshare_start and screenshare_stop for the user)")
+
+        screenshare_start_webhook = screenshare_webhook_attempts.filter(payload__event_type="screenshare_start").first()
+        self.assertIsNotNone(screenshare_start_webhook)
+        self.assertEqual(screenshare_start_webhook.payload["participant_name"], "Test User")
+        self.assertEqual(screenshare_start_webhook.payload["participant_uuid"], "user1")
+        self.assertEqual(screenshare_start_webhook.payload["timestamp_ms"], int(current_time * 1000))
+
+        screenshare_stop_webhook = screenshare_webhook_attempts.filter(payload__event_type="screenshare_stop").first()
+        self.assertIsNotNone(screenshare_stop_webhook)
+        self.assertEqual(screenshare_stop_webhook.payload["participant_name"], "Test User")
+        self.assertEqual(screenshare_stop_webhook.payload["participant_uuid"], "user1")
+        self.assertEqual(screenshare_stop_webhook.payload["timestamp_ms"], int(current_time * 1000) + 30000)
+
+        # Verify that no screenshare webhook was created for the bot participant
+        bot_screenshare_webhooks = screenshare_webhook_attempts.filter(payload__participant_uuid="bot1")
+        self.assertEqual(bot_screenshare_webhooks.count(), 0, "Expected no screenshare webhooks for the bot participant")
+
+        # Verify join/leave webhooks were also created (ensuring screenshare events don't interfere)
+        join_leave_webhook_attempts = WebhookDeliveryAttempt.objects.filter(
+            bot=self.bot,
+            webhook_trigger_type=WebhookTriggerTypes.PARTICIPANT_EVENTS_JOIN_LEAVE,
+        )
+        self.assertGreater(join_leave_webhook_attempts.count(), 0, "Expected join/leave webhook delivery attempts")
+
+        controller.cleanup()
+        bot_thread.join(timeout=5)
+
+        connection.close()
