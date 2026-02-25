@@ -2,6 +2,7 @@ import base64
 import json
 import logging
 import os
+import random
 import signal
 import time
 
@@ -169,11 +170,41 @@ class Command(BaseCommand):
         log.info("Launched %d zoom oauth connection sync tasks", len(zoom_oauth_connections))
 
     def _run_scheduled_bots_with_jitter(self):
-        jitter_start_seconds = int(os.getenv("SCHEDULED_BOT_JITTER_START_SECONDS", 600))
-        jitter_end_seconds = int(os.getenv("SCHEDULED_BOT_JITTER_END_SECONDS", 300))
+        jitter_start_seconds = int(os.getenv("SCHEDULED_BOT_JITTER_START_SECONDS", 300))
+        jitter_end_seconds = int(os.getenv("SCHEDULED_BOT_JITTER_END_SECONDS", 600))
 
-        bot_ids = self._get_bot_ids_for_pending_launch_scheduled_bot_tasks()
-        log.info(f"Found {len(bot_ids)} pending launch scheduled bot tasks: {bot_ids}")
+        pending_bot_ids = self._get_bot_ids_for_pending_launch_scheduled_bot_tasks()
+        log.info(f"Found {len(pending_bot_ids)} pending launch scheduled bots")
+
+        join_at_upper_threshold = timezone.now() + timezone.timedelta(seconds=jitter_end_seconds)
+        # If we miss a scheduled bot by more than 5 minutes, don't bother launching it, it's a failure and it'll be cleaned up
+        # by the clean_up_bots_with_heartbeat_timeout_or_that_never_launched command
+        join_at_lower_threshold = timezone.now() - timezone.timedelta(minutes=5)
+
+        join_at_jitter_threshold = timezone.now() + timezone.timedelta(seconds=jitter_start_seconds)
+
+        with transaction.atomic():
+            bots_to_launch = Bot.objects.filter(state=BotStates.SCHEDULED, join_at__lte=join_at_upper_threshold, join_at__gte=join_at_lower_threshold).select_for_update(skip_locked=True)
+
+            num_bots_launched = 0
+            for bot in bots_to_launch:
+                if bot.id in pending_bot_ids:
+                    # The bot is already being launched, so we can skip it
+                    continue
+
+                if bot.join_at > join_at_jitter_threshold:
+                    # The bot is above the jitter threshold, so we launch it with a random delay of up to bot.join_at - join_at_jitter_threshold seconds
+                    random_delay = random.randint(0, int((bot.join_at - join_at_jitter_threshold).total_seconds()))
+                    log.info(f"Launching scheduled bot {bot.id} ({bot.object_id}) with join_at {bot.join_at.isoformat()} and random delay {random_delay} seconds")
+                    launch_scheduled_bot.apply_async(args=[bot.id, bot.join_at.isoformat()], countdown=random_delay)
+                else:
+                    # The bot is below the jitter threshold, so we need to launch immediately
+                    log.info(f"Launching scheduled bot {bot.id} ({bot.object_id}) with join_at {bot.join_at.isoformat()}")
+                    launch_scheduled_bot.delay(bot.id, bot.join_at.isoformat())
+
+                num_bots_launched += 1
+
+            log.info("Launched %s bots", num_bots_launched)
 
     def _get_bot_ids_for_pending_launch_scheduled_bot_tasks(self):
         try:
