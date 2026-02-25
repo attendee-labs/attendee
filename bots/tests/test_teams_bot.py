@@ -838,7 +838,7 @@ class TestTeamsBot(TransactionTestCase):
         5. Second audio chunk upload succeeds
         6. Verify both chunks result in processed utterances
         """
-        from bots.models import AudioChunk, Participant, Utterance
+        from bots.models import AudioChunk, Utterance
 
         # Configure the mock uploader
         mock_uploader = create_mock_file_uploader()
@@ -1007,8 +1007,8 @@ class TestTeamsBot(TransactionTestCase):
     ):
         mock_deliver_webhook.return_value = None
 
-        webhook_secret = WebhookSecret.objects.create(project=self.project)
-        webhook_subscription = WebhookSubscription.objects.create(
+        WebhookSecret.objects.create(project=self.project)
+        WebhookSubscription.objects.create(
             project=self.project,
             url="https://example.com/webhook",
             triggers=[

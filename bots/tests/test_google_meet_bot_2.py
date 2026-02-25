@@ -1765,6 +1765,7 @@ class TestGoogleMeetBot2(TransactionTestCase):
         bot_thread.join(timeout=5)
 
         connection.close()
+
     @patch("bots.models.Bot.create_debug_recording", return_value=False)
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
     @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")

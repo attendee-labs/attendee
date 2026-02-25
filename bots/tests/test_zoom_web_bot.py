@@ -10,7 +10,7 @@ from selenium.common.exceptions import NoSuchElementException
 
 from bots.bot_adapter import BotAdapter
 from bots.bot_controller.bot_controller import BotController
-from bots.models import Bot, BotEventManager, BotEventSubTypes, BotEventTypes, BotStates, Credentials, Organization, Participant, ParticipantEvent, ParticipantEventTypes, Project, Recording, RecordingTypes, TranscriptionProviders, TranscriptionTypes, WebhookDeliveryAttempt, WebhookSecret, WebhookSubscription, WebhookTriggerTypes, ZoomMeetingToZoomOAuthConnectionMapping, ZoomOAuthApp, ZoomOAuthConnection, ZoomOAuthConnectionStates
+from bots.models import Bot, BotEventManager, BotEventSubTypes, BotEventTypes, BotStates, Credentials, Organization, ParticipantEvent, ParticipantEventTypes, Project, Recording, RecordingTypes, TranscriptionProviders, TranscriptionTypes, WebhookDeliveryAttempt, WebhookSecret, WebhookSubscription, WebhookTriggerTypes, ZoomMeetingToZoomOAuthConnectionMapping, ZoomOAuthApp, ZoomOAuthConnection, ZoomOAuthConnectionStates
 
 
 # Helper functions for creating mocks
@@ -1068,8 +1068,8 @@ class TestZoomWebBot(TransactionTestCase):
     ):
         mock_deliver_webhook.return_value = None
 
-        webhook_secret = WebhookSecret.objects.create(project=self.project)
-        webhook_subscription = WebhookSubscription.objects.create(
+        WebhookSecret.objects.create(project=self.project)
+        WebhookSubscription.objects.create(
             project=self.project,
             url="https://example.com/webhook",
             triggers=[
