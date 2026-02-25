@@ -1,4 +1,7 @@
+import base64
+import json
 import logging
+import os
 import signal
 import time
 
@@ -165,8 +168,35 @@ class Command(BaseCommand):
 
         log.info("Launched %d zoom oauth connection sync tasks", len(zoom_oauth_connections))
 
+    def _run_scheduled_bots_with_jitter(self):
+        jitter_start_seconds = int(os.getenv("SCHEDULED_BOT_JITTER_START_SECONDS", 600))
+        jitter_end_seconds = int(os.getenv("SCHEDULED_BOT_JITTER_END_SECONDS", 300))
+
+        bot_ids = self._get_bot_ids_for_pending_launch_scheduled_bot_tasks()
+        log.info(f"Found {len(bot_ids)} pending launch scheduled bot tasks: {bot_ids}")
+
+    def _get_bot_ids_for_pending_launch_scheduled_bot_tasks(self):
+        try:
+            bot_ids = set()
+            for delivery_tag, raw in self._get_redis_client().hscan_iter("unacked", match="*"):
+                # Filter for this string being in the raw message: bots.tasks.launch_scheduled_bot_task.launch_scheduled_bot
+                if b"bots.tasks.launch_scheduled_bot_task.launch_scheduled_bot" not in raw:
+                    continue
+                # Parse the raw message as JSON. First argument is bot id
+                message = json.loads(raw)
+                body = json.loads(base64.b64decode(message[0]["body"]))
+                bot_ids.add(body[0][0])
+
+            return bot_ids
+        except Exception:
+            log.exception("Failed to get bot ids for pending launch scheduled bot tasks")
+            return set()
+
     # -----------------------------------------------------------
     def _run_scheduled_bots(self):
+        if os.getenv("SCHEDULED_BOT_JITTER_START_SECONDS") and os.getenv("SCHEDULED_BOT_JITTER_END_SECONDS"):
+            return self._run_scheduled_bots_with_jitter()
+
         """
         Promote objects whose join_at ≤ join_at_threshold.
         Uses SELECT … FOR UPDATE SKIP LOCKED so multiple daemons
