@@ -369,6 +369,7 @@ class ZoomBotAdapter(BotAdapter):
             if sharing_source_info_list:
                 self.active_sharer_id = sharing_source_info_list[0].userid
                 self.active_sharer_source_id = sharing_source_info_list[0].shareSourceID
+                self.send_participant_event(self.active_sharer_id, event_type=ParticipantEventTypes.SCREENSHARE_START)
 
         self.set_video_input_manager_based_on_state()
 
@@ -460,6 +461,10 @@ class ZoomBotAdapter(BotAdapter):
             new_active_sharer_source_id = None
 
         if new_active_sharer_id != self.active_sharer_id or new_active_sharer_source_id != self.active_sharer_source_id:
+            if self.active_sharer_id is not None:
+                self.send_participant_event(self.active_sharer_id, event_type=ParticipantEventTypes.SCREENSHARE_STOP)
+            if new_active_sharer_id is not None:
+                self.send_participant_event(new_active_sharer_id, event_type=ParticipantEventTypes.SCREENSHARE_START)
             self.active_sharer_id = new_active_sharer_id
             self.active_sharer_source_id = new_active_sharer_source_id
             self.set_video_input_manager_based_on_state()

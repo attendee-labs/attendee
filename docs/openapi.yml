@@ -659,7 +659,7 @@ paths:
   /api/v1/bots/{object_id}/participant_events:
     get:
       operationId: Get Participant Events
-      description: Returns the participant events (join/leave) for a bot. Results
+      description: Returns the participant events (join/leave, speech start/stop, screenshare start/stop) for a bot. Results
         are paginated using cursor pagination.
       summary: Get participant events for a bot
       parameters:
@@ -2109,6 +2109,8 @@ components:
                   - transcript.update
                   - chat_messages.update
                   - participant_events.join_leave
+                  - participant_events.speech_start_stop
+                  - participant_events.screenshare_start_stop
                   - calendar.events_update
                   - calendar.state_change
                 description: List of webhook trigger types

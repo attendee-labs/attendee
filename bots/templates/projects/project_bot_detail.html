@@ -533,13 +533,17 @@
                                     <div class="participant-events">
                                         <div class="participant-events-timeline mt-3">
                                             {% for event in participant.events.all %}
-                                                {% if event.event_type == ParticipantEventTypes.JOIN or event.event_type == ParticipantEventTypes.LEAVE %}
+                                                {% if event.event_type == ParticipantEventTypes.JOIN or event.event_type == ParticipantEventTypes.LEAVE or event.event_type == ParticipantEventTypes.SCREENSHARE_START or event.event_type == ParticipantEventTypes.SCREENSHARE_STOP %}
                                                     <div class="event-item d-flex align-items-start gap-3 py-2 border-bottom">
                                                         <div class="event-icon">
                                                             {% if event.event_type == ParticipantEventTypes.JOIN %}
                                                                 <i class="bi bi-box-arrow-in-right text-success"></i>
                                                             {% elif event.event_type == ParticipantEventTypes.LEAVE %}
                                                                 <i class="bi bi-box-arrow-left text-danger"></i>
+                                                            {% elif event.event_type == ParticipantEventTypes.SCREENSHARE_START %}
+                                                                <i class="bi bi-display text-primary"></i>
+                                                            {% elif event.event_type == ParticipantEventTypes.SCREENSHARE_STOP %}
+                                                                <i class="bi bi-display-fill text-secondary"></i>
                                                             {% endif %}
                                                         </div>
                                                         <div class="event-content flex-grow-1">
@@ -548,6 +552,10 @@
                                                                     Joined
                                                                 {% elif event.event_type == ParticipantEventTypes.LEAVE %}
                                                                     Left
+                                                                {% elif event.event_type == ParticipantEventTypes.SCREENSHARE_START %}
+                                                                    Screenshare Started
+                                                                {% elif event.event_type == ParticipantEventTypes.SCREENSHARE_STOP %}
+                                                                    Screenshare Stopped
                                                                 {% endif %}
                                                             </div>
                                                             <div class="event-timestamp text-muted small">{{ event.created_at|date:"M d, Y H:i:s" }}</div>

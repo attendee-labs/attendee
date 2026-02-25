@@ -1494,6 +1494,8 @@ class BotController:
             webhook_trigger_type = WebhookTriggerTypes.PARTICIPANT_EVENTS_JOIN_LEAVE
         elif participant_event.event_type == ParticipantEventTypes.SPEECH_START or participant_event.event_type == ParticipantEventTypes.SPEECH_STOP:
             webhook_trigger_type = WebhookTriggerTypes.PARTICIPANT_EVENTS_SPEECH_START_STOP
+        elif participant_event.event_type == ParticipantEventTypes.SCREENSHARE_START or participant_event.event_type == ParticipantEventTypes.SCREENSHARE_STOP:
+            webhook_trigger_type = WebhookTriggerTypes.PARTICIPANT_EVENTS_SCREENSHARE_START_STOP
         else:
             logger.warning(f"Warning: Unknown participant event type: {participant_event.event_type}")
             return
