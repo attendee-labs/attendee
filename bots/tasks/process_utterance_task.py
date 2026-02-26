@@ -1,18 +1,20 @@
+import io
 import json
 import logging
 import os
 import time
+import wave
 
 import requests
 from celery import shared_task
-
-logger = logging.getLogger(__name__)
 
 from bots.models import Credentials, RecordingManager, TranscriptionFailureReasons, TranscriptionProviders, Utterance, WebhookTriggerTypes
 from bots.transcription_utils import get_transcription_via_assemblyai_from_mp3, is_retryable_failure
 from bots.utils import pcm_to_mp3
 from bots.webhook_payloads import utterance_webhook_payload
 from bots.webhook_utils import trigger_webhook
+
+logger = logging.getLogger(__name__)
 
 
 def transform_diarized_json_to_schema(result):
@@ -48,6 +50,7 @@ def transform_diarized_json_to_schema(result):
 
 def get_transcription(utterance):
     try:
+        
         # Regular transcription providers that support async transcription
         if utterance.transcription_provider == TranscriptionProviders.DEEPGRAM:
             transcription, failure_data = get_transcription_via_deepgram(utterance)
@@ -63,6 +66,8 @@ def get_transcription(utterance):
             transcription, failure_data = get_transcription_via_elevenlabs(utterance)
         elif utterance.transcription_provider == TranscriptionProviders.CUSTOM_ASYNC:
             transcription, failure_data = get_transcription_via_custom_async(utterance)
+        elif utterance.transcription_provider == TranscriptionProviders.AZURE:
+            transcription, failure_data = get_transcription_via_azure(utterance)
         else:
             raise Exception(f"Unknown or streaming-only transcription provider: {utterance.transcription_provider}")
 
@@ -603,4 +608,187 @@ def get_transcription_via_custom_async(utterance):
         return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "error": f"Invalid JSON response: {str(e)}"}
     except Exception as e:
         logger.error(f"Custom async transcription unexpected error: {str(e)}")
+        return None, {"reason": TranscriptionFailureReasons.INTERNAL_ERROR, "error": str(e)}
+
+
+def get_transcription_via_azure(utterance):
+    """
+    Transcribe audio using Azure Fast Transcription REST API.
+    
+    When Azure returns 422 "No language identified" (silence/noise), 
+    returns empty transcript gracefully without triggering retries.
+    
+    Credentials (subscription_key, api_version, endpoint) are retrieved from the Credentials model (stored per-project, encrypted).
+    Configuration (candidate_languages, phrase_list, profanity_option) comes from transcription_settings.
+
+    Returns:
+        tuple: (transcription dict, failure_data dict or None)
+    """
+    recording = utterance.recording
+    transcription_settings = utterance.transcription_settings
+    
+    # skip very short audio clips (likely silence/noise)
+    if utterance.duration_ms < 200:
+        logger.info(f"Azure transcription skipped for utterance {utterance.id} because it's less than 200ms in duration (likely silence/noise)")
+        return {"transcript": "", "words": []}, None
+
+    # Get Azure credentials from Credentials model
+    azure_credentials_record = recording.bot.project.credentials.filter(
+        credential_type=Credentials.CredentialTypes.AZURE
+    ).first()
+    
+    if not azure_credentials_record:
+        return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND}
+    
+    azure_credentials = azure_credentials_record.get_credentials()
+    if not azure_credentials:
+        return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND}
+    
+    # Get credentials from Credentials model
+    subscription_key = azure_credentials.get("subscription_key")
+    endpoint = azure_credentials.get("endpoint")
+    api_version = azure_credentials.get("api_version")
+    
+    if not subscription_key or not api_version or not endpoint:
+        return None, {
+            "reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND, 
+            "error": "Missing subscription_key, api_version, or endpoint in Azure credentials"
+        }
+    
+    # Build request params and headers
+    params = {"api-version": api_version}
+    headers = {"Ocp-Apim-Subscription-Key": subscription_key}
+
+    # Get candidate_languages from transcription_settings (required field)
+    candidate_languages = transcription_settings.azure_candidate_languages()
+    if not candidate_languages:
+        return None, {
+            "reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND,
+            "error": "candidate_languages is required in transcription_settings.azure"
+        }
+    
+    # Build definition (transcription config)
+    definition = {
+        "locales": candidate_languages
+    }
+
+    # Add phrase list if configured in transcription_settings
+    phrase_list = transcription_settings.azure_phrase_list()
+    if phrase_list:
+        definition["phraseList"] = {"phrases": phrase_list}
+        logger.info(f"Azure Speech phrase list: {len(phrase_list)} phrases")
+
+    # Add profanity filter if configured in transcription_settings
+    profanity_option = transcription_settings.azure_profanity_option()
+    if profanity_option:
+        profanity_map = {"Raw": "None", "Masked": "Masked", "Removed": "Removed"}
+        if profanity_option in profanity_map:
+            definition["profanityFilterMode"] = profanity_map[profanity_option]
+
+    # Convert PCM to WAV format (Azure expects proper audio format)
+    audio_blob = utterance.get_audio_blob().tobytes()
+    sample_rate = utterance.get_sample_rate()
+
+    # Create WAV file in memory
+    wav_buffer = io.BytesIO()
+    with wave.open(wav_buffer, 'wb') as wav_file:
+        wav_file.setnchannels(1)  # mono
+        wav_file.setsampwidth(2)  # 16-bit
+        wav_file.setframerate(sample_rate)
+        wav_file.writeframes(audio_blob)
+    wav_buffer.seek(0)
+
+    # Prepare multipart request
+    files = {
+        "audio": ("audio.wav", wav_buffer, "audio/wav"),
+        "definition": (None, json.dumps(definition), "application/json")
+    }
+
+    try:
+        logger.info(f"Sending audio to Azure Fast Transcription at {endpoint}")
+        response = requests.post(endpoint, headers=headers, params=params, files=files, timeout=120)
+
+        # Handle 422 "No language identified" - this is NOT an error, just silence/noise
+        if response.status_code == 422:
+            try:
+                error_data = response.json()
+                error_message = error_data.get("message", "")
+                inner_error = error_data.get("innerError", {})
+                inner_message = inner_error.get("message", "")
+                
+                # Check if it's the "No language identified" error (silence/noise)
+                if "no language" in error_message.lower() or "no language" in inner_message.lower():
+                    logger.info(
+                        f"Azure detected no speech for utterance {utterance.id} "
+                        f"(422: No language identified). Returning empty transcript."
+                    )
+                    # Return empty transcript - NOT a failure, so no retry
+                    return {"transcript": "", "words": []}, None
+            except (json.JSONDecodeError, KeyError):
+                pass  # Fall through to normal 422 handling below
+
+        if response.status_code == 401:
+            return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_INVALID}
+
+        if response.status_code == 429:
+            return None, {"reason": TranscriptionFailureReasons.RATE_LIMIT_EXCEEDED}
+
+        if response.status_code != 200:
+            logger.error(
+                f"Azure Fast Transcription failed with status code {response.status_code} "
+                f"for utterance {utterance.id}, recording {utterance.recording.id}, bot {utterance.recording.bot.id}. "
+                f"Response: {response.text}"
+            )
+            return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED,
+                          "status_code": response.status_code, "response_text": response.text}
+
+        result = response.json()
+
+        # Extract transcript from combinedPhrases
+        combined_phrases = result.get("combinedPhrases", [])
+        transcript_text = " ".join([p.get("text", "") for p in combined_phrases])
+
+        # Extract words with timestamps
+        words = []
+        for phrase in result.get("phrases", []):
+            for word in phrase.get("words", []):
+                words.append({
+                    "word": word.get("text", ""),
+                    "start": word.get("offsetMilliseconds", 0) / 1000.0,
+                    "end": (word.get("offsetMilliseconds", 0) + word.get("durationMilliseconds", 0)) / 1000.0
+                })
+
+        transcription = {"transcript": transcript_text}
+        if words:
+            transcription["words"] = words
+
+        # Add detected language if available
+        if combined_phrases and "locale" in combined_phrases[0]:
+            transcription["language"] = combined_phrases[0]["locale"]
+
+        return transcription, None
+
+    except requests.exceptions.Timeout:
+        logger.error(
+            f"Azure Fast Transcription request timed out for utterance {utterance.id}, "
+            f"recording {utterance.recording.id}, bot {utterance.recording.bot.id}"
+        )
+        return None, {"reason": TranscriptionFailureReasons.TIMED_OUT}
+    except requests.exceptions.RequestException as e:
+        logger.error(
+            f"Azure Fast Transcription request failed for utterance {utterance.id}, "
+            f"recording {utterance.recording.id}, bot {utterance.recording.bot.id}: {str(e)}"
+        )
+        return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "error": str(e)}
+    except (json.JSONDecodeError, ValueError) as e:
+        logger.error(
+            f"Azure Fast Transcription response parsing failed for utterance {utterance.id}, "
+            f"recording {utterance.recording.id}, bot {utterance.recording.bot.id}: {str(e)}"
+        )
+        return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "error": f"Invalid JSON response: {str(e)}"}
+    except Exception as e:
+        logger.error(
+            f"Azure Fast Transcription unexpected error for utterance {utterance.id}, "
+            f"recording {utterance.recording.id}, bot {utterance.recording.bot.id}: {str(e)}"
+        )
         return None, {"reason": TranscriptionFailureReasons.INTERNAL_ERROR, "error": str(e)}

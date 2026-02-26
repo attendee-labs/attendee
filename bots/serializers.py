@@ -415,6 +415,40 @@ TRANSCRIPTION_SETTINGS_SCHEMA = {
             "required": [],
             "additionalProperties": False,
         },
+        "azure": {
+            "type": "object",
+            "properties": {
+                "candidate_languages": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of BCP-47 locale codes for automatic language detection (2-10 languages). Azure will detect which language is being spoken from this list. Required.",
+                },
+                "language": {
+                    "type": "string",
+                    "description": "The BCP-47 language code for transcription (e.g., 'en-US', 'ar-AE', 'fr-FR'). Use 'candidate_languages' for automatic detection instead.",
+                },
+                "profanity_option": {
+                    "type": "string",
+                    "enum": ["Raw", "Masked", "Removed"],
+                    "description": "How to handle profanity in transcripts. 'Raw' includes profanity, 'Masked' replaces with asterisks, 'Removed' removes profanity. Defaults to 'Masked'.",
+                },
+                "enable_disfluency_removal": {
+                    "type": "boolean",
+                    "description": "Enable TrueText post-processing to remove filler words (e.g., 'um', 'uh'). Defaults to false.",
+                },
+                "phrase_list": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of phrases for vocabulary hints to improve recognition of specific terms or domain-specific vocabulary.",
+                },
+                "custom_endpoint_id": {
+                    "type": "string",
+                    "description": "Endpoint ID for custom speech models. If provided, uses a custom trained model instead of the base model.",
+                },
+            },
+            "required": ["candidate_languages"],
+            "additionalProperties": False,
+        },
         "custom_async": {
             "type": "object",
             "description": "Custom self-hosted transcription service with async processing. Additional properties will be sent as form data in the request. Only supported if self-hosting Attendee.",

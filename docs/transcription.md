@@ -24,6 +24,7 @@ Third-party-based transcription is generally of higher quality than closed capti
 - Sarvam
 - ElevenLabs
 - Kyutai Labs
+- Azure Speech-to-Text
 - Custom Async (Bring Your Own Platform)
 
 See the [API reference](https://docs.attendee.dev/api-reference#tag/bots/POST/api/v1/bots) for supported parameters for configuring the transcription providers.
@@ -141,6 +142,18 @@ To use a custom OpenAI-compatible endpoint (such as a proxy server or alternativ
 - `OPENAI_MODEL_NAME`: The model name to use for transcription (default: `gpt-4o-transcribe`)
 
 Example: `OPENAI_BASE_URL=https://your-proxy.com/v1` and `OPENAI_MODEL_NAME=whisper-large-v3`
+
+### Azure Speech-to-Text
+
+Microsoft's enterprise-grade speech recognition with support for 140+ languages. When no speech is detected (silence/noise), Azure returns an empty transcript without errors or retries.
+
+**Setup:**
+1. Add Azure credentials in Project Settings → Credentials (Subscription Key, API Version, Region)
+2. Create bot with `transcription_settings.azure` containing required `candidate_languages` array
+
+See the [API reference](https://docs.attendee.dev/api-reference#tag/bots/POST/api/v1/bots) for all Azure configuration options.
+
+**Note:** Credentials must be set up via the Credentials API before creating bots. They cannot be passed in the bot creation request.
 
 ### Custom Async (Bring Your Own Platform)
 

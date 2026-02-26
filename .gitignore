@@ -1,6 +1,5 @@
 # Created by https://www.gitignore.io
 compose.yaml
-
 py-zoom-meeting-sdk/
 
 venv
