@@ -39,13 +39,14 @@ class MockVideoFrame:
 
 class MockPCMAudioFrame:
     def __init__(self):
-        # Create 10ms of a 440Hz sine wave at 32000Hz mono
-        # 32000 samples/sec * 0.01 sec = 320 samples
+        # Create 250ms of a 440Hz sine wave at 32000Hz mono
+        # 32000 samples/sec * 0.25 sec = 8000 samples
+        # Must be >= MIN_DURATION_MS (200ms) threshold in PerParticipantNonStreamingAudioInputManager
         # Each sample is 2 bytes (unsigned 16-bit)
         import math
 
         samples = []
-        for i in range(320):  # 10ms worth of samples at 32kHz
+        for i in range(8000):  # 250ms worth of samples at 32kHz
             # Generate sine wave with frequency 440Hz
             t = i / 32000.0  # time in seconds
             # Generate value between 0 and 65535 (unsigned 16-bit)

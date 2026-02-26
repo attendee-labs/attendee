@@ -70,7 +70,7 @@ FRAME_SIZE = 1920  # Fixed frame size for sending (80ms at 24kHz)
 # Index 0: 0.5s, Index 1: 1.0s, Index 2: 2.0s, Index 3: 3.0s
 # We use 0.5 seconds as a good balance for natural speech segmentation
 PAUSE_PREDICTION_HEAD_INDEX = 0
-PAUSE_THRESHOLD = 0.25  # Confidence threshold for detecting pauses
+PAUSE_THRESHOLD = 0.3  # Threshold for semantic VAD pause detection
 
 
 def _sanitize_text(text):
@@ -168,6 +168,7 @@ class KyutaiStreamingTranscriber:
         self._send_queue = None  # Will be created in event loop
         self._sender_task = None
         self._receiver_task = None
+        self._silence_monitor_task = None  # Periodic silence checker
         self._ws_connection = None
 
         # Timing for frame-based sending
@@ -186,6 +187,11 @@ class KyutaiStreamingTranscriber:
         self.audio_stream_anchor_time = None
         # Track when last word was received (wall clock, for silence detection)
         self.last_word_received_time = None
+        # Track when first word of current utterance was received (wall clock, for timestamp)
+        self.first_word_wall_clock_time = None
+        # Track when first audio chunk was received for current utterance
+        # This is used for timestamp (like non-streaming Deepgram's first_nonsilent_audio_time)
+        self.first_audio_chunk_time = None
         # Track problematic character occurrences for health monitoring
         self.invalid_text_count = 0
         self.last_valid_word_time = None
@@ -197,12 +203,26 @@ class KyutaiStreamingTranscriber:
         self.semantic_vad_detected_pause = False
         self.speech_started = False  # Track if we've received any words
 
-        # Rate limiting for utterance emission checks
-        self._last_utterance_check_time = 0.0
-        self._utterance_check_interval = 0.1  # Check at most every 100ms
+        # Emission metrics - track which trigger caused each emission
+        self._emission_counts = {
+            "semantic_vad": 0,
+            "flush": 0,
+            "fallback": 0,
+            "other": 0,  # e.g., end of stream, finish()
+        }
 
         # Track when audio was last sent (used for monitoring/cleanup)
         self.last_send_time = time.time()
+
+        # Flushing trick: send silence to force model to output pending words
+        # See: https://github.com/kyutai-labs/delayed-streams-modeling/issues/116
+        self._last_nonsilent_send_time = None  # When we last sent real (non-silent) audio
+        self._flush_sent = False  # Whether we've sent the silence flush for current utterance
+        self._flush_duration_seconds = 0.5  # 500ms of silence to flush model buffer
+
+        # Health check: detect silent connection failures (audio sent but no words received)
+        self._frames_sent_since_ready = 0  # Count frames sent since Ready signal
+        self._ever_received_word = False  # Have we received any word from this connection?
 
         # WebSocket connection state
         self.ws = None
@@ -282,12 +302,13 @@ class KyutaiStreamingTranscriber:
 
                     logger.info(f"✅ [{self._participant_name}] Successfully connected to Kyutai server after {attempt} attempt(s)")
 
-                    # Start both receiver and sender tasks
+                    # Start receiver, sender, and silence monitor tasks
                     self._receiver_task = asyncio.create_task(self._receiver_loop())
                     self._sender_task = asyncio.create_task(self._sender_loop())
+                    self._silence_monitor_task = asyncio.create_task(self._silence_monitor_loop())
 
-                    # Wait for both tasks
-                    await asyncio.gather(self._receiver_task, self._sender_task, return_exceptions=True)
+                    # Wait for all tasks
+                    await asyncio.gather(self._receiver_task, self._sender_task, self._silence_monitor_task, return_exceptions=True)
 
                 # Connection closed - check if intentional
                 if self.should_stop:
@@ -390,6 +411,181 @@ class KyutaiStreamingTranscriber:
         except Exception as e:
             logger.error(f"[{self._participant_name}] Sender error: {e}", exc_info=True)
 
+    async def _silence_monitor_loop(self):
+        """
+        Periodically check for silence and trigger flush + emit.
+
+        Uses the "flushing trick" from Kyutai: when speech stops, send 500ms
+        of silence to force the model to output any pending transcription.
+        See: https://github.com/kyutai-labs/delayed-streams-modeling/issues/116
+
+        Also monitors for silent connection failures: if we send a lot of audio
+        but never receive any words, the connection is likely dead.
+        """
+        MONITOR_INTERVAL = 0.03  # 30ms - fast for realtime
+        SILENCE_BEFORE_FLUSH = 1.0  # 1s of no words before sending flush
+
+        # Health check: if we've sent 10s of audio with no words, connection is dead
+        # 10s at 24kHz with 1920 samples/frame = 125 frames
+        HEALTH_CHECK_FRAMES_THRESHOLD = 125
+
+        try:
+            while not self.should_stop:
+                await asyncio.sleep(MONITOR_INTERVAL)
+
+                # Health check: detect silent connection failure
+                if await self._check_connection_health(HEALTH_CHECK_FRAMES_THRESHOLD):
+                    # Connection is unhealthy, will reconnect
+                    break
+
+                # Check if we should send flush silence
+                await self._check_and_flush(SILENCE_BEFORE_FLUSH)
+
+                # Check if we should emit (after flush has time to work)
+                self._check_silence_and_emit()
+
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error(f"[{self._participant_name}] Silence monitor error: {e}", exc_info=True)
+
+    async def _check_connection_health(self, frames_threshold: int) -> bool:
+        """
+        Check if connection is healthy by detecting silent failures.
+
+        A silent failure is when we've sent a lot of audio but never received
+        any words back from Kyutai. This can happen when the WebSocket appears
+        connected but Kyutai's internal state is broken.
+
+        We detect two types of failures:
+        1. Initial failure: Sent lots of audio but never received any words
+        2. Mid-session stall: Was working but stopped producing words while
+           we're still sending non-silent audio
+
+        Returns True if connection is unhealthy and should be closed.
+        """
+        # Check 1: Initial connection failure (never received any words)
+        if self._frames_sent_since_ready >= frames_threshold and not self._ever_received_word:
+            audio_seconds = (self._frames_sent_since_ready * FRAME_SIZE) / KYUTAI_SAMPLE_RATE
+            logger.error(f"🔴 [{self._participant_name}] Kyutai connection unhealthy: sent {audio_seconds:.1f}s of audio but received 0 words. Forcing reconnection...")
+            await self._force_reconnection()
+            return True
+
+        # Check 2: Mid-session stall (was working but stopped)
+        # If we've been sending non-silent audio for 15s+ but no words received,
+        # the connection is likely stalled
+        STALL_THRESHOLD_SECONDS = 15.0
+
+        if self._ever_received_word and self._last_nonsilent_send_time is not None and self.last_valid_word_time is not None:
+            time_since_last_word = time.time() - self.last_valid_word_time
+            time_since_nonsilent_audio = time.time() - self._last_nonsilent_send_time
+
+            # Only trigger if we're actively sending non-silent audio (within last 2s)
+            # AND it's been a long time since we received a word
+            if time_since_nonsilent_audio < 2.0 and time_since_last_word >= STALL_THRESHOLD_SECONDS:
+                logger.error(f"🔴 [{self._participant_name}] Kyutai connection stalled: sending non-silent audio but no words for {time_since_last_word:.1f}s. Forcing reconnection...")
+                await self._force_reconnection()
+                return True
+
+        return False
+
+    async def _force_reconnection(self):
+        """Force close the WebSocket to trigger reconnection."""
+        if self._ws_connection:
+            try:
+                await self._ws_connection.close()
+            except Exception as e:
+                logger.warning(f"[{self._participant_name}] Error closing unhealthy connection: {e}")
+
+        self.connected = False
+
+    async def _check_and_flush(self, silence_threshold: float):
+        """
+        Send 500ms of silence to flush the model when no new words arrive.
+
+        The Kyutai model has ~500ms internal delay. When we haven't received
+        new words for a while but we're still sending audio, flush to force
+        any pending transcription out of the model.
+
+        Key insight: We trigger on lack of WORDS, not lack of AUDIO.
+        The RMS filter may let audio through, but the model might still be
+        buffering internally. Flushing based on word output ensures we catch
+        these cases.
+        """
+        if self._flush_sent:
+            return  # Already flushed since last word
+
+        if not self.speech_started:
+            return  # No words received yet in this utterance
+
+        if not self.last_word_received_time:
+            return  # No word timing available
+
+        current_time = time.time()
+        time_since_last_word = current_time - self.last_word_received_time
+
+        if time_since_last_word >= silence_threshold:
+            # No new words for a while - flush to get any pending output
+            self._flush_sent = True
+
+            flush_samples = int(KYUTAI_SAMPLE_RATE * self._flush_duration_seconds)
+            silence_audio = np.zeros(flush_samples, dtype=np.float32)
+
+            logger.info(f"Kyutai [{self._participant_name}]: Flushing with {self._flush_duration_seconds * 1000:.0f}ms silence (no words for {time_since_last_word:.2f}s)")
+
+            # Send in chunks matching FRAME_SIZE for consistency
+            for i in range(0, len(silence_audio), FRAME_SIZE):
+                frame = silence_audio[i : i + FRAME_SIZE]
+                if len(frame) < FRAME_SIZE:
+                    # Pad last frame if needed
+                    frame = np.pad(frame, (0, FRAME_SIZE - len(frame)))
+
+                message = msgpack.packb(
+                    {"type": "Audio", "pcm": frame.tolist()},
+                    use_bin_type=True,
+                    use_single_float=True,
+                )
+
+                if self._send_queue:
+                    await self._send_queue.put(message)
+
+    def _check_silence_and_emit(self):
+        """
+        Emit utterance after flush has had time to produce words.
+
+        After sending the silence flush, wait a short time for any
+        pending words to arrive, then emit the utterance.
+        """
+        if not self.current_transcript:
+            return
+
+        if not self.last_word_received_time:
+            return
+
+        current_time = time.time()
+        time_since_last_word = current_time - self.last_word_received_time
+
+        # After flush is sent, wait for pending words, then emit
+        # 400ms gives time for words to accumulate after flush
+        EMIT_DELAY_AFTER_FLUSH = 0.40
+
+        # If flush was sent and we've waited long enough, emit
+        if self._flush_sent and time_since_last_word >= EMIT_DELAY_AFTER_FLUSH:
+            word_count = len(self.current_transcript)
+            self._emission_counts["flush"] += 1
+            logger.info(f"Kyutai [{self._participant_name}]: Emitting after flush ({time_since_last_word:.2f}s since last word, {word_count} words)")
+            self._emit_current_utterance()
+            return
+
+        # Fallback: if no flush but long silence, emit anyway
+        # (handles edge cases where flush didn't trigger)
+        FALLBACK_SILENCE = 0.5
+        if time_since_last_word >= FALLBACK_SILENCE:
+            word_count = len(self.current_transcript)
+            self._emission_counts["fallback"] += 1
+            logger.info(f"Kyutai [{self._participant_name}]: Emitting on fallback silence ({time_since_last_word:.2f}s, {word_count} words)")
+            self._emit_current_utterance()
+
     async def _process_message(self, message):
         """
         Handle incoming transcription messages from Kyutai server.
@@ -450,7 +646,12 @@ class KyutaiStreamingTranscriber:
                     logger.debug(f"[{self._participant_name}] Kyutai Word: '{text}' start={start_time:.4f}s offset={audio_offset:.4f}s transcript_len={len(self.current_transcript)}")
 
                 if text:
-                    # Track valid word reception
+                    # Log word as it arrives (real-time visibility)
+                    current_words = " ".join([w["text"] for w in self.current_transcript]) + " " + text if self.current_transcript else text
+                    logger.info(f"Kyutai [{self._participant_name}]: Word received: '{text}' → [{current_words}]")
+
+                    # Track valid word reception (for health check)
+                    self._ever_received_word = True
                     self.last_valid_word_time = time.time()
 
                     # Check for significant gap - emit previous utterance
@@ -463,6 +664,8 @@ class KyutaiStreamingTranscriber:
                     # Track first word's start_time for this utterance
                     if not self.current_transcript:
                         self.current_utterance_first_word_start_time = start_time
+                        # Track wall-clock time of first word for cross-participant ordering
+                        self.first_word_wall_clock_time = time.time()
 
                     # Track when this word was received (wall clock)
                     self.last_word_received_time = time.time()
@@ -498,6 +701,8 @@ class KyutaiStreamingTranscriber:
                     # Detect pause: high confidence prediction
                     # + speech has started
                     if pause_prediction > PAUSE_THRESHOLD and self.speech_started:
+                        if not self.semantic_vad_detected_pause:  # Log only on first detection
+                            logger.info(f"Kyutai [{self._participant_name}]: Semantic VAD pause detected (prob={pause_prediction:.3f}, threshold={PAUSE_THRESHOLD}, words={len(self.current_transcript)})")
                         self.semantic_vad_detected_pause = True
                         # Emit utterance on natural pause
                         self._check_and_emit_utterance()
@@ -506,6 +711,8 @@ class KyutaiStreamingTranscriber:
                 # End of stream marker received
                 logger.info(f"[{self._participant_name}] Kyutai: End of stream marker received")
                 # Emit any remaining transcript
+                if self.current_transcript:
+                    self._emission_counts["other"] += 1
                 self._emit_current_utterance()
 
             elif msg_type == "Ready":
@@ -513,6 +720,9 @@ class KyutaiStreamingTranscriber:
                 # calculations
                 # All audio timestamps will be relative to this moment
                 self.audio_stream_anchor_time = time.time()
+                # Reset health check counters for this connection
+                self._frames_sent_since_ready = 0
+                self._ever_received_word = False
                 logger.info(f"🎯 [{self._participant_name}] Kyutai: Audio stream anchor set (Ready signal)")
 
             else:
@@ -522,7 +732,7 @@ class KyutaiStreamingTranscriber:
             logger.error(f"[{self._participant_name}] Error processing Kyutai message: {e}")
             logger.debug(f"Raw message: {message}")
 
-    def send(self, audio_data):
+    def send(self, audio_data, chunk_time=None):
         """
         Send audio data to the Kyutai server with buffering.
 
@@ -532,6 +742,8 @@ class KyutaiStreamingTranscriber:
 
         Args:
             audio_data: Audio data as bytes (int16 PCM)
+            chunk_time: Optional timestamp when this audio chunk was received
+                       (for accurate utterance timestamps, like non-streaming Deepgram)
 
         Raises:
             ConnectionError: If connection failed permanently (gave up reconnecting)
@@ -543,6 +755,11 @@ class KyutaiStreamingTranscriber:
         if not self.connected or self.should_stop:
             # Silently drop audio during shutdown, reconnection, or when disconnected
             return
+
+        # Track when we first received audio for the current utterance
+        # This is used for timestamp calculation (like non-streaming Deepgram's first_nonsilent_audio_time)
+        if self.first_audio_chunk_time is None and chunk_time is not None:
+            self.first_audio_chunk_time = chunk_time
 
         # Update last send time for monitoring/cleanup
         self.last_send_time = time.time()
@@ -564,6 +781,9 @@ class KyutaiStreamingTranscriber:
             audio_samples = np.frombuffer(audio_data, dtype=np.int16)
             audio_float = audio_samples.astype(np.float32) / 32768.0
 
+            # Track non-silent audio for monitoring
+            self._last_nonsilent_send_time = time.time()
+
             # Add to buffer using numpy concatenation (efficient)
             self._audio_buffer = np.concatenate([self._audio_buffer, audio_float])
 
@@ -579,6 +799,9 @@ class KyutaiStreamingTranscriber:
                     use_bin_type=True,
                     use_single_float=True,
                 )
+
+                # Track frames sent for health check
+                self._frames_sent_since_ready += 1
 
                 # Queue for sending with timing in sender loop
                 # Use call_soon_threadsafe for thread-safe queue operations
@@ -599,7 +822,7 @@ class KyutaiStreamingTranscriber:
     async def _flush_buffer(self):
         """Flush remaining audio in buffer (may be smaller than FRAME_SIZE)."""
         if len(self._audio_buffer) > 0 and self._send_queue:
-            logger.debug(f"[{self._participant_name}] Flushing {len(self._audio_buffer)} buffered samples")
+            logger.info(f"[{self._participant_name}] Flushing {len(self._audio_buffer)} buffered samples")
 
             # Send remaining samples (convert numpy array to list)
             message = msgpack.packb(
@@ -612,83 +835,34 @@ class KyutaiStreamingTranscriber:
 
     def _check_and_emit_utterance(self):
         """
-        Check if there's a natural pause in speech to emit utterance.
-        Uses semantic VAD from Kyutai when available, falls back to timing.
-        Rate-limited to avoid excessive webhook calls.
+        Handle semantic VAD pause detection from Kyutai.
+        Called when Step message indicates a natural speech boundary.
+
+        Note: Time-based silence detection is handled separately by
+        _silence_monitor_loop for guaranteed responsiveness.
         """
         if not self.current_transcript:
             return
 
-        # Check if we've received any words yet
-        if self.last_word_received_time is None:
+        if not self.semantic_vad_detected_pause:
             return
 
-        # Priority 1: Semantic VAD detected a natural pause
-        if self.semantic_vad_detected_pause:
-            # Emit utterance when semantic VAD detects pause
-            # The semantic VAD is trained to detect natural speech boundaries,
-            # so we trust it even for shorter utterances (3+ words)
-            word_count = len(self.current_transcript)
+        word_count = len(self.current_transcript)
 
-            # Calculate utterance duration if possible
-            utterance_duration = 0
-            if self.current_utterance_first_word_start_time is not None and self.current_utterance_last_word_stop_time is not None:
-                utterance_duration = self.current_utterance_last_word_stop_time - self.current_utterance_first_word_start_time
+        # Calculate utterance duration if possible
+        utterance_duration = 0
+        if self.current_utterance_first_word_start_time is not None and self.current_utterance_last_word_stop_time is not None:
+            utterance_duration = self.current_utterance_last_word_stop_time - self.current_utterance_first_word_start_time
 
-            # Emit if meets minimum quality criteria:
-            # - At least 3 words (catches short complete phrases)
-            # - OR more than 1.5 seconds of speech
-            if word_count >= 3 or utterance_duration > 1.5:
-                logger.info(f"Kyutai [{self._participant_name}]: Emitting utterance on semantic VAD pause ({word_count} words, {utterance_duration:.1f}s)")
-                self._emit_current_utterance()
-                self.semantic_vad_detected_pause = False  # Reset flag
-                return
+        # Emit on semantic VAD only if we have enough words
+        # Single words should wait for silence-based emission to reduce fragmentation
+        MIN_WORDS_FOR_SEMANTIC_VAD = 2
 
-            # Very short utterance (1-2 words) - check time since pause detected
-            # If we detected the pause more than 0.5s ago, emit anyway
-            current_time = time.time()
-            if self.last_word_received_time is not None:
-                time_since_last_word = current_time - self.last_word_received_time
-                if time_since_last_word > 0.5:
-                    logger.info(f"Kyutai [{self._participant_name}]: Emitting short utterance after pause+delay ({word_count} words, delay={time_since_last_word:.2f}s)")
-                    self._emit_current_utterance()
-                    self.semantic_vad_detected_pause = False
-                    return
-
-            # Still very fresh - wait a bit longer
-            logger.debug(f"Kyutai [{self._participant_name}]: Delaying emission - very short utterance ({word_count} words, {utterance_duration:.1f}s)")
-            # Keep flag set, will check again soon
-            return
-
-        # Rate limiting: Don't check too frequently (causes webhook spam)
-        current_time = time.time()
-        time_since_last_check = current_time - self._last_utterance_check_time
-        if time_since_last_check < self._utterance_check_interval:
-            return  # Skip this check, too soon
-
-        self._last_utterance_check_time = current_time
-
-        # Priority 2: Time-based silence detection (fallback)
-        silence_duration = current_time - self.last_word_received_time
-
-        # Require minimum silence before emitting to avoid fragmentation
-        MIN_SILENCE_FOR_EMIT = 0.8  # 800ms minimum silence
-
-        # For single-word utterances, be more patient waiting for EndWord
-        if len(self.current_transcript) == 1:
-            # Wait up to 1.5s for EndWord on single-word utterances
-            if self.current_utterance_last_word_stop_time is None:
-                if silence_duration > 1.5:
-                    logger.info(f"Kyutai [{self._participant_name}]: Single-word utterance, no EndWord after {silence_duration:.2f}s - emitting anyway")
-                    self._emit_current_utterance()
-            else:
-                # Have EndWord, can emit after minimum silence
-                if silence_duration > MIN_SILENCE_FOR_EMIT:
-                    self._emit_current_utterance()
-        else:
-            # Multi-word utterance: emit after minimum silence
-            if silence_duration > MIN_SILENCE_FOR_EMIT:
-                self._emit_current_utterance()
+        if word_count >= MIN_WORDS_FOR_SEMANTIC_VAD:
+            self._emission_counts["semantic_vad"] += 1
+            logger.info(f"Kyutai [{self._participant_name}]: Emitting on semantic VAD ({word_count} words, {utterance_duration:.1f}s)")
+            self._emit_current_utterance()
+            self.semantic_vad_detected_pause = False
 
     def _emit_current_utterance(self):
         """Emit the current transcript as an utterance and clear it."""
@@ -696,38 +870,34 @@ class KyutaiStreamingTranscriber:
             # Convert list of word objects to text efficiently
             transcript_text = " ".join([w["text"] for w in self.current_transcript])
 
-            # Calculate timestamp and duration using audio stream positions
-            if self.audio_stream_anchor_time is not None and self.current_utterance_first_word_start_time is not None:
-                # Timestamp: When utterance started in wall-clock time
-                timestamp_ms = int((self.audio_stream_anchor_time + self.current_utterance_first_word_start_time) * 1000)
-
-                # Duration: Speaking duration from first to last word
-                if self.current_utterance_last_word_stop_time is not None:
-                    # Have EndWord timing - use it
-                    duration_seconds = self.current_utterance_last_word_stop_time - self.current_utterance_first_word_start_time
-                    duration_ms = int(duration_seconds * 1000)
-                else:
-                    # EndWord not received - estimate minimum duration
-                    # Use elapsed time since word started as a minimum estimate
-                    current_time = time.time()
-                    elapsed_since_utterance_start = current_time - (self.audio_stream_anchor_time + self.current_utterance_first_word_start_time)
-
-                    # For multi-word utterances, use last word's start time if available
-                    if len(self.current_transcript) > 1 and self.current_transcript:
-                        last_word_start = self.current_transcript[-1]["timestamp"][0]
-                        duration_from_timestamps = last_word_start - self.current_utterance_first_word_start_time
-                        # Use the larger of: timestamp-based duration or elapsed time estimate
-                        duration_seconds = max(duration_from_timestamps, elapsed_since_utterance_start)
-                    else:
-                        # Single word - use elapsed time since word started
-                        duration_seconds = elapsed_since_utterance_start
-
-                    duration_ms = max(int(duration_seconds * 1000), 1)  # Ensure at least 1ms
+            # Calculate timestamp using audio chunk time (when speech was received)
+            # This matches non-streaming Deepgram which uses first_nonsilent_audio_time
+            # Falls back to first word time, then current time
+            if self.first_audio_chunk_time is not None:
+                # Use actual audio arrival time (same approach as non-streaming Deepgram)
+                timestamp_ms = int(self.first_audio_chunk_time.timestamp() * 1000)
+            elif self.first_word_wall_clock_time is not None:
+                # Fallback: use when first word was received
+                timestamp_ms = int(self.first_word_wall_clock_time * 1000)
             else:
-                # Fallback if we don't have proper anchoring
-                if self.debug_logging:
-                    logger.warning(f"[{self._participant_name}] Kyutai: Missing timing anchors")
+                # Last resort: use current time
                 timestamp_ms = int(time.time() * 1000)
+
+            # Calculate duration from audio stream positions (relative timing is accurate)
+            if self.current_utterance_first_word_start_time is not None and self.current_utterance_last_word_stop_time is not None:
+                # Have EndWord timing - use it
+                duration_seconds = self.current_utterance_last_word_stop_time - self.current_utterance_first_word_start_time
+                duration_ms = int(duration_seconds * 1000)
+            elif self.current_utterance_first_word_start_time is not None:
+                # EndWord not received - estimate from transcript
+                if len(self.current_transcript) > 1:
+                    last_word_start = self.current_transcript[-1]["timestamp"][0]
+                    duration_seconds = last_word_start - self.current_utterance_first_word_start_time
+                    duration_ms = max(int(duration_seconds * 1000), 1)
+                else:
+                    # Single word - estimate ~300ms
+                    duration_ms = 300
+            else:
                 duration_ms = 0
 
             # Always log emitted utterances (important for monitoring)
@@ -762,9 +932,13 @@ class KyutaiStreamingTranscriber:
             self.current_utterance_first_word_start_time = None
             self.current_utterance_last_word_stop_time = None
             self.last_word_received_time = None
+            self.first_word_wall_clock_time = None
+            self.first_audio_chunk_time = None
             # Reset semantic VAD state
             self.semantic_vad_detected_pause = False
             self.speech_started = False
+            # Reset flush state (will flush again on next speech end)
+            self._flush_sent = False
 
     def finish(self):
         """
@@ -778,7 +952,15 @@ class KyutaiStreamingTranscriber:
         logger.info(f"Finishing Kyutai transcriber [{self._participant_name}]")
 
         # Emit any remaining transcript before closing
+        if self.current_transcript:
+            self._emission_counts["other"] += 1
         self._emit_current_utterance()
+
+        # Log emission statistics summary
+        total_emissions = sum(self._emission_counts.values())
+        if total_emissions > 0:
+            logger.info(f"Kyutai [{self._participant_name}]: Emission stats - semantic_vad={self._emission_counts['semantic_vad']}, flush={self._emission_counts['flush']}, fallback={self._emission_counts['fallback']}, other={self._emission_counts['other']} (total={total_emissions})")
+
         self.should_stop = True
 
         try:
