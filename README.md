@@ -1,149 +1,152 @@
 <div align="center">
 <img src="static/images/logo_black_white.svg" width="300" alt="Attendee Logo">
+
+[![GitHub stars](https://img.shields.io/github/stars/attendee-labs/attendee)](https://github.com/attendee-labs/attendee/stargazers)
+[![License](https://img.shields.io/badge/License-Elastic%202.0-blue)](https://github.com/attendee-labs/attendee/blob/main/LICENSE)
+[![Slack](https://img.shields.io/badge/Slack-Community-4A154B?logo=slack)](https://join.slack.com/t/attendee-community/shared_invite/zt-3l43ns8cl-G8YnMccWVTugMlloUtSf9g)
+
+**Open source API for meeting bots** — join Zoom, Google Meet, and Teams meetings programmatically.
+
+[Documentation](https://docs.attendee.dev/) · [Try it free](https://app.attendee.dev/accounts/signup/) · [Demo video](https://www.loom.com/embed/b738d02aabf84f489f0bfbadf71605e3?sid=ea605ea9-8961-4cc3-9ba9-10b7dbbb8034)
+
 </div>
-<h2 align="center">Meeting bots made easy</h2>
-<p align="center">
-    <a href="https://docs.attendee.dev/">Documentation</a>
-    ·
-    <a href="https://attendee.dev/">Website</a>
-    ·
-    <a href="https://join.slack.com/t/attendee-community/shared_invite/zt-3l43ns8cl-G8YnMccWVTugMlloUtSf9g">Slack</a>
-</p>
 
+---
 
-Attendee is an open source API for managing meeting bots on platforms like Zoom or Google Meet. Bring meeting transcripts and recordings into your product in days instead of months. 
+## What is Attendee?
 
-See a [quick demo of the API](https://www.loom.com/embed/b738d02aabf84f489f0bfbadf71605e3?sid=ea605ea9-8961-4cc3-9ba9-10b7dbbb8034).
+Attendee is a REST API that handles the infrastructure for meeting bots. You send a meeting URL, and we join a bot that can:
 
-## Getting started
+- Capture real-time transcripts
+- Record audio and video
+- Stream content into meetings (for voice agents)
+- Integrate with calendars for scheduled joins
 
-Sign up for free on our hosted instance [here](https://app.attendee.dev/accounts/signup/). 
+No SDKs to wrangle. No browser automation to maintain. Just HTTP requests.
 
-Interested in using Attendee at your company? Schedule a call [here](https://calendly.com/d/cw6r-2n4-gcw/attendee-intro-meeting). By self-hosting Attendee you can reduce costs by 10x compared to closed source vendors.
- 
-## Self hosting
+## Why?
 
-Attendee is designed for convenient self-hosting. It runs as a Django app in a single Docker image. The only external services needed are Postgres and Redis. Directions for running locally in development mode [here](#running-in-development-mode).
+If you've tried building meeting bots, you know each platform is its own world of pain:
 
-## Why use Attendee?
+| Platform    | Reality                                           |
+| ----------- | ------------------------------------------------- |
+| Zoom        | C++ SDK, complex auth, platform-specific binaries |
+| Google Meet | No SDK—you're running headless Chrome             |
+| Teams       | Graph API limitations, enterprise auth complexity |
 
-Meeting bots are powerful because they have access to the same audio and video streams as human users of meeting software. They power software like Gong or Otter.ai.
+We've dealt with all of this so you don't have to. One API, three platforms.
 
-Building meeting bots is challenging across all platforms, though some have more support than others. Zoom provides a powerful [SDK](https://developers.zoom.us/docs/meeting-sdk/), but it is low-level and advanced features like per-participant audio streams are only available in the C++ variants of the SDK. Google Meet doesn't provide any support at all, so you need to run a full instance of Google Meet in Chrome.
+## Quick start
 
-Attendee abstracts away this complexity into a single developer friendly REST API that manages the state and media streams from these bots. If you're a developer building functionality that requires meeting bots, Attendee can save you months of work vs building from scratch.
+**Hosted (easiest)**
 
-## Calling the API
+1. Sign up at [app.attendee.dev](https://app.attendee.dev/accounts/signup/)
+2. Grab your API key from Settings → API Keys
+3. Add your credentials (Zoom OAuth + Deepgram)
 
-Join a meeting with a POST request to `/bots`:
+**Self-hosted**
+
+```bash
+docker compose -f dev.docker-compose.yaml build
+docker compose -f dev.docker-compose.yaml run --rm attendee-app-local python init_env.py > .env
+# edit .env with your AWS credentials
+docker compose -f dev.docker-compose.yaml up
+docker compose -f dev.docker-compose.yaml exec attendee-app-local python manage.py migrate
 ```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full setup.
+
+## Usage
+
+**Join a meeting:**
+
+```bash
 curl -X POST https://app.attendee.dev/api/v1/bots \
--H 'Authorization: Token <YOUR_API_KEY>' \
--H 'Content-Type: application/json' \
--d '{"meeting_url": "https://us05web.zoom.us/j/84315220467?pwd=9M1SQg2Pu2l0cB078uz6AHeWelSK19.1", "bot_name": "My Bot"}'
+  -H 'Authorization: Token <YOUR_API_KEY>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "meeting_url": "https://us05web.zoom.us/j/84315220467?pwd=...",
+    "bot_name": "My Bot"
+  }'
 ```
-Response:
-```{"id":"bot_3hfP0PXEsNinIZmh","meeting_url":"https://us05web.zoom.us/j/4849920355?pwd=aTBpNz760UTEBwUT2mQFtdXbl3SS3i.1","state":"joining","transcription_state":"not_started"}```
 
-The API will respond with an object that represents your bot's state in the meeting. 
-
-
-
-Make a GET request to `/bots/<id>` to poll the bot:
+```json
+{
+  "id": "bot_3hfP0PXEsNinIZmh",
+  "meeting_url": "https://us05web.zoom.us/j/...",
+  "state": "joining",
+  "transcription_state": "not_started"
+}
 ```
-curl -X GET https://app.attendee.dev/api/v1/bots/bot_3hfP0PXEsNinIZmh \
--H 'Authorization: Token <YOUR_API_KEY>' \
--H 'Content-Type: application/json'
+
+**Get the transcript:**
+
+```bash
+curl https://app.attendee.dev/api/v1/bots/bot_3hfP0PXEsNinIZmh/transcript \
+  -H 'Authorization: Token <YOUR_API_KEY>'
 ```
-Response: 
-```{"id":"bot_3hfP0PXEsNinIZmh","meeting_url":"https://us05web.zoom.us/j/88669088234?pwd=AheaMumvS4qxh6UuDtSOYTpnQ1ZbAS.1","state":"ended","transcription_state":"complete"}```
 
-When the endpoint returns a state of `ended`, it means the meeting has ended. When the `transcription_state` is `complete` it means the meeting recording has been transcribed.
-
-
-Once the meeting has ended and the transcript is ready make a GET request to `/bots/<id>/transcript` to retrieve the meeting transcripts:
+```json
+[
+  {
+    "speaker_name": "John Doe",
+    "timestamp_ms": 1079,
+    "duration_ms": 7710,
+    "transcription": "Let's discuss the quarterly results..."
+  }
+]
 ```
-curl -X GET https://app.attendee.dev/api/v1/bots/bot_3hfP0PXEsNinIZmh/transcript \
--H 'Authorization: Token mpc67dedUlzEDXfNGZKyC30t6cA11TYh' \
--H 'Content-Type: application/json'
-```
-Response:
-```
-[{
-"speaker_name":"Noah Duncan",
-"speaker_uuid":"16778240","speaker_user_uuid":"AAB6E21A-6B36-EA95-58EC-5AF42CD48AF8",
-"timestamp_ms":1079,"duration_ms":7710,
-"transcription":"You can totally record this, buddy. You can totally record this. Go for it, man."
-},...]
-```
-You can also query this endpoint while the meeting is happening to retrieve partial transcripts.
 
-## Prerequisites
+You can poll this during the meeting for real-time transcripts.
 
-To call the API you need the following
+Full API reference: [docs.attendee.dev](https://docs.attendee.dev/)
 
-1. Attendee API Key - These are created in the Attendee UI by creating an account in your Attendee instance, signing in and navigating to the 'API Keys' section in the sidebar.
+## What people build with this
 
-2. Zoom OAuth Credentials - Needed to join Zoom meetings. These are the Zoom app client id and secret that uniquely identify your bot. Directions on obtaining them [here](#obtaining-zoom-oauth-credentials).
+- Meeting analytics (Gong-style call intelligence)
+- Automated note-taking
+- Voice agents that participate in meetings
+- Compliance monitoring
+- Meeting archives
 
-3. Deepgram API Key - Needed for transcribing Zoom meetings. You can sign up for an account [here](https://console.deepgram.com/signup), no credit card required and get 400 hours worth of free transcription.
+## Features
 
-The Zoom OAuth credentials and Deepgram API key are entered into the Attendee UI in the 'Settings' section in the sidebar.
-
-## Missing feature?
-
-We are rapidly adding features to Attendee. If the API is missing something you need, then open an issue in the repository or bring it up in the [Slack Community](https://join.slack.com/t/attendee-community/shared_invite/zt-3l43ns8cl-G8YnMccWVTugMlloUtSf9g). PRs are also welcome!
-
-## Obtaining Zoom OAuth Credentials
-
-- Navigate to [Zoom Marketplace](https://marketplace.zoom.us/) and register/log into your
-developer account.
-- Click the "Develop" button at the top-right, then click 'Build App' and choose "General App".
-- Copy the Client ID and Client Secret from the 'App Credentials' section
-- Go to the Embed tab on the left navigation bar under Features, then select the Meeting SDK toggle.
-
-For more details, follow [this guide](https://developers.zoom.us/docs/meeting-sdk/developer-accounts/) or watch this [video](https://www.loom.com/embed/7cbd3eab1bc4438fb1badcb3787996d6?sid=825a92b5-51ca-447c-86c1-c45f5294ec9d).
-
-## Running in development mode
-
-- Build the Docker image: `docker compose -f dev.docker-compose.yaml build` (Takes about 5 minutes)
-- Create local environment variables
-  - **Linux/Mac**: `docker compose -f dev.docker-compose.yaml run --rm attendee-app-local python init_env.py > .env`
-  - **Windows**: `docker compose -f dev.docker-compose.yaml run --rm attendee-app-local python init_env.py | Out-File -Encoding utf8 .env` 
-- Edit the `.env` file and enter your AWS information.
-- Start all the services: `docker compose -f dev.docker-compose.yaml up`
-- After the services have started, run migrations in a separate terminal tab: `docker compose -f dev.docker-compose.yaml exec attendee-app-local python manage.py migrate`
-- Goto localhost:8000 in your browser and create an account
-- The confirmation link will be written to the server logs in the terminal where you ran `docker compose -f dev.docker-compose.yaml up`. Should look like `http://localhost:8000/accounts/confirm-email/<key>/`.
-- Paste the link into your browser to confirm your account.
-- You should now be able to log in, input your credentials and obtain an API key. API calls should be directed to http://localhost:8000 instead of https://app.attendee.dev.
-
-
-## Contribute 
-
-Attendee is open source. The best way to contribute is to open an issue or join the [Slack Community](https://join.slack.com/t/attendee-community/shared_invite/zt-3l43ns8cl-G8YnMccWVTugMlloUtSf9g) and let us know what you want to build.
-
-See CONTRIBUTING.md for detailed instructions on how to contribute to Attendee.
-
+- **Platforms**: Zoom, Google Meet, Microsoft Teams
+- **Transcription**: Real-time, speaker-attributed
+- **Recording**: Audio and video capture
+- **Webhooks**: State change notifications
+- **Calendars**: Auto-join scheduled meetings
+- **Voice agents**: Stream audio/video into meetings
+- **Self-hostable**: Django app, single Docker image
 
 ## Roadmap
 
-- [x] Join and leave Zoom meetings
-- [x] Transcripts
-- [x] API Reference
-- [x] Audio input / output
-- [x] Video input / output
-- [x] Custom bot image 
-- [x] Google Meet support
-- [x] Speech support
-- [x] Automatically leave meetings
-- [x] Microsoft Teams support
-- [x] Webhooks for state changes
-- [x] Scheduled meetings
-- [x] Audio input / output via websockets
-- [x] Attendee-Managed Calendar Integration
-- [x] [ZAK token](https://developers.zoom.us/docs/meeting-sdk/auth/#start-meetings-and-webinars-with-a-zoom-users-zak-token) and [Join token](https://developers.zoom.us/docs/api/meetings/#tag/meetings/GET/meetings/{meetingId}/jointoken/local_recording) support
-- [x] Stream video and audio from arbitrary website into meeting to support voice agents
-- [ ] Webex Support
+- [x] Zoom, Google Meet, Teams support
+- [x] Real-time transcripts
+- [x] Audio/video recording
+- [x] Webhooks
+- [x] Calendar integrations
+- [x] Voice agents
+- [ ] Webex
 
-Have suggestions for the roadmap? Join the [Slack Community](https://join.slack.com/t/attendee-community/shared_invite/zt-3l43ns8cl-G8YnMccWVTugMlloUtSf9g) or open an issue.
+## Zoom OAuth setup
+
+1. Go to [Zoom Marketplace](https://marketplace.zoom.us/) → Develop → Build App → General App
+2. Copy Client ID and Secret from App Credentials
+3. Enable Meeting SDK under Embed → Features
+
+[Detailed guide](https://developers.zoom.us/docs/meeting-sdk/developer-accounts/) · [Video walkthrough](https://www.loom.com/embed/7cbd3eab1bc4438fb1badcb3787996d6?sid=825a92b5-51ca-447c-86c1-c45f5294ec9d)
+
+## Contributing
+
+Bug reports, feature requests, and PRs welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+Questions? Join us on [Slack](https://join.slack.com/t/attendee-community/shared_invite/zt-3l43ns8cl-G8YnMccWVTugMlloUtSf9g).
+
+---
+
+<div align="center">
+
+[Website](https://attendee.dev/) · [Docs](https://docs.attendee.dev/) · [GitHub](https://github.com/attendee-labs/attendee)
+
+</div>
