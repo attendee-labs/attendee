@@ -777,6 +777,7 @@ class ProjectBotDetailView(LoginRequiredMixin, ProjectUrlContextMixin, View):
         max_ram_usage = 0
         max_cpu_usage = 0
         max_db_connection_count = 0
+        max_redis_connection_count = 0
         network_stats = None
         if resource_snapshots.exists():
             for snapshot in resource_snapshots:
@@ -784,6 +785,7 @@ class ProjectBotDetailView(LoginRequiredMixin, ProjectUrlContextMixin, View):
                 ram_usage = data.get("ram_usage_megabytes") or 0
                 cpu_usage = data.get("cpu_usage_millicores") or 0
                 db_connection_count = data.get("db_connection_count") or 0
+                redis_connection_count = data.get("redis_connection_count") or 0
 
                 if ram_usage > max_ram_usage:
                     max_ram_usage = ram_usage
@@ -791,6 +793,8 @@ class ProjectBotDetailView(LoginRequiredMixin, ProjectUrlContextMixin, View):
                     max_cpu_usage = cpu_usage
                 if db_connection_count > max_db_connection_count:
                     max_db_connection_count = db_connection_count
+                if redis_connection_count > max_redis_connection_count:
+                    max_redis_connection_count = redis_connection_count
 
                 network = data.get("network")
                 if network:
@@ -830,6 +834,7 @@ class ProjectBotDetailView(LoginRequiredMixin, ProjectUrlContextMixin, View):
                 "max_ram_usage": max_ram_usage,
                 "max_cpu_usage": max_cpu_usage,
                 "max_db_connection_count": max_db_connection_count,
+                "max_redis_connection_count": max_redis_connection_count,
                 "network_stats": network_stats,
             }
         )
