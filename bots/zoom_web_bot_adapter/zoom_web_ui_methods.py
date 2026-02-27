@@ -1,4 +1,5 @@
 import logging
+import os
 import time
 
 from selenium.common.exceptions import TimeoutException
