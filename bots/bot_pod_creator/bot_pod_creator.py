@@ -241,7 +241,10 @@ class BotPodCreator:
                                 )
                             )
                         ],
-                        env=[],
+                        env=[
+                            # Env var so that the bot pod can know that it is a bot pod
+                            client.V1EnvVar(name="IS_A_BOT_POD", value="true"),
+                        ],
                         security_context = self.get_bot_container_security_context(),
                         volume_mounts=self.get_bot_container_volume_mounts(),
                     )

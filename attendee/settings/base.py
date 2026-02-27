@@ -195,6 +195,8 @@ CELERY_TASK_ROUTES = {
         "queue": os.getenv("DELIVER_WEBHOOK_CELERY_QUEUE", "celery"),
     },
 }
+if os.getenv("IS_A_BOT_POD", "false") == "true" and os.getenv("CONSERVE_BOT_POD_REDIS_CONNECTIONS", "false") == "true":
+    CELERY_BROKER_POOL_LIMIT = 0
 
 REST_FRAMEWORK = {
     # YOUR SETTINGS
