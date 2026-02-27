@@ -111,7 +111,8 @@ class ZoomWebUIMethods:
         failed_to_join_because_onbehalf_token_user_not_in_meeting = self.driver.execute_script("return window.userHasEncounteredOnBehalfTokenUserNotInMeetingError && window.userHasEncounteredOnBehalfTokenUserNotInMeetingError()")
         if failed_to_join_because_onbehalf_token_user_not_in_meeting:
             logger.warning("Bot failed to join because onbehalf token user not in meeting. Raising UiAuthorizedUserNotInMeetingTimeoutExceededException after sleeping for 5 seconds.")
-            time.sleep(5)  # Sleep for 5 seconds, so we're not constantly retrying
+            retry_time_seconds = int(os.getenv("ZOOM_ONBEHALF_TOKEN_RETRY_TIME_SECONDS", 5))
+            time.sleep(retry_time_seconds)  # Sleep for some seconds, so we're not constantly retrying
             raise UiAuthorizedUserNotInMeetingTimeoutExceededException("Bot failed to join because onbehalf token user not in meeting")
 
     def check_if_failed_to_join_because_generic_join_error(self):

@@ -1045,8 +1045,9 @@ class ZoomBotAdapter(BotAdapter):
         if status == zoom.MEETING_STATUS_ENDED:
             if self.should_retry_after_meeting_ends:
                 self.should_retry_after_meeting_ends = False
-                logger.info("Meeting ended. Will retry to join meeting in 3 seconds...")
-                GLib.timeout_add_seconds(3, self.join_meeting)
+                retry_time_seconds = int(os.getenv("ZOOM_ONBEHALF_TOKEN_RETRY_TIME_SECONDS", 5))
+                logger.info(f"Meeting ended. Will retry to join meeting in {retry_time_seconds} seconds...")
+                GLib.timeout_add_seconds(retry_time_seconds, self.join_meeting)
                 return
 
             # We get the MEETING_STATUS_ENDED regardless of whether we initiated the leave or not
