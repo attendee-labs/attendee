@@ -1,3 +1,132 @@
+class FetchInterceptor {
+    constructor(requestCallback) {
+        this.originalFetch = window.fetch;
+        this.requestCallback = requestCallback;
+        window.fetch = (...args) => this.interceptFetch(...args);
+    }
+
+    interceptFetch(...args) {
+        try {
+            const request = new Request(...args);
+            Promise.resolve(this.requestCallback(request)).catch(() => {});
+        } catch (err) {}
+        return this.originalFetch.apply(window, args);
+    }
+}
+
+class ChatMessagePoller {
+    constructor() {
+        this.ms_teams_region = null;
+        this.skype_token = null;
+        this.lastServerTimestamp = null;
+
+        this.isTeamsConsumerEdition = window.location.hostname === 'teams.live.com';
+        this.hostnameToQuery = this.isTeamsConsumerEdition ? 'teams.live.com' : 'teams.microsoft.com';
+        if (this.isTeamsConsumerEdition)
+            this.ms_teams_region = 'consumer';
+
+        this.consecutiveErrors = 0;
+        this.baseInterval = 5000;
+        this.maxInterval = 60000;
+        this.pollCount = 0;
+
+        this.fetchInterval = setInterval(() => {
+            this.pollCount++;
+            if (this.consecutiveErrors > 0) {
+                const backoffDelay = Math.min(this.baseInterval * Math.pow(2, this.consecutiveErrors), this.maxInterval);
+                if (this.pollCount % Math.ceil(backoffDelay / this.baseInterval) !== 0)
+                    return;
+            }
+            this.fetchChatMessages().catch(err => {
+                this.consecutiveErrors++;
+            });
+        }, 5000);
+    }
+
+    setMsTeamsRegion(ms_teams_region) {
+        if (this.ms_teams_region)
+            return;
+        this.ms_teams_region = ms_teams_region;
+    }
+
+    setSkypeToken(skype_token) {
+        this.skype_token = skype_token;
+    }
+
+    async fetchChatMessages() {
+        if (!this.skype_token || !this.ms_teams_region)
+            return null;
+
+        const threadId = window.callManager.getThreadId();
+        if (!threadId)
+            return null;
+
+        const startTime = this.lastServerTimestamp || 0;
+        const params = new URLSearchParams({
+            'view': 'msnp24Equivalent|supportsMessageProperties',
+            'pageSize': '200',
+            'startTime': startTime.toString()
+        });
+
+        const url = `https://${this.hostnameToQuery}/api/chatsvc/${this.ms_teams_region}/v1/users/ME/conversations/${threadId}/messages?${params.toString()}`;
+
+        const response = await fetch(url, {
+            method: 'GET',
+            headers: {
+                'authentication': `skypetoken=${this.skype_token}`,
+            },
+        });
+
+        if (!response.ok) {
+            this.consecutiveErrors++;
+            return null;
+        }
+
+        this.consecutiveErrors = 0;
+
+        const data = await response.json();
+        const messages = data?.messages || [];
+
+        let maxServerTimestamp = startTime;
+
+        for (const message of messages) {
+            try {
+                if (!message.from || !message.clientmessageid || !message.content)
+                    continue;
+
+                const arrivalTime = new Date(message.originalarrivaltime).getTime();
+                if (arrivalTime > maxServerTimestamp)
+                    maxServerTimestamp = arrivalTime;
+
+                const fromConverted = message.from.split('/').pop();
+                if (!window.userManager.getUserByDeviceId(fromConverted))
+                    window.callManager.syncParticipants();
+
+                window.chatMessageManager?.handleChatMessage({
+                    clientMessageId: message.clientmessageid,
+                    from: fromConverted,
+                    content: message.content,
+                    originalArrivalTime: message.originalarrivaltime,
+                });
+            } catch (err) {}
+        }
+
+        if (maxServerTimestamp > startTime)
+            this.lastServerTimestamp = maxServerTimestamp;
+        
+        return data;
+    }
+}
+
+new FetchInterceptor((req) => {
+    const msTeamsRegion = req.headers.get('ms-teams-region');
+    if (msTeamsRegion)
+        window.chatMessagePoller.setMsTeamsRegion(msTeamsRegion);
+
+    const skypeToken = req.headers.get('x-skypetoken');
+    if (skypeToken)
+        window.chatMessagePoller.setSkypeToken(skypeToken);
+});
 (() => {
     if (globalThis.__realConsole) return;
   
@@ -1774,6 +1903,9 @@ window.styleManager = styleManager;
 const receiverManager = new ReceiverManager();
 window.receiverManager = receiverManager;
 
+const chatMessagePoller = new ChatMessagePoller();
+window.chatMessagePoller = chatMessagePoller;
+
 const processDominantSpeakerHistoryMessage = (item) => {
     realConsole?.log('processDominantSpeakerHistoryMessage', item);
     const newDominantSpeakerAudioVirtualStreamId = item.history[0];
@@ -2729,11 +2861,10 @@ window.botOutputManager = botOutputManager;
         const bound = _bind.apply(this, [thisArg, ...args]);
         return function (...callArgs) {
           const eventData = callArgs[0];
-          if (eventData?.data?.chatServiceBatchEvent?.[0]?.message)
-          {
-            const message = eventData.data.chatServiceBatchEvent[0].message;
-            realConsole?.log('chatMessage', message);
-            window.chatMessageManager?.handleChatMessage(message);
+          const batchEvents = eventData?.data?.chatServiceBatchEvent || [];
+          for (const event of batchEvents) {
+            if (event?.message)
+              window.chatMessageManager?.handleChatMessage(event.message);
           }
           return bound.apply(this, callArgs);
         };
@@ -2788,6 +2919,15 @@ class CallManager {
         return this.activeCall.callerMri;
         // We're using callerMri because it includes the 8: prefix. If callerMri stops working, we can easily use the thing below.
         // return this.activeCall.currentUserSkypeIdentity?.id;
+    }
+
+    getThreadId() {
+        this.setActiveCall();
+        if (!this.activeCall) {
+            return;
+        }
+
+        return this.activeCall.threadId;
     }
 
 
