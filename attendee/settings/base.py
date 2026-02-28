@@ -197,6 +197,7 @@ CELERY_TASK_ROUTES = {
 }
 if os.getenv("IS_A_BOT_POD", "false") == "true" and os.getenv("CONSERVE_BOT_POD_REDIS_CONNECTIONS", "false") == "true":
     CELERY_BROKER_POOL_LIMIT = 0
+    CELERY_TASK_IGNORE_RESULT = True
 
 REST_FRAMEWORK = {
     # YOUR SETTINGS
