@@ -12,9 +12,9 @@ logger = logging.getLogger(__name__)
 from pathlib import Path
 
 
-def get_db_connection_count(db_port: int = 5432) -> int:
+def _get_established_connection_count(port: int) -> int:
     """
-    Count established TCP connections to the specified port (default: PostgreSQL 5432).
+    Count established TCP connections to the specified remote port.
 
     Reads from /proc/net/tcp and /proc/net/tcp6 to count connections without
     requiring the psutil dependency.
@@ -24,7 +24,7 @@ def get_db_connection_count(db_port: int = 5432) -> int:
     where rem_address is hex IP:PORT and st is connection state (01 = ESTABLISHED).
     """
     count = 0
-    db_port_hex = format(db_port, "04X")  # 5432 -> "1538"
+    port_hex = format(port, "04X")
 
     for tcp_file in [Path("/proc/net/tcp"), Path("/proc/net/tcp6")]:
         try:
@@ -42,12 +42,20 @@ def get_db_connection_count(db_port: int = 5432) -> int:
                     if ":" in rem_address:
                         rem_port = rem_address.split(":")[1].upper()
                         # State 01 = ESTABLISHED
-                        if rem_port == db_port_hex and state == "01":
+                        if rem_port == port_hex and state == "01":
                             count += 1
         except (FileNotFoundError, PermissionError):
             continue
 
     return count
+
+
+def get_db_connection_count(db_port: int = 5432) -> int:
+    return _get_established_connection_count(db_port)
+
+
+def get_redis_connection_count(redis_port: int = 6379) -> int:
+    return _get_established_connection_count(redis_port)
 
 
 def get_process_memory_list():
@@ -366,11 +374,18 @@ class BotResourceSnapshotTaker:
         except Exception as e:
             logger.error(f"Error getting db connection count for bot {self.bot.object_id}: {e}. Continuing...")
 
+        redis_connection_count = None
+        try:
+            redis_connection_count = get_redis_connection_count()
+        except Exception as e:
+            logger.error(f"Error getting redis connection count for bot {self.bot.object_id}: {e}. Continuing...")
+
         snapshot_data = {
             "ram_usage_megabytes": ram_usage_megabytes,
             "cpu_usage_millicores": cpu_usage_millicores_delta_per_second,
             "processes": processes,
             "db_connection_count": db_connection_count,
+            "redis_connection_count": redis_connection_count,
             "network": network_delta,
         }
 
