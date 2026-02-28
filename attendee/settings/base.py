@@ -196,7 +196,10 @@ CELERY_TASK_ROUTES = {
     },
 }
 if os.getenv("IS_A_BOT_POD", "false") == "true" and os.getenv("CONSERVE_BOT_POD_REDIS_CONNECTIONS", "false") == "true":
-    CELERY_BROKER_POOL_LIMIT = 0
+    # Setting this to 1 means that bot pods create one redis connection dedicated to celery and keep it alive for the duration of the bot
+    # Setting this to 0 means that no dedicated redis connection is created.
+    # Instead bot pods will create and close a redis connection each time they need to execute a celery task
+    CELERY_BROKER_POOL_LIMIT = int(os.getenv("BOT_POD_CELERY_BROKER_POOL_LIMIT", 1))
     CELERY_TASK_IGNORE_RESULT = True
 
 REST_FRAMEWORK = {
