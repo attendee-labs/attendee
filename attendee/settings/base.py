@@ -195,6 +195,11 @@ CELERY_TASK_ROUTES = {
         "queue": os.getenv("DELIVER_WEBHOOK_CELERY_QUEUE", "celery"),
     },
 }
+
+if os.getenv("BOT_LAUNCH_METHOD") != "kubernetes" and os.getenv("BOT_LAUNCH_METHOD") != "docker-compose-multi-host":
+    # Latest Zoom SDK has segfault issue unless we recreate the process after each bot.
+    CELERY_WORKER_MAX_TASKS_PER_CHILD = 1
+
 if os.getenv("IS_A_BOT_POD", "false") == "true" and os.getenv("CONSERVE_BOT_POD_REDIS_CONNECTIONS", "false") == "true":
     # Setting this to 1 means that bot pods keep one celery broker pool connection alive for the duration of the bot.
     # Note: this results in 2 underlying Redis connections (one for commands, one for pub/sub).
