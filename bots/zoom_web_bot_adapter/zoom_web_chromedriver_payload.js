@@ -1,3 +1,30 @@
+class ParticipantSpeechStartStopManager {
+    constructor() {
+        // Only one active speaker at a time
+        this.activeSpeaker = null;
+    }
+
+    sendSpeechStartStopEvent(participantId, isSpeechStart, timestamp) {
+        window.ws?.sendJson({
+            type: 'ParticipantSpeechStartStopEvent',
+            participantId: participantId.toString(),
+            isSpeechStart: isSpeechStart,
+            timestamp: timestamp
+        });
+    }
+
+    addActiveSpeaker(speakerId) {
+        if (this.activeSpeaker === speakerId) {
+            return;
+        }
+        if (this.activeSpeaker) {
+            this.sendSpeechStartStopEvent(this.activeSpeaker, false, Date.now());
+        }
+        this.activeSpeaker = speakerId;
+        this.sendSpeechStartStopEvent(this.activeSpeaker, true, Date.now());
+    }
+}
+
 class DominantSpeakerManager {
     constructor() {
         this.dominantSpeakerStreamId = null;
@@ -591,6 +618,8 @@ const styleManager = new StyleManager();
 window.styleManager = styleManager;
 const userManager = new UserManager(ws);
 window.userManager = userManager;
+const participantSpeechStartStopManager = new ParticipantSpeechStartStopManager();
+window.participantSpeechStartStopManager = participantSpeechStartStopManager;
 
 
 const turnOnCameraArialLabel = "start my video"

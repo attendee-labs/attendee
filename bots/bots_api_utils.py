@@ -59,8 +59,7 @@ def build_site_url(path=""):
 
 
 def send_sync_command(bot, command="sync"):
-    redis_url = os.getenv("REDIS_URL") + ("?ssl_cert_reqs=none" if os.getenv("DISABLE_REDIS_SSL") else "")
-    redis_client = redis.from_url(redis_url)
+    redis_client = redis.from_url(settings.REDIS_URL_WITH_PARAMS)
     channel = f"bot_{bot.id}"
     message = {"command": command}
     redis_client.publish(channel, json.dumps(message))
@@ -226,6 +225,7 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
     callback_settings = serializer.validated_data["callback_settings"]
     external_media_storage_settings = serializer.validated_data["external_media_storage_settings"]
     voice_agent_settings = serializer.validated_data["voice_agent_settings"]
+    kubernetes_settings = serializer.validated_data["kubernetes_settings"]
     initial_state = BotStates.SCHEDULED if join_at else BotStates.READY
 
     error = validate_external_media_storage_settings(external_media_storage_settings, project)
@@ -249,6 +249,7 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
         "callback_settings": callback_settings,
         "external_media_storage_settings": external_media_storage_settings,
         "voice_agent_settings": voice_agent_settings,
+        "kubernetes_settings": kubernetes_settings,
     }
 
     try:

@@ -2244,6 +2244,10 @@ components:
                     Each string should be in the format ''term_to_find:replacement_term''
                     (e.g., ''kpis:Key Performance Indicators''). See here for details:
                     https://developers.deepgram.com/docs/find-and-replace'
+                use_eu_server:
+                  type: boolean
+                  description: Whether to use the EU server for transcription. Defaults
+                    to false.
               additionalProperties: false
             gladia:
               type: object

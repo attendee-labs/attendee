@@ -1,0 +1,60 @@
+name: Create Release
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - version.json
+
+permissions:
+  contents: write  # needed to push tags and create releases
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout (full history + tags)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read version from version.json
+        id: get_version
+        run: |
+          VERSION=$(jq -r '.version' version.json)
+          if [ -z "$VERSION" ] || [ "$VERSION" = "null" ]; then
+            echo "version.json does not contain a valid .version"
+            exit 1
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=v$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Ensure tag does not already exist
+        id: tag_check
+        run: |
+          TAG="${{ steps.get_version.outputs.tag }}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create annotated tag and push
+        if: steps.tag_check.outputs.exists == 'false'
+        run: |
+          TAG="${{ steps.get_version.outputs.tag }}"
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"
+
+      - name: Create GitHub Release
+        if: steps.tag_check.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.get_version.outputs.tag }}"
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --notes "Automated release for $TAG (from version.json)."

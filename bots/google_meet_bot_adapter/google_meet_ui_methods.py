@@ -30,7 +30,7 @@ class GoogleMeetUIMethods:
             return element
         except Exception as e:
             # Take screenshot when any exception occurs
-            logger.warning(f"Exception raised in locate_element for {step}")
+            logger.warning(f"Exception raised in locate_element for {step}. Exception type = {type(e)}")
             raise UiCouldNotLocateElementException(f"Exception raised in locate_element for {step}", step, e)
 
     def find_element_by_selector(self, selector_type, selector):
@@ -399,6 +399,36 @@ class GoogleMeetUIMethods:
                     raise e
                 logger.warning(f"Error setting layout: {e}. Retrying. Attempt #{attempt_index}...")
 
+                self.reset_attempt_to_set_layout()
+
+    def reset_attempt_to_set_layout(self):
+        # Check if there is a modal with a close button. If so click it.
+
+        logger.info("Looking for a modal with a close button")
+        close_button_selector = '[aria-modal="true"] button[aria-label="Close"]'
+        for attempt in range(5):
+            try:
+                close_button = WebDriverWait(self.driver, 1).until(EC.element_to_be_clickable((By.CSS_SELECTOR, close_button_selector)))
+                logger.info("Found it. Clicking the close button")
+                close_button.click()
+                break
+            except ElementNotInteractableException as e:
+                logger.warning(f"Modal close button not interactable (attempt {attempt + 1}/5): {e}. Retrying...")
+            except Exception as e:
+                logger.warning(f"No modal with a close button found: {e}. Continuing...")
+                break
+
+        logger.info("Sending a click to the body element to close any menus")
+        try:
+            body_element = self.locate_element(
+                step="body_element",
+                condition=EC.presence_of_element_located((By.TAG_NAME, "body")),
+                wait_time_seconds=1,
+            )
+            self.click_element(body_element, "body_element")
+        except Exception as e:
+            logger.warning(f"Error sending a click to the body element to close any menus: {e}. Continuing...")
+
     def attempt_to_set_layout(self, layout_to_select):
         logger.info("Begin setting layout. Waiting for the more options button...")
         MORE_OPTIONS_BUTTON_SELECTOR = 'button[jsname="NakZHc"][aria-label="More options"]'
@@ -433,7 +463,7 @@ class GoogleMeetUIMethods:
             logger.info("Waiting for the 'Sidebar' label element")
             sidebar_label = self.locate_element(
                 step="sidebar_label",
-                condition=EC.presence_of_element_located((By.XPATH, '//label[.//span[text()="Sidebar"]]')),
+                condition=EC.element_to_be_clickable((By.XPATH, '//label[.//span[text()="Sidebar"]]')),
                 wait_time_seconds=6,
             )
             logger.info("Clicking the 'Sidebar' label element")

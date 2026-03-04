@@ -111,9 +111,7 @@ def process_utterance(self, utterance_id):
         # If the utterance has an associated audio chunk, clear the audio blob on the audio chunk.
         # If async transcription data is being saved, do NOT clear it, because we may use it later in an async transcription.
         if utterance.audio_chunk and not utterance.recording.bot.record_async_transcription_audio_chunks():
-            utterance_audio_chunk = utterance.audio_chunk
-            utterance_audio_chunk.audio_blob = b""
-            utterance_audio_chunk.save()
+            utterance.audio_chunk.clear_audio_data()
 
         utterance.transcription = transcription
         utterance.save()
@@ -243,6 +241,7 @@ def get_transcription_via_deepgram(utterance):
     from deepgram import (
         DeepgramApiError,
         DeepgramClient,
+        DeepgramClientOptions,
         FileSource,
         PrerecordedOptions,
     )
@@ -276,7 +275,13 @@ def get_transcription_via_deepgram(utterance):
     if not deepgram_credentials:
         return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND}
 
-    deepgram = DeepgramClient(deepgram_credentials["api_key"])
+    deepgram_base_url = transcription_settings.deepgram_base_url()
+    if deepgram_base_url:
+        logger.info(f"Using Deepgram base URL {deepgram_base_url} for transcription")
+        config = DeepgramClientOptions(url=deepgram_base_url)
+        deepgram = DeepgramClient(deepgram_credentials["api_key"], config)
+    else:
+        deepgram = DeepgramClient(deepgram_credentials["api_key"])
 
     try:
         response = deepgram.listen.rest.v("1").transcribe_file(payload, options)

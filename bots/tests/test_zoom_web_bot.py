@@ -1,4 +1,6 @@
+import json
 import os
+import struct
 import threading
 import time
 from unittest.mock import MagicMock, patch
@@ -941,6 +943,108 @@ class TestZoomWebBot(TransactionTestCase):
         bot_thread.join(timeout=5)
 
         # Close the database connection since we're in a thread
+        connection.close()
+
+    @patch("bots.zoom_web_bot_adapter.zoom_web_ui_methods.ZoomWebUIMethods.attempt_to_join_meeting")
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
+    def test_bot_detects_removal_from_meeting_via_users_update(
+        self,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+        mock_attempt_to_join,
+    ):
+        """
+        Test that the bot detects when it has been removed from the meeting
+        via a UsersUpdate WebSocket message where the current user's
+        humanized_status is "removed_from_meeting".
+
+        Also verifies that when a *different* user is removed, the bot
+        does NOT treat it as its own removal.
+
+        This exercises the detection path in handle_websocket where an
+        updatedUsers entry with humanized_status="removed_from_meeting"
+        and isCurrentUser=True triggers handle_removed_from_meeting().
+        """
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        mock_driver = create_mock_zoom_web_driver()
+        MockChromeDriver.return_value = mock_driver
+
+        mock_display = MagicMock()
+        MockDisplay.return_value = mock_display
+
+        mock_attempt_to_join.return_value = None
+
+        controller = BotController(self.bot.id)
+
+        bot_thread = threading.Thread(target=controller.run)
+        bot_thread.daemon = True
+        bot_thread.start()
+
+        time.sleep(2)
+
+        adapter = controller.adapter
+        self.assertFalse(adapter.left_meeting)
+
+        # Step 1: Another participant is removed — the bot should NOT
+        # consider itself removed from the meeting.
+        other_user_removed = {
+            "type": "UsersUpdate",
+            "newUsers": [],
+            "removedUsers": [],
+            "updatedUsers": [
+                {
+                    "deviceId": "other_device",
+                    "fullName": "Some Other User",
+                    "isCurrentUser": False,
+                    "humanized_status": "removed_from_meeting",
+                    "isHost": False,
+                }
+            ],
+        }
+        json_bytes = json.dumps(other_user_removed).encode("utf-8")
+        message = struct.pack("<I", 1) + json_bytes
+
+        adapter.handle_websocket([message])
+
+        self.assertFalse(adapter.left_meeting, "Bot should not treat another user's removal as its own")
+
+        # Step 2: The bot's own user is removed — this should be detected.
+        bot_user_removed = {
+            "type": "UsersUpdate",
+            "newUsers": [],
+            "removedUsers": [],
+            "updatedUsers": [
+                {
+                    "deviceId": "bot_device",
+                    "fullName": "Test Zoom Web Bot",
+                    "isCurrentUser": True,
+                    "humanized_status": "removed_from_meeting",
+                    "isHost": False,
+                }
+            ],
+        }
+        json_bytes = json.dumps(bot_user_removed).encode("utf-8")
+        message = struct.pack("<I", 1) + json_bytes
+
+        adapter.handle_websocket([message])
+
+        self.assertTrue(adapter.left_meeting)
+
+        time.sleep(3)
+
+        self.bot.refresh_from_db()
+
+        bot_events = self.bot.bot_events.all()
+        meeting_ended_events = [e for e in bot_events if e.event_type == BotEventTypes.MEETING_ENDED]
+        self.assertEqual(len(meeting_ended_events), 1, "Expected exactly one MEETING_ENDED event")
+
+        bot_thread.join(timeout=5)
+
         connection.close()
 
     @patch.dict(os.environ, {"ZOOM_WEB_GENERIC_JOIN_ERROR_SLEEP_TIME_SECONDS": "0.5"})

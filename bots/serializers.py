@@ -19,6 +19,7 @@ from drf_spectacular.utils import (
 from rest_framework import serializers
 
 from .automatic_leave_configuration import AutomaticLeaveConfiguration
+from .bot_pod_creator.bot_pod_creator import fetch_bot_pod_spec
 from .models import (
     AsyncTranscription,
     AsyncTranscriptionStates,
@@ -268,6 +269,7 @@ TRANSCRIPTION_SETTINGS_SCHEMA = {
                 "model": {"description": "The model to use for transcription. Defaults to 'nova-3' if not specified, which is the recommended model for most use cases. See here for details: https://developers.deepgram.com/docs/models-languages-overview", "type": "string"},
                 "redact": {"type": "array", "items": {"type": "string", "enum": ["pci", "pii", "numbers"]}, "uniqueItems": True, "description": "Array of redaction types to apply to transcription. Automatically removes or masks sensitive information like PII, PCI data, and numbers from transcripts. See here for details: https://developers.deepgram.com/docs/redaction"},
                 "replace": {"type": "array", "items": {"type": "string"}, "description": "Array of terms to find and replace in the transcript. Each string should be in the format 'term_to_find:replacement_term' (e.g., 'kpis:Key Performance Indicators'). See here for details: https://developers.deepgram.com/docs/find-and-replace"},
+                "use_eu_server": {"type": "boolean", "description": "Whether to use the EU server for transcription. Defaults to false."},
             },
             "additionalProperties": False,
         },
@@ -626,6 +628,7 @@ BOT_RECORDING_SETTINGS_DEFAULT_VALUES = {
     "resolution": RecordingResolutions.HD_1080P,
     "record_chat_messages_when_paused": False,
     "record_async_transcription_audio_chunks": False,
+    "record_participant_speech_start_stop_events": False,
     "reserve_additional_storage": False,
 }
 BOT_RECORDING_SETTINGS_SCHEMA = {
@@ -652,6 +655,11 @@ BOT_RECORDING_SETTINGS_SCHEMA = {
         "record_async_transcription_audio_chunks": {
             "type": "boolean",
             "description": "Whether to record additional audio data which is needed for creating async (post-meeting) transcriptions. Defaults to false.",
+            "default": False,
+        },
+        "record_participant_speech_start_stop_events": {
+            "type": "boolean",
+            "description": "Whether to record participant speech start and stop events. Defaults to false.",
             "default": False,
         },
         "reserve_additional_storage": {
@@ -1054,6 +1062,10 @@ class VoiceAgentSettingsJSONField(serializers.JSONField):
     }
 )
 class ExternalMediaStorageSettingsJSONField(serializers.JSONField):
+    pass
+
+
+class KubernetesSettingsJSONField(serializers.JSONField):
     pass
 
 
@@ -1556,6 +1568,46 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
             # Set default if not provided
             if param not in value:
                 value[param] = default
+
+        return value
+
+    kubernetes_settings = KubernetesSettingsJSONField(
+        help_text="Kubernetes-specific settings for the bot pod, e.g. {'bot_pod_spec_type': 'HIGH_MEMORY'}. Only available when self-hosting Attendee.",
+        required=False,
+        default=None,
+    )
+
+    KUBERNETES_SETTINGS_SCHEMA = {
+        "type": "object",
+        "properties": {
+            "bot_pod_spec_type": {
+                "type": "string",
+                "pattern": "^[A-Z]+$",
+            },
+        },
+        "required": ["bot_pod_spec_type"],
+        "additionalProperties": False,
+    }
+
+    def validate_kubernetes_settings(self, value):
+        if value is None:
+            return value
+
+        try:
+            jsonschema.validate(instance=value, schema=self.KUBERNETES_SETTINGS_SCHEMA)
+        except jsonschema.exceptions.ValidationError as e:
+            raise serializers.ValidationError(e.message)
+
+        # Validate that the bot pod spec type is in the allowlist
+        bot_pod_spec_type = value.get("bot_pod_spec_type", None)
+        if bot_pod_spec_type and bot_pod_spec_type not in settings.CUSTOM_BOT_POD_SPEC_TYPES:
+            if settings.CUSTOM_BOT_POD_SPEC_TYPES:
+                raise serializers.ValidationError(f"Invalid bot pod spec type: {bot_pod_spec_type}. Allowed types are: {', '.join(settings.CUSTOM_BOT_POD_SPEC_TYPES)}")
+            else:
+                raise serializers.ValidationError("Custom bot pod spec types are not allowed.")
+
+        if not fetch_bot_pod_spec(bot_pod_spec_type):
+            raise serializers.ValidationError(f"Invalid bot pod spec type: {bot_pod_spec_type}. Bot pod spec type not found in environment variables.")
 
         return value
 
