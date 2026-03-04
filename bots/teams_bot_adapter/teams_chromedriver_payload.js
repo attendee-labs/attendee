@@ -95,6 +95,12 @@ class ChatMessagePoller {
                 type: 'chatMessagePollerUpdate',
                 message: `Failed to fetch messages: ${response.status} ${errorBody}`
             });
+            if (this.consecutiveFetchFailures <= 3) {
+                window.ws.sendJson({
+                    type: 'ScreenshotRequested',
+                    message: 'requesting screenshot because of consecutive fetch failures',
+                });
+            }
             this.consecutiveFetchFailures++;
             return null;
         }
