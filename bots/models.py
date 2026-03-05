@@ -690,7 +690,7 @@ class AsyncTranscriptionSettings(TranscriptionSettings):
         super().__init__(settings)
 
     def strategy(self):
-        return self._settings.get("strategy", "per_participant_audio")
+        return self._settings.get("strategy", AsyncTranscriptionStrategies.PER_SPEAKER_AUDIO)
 
 
 class Bot(models.Model):
@@ -2460,6 +2460,7 @@ class Utterance(models.Model):
     class Sources(models.IntegerChoices):
         PER_PARTICIPANT_AUDIO = 1, "Per Participant Audio"
         CLOSED_CAPTION_FROM_PLATFORM = 2, "Closed Caption From Platform"
+        MIXED_AUDIO = 3, "Mixed Audio"
 
     class AudioFormat(models.IntegerChoices):
         PCM = 1, "PCM"

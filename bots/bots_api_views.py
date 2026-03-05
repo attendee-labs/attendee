@@ -872,7 +872,7 @@ class TranscriptView(APIView):
 
             if strategy == AsyncTranscriptionStrategies.PER_SPEAKER_AUDIO:
                 if not bot.record_async_transcription_audio_chunks():
-                    return Response({"error": "Cannot create async transcription using per_participant_audio strategy because you did not enable recording_settings.record_async_transcription_audio_chunks when you created the bot."}, status=status.HTTP_400_BAD_REQUEST)
+                    return Response({"error": "Cannot create async transcription using per_speaker_audio strategy because you did not enable recording_settings.record_async_transcription_audio_chunks when you created the bot."}, status=status.HTTP_400_BAD_REQUEST)
                 if not recording.audio_chunks.exclude(audio_blob=b"").exists() and not recording.audio_chunks.exclude(audio_blob_remote_file=None).exists():
                     return Response({"error": "Cannot create async transcription because the per-speaker audio data has been deleted or was never created."}, status=status.HTTP_400_BAD_REQUEST)
             elif strategy == AsyncTranscriptionStrategies.SPEAKER_EVENTS:
