@@ -55,21 +55,20 @@ def create_utterances_for_transcription_with_speaker_events(async_transcription)
         for result in utterance_results:
             participant = result["participant"]
             transcription = result["transcription"]
+            start_time = result["start_time"]
+            duration = result["duration"]
             words = transcription.get("words", [])
 
             if not words:
                 continue
-
-            timestamp_ms = int(words[0]["start"] * 1000)
-            duration_ms = int(words[-1]["end"] * 1000) - timestamp_ms
 
             Utterance.objects.create(
                 source=Utterance.Sources.MIXED_AUDIO,
                 recording=recording,
                 async_transcription=async_transcription,
                 participant=participant,
-                timestamp_ms=timestamp_ms,
-                duration_ms=duration_ms,
+                timestamp_ms=start_time * 1000 + recording.first_buffer_timestamp_ms,
+                duration_ms=duration * 1000,
                 transcription=transcription,
             )
 

@@ -185,6 +185,7 @@ class _Interval:
 def split_transcription_by_speaker_events(
     transcription_result: dict,
     speaker_events: Sequence[ParticipantEvent],
+    first_buffer_timestamp_ms: int,
 ) -> list[dict]:
     """
     Split a full-recording transcription into per-speaker utterance chunks.
@@ -200,7 +201,7 @@ def split_transcription_by_speaker_events(
     words.sort(key=lambda w: (w["start"], w["end"]))
     recording_end = max(w["end"] for w in words)
 
-    intervals = _split_transcription_by_speaker_events_build_intervals(speaker_events, recording_end)
+    intervals = _split_transcription_by_speaker_events_build_intervals(speaker_events, recording_end, first_buffer_timestamp_ms)
     if not intervals:
         return []
 
@@ -230,8 +231,8 @@ def split_transcription_by_speaker_events(
     return utterances
 
 
-def _split_transcription_by_speaker_events_build_intervals(events: list, recording_end: float) -> list[_Interval]:
-    """Convert SPEECH_START/STOP events into closed intervals."""
+def _split_transcription_by_speaker_events_build_intervals(events: list, recording_end: float, first_buffer_timestamp_ms: int) -> list[_Interval]:
+    """Convert SPEECH_START/STOP events into closed intervals in audio-relative time."""
     events = sorted(
         events,
         key=lambda ev: (
@@ -249,7 +250,7 @@ def _split_transcription_by_speaker_events_build_intervals(events: list, recordi
             continue
 
         pid = ev.participant_id
-        t = ev.timestamp_ms / 1000.0
+        t = (ev.timestamp_ms - first_buffer_timestamp_ms) / 1000.0
 
         if ev.event_type == ParticipantEventTypes.SPEECH_START:
             # Close any already-active interval for this participant
@@ -305,13 +306,20 @@ def _split_transcription_by_speaker_events_nearest_interval(t: float, intervals:
 
 
 def _split_transcription_by_speaker_events_make_utterance(interval: _Interval, words: list[dict], language: str | None) -> dict:
+    utterance_start = words[0]["start"]
+    adjusted_words = [
+        {**w, "start": w["start"] - utterance_start, "end": w["end"] - utterance_start}
+        for w in words
+    ]
     return {
         "participant": interval.participant,
         "transcription": {
-            "transcript": " ".join(w.get("word", "") for w in words).strip(),
-            "words": words,
+            "transcript": " ".join(w.get("word", "") for w in adjusted_words).strip(),
+            "words": adjusted_words,
             "language": language,
         },
+        "start_time": utterance_start,
+        "duration": words[-1]["end"] - utterance_start,
     }
 
 
@@ -409,7 +417,7 @@ def get_transcription_via_assemblyai_for_speaker_events(speaker_events, recordin
     if error:
         return None, error
 
-    return split_transcription_by_speaker_events(transcription, speaker_events), None
+    return split_transcription_by_speaker_events(transcription, speaker_events, recording.first_buffer_timestamp_ms), None
 
 
 def get_transcription_via_assemblyai_from_mp3(
