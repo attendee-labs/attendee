@@ -918,13 +918,28 @@ class OpenAIProviderTest(TransactionTestCase):
     def test_success_path(self, mock_pcm, mock_post):
         mock_post.return_value.status_code = 200
         mock_post.return_value.json.return_value = {"text": "hello!"}
+        with mock.patch.object(self.creds.__class__, "get_credentials", return_value={"api_key": "sk-XYZ"}):
+            tx, failure = get_transcription_via_openai(self.utt)
+
+        self.assertIsNone(failure)
+        self.assertEqual(tx, {"transcript": "hello!"})
+        mock_pcm.assert_called_once_with(b"pcm", sample_rate=16_000, output_sample_rate=None)
+        mock_post.assert_called_once()  # ensure request made
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3")
+    def test_uses_runtime_conversion_sample_rate_override(self, mock_pcm, mock_post):
+        self.bot.settings["transcription_runtime_settings"] = {"conversion_sample_rate_override": 32000}
+        self.bot.save()
+
+        mock_post.return_value.status_code = 200
+        mock_post.return_value.json.return_value = {"text": "hello!"}
         with mock.patch.object(self.creds.__class__, "get_credentials", return_value={"api_key": "sk‑XYZ"}):
             tx, failure = get_transcription_via_openai(self.utt)
 
         self.assertIsNone(failure)
         self.assertEqual(tx, {"transcript": "hello!"})
-        mock_pcm.assert_called_once_with(b"pcm", sample_rate=16_000)
-        mock_post.assert_called_once()  # ensure request made
+        mock_pcm.assert_called_once_with(b"pcm", sample_rate=16_000, output_sample_rate=32000)
 
     # ────────────────────────────────────────────────────────────────────────────────
     @mock.patch("bots.tasks.process_utterance_task.requests.post")
@@ -1519,7 +1534,7 @@ class ElevenLabsProviderTest(TransactionTestCase):
             self.assertEqual(transcript["language"], "eng")
 
             # Verify API call was made correctly
-            mock_pcm.assert_called_once_with(b"pcm-bytes", sample_rate=16_000)
+            mock_pcm.assert_called_once_with(b"pcm-bytes", sample_rate=16_000, output_sample_rate=None)
             mock_post.assert_called_once()
             call_args = mock_post.call_args
             # First argument is the URL

@@ -81,6 +81,92 @@ class TestCreateBot(TestCase):
         self.assertIsNotNone(bot.recordings.first())
         self.assertIsNone(error)
 
+    def test_create_bot_applies_project_global_defaults(self):
+        self.project.transcription_defaults = {
+            "silence_closure_mode": "custom",
+            "silence_closure_seconds": 1.5,
+            "max_segment_mode": "custom",
+            "max_segment_seconds": 90,
+            "conversion_sample_rate": 16000,
+        }
+        self.project.output_file_defaults = {
+            "output_mode": "audio",
+            "video_resolution": "480p",
+            "audio_bitrate_kbps": 96,
+        }
+        self.project.save()
+
+        bot, error = create_bot(data={"meeting_url": "https://meet.google.com/abc-defg-hij", "bot_name": "Test Bot"}, source=BotCreationSource.API, project=self.project)
+        self.assertIsNotNone(bot)
+        self.assertIsNone(error)
+        self.assertEqual(bot.settings["recording_settings"]["format"], "mp3")
+        self.assertEqual(bot.settings["recording_settings"]["resolution"], "480p")
+        self.assertEqual(bot.settings["recording_settings"]["audio_bitrate_kbps"], 96)
+        self.assertEqual(
+            bot.settings["transcription_runtime_settings"],
+            {
+                "silence_duration_seconds_override": 1.5,
+                "max_segment_seconds_override": 90,
+                "conversion_sample_rate_override": 16000,
+            },
+        )
+
+    def test_create_bot_payload_overrides_project_output_defaults(self):
+        self.project.output_file_defaults = {
+            "output_mode": "audio",
+            "video_resolution": "480p",
+            "audio_bitrate_kbps": 96,
+        }
+        self.project.save()
+
+        bot, error = create_bot(
+            data={
+                "meeting_url": "https://meet.google.com/abc-defg-hij",
+                "bot_name": "Test Bot",
+                "recording_settings": {
+                    "format": "mp4",
+                    "resolution": "1080p",
+                },
+            },
+            source=BotCreationSource.API,
+            project=self.project,
+        )
+        self.assertIsNotNone(bot)
+        self.assertIsNone(error)
+        self.assertEqual(bot.settings["recording_settings"]["format"], "mp4")
+        self.assertEqual(bot.settings["recording_settings"]["resolution"], "1080p")
+        self.assertIsNone(bot.settings["recording_settings"]["audio_bitrate_kbps"])
+
+    @patch.dict(
+        "os.environ",
+        {
+            "BOT_DEFAULT_TRANSCRIPTION_SILENCE_MODE": "custom",
+            "BOT_DEFAULT_TRANSCRIPTION_SILENCE_SECONDS": "2.0",
+            "BOT_DEFAULT_TRANSCRIPTION_MAX_SEGMENT_MODE": "custom",
+            "BOT_DEFAULT_TRANSCRIPTION_MAX_SEGMENT_SECONDS": "75",
+            "BOT_DEFAULT_TRANSCRIPTION_CONVERSION_SAMPLE_RATE": "32000",
+            "BOT_DEFAULT_OUTPUT_MODE": "audio",
+            "BOT_DEFAULT_OUTPUT_VIDEO_RESOLUTION": "720p",
+            "BOT_DEFAULT_OUTPUT_AUDIO_BITRATE_KBPS": "64",
+        },
+        clear=False,
+    )
+    def test_create_bot_applies_env_defaults_when_project_defaults_not_set(self):
+        bot, error = create_bot(data={"meeting_url": "https://meet.google.com/abc-defg-hij", "bot_name": "Test Bot"}, source=BotCreationSource.API, project=self.project)
+        self.assertIsNotNone(bot)
+        self.assertIsNone(error)
+        self.assertEqual(bot.settings["recording_settings"]["format"], "mp3")
+        self.assertEqual(bot.settings["recording_settings"]["resolution"], "720p")
+        self.assertEqual(bot.settings["recording_settings"]["audio_bitrate_kbps"], 64)
+        self.assertEqual(
+            bot.settings["transcription_runtime_settings"],
+            {
+                "silence_duration_seconds_override": 2.0,
+                "max_segment_seconds_override": 75,
+                "conversion_sample_rate_override": 32000,
+            },
+        )
+
     def test_create_zoom_bot_with_default_settings(self):
         ZoomOAuthApp.objects.create(project=self.project, client_id="123")
         bot, error = create_bot(data={"meeting_url": "https://zoom.us/j/123456789", "bot_name": "Test Bot"}, source=BotCreationSource.API, project=self.project)

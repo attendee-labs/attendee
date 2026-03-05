@@ -423,6 +423,19 @@ class BotController:
         elif meeting_type == MeetingTypes.TEAMS:
             return GstreamerPipeline.AUDIO_FORMAT_FLOAT
 
+    def configured_recording_audio_bitrate_kbps(self):
+        configured_audio_bitrate_kbps = self.bot_in_db.recording_audio_bitrate_kbps()
+        if configured_audio_bitrate_kbps is not None:
+            return configured_audio_bitrate_kbps
+
+        if self.bot_in_db.recording_type() == RecordingTypes.AUDIO_ONLY:
+            return 192
+
+        return 128
+
+    def configured_recording_audio_bitrate_bps(self):
+        return self.configured_recording_audio_bitrate_kbps() * 1000
+
     def get_sleep_time_between_audio_output_chunks_seconds(self):
         meeting_type = self.get_meeting_type()
         if meeting_type == MeetingTypes.ZOOM:
@@ -744,12 +757,20 @@ class BotController:
     # Sarvam has this 30 second limit on audio clips, so we need to change the max utterance duration to 30 seconds
     # and make the silence duration lower so it generates a bunch of small clips
     def non_streaming_audio_utterance_size_limit(self):
+        max_segment_seconds_override = self.bot_in_db.transcription_runtime_max_segment_seconds_override()
+        if max_segment_seconds_override is not None:
+            return self.get_per_participant_audio_sample_rate() * 2 * max_segment_seconds_override
+
         if self.get_recording_transcription_provider() == TranscriptionProviders.SARVAM:
             return 1920000  # 30 seconds of audio at 32kHz
         else:
             return 19200000  # 19.2 MB / 2 bytes per sample / 32,000 samples per second = 300 seconds of continuous audio
 
     def non_streaming_audio_silence_duration_limit(self):
+        silence_duration_seconds_override = self.bot_in_db.transcription_runtime_silence_duration_seconds_override()
+        if silence_duration_seconds_override is not None:
+            return silence_duration_seconds_override
+
         if self.get_recording_transcription_provider() == TranscriptionProviders.SARVAM:
             return 1  # seconds
         else:
@@ -805,6 +826,7 @@ class BotController:
                 on_new_sample_callback=self.on_new_sample_from_gstreamer_pipeline,
                 video_frame_size=self.bot_in_db.recording_dimensions(),
                 audio_format=self.get_audio_format(),
+                audio_bitrate_bps=self.configured_recording_audio_bitrate_bps(),
                 output_format=self.get_gstreamer_output_format(),
                 sink_type=self.get_gstreamer_sink_type(),
                 file_location=self.get_recording_file_location(),
@@ -817,6 +839,7 @@ class BotController:
                 file_location=self.get_recording_file_location(),
                 recording_dimensions=self.bot_in_db.recording_dimensions(),
                 audio_only=not (self.pipeline_configuration.record_video or self.pipeline_configuration.rtmp_stream_video),
+                audio_bitrate_kbps=self.configured_recording_audio_bitrate_kbps(),
             )
 
         self.websocket_audio_client = None

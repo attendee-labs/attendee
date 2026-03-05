@@ -1,0 +1,94 @@
+{% extends 'projects/sidebar.html' %}
+{% load bot_filters %}
+{% block content %}
+
+<div class="container mt-4">
+  <h2>Output File</h2>
+
+  <div class="card mt-4">
+    <div class="card-body">
+      <form id="output-file-settings-form"
+            hx-put="{% url 'projects:project-output-file-settings' project.object_id %}"
+            hx-trigger="submit"
+            hx-swap="none"
+            hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+            hx-disabled-elt="#saveOutputFileSettingsButton"
+            hx-on::after-request="if(event.detail.successful){window.location.reload();}">
+        {% csrf_token %}
+
+        <div class="mb-4">
+          <label class="form-label">Tipo de saída</label>
+          <div class="form-check">
+            <input class="form-check-input" type="radio" name="output_mode" id="outputModeVideo" value="video" {% if output_file_defaults.output_mode == 'video' %}checked{% endif %}>
+            <label class="form-check-label" for="outputModeVideo">
+              Video (padrão)
+            </label>
+          </div>
+          <div class="form-check">
+            <input class="form-check-input" type="radio" name="output_mode" id="outputModeAudio" value="audio" {% if output_file_defaults.output_mode == 'audio' %}checked{% endif %}>
+            <label class="form-check-label" for="outputModeAudio">
+              Only Audio
+            </label>
+          </div>
+        </div>
+
+        <div class="mb-4" id="videoResolutionGroup">
+          <label for="videoResolution" class="form-label">Resolução de vídeo</label>
+          <select class="form-select" id="videoResolution" name="video_resolution">
+            <option value="1080p" {% if output_file_defaults.video_resolution == '1080p' %}selected{% endif %}>1080p</option>
+            <option value="720p" {% if output_file_defaults.video_resolution == '720p' %}selected{% endif %}>720p</option>
+            <option value="480p" {% if output_file_defaults.video_resolution == '480p' %}selected{% endif %}>480p</option>
+          </select>
+        </div>
+
+        <div class="mb-4" id="audioBitrateGroup">
+          <label for="audioBitrateKbps" class="form-label">Bitrate de áudio (kbps)</label>
+          <select class="form-select" id="audioBitrateKbps" name="audio_bitrate_kbps">
+            <option value="automatic" {% if output_file_defaults.audio_bitrate_kbps == 'automatic' %}selected{% endif %}>Automático</option>
+            <option value="16" {% if output_file_defaults.audio_bitrate_kbps == 16 %}selected{% endif %}>16</option>
+            <option value="24" {% if output_file_defaults.audio_bitrate_kbps == 24 %}selected{% endif %}>24</option>
+            <option value="32" {% if output_file_defaults.audio_bitrate_kbps == 32 %}selected{% endif %}>32</option>
+            <option value="48" {% if output_file_defaults.audio_bitrate_kbps == 48 %}selected{% endif %}>48</option>
+            <option value="64" {% if output_file_defaults.audio_bitrate_kbps == 64 %}selected{% endif %}>64</option>
+            <option value="96" {% if output_file_defaults.audio_bitrate_kbps == 96 %}selected{% endif %}>96</option>
+            <option value="128" {% if output_file_defaults.audio_bitrate_kbps == 128 %}selected{% endif %}>128</option>
+            <option value="160" {% if output_file_defaults.audio_bitrate_kbps == 160 %}selected{% endif %}>160</option>
+            <option value="192" {% if output_file_defaults.audio_bitrate_kbps == 192 %}selected{% endif %}>192</option>
+          </select>
+        </div>
+
+        <button type="submit" id="saveOutputFileSettingsButton" class="btn btn-primary">Save</button>
+      </form>
+    </div>
+  </div>
+</div>
+
+<script>
+  function updateOutputFileSettingsFormState() {
+    const outputModeAudio = document.getElementById('outputModeAudio')?.checked;
+    const videoResolutionGroup = document.getElementById('videoResolutionGroup');
+    const videoResolutionSelect = document.getElementById('videoResolution');
+    const audioBitrateGroup = document.getElementById('audioBitrateGroup');
+    const audioBitrateSelect = document.getElementById('audioBitrateKbps');
+
+    if (videoResolutionGroup && videoResolutionSelect) {
+      videoResolutionGroup.style.display = outputModeAudio ? 'none' : 'block';
+    }
+
+    if (audioBitrateGroup && audioBitrateSelect) {
+      audioBitrateGroup.style.display = outputModeAudio ? 'block' : 'none';
+    }
+  }
+
+  function initializeOutputFileSettingsForm() {
+    document.querySelectorAll('input[name="output_mode"]').forEach(function(el) {
+      el.addEventListener('change', updateOutputFileSettingsFormState);
+    });
+    updateOutputFileSettingsFormState();
+  }
+
+  document.addEventListener('DOMContentLoaded', initializeOutputFileSettingsForm);
+  document.addEventListener('htmx:afterSwap', initializeOutputFileSettingsForm);
+</script>
+
+{% endblock %}

@@ -46,6 +46,10 @@ def transform_diarized_json_to_schema(result):
     return transcription
 
 
+def transcription_conversion_sample_rate_override(utterance):
+    return utterance.recording.bot.transcription_runtime_conversion_sample_rate_override()
+
+
 def get_transcription(utterance):
     try:
         # Regular transcription providers that support async transcription
@@ -148,7 +152,11 @@ def get_transcription_via_gladia(utterance):
 
     upload_url = "https://api.gladia.io/v2/upload"
 
-    payload_mp3 = pcm_to_mp3(utterance.get_audio_blob().tobytes(), sample_rate=utterance.get_sample_rate())
+    payload_mp3 = pcm_to_mp3(
+        utterance.get_audio_blob().tobytes(),
+        sample_rate=utterance.get_sample_rate(),
+        output_sample_rate=transcription_conversion_sample_rate_override(utterance),
+    )
     headers = {
         "x-gladia-key": gladia_credentials["api_key"],
     }
@@ -318,7 +326,11 @@ def get_transcription_via_openai(utterance):
         return {"transcript": ""}, None
 
     # Convert PCM audio to MP3
-    payload_mp3 = pcm_to_mp3(utterance.get_audio_blob().tobytes(), sample_rate=utterance.get_sample_rate())
+    payload_mp3 = pcm_to_mp3(
+        utterance.get_audio_blob().tobytes(),
+        sample_rate=utterance.get_sample_rate(),
+        output_sample_rate=transcription_conversion_sample_rate_override(utterance),
+    )
 
     # Prepare the request for OpenAI's transcription API
     base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
@@ -366,7 +378,11 @@ def get_transcription_via_openai(utterance):
 
 def get_transcription_via_assemblyai(utterance):
     return get_transcription_via_assemblyai_from_mp3(
-        retrieve_mp3_data_callback=lambda: pcm_to_mp3(utterance.get_audio_blob().tobytes(), sample_rate=utterance.get_sample_rate()),
+        retrieve_mp3_data_callback=lambda: pcm_to_mp3(
+            utterance.get_audio_blob().tobytes(),
+            sample_rate=utterance.get_sample_rate(),
+            output_sample_rate=transcription_conversion_sample_rate_override(utterance),
+        ),
         duration_ms=utterance.duration_ms,
         identifier=f"utterance {utterance.id}",
         transcription_settings=utterance.transcription_settings,
@@ -462,7 +478,11 @@ def get_transcription_via_elevenlabs(utterance):
         return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND, "error": "api_key not in credentials"}
 
     # Convert PCM audio to MP3 for ElevenLabs
-    payload_mp3 = pcm_to_mp3(utterance.get_audio_blob().tobytes(), sample_rate=utterance.get_sample_rate())
+    payload_mp3 = pcm_to_mp3(
+        utterance.get_audio_blob().tobytes(),
+        sample_rate=utterance.get_sample_rate(),
+        output_sample_rate=transcription_conversion_sample_rate_override(utterance),
+    )
 
     # Prepare the request for ElevenLabs speech-to-text API
     url = "https://api.elevenlabs.io/v1/speech-to-text"
@@ -534,7 +554,11 @@ def get_transcription_via_custom_async(utterance):
     # Get additional properties from settings
     additional_props = transcription_settings.custom_async_additional_props()
 
-    payload_mp3 = pcm_to_mp3(utterance.get_audio_blob().tobytes(), sample_rate=utterance.get_sample_rate())
+    payload_mp3 = pcm_to_mp3(
+        utterance.get_audio_blob().tobytes(),
+        sample_rate=utterance.get_sample_rate(),
+        output_sample_rate=transcription_conversion_sample_rate_override(utterance),
+    )
 
     files = {"audio": ("audio.mp3", payload_mp3, "audio/mpeg")}
 

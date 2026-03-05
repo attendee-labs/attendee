@@ -111,6 +111,24 @@
                                 onclick="setActiveLink(this)">
                                     <i class="bi bi-card-text"></i> Project
                                 </a>
+                                <a class="nav-link ps-4" 
+                                hx-get="{% url 'projects:project-transcription-settings' project.object_id %}" 
+                                hx-select="#content"
+                                hx-target="#content"
+                                hx-swap="outerHTML"
+                                hx-push-url="true"
+                                onclick="setActiveLink(this)">
+                                    <i class="bi bi-mic"></i> Transcription
+                                </a>
+                                <a class="nav-link ps-4" 
+                                hx-get="{% url 'projects:project-output-file-settings' project.object_id %}" 
+                                hx-select="#content"
+                                hx-target="#content"
+                                hx-swap="outerHTML"
+                                hx-push-url="true"
+                                onclick="setActiveLink(this)">
+                                    <i class="bi bi-file-earmark-music"></i> Output File
+                                </a>
                             {% endif %}
                         </div>
                     </div>

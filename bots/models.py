@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 import math
 import os
 import secrets
@@ -23,6 +24,13 @@ from bots.bot_pod_creator.bot_pod_spec import BotPodSpecType
 from bots.storage import StorageAlias, download_blob_from_remote_storage, remote_storage_url
 from bots.webhook_utils import trigger_webhook
 
+logger = logging.getLogger(__name__)
+
+TRANSCRIPTION_DEFAULT_MODES = ("automatic", "custom")
+TRANSCRIPTION_CONVERSION_SAMPLE_RATE_OPTIONS = (8000, 16000, 32000, 48000)
+OUTPUT_FILE_MODES = ("video", "audio")
+OUTPUT_FILE_AUDIO_BITRATE_OPTIONS_KBPS = (16, 24, 32, 48, 64, 96, 128, 160, 192)
+
 
 class Project(models.Model):
     name = models.CharField(max_length=255)
@@ -33,6 +41,8 @@ class Project(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    transcription_defaults = models.JSONField(default=dict)
+    output_file_defaults = models.JSONField(default=dict)
 
     @classmethod
     def accessible_to(cls, user):
@@ -47,6 +57,158 @@ class Project(models.Model):
 
     def concurrent_bots_limit(self):
         return int(os.getenv("CONCURRENT_BOTS_LIMIT", 2500))
+
+    def _apply_transcription_defaults(self, defaults: dict, values: dict | None, source: str):
+        if not isinstance(values, dict):
+            if values is not None:
+                logger.warning(f"Ignoring non-object transcription defaults from {source}")
+            return
+
+        silence_mode = values.get("silence_closure_mode")
+        if silence_mode in TRANSCRIPTION_DEFAULT_MODES:
+            defaults["silence_closure_mode"] = silence_mode
+        elif silence_mode is not None:
+            logger.warning(f"Ignoring invalid silence_closure_mode from {source}: {silence_mode}")
+
+        silence_seconds = values.get("silence_closure_seconds")
+        if silence_seconds is not None:
+            try:
+                silence_seconds = float(silence_seconds)
+                if 0.5 <= silence_seconds <= 15:
+                    defaults["silence_closure_seconds"] = silence_seconds
+                else:
+                    logger.warning(f"Ignoring invalid silence_closure_seconds from {source}: {silence_seconds}")
+            except (TypeError, ValueError):
+                logger.warning(f"Ignoring non-numeric silence_closure_seconds from {source}: {silence_seconds}")
+
+        max_segment_mode = values.get("max_segment_mode")
+        if max_segment_mode in TRANSCRIPTION_DEFAULT_MODES:
+            defaults["max_segment_mode"] = max_segment_mode
+        elif max_segment_mode is not None:
+            logger.warning(f"Ignoring invalid max_segment_mode from {source}: {max_segment_mode}")
+
+        max_segment_seconds = values.get("max_segment_seconds")
+        if max_segment_seconds is not None:
+            try:
+                max_segment_seconds = int(max_segment_seconds)
+                if max_segment_seconds >= 1:
+                    defaults["max_segment_seconds"] = max_segment_seconds
+                else:
+                    logger.warning(f"Ignoring invalid max_segment_seconds from {source}: {max_segment_seconds}")
+            except (TypeError, ValueError):
+                logger.warning(f"Ignoring non-integer max_segment_seconds from {source}: {max_segment_seconds}")
+
+        conversion_sample_rate = values.get("conversion_sample_rate")
+        if conversion_sample_rate == "automatic":
+            defaults["conversion_sample_rate"] = "automatic"
+        elif conversion_sample_rate is not None:
+            try:
+                conversion_sample_rate = int(conversion_sample_rate)
+                if conversion_sample_rate in TRANSCRIPTION_CONVERSION_SAMPLE_RATE_OPTIONS:
+                    defaults["conversion_sample_rate"] = conversion_sample_rate
+                else:
+                    logger.warning(f"Ignoring invalid conversion_sample_rate from {source}: {conversion_sample_rate}")
+            except (TypeError, ValueError):
+                logger.warning(f"Ignoring non-integer conversion_sample_rate from {source}: {conversion_sample_rate}")
+
+    def effective_transcription_defaults(self):
+        defaults = {
+            "silence_closure_mode": "automatic",
+            "silence_closure_seconds": None,
+            "max_segment_mode": "automatic",
+            "max_segment_seconds": None,
+            "conversion_sample_rate": "automatic",
+        }
+
+        self._apply_transcription_defaults(
+            defaults,
+            {
+                "silence_closure_mode": os.getenv("BOT_DEFAULT_TRANSCRIPTION_SILENCE_MODE"),
+                "silence_closure_seconds": os.getenv("BOT_DEFAULT_TRANSCRIPTION_SILENCE_SECONDS"),
+                "max_segment_mode": os.getenv("BOT_DEFAULT_TRANSCRIPTION_MAX_SEGMENT_MODE"),
+                "max_segment_seconds": os.getenv("BOT_DEFAULT_TRANSCRIPTION_MAX_SEGMENT_SECONDS"),
+                "conversion_sample_rate": os.getenv("BOT_DEFAULT_TRANSCRIPTION_CONVERSION_SAMPLE_RATE"),
+            },
+            "environment",
+        )
+        self._apply_transcription_defaults(defaults, self.transcription_defaults, "project")
+
+        if defaults["silence_closure_mode"] != "custom":
+            defaults["silence_closure_seconds"] = None
+        if defaults["silence_closure_mode"] == "custom" and defaults["silence_closure_seconds"] is None:
+            logger.warning("Falling back to automatic silence closure because custom silence_closure_seconds was not set")
+            defaults["silence_closure_mode"] = "automatic"
+
+        if defaults["max_segment_mode"] != "custom":
+            defaults["max_segment_seconds"] = None
+        if defaults["max_segment_mode"] == "custom" and defaults["max_segment_seconds"] is None:
+            logger.warning("Falling back to automatic max segment because custom max_segment_seconds was not set")
+            defaults["max_segment_mode"] = "automatic"
+
+        return defaults
+
+    def _apply_output_file_defaults(self, defaults: dict, values: dict | None, source: str):
+        if not isinstance(values, dict):
+            if values is not None:
+                logger.warning(f"Ignoring non-object output file defaults from {source}")
+            return
+
+        output_mode = values.get("output_mode")
+        if output_mode in OUTPUT_FILE_MODES:
+            defaults["output_mode"] = output_mode
+        elif output_mode is not None:
+            logger.warning(f"Ignoring invalid output_mode from {source}: {output_mode}")
+
+        video_resolution = values.get("video_resolution")
+        if video_resolution in RecordingResolutions.values:
+            defaults["video_resolution"] = video_resolution
+        elif video_resolution is not None:
+            logger.warning(f"Ignoring invalid video_resolution from {source}: {video_resolution}")
+
+        audio_bitrate_kbps = values.get("audio_bitrate_kbps")
+        if audio_bitrate_kbps == "automatic":
+            defaults["audio_bitrate_kbps"] = "automatic"
+        elif audio_bitrate_kbps is not None:
+            try:
+                audio_bitrate_kbps = int(audio_bitrate_kbps)
+                if audio_bitrate_kbps in OUTPUT_FILE_AUDIO_BITRATE_OPTIONS_KBPS:
+                    defaults["audio_bitrate_kbps"] = audio_bitrate_kbps
+                else:
+                    logger.warning(f"Ignoring invalid audio_bitrate_kbps from {source}: {audio_bitrate_kbps}")
+            except (TypeError, ValueError):
+                logger.warning(f"Ignoring non-integer audio_bitrate_kbps from {source}: {audio_bitrate_kbps}")
+
+    def effective_output_file_defaults(self):
+        defaults = {
+            "output_mode": "video",
+            "video_resolution": RecordingResolutions.HD_1080P,
+            "audio_bitrate_kbps": "automatic",
+        }
+
+        self._apply_output_file_defaults(
+            defaults,
+            {
+                "output_mode": os.getenv("BOT_DEFAULT_OUTPUT_MODE"),
+                "video_resolution": os.getenv("BOT_DEFAULT_OUTPUT_VIDEO_RESOLUTION"),
+                "audio_bitrate_kbps": os.getenv("BOT_DEFAULT_OUTPUT_AUDIO_BITRATE_KBPS"),
+            },
+            "environment",
+        )
+        self._apply_output_file_defaults(defaults, self.output_file_defaults, "project")
+        return defaults
+
+    def transcription_runtime_overrides(self):
+        defaults = self.effective_transcription_defaults()
+        overrides = {}
+
+        if defaults["silence_closure_mode"] == "custom":
+            overrides["silence_duration_seconds_override"] = defaults["silence_closure_seconds"]
+        if defaults["max_segment_mode"] == "custom":
+            overrides["max_segment_seconds_override"] = defaults["max_segment_seconds"]
+        if defaults["conversion_sample_rate"] != "automatic":
+            overrides["conversion_sample_rate_override"] = defaults["conversion_sample_rate"]
+
+        return overrides
 
     def save(self, *args, **kwargs):
         if not self.object_id:
@@ -955,6 +1117,74 @@ class Bot(models.Model):
         if recording_settings is None:
             recording_settings = {}
         return recording_settings.get("view", RecordingViews.SPEAKER_VIEW)
+
+    def recording_audio_bitrate_kbps(self):
+        recording_settings = self.settings.get("recording_settings", {})
+        if recording_settings is None:
+            recording_settings = {}
+
+        audio_bitrate_kbps = recording_settings.get("audio_bitrate_kbps")
+        if audio_bitrate_kbps is None:
+            return None
+
+        if isinstance(audio_bitrate_kbps, str):
+            if audio_bitrate_kbps.isdigit():
+                audio_bitrate_kbps = int(audio_bitrate_kbps)
+            else:
+                return None
+
+        if isinstance(audio_bitrate_kbps, int) and audio_bitrate_kbps in OUTPUT_FILE_AUDIO_BITRATE_OPTIONS_KBPS:
+            return audio_bitrate_kbps
+
+        return None
+
+    def transcription_runtime_settings(self):
+        transcription_runtime_settings = self.settings.get("transcription_runtime_settings", {})
+        if transcription_runtime_settings is None:
+            transcription_runtime_settings = {}
+        return transcription_runtime_settings
+
+    def transcription_runtime_silence_duration_seconds_override(self):
+        value = self.transcription_runtime_settings().get("silence_duration_seconds_override")
+        if value is None:
+            return None
+
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            return None
+
+        if 0.5 <= value <= 15:
+            return value
+        return None
+
+    def transcription_runtime_max_segment_seconds_override(self):
+        value = self.transcription_runtime_settings().get("max_segment_seconds_override")
+        if value is None:
+            return None
+
+        try:
+            value = int(value)
+        except (TypeError, ValueError):
+            return None
+
+        if value >= 1:
+            return value
+        return None
+
+    def transcription_runtime_conversion_sample_rate_override(self):
+        value = self.transcription_runtime_settings().get("conversion_sample_rate_override")
+        if value is None:
+            return None
+
+        try:
+            value = int(value)
+        except (TypeError, ValueError):
+            return None
+
+        if value in TRANSCRIPTION_CONVERSION_SAMPLE_RATE_OPTIONS:
+            return value
+        return None
 
     def save_resource_snapshots(self):
         save_resource_snapshots_env_var_value = os.getenv("SAVE_BOT_RESOURCE_SNAPSHOTS", "false")
@@ -2019,6 +2249,7 @@ class RecordingTypes(models.IntegerChoices):
 class RecordingResolutions(models.TextChoices):
     HD_1080P = "1080p"
     HD_720P = "720p"
+    SD_480P = "480p"
 
     @classmethod
     def get_dimensions(cls, value):
@@ -2026,6 +2257,7 @@ class RecordingResolutions(models.TextChoices):
         dimensions = {
             cls.HD_1080P: (1920, 1080),
             cls.HD_720P: (1280, 720),
+            cls.SD_480P: (854, 480),
         }
         return dimensions.get(value)
 
