@@ -1,4 +1,5 @@
 import logging
+import os
 import time
 
 import numpy as np
@@ -76,12 +77,18 @@ class PerParticipantStreamingAudioInputManager:
         self.transcription_provider = transcription_provider
         self.streaming_transcribers = {}
         self.last_nonsilent_audio_time = {}
+        self.streaming_noise_floor_by_speaker = {}
 
         self.project = bot.project
         self.bot = bot
         self.deepgram_api_key = self.get_deepgram_api_key()
         self.kyutai_server_url, self.kyutai_api_key = self.get_kyutai_server_url_and_api_key()
         self.openai_api_key = self.get_openai_api_key()
+        self.streaming_silence_min_normalized_rms = self.get_streaming_silence_min_normalized_rms()
+        self.streaming_silence_max_normalized_rms = self.get_streaming_silence_max_normalized_rms()
+        self.streaming_silence_noise_multiplier = self.get_streaming_silence_noise_multiplier()
+        self.streaming_silence_margin = self.get_streaming_silence_margin()
+        self.streaming_silence_ema_alpha = self.get_streaming_silence_ema_alpha()
 
         # Create utterance handler for providers that need it (like Kyutai)
         self.utterance_handler = DefaultUtteranceHandler(bot=bot, get_participant_callback=get_participant_callback, sample_rate=sample_rate)
@@ -90,6 +97,85 @@ class PerParticipantStreamingAudioInputManager:
         if calculate_normalized_rms(chunk_bytes) < 0.0025:
             return True
         return not self.vad.is_speech(chunk_bytes, self.sample_rate)
+
+    def get_streaming_silence_min_normalized_rms(self):
+        default_threshold = 0.006
+        configured_threshold = os.getenv(
+            "STREAMING_TRANSCRIPTION_SILENCE_MIN_NORMALIZED_RMS",
+            os.getenv("OPENAI_REALTIME_SILENCE_MIN_NORMALIZED_RMS", str(default_threshold)),
+        )
+        try:
+            threshold = float(configured_threshold)
+        except (TypeError, ValueError):
+            return default_threshold
+        return max(0.0, min(threshold, 1.0))
+
+    def get_streaming_silence_max_normalized_rms(self):
+        default_threshold = 0.05
+        configured_threshold = os.getenv("STREAMING_TRANSCRIPTION_SILENCE_MAX_NORMALIZED_RMS", str(default_threshold))
+        try:
+            threshold = float(configured_threshold)
+        except (TypeError, ValueError):
+            return default_threshold
+        return max(self.streaming_silence_min_normalized_rms, min(threshold, 1.0))
+
+    def get_streaming_silence_noise_multiplier(self):
+        default_multiplier = 2.2
+        configured_multiplier = os.getenv("STREAMING_TRANSCRIPTION_SILENCE_NOISE_MULTIPLIER", str(default_multiplier))
+        try:
+            multiplier = float(configured_multiplier)
+        except (TypeError, ValueError):
+            return default_multiplier
+        return max(1.0, min(multiplier, 10.0))
+
+    def get_streaming_silence_margin(self):
+        default_margin = 0.0015
+        configured_margin = os.getenv("STREAMING_TRANSCRIPTION_SILENCE_MARGIN", str(default_margin))
+        try:
+            margin = float(configured_margin)
+        except (TypeError, ValueError):
+            return default_margin
+        return max(0.0, min(margin, 1.0))
+
+    def get_streaming_silence_ema_alpha(self):
+        default_alpha = 0.08
+        configured_alpha = os.getenv("STREAMING_TRANSCRIPTION_SILENCE_EMA_ALPHA", str(default_alpha))
+        try:
+            alpha = float(configured_alpha)
+        except (TypeError, ValueError):
+            return default_alpha
+        return max(0.01, min(alpha, 1.0))
+
+    def get_streaming_silence_threshold_for_speaker(self, speaker_id):
+        noise_floor = self.streaming_noise_floor_by_speaker.get(speaker_id, 0.0)
+        adaptive_threshold = (noise_floor * self.streaming_silence_noise_multiplier) + self.streaming_silence_margin
+        return max(
+            self.streaming_silence_min_normalized_rms,
+            min(adaptive_threshold, self.streaming_silence_max_normalized_rms),
+        )
+
+    def update_streaming_noise_floor(self, speaker_id, normalized_rms):
+        previous_noise_floor = self.streaming_noise_floor_by_speaker.get(speaker_id)
+        if previous_noise_floor is None:
+            self.streaming_noise_floor_by_speaker[speaker_id] = normalized_rms
+            return
+
+        alpha = self.streaming_silence_ema_alpha
+        self.streaming_noise_floor_by_speaker[speaker_id] = (1 - alpha) * previous_noise_floor + alpha * normalized_rms
+
+    def streaming_silence_detected(self, speaker_id, chunk_bytes):
+        normalized_rms = calculate_normalized_rms(chunk_bytes)
+        dynamic_threshold = self.get_streaming_silence_threshold_for_speaker(speaker_id)
+
+        if normalized_rms < dynamic_threshold:
+            self.update_streaming_noise_floor(speaker_id, normalized_rms)
+            return True
+
+        is_speech = self.vad.is_speech(chunk_bytes, self.sample_rate)
+        if not is_speech:
+            self.update_streaming_noise_floor(speaker_id, normalized_rms)
+            return True
+        return False
 
     def get_deepgram_api_key(self):
         deepgram_credentials_record = self.project.credentials.filter(credential_type=Credentials.CredentialTypes.DEEPGRAM).first()
@@ -215,44 +301,21 @@ class PerParticipantStreamingAudioInputManager:
                 logger.warning("No OpenAI API key available")
                 return
 
-        # For Kyutai: Send all audio continuously, let semantic VAD handle it
-        # For OpenAI realtime: Send all audio continuously and let server VAD segment turns
-        # For Deepgram: Use pre-filtering to reduce API costs
-        if self.transcription_provider in [TranscriptionProviders.KYUTAI, TranscriptionProviders.OPENAI]:
-            # Still detect silence for monitoring purposes, but send all audio
-            audio_is_silent = self.silence_detected(chunk_bytes)
+        audio_is_silent = self.streaming_silence_detected(speaker_id, chunk_bytes)
+        if audio_is_silent:
+            return
 
-            if not audio_is_silent:
-                self.last_nonsilent_audio_time[speaker_id] = time.time()
-
-            # Create transcriber if needed
+        try:
+            self.last_nonsilent_audio_time[speaker_id] = time.time()
             streaming_transcriber = self.find_or_create_streaming_transcriber_for_speaker(speaker_id)
-            if streaming_transcriber:
-                # Send audio
-                try:
-                    streaming_transcriber.send(chunk_bytes)
-                except Exception as e:
-                    participant_info = self.get_participant_callback(speaker_id)
-                    participant_name = participant_info.get("participant_full_name", speaker_id) if participant_info else speaker_id
-                    logger.info(f"Recreating transcriber for speaker {speaker_id} ({participant_name}) after connection failure: {e}")
-                    # Remove failed transcriber so it will be recreated on next chunk
-                    if speaker_id in self.streaming_transcribers:
-                        del self.streaming_transcribers[speaker_id]
-        else:
-            # Deepgram and other providers: use VAD pre-filtering
-            audio_is_silent = self.silence_detected(chunk_bytes)
-
-            if not audio_is_silent:
-                self.last_nonsilent_audio_time[speaker_id] = time.time()
-
-            if audio_is_silent and speaker_id not in self.streaming_transcribers:
-                return
-
-            streaming_transcriber = self.find_or_create_streaming_transcriber_for_speaker(speaker_id)
-
-            # Only send audio if transcriber was successfully created
             if streaming_transcriber:
                 streaming_transcriber.send(chunk_bytes)
+        except Exception as e:
+            participant_info = self.get_participant_callback(speaker_id)
+            participant_name = participant_info.get("participant_full_name", speaker_id) if participant_info else speaker_id
+            logger.info(f"Recreating transcriber for speaker {speaker_id} ({participant_name}) after connection failure: {e}")
+            if speaker_id in self.streaming_transcribers:
+                del self.streaming_transcribers[speaker_id]
 
     def monitor_transcription(self):
         speakers_to_remove = []
@@ -279,6 +342,8 @@ class PerParticipantStreamingAudioInputManager:
             # Also clean up timing data
             if speaker_id in self.last_nonsilent_audio_time:
                 del self.last_nonsilent_audio_time[speaker_id]
+            if speaker_id in self.streaming_noise_floor_by_speaker:
+                del self.streaming_noise_floor_by_speaker[speaker_id]
 
         # If Number of streaming transcribers is greater than 4,
         # stop the oldest one
