@@ -216,13 +216,9 @@ class Command(BaseCommand):
                 logger.info("Shutdown requested, stopping pod creation")
                 break
 
-            bot_runner_uuid = str(uuid.uuid4())
+            bot_runner_uuid = uuid.uuid4().hex[:12]
             try:
-                result = (bot_pod_creator.create_bot_pod(
-                    bot_id=None, 
-                    bot_runner_uuid=bot_runner_uuid, 
-                    add_webpage_streamer=os.getenv("ADD_WEBPAGE_STREAMER_TO_BOT_RUNNER_PODS", "false") == "true"),
-                )
+                result = (bot_pod_creator.create_bot_pod(bot_id=None, bot_runner_uuid=bot_runner_uuid, add_webpage_streamer=os.getenv("ADD_WEBPAGE_STREAMER_TO_BOT_RUNNER_PODS", "false") == "true"),)
 
                 if result.get("created"):
                     logger.info(
