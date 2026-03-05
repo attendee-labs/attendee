@@ -221,8 +221,14 @@ class BotPodCreator:
         memory_limit = os.getenv("BOT_MEMORY_LIMIT", "4Gi")
         ephemeral_storage_request = os.getenv("BOT_EPHEMERAL_STORAGE_REQUEST", "10Gi")
 
+        bot_pod_env_vars = [
+                            # Env var so that the bot pod can know that it is a bot pod
+                            client.V1EnvVar(name="IS_A_BOT_POD", value="true"),
+                        ]
+
         if self.bot_runner_uuid:
             args = ["python", "manage.py", "wait_for_bot_runner_assignment"]
+            bot_pod_env_vars.append(client.V1EnvVar(name="BOT_RUNNER_UUID", value=self.bot_runner_uuid))
         else:
             args = ["python", "manage.py", "run_bot", "--botid", str(self.bot_id)]
 
@@ -255,10 +261,7 @@ class BotPodCreator:
                                 )
                             )
                         ],
-                        env=[
-                            # Env var so that the bot pod can know that it is a bot pod
-                            client.V1EnvVar(name="IS_A_BOT_POD", value="true"),
-                        ],
+                        env=bot_pod_env_vars,
                         security_context = self.get_bot_container_security_context(),
                         volume_mounts=self.get_bot_container_volume_mounts(),
                     )
@@ -391,12 +394,12 @@ class BotPodCreator:
             # Create specific labels for the webpage streamer pod
             webpage_streamer_labels = {
                 "app": "webpage-streamer",
-                "bot-id": bot_name
+                "bot-id": bot_pod_name
             }
             
             webpage_streamer_pod = client.V1Pod(
                 metadata=client.V1ObjectMeta(
-                    name=f"{bot_name}-webpage-streamer",
+                    name=f"{bot_pod_name}-webpage-streamer",
                     namespace=self.webpage_streamer_namespace,
                     labels=webpage_streamer_labels,
                     annotations=annotations
@@ -443,7 +446,7 @@ class BotPodCreator:
                     ),
                     spec=client.V1ServiceSpec(
                         # Selector is used to connect the service to the streaming pod
-                        selector={"app": "webpage-streamer", "bot-id": bot_name},
+                        selector={"app": "webpage-streamer", "bot-id": bot_pod_name},
                         ports=[client.V1ServicePort(name="http", port=8000, target_port=8000)],
                         type="ClusterIP",
                     ),
