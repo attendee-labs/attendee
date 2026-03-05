@@ -80,6 +80,40 @@ class AdminRoleIntegrationTest(TransactionTestCase):
 
         self.assertEqual(response.status_code, 403)
 
+    def test_project_transcription_settings_view_admin_access(self):
+        """Test that admin users can access transcription project settings"""
+        self.client.force_login(self.admin_user)
+
+        response = self.client.get(reverse("bots:project-transcription-settings", kwargs={"object_id": self.project.object_id}))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Transcription")
+
+    def test_project_transcription_settings_view_non_admin_denied(self):
+        """Test that non-admin users cannot access transcription project settings"""
+        self.client.force_login(self.regular_user)
+
+        response = self.client.get(reverse("bots:project-transcription-settings", kwargs={"object_id": self.project.object_id}))
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_project_output_file_settings_view_admin_access(self):
+        """Test that admin users can access output file project settings"""
+        self.client.force_login(self.admin_user)
+
+        response = self.client.get(reverse("bots:project-output-file-settings", kwargs={"object_id": self.project.object_id}))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Output File")
+
+    def test_project_output_file_settings_view_non_admin_denied(self):
+        """Test that non-admin users cannot access output file project settings"""
+        self.client.force_login(self.regular_user)
+
+        response = self.client.get(reverse("bots:project-output-file-settings", kwargs={"object_id": self.project.object_id}))
+
+        self.assertEqual(response.status_code, 403)
+
     def test_edit_project_admin_access(self):
         """Test that admin users can edit projects"""
         self.client.force_login(self.admin_user)
@@ -89,6 +123,51 @@ class AdminRoleIntegrationTest(TransactionTestCase):
         self.assertEqual(response.status_code, 200)
         self.project.refresh_from_db()
         self.assertEqual(self.project.name, "Updated Project Name")
+
+    def test_edit_project_transcription_settings_admin_access(self):
+        """Test that admin users can edit project transcription defaults"""
+        self.client.force_login(self.admin_user)
+
+        response = self.client.put(
+            reverse("bots:project-transcription-settings", kwargs={"object_id": self.project.object_id}),
+            data="transcription_mode=automatic&silence_closure_mode=custom&silence_closure_seconds=1.5&max_segment_mode=custom&max_segment_seconds=90&conversion_sample_rate=16000",
+            content_type="application/x-www-form-urlencoded",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.project.refresh_from_db()
+        self.assertEqual(
+            self.project.transcription_defaults,
+            {
+                "transcription_mode": "automatic",
+                "silence_closure_mode": "custom",
+                "silence_closure_seconds": 1.5,
+                "max_segment_mode": "custom",
+                "max_segment_seconds": 90,
+                "conversion_sample_rate": 16000,
+            },
+        )
+
+    def test_edit_project_output_file_settings_admin_access(self):
+        """Test that admin users can edit project output file defaults"""
+        self.client.force_login(self.admin_user)
+
+        response = self.client.put(
+            reverse("bots:project-output-file-settings", kwargs={"object_id": self.project.object_id}),
+            data="output_mode=audio&video_resolution=480p&audio_bitrate_kbps=96",
+            content_type="application/x-www-form-urlencoded",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.project.refresh_from_db()
+        self.assertEqual(
+            self.project.output_file_defaults,
+            {
+                "output_mode": "audio",
+                "video_resolution": "480p",
+                "audio_bitrate_kbps": 96,
+            },
+        )
 
     def test_edit_project_non_admin_denied(self):
         """Test that non-admin users cannot edit projects"""
@@ -100,6 +179,60 @@ class AdminRoleIntegrationTest(TransactionTestCase):
         self.assertEqual(response.status_code, 403)
         self.project.refresh_from_db()
         self.assertEqual(self.project.name, original_name)
+
+    def test_edit_project_transcription_settings_non_admin_denied(self):
+        """Test that non-admin users cannot edit project transcription defaults"""
+        self.client.force_login(self.regular_user)
+        original_defaults = self.project.transcription_defaults
+
+        response = self.client.put(
+            reverse("bots:project-transcription-settings", kwargs={"object_id": self.project.object_id}),
+            data="transcription_mode=automatic&silence_closure_mode=custom&silence_closure_seconds=1.5&max_segment_mode=custom&max_segment_seconds=90&conversion_sample_rate=16000",
+            content_type="application/x-www-form-urlencoded",
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.project.refresh_from_db()
+        self.assertEqual(self.project.transcription_defaults, original_defaults)
+
+    def test_edit_project_output_file_settings_non_admin_denied(self):
+        """Test that non-admin users cannot edit project output file defaults"""
+        self.client.force_login(self.regular_user)
+        original_defaults = self.project.output_file_defaults
+
+        response = self.client.put(
+            reverse("bots:project-output-file-settings", kwargs={"object_id": self.project.object_id}),
+            data="output_mode=audio&video_resolution=480p&audio_bitrate_kbps=96",
+            content_type="application/x-www-form-urlencoded",
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.project.refresh_from_db()
+        self.assertEqual(self.project.output_file_defaults, original_defaults)
+
+    def test_edit_project_transcription_settings_validation_error(self):
+        """Test transcription settings validation for out-of-range values"""
+        self.client.force_login(self.admin_user)
+
+        response = self.client.put(
+            reverse("bots:project-transcription-settings", kwargs={"object_id": self.project.object_id}),
+            data="transcription_mode=realtime&silence_closure_mode=custom&silence_closure_seconds=99&max_segment_mode=custom&max_segment_seconds=0&conversion_sample_rate=12345",
+            content_type="application/x-www-form-urlencoded",
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_edit_project_output_file_settings_validation_error(self):
+        """Test output file settings validation for invalid bitrate"""
+        self.client.force_login(self.admin_user)
+
+        response = self.client.put(
+            reverse("bots:project-output-file-settings", kwargs={"object_id": self.project.object_id}),
+            data="output_mode=audio&video_resolution=480p&audio_bitrate_kbps=999",
+            content_type="application/x-www-form-urlencoded",
+        )
+
+        self.assertEqual(response.status_code, 400)
 
     def test_project_billing_admin_access(self):
         """Test that admin users can access billing"""
@@ -189,6 +322,8 @@ class AdminRoleIntegrationTest(TransactionTestCase):
         admin_endpoints = [
             ("bots:create-project", {}),
             ("bots:project-project", {"object_id": self.project.object_id}),
+            ("bots:project-transcription-settings", {"object_id": self.project.object_id}),
+            ("bots:project-output-file-settings", {"object_id": self.project.object_id}),
             ("bots:project-billing", {"object_id": self.project.object_id}),
             ("bots:project-team", {"object_id": self.project.object_id}),
             ("bots:invite-user", {"object_id": self.project.object_id}),

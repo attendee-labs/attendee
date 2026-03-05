@@ -28,6 +28,7 @@ class GstreamerPipeline:
         on_new_sample_callback,
         video_frame_size,
         audio_format,
+        audio_bitrate_bps,
         output_format,
         sink_type,
         file_location=None,
@@ -35,6 +36,7 @@ class GstreamerPipeline:
         self.on_new_sample_callback = on_new_sample_callback
         self.video_frame_size = video_frame_size
         self.audio_format = audio_format
+        self.audio_bitrate_bps = audio_bitrate_bps
         self.output_format = output_format
         self.sink_type = sink_type
         self.file_location = file_location
@@ -56,6 +58,16 @@ class GstreamerPipeline:
 
         self.queue_drops = {}
         self.last_reported_drops = {}
+
+    def audio_only_encoder_string(self):
+        audio_bitrate_kbps = max(int(self.audio_bitrate_bps / 1000), 8)
+        if Gst.ElementFactory.find("lamemp3enc"):
+            return f"lamemp3enc target=bitrate cbr=true bitrate={audio_bitrate_kbps} ! "
+        if Gst.ElementFactory.find("avenc_mp3"):
+            return f"avenc_mp3 bitrate={self.audio_bitrate_bps} ! "
+
+        logger.warning("No MP3 encoder available in GStreamer, falling back to flacenc. audio_bitrate_bps will be ignored.")
+        return "flacenc ! "
 
     def on_new_sample_from_appsink(self, sink):
         """Handle new samples from the appsink"""
@@ -103,7 +115,7 @@ class GstreamerPipeline:
         if self.output_format == self.OUTPUT_FORMAT_MP3:
             pipeline_str = (
                 f"{audio_source_string}"        # raw audio → …
-                "flacenc ! "
+                f"{self.audio_only_encoder_string()}"
                 f"{sink_string}"               # … → sink
             )
         else:
@@ -117,7 +129,7 @@ class GstreamerPipeline:
                 "queue name=q3 max-size-buffers=1000 max-size-bytes=100000000 max-size-time=0 ! "
                 f"{muxer_string} ! queue name=q4 ! {sink_string} "
                 f"{audio_source_string} "
-                "voaacenc bitrate=128000 ! "
+                f"voaacenc bitrate={self.audio_bitrate_bps} ! "
                 "queue name=q7 leaky=downstream max-size-buffers=1000000 max-size-bytes=100000000 max-size-time=0 ! "
                 "muxer. "
             )

@@ -1,0 +1,135 @@
+{% extends 'projects/sidebar.html' %}
+{% load bot_filters %}
+{% block content %}
+
+<div class="container mt-4">
+  <h2>Transcription</h2>
+
+  <div class="card mt-4">
+    <div class="card-body">
+      <form id="transcription-settings-form"
+            hx-put="{% url 'projects:project-transcription-settings' project.object_id %}"
+            hx-trigger="submit"
+            hx-swap="none"
+            hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+            hx-disabled-elt="#saveTranscriptionSettingsButton"
+            hx-on::after-request="if(event.detail.successful){window.location.reload();}">
+        {% csrf_token %}
+
+        <div class="mb-4">
+          <label for="transcriptionMode" class="form-label">Transcription mode</label>
+          <select class="form-select" id="transcriptionMode" name="transcription_mode">
+            <option value="automatic" {% if transcription_defaults.transcription_mode == 'automatic' %}selected{% endif %}>Automatic (current behavior)</option>
+            <option value="chunks" {% if transcription_defaults.transcription_mode == 'chunks' %}selected{% endif %}>Chunks</option>
+            <option value="realtime" {% if transcription_defaults.transcription_mode == 'realtime' %}selected{% endif %}>Realtime</option>
+          </select>
+          <div class="form-text">`Automatic` keeps the current logic. `Chunks` forces silence/size segmentation. `Realtime` forces the low-latency path.</div>
+        </div>
+
+        <div class="mb-4">
+          <label class="form-label">Silence closure</label>
+          <div class="form-check">
+            <input class="form-check-input" type="radio" name="silence_closure_mode" id="silenceModeAutomatic" value="automatic" {% if transcription_defaults.silence_closure_mode == 'automatic' %}checked{% endif %}>
+            <label class="form-check-label" for="silenceModeAutomatic">
+              Automatic
+            </label>
+          </div>
+          <div class="form-check">
+            <input class="form-check-input" type="radio" name="silence_closure_mode" id="silenceModeCustom" value="custom" {% if transcription_defaults.silence_closure_mode == 'custom' %}checked{% endif %}>
+            <label class="form-check-label" for="silenceModeCustom">
+              Custom
+            </label>
+          </div>
+          <div class="mt-3">
+            <label for="silenceClosureSeconds" class="form-label">Seconds: <span id="silenceClosureSecondsValue">{{ transcription_defaults.silence_closure_seconds|default_if_none:3 }}</span></label>
+            <input type="range"
+                   class="form-range"
+                   min="0.5"
+                   max="15"
+                   step="0.5"
+                   id="silenceClosureSeconds"
+                   name="silence_closure_seconds"
+                   value="{{ transcription_defaults.silence_closure_seconds|default_if_none:3 }}">
+          </div>
+        </div>
+
+        <div class="mb-4">
+          <label class="form-label">Maximum segment length</label>
+          <div class="form-check">
+            <input class="form-check-input" type="radio" name="max_segment_mode" id="maxSegmentModeAutomatic" value="automatic" {% if transcription_defaults.max_segment_mode == 'automatic' %}checked{% endif %}>
+            <label class="form-check-label" for="maxSegmentModeAutomatic">
+              Automatic
+            </label>
+          </div>
+          <div class="form-check">
+            <input class="form-check-input" type="radio" name="max_segment_mode" id="maxSegmentModeCustom" value="custom" {% if transcription_defaults.max_segment_mode == 'custom' %}checked{% endif %}>
+            <label class="form-check-label" for="maxSegmentModeCustom">
+              Custom
+            </label>
+          </div>
+          <div class="mt-3">
+            <label for="maxSegmentSeconds" class="form-label">Seconds</label>
+            <input type="number"
+                   class="form-control"
+                   min="1"
+                   step="1"
+                   id="maxSegmentSeconds"
+                   name="max_segment_seconds"
+                   value="{{ transcription_defaults.max_segment_seconds|default_if_none:90 }}">
+          </div>
+        </div>
+
+        <div class="mb-4">
+          <label for="conversionSampleRate" class="form-label">Conversion sample rate</label>
+          <select class="form-select" id="conversionSampleRate" name="conversion_sample_rate">
+            <option value="automatic" {% if transcription_defaults.conversion_sample_rate == 'automatic' %}selected{% endif %}>Automatic</option>
+            <option value="8000" {% if transcription_defaults.conversion_sample_rate == 8000 %}selected{% endif %}>8000</option>
+            <option value="16000" {% if transcription_defaults.conversion_sample_rate == 16000 %}selected{% endif %}>16000</option>
+            <option value="32000" {% if transcription_defaults.conversion_sample_rate == 32000 %}selected{% endif %}>32000</option>
+            <option value="48000" {% if transcription_defaults.conversion_sample_rate == 48000 %}selected{% endif %}>48000</option>
+          </select>
+        </div>
+
+        <button type="submit" id="saveTranscriptionSettingsButton" class="btn btn-primary">Save</button>
+      </form>
+    </div>
+  </div>
+</div>
+
+<script>
+  function updateTranscriptionSettingsFormState() {
+    const silenceModeCustom = document.getElementById('silenceModeCustom')?.checked;
+    const silenceRange = document.getElementById('silenceClosureSeconds');
+    if (silenceRange) {
+      silenceRange.disabled = !silenceModeCustom;
+    }
+
+    const maxSegmentModeCustom = document.getElementById('maxSegmentModeCustom')?.checked;
+    const maxSegmentInput = document.getElementById('maxSegmentSeconds');
+    if (maxSegmentInput) {
+      maxSegmentInput.disabled = !maxSegmentModeCustom;
+    }
+  }
+
+  function initializeTranscriptionSettingsForm() {
+    const silenceRange = document.getElementById('silenceClosureSeconds');
+    const silenceValue = document.getElementById('silenceClosureSecondsValue');
+
+    if (silenceRange && silenceValue) {
+      silenceRange.addEventListener('input', function() {
+        silenceValue.textContent = silenceRange.value;
+      });
+    }
+
+    document.querySelectorAll('input[name="silence_closure_mode"], input[name="max_segment_mode"]').forEach(function(el) {
+      el.addEventListener('change', updateTranscriptionSettingsFormState);
+    });
+
+    updateTranscriptionSettingsFormState();
+  }
+
+  document.addEventListener('DOMContentLoaded', initializeTranscriptionSettingsForm);
+  document.addEventListener('htmx:afterSwap', initializeTranscriptionSettingsForm);
+</script>
+
+{% endblock %}

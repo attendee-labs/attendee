@@ -40,11 +40,17 @@ from .models import (
     ParticipantEventTypes,
     Project,
     ProjectAccess,
+    RecordingResolutions,
     Recording,
     RecordingStates,
     RecordingTranscriptionStates,
     RecordingTypes,
     SessionTypes,
+    OUTPUT_FILE_AUDIO_BITRATE_OPTIONS_KBPS,
+    OUTPUT_FILE_MODES,
+    TRANSCRIPTION_CONVERSION_SAMPLE_RATE_OPTIONS,
+    TRANSCRIPTION_DEFAULT_MODES,
+    TRANSCRIPTION_PROCESSING_MODES,
     Utterance,
     WebhookDeliveryAttempt,
     WebhookDeliveryAttemptStatus,
@@ -898,6 +904,128 @@ class ProjectProjectView(AdminRequiredMixin, ProjectUrlContextMixin, View):
         context = self.get_project_context(object_id, project)
         context["users_with_access"] = project.users_with_access()
         return render(request, "projects/project_project.html", context)
+
+
+def normalize_transcription_defaults_from_data(data):
+    normalized = {
+        "transcription_mode": data.get("transcription_mode", "automatic"),
+        "silence_closure_mode": data.get("silence_closure_mode", "automatic"),
+        "silence_closure_seconds": None,
+        "max_segment_mode": data.get("max_segment_mode", "automatic"),
+        "max_segment_seconds": None,
+        "conversion_sample_rate": data.get("conversion_sample_rate", "automatic"),
+    }
+    errors = []
+
+    if normalized["transcription_mode"] not in TRANSCRIPTION_PROCESSING_MODES:
+        errors.append("transcription_mode must be automatic, chunks or realtime")
+
+    if normalized["silence_closure_mode"] not in TRANSCRIPTION_DEFAULT_MODES:
+        errors.append("silence_closure_mode must be automatic or custom")
+
+    if normalized["max_segment_mode"] not in TRANSCRIPTION_DEFAULT_MODES:
+        errors.append("max_segment_mode must be automatic or custom")
+
+    if normalized["silence_closure_mode"] == "custom":
+        try:
+            silence_closure_seconds = float(data.get("silence_closure_seconds"))
+            if silence_closure_seconds < 0.5 or silence_closure_seconds > 15:
+                errors.append("silence_closure_seconds must be between 0.5 and 15")
+            else:
+                normalized["silence_closure_seconds"] = silence_closure_seconds
+        except (TypeError, ValueError):
+            errors.append("silence_closure_seconds must be a number between 0.5 and 15")
+
+    if normalized["max_segment_mode"] == "custom":
+        try:
+            max_segment_seconds = int(data.get("max_segment_seconds"))
+            if max_segment_seconds < 1:
+                errors.append("max_segment_seconds must be at least 1")
+            else:
+                normalized["max_segment_seconds"] = max_segment_seconds
+        except (TypeError, ValueError):
+            errors.append("max_segment_seconds must be an integer greater than or equal to 1")
+
+    conversion_sample_rate = normalized["conversion_sample_rate"]
+    if conversion_sample_rate != "automatic":
+        try:
+            conversion_sample_rate = int(conversion_sample_rate)
+            if conversion_sample_rate not in TRANSCRIPTION_CONVERSION_SAMPLE_RATE_OPTIONS:
+                errors.append(f"conversion_sample_rate must be one of {list(TRANSCRIPTION_CONVERSION_SAMPLE_RATE_OPTIONS)} or automatic")
+            else:
+                normalized["conversion_sample_rate"] = conversion_sample_rate
+        except (TypeError, ValueError):
+            errors.append(f"conversion_sample_rate must be one of {list(TRANSCRIPTION_CONVERSION_SAMPLE_RATE_OPTIONS)} or automatic")
+
+    return normalized, errors
+
+
+def normalize_output_file_defaults_from_data(data):
+    normalized = {
+        "output_mode": data.get("output_mode", "video"),
+        "video_resolution": data.get("video_resolution", RecordingResolutions.HD_1080P),
+        "audio_bitrate_kbps": data.get("audio_bitrate_kbps", "automatic"),
+    }
+    errors = []
+
+    if normalized["output_mode"] not in OUTPUT_FILE_MODES:
+        errors.append("output_mode must be video or audio")
+
+    if normalized["video_resolution"] not in RecordingResolutions.values:
+        errors.append(f"video_resolution must be one of {list(RecordingResolutions.values)}")
+
+    audio_bitrate_kbps = normalized["audio_bitrate_kbps"]
+    if audio_bitrate_kbps != "automatic":
+        try:
+            audio_bitrate_kbps = int(audio_bitrate_kbps)
+            if audio_bitrate_kbps not in OUTPUT_FILE_AUDIO_BITRATE_OPTIONS_KBPS:
+                errors.append(f"audio_bitrate_kbps must be one of {list(OUTPUT_FILE_AUDIO_BITRATE_OPTIONS_KBPS)} or automatic")
+            else:
+                normalized["audio_bitrate_kbps"] = audio_bitrate_kbps
+        except (TypeError, ValueError):
+            errors.append(f"audio_bitrate_kbps must be one of {list(OUTPUT_FILE_AUDIO_BITRATE_OPTIONS_KBPS)} or automatic")
+
+    return normalized, errors
+
+
+class ProjectTranscriptionSettingsView(AdminRequiredMixin, ProjectUrlContextMixin, View):
+    def get(self, request, object_id):
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
+        context = self.get_project_context(object_id, project)
+        context["transcription_defaults"] = project.effective_transcription_defaults()
+        return render(request, "projects/project_transcription_settings.html", context)
+
+    def put(self, request, object_id):
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
+        put_data = QueryDict(request.body)
+
+        normalized, errors = normalize_transcription_defaults_from_data(put_data)
+        if errors:
+            return HttpResponse("; ".join(errors), status=400)
+
+        project.transcription_defaults = normalized
+        project.save(update_fields=["transcription_defaults", "updated_at"])
+        return HttpResponse("ok", status=200)
+
+
+class ProjectOutputFileSettingsView(AdminRequiredMixin, ProjectUrlContextMixin, View):
+    def get(self, request, object_id):
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
+        context = self.get_project_context(object_id, project)
+        context["output_file_defaults"] = project.effective_output_file_defaults()
+        return render(request, "projects/project_output_file_settings.html", context)
+
+    def put(self, request, object_id):
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
+        put_data = QueryDict(request.body)
+
+        normalized, errors = normalize_output_file_defaults_from_data(put_data)
+        if errors:
+            return HttpResponse("; ".join(errors), status=400)
+
+        project.output_file_defaults = normalized
+        project.save(update_fields=["output_file_defaults", "updated_at"])
+        return HttpResponse("ok", status=200)
 
 
 class ProjectTeamView(AdminRequiredMixin, ProjectUrlContextMixin, View):
