@@ -798,6 +798,21 @@ class BotController:
         else:
             return 3  # seconds
 
+    def non_streaming_audio_minimum_segment_for_silence_closure_seconds(self):
+        minimum_segment_enabled_override = self.bot_in_db.transcription_runtime_minimum_segment_for_silence_closure_enabled_override()
+        minimum_segment_seconds_override = self.bot_in_db.transcription_runtime_minimum_segment_for_silence_closure_seconds_override()
+
+        if minimum_segment_enabled_override is False:
+            return None
+
+        if minimum_segment_seconds_override is not None:
+            return minimum_segment_seconds_override
+
+        if minimum_segment_enabled_override is True:
+            return 10
+
+        return None
+
     def run(self):
         if self.run_called:
             raise Exception("Run already called, exiting")
@@ -814,6 +829,7 @@ class BotController:
             sample_rate=self.get_per_participant_audio_sample_rate(),
             utterance_size_limit=self.non_streaming_audio_utterance_size_limit(),
             silence_duration_limit=self.non_streaming_audio_silence_duration_limit(),
+            minimum_segment_for_silence_closure_seconds=self.non_streaming_audio_minimum_segment_for_silence_closure_seconds(),
             should_print_diagnostic_info=self.should_capture_audio_chunks(),
         )
 

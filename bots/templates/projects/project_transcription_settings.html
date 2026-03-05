@@ -80,6 +80,26 @@
         </div>
 
         <div class="mb-4">
+          <label class="form-label">Minimum segment before silence closure</label>
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" name="minimum_segment_for_silence_closure_enabled" id="minimumSegmentForSilenceClosureEnabled" value="true" {% if transcription_defaults.minimum_segment_for_silence_closure_enabled %}checked{% endif %}>
+            <label class="form-check-label" for="minimumSegmentForSilenceClosureEnabled">
+              Enable minimum segment threshold before flushing on silence
+            </label>
+          </div>
+          <div class="mt-3">
+            <label for="minimumSegmentForSilenceClosureSeconds" class="form-label">Minimum seconds</label>
+            <input type="number"
+                   class="form-control"
+                   min="1"
+                   step="1"
+                   id="minimumSegmentForSilenceClosureSeconds"
+                   name="minimum_segment_for_silence_closure_seconds"
+                   value="{{ transcription_defaults.minimum_segment_for_silence_closure_seconds|default_if_none:10 }}">
+          </div>
+        </div>
+
+        <div class="mb-4">
           <label for="conversionSampleRate" class="form-label">Conversion sample rate</label>
           <select class="form-select" id="conversionSampleRate" name="conversion_sample_rate">
             <option value="automatic" {% if transcription_defaults.conversion_sample_rate == 'automatic' %}selected{% endif %}>Automatic</option>
@@ -109,6 +129,12 @@
     if (maxSegmentInput) {
       maxSegmentInput.disabled = !maxSegmentModeCustom;
     }
+
+    const minimumSegmentForSilenceClosureEnabled = document.getElementById('minimumSegmentForSilenceClosureEnabled')?.checked;
+    const minimumSegmentForSilenceClosureSeconds = document.getElementById('minimumSegmentForSilenceClosureSeconds');
+    if (minimumSegmentForSilenceClosureSeconds) {
+      minimumSegmentForSilenceClosureSeconds.disabled = !minimumSegmentForSilenceClosureEnabled;
+    }
   }
 
   function initializeTranscriptionSettingsForm() {
@@ -124,6 +150,7 @@
     document.querySelectorAll('input[name="silence_closure_mode"], input[name="max_segment_mode"]').forEach(function(el) {
       el.addEventListener('change', updateTranscriptionSettingsFormState);
     });
+    document.getElementById('minimumSegmentForSilenceClosureEnabled')?.addEventListener('change', updateTranscriptionSettingsFormState);
 
     updateTranscriptionSettingsFormState();
   }

@@ -130,7 +130,7 @@ class AdminRoleIntegrationTest(TransactionTestCase):
 
         response = self.client.put(
             reverse("bots:project-transcription-settings", kwargs={"object_id": self.project.object_id}),
-            data="transcription_mode=automatic&silence_closure_mode=custom&silence_closure_seconds=1.5&max_segment_mode=custom&max_segment_seconds=90&conversion_sample_rate=16000",
+            data="transcription_mode=automatic&silence_closure_mode=custom&silence_closure_seconds=1.5&max_segment_mode=custom&max_segment_seconds=90&minimum_segment_for_silence_closure_enabled=true&minimum_segment_for_silence_closure_seconds=10&conversion_sample_rate=16000",
             content_type="application/x-www-form-urlencoded",
         )
 
@@ -144,6 +144,8 @@ class AdminRoleIntegrationTest(TransactionTestCase):
                 "silence_closure_seconds": 1.5,
                 "max_segment_mode": "custom",
                 "max_segment_seconds": 90,
+                "minimum_segment_for_silence_closure_enabled": True,
+                "minimum_segment_for_silence_closure_seconds": 10,
                 "conversion_sample_rate": 16000,
             },
         )
@@ -216,7 +218,7 @@ class AdminRoleIntegrationTest(TransactionTestCase):
 
         response = self.client.put(
             reverse("bots:project-transcription-settings", kwargs={"object_id": self.project.object_id}),
-            data="transcription_mode=realtime&silence_closure_mode=custom&silence_closure_seconds=99&max_segment_mode=custom&max_segment_seconds=0&conversion_sample_rate=12345",
+            data="transcription_mode=realtime&silence_closure_mode=custom&silence_closure_seconds=99&max_segment_mode=custom&max_segment_seconds=0&minimum_segment_for_silence_closure_enabled=true&minimum_segment_for_silence_closure_seconds=0&conversion_sample_rate=12345",
             content_type="application/x-www-form-urlencoded",
         )
 

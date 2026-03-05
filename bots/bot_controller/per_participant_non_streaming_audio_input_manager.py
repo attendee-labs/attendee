@@ -17,7 +17,17 @@ def calculate_normalized_rms(audio_bytes):
 
 
 class PerParticipantNonStreamingAudioInputManager:
-    def __init__(self, *, save_audio_chunk_callback, get_participant_callback, sample_rate, utterance_size_limit, silence_duration_limit, should_print_diagnostic_info):
+    def __init__(
+        self,
+        *,
+        save_audio_chunk_callback,
+        get_participant_callback,
+        sample_rate,
+        utterance_size_limit,
+        silence_duration_limit,
+        minimum_segment_for_silence_closure_seconds,
+        should_print_diagnostic_info,
+    ):
         self.queue = queue.Queue()
 
         self.save_audio_chunk_callback = save_audio_chunk_callback
@@ -31,6 +41,7 @@ class PerParticipantNonStreamingAudioInputManager:
 
         self.UTTERANCE_SIZE_LIMIT = utterance_size_limit
         self.SILENCE_DURATION_LIMIT = silence_duration_limit
+        self.MINIMUM_SEGMENT_FOR_SILENCE_CLOSURE_SECONDS = minimum_segment_for_silence_closure_seconds
         self.vad = webrtcvad.Vad()
 
         self.should_print_diagnostic_info = should_print_diagnostic_info
@@ -76,6 +87,7 @@ class PerParticipantNonStreamingAudioInputManager:
                 speaker_id,
                 datetime.utcnow() + timedelta(seconds=self.SILENCE_DURATION_LIMIT + 1),
                 None,
+                force_flush=True,
             )
 
     def is_speech(self, chunk_bytes):
@@ -103,7 +115,12 @@ class PerParticipantNonStreamingAudioInputManager:
             return True
         return False
 
-    def process_chunk(self, speaker_id, chunk_time, chunk_bytes):
+    def buffer_duration_seconds(self, speaker_id):
+        if speaker_id not in self.utterances:
+            return 0.0
+        return len(self.utterances[speaker_id]) / (self.sample_rate * 2)
+
+    def process_chunk(self, speaker_id, chunk_time, chunk_bytes, force_flush=False):
         audio_is_silent = self.silence_detected(chunk_bytes) if chunk_bytes else True
 
         # Initialize buffer and timing for new speaker
@@ -130,8 +147,13 @@ class PerParticipantNonStreamingAudioInputManager:
         if audio_is_silent:
             silence_duration = (chunk_time - self.last_nonsilent_audio_time[speaker_id]).total_seconds()
             if silence_duration >= self.SILENCE_DURATION_LIMIT:
-                should_flush = True
-                reason = "silence_limit"
+                minimum_segment_reached = (
+                    self.MINIMUM_SEGMENT_FOR_SILENCE_CLOSURE_SECONDS is None
+                    or self.buffer_duration_seconds(speaker_id) >= self.MINIMUM_SEGMENT_FOR_SILENCE_CLOSURE_SECONDS
+                )
+                if minimum_segment_reached or force_flush:
+                    should_flush = True
+                    reason = "silence_limit"
         else:
             self.last_nonsilent_audio_time[speaker_id] = chunk_time
 

@@ -907,12 +907,15 @@ class ProjectProjectView(AdminRequiredMixin, ProjectUrlContextMixin, View):
 
 
 def normalize_transcription_defaults_from_data(data):
+    minimum_segment_for_silence_closure_enabled = str(data.get("minimum_segment_for_silence_closure_enabled", "")).lower() in {"1", "true", "on", "yes"}
     normalized = {
         "transcription_mode": data.get("transcription_mode", "automatic"),
         "silence_closure_mode": data.get("silence_closure_mode", "automatic"),
         "silence_closure_seconds": None,
         "max_segment_mode": data.get("max_segment_mode", "automatic"),
         "max_segment_seconds": None,
+        "minimum_segment_for_silence_closure_enabled": minimum_segment_for_silence_closure_enabled,
+        "minimum_segment_for_silence_closure_seconds": None,
         "conversion_sample_rate": data.get("conversion_sample_rate", "automatic"),
     }
     errors = []
@@ -945,6 +948,16 @@ def normalize_transcription_defaults_from_data(data):
                 normalized["max_segment_seconds"] = max_segment_seconds
         except (TypeError, ValueError):
             errors.append("max_segment_seconds must be an integer greater than or equal to 1")
+
+    if normalized["minimum_segment_for_silence_closure_enabled"]:
+        try:
+            minimum_segment_for_silence_closure_seconds = int(data.get("minimum_segment_for_silence_closure_seconds"))
+            if minimum_segment_for_silence_closure_seconds < 1:
+                errors.append("minimum_segment_for_silence_closure_seconds must be at least 1")
+            else:
+                normalized["minimum_segment_for_silence_closure_seconds"] = minimum_segment_for_silence_closure_seconds
+        except (TypeError, ValueError):
+            errors.append("minimum_segment_for_silence_closure_seconds must be an integer greater than or equal to 1")
 
     conversion_sample_rate = normalized["conversion_sample_rate"]
     if conversion_sample_rate != "automatic":

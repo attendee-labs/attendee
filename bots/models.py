@@ -105,6 +105,43 @@ class Project(models.Model):
             except (TypeError, ValueError):
                 logger.warning(f"Ignoring non-integer max_segment_seconds from {source}: {max_segment_seconds}")
 
+        minimum_segment_for_silence_closure_enabled = values.get("minimum_segment_for_silence_closure_enabled")
+        if isinstance(minimum_segment_for_silence_closure_enabled, bool):
+            defaults["minimum_segment_for_silence_closure_enabled"] = minimum_segment_for_silence_closure_enabled
+        elif isinstance(minimum_segment_for_silence_closure_enabled, str):
+            normalized = minimum_segment_for_silence_closure_enabled.strip().lower()
+            if normalized in ("1", "true", "yes", "on"):
+                defaults["minimum_segment_for_silence_closure_enabled"] = True
+            elif normalized in ("0", "false", "no", "off"):
+                defaults["minimum_segment_for_silence_closure_enabled"] = False
+            else:
+                logger.warning(
+                    f"Ignoring invalid minimum_segment_for_silence_closure_enabled from {source}: "
+                    f"{minimum_segment_for_silence_closure_enabled}"
+                )
+        elif minimum_segment_for_silence_closure_enabled is not None:
+            logger.warning(
+                f"Ignoring invalid minimum_segment_for_silence_closure_enabled from {source}: "
+                f"{minimum_segment_for_silence_closure_enabled}"
+            )
+
+        minimum_segment_for_silence_closure_seconds = values.get("minimum_segment_for_silence_closure_seconds")
+        if minimum_segment_for_silence_closure_seconds is not None:
+            try:
+                minimum_segment_for_silence_closure_seconds = int(minimum_segment_for_silence_closure_seconds)
+                if minimum_segment_for_silence_closure_seconds >= 1:
+                    defaults["minimum_segment_for_silence_closure_seconds"] = minimum_segment_for_silence_closure_seconds
+                else:
+                    logger.warning(
+                        f"Ignoring invalid minimum_segment_for_silence_closure_seconds from {source}: "
+                        f"{minimum_segment_for_silence_closure_seconds}"
+                    )
+            except (TypeError, ValueError):
+                logger.warning(
+                    f"Ignoring non-integer minimum_segment_for_silence_closure_seconds from {source}: "
+                    f"{minimum_segment_for_silence_closure_seconds}"
+                )
+
         conversion_sample_rate = values.get("conversion_sample_rate")
         if conversion_sample_rate == "automatic":
             defaults["conversion_sample_rate"] = "automatic"
@@ -125,6 +162,8 @@ class Project(models.Model):
             "silence_closure_seconds": None,
             "max_segment_mode": "automatic",
             "max_segment_seconds": None,
+            "minimum_segment_for_silence_closure_enabled": False,
+            "minimum_segment_for_silence_closure_seconds": 10,
             "conversion_sample_rate": "automatic",
         }
 
@@ -136,6 +175,8 @@ class Project(models.Model):
                 "silence_closure_seconds": os.getenv("BOT_DEFAULT_TRANSCRIPTION_SILENCE_SECONDS"),
                 "max_segment_mode": os.getenv("BOT_DEFAULT_TRANSCRIPTION_MAX_SEGMENT_MODE"),
                 "max_segment_seconds": os.getenv("BOT_DEFAULT_TRANSCRIPTION_MAX_SEGMENT_SECONDS"),
+                "minimum_segment_for_silence_closure_enabled": os.getenv("BOT_DEFAULT_TRANSCRIPTION_MINIMUM_SEGMENT_FOR_SILENCE_CLOSURE_ENABLED"),
+                "minimum_segment_for_silence_closure_seconds": os.getenv("BOT_DEFAULT_TRANSCRIPTION_MINIMUM_SEGMENT_FOR_SILENCE_CLOSURE_SECONDS"),
                 "conversion_sample_rate": os.getenv("BOT_DEFAULT_TRANSCRIPTION_CONVERSION_SAMPLE_RATE"),
             },
             "environment",
@@ -153,6 +194,11 @@ class Project(models.Model):
         if defaults["max_segment_mode"] == "custom" and defaults["max_segment_seconds"] is None:
             logger.warning("Falling back to automatic max segment because custom max_segment_seconds was not set")
             defaults["max_segment_mode"] = "automatic"
+
+        if not defaults["minimum_segment_for_silence_closure_enabled"]:
+            defaults["minimum_segment_for_silence_closure_seconds"] = None
+        elif defaults["minimum_segment_for_silence_closure_seconds"] is None:
+            defaults["minimum_segment_for_silence_closure_seconds"] = 10
 
         return defaults
 
@@ -216,6 +262,9 @@ class Project(models.Model):
             overrides["silence_duration_seconds_override"] = defaults["silence_closure_seconds"]
         if defaults["max_segment_mode"] == "custom":
             overrides["max_segment_seconds_override"] = defaults["max_segment_seconds"]
+        if defaults["minimum_segment_for_silence_closure_enabled"]:
+            overrides["minimum_segment_for_silence_closure_enabled_override"] = True
+            overrides["minimum_segment_for_silence_closure_seconds_override"] = defaults["minimum_segment_for_silence_closure_seconds"]
         if defaults["conversion_sample_rate"] != "automatic":
             overrides["conversion_sample_rate_override"] = defaults["conversion_sample_rate"]
 
@@ -1186,6 +1235,34 @@ class Bot(models.Model):
 
     def transcription_runtime_max_segment_seconds_override(self):
         value = self.transcription_runtime_settings().get("max_segment_seconds_override")
+        if value is None:
+            return None
+
+        try:
+            value = int(value)
+        except (TypeError, ValueError):
+            return None
+
+        if value >= 1:
+            return value
+        return None
+
+    def transcription_runtime_minimum_segment_for_silence_closure_enabled_override(self):
+        value = self.transcription_runtime_settings().get("minimum_segment_for_silence_closure_enabled_override")
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in ("1", "true", "yes", "on"):
+                return True
+            if normalized in ("0", "false", "no", "off"):
+                return False
+        return None
+
+    def transcription_runtime_minimum_segment_for_silence_closure_seconds_override(self):
+        value = self.transcription_runtime_settings().get("minimum_segment_for_silence_closure_seconds_override")
         if value is None:
             return None
 

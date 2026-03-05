@@ -32,6 +32,7 @@ class BotControllerTranscriptionDefaultsTest(TestCase):
         controller = BotController(self.bot.id)
         self.assertEqual(controller.non_streaming_audio_silence_duration_limit(), 1.5)
         self.assertEqual(controller.non_streaming_audio_utterance_size_limit(), 48000 * 2 * 90)
+        self.assertIsNone(controller.non_streaming_audio_minimum_segment_for_silence_closure_seconds())
 
     def test_automatic_provider_defaults_are_preserved(self):
         self.bot.settings = {
@@ -82,3 +83,28 @@ class BotControllerTranscriptionDefaultsTest(TestCase):
 
         controller = BotController(self.bot.id)
         self.assertFalse(controller.use_streaming_transcription())
+
+    def test_custom_minimum_segment_for_silence_closure_is_used(self):
+        self.bot.settings = {
+            "recording_settings": {"format": "mp4"},
+            "transcription_runtime_settings": {
+                "minimum_segment_for_silence_closure_enabled_override": True,
+                "minimum_segment_for_silence_closure_seconds_override": 10,
+            },
+        }
+        self.bot.save()
+
+        controller = BotController(self.bot.id)
+        self.assertEqual(controller.non_streaming_audio_minimum_segment_for_silence_closure_seconds(), 10)
+
+    def test_minimum_segment_for_silence_closure_defaults_to_10_when_enabled_without_seconds(self):
+        self.bot.settings = {
+            "recording_settings": {"format": "mp4"},
+            "transcription_runtime_settings": {
+                "minimum_segment_for_silence_closure_enabled_override": True,
+            },
+        }
+        self.bot.save()
+
+        controller = BotController(self.bot.id)
+        self.assertEqual(controller.non_streaming_audio_minimum_segment_for_silence_closure_seconds(), 10)

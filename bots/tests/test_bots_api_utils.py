@@ -88,6 +88,8 @@ class TestCreateBot(TestCase):
             "silence_closure_seconds": 1.5,
             "max_segment_mode": "custom",
             "max_segment_seconds": 90,
+            "minimum_segment_for_silence_closure_enabled": True,
+            "minimum_segment_for_silence_closure_seconds": 10,
             "conversion_sample_rate": 16000,
         }
         self.project.output_file_defaults = {
@@ -109,6 +111,8 @@ class TestCreateBot(TestCase):
                 "transcription_mode_override": "realtime",
                 "silence_duration_seconds_override": 1.5,
                 "max_segment_seconds_override": 90,
+                "minimum_segment_for_silence_closure_enabled_override": True,
+                "minimum_segment_for_silence_closure_seconds_override": 10,
                 "conversion_sample_rate_override": 16000,
             },
         )
@@ -147,6 +151,8 @@ class TestCreateBot(TestCase):
             "BOT_DEFAULT_TRANSCRIPTION_SILENCE_SECONDS": "2.0",
             "BOT_DEFAULT_TRANSCRIPTION_MAX_SEGMENT_MODE": "custom",
             "BOT_DEFAULT_TRANSCRIPTION_MAX_SEGMENT_SECONDS": "75",
+            "BOT_DEFAULT_TRANSCRIPTION_MINIMUM_SEGMENT_FOR_SILENCE_CLOSURE_ENABLED": "true",
+            "BOT_DEFAULT_TRANSCRIPTION_MINIMUM_SEGMENT_FOR_SILENCE_CLOSURE_SECONDS": "12",
             "BOT_DEFAULT_TRANSCRIPTION_CONVERSION_SAMPLE_RATE": "32000",
             "BOT_DEFAULT_OUTPUT_MODE": "audio",
             "BOT_DEFAULT_OUTPUT_VIDEO_RESOLUTION": "720p",
@@ -167,6 +173,8 @@ class TestCreateBot(TestCase):
                 "transcription_mode_override": "chunks",
                 "silence_duration_seconds_override": 2.0,
                 "max_segment_seconds_override": 75,
+                "minimum_segment_for_silence_closure_enabled_override": True,
+                "minimum_segment_for_silence_closure_seconds_override": 12,
                 "conversion_sample_rate_override": 32000,
             },
         )
