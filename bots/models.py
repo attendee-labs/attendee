@@ -2302,6 +2302,7 @@ class AsyncTranscriptionStrategies(models.TextChoices):
     PER_SPEAKER_AUDIO = "per_speaker_audio", "Per Speaker Audio"
     SPEAKER_EVENTS = "speaker_events", "Speaker Events"
 
+
 class AsyncTranscription(models.Model):
     OBJECT_ID_PREFIX = "tran_"
     object_id = models.CharField(max_length=32, unique=True, editable=False)

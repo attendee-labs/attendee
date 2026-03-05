@@ -574,6 +574,7 @@ class BotImageSerializer(serializers.Serializer):
 class TranscriptionSettingsJSONField(serializers.JSONField):
     pass
 
+
 ASYNC_TRANSCRIPTION_SETTINGS_SCHEMA = {
     "type": "object",
     "properties": {
@@ -583,15 +584,17 @@ ASYNC_TRANSCRIPTION_SETTINGS_SCHEMA = {
             "enum": ["per_speaker_audio", "speaker_events"],
             "description": "The strategy to use for producing the async transcription. Defaults to 'per_speaker_audio'.",
             "default": "per_speaker_audio",
-        }
+        },
     },
     "required": [],
     "additionalProperties": False,
 }
 
+
 @extend_schema_field(ASYNC_TRANSCRIPTION_SETTINGS_SCHEMA)
 class AsyncTranscriptionSettingsJSONField(serializers.JSONField):
     pass
+
 
 # Define a subset schema for updating transcription settings (currently only Teams closed captions language)
 PATCH_BOT_TRANSCRIPTION_SETTINGS_SCHEMA = {

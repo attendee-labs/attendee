@@ -7,7 +7,7 @@ from typing import Any, Callable, Dict, List, Sequence
 
 import requests
 
-from bots.models import Credentials, Recording, TranscriptionFailureReasons, TranscriptionSettings, Utterance
+from bots.models import Credentials, ParticipantEvent, ParticipantEventTypes, Recording, TranscriptionFailureReasons, TranscriptionSettings, Utterance
 
 logger = logging.getLogger(__name__)
 
@@ -170,6 +170,151 @@ def get_mp3_for_utterance_group(
             pass
 
 
+from bisect import bisect_left
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class _Interval:
+    participant: Any
+    start: float  # seconds
+    end: float  # seconds
+    index: int  # stable tie-breaker
+
+
+def split_transcription_by_speaker_events(
+    transcription_result: dict,
+    speaker_events: Sequence[ParticipantEvent],
+) -> list[dict]:
+    """
+    Split a full-recording transcription into per-speaker utterance chunks.
+
+    Each word is assigned to the nearest speech interval (by midpoint).
+    Consecutive words in the same interval are grouped into one utterance.
+    """
+    language = transcription_result.get("language")
+    words = list(transcription_result.get("words") or [])
+    if not words:
+        return []
+
+    words.sort(key=lambda w: (w["start"], w["end"]))
+    recording_end = max(w["end"] for w in words)
+
+    intervals = _split_transcription_by_speaker_events_build_intervals(speaker_events, recording_end)
+    if not intervals:
+        return []
+
+    intervals.sort(key=lambda it: (it.start, it.index))
+    interval_starts = [it.start for it in intervals]
+
+    # Assign words → intervals → group consecutive runs into utterances
+    utterances = []
+    prev_idx = None
+    current_words = []
+
+    for word in words:
+        midpoint = (word["start"] + word["end"]) / 2.0
+        idx = _split_transcription_by_speaker_events_nearest_interval(midpoint, intervals, interval_starts)
+
+        if idx == prev_idx:
+            current_words.append(word)
+        else:
+            if current_words:
+                utterances.append(_split_transcription_by_speaker_events_make_utterance(intervals[prev_idx], current_words, language))
+            prev_idx = idx
+            current_words = [word]
+
+    if current_words:
+        utterances.append(_split_transcription_by_speaker_events_make_utterance(intervals[prev_idx], current_words, language))
+
+    return utterances
+
+
+def _split_transcription_by_speaker_events_build_intervals(events: list, recording_end: float) -> list[_Interval]:
+    """Convert SPEECH_START/STOP events into closed intervals."""
+    events = sorted(
+        events,
+        key=lambda ev: (
+            ev.timestamp_ms,
+            0 if ev.event_type == ParticipantEventTypes.SPEECH_START else 1,
+            ev.participant_id,
+        ),
+    )
+
+    active: dict[int, tuple[float, Any]] = {}  # pid → (start_sec, participant)
+    intervals: list[_Interval] = []
+
+    for ev in events:
+        if ev.event_type not in (ParticipantEventTypes.SPEECH_START, ParticipantEventTypes.SPEECH_STOP):
+            continue
+
+        pid = ev.participant_id
+        t = ev.timestamp_ms / 1000.0
+
+        if ev.event_type == ParticipantEventTypes.SPEECH_START:
+            # Close any already-active interval for this participant
+            if pid in active:
+                start, participant = active[pid]
+                intervals.append(_Interval(participant, start, t, len(intervals)))
+            active[pid] = (t, ev.participant)
+
+        else:  # SPEECH_STOP
+            if pid not in active:
+                continue
+            start, participant = active.pop(pid)
+            intervals.append(_Interval(participant, start, t, len(intervals)))
+
+    # Close any still-open intervals at end of recording
+    for pid, (start, participant) in active.items():
+        intervals.append(_Interval(participant, start, recording_end, len(intervals)))
+
+    return intervals
+
+
+def _split_transcription_by_speaker_events_nearest_interval(t: float, intervals: list[_Interval], starts: list[float]) -> int:
+    """Return index of the interval nearest to time t. Ties go to earlier start."""
+    j = bisect_left(starts, t)
+
+    # Check for overlapping intervals around the insertion point
+    overlaps = []
+    k = j - 1
+    while k >= 0 and intervals[k].end >= t:
+        overlaps.append(k)
+        k -= 1
+    k = j
+    while k < len(intervals) and intervals[k].start <= t:
+        overlaps.append(k)
+        k += 1
+
+    if overlaps:
+        return min(overlaps, key=lambda i: (intervals[i].start, intervals[i].index))
+
+    # No overlap — pick the closer of prev/next
+    candidates = []
+    if j > 0:
+        candidates.append(j - 1)
+    if j < len(intervals):
+        candidates.append(j)
+
+    def distance(i: int) -> float:
+        if t < intervals[i].start:
+            return intervals[i].start - t
+        return t - intervals[i].end
+
+    return min(candidates, key=lambda i: (distance(i), intervals[i].start, intervals[i].index))
+
+
+def _split_transcription_by_speaker_events_make_utterance(interval: _Interval, words: list[dict], language: str | None) -> dict:
+    return {
+        "participant": interval.participant,
+        "transcription": {
+            "transcript": " ".join(w.get("word", "") for w in words).strip(),
+            "words": words,
+            "language": language,
+        },
+    }
+
+
 def split_transcription_by_utterance(
     transcription_result: Dict[str, Any],
     utterances: Sequence[Utterance],
@@ -253,12 +398,27 @@ def get_transcription_via_assemblyai_for_utterance_group(utterances):
     return split_transcription_by_utterance(transcription, utterances), None
 
 
+def get_transcription_via_assemblyai_for_speaker_events(speaker_events, recording, transcription_settings):
+    transcription, error = get_transcription_via_assemblyai_from_mp3(
+        retrieve_mp3_data_url_callback=lambda: recording.url,
+        duration_ms=(recording.completed_at - recording.started_at).total_seconds() * 1000,
+        identifier=f"recording {recording.id}",
+        transcription_settings=transcription_settings,
+        recording=recording,
+    )
+    if error:
+        return None, error
+
+    return split_transcription_by_speaker_events(transcription, speaker_events), None
+
+
 def get_transcription_via_assemblyai_from_mp3(
-    retrieve_mp3_data_callback: Callable[[], bytes],
     duration_ms: int,
     identifier: str,
     transcription_settings: TranscriptionSettings,
     recording: Recording,
+    retrieve_mp3_data_callback: Callable[[], bytes] = None,
+    retrieve_mp3_data_url_callback: Callable[[], str] = None,
 ):
     assemblyai_credentials_record = recording.bot.project.credentials.filter(credential_type=Credentials.CredentialTypes.ASSEMBLY_AI).first()
     if not assemblyai_credentials_record:
@@ -282,16 +442,23 @@ def get_transcription_via_assemblyai_from_mp3(
     headers = {"authorization": api_key}
     base_url = transcription_settings.assemblyai_base_url()
 
-    mp3_data = retrieve_mp3_data_callback()
-    upload_response = requests.post(f"{base_url}/upload", headers=headers, data=mp3_data)
+    upload_url = None
+    if retrieve_mp3_data_url_callback:
+        upload_url = retrieve_mp3_data_url_callback()
 
-    if upload_response.status_code == 401:
-        return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_INVALID}
+        if not upload_url:
+            return None, {"reason": TranscriptionFailureReasons.AUDIO_UPLOAD_FAILED, "error": "upload_url not found"}
+    else:
+        mp3_data = retrieve_mp3_data_callback()
+        upload_response = requests.post(f"{base_url}/upload", headers=headers, data=mp3_data)
 
-    if upload_response.status_code != 200:
-        return None, {"reason": TranscriptionFailureReasons.AUDIO_UPLOAD_FAILED, "status_code": upload_response.status_code, "text": upload_response.text}
+        if upload_response.status_code == 401:
+            return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_INVALID}
 
-    upload_url = upload_response.json()["upload_url"]
+        if upload_response.status_code != 200:
+            return None, {"reason": TranscriptionFailureReasons.AUDIO_UPLOAD_FAILED, "status_code": upload_response.status_code, "text": upload_response.text}
+
+        upload_url = upload_response.json()["upload_url"]
 
     data = {
         "audio_url": upload_url,
