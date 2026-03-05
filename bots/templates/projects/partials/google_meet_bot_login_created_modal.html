@@ -1,0 +1,65 @@
+{% comment %}
+This partial is returned after successfully creating an OIDC Google Meet bot login.
+It includes the updated login table AND a modal showing the auto-generated credentials.
+{% endcomment %}
+
+{% include "projects/partials/google_meet_bot_login_group.html" %}
+
+<!-- OIDC Credentials Modal (shown once after creation) -->
+<div class="modal fade" id="oidcCredentialsModal" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false">
+    <div class="modal-dialog">
+        <div class="modal-content" id="oidc-credentials-modal">
+            <div class="modal-header">
+                <h5 class="modal-title">OIDC Client Credentials</h5>
+            </div>
+            <div class="modal-body">
+                <div class="alert alert-warning">
+                    <i class="bi bi-exclamation-triangle"></i>
+                    <strong>Save these credentials now.</strong> The client secret will not be shown again.
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label fw-bold">Client ID</label>
+                    <div class="input-group">
+                        <input type="text" class="form-control font-monospace" value="{{ oidc_client_id }}" readonly id="oidc-client-id-value">
+                        <button class="btn btn-outline-secondary" type="button" onclick="navigator.clipboard.writeText(document.getElementById('oidc-client-id-value').value)">
+                            <i class="bi bi-clipboard"></i> Copy
+                        </button>
+                    </div>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label fw-bold">Client Secret</label>
+                    <div class="input-group">
+                        <input type="text" class="form-control font-monospace" value="{{ oidc_client_secret }}" readonly id="oidc-client-secret-value">
+                        <button class="btn btn-outline-secondary" type="button" onclick="navigator.clipboard.writeText(document.getElementById('oidc-client-secret-value').value)">
+                            <i class="bi bi-clipboard"></i> Copy
+                        </button>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-primary" data-bs-dismiss="modal">I've saved the credentials</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // Auto-show the credentials modal
+    document.addEventListener('DOMContentLoaded', function() {
+        var modalEl = document.getElementById('oidcCredentialsModal');
+        if (modalEl) {
+            var modal = new bootstrap.Modal(modalEl);
+            modal.show();
+        }
+    });
+    // Also try immediately (for HTMX swaps where DOMContentLoaded already fired)
+    (function() {
+        var modalEl = document.getElementById('oidcCredentialsModal');
+        if (modalEl) {
+            var modal = new bootstrap.Modal(modalEl);
+            modal.show();
+        }
+    })();
+</script>
