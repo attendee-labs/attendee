@@ -61,6 +61,7 @@ from .serializers import (
 )
 from .tasks import process_async_transcription
 from .throttling import ProjectPostThrottle
+from .utils import split_utterances_on_turn_taking
 
 TokenHeaderParameter = [
     OpenApiParameter(
@@ -823,6 +824,9 @@ class TranscriptView(APIView):
                 if utterance.transcription.get("transcript", "")
             ]
 
+            if request.query_params.get("split_on_turns") == "true":
+                transcript_data = split_utterances_on_turn_taking(transcript_data)
+
             serializer = TranscriptUtteranceSerializer(transcript_data, many=True)
             return Response(serializer.data)
 
@@ -851,15 +855,16 @@ class TranscriptView(APIView):
                     status=status.HTTP_404_NOT_FOUND,
                 )
 
-            if not recording.audio_chunks.exclude(audio_blob=b"").exists():
+            if not recording.audio_chunks.exclude(audio_blob=b"").exists() and not recording.audio_chunks.exclude(audio_blob_remote_file=None).exists():
                 return Response({"error": "Cannot create async transcription because the per-speaker audio data has been deleted or was never created."}, status=status.HTTP_400_BAD_REQUEST)
 
             existing_async_transcription_count = AsyncTranscription.objects.filter(
                 recording=recording,
             ).count()
             # We only allow a max of 4 async transcriptions per recording
-            if existing_async_transcription_count >= 4:
-                return Response({"error": "You cannot have more than 4 async transcriptions per bot."}, status=status.HTTP_400_BAD_REQUEST)
+            max_async_transcription_count = int(os.getenv("MAX_ASYNC_TRANSCRIPTIONS_PER_RECORDING", 4))
+            if existing_async_transcription_count >= max_async_transcription_count:
+                return Response({"error": f"You cannot have more than {max_async_transcription_count} async transcriptions per bot."}, status=status.HTTP_400_BAD_REQUEST)
 
             serializer = CreateAsyncTranscriptionSerializer(data={"transcription_settings": request.data.get("transcription_settings")})
             if not serializer.is_valid():
@@ -969,7 +974,7 @@ class BotDetailView(APIView):
     @extend_schema(
         operation_id="Patch Bot",
         summary="Update a bot",
-        description="Updates a bot. Currently only the join_at and metadata fields can be updated. The join_at field can only be updated when the bot is in the scheduled state. The metadata field can be updated at any time.",
+        description="Updates a bot. The join_at, meeting_url, bot_name, bot_image and recording_settings fields can only be updated when the bot is in the scheduled state. The metadata field can be updated at any time.",
         request=PatchBotSerializer,
         responses={
             200: OpenApiResponse(

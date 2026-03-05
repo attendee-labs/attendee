@@ -1,4 +1,5 @@
 import io
+import logging
 
 import cv2
 import numpy as np
@@ -7,8 +8,13 @@ from pydub import AudioSegment
 from .meeting_url_utils import meeting_type_from_url
 from .models import (
     MeetingTypes,
+    ParticipantEvent,
+    ParticipantEventTypes,
     TranscriptionProviders,
 )
+from .templatetags.bot_filters import participant_color as compute_participant_color
+
+logger = logging.getLogger(__name__)
 
 
 def pcm_to_mp3(
@@ -341,8 +347,8 @@ class AggregatedUtterance:
         self.duration_ms += utterance.duration_ms
 
 
-def generate_aggregated_utterances(recording):
-    utterances_sorted = sorted(recording.utterances.filter(async_transcription=None).all(), key=lambda x: x.timestamp_ms)
+def generate_aggregated_utterances(recording, async_transcription=None):
+    utterances_sorted = sorted(recording.utterances.filter(async_transcription=async_transcription).all(), key=lambda x: x.timestamp_ms)
 
     aggregated_utterances = []
     current_aggregated_utterance = None
@@ -366,8 +372,8 @@ def generate_aggregated_utterances(recording):
     return aggregated_utterances
 
 
-def generate_failed_utterance_json_for_bot_detail_view(recording):
-    failed_utterances = recording.utterances.filter(async_transcription=None).filter(failure_data__isnull=False).order_by("timestamp_ms")[:10]
+def generate_failed_utterance_json_for_bot_detail_view(recording, async_transcription=None):
+    failed_utterances = recording.utterances.filter(async_transcription=async_transcription).filter(failure_data__isnull=False).order_by("timestamp_ms")[:10]
 
     failed_utterances_data = []
 
@@ -381,11 +387,11 @@ def generate_failed_utterance_json_for_bot_detail_view(recording):
     return failed_utterances_data
 
 
-def generate_utterance_json_for_bot_detail_view(recording):
+def generate_utterance_json_for_bot_detail_view(recording, async_transcription=None):
     utterances_data = []
     recording_first_buffer_timestamp_ms = recording.first_buffer_timestamp_ms
 
-    aggregated_utterances = generate_aggregated_utterances(recording)
+    aggregated_utterances = generate_aggregated_utterances(recording, async_transcription)
     for utterance in aggregated_utterances:
         if not utterance.transcription:
             continue
@@ -488,19 +494,113 @@ def transcription_provider_from_bot_creation_data(data):
     return TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM
 
 
+def generate_async_transcriptions_json_for_bot_detail_view(recording):
+    async_transcriptions = recording.async_transcriptions.all().order_by("created_at")
+    async_transcriptions_data = []
+    for async_transcription in async_transcriptions:
+        async_transcriptions_data.append(
+            {
+                "label": "Async (" + async_transcription.created_at.strftime("%Y-%m-%d %H:%M:%S") + ")",
+                "is_async": True,
+                "state": async_transcription.state,
+                "recording_state": recording.state,
+                "provider_display": async_transcription.transcription_provider.label if async_transcription.transcription_provider else None,
+                "utterances": generate_utterance_json_for_bot_detail_view(recording, async_transcription),
+                "failed_utterances": generate_failed_utterance_json_for_bot_detail_view(recording, async_transcription),
+            }
+        )
+    return async_transcriptions_data
+
+
+def generate_speaker_timeline_for_bot_detail_view(recording):
+    """Generate speaker timeline data (speech intervals per participant) for a recording."""
+
+    first_buffer_ms = recording.first_buffer_timestamp_ms
+    if not first_buffer_ms:
+        return []
+
+    speech_events = (
+        ParticipantEvent.objects.filter(
+            participant__bot=recording.bot,
+            event_type__in=[ParticipantEventTypes.SPEECH_START, ParticipantEventTypes.SPEECH_STOP],
+        )
+        .select_related("participant")
+        .order_by("timestamp_ms")
+    )
+
+    if not speech_events.exists():
+        return []
+
+    # Group events by participant
+    participants_data = {}
+    for event in speech_events:
+        pid = event.participant.uuid
+        if pid not in participants_data:
+            participants_data[pid] = {
+                "name": event.participant.full_name or event.participant.uuid,
+                "color": compute_participant_color(event.participant.uuid),
+                "events": [],
+            }
+
+        relative_ms = event.timestamp_ms - first_buffer_ms
+        participants_data[pid]["events"].append(
+            {
+                "type": "start" if event.event_type == ParticipantEventTypes.SPEECH_START else "stop",
+                "ms": relative_ms,
+            }
+        )
+
+    # Build intervals from start/stop pairs
+    result = []
+    for pid, data in participants_data.items():
+        intervals = []
+        current_start = None
+        for evt in data["events"]:
+            if evt["type"] == "start":
+                current_start = evt["ms"]
+            elif evt["type"] == "stop" and current_start is not None:
+                intervals.append({"start_ms": current_start, "end_ms": evt["ms"]})
+                current_start = None
+        # If there's a dangling start with no stop, leave end_ms null (JS will use video duration)
+        if current_start is not None:
+            intervals.append({"start_ms": current_start, "end_ms": None})
+
+        if intervals:
+            result.append(
+                {
+                    "name": data["name"],
+                    "color": data["color"],
+                    "intervals": intervals,
+                }
+            )
+
+    return result
+
+
 def generate_recordings_json_for_bot_detail_view(bot):
     # Process recordings and utterances
     recordings_data = []
     for recording in bot.recordings.all():
+        realtime_transcription = {
+            "label": "Realtime",
+            "state": recording.transcription_state,
+            "recording_state": recording.state,
+            "provider_display": recording.get_transcription_provider_display() if recording.transcription_provider else None,
+            "utterances": generate_utterance_json_for_bot_detail_view(recording),
+            "failed_utterances": generate_failed_utterance_json_for_bot_detail_view(recording),
+        }
+        async_transcriptions = generate_async_transcriptions_json_for_bot_detail_view(recording)
+        speaker_timeline = generate_speaker_timeline_for_bot_detail_view(recording)
         recordings_data.append(
             {
                 "state": recording.state,
                 "recording_type": recording.bot.recording_type(),
-                "transcription_state": recording.transcription_state,
-                "transcription_provider_display": recording.get_transcription_provider_display() if recording.transcription_provider else None,
                 "url": recording.url,
-                "utterances": generate_utterance_json_for_bot_detail_view(recording),
-                "failed_utterances": generate_failed_utterance_json_for_bot_detail_view(recording),
+                "transcriptions": [
+                    realtime_transcription,
+                    *async_transcriptions,
+                ],
+                "speaker_timeline": speaker_timeline,
             }
         )
 
@@ -531,3 +631,126 @@ def is_valid_png(image_data: bytes) -> bool:
         return img is not None
     except Exception:
         return False
+
+
+"""
+Split transcript utterances at turn-taking boundaries.
+
+When one speaker pauses and another speaker talks during that pause,
+split the first speaker's utterance at the pause point. This produces
+cleaner turn-by-turn conversation ordering.
+"""
+
+import bisect
+import copy
+from typing import Any
+
+
+def split_utterances_on_turn_taking(
+    utterances: list[dict[str, Any]],
+    min_pause_ms: int = 300,
+    slack_ms: int = 60,
+) -> list[dict[str, Any]]:
+    # Check if any utterances do not have words. If so return the original input
+    for u in utterances:
+        if "words" not in u["transcription"]:
+            logger.warning("Utterance does not have words. Skipping split on turn taking.")
+            return utterances
+
+    # Step 1: Convert every word to absolute (epoch) milliseconds
+    # so we can compare across speakers on a shared timeline.
+    all_word_events: list[tuple[int, str]] = []  # (abs_start_ms, speaker_uuid)
+    enriched = []
+
+    for u in utterances:
+        t0 = int(u["timestamp_ms"])
+        speaker = u["speaker_uuid"]
+        words = u["transcription"]["words"]
+
+        abs_words = []
+        for w in words:
+            abs_start = t0 + int(round(float(w["start"]) * 1000))
+            abs_end = t0 + int(round(float(w["end"]) * 1000))
+            abs_words.append({**w, "_abs_start": abs_start, "_abs_end": abs_end})
+            all_word_events.append((abs_start, speaker))
+
+        enriched.append({"utterance": u, "speaker": speaker, "abs_words": abs_words})
+
+    # Sort word events for fast range queries
+    all_word_events.sort()
+    event_times = [t for t, _ in all_word_events]
+
+    # Step 2: For each utterance, find internal pauses where another
+    # speaker is talking, and split at those points.
+    results = []
+
+    for item in enriched:
+        u = item["utterance"]
+        speaker = item["speaker"]
+        abs_words = item["abs_words"]
+
+        # Walk consecutive word pairs looking for split points
+        segments: list[list[dict]] = []
+        current_segment: list[dict] = [abs_words[0]]
+
+        for i in range(len(abs_words) - 1):
+            gap_ms = abs_words[i + 1]["_abs_start"] - abs_words[i]["_abs_end"]
+
+            if gap_ms >= min_pause_ms and _other_speaker_in_range_for_split_utterances_on_turn_taking(
+                event_times,
+                all_word_events,
+                start=abs_words[i]["_abs_end"] - slack_ms,
+                end=abs_words[i + 1]["_abs_start"] + slack_ms,
+                exclude_speaker=speaker,
+            ):
+                segments.append(current_segment)
+                current_segment = []
+
+            current_segment.append(abs_words[i + 1])
+
+        segments.append(current_segment)
+
+        # Step 3: Convert each segment back into an utterance
+        for seg_words in segments:
+            results.append(_make_utterance_for_split_utterances_on_turn_taking(u, seg_words))
+
+    results.sort(key=lambda u: (u["timestamp_ms"], u["speaker_uuid"]))
+    return results
+
+
+def _other_speaker_in_range_for_split_utterances_on_turn_taking(
+    event_times: list[int],
+    word_events: list[tuple[int, str]],
+    start: int,
+    end: int,
+    exclude_speaker: str,
+) -> bool:
+    """Check if any other speaker has a word starting in [start, end]."""
+    lo = bisect.bisect_left(event_times, start)
+    hi = bisect.bisect_right(event_times, end)
+    return any(word_events[i][1] != exclude_speaker for i in range(lo, hi))
+
+
+def _make_utterance_for_split_utterances_on_turn_taking(
+    original: dict[str, Any],
+    abs_words: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Build a new utterance from a slice of absolute-timed words."""
+    seg_start = abs_words[0]["_abs_start"]
+    seg_end = abs_words[-1]["_abs_end"]
+
+    # Re-normalize word times relative to the new segment start
+    clean_words = []
+    for w in abs_words:
+        cleaned = {k: v for k, v in w.items() if not k.startswith("_abs_")}
+        cleaned["start"] = (w["_abs_start"] - seg_start) / 1000.0
+        cleaned["end"] = (w["_abs_end"] - seg_start) / 1000.0
+        clean_words.append(cleaned)
+
+    transcript = " ".join(w.get("punctuated_word") or w.get("word") for w in clean_words)
+
+    out = copy.deepcopy(original)
+    out["timestamp_ms"] = seg_start
+    out["duration_ms"] = seg_end - seg_start
+    out["transcription"] = {"words": clean_words, "transcript": transcript}
+    return out

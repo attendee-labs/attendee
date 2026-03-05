@@ -581,6 +581,7 @@ def _build_fake_deepgram(success=True, err_code=None):
 
     # ------------------------------------------------------------------ #
     # 3. Other names used in the provider
+    fake.DeepgramClientOptions = mock.Mock()
     fake.FileSource = dict
     fake.PrerecordedOptions = mock.Mock()
     return fake
@@ -665,6 +666,37 @@ class DeepgramProviderTest(TransactionTestCase):
                 "error_json": {"err_code": "SOME_OTHER"},
             },
         )
+
+    # ------------------------------------------------------------------ #
+    @mock.patch.dict("os.environ", {"DEEPGRAM_BASE_URL": "https://custom.deepgram-proxy.example.com"})
+    def test_custom_base_url_from_env(self):
+        """DEEPGRAM_BASE_URL env var → DeepgramClientOptions created with that URL."""
+        fake = _build_fake_deepgram(success=True)
+        transcription, failure = self._call_with_fake_module(fake)
+
+        self.assertIsNone(failure)
+        self.assertEqual(transcription, {"transcript": "hello"})
+
+        # DeepgramClientOptions should have been instantiated with the custom URL
+        fake.DeepgramClientOptions.assert_called_once_with(url="https://custom.deepgram-proxy.example.com")
+        # DeepgramClient should have received the options object as second arg
+        fake.DeepgramClient.assert_called_once_with("dg_key", fake.DeepgramClientOptions.return_value)
+
+    # ------------------------------------------------------------------ #
+    def test_eu_server_setting(self):
+        """use_eu_server=True → DeepgramClientOptions created with EU endpoint."""
+        self.bot.settings = {"transcription_settings": {"deepgram": {"use_eu_server": True}}}
+        self.bot.save()
+
+        fake = _build_fake_deepgram(success=True)
+        transcription, failure = self._call_with_fake_module(fake)
+
+        self.assertIsNone(failure)
+        self.assertEqual(transcription, {"transcript": "hello"})
+
+        # DeepgramClientOptions should have been instantiated with the EU URL
+        fake.DeepgramClientOptions.assert_called_once_with(url="https://api.eu.deepgram.com")
+        fake.DeepgramClient.assert_called_once_with("dg_key", fake.DeepgramClientOptions.return_value)
 
 
 from unittest import mock

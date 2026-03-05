@@ -219,8 +219,8 @@ paths:
           description: Bot not found
     patch:
       operationId: Patch Bot
-      description: Updates a bot. Currently only the join_at and metadata fields can
-        be updated. The join_at field can only be updated when the bot is in the scheduled
+      description: Updates a bot. The join_at, meeting_url, bot_name, bot_image and
+        recording_settings fields can only be updated when the bot is in the scheduled
         state. The metadata field can be updated at any time.
       summary: Update a bot
       parameters:
@@ -262,6 +262,14 @@ paths:
                 summary: Update join_at
                 description: Example of updating the join_at time for a scheduled
                   bot
+              UpdateNameAndImage:
+                value:
+                  bot_name: My Updated Bot
+                  bot_image:
+                    type: image/png
+                    data: iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==
+                summary: Update name and image
+                description: Example of updating the bot name and/or image
       security:
       - {}
       responses:
@@ -2236,6 +2244,10 @@ components:
                     Each string should be in the format ''term_to_find:replacement_term''
                     (e.g., ''kpis:Key Performance Indicators''). See here for details:
                     https://developers.deepgram.com/docs/find-and-replace'
+                use_eu_server:
+                  type: boolean
+                  description: Whether to use the EU server for transcription. Defaults
+                    to false.
               additionalProperties: false
             gladia:
               type: object
@@ -2542,7 +2554,7 @@ components:
             format:
               type: string
               description: The format of the recording to save. The supported formats
-                are 'mp4', 'mp3' and 'none'.
+                are 'mp4', 'mp3' and 'none'. Defaults to 'mp4'.
             view:
               type: string
               description: The view to use for the recording. The supported views
@@ -3000,7 +3012,8 @@ components:
       - timestamp_ms
     PatchedPatchBotRequest:
       type: object
-      description: Mixin class providing meeting URL validation for serializers.
+      description: Mixin class providing validation for common attributes used in
+        both patching and creating bots.
       properties:
         join_at:
           type: string
@@ -3011,6 +3024,55 @@ components:
           type: string
           minLength: 1
           description: The URL of the meeting to join, e.g. https://zoom.us/j/123?pwd=456
+        metadata:
+          type: object
+          description: JSON object containing metadata to associate with the bot
+        bot_name:
+          type: string
+          minLength: 1
+          description: The name of the bot, e.g. 'My Bot'
+        bot_image:
+          allOf:
+          - $ref: '#/components/schemas/BotImageRequest'
+          description: The image for the bot
+        recording_settings:
+          type: object
+          properties:
+            format:
+              type: string
+              description: The format of the recording to save. The supported formats
+                are 'mp4', 'mp3' and 'none'. Defaults to 'mp4'.
+            view:
+              type: string
+              description: The view to use for the recording. The supported views
+                are 'speaker_view', 'gallery_view' and 'speaker_view_no_sidebar'.
+            resolution:
+              type: string
+              description: The resolution to use for the recording. The supported
+                resolutions are '1080p' and '720p'. Defaults to '1080p'.
+              enum:
+              - 1080p
+              - 720p
+            record_chat_messages_when_paused:
+              type: boolean
+              description: Whether to record chat messages even when the recording
+                is paused. Defaults to false.
+              default: false
+            record_async_transcription_audio_chunks:
+              type: boolean
+              description: Whether to record additional audio data which is needed
+                for creating async (post-meeting) transcriptions. Defaults to false.
+              default: false
+            reserve_additional_storage:
+              type: boolean
+              description: Whether to reserve extra space to store the recording.
+                Only needed when the bot will record video for longer than 6 hours.
+                Defaults to false.
+              default: false
+          additionalProperties: false
+          required: []
+          description: The settings for the bot's recording. The settings specified
+            here will completely replace the existing settings.
     PatchedPatchBotVoiceAgentSettingsRequest:
       type: object
       properties:

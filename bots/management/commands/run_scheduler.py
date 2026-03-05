@@ -1,9 +1,13 @@
+import base64
+import json
 import logging
 import os
+import random
 import signal
 import time
 
 import redis
+from django.conf import settings
 from django.core.management.base import BaseCommand
 from django.db import connection, models, transaction
 from django.db.models import Q
@@ -44,18 +48,26 @@ class Command(BaseCommand):
     def _get_redis_client(self):
         """Get or create a Redis client connection."""
         if self._redis_client is None:
-            redis_url = os.getenv("REDIS_URL") + ("?ssl_cert_reqs=none" if os.getenv("DISABLE_REDIS_SSL") else "")
-            self._redis_client = redis.from_url(redis_url)
+            self._redis_client = redis.from_url(settings.REDIS_URL_WITH_PARAMS)
         return self._redis_client
 
-    def _log_celery_queue_size(self):
+    def _log_celery_queue_size(self, queue_name):
         """Log the size of the default Celery queue."""
         try:
-            queue_size = self._get_redis_client().llen("celery")
-            log.info("Celery queue size: %d", queue_size)
+            queue_size = self._get_redis_client().llen(queue_name)
+            log.info("Celery queue %s size: %d", queue_name, queue_size)
         except Exception:
-            log.exception("Failed to get Celery queue size")
+            log.exception("Failed to get Celery queue %s size", queue_name)
             self._redis_client = None  # Reset connection on failure
+
+    def _log_celery_queue_sizes(self):
+        try:
+            # Get all the celery queue names from the CELERY_TASK_ROUTES setting
+            queue_names = list({"celery"} | {route.get("queue", "celery") for route in settings.CELERY_TASK_ROUTES.values()})
+            for queue_name in queue_names:
+                self._log_celery_queue_size(queue_name)
+        except Exception:
+            log.exception("Failed to get Celery queue sizes, skipping")
 
     def handle(self, *args, **opts):
         # Trap SIGINT / SIGTERM so Kubernetes or Heroku can stop the container cleanly
@@ -68,7 +80,7 @@ class Command(BaseCommand):
         while self._keep_running:
             began = time.monotonic()
             try:
-                self._log_celery_queue_size()
+                self._log_celery_queue_sizes()
                 self._run_scheduled_bots()
                 self._run_periodic_calendar_syncs()
                 self._run_periodic_zoom_oauth_connection_syncs()
@@ -157,8 +169,65 @@ class Command(BaseCommand):
 
         log.info("Launched %d zoom oauth connection sync tasks", len(zoom_oauth_connections))
 
+    def _run_scheduled_bots_with_jitter(self):
+        jitter_start_seconds = int(os.getenv("SCHEDULED_BOT_JITTER_START_SECONDS", 300))
+        jitter_end_seconds = int(os.getenv("SCHEDULED_BOT_JITTER_END_SECONDS", 600))
+
+        pending_scheduled_bot_task_args = self._get_args_for_pending_launch_scheduled_bot_tasks()
+        log.info(f"Found {len(pending_scheduled_bot_task_args)} pending launch scheduled bot tasks")
+
+        join_at_upper_threshold = timezone.now() + timezone.timedelta(seconds=jitter_end_seconds)
+        # If we miss a scheduled bot by more than 5 minutes, don't bother launching it, it's a failure and it'll be cleaned up
+        # by the clean_up_bots_with_heartbeat_timeout_or_that_never_launched command
+        join_at_lower_threshold = timezone.now() - timezone.timedelta(minutes=5)
+
+        join_at_jitter_threshold = timezone.now() + timezone.timedelta(seconds=jitter_start_seconds)
+
+        with transaction.atomic():
+            bots_to_launch = Bot.objects.filter(state=BotStates.SCHEDULED, join_at__lte=join_at_upper_threshold, join_at__gte=join_at_lower_threshold).select_for_update(skip_locked=True)
+
+            num_bots_launched = 0
+            for bot in bots_to_launch:
+                if (bot.id, bot.join_at.isoformat()) in pending_scheduled_bot_task_args:
+                    # The bot is already being launched, so we can skip it
+                    continue
+
+                if bot.join_at > join_at_jitter_threshold:
+                    # The bot is above the jitter threshold, so we launch it with a random delay of up to bot.join_at - join_at_jitter_threshold seconds
+                    random_delay = random.randint(0, int((bot.join_at - join_at_jitter_threshold).total_seconds()))
+                    log.info(f"Launching scheduled bot {bot.id} ({bot.object_id}) with join_at {bot.join_at.isoformat()} and random delay {random_delay} seconds")
+                    launch_scheduled_bot.apply_async(args=[bot.id, bot.join_at.isoformat()], countdown=random_delay)
+                else:
+                    # The bot is below the jitter threshold, so we need to launch immediately
+                    log.info(f"Launching scheduled bot {bot.id} ({bot.object_id}) with join_at {bot.join_at.isoformat()}")
+                    launch_scheduled_bot.delay(bot.id, bot.join_at.isoformat())
+
+                num_bots_launched += 1
+
+            log.info("Launched %s bots", num_bots_launched)
+
+    def _get_args_for_pending_launch_scheduled_bot_tasks(self):
+        try:
+            scheduled_bot_task_args = set()
+            for delivery_tag, raw in self._get_redis_client().hscan_iter("unacked", match="*"):
+                # Filter for this string being in the raw message: bots.tasks.launch_scheduled_bot_task.launch_scheduled_bot
+                if b"bots.tasks.launch_scheduled_bot_task.launch_scheduled_bot" not in raw:
+                    continue
+                # Parse the raw message as JSON. First argument is bot id, second argument is join_at
+                message = json.loads(raw)
+                body = json.loads(base64.b64decode(message[0]["body"]))
+                scheduled_bot_task_args.add((body[0][0], body[0][1]))
+
+            return scheduled_bot_task_args
+        except Exception:
+            log.exception("Failed to get args for pending launch scheduled bot tasks")
+            return set()
+
     # -----------------------------------------------------------
     def _run_scheduled_bots(self):
+        if os.getenv("SCHEDULED_BOT_JITTER_START_SECONDS") and os.getenv("SCHEDULED_BOT_JITTER_END_SECONDS"):
+            return self._run_scheduled_bots_with_jitter()
+
         """
         Promote objects whose join_at ≤ join_at_threshold.
         Uses SELECT … FOR UPDATE SKIP LOCKED so multiple daemons
