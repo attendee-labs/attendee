@@ -15,6 +15,9 @@ OPENAI_REALTIME_SAMPLE_RATE = 24000
 SAMPLE_WIDTH = 2  # 16-bit PCM
 CHANNELS = 1  # mono
 OPENAI_APPEND_FRAME_BYTES = int(OPENAI_REALTIME_SAMPLE_RATE * SAMPLE_WIDTH * 0.1)  # 100ms
+OPENAI_SERVER_VAD_THRESHOLD = 0.65
+OPENAI_SERVER_VAD_PREFIX_PADDING_MS = 900
+OPENAI_SERVER_VAD_SILENCE_DURATION_MS = 1400
 
 
 class OpenAIStreamingTranscriber:
@@ -209,9 +212,9 @@ class OpenAIStreamingTranscriber:
                         "transcription": transcription_config,
                         "turn_detection": {
                             "type": "server_vad",
-                            "threshold": 0.5,
-                            "prefix_padding_ms": 300,
-                            "silence_duration_ms": 500,
+                            "threshold": OPENAI_SERVER_VAD_THRESHOLD,
+                            "prefix_padding_ms": OPENAI_SERVER_VAD_PREFIX_PADDING_MS,
+                            "silence_duration_ms": OPENAI_SERVER_VAD_SILENCE_DURATION_MS,
                         },
                     },
                 },
@@ -239,9 +242,9 @@ class OpenAIStreamingTranscriber:
                         "transcription": transcription_config,
                         "turn_detection": {
                             "type": "server_vad",
-                            "threshold": 0.5,
-                            "prefix_padding_ms": 300,
-                            "silence_duration_ms": 500,
+                            "threshold": OPENAI_SERVER_VAD_THRESHOLD,
+                            "prefix_padding_ms": OPENAI_SERVER_VAD_PREFIX_PADDING_MS,
+                            "silence_duration_ms": OPENAI_SERVER_VAD_SILENCE_DURATION_MS,
                         },
                     }
                 },
@@ -263,9 +266,9 @@ class OpenAIStreamingTranscriber:
                 "input_audio_transcription": transcription_config,
                 "turn_detection": {
                     "type": "server_vad",
-                    "threshold": 0.5,
-                    "prefix_padding_ms": 300,
-                    "silence_duration_ms": 500,
+                    "threshold": OPENAI_SERVER_VAD_THRESHOLD,
+                    "prefix_padding_ms": OPENAI_SERVER_VAD_PREFIX_PADDING_MS,
+                    "silence_duration_ms": OPENAI_SERVER_VAD_SILENCE_DURATION_MS,
                 },
             },
         }
