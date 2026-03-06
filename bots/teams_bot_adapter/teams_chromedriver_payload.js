@@ -1111,6 +1111,14 @@ class ChatMessageManager {
 
     handleChatMessage(chatMessage) {
         try {
+            if (!chatMessage.clientMessageId)
+                return;
+            if (!chatMessage.from)
+                return;
+            if (!chatMessage.content)
+                return;
+            if (!chatMessage.originalArrivalTime)
+                return;
             // messageTypes we care about are: RichText, RichText/Html, Text
             const allowedMessageTypes = ['RichText', 'RichText/Html', 'Text', 'RichText/Sms'];
             if (!allowedMessageTypes.includes(chatMessage.messageType))
@@ -1121,14 +1129,6 @@ class ChatMessageManager {
                 });
                 return;
             }
-            if (!chatMessage.clientMessageId)
-                return;
-            if (!chatMessage.from)
-                return;
-            if (!chatMessage.content)
-                return;
-            if (!chatMessage.originalArrivalTime)
-                return;
             if (!this.isNewOrUpdatedChatMessage(chatMessage))
                 return;
 
