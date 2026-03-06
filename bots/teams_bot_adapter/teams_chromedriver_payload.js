@@ -56,6 +56,11 @@ class ChatMessagePoller {
     }
 
     async fetchChatMessages() {
+        if  (!window.ws?.mediaSendingEnabled) {
+            console.log('ChatMessagePoller: Media sending is disabled, skipping fetch');
+            return null;
+        }
+        
         if (!this.skype_token || !this.ms_teams_region) {
             console.log('ChatMessagePoller: Missing required params', {
                 hasSkypeToken: !!this.skype_token,
