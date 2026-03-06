@@ -281,6 +281,7 @@ class BotController:
             disable_incoming_video=self.disable_incoming_video_for_web_bots(),
             record_participant_speech_start_stop_events=self.bot_in_db.record_participant_speech_start_stop_events(),
             zoom_tokens=zoom_tokens,
+            zoom_user_email=self.bot_in_db.zoom_user_email(),
         )
 
     def get_zoom_bot_adapter(self):
@@ -309,6 +310,7 @@ class BotController:
             video_frame_size=self.bot_in_db.recording_dimensions(),
             zoom_tokens=zoom_tokens,
             zoom_meeting_settings=self.bot_in_db.zoom_meeting_settings(),
+            zoom_user_email=self.bot_in_db.zoom_user_email(),
             record_chat_messages_when_paused=self.bot_in_db.record_chat_messages_when_paused(),
             record_participant_speech_start_stop_events=self.bot_in_db.record_participant_speech_start_stop_events(),
         )

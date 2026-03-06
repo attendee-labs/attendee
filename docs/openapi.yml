@@ -2666,6 +2666,10 @@ components:
               additionalProperties: false
               description: Settings for various aspects of the Zoom Meeting. To use
                 these settings, the bot must have host privileges.
+            user_email:
+              type: string
+              description: Email address for the bot when joining Zoom webinars
+                (required for Zoom webinars, cannot be the host's email address).
           required: []
           additionalProperties: false
           default:
