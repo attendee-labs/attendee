@@ -73,7 +73,7 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
-        self.meeting_id, self.meeting_password = parse_zoom_join_url(self.meeting_url)
+        self.meeting_id, self.meeting_password, self.registrant_token = parse_zoom_join_url(self.meeting_url)
         self.zoom_oauth_credentials_callback = zoom_oauth_credentials_callback
 
         # Doing it via callback so we don't store these in-memory
@@ -85,7 +85,7 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
         self.zoom_closed_captions_language = zoom_closed_captions_language
         self.should_ask_for_recording_permission = should_ask_for_recording_permission
         self.zoom_tokens = zoom_tokens
-        self.zoom_user_email = zoom_user_email or ""
+        self.zoom_user_email = zoom_user_email
 
         self.generic_join_error_retries = 0
 
@@ -124,7 +124,8 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
                 joinToken: {json.dumps(self.zoom_tokens.get("join_token", ""))},
                 appPrivilegeToken: {json.dumps(self.zoom_tokens.get("app_privilege_token", ""))},
                 onBehalfToken: {json.dumps(self.zoom_tokens.get("onbehalf_token", ""))},
-                userEmail: {json.dumps(self.zoom_user_email)},
+                userEmail: {json.dumps(self.zoom_user_email or "")},
+                registrantToken: {json.dumps(self.registrant_token or "")},
             }}
         """
 
