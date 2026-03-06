@@ -33,6 +33,8 @@ class BotAdapter:
         APP_SESSION_DISCONNECT_REQUESTED = "App session disconnect requested"
         APP_SESSION_DISCONNECTED = "App session disconnected"
 
+        ADAPTER_REQUESTED_SAVE_SCREENSHOT = "Adapter requested save screenshot"
+
     class BOT_RECORDING_PERMISSION_DENIED_REASON:
         HOST_DENIED_PERMISSION = "HOST_DENIED_PERMISSION"
         REQUEST_TIMED_OUT = "REQUEST_TIMED_OUT"

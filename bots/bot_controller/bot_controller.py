@@ -1713,6 +1713,12 @@ class BotController:
             self.cleanup()
             return
 
+        if message.get("message") == BotAdapter.Messages.ADAPTER_REQUESTED_SAVE_SCREENSHOT:
+            logger.info("Received message that adapter requested save screenshot")
+            last_bot_event = self.bot_in_db.last_bot_event()
+            self.save_debug_artifacts(message, last_bot_event)
+            return
+
         if message.get("message") == BotAdapter.Messages.LOGIN_ATTEMPT_FAILED:
             logger.info("Received message that login attempt failed")
             new_bot_event = BotEventManager.create_event(
