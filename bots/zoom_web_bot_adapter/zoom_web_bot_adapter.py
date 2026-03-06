@@ -69,6 +69,7 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
         zoom_closed_captions_language: str | None,
         should_ask_for_recording_permission: bool,
         zoom_tokens: dict,
+        zoom_user_email: str | None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -84,6 +85,7 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
         self.zoom_closed_captions_language = zoom_closed_captions_language
         self.should_ask_for_recording_permission = should_ask_for_recording_permission
         self.zoom_tokens = zoom_tokens
+        self.zoom_user_email = zoom_user_email or ""
 
         self.generic_join_error_retries = 0
 
@@ -122,6 +124,7 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
                 joinToken: {json.dumps(self.zoom_tokens.get("join_token", ""))},
                 appPrivilegeToken: {json.dumps(self.zoom_tokens.get("app_privilege_token", ""))},
                 onBehalfToken: {json.dumps(self.zoom_tokens.get("onbehalf_token", ""))},
+                userEmail: {json.dumps(self.zoom_user_email)},
             }}
         """
 

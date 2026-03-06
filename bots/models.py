@@ -851,6 +851,9 @@ class Bot(models.Model):
 
     def zoom_meeting_settings(self):
         return self.settings.get("zoom_settings", {}).get("meeting_settings", {})
+    
+    def zoom_user_email(self):
+        return self.settings.get("zoom_settings", {}).get("user_email", None)
 
     def rtmp_destination_url(self):
         rtmp_settings = self.settings.get("rtmp_settings")

@@ -76,6 +76,7 @@ class ZoomBotAdapter(BotAdapter):
         video_frame_size: tuple[int, int],
         zoom_tokens: dict,
         zoom_meeting_settings: dict,
+        zoom_user_email: str | None,
         record_chat_messages_when_paused: bool,
         record_participant_speech_start_stop_events: bool,
     ):
@@ -92,6 +93,7 @@ class ZoomBotAdapter(BotAdapter):
         self.add_participant_event_callback = add_participant_event_callback
         self.zoom_tokens = zoom_tokens
         self.zoom_meeting_settings = zoom_meeting_settings
+        self.zoom_user_email = zoom_user_email or ""
         self.record_chat_messages_when_paused = record_chat_messages_when_paused
         self.record_participant_speech_start_stop_events = record_participant_speech_start_stop_events
 
@@ -943,6 +945,9 @@ class ZoomBotAdapter(BotAdapter):
             param.app_privilege_token = self.zoom_tokens.get("app_privilege_token")
         if self.zoom_tokens.get("onbehalf_token"):
             param.onBehalfToken = self.zoom_tokens.get("onbehalf_token")
+
+        if self.zoom_user_email:
+            param.userEmail = self.zoom_user_email
 
         param.eAudioRawdataSamplingRate = zoom.AudioRawdataSamplingRate.AudioRawdataSamplingRate_32K
 
