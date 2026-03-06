@@ -1,4 +1,5 @@
 import logging
+import random
 import time
 
 from selenium.common.exceptions import ElementClickInterceptedException, ElementNotInteractableException, NoSuchElementException, StaleElementReferenceException, TimeoutException
@@ -7,12 +8,17 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
 from bots.models import RecordingViews
-from bots.web_bot_adapter.ui_methods import UiBlockedByCaptchaException, UiCouldNotClickElementException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableExpectedException
+from bots.web_bot_adapter.ui_methods import UiBlockedByCaptchaException, UiCouldNotClickElementException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableException, UiRetryableExpectedException
 
 logger = logging.getLogger(__name__)
 
 
 class UiTeamsBlockingUsException(UiRetryableExpectedException):
+    def __init__(self, message, step=None, inner_exception=None):
+        super().__init__(message, step, inner_exception)
+
+
+class UiWaitingRoomTransitionFailedException(UiRetryableException):
     def __init__(self, message, step=None, inner_exception=None):
         super().__init__(message, step, inner_exception)
 
@@ -78,6 +84,11 @@ class TeamsUIMethods:
             return True
         return False
 
+    def sleep_for_random_amount_of_time(self):
+        time_to_sleep_for = int(random.uniform(1, 90))
+        logger.info(f"Sleeping for {time_to_sleep_for} seconds.")
+        time.sleep(time_to_sleep_for)
+
     def fill_out_name_input(self):
         num_attempts = 60
         logger.info("Waiting for the name input field...")
@@ -97,6 +108,7 @@ class TeamsUIMethods:
                 last_check_timed_out = attempt_index == num_attempts - 1
                 if last_check_timed_out:
                     logger.info("Could not find name input. Timed out. Raising UiCouldNotLocateElementException")
+                    self.sleep_for_random_amount_of_time()
                     raise UiCouldNotLocateElementException("Could not find name input. Timed out.", "name_input", e)
             except Exception as e:
                 logger.info(f"Could not find name input. Unknown error {e} of type {type(e)}. Raising UiCouldNotLocateElementException")
@@ -135,6 +147,11 @@ class TeamsUIMethods:
         if waiting_room_timeout_exceeded:
             # If there is more than one participant in the meeting, then the bot was just let in and we should not timeout
             if len(self.participants_info) > 1:
+                waiting_room_timeout_exceeded_by_more_than_three_minutes = time.time() - waiting_room_timeout_started_at > self.automatic_leave_configuration.waiting_room_timeout_seconds + 180
+                if waiting_room_timeout_exceeded_by_more_than_three_minutes:
+                    logger.warning("Waiting room timeout exceeded, but there is more than one participant in the meeting. More than three minutes have passed since the timeout started. This is unexpected, throwing exception.")
+                    raise UiWaitingRoomTransitionFailedException("Waiting room timeout exceeded, but there is more than one participant in the meeting. More than three minutes have passed since the timeout started. This is unexpected.", step)
+
                 logger.info("Waiting room timeout exceeded, but there is more than one participant in the meeting. Not aborting join attempt.")
                 return
 

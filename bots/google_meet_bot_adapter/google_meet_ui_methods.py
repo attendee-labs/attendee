@@ -142,23 +142,51 @@ class GoogleMeetUIMethods:
     def turn_off_media_inputs(self):
         logger.info("Waiting for the microphone button...")
         MICROPHONE_BUTTON_SELECTOR = 'div[aria-label="Turn off microphone"], button[aria-label="Turn off microphone"]'
-        microphone_button = self.locate_element(
-            step="turn_off_microphone_button",
-            condition=EC.presence_of_element_located((By.CSS_SELECTOR, MICROPHONE_BUTTON_SELECTOR)),
-            wait_time_seconds=6,
-        )
-        logger.info("Clicking the microphone button...")
-        self.click_element(microphone_button, "turn_off_microphone_button")
+        MICROPHONE_BUTTON_ON_SELECTOR = 'div[aria-label="Turn on microphone"], button[aria-label="Turn on microphone"]'
 
-        logger.info("Waiting for the camera button...")
         CAMERA_BUTTON_SELECTOR = 'div[aria-label="Turn off camera"], button[aria-label="Turn off camera"]'
-        camera_button = self.locate_element(
-            step="turn_off_camera_button",
-            condition=EC.presence_of_element_located((By.CSS_SELECTOR, CAMERA_BUTTON_SELECTOR)),
-            wait_time_seconds=6,
-        )
-        logger.info("Clicking the camera button...")
-        self.click_element(camera_button, "turn_off_camera_button")
+        CAMERA_BUTTON_ON_SELECTOR = 'div[aria-label="Turn on camera"], button[aria-label="Turn on camera"]'
+
+        for attempt in range(5):
+            microphone_button = self.locate_element(
+                step="turn_off_microphone_button",
+                condition=EC.element_to_be_clickable((By.CSS_SELECTOR, MICROPHONE_BUTTON_SELECTOR)),
+                wait_time_seconds=6,
+            )
+            logger.info("Clicking the microphone button...")
+            self.click_element(microphone_button, "turn_off_microphone_button")
+
+            # Wait for confirmation that microphone is off
+            try:
+                self.locate_element(
+                    step="wait_for_microphone_to_be_off",
+                    condition=EC.element_to_be_clickable((By.CSS_SELECTOR, MICROPHONE_BUTTON_ON_SELECTOR)),
+                    wait_time_seconds=2,
+                )
+                break
+            except:
+                logger.warning("Microphone button did not seem to be turned off. Retrying...")
+
+        for attempt in range(5):
+            logger.info("Waiting for the camera button...")
+            camera_button = self.locate_element(
+                step="turn_off_camera_button",
+                condition=EC.element_to_be_clickable((By.CSS_SELECTOR, CAMERA_BUTTON_SELECTOR)),
+                wait_time_seconds=6,
+            )
+            logger.info("Clicking the camera button...")
+            self.click_element(camera_button, "turn_off_camera_button")
+
+            # Wait for confirmation that camera is off
+            try:
+                self.locate_element(
+                    step="wait_for_camera_to_be_off",
+                    condition=EC.element_to_be_clickable((By.CSS_SELECTOR, CAMERA_BUTTON_ON_SELECTOR)),
+                    wait_time_seconds=2,
+                )
+                break
+            except:
+                logger.warning("Camera button did not seem to be turned off. Retrying...")
 
     def join_now_button_selector(self):
         return '//button[.//span[text()="Ask to join" or text()="Join now" or text()="Join the call now"]]'
