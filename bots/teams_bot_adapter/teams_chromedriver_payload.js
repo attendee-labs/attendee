@@ -144,6 +144,7 @@ class ChatMessagePoller {
                         from: fromConverted,
                         content: message.content,
                         originalArrivalTime: message.originalarrivaltime,
+                        messageType: message.messagetype,
                     };
                     window.chatMessageManager?.handleChatMessage(messageConverted);
                 }
@@ -1110,6 +1111,16 @@ class ChatMessageManager {
 
     handleChatMessage(chatMessage) {
         try {
+            // messageTypes we care about are: RichText, RichText/Html, Text
+            const allowedMessageTypes = ['RichText', 'RichText/Html', 'Text', 'RichText/Sms'];
+            if (!allowedMessageTypes.includes(chatMessage.messageType))
+            {
+                window.ws.sendJson({
+                    type: 'chatMessagePollerUpdate',
+                    message: `Ignoring chat message because it had message type ${chatMessage.messageType}.`,
+                });
+                return;
+            }
             if (!chatMessage.clientMessageId)
                 return;
             if (!chatMessage.from)
