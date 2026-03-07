@@ -45,6 +45,14 @@ class ZoomWebUIMethods:
 
         self.wait_to_be_admitted_to_meeting()
 
+        if self._is_webinar_session():
+            # Webinars use a different in-meeting UI: caption button is visible from the start; no "disable incoming video" control.
+            logger.info("Webinar detected; using webinar caption flow.")
+            self._enable_webinar_captions()
+            self.ready_to_show_bot_image()
+            return
+
+        # Meeting flow: find "More meeting control" and optionally enable Captions
         # Then find a button with the arial-label "More meeting control " and click it
         logger.info("Waiting for more meeting control button")
         more_meeting_control_button = WebDriverWait(self.driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, "div[aria-label='More meeting control ']")))
@@ -177,6 +185,26 @@ class ZoomWebUIMethods:
                     e,
                 )
 
+    def _is_webinar_session(self):
+        """
+        Determine if the current session is a webinar (vs a meeting).
+        Uses URL /w/ when present; otherwise detects by in-meeting UI:
+        - Meeting: "More meeting control" button is present.
+        - Webinar: Q&A button is present (aria-label like "Question and Answer 0 open questions").
+        """
+        try:
+            WebDriverWait(self.driver, 6).until(
+                EC.presence_of_element_located((
+                    By.CSS_SELECTOR,
+                    "[aria-label='Question and Answer 0 open questions']",
+                ))
+            )
+            logger.info("Detected webinar UI (Q&A button visible).")
+            return True
+        except TimeoutException:
+            logger.info("Could not determine meeting type from UI; defaulting to meeting flow.")
+            return False
+
     def disable_incoming_video_in_ui(self):
         logger.info("Waiting for more meeting control button to disable incoming video")
         more_meeting_control_button = WebDriverWait(self.driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, "div[aria-label='More meeting control ']")))
@@ -187,6 +215,42 @@ class ZoomWebUIMethods:
         turn_off_incoming_video_button = WebDriverWait(self.driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, "[aria-label='Stop Incoming Video']")))
         logger.info("Turn off incoming video button found, clicking")
         self.driver.execute_script("arguments[0].click();", turn_off_incoming_video_button)
+
+    def _enable_webinar_captions(self):
+        """
+        Enable closed captions in webinar UI.
+        Webinar has a direct "Show Captions" / "Hide Captions" button and "More options for captions, menu button" for language.
+        """
+        closed_captions_enabled = False
+        try:
+            # Caption button is visible from the start: "Show Captions" when off, "Hide Captions" when on.
+            show_captions = WebDriverWait(self.driver, 10).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "button[aria-label='Show Captions']"))
+            )
+            if show_captions.is_displayed():
+                logger.info("Webinar: Show Captions button found, clicking to enable CC.")
+                self.driver.execute_script("arguments[0].click();", show_captions)
+                closed_captions_enabled = True
+        except TimeoutException:
+            try:
+                hide_captions = WebDriverWait(self.driver, 2).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "button[aria-label='Hide Captions']"))
+                )
+                if hide_captions.is_displayed():
+                    logger.info("Webinar: Hide Captions button found, CC already enabled.")
+                    closed_captions_enabled = True
+            except TimeoutException:
+                logger.info("Webinar: Captions button not found, unable to transcribe via closed-captions.")
+                self.could_not_enable_closed_captions()
+                return
+
+        if not closed_captions_enabled:
+            return
+
+        # don't know if it's possible to set the closed captions language in a webinar
+        # only thing i see is a button to select the _speaking_ language, which is for interpreting the speaker's language
+        # [aria-label='More options for captions, menu button']
+        # after which we would self.set_zoom_closed_captions_language()
 
     def click_cancel_join_button(self):
         cancel_join_button = WebDriverWait(self.driver, 5).until(EC.presence_of_element_located((By.CSS_SELECTOR, "button.leave-btn")))

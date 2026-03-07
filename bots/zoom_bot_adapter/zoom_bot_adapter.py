@@ -946,10 +946,10 @@ class ZoomBotAdapter(BotAdapter):
         if self.zoom_tokens.get("onbehalf_token"):
             param.onBehalfToken = self.zoom_tokens.get("onbehalf_token")
         
-        if self.zoom_user_email:
-            param.userEmail = self.zoom_user_email
+        # if self.zoom_user_email:
+        #     param.userEmail = self.zoom_user_email
         if self.registrant_token:
-            param.tk = self.registrant_token
+            param.webinarToken = self.registrant_token
 
         param.eAudioRawdataSamplingRate = zoom.AudioRawdataSamplingRate.AudioRawdataSamplingRate_32K
 
