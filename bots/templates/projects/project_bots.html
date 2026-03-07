@@ -72,7 +72,7 @@
     </div>
     
     <!-- Filters Collapsible Panel -->
-    {% if filter_params.start_date or filter_params.end_date or filter_params.join_at_start or filter_params.join_at_end or filter_params.states or filter_params.search or bots %}
+    {% if filter_params.start_date or filter_params.end_date or filter_params.join_at_start or filter_params.join_at_end or filter_params.ended_at_start or filter_params.ended_at_end or filter_params.states or filter_params.search or filter_params.joined_meeting or filter_params.unexpected_error or bots %}
     <div class="filter-panel mb-3">
         <div class="filter-header p-2 rounded d-flex align-items-center" 
              style="background-color: #f8f9fa; cursor: pointer;" 
@@ -81,12 +81,12 @@
             <span>Filters</span>
             <span style="margin-left: 5px;" class="filter-caret-container ms-auto">
                 <svg width="21" height="21" viewBox="0 0 14 14" fill="none" class="filter-caret" 
-                     style="transform: {% if filter_params.start_date or filter_params.end_date or filter_params.join_at_start or filter_params.join_at_end or filter_params.states or filter_params.search %}rotate(180deg){% else %}rotate(0deg){% endif %};">
+                     style="transform: {% if filter_params.start_date or filter_params.end_date or filter_params.join_at_start or filter_params.join_at_end or filter_params.ended_at_start or filter_params.ended_at_end or filter_params.states or filter_params.search or filter_params.joined_meeting or filter_params.unexpected_error %}rotate(180deg){% else %}rotate(0deg){% endif %};">
                     <path d="M4.3225 5.0108L7 7.68247L9.6775 5.0108L10.5 5.8333L7 9.3333L3.5 5.8333L4.3225 5.0108Z" fill="currentcolor"></path>
                 </svg>
             </span>
         </div>
-        <div class="filter-content" style="display: {% if filter_params.start_date or filter_params.end_date or filter_params.join_at_start or filter_params.join_at_end or filter_params.states or filter_params.search %}block{% else %}none{% endif %};">
+        <div class="filter-content" style="display: {% if filter_params.start_date or filter_params.end_date or filter_params.join_at_start or filter_params.join_at_end or filter_params.ended_at_start or filter_params.ended_at_end or filter_params.states or filter_params.search or filter_params.joined_meeting or filter_params.unexpected_error %}block{% else %}none{% endif %};">
             <div class="filter-container">
                 <form method="get" class="row g-3">
                     <!-- Search filter -->
@@ -98,7 +98,7 @@
                     </div>
                     
                     <!-- Compact date filters in a single row -->
-                    <div class="col-md-10 d-flex flex-wrap filter-item">
+                    <div class="col-md-12 d-flex flex-wrap filter-item">
                         <div class="me-2" style="display: inline-flex; white-space: nowrap; align-items: center;">
                             <label for="start_date" class="form-label me-2 mb-0" style="flex-shrink: 0;">Created</label>
                             <input type="date" class="form-control form-control-sm" id="start_date" name="start_date" value="{{ filter_params.start_date }}">
@@ -112,24 +112,66 @@
                         <div class="me-4" style="border-left: 1px solid #dee2e6; height: 24px; align-self: center;"></div>
                         
                         <div class="me-2" style="display: inline-flex; white-space: nowrap; align-items: center;">
+                            <label for="ended_at_start" class="form-label me-2 mb-0" style="flex-shrink: 0;">Ended</label>
+                            <input type="date" class="form-control form-control-sm" id="ended_at_start" name="ended_at_start" value="{{ filter_params.ended_at_start }}">
+                        </div>
+                        
+                        <div style="display: inline-flex; white-space: nowrap; align-items: center;" class="me-4">
+                            <label for="ended_at_end" class="form-label me-2 mb-1" style="flex-shrink: 0;">→</label>
+                            <input type="date" class="form-control form-control-sm" id="ended_at_end" name="ended_at_end" value="{{ filter_params.ended_at_end }}">
+                        </div>
+                        
+                        <div class="me-4" style="border-left: 1px solid #dee2e6; height: 24px; align-self: center;"></div>
+                        
+                        <div class="me-2" style="display: inline-flex; white-space: nowrap; align-items: center;">
                             <label for="join_at_start" class="form-label me-2 mb-0" style="flex-shrink: 0;">Join At</label>
                             <input type="date" class="form-control form-control-sm" id="join_at_start" name="join_at_start" value="{{ filter_params.join_at_start }}">
                         </div>
                         
-                        <div style="display: inline-flex; white-space: nowrap; align-items: center;">
+                        <div style="display: inline-flex; white-space: nowrap; align-items: center;" class="me-4">
                             <label for="join_at_end" class="form-label me-2 mb-1" style="flex-shrink: 0;">→</label>
                             <input type="date" class="form-control form-control-sm" id="join_at_end" name="join_at_end" value="{{ filter_params.join_at_end }}">
+                        </div>
+                    </div>
+
+                    <div class="col-md-10 filter-item">
+                        <div style="display: inline-flex; white-space: nowrap; align-items: center; gap: 15px;">
+                            <div style="display: inline-flex; align-items: center;">
+                                <span class="me-2" style="flex-shrink: 0;">Joined Meeting</span>
+                                <div class="btn-group btn-group-sm" role="group">
+                                    <input type="radio" class="btn-check" name="joined_meeting" id="joined_meeting_any" value="" {% if not filter_params.joined_meeting %}checked{% endif %}>
+                                    <label class="btn btn-outline-secondary" for="joined_meeting_any">Any</label>
+                                    <input type="radio" class="btn-check" name="joined_meeting" id="joined_meeting_yes" value="yes" {% if filter_params.joined_meeting == "yes" %}checked{% endif %}>
+                                    <label class="btn btn-outline-secondary" for="joined_meeting_yes">Yes</label>
+                                    <input type="radio" class="btn-check" name="joined_meeting" id="joined_meeting_no" value="no" {% if filter_params.joined_meeting == "no" %}checked{% endif %}>
+                                    <label class="btn btn-outline-secondary" for="joined_meeting_no">No</label>
+                                </div>
+                            </div>
+                            <div style="border-left: 1px solid #dee2e6; height: 24px; align-self: center;"></div>
+                            <div style="display: inline-flex; align-items: center;">
+                                <span class="me-2" style="flex-shrink: 0;">Unexpected Error</span>
+                                <div class="btn-group btn-group-sm" role="group">
+                                    <input type="radio" class="btn-check" name="unexpected_error" id="unexpected_error_any" value="" {% if not filter_params.unexpected_error %}checked{% endif %}>
+                                    <label class="btn btn-outline-secondary" for="unexpected_error_any">Any</label>
+                                    <input type="radio" class="btn-check" name="unexpected_error" id="unexpected_error_yes" value="yes" {% if filter_params.unexpected_error == "yes" %}checked{% endif %}>
+                                    <label class="btn btn-outline-secondary" for="unexpected_error_yes">Yes</label>
+                                    <input type="radio" class="btn-check" name="unexpected_error" id="unexpected_error_no" value="no" {% if filter_params.unexpected_error == "no" %}checked{% endif %}>
+                                    <label class="btn btn-outline-secondary" for="unexpected_error_no">No</label>
+                                </div>
+                            </div>
                         </div>
                     </div>
                     
                     <div class="col-md-10 filter-item">
                         <div class="state-checkboxes">
                             {% for state_value, state_label in BotStates.choices %}
+                            {% if state_value < 100 and session_type == SessionTypes.BOT or session_type == SessionTypes.APP_SESSION %}
                             <div class="state-checkbox">
                                 <input type="checkbox" class="btn-check" id="state_{{ state_value }}" name="states" value="{{ state_value }}"
                                        {% if state_value|stringformat:"i" in filter_params.states %}checked{% endif %}>
                                 <label class="btn btn-outline-secondary btn-sm" for="state_{{ state_value }}">{{ state_label }}</label>
                             </div>
+                            {% endif %}
                             {% endfor %}
                         </div>
                     </div>
@@ -220,7 +262,7 @@
         {% else %}
             <div class="alert alert-info" role="alert">
                 <i class="bi bi-info-circle me-2"></i>
-                {% if filter_params.start_date or filter_params.end_date or filter_params.join_at_start or filter_params.join_at_end or filter_params.states or filter_params.search %}
+                {% if filter_params.start_date or filter_params.end_date or filter_params.join_at_start or filter_params.join_at_end or filter_params.ended_at_start or filter_params.ended_at_end or filter_params.states or filter_params.search or filter_params.joined_meeting or filter_params.unexpected_error %}
                     {% if session_type == SessionTypes.APP_SESSION %}
                         No app sessions found matching the current filters.
                     {% endif %}

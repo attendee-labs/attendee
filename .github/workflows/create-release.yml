@@ -57,4 +57,4 @@ jobs:
           TAG="${{ steps.get_version.outputs.tag }}"
           gh release create "$TAG" \
             --title "$TAG" \
-            --notes "Automated release for $TAG (from version.json)."
+            --generate-notes

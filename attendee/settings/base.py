@@ -16,6 +16,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from attendee.sentry import init_sentry
+
 load_dotenv()
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -303,3 +305,6 @@ SITE_DOMAIN = os.getenv("SITE_DOMAIN", "app.attendee.dev")
 MASK_TRANSCRIPT_IN_LOGS = os.getenv("MASK_TRANSCRIPT_IN_LOGS", "false") == "true"
 ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME = os.getenv("ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME", "false") == "true"
 CUSTOM_BOT_POD_SPEC_TYPES = os.getenv("CUSTOM_BOT_POD_SPEC_TYPES", "").split(",") if os.getenv("CUSTOM_BOT_POD_SPEC_TYPES") else []
+
+# Initialize Sentry (only if SENTRY_DSN is set)
+init_sentry()
