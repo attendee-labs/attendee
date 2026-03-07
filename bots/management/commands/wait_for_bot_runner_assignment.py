@@ -1,9 +1,11 @@
 import json
 import logging
+import os
 import signal
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
+import requests
 from django.core.management.base import BaseCommand
 
 from bots.tasks import run_bot
@@ -74,9 +76,9 @@ class AssignmentHandler(BaseHTTPRequestHandler):
 class Command(BaseCommand):
     help = "Waits for bot assignment via HTTP POST request, then runs the bot"
 
-    # Graceful shutdown flag
     _keep_running = True
     _server = None
+    _stop_webpage_streamer_keepalive = None
 
     def _graceful_exit(self, signum, frame):
         logger.info("Received signal %s, shutting down...", signum)
@@ -116,6 +118,17 @@ class Command(BaseCommand):
         result = run_bot.run(bot_id)
         logger.info("Run bot task completed with result: %s", result)
 
+    def _send_webpage_streamer_keepalive_periodically(self):
+        hostname = f"bot-runner-{os.getenv('BOT_RUNNER_UUID')}-webpage-streamer-service.attendee-webpage-streamer.svc.cluster.local"
+        while not self._stop_webpage_streamer_keepalive.is_set():
+            try:
+                response = requests.post(f"http://{hostname}:8000/keepalive", json={})
+                logger.info(f"Webpage streamer keepalive response: {response.status_code}")
+            except Exception as e:
+                logger.info(f"Failed to send webpage streamer keepalive: {e}")
+            self._stop_webpage_streamer_keepalive.wait(60)
+        logger.info("Webpage streamer keepalive task stopped")
+
     def _wait_for_assignment(self, host: str, port: int) -> int | None:
         """
         Start HTTP server and wait for assignment POST request.
@@ -125,6 +138,11 @@ class Command(BaseCommand):
         self._server = HTTPServer((host, port), AssignmentHandler)
         self._server.assigned_bot_id = None
 
+        if os.getenv("ADD_WEBPAGE_STREAMER_TO_BOT_RUNNER_PODS", "false") == "true":
+            self._stop_webpage_streamer_keepalive = threading.Event()
+            keepalive_thread = threading.Thread(target=self._send_webpage_streamer_keepalive_periodically, daemon=True)
+            keepalive_thread.start()
+
         logger.info("Bot runner HTTP server listening on %s:%s, waiting for assignment...", host, port)
 
         try:
@@ -133,6 +151,8 @@ class Command(BaseCommand):
             logger.error("Server error: %s", e)
             return None
         finally:
+            if self._stop_webpage_streamer_keepalive:
+                self._stop_webpage_streamer_keepalive.set()
             self._server.server_close()
 
         return self._server.assigned_bot_id
