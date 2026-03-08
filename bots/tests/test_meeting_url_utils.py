@@ -3,7 +3,7 @@ import base64
 import json
 import unittest
 
-from bots.meeting_url_utils import MeetingTypes, domain_and_subdomain_from_url, meeting_type_from_url, normalize_meeting_url, root_domain_from_url
+from bots.meeting_url_utils import MeetingTypes, domain_and_subdomain_from_url, meeting_type_from_url, normalize_meeting_url, parse_zoom_join_url, root_domain_from_url
 
 
 class TestMeetingUrlUtils(unittest.TestCase):
@@ -61,6 +61,34 @@ class TestMeetingUrlUtils(unittest.TestCase):
         self.assertIsNone(meeting_type_from_url(""))
         self.assertIsNone(meeting_type_from_url(None))
         self.assertEqual(meeting_type_from_url("https://teams.microsoft.com/l/meetup-join/19%3ameeting_OTA0nTDmYgItYTlTti00MmRkLTgxODItZGFmNWVmNTJmOGQ4%40thread.v2"), None)
+
+    def test_parse_zoom_join_url(self):
+        meeting_id, password, registrant_token = parse_zoom_join_url("https://zoom.us/j/123456789")
+        self.assertEqual(meeting_id, "123456789")
+        self.assertIsNone(password)
+        self.assertIsNone(registrant_token)
+
+        meeting_id, password, registrant_token = parse_zoom_join_url("https://zoom.us/j/123456789?pwd=abc123")
+        self.assertEqual(meeting_id, "123456789")
+        self.assertEqual(password, "abc123")
+        self.assertIsNone(registrant_token)
+
+        meeting_id, password, registrant_token = parse_zoom_join_url("https://zoom.us/j/987654321?tk=registrant_token_xyz")
+        self.assertEqual(meeting_id, "987654321")
+        self.assertIsNone(password)
+        self.assertEqual(registrant_token, "registrant_token_xyz")
+
+        meeting_id, password, registrant_token = parse_zoom_join_url("https://zoom.us/j/111222333?pwd=pass&tk=webinar_tk")
+        self.assertEqual(meeting_id, "111222333")
+        self.assertEqual(password, "pass")
+        self.assertEqual(registrant_token, "webinar_tk")
+
+    def test_normalize_zoom_url_preserves_tk(self):
+        """Zoom webinar URLs with tk (registrant token) should preserve it in normalized URL."""
+        url = "https://zoom.us/j/123456789?tk=my_registrant_token"
+        meeting_type, normalized = normalize_meeting_url(url)
+        self.assertEqual(meeting_type, MeetingTypes.ZOOM)
+        self.assertIn("tk=my_registrant_token", normalized)
 
 
 if __name__ == "__main__":
