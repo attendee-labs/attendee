@@ -96,7 +96,7 @@ class ZoomBotAdapter(BotAdapter):
         self.record_participant_speech_start_stop_events = record_participant_speech_start_stop_events
 
         self._jwt_token = generate_jwt(zoom_client_id, zoom_client_secret)
-        self.meeting_id, self.meeting_password, self.registrant_token = parse_zoom_join_url(meeting_url)
+        self.meeting_id, self.meeting_password = parse_zoom_join_url(self.meeting_url)[:2]
 
         self.meeting_service = None
         self.setting_service = None
@@ -957,9 +957,10 @@ class ZoomBotAdapter(BotAdapter):
             param.app_privilege_token = self.zoom_tokens.get("app_privilege_token")
         if self.zoom_tokens.get("onbehalf_token"):
             param.onBehalfToken = self.zoom_tokens.get("onbehalf_token")
-        
-        if self.registrant_token and not self.zoom_tokens.get("zak_token"):
-            param.webinarToken = self.registrant_token
+        # Set the webinarToken only if joining a webinar as an Attendee (in webinars, all Attendees are in Guest Mode).
+        # If joining as a signed-in bot (for panelists and co-hosts), use the ZAK token instead, and leave the webinarToken as NULL.
+        if self.zoom_tokens.get("registrant_token") and not self.zoom_tokens.get("zak_token"):
+            param.webinarToken = self.zoom_tokens.get("registrant_token")
 
         param.eAudioRawdataSamplingRate = zoom.AudioRawdataSamplingRate.AudioRawdataSamplingRate_32K
 

@@ -3,6 +3,7 @@ from typing import Dict, Optional
 
 import requests
 
+from bots.meeting_url_utils import parse_zoom_join_url
 from bots.models import WebhookSecret
 from bots.webhook_utils import sign_payload
 
@@ -158,6 +159,11 @@ def get_zoom_tokens(bot) -> Dict[str, str]:
         token_value = response_data.get(field)
         if isinstance(token_value, str) and token_value.strip():
             tokens[field] = token_value
+
+    # Add registrant token if it exists, for meetings or webinars that require registration
+    meeting_id, password, registrant_token = parse_zoom_join_url(bot.meeting_url)
+    if registrant_token:
+        tokens["registrant_token"] = registrant_token
 
     logger.info(f"Retrieved zoom tokens for bot {bot.object_id}")
     return tokens
