@@ -210,14 +210,11 @@ def split_transcription_by_speaker_events(
     utterances = []
     prev_idx = None
     current_words = []
-    logger.info(f"Intervals: {intervals}")
 
     for word in words:
         midpoint = (word["start"] + word["end"]) / 2.0
         idx = _split_transcription_by_speaker_events_nearest_interval(midpoint, intervals)
 
-        logger.info(f"Word: {word}")
-        logger.info(f"Idx: {idx}")
         if idx == prev_idx:
             current_words.append(word)
         else:
@@ -458,7 +455,7 @@ def get_transcription_via_assemblyai_from_mp3(
 
     data = {
         "audio_url": upload_url,
-        "speech_models": ["universal"],
+        "speech_model": "universal",
     }
 
     if transcription_settings.assembly_ai_language_detection():
@@ -472,7 +469,7 @@ def get_transcription_via_assemblyai_from_mp3(
         data["keyterms_prompt"] = keyterms_prompt
     speech_model = transcription_settings.assemblyai_speech_model()
     if speech_model:
-        data["speech_models"] = [speech_model]
+        data["speech_model"] = speech_model
 
     if transcription_settings.assemblyai_speaker_labels():
         data["speaker_labels"] = True

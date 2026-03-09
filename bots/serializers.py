@@ -343,7 +343,7 @@ TRANSCRIPTION_SETTINGS_SCHEMA = {
                     "description": "Whether to automatically detect the spoken language.",
                 },
                 "keyterms_prompt": {"type": "array", "items": {"type": "string"}, "description": "List of words or phrases to boost in the transcript. Only supported for when using the 'slam-1' speech model. See AssemblyAI docs for details."},
-                "speech_model": {"type": "string", "enum": ["best", "nano", "slam-1", "universal", "universal-3-pro"], "description": "The speech model to use for transcription. See AssemblyAI docs for details."},
+                "speech_model": {"type": "string", "enum": ["best", "nano", "slam-1", "universal"], "description": "The speech model to use for transcription. See AssemblyAI docs for details."},
                 "speaker_labels": {"type": "boolean", "description": "Whether to enable AssemblyAI's ML-based diarization. Only needed if multiple people are speaking into a single microphone. Defaults to false."},
                 "use_eu_server": {"type": "boolean", "description": "Whether to use the EU server for transcription. Defaults to false."},
                 "language_detection_options": {"type": "object", "properties": {"expected_languages": {"type": "array", "items": {"type": "string"}}, "fallback_language": {"type": "string"}}, "description": "Options for controlling the automatic language detection. See AssemblyAI docs for details.", "additionalProperties": False},
