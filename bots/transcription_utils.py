@@ -213,7 +213,22 @@ def split_transcription_by_speaker_events(
 
     for word in words:
         midpoint = (word["start"] + word["end"]) / 2.0
+        logger.info("Word: %s", word)
+        logger.info("Midpoint: %s", midpoint)
+
+        ranked = _split_transcription_by_speaker_events_rank_intervals(midpoint, intervals, top_n=5)
+        for rank, (ri, iv, dist_key) in enumerate(ranked):
+            logger.info(
+                "  Nearest #%d: idx=%d participant=%s [%.3f–%.3f] distance_key=%s",
+                rank + 1, ri, iv.participant, iv.start, iv.end, dist_key,
+            )
+
         idx = _split_transcription_by_speaker_events_nearest_interval(midpoint, intervals)
+        chosen = intervals[idx]
+        logger.info(
+            "  Chosen interval: idx=%d participant=%s [%.3f–%.3f]",
+            idx, chosen.participant, chosen.start, chosen.end,
+        )
 
         if idx == prev_idx:
             current_words.append(word)
@@ -288,6 +303,22 @@ def _split_transcription_by_speaker_events_nearest_interval(t: float, intervals:
             best_key = key
 
     return best
+
+
+def _split_transcription_by_speaker_events_rank_intervals(t: float, intervals: list[_Interval], top_n: int = 5) -> list[tuple[int, _Interval, tuple]]:
+    """Return the top_n intervals nearest to time t, sorted by distance key (closest first)."""
+    scored = []
+    for i, iv in enumerate(intervals):
+        if iv.start <= t <= iv.end:
+            key = (0, 0.0, iv.start, iv.index)
+        elif t < iv.start:
+            key = (1, iv.start - t, iv.start, iv.index)
+        else:
+            key = (1, t - iv.end, iv.start, iv.index)
+        scored.append((key, i, iv))
+
+    scored.sort(key=lambda x: x[0])
+    return [(i, iv, key) for key, i, iv in scored[:top_n]]
 
 
 def _split_transcription_by_speaker_events_make_utterance(interval: _Interval, words: list[dict], language: str | None) -> dict:
