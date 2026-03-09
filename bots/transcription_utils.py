@@ -269,14 +269,14 @@ def _split_transcription_by_speaker_events_build_intervals(events: list, recordi
             # Close any already-active interval for this participant
             if pid in active:
                 start, participant = active[pid]
-                intervals.append(_Interval(participant, start, t, len(intervals)))
+                intervals.append(_Interval(participant, start-0.2, t - 0.4, len(intervals)))
             active[pid] = (t, ev.participant)
 
         else:  # SPEECH_STOP
             if pid not in active:
                 continue
             start, participant = active.pop(pid)
-            intervals.append(_Interval(participant, start, t, len(intervals)))
+            intervals.append(_Interval(participant, start-0.2, t - 0.4, len(intervals)))
 
     # Close any still-open intervals at end of recording
     for pid, (start, participant) in active.items():
