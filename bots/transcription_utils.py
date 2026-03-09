@@ -3,6 +3,7 @@ import logging
 import subprocess
 import threading
 import time
+from collections import Counter
 from typing import Any, Callable, Dict, List, Sequence
 
 import requests
@@ -206,25 +207,39 @@ def split_transcription_by_speaker_events(
 
     intervals.sort(key=lambda it: (it.start, it.index))
 
-    # Assign words → intervals → group consecutive runs into utterances
+    # 1. Form word groups: consecutive words with no temporal gap between them.
+    word_groups = _split_transcription_by_speaker_events_build_word_groups(words)
+
+    # 2. Assign each word group to a single participant via majority vote.
+    group_assignments: list[tuple[Any, list[dict]]] = []
+    for group in word_groups:
+        votes = [
+            intervals[
+                _split_transcription_by_speaker_events_nearest_interval(
+                    (w["start"] + w["end"]) / 2.0, intervals
+                )
+            ].participant
+            for w in group
+        ]
+        winner = Counter(votes).most_common(1)[0][0]
+        group_assignments.append((winner, group))
+
+    # 3. Group consecutive word groups with the same participant into utterances.
     utterances = []
-    prev_idx = None
+    prev_participant = None
     current_words = []
 
-    for word in words:
-        midpoint = (word["start"] + word["end"]) / 2.0
-        idx = _split_transcription_by_speaker_events_nearest_interval(midpoint, intervals)
-
-        if idx == prev_idx:
-            current_words.append(word)
+    for participant, group in group_assignments:
+        if participant == prev_participant:
+            current_words.extend(group)
         else:
             if current_words:
-                utterances.append(_split_transcription_by_speaker_events_make_utterance(intervals[prev_idx], current_words, language))
-            prev_idx = idx
-            current_words = [word]
+                utterances.append(_split_transcription_by_speaker_events_make_utterance(prev_participant, current_words, language))
+            prev_participant = participant
+            current_words = list(group)
 
     if current_words:
-        utterances.append(_split_transcription_by_speaker_events_make_utterance(intervals[prev_idx], current_words, language))
+        utterances.append(_split_transcription_by_speaker_events_make_utterance(prev_participant, current_words, language))
 
     return utterances
 
@@ -270,6 +285,31 @@ def _split_transcription_by_speaker_events_build_intervals(events: list, recordi
     return intervals
 
 
+def _split_transcription_by_speaker_events_build_word_groups(words: list[dict], gap_threshold: float = 0.01) -> list[list[dict]]:
+    """
+    Group consecutive words whose timestamps are adjacent (gap <= threshold).
+
+    Words in the same group are treated as a single unit for speaker assignment,
+    preventing individual words from flickering to a different speaker when they
+    straddle an interval boundary.
+    """
+    if not words:
+        return []
+
+    groups: list[list[dict]] = []
+    current_group = [words[0]]
+
+    for word in words[1:]:
+        if word["start"] - current_group[-1]["end"] <= gap_threshold:
+            current_group.append(word)
+        else:
+            groups.append(current_group)
+            current_group = [word]
+
+    groups.append(current_group)
+    return groups
+
+
 def _split_transcription_by_speaker_events_nearest_interval(t: float, intervals: list[_Interval]) -> int:
     """Return index of the interval nearest to time t. Ties go to earlier start."""
     best = None
@@ -290,14 +330,14 @@ def _split_transcription_by_speaker_events_nearest_interval(t: float, intervals:
     return best
 
 
-def _split_transcription_by_speaker_events_make_utterance(interval: _Interval, words: list[dict], language: str | None) -> dict:
+def _split_transcription_by_speaker_events_make_utterance(participant: Any, words: list[dict], language: str | None) -> dict:
     utterance_start = words[0]["start"]
     adjusted_words = [
         {**w, "start": w["start"] - utterance_start, "end": w["end"] - utterance_start}
         for w in words
     ]
     return {
-        "participant": interval.participant,
+        "participant": participant,
         "transcription": {
             "transcript": " ".join(w.get("word", "") for w in adjusted_words).strip(),
             "words": adjusted_words,
