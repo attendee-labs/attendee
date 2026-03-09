@@ -76,7 +76,6 @@ class ZoomBotAdapter(BotAdapter):
         video_frame_size: tuple[int, int],
         zoom_tokens: dict,
         zoom_meeting_settings: dict,
-        zoom_user_email: str | None,
         record_chat_messages_when_paused: bool,
         record_participant_speech_start_stop_events: bool,
     ):
@@ -93,7 +92,6 @@ class ZoomBotAdapter(BotAdapter):
         self.add_participant_event_callback = add_participant_event_callback
         self.zoom_tokens = zoom_tokens
         self.zoom_meeting_settings = zoom_meeting_settings
-        self.zoom_user_email = zoom_user_email
         self.record_chat_messages_when_paused = record_chat_messages_when_paused
         self.record_participant_speech_start_stop_events = record_participant_speech_start_stop_events
 
@@ -650,9 +648,23 @@ class ZoomBotAdapter(BotAdapter):
                 # This means the host is using a zoom client that is incapable of displaying the popup to allow recording (Only known client where this happens is Zoom Rooms)
                 if is_support_request_local_recording_privilege_result == zoom.SDKERR_MEETING_DONT_SUPPORT_FEATURE:
                     self.handle_recording_permission_denied(reason=BotAdapter.BOT_RECORDING_PERMISSION_DENIED_REASON.HOST_CLIENT_CANNOT_GRANT_PERMISSION)
+                elif is_support_request_local_recording_privilege_result == zoom.SDKERR_WRONG_USAGE:
+                    # SDKERR_WRONG_USAGE means we are in a webinar where requesting local recording
+                    # privilege is not applicable. Wait 60 seconds in case the host promotes the bot
+                    # to panelist (which would trigger on_recording_privilege_changed), then leave.
+                    logger.info("Webinar context detected. Waiting 60 seconds for recording permission before leaving.")
 
-                self.recording_ctrl.RequestLocalRecordingPrivilege()
-                logger.info("Requesting recording privilege.")
+                    def leave_if_recording_not_granted():
+                        if self.recording_permission_granted:
+                            return False
+                        logger.info("Recording permission not granted after 60 seconds in webinar. Leaving.")
+                        self.send_message_callback({"message": self.Messages.ADAPTER_REQUESTED_BOT_LEAVE_MEETING, "leave_reason": BotAdapter.LEAVE_REASON.AUTO_LEAVE_RECORDING_PERMISSION_NOT_GRANTED})
+                        return False
+
+                    GLib.timeout_add_seconds(60, leave_if_recording_not_granted)
+                else:
+                    self.recording_ctrl.RequestLocalRecordingPrivilege()
+                    logger.info("Requesting recording privilege.")
             else:
                 self.handle_recording_permission_granted()
 
@@ -946,9 +958,7 @@ class ZoomBotAdapter(BotAdapter):
         if self.zoom_tokens.get("onbehalf_token"):
             param.onBehalfToken = self.zoom_tokens.get("onbehalf_token")
         
-        # if self.zoom_user_email:
-        #     param.userEmail = self.zoom_user_email
-        if self.registrant_token:
+        if self.registrant_token and not self.zoom_tokens.get("zak_token"):
             param.webinarToken = self.registrant_token
 
         param.eAudioRawdataSamplingRate = zoom.AudioRawdataSamplingRate.AudioRawdataSamplingRate_32K

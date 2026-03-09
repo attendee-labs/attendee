@@ -108,6 +108,7 @@ class WebBotAdapter(BotAdapter):
         self.silence_detection_activated = False
         self.joined_at = None
         self.recording_permission_granted_at = None
+        self.webinar_recording_timeout_timer = None
 
         self.ready_to_send_chat_messages = False
 
@@ -780,9 +781,23 @@ class WebBotAdapter(BotAdapter):
     def after_bot_recording_permission_denied(self):
         self.send_message_callback({"message": self.Messages.BOT_RECORDING_PERMISSION_DENIED, "denied_reason": BotAdapter.BOT_RECORDING_PERMISSION_DENIED_REASON.HOST_DENIED_PERMISSION})
 
+    def start_webinar_recording_timeout(self):
+        def leave_if_recording_not_granted():
+            if self.recording_permission_granted_at is not None:
+                return
+            logger.info("Recording permission not granted after 60 seconds in webinar. Leaving.")
+            self.send_message_callback({"message": self.Messages.ADAPTER_REQUESTED_BOT_LEAVE_MEETING, "leave_reason": BotAdapter.LEAVE_REASON.AUTO_LEAVE_RECORDING_PERMISSION_NOT_GRANTED})
+
+        self.webinar_recording_timeout_timer = threading.Timer(60, leave_if_recording_not_granted)
+        self.webinar_recording_timeout_timer.start()
+
     def after_bot_can_record_meeting(self):
         if self.recording_permission_granted_at is not None:
             return
+
+        if self.webinar_recording_timeout_timer is not None:
+            self.webinar_recording_timeout_timer.cancel()
+            self.webinar_recording_timeout_timer = None
 
         self.recording_permission_granted_at = time.time()
         self.send_message_callback({"message": self.Messages.BOT_RECORDING_PERMISSION_GRANTED})

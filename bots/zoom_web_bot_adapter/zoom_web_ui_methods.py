@@ -45,18 +45,17 @@ class ZoomWebUIMethods:
 
         self.wait_to_be_admitted_to_meeting()
 
-        if self._is_webinar_session():
-            # Webinars use a different in-meeting UI: caption button is visible from the start; no "disable incoming video" control.
-            logger.info("Webinar detected; using webinar caption flow.")
+        # Detect webinar by URL path: Zoom webinar URLs use /w/, meetings use /j/.
+        if "/w/" in self.meeting_url:
+            logger.info("Webinar detected from URL; using webinar caption flow.")
             self._enable_webinar_captions()
             self.ready_to_show_bot_image()
+            self.start_webinar_recording_timeout()
             return
 
         # Meeting flow: find "More meeting control" and optionally enable Captions
-        # Then find a button with the arial-label "More meeting control " and click it
         logger.info("Waiting for more meeting control button")
         more_meeting_control_button = WebDriverWait(self.driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, "div[aria-label='More meeting control ']")))
-        logger.info("More meeting control button found, clicking")
         self.driver.execute_script("arguments[0].click();", more_meeting_control_button)
 
         # Then find an <a> tag with the arial label "Captions" and click it
@@ -184,26 +183,6 @@ class ZoomWebUIMethods:
                     "wait_to_be_admitted_to_meeting",
                     e,
                 )
-
-    def _is_webinar_session(self):
-        """
-        Determine if the current session is a webinar (vs a meeting).
-        Uses URL /w/ when present; otherwise detects by in-meeting UI:
-        - Meeting: "More meeting control" button is present.
-        - Webinar: Q&A button is present (aria-label like "Question and Answer 0 open questions").
-        """
-        try:
-            WebDriverWait(self.driver, 6).until(
-                EC.presence_of_element_located((
-                    By.CSS_SELECTOR,
-                    "[aria-label='Question and Answer 0 open questions']",
-                ))
-            )
-            logger.info("Detected webinar UI (Q&A button visible).")
-            return True
-        except TimeoutException:
-            logger.info("Could not determine meeting type from UI; defaulting to meeting flow.")
-            return False
 
     def disable_incoming_video_in_ui(self):
         logger.info("Waiting for more meeting control button to disable incoming video")
