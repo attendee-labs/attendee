@@ -212,11 +212,14 @@ def split_transcription_by_speaker_events(
     utterances = []
     prev_idx = None
     current_words = []
+    logger.info(f"Intervals: {intervals}")
 
     for word in words:
         midpoint = (word["start"] + word["end"]) / 2.0
         idx = _split_transcription_by_speaker_events_nearest_interval(midpoint, intervals, interval_starts)
 
+        logger.info(f"Word: {word}")
+        logger.info(f"Idx: {idx}")
         if idx == prev_idx:
             current_words.append(word)
         else:
