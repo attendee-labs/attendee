@@ -458,7 +458,7 @@ def get_transcription_via_assemblyai_from_mp3(
 
     data = {
         "audio_url": upload_url,
-        "speech_model": "universal",
+        "speech_models": ["universal"],
     }
 
     if transcription_settings.assembly_ai_language_detection():
@@ -472,7 +472,7 @@ def get_transcription_via_assemblyai_from_mp3(
         data["keyterms_prompt"] = keyterms_prompt
     speech_model = transcription_settings.assemblyai_speech_model()
     if speech_model:
-        data["speech_model"] = speech_model
+        data["speech_models"] = [speech_model]
 
     if transcription_settings.assemblyai_speaker_labels():
         data["speaker_labels"] = True
