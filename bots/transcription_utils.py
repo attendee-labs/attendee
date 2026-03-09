@@ -170,7 +170,6 @@ def get_mp3_for_utterance_group(
             pass
 
 
-from bisect import bisect_left
 from dataclasses import dataclass
 
 
@@ -206,7 +205,6 @@ def split_transcription_by_speaker_events(
         return []
 
     intervals.sort(key=lambda it: (it.start, it.index))
-    interval_starts = [it.start for it in intervals]
 
     # Assign words → intervals → group consecutive runs into utterances
     utterances = []
@@ -216,7 +214,7 @@ def split_transcription_by_speaker_events(
 
     for word in words:
         midpoint = (word["start"] + word["end"]) / 2.0
-        idx = _split_transcription_by_speaker_events_nearest_interval(midpoint, intervals, interval_starts)
+        idx = _split_transcription_by_speaker_events_nearest_interval(midpoint, intervals)
 
         logger.info(f"Word: {word}")
         logger.info(f"Idx: {idx}")
@@ -275,37 +273,24 @@ def _split_transcription_by_speaker_events_build_intervals(events: list, recordi
     return intervals
 
 
-def _split_transcription_by_speaker_events_nearest_interval(t: float, intervals: list[_Interval], starts: list[float]) -> int:
+def _split_transcription_by_speaker_events_nearest_interval(t: float, intervals: list[_Interval]) -> int:
     """Return index of the interval nearest to time t. Ties go to earlier start."""
-    j = bisect_left(starts, t)
+    best = None
+    best_key = None
 
-    # Check for overlapping intervals around the insertion point
-    overlaps = []
-    k = j - 1
-    while k >= 0 and intervals[k].end >= t:
-        overlaps.append(k)
-        k -= 1
-    k = j
-    while k < len(intervals) and intervals[k].start <= t:
-        overlaps.append(k)
-        k += 1
+    for i, iv in enumerate(intervals):
+        if iv.start <= t <= iv.end:
+            key = (0, 0.0, iv.start, iv.index)
+        elif t < iv.start:
+            key = (1, iv.start - t, iv.start, iv.index)
+        else:
+            key = (1, t - iv.end, iv.start, iv.index)
 
-    if overlaps:
-        return min(overlaps, key=lambda i: (intervals[i].start, intervals[i].index))
+        if best_key is None or key < best_key:
+            best = i
+            best_key = key
 
-    # No overlap — pick the closer of prev/next
-    candidates = []
-    if j > 0:
-        candidates.append(j - 1)
-    if j < len(intervals):
-        candidates.append(j)
-
-    def distance(i: int) -> float:
-        if t < intervals[i].start:
-            return intervals[i].start - t
-        return t - intervals[i].end
-
-    return min(candidates, key=lambda i: (distance(i), intervals[i].start, intervals[i].index))
+    return best
 
 
 def _split_transcription_by_speaker_events_make_utterance(interval: _Interval, words: list[dict], language: str | None) -> dict:
