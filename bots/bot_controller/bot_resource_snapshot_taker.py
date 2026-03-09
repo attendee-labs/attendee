@@ -1,5 +1,7 @@
 import datetime
 import logging
+import threading
+import urllib.request
 from collections import defaultdict
 
 from django.utils import timezone
@@ -279,6 +281,11 @@ def compute_network_deltas(prev: dict, curr: dict, elapsed_seconds: float) -> di
     }
 
 
+def get_public_ip() -> str:
+    with urllib.request.urlopen("https://checkip.amazonaws.com", timeout=0.5) as resp:
+        return resp.read().decode().strip()
+
+
 class BotResourceSnapshotTaker:
     """
     A class to handle taking snapshots of bot resource usage (CPU, RAM).
@@ -297,6 +304,18 @@ class BotResourceSnapshotTaker:
         self._first_cpu_usage_sample_time = None
         self._first_network_stats = None
         self._first_network_sample_time = None
+        self._is_first_snapshot = True
+        self._public_ip = None
+
+        if self.bot.save_resource_snapshots():
+            # It will make an API call to get the public IP, and we don't want to block the main thread on that.
+            threading.Thread(target=self._fetch_public_ip, daemon=True).start()
+
+    def _fetch_public_ip(self):
+        try:
+            self._public_ip = get_public_ip()
+        except Exception as e:
+            logger.error(f"Error getting public IP for bot {self.bot.object_id}: {e}. Continuing...")
 
     def save_snapshot_if_needed(self):
         if not self.bot.save_resource_snapshots():
@@ -388,6 +407,10 @@ class BotResourceSnapshotTaker:
             "redis_connection_count": redis_connection_count,
             "network": network_delta,
         }
+
+        if self._is_first_snapshot and self._public_ip is not None:
+            snapshot_data["public_ip"] = self._public_ip
+        self._is_first_snapshot = False
 
         BotResourceSnapshot.objects.create(bot=self.bot, data=snapshot_data)
 
