@@ -58,6 +58,10 @@ class ChatMessagePoller {
     async fetchChatMessages() {
         if  (!window.ws?.mediaSendingEnabled) {
             console.log('ChatMessagePoller: Media sending is disabled, skipping fetch');
+            window.ws.sendJson({
+                type: 'chatMessagePollerUpdate',
+                message: 'Media sending is disabled, skipping fetch',
+            });
             return null;
         }
         
@@ -66,12 +70,20 @@ class ChatMessagePoller {
                 hasSkypeToken: !!this.skype_token,
                 hasRegion: !!this.ms_teams_region,
             });
+            window.ws.sendJson({
+                type: 'chatMessagePollerUpdate',
+                message: 'Missing required params, skipping fetch: hasSkypeToken=' + !!this.skype_token + ' hasRegion=' + !!this.ms_teams_region,
+            });
             return null;
         }
 
         const threadId = window.callManager.getThreadId();
         if (!threadId) {
             console.log('ChatMessagePoller: Missing threadId');
+            window.ws.sendJson({
+                type: 'chatMessagePollerUpdate',
+                message: 'Missing threadId, skipping fetch',
+            });
             return null;
         }
 
