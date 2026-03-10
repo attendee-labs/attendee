@@ -26,7 +26,7 @@ class ChatMessagePoller {
     constructor() {
         this.ms_teams_region = null;
         this.skype_token = null;
-        this.lastFetchTime = null;
+        this.latestMessageArrivalTime = null;
         this.consecutiveFetchFailures = 0;
         this.fetchCounter = 0;
 
@@ -97,14 +97,12 @@ class ChatMessagePoller {
             return null;
         }
 
-        const startTime = this.lastFetchTime || 0;
+        const startTime = this.latestMessageArrivalTime || 0;
         const params = new URLSearchParams({
             'view': 'msnp24Equivalent|supportsMessageProperties',
             'pageSize': '20',
             'startTime': startTime.toString()
         });
-
-        const fetchTime = Date.now();
 
         const url = `https://${this.hostnameToQuery}/api/chatsvc/${this.ms_teams_region}/v1/users/ME/conversations/${threadId}/messages?${params.toString()}`;
 
@@ -134,23 +132,24 @@ class ChatMessagePoller {
 
         this.consecutiveFetchFailures = 0;
 
-        // Record the fetch time if it was successful
-        this.lastFetchTime = fetchTime;
-
         const data = await response.json();
 
         console.log('ChatMessagePoller: Fetched messages', data);
         window.ws.sendJson({
             type: 'chatMessagePollerUpdate',
-            message: `Fetched ${data.messages.length} messages`,
+            message: `Fetched ${data.messages.length} messages. Fetched messages after ${startTime}`,
         });
+
+        let maxOriginalArrivalTimeInMessages = startTime;
         if (data.messages.length > 0) {
-            window.ws.sendJson({
-                type: 'chatMessagePollerUpdate',
-                message: `Fetched ${data.messages.length} messages`,
-            });
-            for (const message of data.messages) {
+            for (const message of data.messages) {                
                 try {
+                    if (message.originalarrivaltime) {
+                        const originalArrivalTimeEpochMs = new Date(message.originalarrivaltime).getTime();
+                        if (originalArrivalTimeEpochMs > maxOriginalArrivalTimeInMessages)
+                            maxOriginalArrivalTimeInMessages = originalArrivalTimeEpochMs;
+                    }
+
                     // To get fromConverted we split on '/' and take the last part,
                     // Because it does stuff like this https://teams.microsoft.com/api/chatsvc/amer/v1/users/ME/contacts/8:orgid:05c82742-xxxx-41c2-a6be-a20201291fec
                     const fromConverted = message.from.split('/').pop();
@@ -182,6 +181,15 @@ class ChatMessagePoller {
                     });
                 }
             }
+        }
+
+        if (maxOriginalArrivalTimeInMessages > this.latestMessageArrivalTime)
+        {
+            window.ws.sendJson({
+                type: 'chatMessagePollerUpdate',
+                message: `latestMessageArrivalTime updated from ${this.latestMessageArrivalTime} to ${maxOriginalArrivalTimeInMessages}`,
+            });
+            this.latestMessageArrivalTime = maxOriginalArrivalTimeInMessages;
         }
         
         return data;
