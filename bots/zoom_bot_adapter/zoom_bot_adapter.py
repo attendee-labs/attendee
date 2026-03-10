@@ -138,6 +138,7 @@ class ZoomBotAdapter(BotAdapter):
         self.automatic_leave_configuration = automatic_leave_configuration
 
         self.only_one_participant_in_meeting_at = None
+        self.is_webinar = False
         self.last_audio_received_at = None
         self.silence_detection_activated = False
         self.cleaned_up = False
@@ -239,6 +240,11 @@ class ZoomBotAdapter(BotAdapter):
         if not self.joined_at:
             return
 
+        # In a webinar, attendees cannot see host/panelists in the participant list,
+        # so "only one participant" would always be true and wrongly trigger auto-leave.
+        if self.is_webinar:
+            return
+
         # If nobody (excluding other bots) other than the bot was ever in the meeting, then don't activate this. We only want to activate if someone else was in the meeting and left
         if self.number_of_participants_ever_in_meeting_excluding_other_bots() <= 1:
             return
@@ -249,6 +255,8 @@ class ZoomBotAdapter(BotAdapter):
         other_bots_in_meeting_names = []
         for participant_id in all_participant_ids:
             participant = self.get_participant(participant_id)
+            if participant is None:
+                continue
             if not participant_is_another_bot(participant["participant_full_name"], participant["participant_is_the_bot"], self.automatic_leave_configuration):
                 all_participant_ids_excluding_other_bots.append(participant_id)
             else:
@@ -650,9 +658,10 @@ class ZoomBotAdapter(BotAdapter):
                     self.handle_recording_permission_denied(reason=BotAdapter.BOT_RECORDING_PERMISSION_DENIED_REASON.HOST_CLIENT_CANNOT_GRANT_PERMISSION)
                 elif is_support_request_local_recording_privilege_result == zoom.SDKERR_WRONG_USAGE:
                     # SDKERR_WRONG_USAGE means we are in a webinar where requesting local recording
-                    # privilege is not applicable. Wait 60 seconds in case the host promotes the bot
+                    # privilege is not applicable. Wait 180 seconds in case the host promotes the bot
                     # to panelist (which would trigger on_recording_privilege_changed), then leave.
                     logger.info("Webinar context detected. Waiting 60 seconds for recording permission before leaving.")
+                    self.is_webinar = True
 
                     def leave_if_recording_not_granted():
                         if self.recording_permission_granted:
@@ -661,7 +670,7 @@ class ZoomBotAdapter(BotAdapter):
                         self.send_message_callback({"message": self.Messages.ADAPTER_REQUESTED_BOT_LEAVE_MEETING, "leave_reason": BotAdapter.LEAVE_REASON.AUTO_LEAVE_RECORDING_PERMISSION_NOT_GRANTED})
                         return False
 
-                    GLib.timeout_add_seconds(60, leave_if_recording_not_granted)
+                    GLib.timeout_add_seconds(180, leave_if_recording_not_granted)
                 else:
                     self.recording_ctrl.RequestLocalRecordingPrivilege()
                     logger.info("Requesting recording privilege.")

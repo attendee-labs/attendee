@@ -120,7 +120,7 @@ def normalize_meeting_url_raw(url):
                 filtered_params["pwd"] = [sanitized_pwd]
             # If password doesn't match expected pattern, skip it for security
         if "tk" in query_params:
-            # Registrant token for webinars (required when webinar requires registration)
+            # Registrant token for meetings or webinars that require registration
             tk_value = query_params["tk"][0]
             if tk_value and tk_value.strip():
                 filtered_params["tk"] = [tk_value.strip()]
