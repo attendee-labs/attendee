@@ -184,6 +184,7 @@ class ZoomBotAdapter(BotAdapter):
         self.breakout_room_ctrl = None
         self.breakout_room_ctrl_event = None
         self.is_joining_or_leaving_breakout_room = False
+        self.is_reconnecting = False
 
         # Waiting room controller
         self.waiting_room_ctrl = None
@@ -240,9 +241,9 @@ class ZoomBotAdapter(BotAdapter):
         if not self.joined_at:
             return
 
-        # In a webinar, attendees cannot see host/panelists in the participant list,
-        # so "only one participant" would always be true and wrongly trigger auto-leave.
-        if self.is_webinar:
+        # In a webinar, attendees cannot see the participant list, so do not trigger auto-leave.
+        # Also skip during reconnects as participant IDs are reassigned and not yet fetchable.
+        if self.is_webinar or self.is_reconnecting:
             return
 
         # If nobody (excluding other bots) other than the bot was ever in the meeting, then don't activate this. We only want to activate if someone else was in the meeting and left
@@ -255,8 +256,6 @@ class ZoomBotAdapter(BotAdapter):
         other_bots_in_meeting_names = []
         for participant_id in all_participant_ids:
             participant = self.get_participant(participant_id)
-            if participant is None:
-                continue
             if not participant_is_another_bot(participant["participant_full_name"], participant["participant_is_the_bot"], self.automatic_leave_configuration):
                 all_participant_ids_excluding_other_bots.append(participant_id)
             else:
@@ -574,8 +573,9 @@ class ZoomBotAdapter(BotAdapter):
         return self.ready_to_send_chat_messages
 
     def on_join(self):
-        # Reset breakout room transition flag
+        # Reset transition flags
         self.is_joining_or_leaving_breakout_room = False
+        self.is_reconnecting = False
 
         # Meeting reminder controller
         self.joined_at = time.time()
@@ -657,10 +657,8 @@ class ZoomBotAdapter(BotAdapter):
                 if is_support_request_local_recording_privilege_result == zoom.SDKERR_MEETING_DONT_SUPPORT_FEATURE:
                     self.handle_recording_permission_denied(reason=BotAdapter.BOT_RECORDING_PERMISSION_DENIED_REASON.HOST_CLIENT_CANNOT_GRANT_PERMISSION)
                 elif is_support_request_local_recording_privilege_result == zoom.SDKERR_WRONG_USAGE:
-                    # SDKERR_WRONG_USAGE means we are in a webinar where requesting local recording
-                    # privilege is not applicable (bot joined as attendee, not yet promoted to panelist).
-                    # Treat the same as a regular meeting: emit permission denied and stay in the meeting.
-                    # If the host promotes the bot to panelist, on_recording_privilege_changed will fire.
+                    # Hacky, but we're assuming SDKERR_WRONG_USAGE means we are in a webinar where requesting 
+                    # local recording privilege is not applicable (bot joined as attendee, not yet promoted to panelist).
                     logger.info("Webinar context detected (SDKERR_WRONG_USAGE). Treating as permission denied.")
                     self.is_webinar = True
                     self.handle_recording_permission_denied(reason=BotAdapter.BOT_RECORDING_PERMISSION_DENIED_REASON.HOST_CLIENT_CANNOT_GRANT_PERMISSION)
@@ -959,8 +957,8 @@ class ZoomBotAdapter(BotAdapter):
             param.app_privilege_token = self.zoom_tokens.get("app_privilege_token")
         if self.zoom_tokens.get("onbehalf_token"):
             param.onBehalfToken = self.zoom_tokens.get("onbehalf_token")
-        # Set the webinarToken only if joining a webinar as an Attendee (in webinars, all Attendees are in Guest Mode).
-        # If joining as a signed-in bot (for Panelists and Co-Hosts), use the ZAK token instead, and leave the webinarToken as NULL.
+        # Set the webinarToken only if joining a webinar as an attendee (in webinars, all attendees are in Guest Mode).
+        # If joining as a signed-in bot (for panelists and co-hosts), use the ZAK token instead, and leave the webinarToken as NULL.
         if self.zoom_tokens.get("registrant_token") and not self.zoom_tokens.get("zak_token"):
             param.webinarToken = self.zoom_tokens.get("registrant_token")
 
@@ -1049,6 +1047,9 @@ class ZoomBotAdapter(BotAdapter):
         if status == zoom.MEETING_STATUS_LEAVE_BREAKOUT_ROOM:
             self.is_joining_or_leaving_breakout_room = True
             self.send_message_callback({"message": self.Messages.LEAVING_BREAKOUT_ROOM})
+
+        if status == zoom.MEETING_STATUS_RECONNECTING:
+            self.is_reconnecting = True
 
         if status == zoom.MEETING_STATUS_CONNECTING:
             self.wait_to_get_out_of_connecting_state()
