@@ -658,19 +658,12 @@ class ZoomBotAdapter(BotAdapter):
                     self.handle_recording_permission_denied(reason=BotAdapter.BOT_RECORDING_PERMISSION_DENIED_REASON.HOST_CLIENT_CANNOT_GRANT_PERMISSION)
                 elif is_support_request_local_recording_privilege_result == zoom.SDKERR_WRONG_USAGE:
                     # SDKERR_WRONG_USAGE means we are in a webinar where requesting local recording
-                    # privilege is not applicable. Wait 180 seconds in case the host promotes the bot
-                    # to panelist (which would trigger on_recording_privilege_changed), then leave.
-                    logger.info("Webinar context detected. Waiting 60 seconds for recording permission before leaving.")
+                    # privilege is not applicable (bot joined as attendee, not yet promoted to panelist).
+                    # Treat the same as a regular meeting: emit permission denied and stay in the meeting.
+                    # If the host promotes the bot to panelist, on_recording_privilege_changed will fire.
+                    logger.info("Webinar context detected (SDKERR_WRONG_USAGE). Treating as permission denied.")
                     self.is_webinar = True
-
-                    def leave_if_recording_not_granted():
-                        if self.recording_permission_granted:
-                            return False
-                        logger.info("Recording permission not granted after 60 seconds in webinar. Leaving.")
-                        self.send_message_callback({"message": self.Messages.ADAPTER_REQUESTED_BOT_LEAVE_MEETING, "leave_reason": BotAdapter.LEAVE_REASON.AUTO_LEAVE_RECORDING_PERMISSION_NOT_GRANTED})
-                        return False
-
-                    GLib.timeout_add_seconds(180, leave_if_recording_not_granted)
+                    self.handle_recording_permission_denied(reason=BotAdapter.BOT_RECORDING_PERMISSION_DENIED_REASON.HOST_CLIENT_CANNOT_GRANT_PERMISSION)
                 else:
                     self.recording_ctrl.RequestLocalRecordingPrivilege()
                     logger.info("Requesting recording privilege.")
