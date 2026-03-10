@@ -101,7 +101,7 @@ class ChatMessagePoller {
         const params = new URLSearchParams({
             'view': 'msnp24Equivalent|supportsMessageProperties',
             'pageSize': '20',
-            'startTime': startTime.toString()
+            'startTime': (startTime + 1).toString()
         });
 
         const url = `https://${this.hostnameToQuery}/api/chatsvc/${this.ms_teams_region}/v1/users/ME/conversations/${threadId}/messages?${params.toString()}`;
