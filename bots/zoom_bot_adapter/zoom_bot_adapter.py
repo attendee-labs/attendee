@@ -657,9 +657,10 @@ class ZoomBotAdapter(BotAdapter):
                 if is_support_request_local_recording_privilege_result == zoom.SDKERR_MEETING_DONT_SUPPORT_FEATURE:
                     self.handle_recording_permission_denied(reason=BotAdapter.BOT_RECORDING_PERMISSION_DENIED_REASON.HOST_CLIENT_CANNOT_GRANT_PERMISSION)
                 elif is_support_request_local_recording_privilege_result == zoom.SDKERR_WRONG_USAGE:
-                    # Hacky, but we're assuming SDKERR_WRONG_USAGE means we are in a webinar where requesting 
+                    # Hacky, but we're assuming SDKERR_WRONG_USAGE means we are in a webinar where requesting
                     # local recording privilege is not applicable (bot joined as attendee, not yet promoted to panelist).
                     logger.info("Webinar context detected (SDKERR_WRONG_USAGE). Treating as permission denied.")
+                    logger.info("Bot joined as webinar attendee; waiting for host to promote to panelist.")
                     self.is_webinar = True
                     self.handle_recording_permission_denied(reason=BotAdapter.BOT_RECORDING_PERMISSION_DENIED_REASON.HOST_CLIENT_CANNOT_GRANT_PERMISSION)
                 else:

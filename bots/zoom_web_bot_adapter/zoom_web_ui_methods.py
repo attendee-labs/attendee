@@ -45,32 +45,23 @@ class ZoomWebUIMethods:
 
         self.wait_to_be_admitted_to_meeting()
 
-        # Detect webinar by URL path: Zoom webinar URLs use /w/, meetings use /j/.
+        # /w/ URL is definitively a webinar. Detect also if it's an attendee or panelist.
         if "/w/" in self.meeting_url:
-            logger.info("Webinar detected from URL; using webinar caption flow.")
-            if self._is_webinar_attendee():
-                logger.info("Bot joined as attendee; waiting for host to promote to panelist.")
-                self._wait_for_panelist_promotion_and_accept()
-            self._enable_webinar_captions()
-            self.ready_to_show_bot_image()
+            logger.info("Webinar URL detected, attempting to join webinar")
+            self.attempt_to_join_webinar(self.is_webinar_attendee())
             return
-
-        # Meeting flow: find "More meeting control" and optionally enable Captions.
-        # A /j/ link can actually resolve to a webinar — detect this by absence of the button,
-        # then positively confirm with webinar-specific UI before switching flows.
-        logger.info("Waiting for more meeting control button")
+            
         try:
             more_meeting_control_button = WebDriverWait(self.driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, "div[aria-label='More meeting control ']")))
+            logger.info("More meeting control button found, clicking")
+            self.driver.execute_script("arguments[0].click();", more_meeting_control_button)
         except TimeoutException:
-            logger.info("'More meeting control' button not found on /j/ link; checking for webinar attendee UI.")
-            if self._is_webinar_attendee():
-                logger.info("Webinar attendee confirmed on /j/ link; waiting for panelist promotion.")
-                self._wait_for_panelist_promotion_and_accept()
-                self._enable_webinar_captions()
-                self.ready_to_show_bot_image()
+            # Non-webinar URLs may also be webinars (but only as attendees), detect via UI.
+            if self.is_webinar_attendee():
+                self.attempt_to_join_webinar(True)
                 return
-            raise
-        self.driver.execute_script("arguments[0].click();", more_meeting_control_button)
+            else:
+                raise
 
         # Then find an <a> tag with the arial label "Captions" and click it
         logger.info("Waiting for captions button")
@@ -123,6 +114,37 @@ class ZoomWebUIMethods:
 
         if self.disable_incoming_video:
             self.disable_incoming_video_in_ui()
+
+        self.ready_to_show_bot_image()
+
+    def attempt_to_join_webinar(self, is_webinar_attendee: bool):
+        if is_webinar_attendee:
+            # Wait for the panelist promotion modal and accept
+            try:
+                dialog = WebDriverWait(self.driver, 1800).until(EC.presence_of_element_located((By.CSS_SELECTOR, '[aria-label="The host would like to promote you to be a panelist"]')))
+                logger.info("Webinar: Panelist promotion modal appeared, clicking 'Join as Panelist'.")
+                join_as_panelist_btn = dialog.find_element(By.XPATH, './/button[contains(@class, "zm-btn--primary")]')
+                self.driver.execute_script("arguments[0].click();", join_as_panelist_btn)
+                logger.info("Webinar: Clicked 'Join as Panelist' button.")
+            except TimeoutException:
+                logger.info("Webinar: Panelist promotion modal did not appear within timeout; continuing as attendee.")
+        
+        logger.info("Webinar: Waiting for captions button")
+        try:
+            # Caption button is different for webinar panelists: "Show Captions" when off, "Hide Captions" when on.
+            hide_captions = WebDriverWait(self.driver, 2).until(EC.presence_of_element_located((By.CSS_SELECTOR, "button[aria-label='Hide Captions']")))
+            logger.info("Webinar: Hide Captions button found, CC already enabled.")
+        except TimeoutException:
+            try:
+                show_captions = WebDriverWait(self.driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, "button[aria-label='Show Captions']")))
+                logger.info("Webinar: Show Captions button found, clicking to enable CC.")
+                self.driver.execute_script("arguments[0].click();", show_captions)
+            except TimeoutException:
+                logger.info("Webinar: Captions button not found, unable to transcribe via closed-captions.")
+                self.could_not_enable_closed_captions()
+
+        # this may not work
+        self.set_zoom_closed_captions_language()
 
         self.ready_to_show_bot_image()
 
@@ -208,84 +230,15 @@ class ZoomWebUIMethods:
         turn_off_incoming_video_button = WebDriverWait(self.driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, "[aria-label='Stop Incoming Video']")))
         logger.info("Turn off incoming video button found, clicking")
         self.driver.execute_script("arguments[0].click();", turn_off_incoming_video_button)
-
-    def _is_webinar_attendee(self):
-        """
-        Return True if the bot joined as an attendee.
-        Attendees have an 'audio setting' button (output only) but no 'Video' button.
-        """
+    
+    def is_webinar_attendee(self):
         try:
-            WebDriverWait(self.driver, 5).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, "button[aria-label='audio setting']"))
-            )
+            WebDriverWait(self.driver, 5).until(EC.presence_of_element_located((By.CSS_SELECTOR, "button[aria-label='audio setting']")))
         except TimeoutException:
-            logger.info("No 'audio setting' button found; assuming panelist.")
             return False
 
-        has_video_button = bool(self.driver.find_elements(By.CSS_SELECTOR, "button[aria-label='Video']"))
-        if has_video_button:
-            logger.info("'Video' button present; bot is a panelist.")
-            return False
-
-        logger.info("'audio setting' present and no 'Video' button; bot is an attendee.")
+        logger.info("UI indicates that the bot is a webinar attendee, based on presence of 'Audio Setting' button.")
         return True
-
-    def _wait_for_panelist_promotion_and_accept(self, timeout_seconds=1800):
-        """
-        Block until the host promotes the bot to panelist and the confirmation modal appears,
-        then click the primary 'Join as Panelist' button.
-        """
-        logger.info(f"Waiting up to {timeout_seconds}s for panelist promotion modal...")
-        try:
-            dialog = WebDriverWait(self.driver, timeout_seconds).until(
-                EC.presence_of_element_located(
-                    (By.CSS_SELECTOR, '[aria-label="The host would like to promote you to be a panelist"]')
-                )
-            )
-            logger.info("Panelist promotion modal appeared, clicking 'Join as Panelist'.")
-            join_as_panelist_btn = dialog.find_element(
-                By.XPATH, './/button[contains(@class, "zm-btn--primary")]'
-            )
-            self.driver.execute_script("arguments[0].click();", join_as_panelist_btn)
-            logger.info("Clicked 'Join as Panelist' button.")
-        except TimeoutException:
-            logger.warning("Panelist promotion modal did not appear within timeout; continuing as attendee.")
-
-    def _enable_webinar_captions(self):
-        """
-        Enable closed captions in webinar UI.
-        Webinar has a direct "Show Captions" / "Hide Captions" button and "More options for captions, menu button" for language.
-        """
-        closed_captions_enabled = False
-        try:
-            # Caption button is visible from the start: "Show Captions" when off, "Hide Captions" when on.
-            show_captions = WebDriverWait(self.driver, 10).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, "button[aria-label='Show Captions']"))
-            )
-            if show_captions.is_displayed():
-                logger.info("Webinar: Show Captions button found, clicking to enable CC.")
-                self.driver.execute_script("arguments[0].click();", show_captions)
-                closed_captions_enabled = True
-        except TimeoutException:
-            try:
-                hide_captions = WebDriverWait(self.driver, 2).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, "button[aria-label='Hide Captions']"))
-                )
-                if hide_captions.is_displayed():
-                    logger.info("Webinar: Hide Captions button found, CC already enabled.")
-                    closed_captions_enabled = True
-            except TimeoutException:
-                logger.info("Webinar: Captions button not found, unable to transcribe via closed-captions.")
-                self.could_not_enable_closed_captions()
-                return
-
-        if not closed_captions_enabled:
-            return
-
-        # don't know if it's possible to set the closed captions language in a webinar
-        # only thing i see is a button to select the _speaking_ language, which is for interpreting the speaker's language
-        # [aria-label='More options for captions, menu button']
-        # after which we would self.set_zoom_closed_captions_language()
 
     def click_cancel_join_button(self):
         cancel_join_button = WebDriverWait(self.driver, 5).until(EC.presence_of_element_located((By.CSS_SELECTOR, "button.leave-btn")))

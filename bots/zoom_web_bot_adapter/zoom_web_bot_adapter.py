@@ -1,4 +1,3 @@
-from atexit import register
 import json
 import logging
 import os
@@ -127,8 +126,8 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
                 joinToken: {json.dumps(self.zoom_tokens.get("join_token", ""))},
                 appPrivilegeToken: {json.dumps(self.zoom_tokens.get("app_privilege_token", ""))},
                 onBehalfToken: {json.dumps(self.zoom_tokens.get("onbehalf_token", ""))},
-                userEmail: {json.dumps(self.zoom_user_email or "")},
                 registrantToken: {json.dumps(self.zoom_tokens.get("registrant_token", ""))},
+                userEmail: {json.dumps(self.zoom_user_email or "")},
             }}
         """
 
