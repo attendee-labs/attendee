@@ -140,6 +140,10 @@ class ChatMessagePoller {
         const data = await response.json();
 
         console.log('ChatMessagePoller: Fetched messages', data);
+        window.ws.sendJson({
+            type: 'chatMessagePollerUpdate',
+            message: `Fetched ${data.messages.length} messages`,
+        });
         if (data.messages.length > 0) {
             window.ws.sendJson({
                 type: 'chatMessagePollerUpdate',
