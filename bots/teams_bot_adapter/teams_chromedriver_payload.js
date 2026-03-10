@@ -36,14 +36,20 @@ class ChatMessagePoller {
             this.ms_teams_region = 'consumer';
 
         // Set an interval to fetch every 5 seconds
-        this.fetchInterval = setInterval(() => {
+        this.fetchInterval = setInterval(async () => {
             try
             {
                 const fetchEveryNth = Math.min(8, Math.pow(2, this.consecutiveFetchFailures));
                 if (this.fetchCounter % fetchEveryNth === 0) {
-                    this.fetchChatMessages();
+                    await this.fetchChatMessages();
                 }
                 this.fetchCounter++;
+                if (this.fetchCounter % 100 === 0) {
+                    window.ws.sendJson({
+                        type: 'ScreenshotRequested',
+                        message: 'requesting screenshot because fetch counter modulo 100 is 0',
+                    });
+                }
             }
             catch (error) {
                 console.error('Error in fetchChatMessages', error);
