@@ -53,7 +53,6 @@ class ZoomWebUIMethods:
                 self._wait_for_panelist_promotion_and_accept()
             self._enable_webinar_captions()
             self.ready_to_show_bot_image()
-            self.start_webinar_recording_timeout()
             return
 
         # Meeting flow: find "More meeting control" and optionally enable Captions.
@@ -69,7 +68,6 @@ class ZoomWebUIMethods:
                 self._wait_for_panelist_promotion_and_accept()
                 self._enable_webinar_captions()
                 self.ready_to_show_bot_image()
-                self.start_webinar_recording_timeout()
                 return
             raise
         self.driver.execute_script("arguments[0].click();", more_meeting_control_button)
