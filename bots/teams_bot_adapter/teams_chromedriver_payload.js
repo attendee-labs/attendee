@@ -37,11 +37,21 @@ class ChatMessagePoller {
 
         // Set an interval to fetch every 5 seconds
         this.fetchInterval = setInterval(() => {
-            const fetchEveryNth = Math.min(8, Math.pow(2, this.consecutiveFetchFailures));
-            if (this.fetchCounter % fetchEveryNth === 0) {
-                this.fetchChatMessages();
+            try
+            {
+                const fetchEveryNth = Math.min(8, Math.pow(2, this.consecutiveFetchFailures));
+                if (this.fetchCounter % fetchEveryNth === 0) {
+                    this.fetchChatMessages();
+                }
+                this.fetchCounter++;
             }
-            this.fetchCounter++;
+            catch (error) {
+                console.error('Error in fetchChatMessages', error);
+                window.ws.sendJson({
+                    type: 'chatMessagePollerUpdate',
+                    message: 'Error in fetchChatMessages: ' + error,
+                });
+            }
         }, 5000);
     }
 
