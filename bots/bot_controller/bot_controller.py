@@ -21,7 +21,7 @@ from bots.bot_controller.bot_websocket_client_manager import BotWebsocketClientM
 from bots.bot_sso_utils import create_google_meet_sign_in_session
 from bots.bots_api_utils import BotCreationSource
 from bots.external_callback_utils import get_zoom_tokens
-from bots.meeting_url_utils import meeting_type_from_url
+from bots.meeting_url_utils import meeting_type_from_url, parse_zoom_join_url
 from bots.models import (
     AudioChunk,
     Bot,
@@ -269,6 +269,11 @@ class BotController:
             zoom_tokens = get_zoom_tokens(self.bot_in_db)
         else:
             zoom_tokens = get_zoom_tokens_via_zoom_oauth_app(self.bot_in_db)
+
+        # Add registrant token if it exists, for meetings or webinars that require registration
+        meeting_id, password, registrant_token = parse_zoom_join_url(self.bot_in_db.meeting_url)
+        if registrant_token:
+            zoom_tokens["registrant_token"] = registrant_token
 
         return zoom_tokens
 

@@ -328,12 +328,9 @@ def get_zoom_tokens_via_zoom_oauth_app(bot: Bot) -> dict | None:
     onbehalf_token = get_onbehalf_token_via_zoom_oauth_app(bot)
     local_recording_token = get_local_recording_token_via_zoom_oauth_app(bot)
 
-    meeting_id, password, registrant_token = parse_zoom_join_url(bot.meeting_url)
-
     return {
         "zak_token": None,
         "join_token": None,
         "app_privilege_token": local_recording_token,
         "onbehalf_token": onbehalf_token,
-        "registrant_token": registrant_token,
     }
