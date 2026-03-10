@@ -48,14 +48,30 @@ class ZoomWebUIMethods:
         # Detect webinar by URL path: Zoom webinar URLs use /w/, meetings use /j/.
         if "/w/" in self.meeting_url:
             logger.info("Webinar detected from URL; using webinar caption flow.")
+            if self._is_webinar_attendee():
+                logger.info("Bot joined as attendee; waiting for host to promote to panelist.")
+                self._wait_for_panelist_promotion_and_accept()
             self._enable_webinar_captions()
             self.ready_to_show_bot_image()
             self.start_webinar_recording_timeout()
             return
 
-        # Meeting flow: find "More meeting control" and optionally enable Captions
+        # Meeting flow: find "More meeting control" and optionally enable Captions.
+        # A /j/ link can actually resolve to a webinar — detect this by absence of the button,
+        # then positively confirm with webinar-specific UI before switching flows.
         logger.info("Waiting for more meeting control button")
-        more_meeting_control_button = WebDriverWait(self.driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, "div[aria-label='More meeting control ']")))
+        try:
+            more_meeting_control_button = WebDriverWait(self.driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, "div[aria-label='More meeting control ']")))
+        except TimeoutException:
+            logger.info("'More meeting control' button not found on /j/ link; checking for webinar attendee UI.")
+            if self._is_webinar_attendee():
+                logger.info("Webinar attendee confirmed on /j/ link; waiting for panelist promotion.")
+                self._wait_for_panelist_promotion_and_accept()
+                self._enable_webinar_captions()
+                self.ready_to_show_bot_image()
+                self.start_webinar_recording_timeout()
+                return
+            raise
         self.driver.execute_script("arguments[0].click();", more_meeting_control_button)
 
         # Then find an <a> tag with the arial label "Captions" and click it
@@ -194,6 +210,48 @@ class ZoomWebUIMethods:
         turn_off_incoming_video_button = WebDriverWait(self.driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, "[aria-label='Stop Incoming Video']")))
         logger.info("Turn off incoming video button found, clicking")
         self.driver.execute_script("arguments[0].click();", turn_off_incoming_video_button)
+
+    def _is_webinar_attendee(self):
+        """
+        Return True if the bot joined as an attendee.
+        Attendees have an 'audio setting' button (output only) but no 'Video' button.
+        """
+        try:
+            WebDriverWait(self.driver, 5).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "button[aria-label='audio setting']"))
+            )
+        except TimeoutException:
+            logger.info("No 'audio setting' button found; assuming panelist.")
+            return False
+
+        has_video_button = bool(self.driver.find_elements(By.CSS_SELECTOR, "button[aria-label='Video']"))
+        if has_video_button:
+            logger.info("'Video' button present; bot is a panelist.")
+            return False
+
+        logger.info("'audio setting' present and no 'Video' button; bot is an attendee.")
+        return True
+
+    def _wait_for_panelist_promotion_and_accept(self, timeout_seconds=1800):
+        """
+        Block until the host promotes the bot to panelist and the confirmation modal appears,
+        then click the primary 'Join as Panelist' button.
+        """
+        logger.info(f"Waiting up to {timeout_seconds}s for panelist promotion modal...")
+        try:
+            dialog = WebDriverWait(self.driver, timeout_seconds).until(
+                EC.presence_of_element_located(
+                    (By.CSS_SELECTOR, '[aria-label="The host would like to promote you to be a panelist"]')
+                )
+            )
+            logger.info("Panelist promotion modal appeared, clicking 'Join as Panelist'.")
+            join_as_panelist_btn = dialog.find_element(
+                By.XPATH, './/button[contains(@class, "zm-btn--primary")]'
+            )
+            self.driver.execute_script("arguments[0].click();", join_as_panelist_btn)
+            logger.info("Clicked 'Join as Panelist' button.")
+        except TimeoutException:
+            logger.warning("Panelist promotion modal did not appear within timeout; continuing as attendee.")
 
     def _enable_webinar_captions(self):
         """
