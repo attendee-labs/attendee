@@ -789,12 +789,19 @@ class BotController:
             )
             return PerParticipantNonStreamingAudioInputManager.DEFAULT_SPEECH_STOP_POST_ROLL_SECONDS
 
+    def non_streaming_audio_use_speech_events_as_primary_chunking_enabled(self):
+        return os.getenv("TRANSCRIPTION_CHUNK_USE_SPEECH_EVENTS_PRIMARY_CHUNKING_ENABLED", "false").lower() == "true"
+
     def should_request_participant_speech_start_stop_events(self):
         if self.bot_in_db.record_participant_speech_start_stop_events():
             return True
 
-        # Even when we do not persist speech events, use them as primary chunk boundaries.
-        return self.should_capture_audio_chunks() and not self.use_streaming_transcription()
+        # Optionally use speech events as primary chunk boundaries without persisting those events.
+        return (
+            self.non_streaming_audio_use_speech_events_as_primary_chunking_enabled()
+            and self.should_capture_audio_chunks()
+            and not self.use_streaming_transcription()
+        )
 
     def non_streaming_audio_min_speech_duration_limit(self):
         env_min_speech_duration_limit = os.getenv("TRANSCRIPTION_CHUNK_MIN_SPEECH_DURATION_SECONDS")
@@ -1540,6 +1547,9 @@ class BotController:
             return
 
         if not self.should_capture_audio_chunks() or self.use_streaming_transcription():
+            return
+
+        if not self.non_streaming_audio_use_speech_events_as_primary_chunking_enabled():
             return
 
         if not self.per_participant_non_streaming_audio_input_manager:

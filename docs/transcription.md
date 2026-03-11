@@ -139,6 +139,7 @@ To use a custom OpenAI-compatible endpoint (such as a proxy server or alternativ
 
 - `OPENAI_BASE_URL`: The base URL for your custom endpoint (default: `https://api.openai.com/v1`)
 - `OPENAI_MODEL_NAME`: The model name to use for transcription (default: `gpt-4o-transcribe`)
+- `TRANSCRIPTION_CHUNK_USE_SPEECH_EVENTS_PRIMARY_CHUNKING_ENABLED`: When `true`, use participant `speech_start`/`speech_stop` events as primary boundaries for non-streaming per-participant chunk flushing (default: `false`). When `false`, Attendee keeps the previous chunking behavior based on silence and buffer limits.
 - `TRANSCRIPTION_CHUNK_MIN_SPEECH_DURATION_SECONDS`: Minimum detected speech duration required before Attendee flushes a non-streaming per-participant audio chunk for transcription (default: `3`)
 - `TRANSCRIPTION_CHUNK_IGNORE_LONG_SILENCE_ENABLED`: Enable/disable dropping long silence from non-streaming chunk audio payloads (default: `true`)
 - `TRANSCRIPTION_CHUNK_MAX_SILENCE_TO_APPEND_SECONDS`: Maximum silence duration that is still appended to non-streaming chunk audio payloads (default: `1`). Silence longer than this is ignored in the chunk payload.
