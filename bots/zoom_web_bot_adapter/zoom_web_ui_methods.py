@@ -3,6 +3,7 @@ import os
 import time
 
 from selenium.common.exceptions import TimeoutException
+from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
@@ -50,7 +51,7 @@ class ZoomWebUIMethods:
             logger.info("Webinar URL detected, attempting to join webinar")
             self.attempt_to_join_webinar(self.is_webinar_attendee())
             return
-            
+
         try:
             more_meeting_control_button = WebDriverWait(self.driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, "div[aria-label='More meeting control ']")))
             logger.info("More meeting control button found, clicking")
@@ -128,11 +129,11 @@ class ZoomWebUIMethods:
                 logger.info("Webinar: Clicked 'Join as Panelist' button.")
             except TimeoutException:
                 logger.info("Webinar: Panelist promotion modal did not appear within timeout; continuing as attendee.")
-        
+
         logger.info("Webinar: Waiting for captions button")
         try:
             # Caption button is different for webinar panelists: "Show Captions" when off, "Hide Captions" when on.
-            hide_captions = WebDriverWait(self.driver, 2).until(EC.presence_of_element_located((By.CSS_SELECTOR, "button[aria-label='Hide Captions']")))
+            WebDriverWait(self.driver, 2).until(EC.presence_of_element_located((By.CSS_SELECTOR, "button[aria-label='Hide Captions']")))
             logger.info("Webinar: Hide Captions button found, CC already enabled.")
         except TimeoutException:
             try:
@@ -143,8 +144,7 @@ class ZoomWebUIMethods:
                 logger.info("Webinar: Captions button not found, unable to transcribe via closed-captions.")
                 self.could_not_enable_closed_captions()
 
-        # this may not work
-        self.set_zoom_closed_captions_language()
+        self.set_zoom_webinar_closed_captions_language()
 
         self.ready_to_show_bot_image()
 
@@ -230,7 +230,7 @@ class ZoomWebUIMethods:
         turn_off_incoming_video_button = WebDriverWait(self.driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, "[aria-label='Stop Incoming Video']")))
         logger.info("Turn off incoming video button found, clicking")
         self.driver.execute_script("arguments[0].click();", turn_off_incoming_video_button)
-    
+
     def is_webinar_attendee(self):
         try:
             WebDriverWait(self.driver, 5).until(EC.presence_of_element_located((By.CSS_SELECTOR, "button[aria-label='audio setting']")))
@@ -357,6 +357,45 @@ class ZoomWebUIMethods:
             logger.warning("Could not find transcription language input element")
         except Exception as e:
             logger.warning(f"Error setting transcription language: {e}")
+
+    def set_zoom_webinar_closed_captions_language(self):
+        if not self.zoom_closed_captions_language:
+            return
+
+        logger.info(f"Webinar: Setting closed captions language to {self.zoom_closed_captions_language}")
+        
+        try:
+            # Open the captions options dropdown
+            more_options_btn = WebDriverWait(self.driver, 20).until(EC.element_to_be_clickable((By.CSS_SELECTOR, "button[aria-label='More options for captions, menu button']")))
+            self.driver.execute_script("arguments[0].click();", more_options_btn)
+
+            # Enable translation if currently off. aria-label changes between "translation is off" / "translation is on"
+            translation_toggle = WebDriverWait(self.driver, 5).until(EC.presence_of_element_located((By.CSS_SELECTOR, "input[aria-label*='translation is']")))
+            if not translation_toggle.is_selected():
+                logger.info("Translation toggle is OFF, clicking to enable")
+                self.driver.execute_script("arguments[0].click();", translation_toggle)
+                # Reopen dropdown using ActionChains to maintain focus after enabling translation.
+                more_options_btn = WebDriverWait(self.driver, 5).until(EC.element_to_be_clickable((By.CSS_SELECTOR, "button[aria-label='More options for captions, menu button']")))
+                ActionChains(self.driver).move_to_element(more_options_btn).click().perform()
+            else:
+                logger.info("Translation toggle is already ON")
+
+            # Open the language sub-dropdown
+            my_caption_language = WebDriverWait(self.driver, 10).until(EC.element_to_be_clickable((By.CSS_SELECTOR, "a[aria-label='Host controls grouping My Caption Language']")))
+            self.driver.execute_script("arguments[0].click();", my_caption_language)
+
+            # Select the target language if not already checked
+            try:
+                language_option = WebDriverWait(self.driver, 5).until(EC.presence_of_element_located((By.XPATH, f"//a[@aria-checked='false' and contains(@aria-label, '{self.zoom_closed_captions_language}')]")))
+                self.driver.execute_script("arguments[0].click();", language_option)
+                logger.info(f"Successfully set webinar closed captions language to {self.zoom_closed_captions_language}")
+            except TimeoutException:
+                logger.info(f"Language '{self.zoom_closed_captions_language}' is already selected or not found in list")
+
+        except TimeoutException:
+            logger.warning("Could not set webinar closed captions language — UI element not found")
+        except Exception as e:
+            logger.warning(f"Error setting webinar closed captions language: {e}")
 
     def retrieve_language_input_from_bottom_panel(self):
         # Then find a button with the arial-label "More meeting control " and click it
