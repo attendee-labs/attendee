@@ -1,5 +1,6 @@
 import io
 import logging
+import os
 import subprocess
 import threading
 import time
@@ -328,7 +329,7 @@ def get_transcription_via_assemblyai_from_mp3(
     polling_endpoint = f"{base_url}/transcript/{transcript_id}"
 
     # Poll the result_url until we get a completed transcription
-    max_retries = 120  # Maximum number of retries (2 minutes with 1s sleep)
+    max_retries = int(os.getenv("TRANSCRIPTION_POLLING_TIMEOUT_SECONDS", 120))  # Maximum number of retries (2 minutes with 1s sleep)
     retry_count = 0
 
     while retry_count < max_retries:

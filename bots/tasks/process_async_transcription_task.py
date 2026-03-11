@@ -24,10 +24,9 @@ def create_utterances_for_transcription_without_using_groups(async_transcription
 
     # Get all the audio chunks for the recording
     # then create utterances for each audio chunk
-    # Use defer() to exclude large audio_blob field and iterator() to stream results
-    # instead of loading all chunks into memory at once (can be >1GB of audio data)
+    # Do NOT load the audio blob field, because it's not needed and can consume significant memory
     utterance_task_delay_seconds = 0
-    for audio_chunk in recording.audio_chunks.defer("audio_blob").iterator(chunk_size=100):
+    for audio_chunk in recording.audio_chunks.defer("audio_blob").all():
         utterance = Utterance.objects.create(
             source=Utterance.Sources.PER_PARTICIPANT_AUDIO,
             recording=recording,
