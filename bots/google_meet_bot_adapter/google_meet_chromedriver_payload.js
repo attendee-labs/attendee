@@ -1952,6 +1952,11 @@ const handleAudioTrack = async (event) => {
 new RTCInterceptor({
     onPeerConnectionCreate: (peerConnection) => {
         console.log('New RTCPeerConnection created:', peerConnection);
+
+        window.ws?.sendJson({
+            type: 'WebRTCPeerConnectionCreated',
+        });
+
         peerConnection.addEventListener('datachannel', (event) => {
             console.log('datachannel', event);
             if (event.channel.label === "collections") {               
@@ -1999,7 +2004,6 @@ new RTCInterceptor({
 
         window.ws?.sendJson({
             type: 'WebRTCPeerConnectionTrackListenerStarted',
-            peerConnectionId: JSON.stringify(peerConnection),
         });
 
         /*
