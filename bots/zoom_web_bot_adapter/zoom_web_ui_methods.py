@@ -363,7 +363,7 @@ class ZoomWebUIMethods:
             return
 
         logger.info(f"Webinar: Setting closed captions language to {self.zoom_closed_captions_language}")
-        
+
         try:
             # Open the captions options dropdown
             more_options_btn = WebDriverWait(self.driver, 20).until(EC.element_to_be_clickable((By.CSS_SELECTOR, "button[aria-label='More options for captions, menu button']")))
