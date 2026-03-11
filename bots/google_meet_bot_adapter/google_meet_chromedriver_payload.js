@@ -1804,7 +1804,7 @@ const handleVideoTrack = async (event) => {
 
 const handleAudioTrack = async (event) => {
   let lastAudioFormat = null;  // Track last seen format
-  
+
   try {
     // Create processor to get raw frames
     const processor = new MediaStreamTrackProcessor({ track: event.track });
@@ -1967,7 +1967,7 @@ new RTCInterceptor({
             }
         });
 
-        peerConnection.addEventListener('track', (event) => {
+        peerConnection.addEventListener('track', async (event) => {
             try
             {
             window.ws?.sendJson({
@@ -1986,7 +1986,7 @@ new RTCInterceptor({
             if (event.track.kind === 'audio') {
                 window.styleManager.addAudioTrack(event.track);
                 if (window.initialData.sendPerParticipantAudio) {
-                    handleAudioTrack(event);
+                    await handleAudioTrack(event);
                 }
             }
             if (event.track.kind === 'video') {
