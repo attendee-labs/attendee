@@ -17,7 +17,19 @@ def calculate_normalized_rms(audio_bytes):
 
 
 class PerParticipantNonStreamingAudioInputManager:
-    def __init__(self, *, save_audio_chunk_callback, get_participant_callback, sample_rate, utterance_size_limit, silence_duration_limit, should_print_diagnostic_info):
+    def __init__(
+        self,
+        *,
+        save_audio_chunk_callback,
+        get_participant_callback,
+        sample_rate,
+        utterance_size_limit,
+        silence_duration_limit,
+        min_speech_duration_limit,
+        ignore_long_silence_enabled,
+        max_silence_to_append_seconds,
+        should_print_diagnostic_info,
+    ):
         self.queue = queue.Queue()
 
         self.save_audio_chunk_callback = save_audio_chunk_callback
@@ -28,9 +40,13 @@ class PerParticipantNonStreamingAudioInputManager:
 
         self.first_nonsilent_audio_time = {}
         self.last_nonsilent_audio_time = {}
+        self.nonsilent_audio_duration_seconds = {}
 
         self.UTTERANCE_SIZE_LIMIT = utterance_size_limit
         self.SILENCE_DURATION_LIMIT = silence_duration_limit
+        self.MIN_SPEECH_DURATION_LIMIT = min_speech_duration_limit
+        self.IGNORE_LONG_SILENCE_ENABLED = ignore_long_silence_enabled
+        self.MAX_SILENCE_TO_APPEND_SECONDS = max_silence_to_append_seconds
         self.vad = webrtcvad.Vad()
 
         self.should_print_diagnostic_info = should_print_diagnostic_info
@@ -50,6 +66,7 @@ class PerParticipantNonStreamingAudioInputManager:
             "total_chunks_that_caused_vad_error": 0,
             "total_audio_chunks_sent": 0,
             "total_audio_chunks_not_sent_because_participant_not_found": 0,
+            "total_audio_chunks_discarded_because_min_speech_duration_not_reached": 0,
         }
         self.last_diagnostic_info_print_time = time.time()
 
@@ -105,6 +122,7 @@ class PerParticipantNonStreamingAudioInputManager:
 
     def process_chunk(self, speaker_id, chunk_time, chunk_bytes):
         audio_is_silent = self.silence_detected(chunk_bytes) if chunk_bytes else True
+        silence_duration = 0.0
 
         # Initialize buffer and timing for new speaker
         if speaker_id not in self.utterances or len(self.utterances[speaker_id]) == 0:
@@ -113,10 +131,15 @@ class PerParticipantNonStreamingAudioInputManager:
             self.utterances[speaker_id] = bytearray()
             self.first_nonsilent_audio_time[speaker_id] = chunk_time
             self.last_nonsilent_audio_time[speaker_id] = chunk_time
+            self.nonsilent_audio_duration_seconds[speaker_id] = 0.0
 
-        # Add new audio data to buffer
-        if chunk_bytes:
+        # Add speech audio data, and only short silence (for better timing continuity).
+        if chunk_bytes and not audio_is_silent:
             self.utterances[speaker_id].extend(chunk_bytes)
+        elif chunk_bytes and audio_is_silent:
+            silence_duration = (chunk_time - self.last_nonsilent_audio_time[speaker_id]).total_seconds()
+            if not self.IGNORE_LONG_SILENCE_ENABLED or silence_duration <= self.MAX_SILENCE_TO_APPEND_SECONDS:
+                self.utterances[speaker_id].extend(chunk_bytes)
 
         should_flush = False
         reason = None
@@ -128,33 +151,48 @@ class PerParticipantNonStreamingAudioInputManager:
 
         # Check for silence
         if audio_is_silent:
-            silence_duration = (chunk_time - self.last_nonsilent_audio_time[speaker_id]).total_seconds()
+            if silence_duration == 0.0:
+                silence_duration = (chunk_time - self.last_nonsilent_audio_time[speaker_id]).total_seconds()
             if silence_duration >= self.SILENCE_DURATION_LIMIT:
                 should_flush = True
                 reason = "silence_limit"
         else:
             self.last_nonsilent_audio_time[speaker_id] = chunk_time
+            if chunk_bytes:
+                # Convert bytes to seconds (16-bit PCM, mono).
+                self.nonsilent_audio_duration_seconds[speaker_id] += len(chunk_bytes) / (self.sample_rate * 2)
 
             logger.debug(f"Speaker {speaker_id} is speaking")
 
         # Flush buffer if needed
         if should_flush and len(self.utterances[speaker_id]) > 0:
-            participant = self.get_participant_callback(speaker_id)
-            if participant:
-                self.save_audio_chunk_callback(
-                    {
-                        **participant,
-                        "audio_data": bytes(self.utterances[speaker_id]),
-                        "timestamp_ms": int(self.first_nonsilent_audio_time[speaker_id].timestamp() * 1000),
-                        "flush_reason": reason,
-                        "sample_rate": self.sample_rate,
-                    }
-                )
-                self.diagnostic_info["total_audio_chunks_sent"] += 1
+            speech_duration_seconds = self.nonsilent_audio_duration_seconds.get(speaker_id, 0.0)
+            if speech_duration_seconds >= self.MIN_SPEECH_DURATION_LIMIT:
+                participant = self.get_participant_callback(speaker_id)
+                if participant:
+                    self.save_audio_chunk_callback(
+                        {
+                            **participant,
+                            "audio_data": bytes(self.utterances[speaker_id]),
+                            "timestamp_ms": int(self.first_nonsilent_audio_time[speaker_id].timestamp() * 1000),
+                            "flush_reason": reason,
+                            "sample_rate": self.sample_rate,
+                        }
+                    )
+                    self.diagnostic_info["total_audio_chunks_sent"] += 1
+                else:
+                    logger.warning(f"Participant {speaker_id} not found")
+                    self.diagnostic_info["total_audio_chunks_not_sent_because_participant_not_found"] += 1
             else:
-                logger.warning(f"Participant {speaker_id} not found")
-                self.diagnostic_info["total_audio_chunks_not_sent_because_participant_not_found"] += 1
+                self.diagnostic_info["total_audio_chunks_discarded_because_min_speech_duration_not_reached"] += 1
+                logger.info(
+                    "Discarding chunk for speaker %s because speech duration %.2fs is below minimum %.2fs",
+                    speaker_id,
+                    speech_duration_seconds,
+                    self.MIN_SPEECH_DURATION_LIMIT,
+                )
             # Clear the buffer
             self.utterances[speaker_id] = bytearray()
             del self.first_nonsilent_audio_time[speaker_id]
             del self.last_nonsilent_audio_time[speaker_id]
+            self.nonsilent_audio_duration_seconds.pop(speaker_id, None)

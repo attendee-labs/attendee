@@ -771,6 +771,47 @@ class BotController:
         else:
             return 3  # seconds
 
+    def non_streaming_audio_min_speech_duration_limit(self):
+        env_min_speech_duration_limit = os.getenv("TRANSCRIPTION_CHUNK_MIN_SPEECH_DURATION_SECONDS")
+        if env_min_speech_duration_limit is not None:
+            try:
+                parsed_min_speech_duration_limit = float(env_min_speech_duration_limit)
+                if parsed_min_speech_duration_limit > 0:
+                    return parsed_min_speech_duration_limit
+                logger.warning(
+                    "Ignoring TRANSCRIPTION_CHUNK_MIN_SPEECH_DURATION_SECONDS because it is not greater than zero: %s",
+                    env_min_speech_duration_limit,
+                )
+            except ValueError:
+                logger.warning(
+                    "Ignoring TRANSCRIPTION_CHUNK_MIN_SPEECH_DURATION_SECONDS because it is not a valid number: %s",
+                    env_min_speech_duration_limit,
+                )
+
+        return 3  # seconds
+
+    def non_streaming_audio_max_silence_to_append_seconds(self):
+        env_max_silence_to_append = os.getenv("TRANSCRIPTION_CHUNK_MAX_SILENCE_TO_APPEND_SECONDS")
+        if env_max_silence_to_append is not None:
+            try:
+                parsed_max_silence_to_append = float(env_max_silence_to_append)
+                if parsed_max_silence_to_append >= 0:
+                    return parsed_max_silence_to_append
+                logger.warning(
+                    "Ignoring TRANSCRIPTION_CHUNK_MAX_SILENCE_TO_APPEND_SECONDS because it is negative: %s",
+                    env_max_silence_to_append,
+                )
+            except ValueError:
+                logger.warning(
+                    "Ignoring TRANSCRIPTION_CHUNK_MAX_SILENCE_TO_APPEND_SECONDS because it is not a valid number: %s",
+                    env_max_silence_to_append,
+                )
+
+        return 1  # seconds
+
+    def non_streaming_audio_ignore_long_silence_enabled(self):
+        return os.getenv("TRANSCRIPTION_CHUNK_IGNORE_LONG_SILENCE_ENABLED", "true").lower() == "true"
+
     def run(self):
         if self.run_called:
             raise Exception("Run already called, exiting")
@@ -787,6 +828,9 @@ class BotController:
             sample_rate=self.get_per_participant_audio_sample_rate(),
             utterance_size_limit=self.non_streaming_audio_utterance_size_limit(),
             silence_duration_limit=self.non_streaming_audio_silence_duration_limit(),
+            min_speech_duration_limit=self.non_streaming_audio_min_speech_duration_limit(),
+            ignore_long_silence_enabled=self.non_streaming_audio_ignore_long_silence_enabled(),
+            max_silence_to_append_seconds=self.non_streaming_audio_max_silence_to_append_seconds(),
             should_print_diagnostic_info=self.should_capture_audio_chunks(),
         )
 
