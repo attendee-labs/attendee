@@ -54,8 +54,9 @@ RUN apt-get install -y ./google-chrome-stable_current_amd64.deb
 
 # Install a specific version of ChromeDriver.
 # Install ChromeDriver that matches the current Chrome version
+# Dynamically install ChromeDriver that matches the installed Chrome version
 RUN CHROME_MAJOR_VERSION=$(google-chrome --version | cut -d ' ' -f 3 | cut -d '.' -f 1) && \
-    CHROMEDRIVER_URL=$(curl -s https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json | grep -oE "https://storage.googleapis.com/chrome-for-testing-public/.*/linux64/chromedriver-linux64.zip" | grep "/$CHROME_MAJOR_VERSION." | head -n 1) && \
+    CHROMEDRIVER_URL=$(curl -s https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json | grep -oE "https://storage.googleapis.com/chrome-for-testing-public/[^/]+/linux64/chromedriver-linux64.zip" | grep "/$CHROME_MAJOR_VERSION." | head -n 1) && \
     wget -q $CHROMEDRIVER_URL && \
     unzip chromedriver-linux64.zip && \
     mv chromedriver-linux64/chromedriver /usr/local/bin/chromedriver && \
