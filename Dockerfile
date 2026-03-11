@@ -49,19 +49,16 @@ RUN apt-get update  \
 # Install Chrome dependencies
 RUN apt-get install -y xvfb x11-xkb-utils xfonts-100dpi xfonts-75dpi xfonts-scalable xfonts-cyrillic x11-apps libvulkan1 fonts-liberation xdg-utils wget
 # Install a specific version of Chrome.
-RUN wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
-RUN apt-get install -y ./google-chrome-stable_current_amd64.deb
+RUN wget -q http://dl.google.com/linux/chrome/deb/pool/main/g/google-chrome-stable/google-chrome-stable_139.0.7258.66-1_amd64.deb
+RUN apt-get install -y ./google-chrome-stable_139.0.7258.66-1_amd64.deb
 
 # Install a specific version of ChromeDriver.
-# Install ChromeDriver that matches the current Chrome version
-# Dynamically install ChromeDriver that matches the installed Chrome version
-RUN CHROME_MAJOR_VERSION=$(google-chrome --version | cut -d ' ' -f 3 | cut -d '.' -f 1) && \
-    CHROMEDRIVER_URL=$(curl -s https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json | grep -oE "https://storage.googleapis.com/chrome-for-testing-public/[^/]+/linux64/chromedriver-linux64.zip" | grep "/$CHROME_MAJOR_VERSION." | head -n 1) && \
-    wget -q $CHROMEDRIVER_URL && \
-    unzip chromedriver-linux64.zip && \
-    mv chromedriver-linux64/chromedriver /usr/local/bin/chromedriver && \
-    chmod +x /usr/local/bin/chromedriver && \
-    rm -rf chromedriver-linux64 chromedriver-linux64.zip
+RUN wget -q https://storage.googleapis.com/chrome-for-testing-public/139.0.7258.66/linux64/chromedriver-linux64.zip \
+    && unzip chromedriver-linux64.zip \
+    && mv chromedriver-linux64/chromedriver /usr/local/bin/chromedriver \
+    && chmod +x /usr/local/bin/chromedriver \
+    && rm -rf chromedriver-linux64 chromedriver-linux64.zip
+
 # Install ALSA
 RUN apt-get update && apt-get install -y libasound2 libasound2-plugins alsa alsa-utils alsa-oss
 
