@@ -1977,9 +1977,9 @@ new RTCInterceptor({
                 streamsLength: event?.streams?.length,
             });
             console.log('New track:', {
-                trackId: event.track?.id,
-                trackKind: event.track?.kind,
-                streams: event?.streams,
+                trackId: event.track.id,
+                trackKind: event.track.kind,
+                streams: event.streams,
             });
             // We need to capture every audio track in the meeting,
             // but we don't need to do anything with the video tracks
