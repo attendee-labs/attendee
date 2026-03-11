@@ -1,6 +1,7 @@
 import copy
 import json
 import logging
+import os
 import re
 import uuid
 from datetime import datetime, timedelta
@@ -197,7 +198,7 @@ class CalendarSyncHandler:
             # Step 1: Set time window
             now = timezone.now()
             self.time_window_start = now - timedelta(days=1)
-            self.time_window_end = now + timedelta(days=28)
+            self.time_window_end = now + timedelta(days=int(os.getenv("CALENDAR_SYNC_TIME_WINDOW_END_DAYS", 28)))
             logger.info(f"Set time window for calendar {self.calendar.object_id}: {self.time_window_start.isoformat()} to {self.time_window_end.isoformat()}")
 
             # Get access token

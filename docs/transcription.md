@@ -144,6 +144,8 @@ To use a custom OpenAI-compatible endpoint (such as a proxy server or alternativ
 - `TRANSCRIPTION_CHUNK_MAX_SILENCE_TO_APPEND_SECONDS`: Maximum silence duration that is still appended to non-streaming chunk audio payloads (default: `1`). Silence longer than this is ignored in the chunk payload.
 
 Non-streaming per-participant chunks append speech plus short silence up to the configured threshold. Longer silence is not appended when `TRANSCRIPTION_CHUNK_IGNORE_LONG_SILENCE_ENABLED=true`.
+- `OPENAI_TRANSCRIPTION_SILENCE_DURATION_MS`: Optional default silence duration for OpenAI `gpt-4o-transcribe-diarize` chunking. If set, Attendee uses `server_vad` with this `silence_duration_ms` when chunking strategy is not explicitly configured.
+- `TRANSCRIPTION_CHUNK_SILENCE_DURATION_SECONDS`: Optional silence duration (seconds) used to cut non-streaming per-participant audio chunks before sending for transcription.
 
 Example: `OPENAI_BASE_URL=https://your-proxy.com/v1` and `OPENAI_MODEL_NAME=whisper-large-v3`
 

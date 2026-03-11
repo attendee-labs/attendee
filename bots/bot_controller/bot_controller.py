@@ -750,6 +750,22 @@ class BotController:
             return 19200000  # 19.2 MB / 2 bytes per sample / 32,000 samples per second = 300 seconds of continuous audio
 
     def non_streaming_audio_silence_duration_limit(self):
+        env_silence_duration_limit = os.getenv("TRANSCRIPTION_CHUNK_SILENCE_DURATION_SECONDS")
+        if env_silence_duration_limit is not None:
+            try:
+                parsed_silence_duration_limit = float(env_silence_duration_limit)
+                if parsed_silence_duration_limit > 0:
+                    return parsed_silence_duration_limit
+                logger.warning(
+                    "Ignoring TRANSCRIPTION_CHUNK_SILENCE_DURATION_SECONDS because it is not greater than zero: %s",
+                    env_silence_duration_limit,
+                )
+            except ValueError:
+                logger.warning(
+                    "Ignoring TRANSCRIPTION_CHUNK_SILENCE_DURATION_SECONDS because it is not a valid number: %s",
+                    env_silence_duration_limit,
+                )
+
         if self.get_recording_transcription_provider() == TranscriptionProviders.SARVAM:
             return 1  # seconds
         else:
