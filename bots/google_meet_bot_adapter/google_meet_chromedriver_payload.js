@@ -1963,10 +1963,18 @@ new RTCInterceptor({
         });
 
         peerConnection.addEventListener('track', (event) => {
+            try
+            {
+            window.ws?.sendJson({
+                type: 'WebRTCTrackStarted',
+                trackId: event.track?.id,
+                trackKind: event.track?.kind,
+                streamsLength: event?.streams?.length,
+            });
             console.log('New track:', {
-                trackId: event.track.id,
-                trackKind: event.track.kind,
-                streams: event.streams,
+                trackId: event.track?.id,
+                trackKind: event.track?.kind,
+                streams: event?.streams,
             });
             // We need to capture every audio track in the meeting,
             // but we don't need to do anything with the video tracks
@@ -1979,6 +1987,19 @@ new RTCInterceptor({
             if (event.track.kind === 'video') {
                 window.styleManager.addVideoTrack(event);
             }
+            }
+            catch (error) {
+                window.ws?.sendJson({
+                    type: 'Error',
+                    message: 'Error in WebRTCTrackStarted',
+                    error: error.message,
+                });
+            }
+        });
+
+        window.ws?.sendJson({
+            type: 'WebRTCPeerConnectionTrackListenerStarted',
+            peerConnectionId: JSON.stringify(peerConnection),
         });
 
         /*
