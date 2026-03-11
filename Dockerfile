@@ -53,12 +53,14 @@ RUN wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd6
 RUN apt-get install -y ./google-chrome-stable_current_amd64.deb
 
 # Install a specific version of ChromeDriver.
-RUN wget -q https://storage.googleapis.com/chrome-for-testing-public/134.0.6998.88/linux64/chromedriver-linux64.zip \
-    && unzip chromedriver-linux64.zip \
-    && mv chromedriver-linux64/chromedriver /usr/local/bin/chromedriver \
-    && chmod +x /usr/local/bin/chromedriver \
-    && rm -rf chromedriver-linux64 chromedriver-linux64.zip
-
+# Install ChromeDriver that matches the current Chrome version
+RUN CHROME_MAJOR_VERSION=$(google-chrome --version | cut -d ' ' -f 3 | cut -d '.' -f 1) && \
+    CHROMEDRIVER_URL=$(curl -s https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json | grep -oE "https://storage.googleapis.com/chrome-for-testing-public/.*/linux64/chromedriver-linux64.zip" | grep "/$CHROME_MAJOR_VERSION." | head -n 1) && \
+    wget -q $CHROMEDRIVER_URL && \
+    unzip chromedriver-linux64.zip && \
+    mv chromedriver-linux64/chromedriver /usr/local/bin/chromedriver && \
+    chmod +x /usr/local/bin/chromedriver && \
+    rm -rf chromedriver-linux64 chromedriver-linux64.zip
 # Install ALSA
 RUN apt-get update && apt-get install -y libasound2 libasound2-plugins alsa alsa-utils alsa-oss
 
