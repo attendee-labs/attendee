@@ -139,6 +139,8 @@ To use a custom OpenAI-compatible endpoint (such as a proxy server or alternativ
 
 - `OPENAI_BASE_URL`: The base URL for your custom endpoint (default: `https://api.openai.com/v1`)
 - `OPENAI_MODEL_NAME`: The model name to use for transcription (default: `gpt-4o-transcribe`)
+- `OPENAI_TRANSCRIPTION_SILENCE_DURATION_MS`: Optional default silence duration for OpenAI `gpt-4o-transcribe-diarize` chunking. If set, Attendee uses `server_vad` with this `silence_duration_ms` when chunking strategy is not explicitly configured.
+- `TRANSCRIPTION_CHUNK_SILENCE_DURATION_SECONDS`: Optional silence duration (seconds) used to cut non-streaming per-participant audio chunks before sending for transcription.
 
 Example: `OPENAI_BASE_URL=https://your-proxy.com/v1` and `OPENAI_MODEL_NAME=whisper-large-v3`
 

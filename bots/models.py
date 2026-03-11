@@ -566,7 +566,31 @@ class TranscriptionSettings:
         # Only applicable for gpt-4o-transcribe-diarize, default to auto
         model = self.openai_transcription_model()
         if model == "gpt-4o-transcribe-diarize":
-            return self._settings.get("openai", {}).get("chunking_strategy", "auto")
+            configured_chunking_strategy = self._settings.get("openai", {}).get("chunking_strategy")
+            env_silence_duration_ms = os.getenv("OPENAI_TRANSCRIPTION_SILENCE_DURATION_MS")
+            parsed_env_silence_duration_ms = None
+
+            if env_silence_duration_ms is not None:
+                try:
+                    value = int(env_silence_duration_ms)
+                    if value > 0:
+                        parsed_env_silence_duration_ms = value
+                except ValueError:
+                    parsed_env_silence_duration_ms = None
+
+            if isinstance(configured_chunking_strategy, dict):
+                if parsed_env_silence_duration_ms is not None and "silence_duration_ms" not in configured_chunking_strategy:
+                    return {**configured_chunking_strategy, "silence_duration_ms": parsed_env_silence_duration_ms}
+                return configured_chunking_strategy
+
+            if configured_chunking_strategy is not None:
+                if configured_chunking_strategy == "auto" and parsed_env_silence_duration_ms is not None:
+                    return {"type": "server_vad", "silence_duration_ms": parsed_env_silence_duration_ms}
+                return configured_chunking_strategy
+
+            if parsed_env_silence_duration_ms is not None:
+                return {"type": "server_vad", "silence_duration_ms": parsed_env_silence_duration_ms}
+            return "auto"
         return None
 
     def gladia_code_switching_languages(self):
