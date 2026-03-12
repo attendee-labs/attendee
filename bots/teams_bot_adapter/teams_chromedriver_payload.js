@@ -1,3 +1,220 @@
+class FetchInterceptor {
+    constructor(requestCallback) {
+        this.originalFetch = window.fetch;
+        this.requestCallback = requestCallback;
+        window.fetch = (...args) => this.interceptFetch(...args);
+    }
+
+    interceptFetch(...args) {
+        // args is either: [input, init] or [Request]
+        try {
+        const request = new Request(...args); // normalizes into a Request object
+        // fire-and-forget so we don't block fetch; callback can be async if it wants
+        Promise.resolve(this.requestCallback(request)).catch(err =>
+            console.error("Error in requestCallback:", err)
+        );
+        } catch (err) {
+        console.error("Error building Request from fetch args:", err);
+        }
+
+        // Always return the real fetch promise unchanged
+        return this.originalFetch.apply(window, args);
+    }
+}
+
+class ChatMessagePoller {
+    constructor() {
+        this.ms_teams_region = null;
+        this.skype_token = null;
+        this.latestMessageArrivalTime = null;
+        this.consecutiveFetchFailures = 0;
+        this.fetchCounter = 0;
+
+        this.isTeamsConsumerEdition = window.location.hostname === 'teams.live.com';
+        this.hostnameToQuery = this.isTeamsConsumerEdition ? 'teams.live.com' : 'teams.microsoft.com';
+        if (this.isTeamsConsumerEdition)
+            this.ms_teams_region = 'consumer';
+
+        // Set an interval to fetch every 5 seconds
+        this.fetchInterval = setInterval(async () => {
+            try
+            {
+                const fetchEveryNth = Math.min(8, Math.pow(2, this.consecutiveFetchFailures));
+                if (this.fetchCounter % fetchEveryNth === 0) {
+                    await this.fetchChatMessages();
+                }
+                this.fetchCounter++;
+                if (this.fetchCounter % 100 === 0) {
+                    window.ws.sendJson({
+                        type: 'ScreenshotRequested',
+                        message: 'requesting screenshot because fetch counter modulo 100 is 0',
+                    });
+                }
+            }
+            catch (error) {
+                console.error('Error in fetchChatMessages', error);
+                window.ws.sendJson({
+                    type: 'chatMessagePollerUpdate',
+                    message: 'Error in fetchChatMessages: ' + error,
+                });
+            }
+        }, 5000);
+    }
+
+    setMsTeamsRegion(ms_teams_region) {
+        if (this.ms_teams_region)
+            return;
+        this.ms_teams_region = ms_teams_region;
+    }
+
+    setSkypeToken(skype_token) {
+        this.skype_token = skype_token;
+    }
+
+    async fetchChatMessages() {
+        if  (!window.ws?.mediaSendingEnabled) {
+            console.log('ChatMessagePoller: Media sending is disabled, skipping fetch');
+            window.ws.sendJson({
+                type: 'chatMessagePollerUpdate',
+                message: 'Media sending is disabled, skipping fetch',
+            });
+            return null;
+        }
+        
+        if (!this.skype_token || !this.ms_teams_region) {
+            console.log('ChatMessagePoller: Missing required params', {
+                hasSkypeToken: !!this.skype_token,
+                hasRegion: !!this.ms_teams_region,
+            });
+            window.ws.sendJson({
+                type: 'chatMessagePollerUpdate',
+                message: 'Missing required params, skipping fetch: hasSkypeToken=' + !!this.skype_token + ' hasRegion=' + !!this.ms_teams_region,
+            });
+            return null;
+        }
+
+        const threadId = window.callManager.getThreadId();
+        if (!threadId) {
+            console.log('ChatMessagePoller: Missing threadId');
+            window.ws.sendJson({
+                type: 'chatMessagePollerUpdate',
+                message: 'Missing threadId, skipping fetch',
+            });
+            return null;
+        }
+
+        const startTime = this.latestMessageArrivalTime || 0;
+        const params = new URLSearchParams({
+            'view': 'msnp24Equivalent|supportsMessageProperties',
+            'pageSize': '20',
+            'startTime': (startTime + 1).toString()
+        });
+
+        const url = `https://${this.hostnameToQuery}/api/chatsvc/${this.ms_teams_region}/v1/users/ME/conversations/${threadId}/messages?${params.toString()}`;
+
+        const response = await fetch(url, {
+            method: 'GET',
+            headers: {
+                'authentication': `skypetoken=${this.skype_token}`,
+            },
+        });
+
+        if (!response.ok) {
+            const errorBody = await response.text();
+            console.error('ChatMessagePoller: Failed to fetch messages', response.status, errorBody);
+            window.ws.sendJson({
+                type: 'chatMessagePollerUpdate',
+                message: `Failed to fetch messages: ${response.status} ${errorBody}`
+            });
+            if (this.consecutiveFetchFailures <= 3) {
+                window.ws.sendJson({
+                    type: 'ScreenshotRequested',
+                    message: 'requesting screenshot because of consecutive fetch failures',
+                });
+            }
+            this.consecutiveFetchFailures++;
+            return null;
+        }
+
+        this.consecutiveFetchFailures = 0;
+
+        const data = await response.json();
+
+        console.log('ChatMessagePoller: Fetched messages', data);
+        window.ws.sendJson({
+            type: 'chatMessagePollerUpdate',
+            message: `Fetched ${data.messages.length} messages. Fetched messages after ${startTime}`,
+        });
+
+        let maxOriginalArrivalTimeInMessages = startTime;
+        if (data.messages.length > 0) {
+            for (const message of data.messages) {                
+                try {
+                    if (message.originalarrivaltime) {
+                        const originalArrivalTimeEpochMs = new Date(message.originalarrivaltime).getTime();
+                        if (originalArrivalTimeEpochMs > maxOriginalArrivalTimeInMessages)
+                            maxOriginalArrivalTimeInMessages = originalArrivalTimeEpochMs;
+                    }
+
+                    // To get fromConverted we split on '/' and take the last part,
+                    // Because it does stuff like this https://teams.microsoft.com/api/chatsvc/amer/v1/users/ME/contacts/8:orgid:05c82742-xxxx-41c2-a6be-a20201291fec
+                    const fromConverted = message.from.split('/').pop();
+                    // Check if a user exists in userManager with the deviceId of fromConverted
+                    const fromUser = window.userManager.getUserByDeviceId(fromConverted);
+                    // If not found, somehowe we didn't detect that this user is in the meeting, so we need to sync the participants list
+                    if (!fromUser) {
+                        window.callManager.syncParticipants();
+                        window.ws.sendJson({
+                            type: 'chatMessagePollerUpdate',
+                            message: `User ${fromConverted} not found, syncing participants`,
+                            userNowInParticipantsList: !!window.userManager.getUserByDeviceId(fromConverted)
+                        });
+                    }
+                    const messageConverted = {
+                        clientMessageId: message.clientmessageid,
+                        from: fromConverted,
+                        content: message.content,
+                        originalArrivalTime: message.originalarrivaltime,
+                        messageType: message.messagetype,
+                    };
+                    window.chatMessageManager?.handleChatMessage(messageConverted);
+                }
+                catch (error) {
+                    console.error('Error in handleChatMessage', error);
+                    window.ws.sendJson({
+                        type: 'chatMessagePollerUpdate',
+                        message: `Error in handleChatMessage: ${error}`,
+                    });
+                }
+            }
+        }
+
+        if (maxOriginalArrivalTimeInMessages > this.latestMessageArrivalTime)
+        {
+            window.ws.sendJson({
+                type: 'chatMessagePollerUpdate',
+                message: `latestMessageArrivalTime updated from ${this.latestMessageArrivalTime} to ${maxOriginalArrivalTimeInMessages}`,
+            });
+            this.latestMessageArrivalTime = maxOriginalArrivalTimeInMessages;
+        }
+        
+        return data;
+    }
+}
+
+new FetchInterceptor((req) => {
+    console.log("FETCH INTERCEPTED", req.method, req.url, [...req.headers.entries()], req.body);
+
+    const msTeamsRegion = req.headers.get('ms-teams-region');
+    if (msTeamsRegion) {
+        window.chatMessagePoller.setMsTeamsRegion(msTeamsRegion);
+    }
+
+    const skypeToken = req.headers.get('x-skypetoken');
+    if (skypeToken) {
+        window.chatMessagePoller.setSkypeToken(skypeToken);
+    }    
+});
 (() => {
     if (globalThis.__realConsole) return;
   
@@ -942,6 +1159,16 @@ class ChatMessageManager {
                 return;
             if (!chatMessage.originalArrivalTime)
                 return;
+            // messageTypes we care about are: RichText, RichText/Html, Text
+            const allowedMessageTypes = ['RichText', 'RichText/Html', 'Text', 'RichText/Sms'];
+            if (!allowedMessageTypes.includes(chatMessage.messageType))
+            {
+                window.ws.sendJson({
+                    type: 'chatMessagePollerUpdate',
+                    message: `Ignoring chat message because it had message type ${chatMessage.messageType}.`,
+                });
+                return;
+            }
             if (!this.isNewOrUpdatedChatMessage(chatMessage))
                 return;
 
@@ -1773,6 +2000,9 @@ window.styleManager = styleManager;
 
 const receiverManager = new ReceiverManager();
 window.receiverManager = receiverManager;
+
+const chatMessagePoller = new ChatMessagePoller();
+window.chatMessagePoller = chatMessagePoller;
 
 const processDominantSpeakerHistoryMessage = (item) => {
     realConsole?.log('processDominantSpeakerHistoryMessage', item);
@@ -2729,11 +2959,13 @@ window.botOutputManager = botOutputManager;
         const bound = _bind.apply(this, [thisArg, ...args]);
         return function (...callArgs) {
           const eventData = callArgs[0];
-          if (eventData?.data?.chatServiceBatchEvent?.[0]?.message)
-          {
-            const message = eventData.data.chatServiceBatchEvent[0].message;
-            realConsole?.log('chatMessage', message);
-            window.chatMessageManager?.handleChatMessage(message);
+          const batchEvents = eventData?.data?.chatServiceBatchEvent || [];
+          for (const event of batchEvents) {
+            if (event?.message)
+            {
+                realConsole?.log('chatMessage', event.message);
+                window.chatMessageManager?.handleChatMessage(event.message);
+            }
           }
           return bound.apply(this, callArgs);
         };
@@ -2788,6 +3020,15 @@ class CallManager {
         return this.activeCall.callerMri;
         // We're using callerMri because it includes the 8: prefix. If callerMri stops working, we can easily use the thing below.
         // return this.activeCall.currentUserSkypeIdentity?.id;
+    }
+
+    getThreadId() {
+        this.setActiveCall();
+        if (!this.activeCall) {
+            return;
+        }
+
+        return this.activeCall.threadId;
     }
 
 

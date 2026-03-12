@@ -399,6 +399,11 @@ class WebBotAdapter(BotAdapter):
                             if json_data.get("change") == "save_caption_not_allowed":
                                 self.could_not_enable_closed_captions()
 
+                        elif json_data.get("type") == "ScreenshotRequested":
+                            logger.info("Received message that screenshot was requested")
+                            screenshot_path, mhtml_file_path, current_time = self.capture_screenshot_and_mhtml_file()
+                            self.send_message_callback({"message": self.Messages.ADAPTER_REQUESTED_SAVE_SCREENSHOT, "screenshot_path": screenshot_path, "mhtml_file_path": mhtml_file_path, "current_time": current_time})
+
                 elif message_type == 2:  # VIDEO
                     self.process_video_frame(message)
                 elif message_type == 3:  # AUDIO
