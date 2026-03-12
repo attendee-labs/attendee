@@ -1950,7 +1950,7 @@ const handleAudioTrack = async (event) => {
 };
 
 const processedAudioTrackIds = new Set();
-function processAudioTrackEvent(event) {
+async function processAudioTrackEvent(event) {
     try
     {
         if (processedAudioTrackIds.has(event.track.id))
@@ -2016,24 +2016,24 @@ new RTCInterceptor({
                 type: 'WebRTCTrackStarted',
                 trackId: event.track?.id,
                 trackKind: event.track?.kind,
+                trackMuted: event.track?.muted,
                 streamsLength: event?.streams?.length,
             });
             console.log('New track:', {
                 trackId: event.track.id,
                 trackKind: event.track.kind,
-                trackMuted: event.track.muted,
                 streams: event.streams,
             });
             // We need to capture every audio track in the meeting,
             // but we don't need to do anything with the video tracks
             if (event.track.kind === 'audio') {
-                event.track.addEventListener('unmute', () => {
+                event.track.addEventListener('unmute', async () => {
                     window.ws?.sendJson({
                         type: 'WebRTCAudioTrackUnmuted',
                         trackId: event.track.id,
                     });
             
-                    processAudioTrackEvent(event);
+                    await processAudioTrackEvent(event);
                 }, { once: true });
 
                 event.track.addEventListener('mute', () => {
@@ -2043,9 +2043,16 @@ new RTCInterceptor({
                     });
                 });
 
+                event.track.addEventListener('ended', () => {
+                    window.ws?.sendJson({
+                        type: 'WebRTCAudioTrackEnded',
+                        trackId: event.track.id,
+                    });
+                });
+
                 if (!event.track.muted)
                 {
-                    processAudioTrackEvent(event);
+                    await processAudioTrackEvent(event);
                 }
             }
             if (event.track.kind === 'video') {
