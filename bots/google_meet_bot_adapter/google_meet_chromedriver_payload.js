@@ -1804,7 +1804,7 @@ const handleVideoTrack = async (event) => {
 
 const handleAudioTrack = async (event) => {
   let lastAudioFormat = null;  // Track last seen format
-  
+
   try {
     // Create processor to get raw frames
     const processor = new MediaStreamTrackProcessor({ track: event.track });
@@ -1949,9 +1949,56 @@ const handleAudioTrack = async (event) => {
   }
 };
 
+const processedAudioTrackIds = new Set();
+async function processAudioTrackEvent(event) {
+    try
+    {
+        if (processedAudioTrackIds.has(event.track.id))
+        {
+            window.ws?.sendJson({
+                type: 'processAudioTrackEventUpdate',
+                updateType: 'alreadyStartedForTrack',
+                trackId: event.track.id,
+            });
+            return;
+        }
+        processedAudioTrackIds.add(event.track.id);
+
+        window.ws?.sendJson({
+            type: 'processAudioTrackEventUpdate',
+            updateType: 'aboutToStartProcessingForTrack',
+            trackId: event.track.id,
+        });
+        window.styleManager.addAudioTrack(event.track);
+        if (window.initialData.sendPerParticipantAudio) {
+            await handleAudioTrack(event);
+        }
+        window.ws?.sendJson({
+            type: 'processAudioTrackEventUpdate',
+            updateType: 'finishedProcessingForTrack',
+            trackId: event.track.id,
+        });
+    }
+    catch (error) {
+        window.ws?.sendJson({
+            type: 'processAudioTrackEventUpdate',
+            updateType: 'errorProcessingForTrack',
+            trackId: event.track.id,
+            error: error.message,
+        });
+        processedAudioTrackIds.delete(event.track.id);
+    }
+}
+
+
 new RTCInterceptor({
     onPeerConnectionCreate: (peerConnection) => {
         console.log('New RTCPeerConnection created:', peerConnection);
+
+        window.ws?.sendJson({
+            type: 'WebRTCPeerConnectionCreated',
+        });
+
         peerConnection.addEventListener('datachannel', (event) => {
             console.log('datachannel', event);
             if (event.channel.label === "collections") {               
@@ -1962,7 +2009,16 @@ new RTCInterceptor({
             }
         });
 
-        peerConnection.addEventListener('track', (event) => {
+        peerConnection.addEventListener('track', async (event) => {
+            try
+            {
+            window.ws?.sendJson({
+                type: 'WebRTCTrackStarted',
+                trackId: event.track?.id,
+                trackKind: event.track?.kind,
+                trackMuted: event.track?.muted,
+                streamsLength: event?.streams?.length,
+            });
             console.log('New track:', {
                 trackId: event.track.id,
                 trackKind: event.track.kind,
@@ -1971,14 +2027,49 @@ new RTCInterceptor({
             // We need to capture every audio track in the meeting,
             // but we don't need to do anything with the video tracks
             if (event.track.kind === 'audio') {
-                window.styleManager.addAudioTrack(event.track);
-                if (window.initialData.sendPerParticipantAudio) {
-                    handleAudioTrack(event);
+                event.track.addEventListener('unmute', async () => {
+                    window.ws?.sendJson({
+                        type: 'WebRTCAudioTrackUnmuted',
+                        trackId: event.track.id,
+                    });
+            
+                    await processAudioTrackEvent(event);
+                }, { once: true });
+
+                event.track.addEventListener('mute', () => {
+                    window.ws?.sendJson({
+                        type: 'WebRTCAudioTrackMuted',
+                        trackId: event.track.id,
+                    });
+                });
+
+                event.track.addEventListener('ended', () => {
+                    window.ws?.sendJson({
+                        type: 'WebRTCAudioTrackEnded',
+                        trackId: event.track.id,
+                    });
+                });
+
+                if (!event.track.muted)
+                {
+                    await processAudioTrackEvent(event);
                 }
             }
             if (event.track.kind === 'video') {
                 window.styleManager.addVideoTrack(event);
             }
+            }
+            catch (error) {
+                window.ws?.sendJson({
+                    type: 'Error',
+                    message: 'Error in WebRTCTrackStarted',
+                    error: error.message,
+                });
+            }
+        });
+
+        window.ws?.sendJson({
+            type: 'WebRTCPeerConnectionTrackListenerStarted',
         });
 
         /*
