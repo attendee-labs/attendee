@@ -1971,7 +1971,7 @@ async function processAudioTrackEvent(event) {
         });
         window.styleManager.addAudioTrack(event.track);
         if (window.initialData.sendPerParticipantAudio) {
-            handleAudioTrack(event);
+            await handleAudioTrack(event);
         }
         window.ws?.sendJson({
             type: 'processAudioTrackEventUpdate',
