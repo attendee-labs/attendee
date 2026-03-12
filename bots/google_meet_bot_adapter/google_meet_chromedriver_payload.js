@@ -1949,6 +1949,48 @@ const handleAudioTrack = async (event) => {
   }
 };
 
+const processedAudioTrackIds = new Set();
+function processAudioTrackEvent(event) {
+    try
+    {
+        if (processedAudioTrackIds.has(event.track.id))
+        {
+            window.ws?.sendJson({
+                type: 'processAudioTrackEventUpdate',
+                updateType: 'alreadyStartedForTrack',
+                trackId: event.track.id,
+            });
+            return;
+        }
+        processedAudioTrackIds.add(event.track.id);
+
+        window.ws?.sendJson({
+            type: 'processAudioTrackEventUpdate',
+            updateType: 'aboutToStartProcessingForTrack',
+            trackId: event.track.id,
+        });
+        window.styleManager.addAudioTrack(event.track);
+        if (window.initialData.sendPerParticipantAudio) {
+            handleAudioTrack(event);
+        }
+        window.ws?.sendJson({
+            type: 'processAudioTrackEventUpdate',
+            updateType: 'finishedProcessingForTrack',
+            trackId: event.track.id,
+        });
+    }
+    catch (error) {
+        window.ws?.sendJson({
+            type: 'processAudioTrackEventUpdate',
+            updateType: 'errorProcessingForTrack',
+            trackId: event.track.id,
+            error: error.message,
+        });
+        processedAudioTrackIds.delete(event.track.id);
+    }
+}
+
+
 new RTCInterceptor({
     onPeerConnectionCreate: (peerConnection) => {
         console.log('New RTCPeerConnection created:', peerConnection);
@@ -1979,14 +2021,31 @@ new RTCInterceptor({
             console.log('New track:', {
                 trackId: event.track.id,
                 trackKind: event.track.kind,
+                trackMuted: event.track.muted,
                 streams: event.streams,
             });
             // We need to capture every audio track in the meeting,
             // but we don't need to do anything with the video tracks
             if (event.track.kind === 'audio') {
-                window.styleManager.addAudioTrack(event.track);
-                if (window.initialData.sendPerParticipantAudio) {
-                    await handleAudioTrack(event);
+                event.track.addEventListener('unmute', () => {
+                    window.ws?.sendJson({
+                        type: 'WebRTCAudioTrackUnmuted',
+                        trackId: event.track.id,
+                    });
+            
+                    processAudioTrackEvent(event);
+                }, { once: true });
+
+                event.track.addEventListener('mute', () => {
+                    window.ws?.sendJson({
+                        type: 'WebRTCAudioTrackMuted',
+                        trackId: event.track.id,
+                    });
+                });
+
+                if (!event.track.muted)
+                {
+                    processAudioTrackEvent(event);
                 }
             }
             if (event.track.kind === 'video') {
