@@ -1,0 +1,51 @@
+# Devcontainer docker-compose based on dev.docker-compose.yaml
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: deps  # Use deps stage which has all dependencies installed
+    volumes:
+      - ..:/attendee:cached
+    networks:
+      - attendee_network
+    ports:
+      - "8000:8000"
+    environment:
+      - POSTGRES_HOST=postgres
+      - REDIS_URL=redis://redis:6379/5
+      - DJANGO_SETTINGS_MODULE=attendee.settings.development
+      - ENABLE_CHROME_SANDBOX=false
+    command: sleep infinity
+    depends_on:
+      - postgres
+      - redis
+
+  postgres:
+    image: postgres:15.3-alpine
+    environment:
+      POSTGRES_DB: attendee_development
+      POSTGRES_USER: attendee_development_user
+      POSTGRES_PASSWORD: attendee_development_user
+      PGDATA: /data/postgres
+    volumes:
+      - postgres:/data/postgres
+    networks:
+      - attendee_network
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    networks:
+      - attendee_network
+    restart: unless-stopped
+    volumes:
+      - redis:/data/redis
+
+networks:
+  attendee_network:
+    driver: bridge
+
+volumes:
+  postgres:
+  redis:

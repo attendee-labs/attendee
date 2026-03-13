@@ -1,0 +1,204 @@
+#!/bin/bash
+# Local Development Setup Script for Attendee
+# Run this inside the devcontainer: ./bin/setup
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+
+cd "$PROJECT_DIR"
+
+echo "=========================================="
+echo "  Attendee Local Development Setup"
+echo "=========================================="
+echo ""
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+print_status() {
+    echo -e "${GREEN}✓${NC} $1"
+}
+
+print_warning() {
+    echo -e "${YELLOW}!${NC} $1"
+}
+
+print_error() {
+    echo -e "${RED}✗${NC} $1"
+}
+
+# Step 1: Install dependencies
+echo "Step 1: Installing Python dependencies..."
+pip install -r requirements.txt --quiet
+print_status "Dependencies installed"
+echo ""
+
+# Step 2: Setup .env file
+echo "Step 2: Setting up environment variables..."
+if [ -f .env ]; then
+    print_warning ".env file already exists"
+    read -p "Do you want to overwrite it? (y/N): " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        print_status "Keeping existing .env file"
+    else
+        rm .env
+    fi
+fi
+
+if [ ! -f .env ]; then
+    cp .env.example .env
+
+    # Generate Django secret key
+    SECRET_KEY=$(python -c "from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())")
+    sed -i "s/DJANGO_SECRET_KEY=your-secret-key-here/DJANGO_SECRET_KEY=$SECRET_KEY/" .env
+
+    # Generate encryption key
+    ENCRYPTION_KEY=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
+    sed -i "s/CREDENTIALS_ENCRYPTION_KEY=your-encryption-key-here/CREDENTIALS_ENCRYPTION_KEY=$ENCRYPTION_KEY/" .env
+
+    # Set postgres host for devcontainer
+    sed -i "s/POSTGRES_HOST=localhost/POSTGRES_HOST=postgres/" .env
+
+    # Set redis URL for devcontainer
+    sed -i "s|REDIS_URL=redis://localhost:6379/0|REDIS_URL=redis://redis:6379/5|" .env
+    sed -i "s|CELERY_BROKER_URL=redis://localhost:6379/0|CELERY_BROKER_URL=redis://redis:6379/5|" .env
+
+    print_status ".env file created with generated secrets"
+fi
+echo ""
+
+# Step 3: Wait for database to be ready
+echo "Step 3: Waiting for database..."
+MAX_RETRIES=30
+RETRY_COUNT=0
+until python -c "import psycopg2; psycopg2.connect(host='postgres', dbname='attendee_development', user='attendee_development_user', password='attendee_development_user')" 2>/dev/null; do
+    RETRY_COUNT=$((RETRY_COUNT + 1))
+    if [ $RETRY_COUNT -ge $MAX_RETRIES ]; then
+        print_error "Database not available after $MAX_RETRIES attempts"
+        exit 1
+    fi
+    echo -n "."
+    sleep 1
+done
+echo ""
+print_status "Database is ready"
+echo ""
+
+# Step 4: Run migrations
+echo "Step 4: Running database migrations..."
+python manage.py migrate --no-input
+print_status "Migrations completed"
+echo ""
+
+# Step 5: Create superuser
+echo "Step 5: Creating local admin account..."
+echo ""
+
+# Check if superuser already exists
+SUPERUSER_EXISTS=$(python manage.py shell -c "from django.contrib.auth import get_user_model; User = get_user_model(); print(User.objects.filter(is_superuser=True).exists())" 2>/dev/null)
+
+if [ "$SUPERUSER_EXISTS" = "True" ]; then
+    print_warning "Superuser already exists"
+    read -p "Do you want to create another admin account? (y/N): " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo ""
+        echo "=========================================="
+        echo "  Setup Complete!"
+        echo "=========================================="
+        echo ""
+        echo "Start the server with:"
+        echo "  python manage.py runserver 0.0.0.0:8000"
+        echo ""
+        echo "Then visit: http://localhost:8000"
+        echo ""
+        exit 0
+    fi
+fi
+
+# Prompt for account details
+echo "Enter details for the local admin account:"
+echo ""
+
+read -p "Email: " ADMIN_EMAIL
+while [ -z "$ADMIN_EMAIL" ]; do
+    print_error "Email is required"
+    read -p "Email: " ADMIN_EMAIL
+done
+
+read -p "Username (default: admin): " ADMIN_USERNAME
+ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
+
+while true; do
+    read -s -p "Password: " ADMIN_PASSWORD
+    echo
+    if [ -z "$ADMIN_PASSWORD" ]; then
+        print_error "Password is required"
+        continue
+    fi
+    read -s -p "Confirm password: " ADMIN_PASSWORD_CONFIRM
+    echo
+    if [ "$ADMIN_PASSWORD" != "$ADMIN_PASSWORD_CONFIRM" ]; then
+        print_error "Passwords do not match"
+        continue
+    fi
+    break
+done
+
+# Create superuser using Django shell
+python manage.py shell << EOF
+from django.contrib.auth import get_user_model
+from allauth.account.models import EmailAddress
+
+User = get_user_model()
+
+# Check if user exists
+if User.objects.filter(email='$ADMIN_EMAIL').exists():
+    print("User with this email already exists")
+else:
+    user = User.objects.create_superuser(
+        username='$ADMIN_USERNAME',
+        email='$ADMIN_EMAIL',
+        password='$ADMIN_PASSWORD'
+    )
+
+    # Mark email as verified (skip email confirmation)
+    EmailAddress.objects.create(
+        user=user,
+        email='$ADMIN_EMAIL',
+        verified=True,
+        primary=True
+    )
+
+    print("Admin account created successfully!")
+EOF
+
+print_status "Admin account created"
+echo ""
+
+# Step 6: Collect static files (optional for dev but good practice)
+echo "Step 6: Collecting static files..."
+python manage.py collectstatic --no-input --clear --verbosity=0 2>/dev/null || true
+print_status "Static files collected"
+echo ""
+
+echo "=========================================="
+echo "  Setup Complete!"
+echo "=========================================="
+echo ""
+echo "Start the server with:"
+echo "  python manage.py runserver 0.0.0.0:8000"
+echo ""
+echo "Then visit: http://localhost:8000"
+echo "Admin panel: http://localhost:8000/admin/"
+echo ""
+echo "Login with:"
+echo "  Email: $ADMIN_EMAIL"
+echo "  Username: $ADMIN_USERNAME"
+echo ""

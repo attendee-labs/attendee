@@ -1,0 +1,45 @@
+{
+  "name": "attendee",
+  "dockerComposeFile": "docker-compose.yml",
+  "service": "app",
+  "workspaceFolder": "/attendee",
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "charliermarsh.ruff",
+        "ms-python.debugpy",
+        "ms-azuretools.vscode-docker"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/bin/python3",
+        "python.linting.enabled": true,
+        "python.formatting.provider": "none",
+        "[python]": {
+          "editor.defaultFormatter": "charliermarsh.ruff",
+          "editor.formatOnSave": true
+        }
+      }
+    }
+  },
+
+  "forwardPorts": [8000],
+  "portsAttributes": {
+    "8000": {
+      "label": "Django Server",
+      "onAutoForward": "notify"
+    }
+  },
+
+  "postCreateCommand": "pip install -r requirements.txt && python manage.py migrate",
+
+  "remoteUser": "root",
+
+  "containerEnv": {
+    "DJANGO_SETTINGS_MODULE": "attendee.settings.development",
+    "POSTGRES_HOST": "postgres",
+    "REDIS_URL": "redis://redis:6379/5"
+  }
+}

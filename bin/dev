@@ -1,0 +1,62 @@
+#!/bin/bash
+# Start Django development server and Celery worker
+# Run this inside the devcontainer: ./bin/dev
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+
+cd "$PROJECT_DIR"
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+NC='\033[0m' # No Color
+
+# Trap to kill background processes on exit
+cleanup() {
+    echo ""
+    echo -e "${YELLOW}Shutting down...${NC}"
+    kill $CELERY_PID 2>/dev/null || true
+    kill $DJANGO_PID 2>/dev/null || true
+    exit 0
+}
+
+trap cleanup SIGINT SIGTERM
+
+echo -e "${CYAN}=========================================="
+echo "  Attendee Development Server"
+echo -e "==========================================${NC}"
+echo ""
+
+# Check if .env exists
+if [ ! -f .env ]; then
+    echo -e "${RED}Error: .env file not found${NC}"
+    echo "Run ./bin/setup first to configure your environment"
+    exit 1
+fi
+
+# Start Celery worker in background
+echo -e "${GREEN}Starting Celery worker...${NC}"
+celery -A attendee worker --loglevel=info &
+CELERY_PID=$!
+echo -e "Celery PID: $CELERY_PID"
+echo ""
+
+# Give Celery a moment to start
+sleep 2
+
+# Start Django development server in foreground
+echo -e "${GREEN}Starting Django server on http://0.0.0.0:8000${NC}"
+echo ""
+echo -e "${CYAN}Press Ctrl+C to stop both servers${NC}"
+echo ""
+
+python manage.py runserver 0.0.0.0:8000 &
+DJANGO_PID=$!
+
+# Wait for either process to exit
+wait $DJANGO_PID $CELERY_PID

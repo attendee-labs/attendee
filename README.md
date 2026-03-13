@@ -10,17 +10,16 @@
     <a href="https://join.slack.com/t/attendee-community/shared_invite/zt-3l43ns8cl-G8YnMccWVTugMlloUtSf9g">Slack</a>
 </p>
 
-
-Attendee is an open source API for managing meeting bots on platforms like Zoom or Google Meet. Bring meeting transcripts and recordings into your product in days instead of months. 
+Attendee is an open source API for managing meeting bots on platforms like Zoom or Google Meet. Bring meeting transcripts and recordings into your product in days instead of months.
 
 See a [quick demo of the API](https://www.loom.com/embed/b738d02aabf84f489f0bfbadf71605e3?sid=ea605ea9-8961-4cc3-9ba9-10b7dbbb8034).
 
 ## Getting started
 
-Sign up for free on our hosted instance [here](https://app.attendee.dev/accounts/signup/). 
+Sign up for free on our hosted instance [here](https://app.attendee.dev/accounts/signup/).
 
 Interested in using Attendee at your company? Schedule a call [here](https://calendly.com/d/cw6r-2n4-gcw/attendee-intro-meeting). By self-hosting Attendee you can reduce costs by 10x compared to closed source vendors.
- 
+
 ## Self hosting
 
 Attendee is designed for convenient self-hosting. It runs as a Django app in a single Docker image. The only external services needed are Postgres and Redis. Directions for running locally in development mode [here](#running-in-development-mode).
@@ -36,38 +35,42 @@ Attendee abstracts away this complexity into a single developer friendly REST AP
 ## Calling the API
 
 Join a meeting with a POST request to `/bots`:
+
 ```
 curl -X POST https://app.attendee.dev/api/v1/bots \
 -H 'Authorization: Token <YOUR_API_KEY>' \
 -H 'Content-Type: application/json' \
 -d '{"meeting_url": "https://us05web.zoom.us/j/84315220467?pwd=9M1SQg2Pu2l0cB078uz6AHeWelSK19.1", "bot_name": "My Bot"}'
 ```
+
 Response:
 ```{"id":"bot_3hfP0PXEsNinIZmh","meeting_url":"https://us05web.zoom.us/j/4849920355?pwd=aTBpNz760UTEBwUT2mQFtdXbl3SS3i.1","state":"joining","transcription_state":"not_started"}```
 
-The API will respond with an object that represents your bot's state in the meeting. 
-
-
+The API will respond with an object that represents your bot's state in the meeting.
 
 Make a GET request to `/bots/<id>` to poll the bot:
+
 ```
 curl -X GET https://app.attendee.dev/api/v1/bots/bot_3hfP0PXEsNinIZmh \
 -H 'Authorization: Token <YOUR_API_KEY>' \
 -H 'Content-Type: application/json'
 ```
-Response: 
+
+Response:
 ```{"id":"bot_3hfP0PXEsNinIZmh","meeting_url":"https://us05web.zoom.us/j/88669088234?pwd=AheaMumvS4qxh6UuDtSOYTpnQ1ZbAS.1","state":"ended","transcription_state":"complete"}```
 
 When the endpoint returns a state of `ended`, it means the meeting has ended. When the `transcription_state` is `complete` it means the meeting recording has been transcribed.
 
-
 Once the meeting has ended and the transcript is ready make a GET request to `/bots/<id>/transcript` to retrieve the meeting transcripts:
+
 ```
 curl -X GET https://app.attendee.dev/api/v1/bots/bot_3hfP0PXEsNinIZmh/transcript \
 -H 'Authorization: Token mpc67dedUlzEDXfNGZKyC30t6cA11TYh' \
 -H 'Content-Type: application/json'
 ```
+
 Response:
+
 ```
 [{
 "speaker_name":"Noah Duncan",
@@ -76,6 +79,7 @@ Response:
 "transcription":"You can totally record this, buddy. You can totally record this. Go for it, man."
 },...]
 ```
+
 You can also query this endpoint while the meeting is happening to retrieve partial transcripts.
 
 ## Prerequisites
@@ -109,22 +113,74 @@ For more details, follow [this guide](https://developers.zoom.us/docs/meeting-sd
 - Build the Docker image: `docker compose -f dev.docker-compose.yaml build` (Takes about 5 minutes)
 - Create local environment variables
   - **Linux/Mac**: `docker compose -f dev.docker-compose.yaml run --rm attendee-app-local python init_env.py > .env`
-  - **Windows**: `docker compose -f dev.docker-compose.yaml run --rm attendee-app-local python init_env.py | Out-File -Encoding utf8 .env` 
+  - **Windows**: `docker compose -f dev.docker-compose.yaml run --rm attendee-app-local python init_env.py | Out-File -Encoding utf8 .env`
 - Edit the `.env` file and enter your AWS information.
 - Start all the services: `docker compose -f dev.docker-compose.yaml up`
 - After the services have started, run migrations in a separate terminal tab: `docker compose -f dev.docker-compose.yaml exec attendee-app-local python manage.py migrate`
 - Goto localhost:8000 in your browser and create an account
 - The confirmation link will be written to the server logs in the terminal where you ran `docker compose -f dev.docker-compose.yaml up`. Should look like `http://localhost:8000/accounts/confirm-email/<key>/`.
 - Paste the link into your browser to confirm your account.
-- You should now be able to log in, input your credentials and obtain an API key. API calls should be directed to http://localhost:8000 instead of https://app.attendee.dev.
+- You should now be able to log in, input your credentials and obtain an API key. API calls should be directed to <http://localhost:8000> instead of <https://app.attendee.dev>.
 
+## Oppy Development Setup
 
-## Contribute 
+For Oppy team members, we use VS Code Dev Containers for local development.
+
+### Prerequisites
+
+- [VS Code](https://code.visualstudio.com/)
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+- [Dev Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers)
+
+### Quick Start
+
+1. **Open in Dev Container**
+   - Open VS Code
+   - Open the `attendee` folder
+   - When prompted, click "Reopen in Container" (or use `Cmd+Shift+P` → "Dev Containers: Reopen in Container")
+
+2. **Run Setup** (first time only)
+
+   ```bash
+   ./bin/setup
+   ```
+
+   This will:
+   - Install Python dependencies
+   - Create `.env` file with auto-generated secrets
+   - Run database migrations
+   - Create a local admin account (you'll be prompted for email/password)
+
+3. **Start Development Server**
+
+   ```bash
+   ./bin/dev
+   ```
+
+   This starts both:
+   - Django server on `http://localhost:8000`
+   - Celery worker for background tasks
+
+   Press `Ctrl+C` to stop both services.
+
+### Available Scripts
+
+| Script | Description |
+|--------|-------------|
+| `./bin/setup` | First-time setup (dependencies, .env, migrations, admin account) |
+| `./bin/dev` | Start Django + Celery for development |
+
+### Accessing the App
+
+- **Web UI**: <http://localhost:8000>
+- **Admin Panel**: <http://localhost:8000/admin/>
+- **API**: <http://localhost:8000/api/v1/>
+
+## Contribute
 
 Attendee is open source. The best way to contribute is to open an issue or join the [Slack Community](https://join.slack.com/t/attendee-community/shared_invite/zt-3l43ns8cl-G8YnMccWVTugMlloUtSf9g) and let us know what you want to build.
 
 See CONTRIBUTING.md for detailed instructions on how to contribute to Attendee.
-
 
 ## Roadmap
 
@@ -133,7 +189,7 @@ See CONTRIBUTING.md for detailed instructions on how to contribute to Attendee.
 - [x] API Reference
 - [x] Audio input / output
 - [x] Video input / output
-- [x] Custom bot image 
+- [x] Custom bot image
 - [x] Google Meet support
 - [x] Speech support
 - [x] Automatically leave meetings
