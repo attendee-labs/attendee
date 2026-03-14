@@ -20,6 +20,7 @@ from bots.models import (
     BotStates,
     ChatMessage,
     ChatMessageToOptions,
+    Credentials,
     MediaBlob,
     Participant,
     ParticipantEvent,
@@ -374,6 +375,27 @@ class BotApiObjectAccessIntegrationTest(TransactionTestCase):
         # API key A cannot send speech to bot B
         response = self._make_authenticated_request("POST", f"/api/v1/bots/{self.bot_b.object_id}/speech", self.api_key_a_plain, json.dumps(speech_data))
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_speech_access_control_with_elevenlabs_provider(self):
+        """Test that speech requests use ElevenLabs credentials when ElevenLabs TTS is requested"""
+        speech_data = {"text": "Hello, this is a test speech", "text_to_speech_settings": {"elevenlabs": {"voice_language_code": "en", "voice_id": "voice_123"}}}
+
+        response = self._make_authenticated_request("POST", f"/api/v1/bots/{self.bot_a.object_id}/speech", self.api_key_a_plain, json.dumps(speech_data))
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("ElevenLabs credentials are required", response.json()["error"])
+
+        elevenlabs_credentials = Credentials.objects.create(project=self.project_a, credential_type=Credentials.CredentialTypes.ELEVENLABS)
+        elevenlabs_credentials.set_credentials({"api_key": "test-api-key"})
+
+        response = self._make_authenticated_request("POST", f"/api/v1/bots/{self.bot_a.object_id}/speech", self.api_key_a_plain, json.dumps(speech_data))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        speech_request = BotMediaRequest.objects.filter(bot=self.bot_a, text_to_speak="Hello, this is a test speech").order_by("-id").first()
+        self.assertIsNotNone(speech_request)
+        self.assertEqual(
+            speech_request.text_to_speech_settings,
+            {"elevenlabs": {"voice_language_code": "en", "voice_id": "voice_123"}},
+        )
 
     # Tests for Output Audio View (POST /api/bots/<object_id>/output_audio)
     def test_output_audio_access_control(self):

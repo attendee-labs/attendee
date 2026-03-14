@@ -1749,23 +1749,52 @@ class RecordingSerializer(serializers.ModelSerializer):
 
 @extend_schema_field(
     {
-        "type": "object",
-        "properties": {
-            "google": {
+        "oneOf": [
+            {
                 "type": "object",
                 "properties": {
-                    "voice_language_code": {
-                        "type": "string",
-                        "description": "The voice language code (e.g. 'en-US'). See https://cloud.google.com/text-to-speech/docs/voices for a list of available language codes and voices.",
-                    },
-                    "voice_name": {
-                        "type": "string",
-                        "description": "The name of the voice to use (e.g. 'en-US-Casual-K')",
-                    },
+                    "google": {
+                        "type": "object",
+                        "properties": {
+                            "voice_language_code": {
+                                "type": "string",
+                                "description": "The voice language code (e.g. 'en-US'). See https://cloud.google.com/text-to-speech/docs/voices for a list of available language codes and voices.",
+                            },
+                            "voice_name": {
+                                "type": "string",
+                                "description": "The name of the voice to use (e.g. 'en-US-Casual-K')",
+                            },
+                        },
+                        "required": ["voice_language_code", "voice_name"],
+                        "additionalProperties": False,
+                    }
                 },
-            }
-        },
-        "required": ["google"],
+                "required": ["google"],
+                "additionalProperties": False,
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "elevenlabs": {
+                        "type": "object",
+                        "properties": {
+                            "voice_language_code": {
+                                "type": "string",
+                                "description": "The voice language code (e.g. 'en'). See https://elevenlabs.io/docs/api-reference/text-to-speech/convert for supported ISO 639-1 language codes.",
+                            },
+                            "voice_id": {
+                                "type": "string",
+                                "description": "The ElevenLabs voice ID to use.",
+                            },
+                        },
+                        "required": ["voice_language_code", "voice_id"],
+                        "additionalProperties": False,
+                    }
+                },
+                "required": ["elevenlabs"],
+                "additionalProperties": False,
+            },
+        ]
     }
 )
 class TextToSpeechSettingsJSONField(serializers.JSONField):
@@ -1775,7 +1804,7 @@ class TextToSpeechSettingsJSONField(serializers.JSONField):
 @extend_schema_serializer(
     examples=[
         OpenApiExample(
-            "Valid speech request",
+            "Valid Google speech request",
             value={
                 "text": "Hello, this is a bot speaking text.",
                 "text_to_speech_settings": {
@@ -1785,7 +1814,20 @@ class TextToSpeechSettingsJSONField(serializers.JSONField):
                     }
                 },
             },
-            description="Example of a valid speech request",
+            description="Example of a valid Google text-to-speech request",
+        ),
+        OpenApiExample(
+            "Valid ElevenLabs speech request",
+            value={
+                "text": "Hello, this is a bot speaking text.",
+                "text_to_speech_settings": {
+                    "elevenlabs": {
+                        "voice_language_code": "en",
+                        "voice_id": "some-id",
+                    }
+                },
+            },
+            description="Example of a valid ElevenLabs text-to-speech request",
         )
     ]
 )
@@ -1793,29 +1835,43 @@ class SpeechSerializer(serializers.Serializer):
     text = serializers.CharField()
     text_to_speech_settings = TextToSpeechSettingsJSONField()
 
-    TEXT_TO_SPEECH_SETTINGS_SCHEMA = {
+    GOOGLE_TEXT_TO_SPEECH_SETTINGS_SCHEMA = {
         "type": "object",
         "properties": {
-            "google": {
-                "type": "object",
-                "properties": {
-                    "voice_language_code": {"type": "string"},
-                    "voice_name": {"type": "string"},
-                },
-                "required": ["voice_language_code", "voice_name"],
-                "additionalProperties": False,
-            }
+            "voice_language_code": {"type": "string"},
+            "voice_name": {"type": "string"},
         },
-        "required": ["google"],
+        "required": ["voice_language_code", "voice_name"],
         "additionalProperties": False,
+    }
+    ELEVENLABS_TEXT_TO_SPEECH_SETTINGS_SCHEMA = {
+        "type": "object",
+        "properties": {
+            "voice_language_code": {"type": "string"},
+            "voice_id": {"type": "string"},
+        },
+        "required": ["voice_language_code", "voice_id"],
+        "additionalProperties": False,
+    }
+    TEXT_TO_SPEECH_PROVIDER_SCHEMAS = {
+        "google": GOOGLE_TEXT_TO_SPEECH_SETTINGS_SCHEMA,
+        "elevenlabs": ELEVENLABS_TEXT_TO_SPEECH_SETTINGS_SCHEMA,
     }
 
     def validate_text_to_speech_settings(self, value):
         if value is None:
             return None
 
+        if not isinstance(value, dict):
+            raise serializers.ValidationError("text_to_speech_settings must be an object.")
+
+        providers = list(value.keys())
+        if len(providers) != 1 or providers[0] not in self.TEXT_TO_SPEECH_PROVIDER_SCHEMAS:
+            raise serializers.ValidationError("Exactly one text-to-speech provider must be specified. Supported providers are 'google' and 'elevenlabs'.")
+
         try:
-            jsonschema.validate(instance=value, schema=self.TEXT_TO_SPEECH_SETTINGS_SCHEMA)
+            provider = providers[0]
+            jsonschema.validate(instance=value[provider], schema=self.TEXT_TO_SPEECH_PROVIDER_SCHEMAS[provider])
         except jsonschema.exceptions.ValidationError as e:
             raise serializers.ValidationError(e.message)
 
