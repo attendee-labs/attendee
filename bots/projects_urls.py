@@ -57,6 +57,16 @@ urlpatterns = [
         name="project-project",
     ),
     path(
+        "<str:object_id>/settings/transcription",
+        projects_views.ProjectTranscriptionSettingsView.as_view(),
+        name="project-transcription-settings",
+    ),
+    path(
+        "<str:object_id>/settings/output-file",
+        projects_views.ProjectOutputFileSettingsView.as_view(),
+        name="project-output-file-settings",
+    ),
+    path(
         "<str:object_id>/edit",
         projects_views.EditProjectView.as_view(),
         name="project-edit",

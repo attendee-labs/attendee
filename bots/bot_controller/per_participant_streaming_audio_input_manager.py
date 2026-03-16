@@ -14,6 +14,9 @@ from bots.transcription_providers.deepgram.deepgram_streaming_transcriber import
 from bots.transcription_providers.kyutai.kyutai_streaming_transcriber import (  # noqa: E501
     KyutaiStreamingTranscriber,
 )
+from bots.transcription_providers.openai.openai_streaming_transcriber import (  # noqa: E501
+    OpenAIStreamingTranscriber,
+)
 from bots.transcription_providers.utterance_handler import DefaultUtteranceHandler
 
 logger = logging.getLogger(__name__)
@@ -78,6 +81,7 @@ class PerParticipantStreamingAudioInputManager:
         self.bot = bot
         self.deepgram_api_key = self.get_deepgram_api_key()
         self.kyutai_server_url, self.kyutai_api_key = self.get_kyutai_server_url_and_api_key()
+        self.openai_api_key = self.get_openai_api_key()
 
         # Create utterance handler for providers that need it (like Kyutai)
         self.utterance_handler = DefaultUtteranceHandler(bot=bot, get_participant_callback=get_participant_callback, sample_rate=sample_rate)
@@ -111,6 +115,17 @@ class PerParticipantStreamingAudioInputManager:
 
         return server_url, api_key
 
+    def get_openai_api_key(self):
+        openai_credentials_record = self.project.credentials.filter(credential_type=Credentials.CredentialTypes.OPENAI).first()
+        if not openai_credentials_record:
+            return None
+
+        openai_credentials = openai_credentials_record.get_credentials()
+        if not openai_credentials:
+            return None
+
+        return openai_credentials.get("api_key")
+
     def create_streaming_transcriber(self, speaker_id, metadata):
         if self.transcription_provider == TranscriptionProviders.DEEPGRAM:
             metadata_list = [f"{key}:{value}" for key, value in metadata.items()] if metadata else None
@@ -141,6 +156,27 @@ class PerParticipantStreamingAudioInputManager:
                 interim_results=True,
                 api_key=self.kyutai_api_key,
                 save_utterance_callback=kyutai_save_utterance_callback,
+            )
+        elif self.transcription_provider == TranscriptionProviders.OPENAI:
+
+            def openai_save_utterance_callback(transcript_text, transcriber_metadata=None):
+                duration_ms = transcriber_metadata.get("duration_ms", 0) if transcriber_metadata else 0
+                self.utterance_handler.handle_utterance(
+                    speaker_id=speaker_id,
+                    transcript_text=transcript_text,
+                    metadata=transcriber_metadata,
+                    duration_ms=duration_ms,
+                )
+
+            return OpenAIStreamingTranscriber(
+                openai_api_key=self.openai_api_key,
+                connection_model=self.bot.transcription_settings.openai_realtime_connection_model(),
+                transcription_model=self.bot.transcription_settings.openai_realtime_transcription_model(),
+                sample_rate=self.sample_rate,
+                metadata=metadata,
+                language=self.bot.transcription_settings.openai_transcription_language(),
+                prompt=self.bot.transcription_settings.openai_transcription_prompt(),
+                save_utterance_callback=openai_save_utterance_callback,
             )
         else:
             raise Exception(f"Unsupported transcription provider: {self.transcription_provider}")
@@ -174,10 +210,15 @@ class PerParticipantStreamingAudioInputManager:
             if not self.kyutai_server_url:
                 logger.warning("No Kyutai server URL available")
                 return
+        elif self.transcription_provider == TranscriptionProviders.OPENAI:
+            if not self.openai_api_key:
+                logger.warning("No OpenAI API key available")
+                return
 
         # For Kyutai: Send all audio continuously, let semantic VAD handle it
+        # For OpenAI realtime: Send all audio continuously and let server VAD segment turns
         # For Deepgram: Use pre-filtering to reduce API costs
-        if self.transcription_provider == TranscriptionProviders.KYUTAI:
+        if self.transcription_provider in [TranscriptionProviders.KYUTAI, TranscriptionProviders.OPENAI]:
             # Still detect silence for monitoring purposes, but send all audio
             audio_is_silent = self.silence_detected(chunk_bytes)
 

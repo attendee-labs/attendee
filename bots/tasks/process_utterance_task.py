@@ -4,6 +4,7 @@ import os
 import time
 
 import requests
+from openai import APIConnectionError, APIStatusError, AuthenticationError, OpenAI
 from celery import shared_task
 
 logger = logging.getLogger(__name__)
@@ -44,6 +45,10 @@ def transform_diarized_json_to_schema(result):
         transcription["words"] = words
 
     return transcription
+
+
+def transcription_conversion_sample_rate_override(utterance):
+    return utterance.recording.bot.transcription_runtime_conversion_sample_rate_override()
 
 
 def get_transcription(utterance):
@@ -148,7 +153,11 @@ def get_transcription_via_gladia(utterance):
 
     upload_url = "https://api.gladia.io/v2/upload"
 
-    payload_mp3 = pcm_to_mp3(utterance.get_audio_blob().tobytes(), sample_rate=utterance.get_sample_rate())
+    payload_mp3 = pcm_to_mp3(
+        utterance.get_audio_blob().tobytes(),
+        sample_rate=utterance.get_sample_rate(),
+        output_sample_rate=transcription_conversion_sample_rate_override(utterance),
+    )
     headers = {
         "x-gladia-key": gladia_credentials["api_key"],
     }
@@ -318,41 +327,55 @@ def get_transcription_via_openai(utterance):
         return {"transcript": ""}, None
 
     # Convert PCM audio to MP3
-    payload_mp3 = pcm_to_mp3(utterance.get_audio_blob().tobytes(), sample_rate=utterance.get_sample_rate())
+    payload_mp3 = pcm_to_mp3(
+        utterance.get_audio_blob().tobytes(),
+        sample_rate=utterance.get_sample_rate(),
+        output_sample_rate=transcription_conversion_sample_rate_override(utterance),
+    )
 
-    # Prepare the request for OpenAI's transcription API
+    # Prepare the request for OpenAI SDK transcription API
     base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
-    url = f"{base_url}/audio/transcriptions"
-    headers = {
-        "Authorization": f"Bearer {openai_credentials['api_key']}",
+    request_kwargs = {
+        "file": ("file.mp3", payload_mp3, "audio/mpeg"),
+        "model": transcription_settings.openai_transcription_model(),
     }
-    files = {"file": ("file.mp3", payload_mp3, "audio/mpeg"), "model": (None, transcription_settings.openai_transcription_model())}
     if transcription_settings.openai_transcription_prompt():
-        files["prompt"] = (None, transcription_settings.openai_transcription_prompt())
+        request_kwargs["prompt"] = transcription_settings.openai_transcription_prompt()
     if transcription_settings.openai_transcription_language():
-        files["language"] = (None, transcription_settings.openai_transcription_language())
+        request_kwargs["language"] = transcription_settings.openai_transcription_language()
     # Add response_format and chunking_strategy for gpt-4o-transcribe-diarize
     response_format = transcription_settings.openai_transcription_response_format()
     if response_format:
-        files["response_format"] = (None, response_format)
+        request_kwargs["response_format"] = response_format
     chunking_strategy = transcription_settings.openai_transcription_chunking_strategy()
     if chunking_strategy:
-        # If chunking_strategy is a dict (server_vad object), JSON stringify it
-        if isinstance(chunking_strategy, dict):
-            files["chunking_strategy"] = (None, json.dumps(chunking_strategy))
-        else:
-            files["chunking_strategy"] = (None, chunking_strategy)
+        request_kwargs["chunking_strategy"] = chunking_strategy
 
-    response = requests.post(url, headers=headers, files=files)
-
-    if response.status_code == 401:
+    try:
+        with OpenAI(api_key=openai_credentials["api_key"], base_url=base_url) as client:
+            result = client.audio.transcriptions.create(**request_kwargs)
+    except AuthenticationError:
         return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_INVALID}
+    except APIStatusError as e:
+        if e.status_code == 401:
+            return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_INVALID}
+        response_text = str(e)
+        if hasattr(e, "response") and e.response is not None and hasattr(e.response, "text"):
+            response_text = e.response.text
+        logger.error(f"OpenAI transcription failed with status code {e.status_code}: {response_text}")
+        return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "status_code": e.status_code, "response_text": response_text}
+    except APIConnectionError as e:
+        logger.error(f"OpenAI transcription connection failed: {str(e)}")
+        return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "error": str(e)}
+    except Exception as e:
+        logger.error(f"OpenAI transcription request failed: {str(e)}")
+        return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "error": str(e)}
 
-    if response.status_code != 200:
-        logger.error(f"OpenAI transcription failed with status code {response.status_code}: {response.text}")
-        return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "status_code": response.status_code, "response_text": response.text}
+    if hasattr(result, "model_dump"):
+        result = result.model_dump()
+    elif isinstance(result, str):
+        result = {"text": result}
 
-    result = response.json()
     logger.info(f"OpenAI transcription completed successfully for utterance {utterance.id}.")
 
     # If diarized_json format, transform to Attendee's expected transcription schema
@@ -366,7 +389,11 @@ def get_transcription_via_openai(utterance):
 
 def get_transcription_via_assemblyai(utterance):
     return get_transcription_via_assemblyai_from_mp3(
-        retrieve_mp3_data_callback=lambda: pcm_to_mp3(utterance.get_audio_blob().tobytes(), sample_rate=utterance.get_sample_rate()),
+        retrieve_mp3_data_callback=lambda: pcm_to_mp3(
+            utterance.get_audio_blob().tobytes(),
+            sample_rate=utterance.get_sample_rate(),
+            output_sample_rate=transcription_conversion_sample_rate_override(utterance),
+        ),
         duration_ms=utterance.duration_ms,
         identifier=f"utterance {utterance.id}",
         transcription_settings=utterance.transcription_settings,
@@ -462,7 +489,11 @@ def get_transcription_via_elevenlabs(utterance):
         return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND, "error": "api_key not in credentials"}
 
     # Convert PCM audio to MP3 for ElevenLabs
-    payload_mp3 = pcm_to_mp3(utterance.get_audio_blob().tobytes(), sample_rate=utterance.get_sample_rate())
+    payload_mp3 = pcm_to_mp3(
+        utterance.get_audio_blob().tobytes(),
+        sample_rate=utterance.get_sample_rate(),
+        output_sample_rate=transcription_conversion_sample_rate_override(utterance),
+    )
 
     # Prepare the request for ElevenLabs speech-to-text API
     url = "https://api.elevenlabs.io/v1/speech-to-text"
@@ -534,7 +565,11 @@ def get_transcription_via_custom_async(utterance):
     # Get additional properties from settings
     additional_props = transcription_settings.custom_async_additional_props()
 
-    payload_mp3 = pcm_to_mp3(utterance.get_audio_blob().tobytes(), sample_rate=utterance.get_sample_rate())
+    payload_mp3 = pcm_to_mp3(
+        utterance.get_audio_blob().tobytes(),
+        sample_rate=utterance.get_sample_rate(),
+        output_sample_rate=transcription_conversion_sample_rate_override(utterance),
+    )
 
     files = {"audio": ("audio.mp3", payload_mp3, "audio/mpeg")}
 

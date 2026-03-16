@@ -6,13 +6,14 @@ logger = logging.getLogger(__name__)
 
 
 class ScreenAndAudioRecorder:
-    def __init__(self, file_location, recording_dimensions, audio_only):
+    def __init__(self, file_location, recording_dimensions, audio_only, audio_bitrate_kbps=None):
         self.file_location = file_location
         self.ffmpeg_proc = None
         # Screen will have buffer, we will crop to the recording dimensions
         self.screen_dimensions = (recording_dimensions[0] + 10, recording_dimensions[1] + 10)
         self.recording_dimensions = recording_dimensions
         self.audio_only = audio_only
+        self.audio_bitrate_kbps = audio_bitrate_kbps
         self.paused = False
         self.xterm_proc = None
 
@@ -20,6 +21,7 @@ class ScreenAndAudioRecorder:
         logger.info(f"Starting screen recorder for display {display_var} with dimensions {self.screen_dimensions} and file location {self.file_location}")
 
         if self.audio_only:
+            audio_bitrate_kbps = self.audio_bitrate_kbps or 192
             # FFmpeg command for audio-only recording to MP3
             ffmpeg_cmd = [
                 "ffmpeg",
@@ -33,7 +35,7 @@ class ScreenAndAudioRecorder:
                 "-c:a",
                 "libmp3lame",  # MP3 codec
                 "-b:a",
-                "192k",  # Audio bitrate (192 kbps for good quality)
+                f"{audio_bitrate_kbps}k",
                 "-ar",
                 "44100",  # Sample rate
                 "-ac",
@@ -41,7 +43,8 @@ class ScreenAndAudioRecorder:
                 self.file_location,
             ]
         else:
-            ffmpeg_cmd = ["ffmpeg", "-y", "-thread_queue_size", "256", "-framerate", "30", "-video_size", f"{self.screen_dimensions[0]}x{self.screen_dimensions[1]}", "-f", "x11grab", "-draw_mouse", "0", "-probesize", "32", "-i", display_var, "-thread_queue_size", "4096", "-f", "alsa", "-i", "default", "-vf", f"crop={self.recording_dimensions[0]}:{self.recording_dimensions[1]}:10:10", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-g", "30", "-c:a", "aac", "-strict", "experimental", "-b:a", "128k", self.file_location]
+            audio_bitrate_kbps = self.audio_bitrate_kbps or 128
+            ffmpeg_cmd = ["ffmpeg", "-y", "-thread_queue_size", "256", "-framerate", "30", "-video_size", f"{self.screen_dimensions[0]}x{self.screen_dimensions[1]}", "-f", "x11grab", "-draw_mouse", "0", "-probesize", "32", "-i", display_var, "-thread_queue_size", "4096", "-f", "alsa", "-i", "default", "-vf", f"crop={self.recording_dimensions[0]}:{self.recording_dimensions[1]}:10:10", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-g", "30", "-c:a", "aac", "-strict", "experimental", "-b:a", f"{audio_bitrate_kbps}k", self.file_location]
 
         logger.info(f"Starting FFmpeg command: {' '.join(ffmpeg_cmd)}")
         self.ffmpeg_proc = subprocess.Popen(ffmpeg_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
