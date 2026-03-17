@@ -104,9 +104,8 @@ FROM base AS deps
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 
-ENV TINI_VERSION=v0.19.0
-ADD https://github.com/krallin/tini/releases/download/${TINI_VERSION}/tini /tini
-RUN chmod +x /tini
+# Install tini via apt for reliable permissions
+RUN apt-get update && apt-get install -y tini && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt
 
@@ -138,5 +137,5 @@ RUN mkdir -p /etc/opt/chrome/policies/managed \
 USER app
 
 # Use tini + entrypoint; CMD can be overridden by compose
-ENTRYPOINT ["/tini","--","/usr/local/bin/entrypoint.sh"]
+ENTRYPOINT ["/usr/bin/tini","--","/usr/local/bin/entrypoint.sh"]
 CMD ["bash"]
