@@ -14,21 +14,29 @@
 #   _ENV: Environment (staging or production)
 #
 # Required secrets (configured in Secret Manager):
-#   - DATABASE_URL
-#   - DJANGO_SECRET_KEY
-#   - CREDENTIALS_ENCRYPTION_KEY
-#   - REDIS_URL
+#   - ATTENDEE_DATABASE_URL: PostgreSQL connection string
+#   - DJANGO_SECRET_KEY: Django secret key
+#   - CREDENTIALS_ENCRYPTION_KEY: Encryption key for sensitive data
+#   - REDIS_URL: Redis/Memorystore connection (e.g., redis://10.0.0.3:6379)
+#
+# Required infrastructure:
+#   - VPC Connector: For Cloud Run to access Memorystore (private IP)
+#   - Memorystore for Redis: Create instance in same region/VPC
 
 substitutions:
   _ENV: staging
-  _REGION: us-central1
+  _REGION: us-west2
   _SERVICE_NAME: attendee
   _GKE_CLUSTER: attendee-cluster
-  _GKE_ZONE: us-central1-a
+  _GKE_ZONE: us-west2-a
+  _VPC_CONNECTOR: attendee-vpc-connector
 
 options:
-  logging: CLOUD_LOGGING_ONLY
+  logging: GCS_ONLY
   machineType: E2_HIGHCPU_8
+  substitutionOption: ALLOW_LOOSE
+
+logsBucket: 'gs://oppy-prod_cloudbuild'
 
 steps:
   # Step 1: Build the Docker image
@@ -100,8 +108,9 @@ steps:
           --memory 2Gi \
           --min-instances 1 \
           --max-instances 10 \
+          --vpc-connector ${_VPC_CONNECTOR} \
           --set-env-vars "DJANGO_SETTINGS_MODULE=attendee.settings.production-gke" \
-          --set-secrets "DATABASE_URL=DATABASE_URL:latest,DJANGO_SECRET_KEY=DJANGO_SECRET_KEY:latest,CREDENTIALS_ENCRYPTION_KEY=CREDENTIALS_ENCRYPTION_KEY:latest" \
+          --set-secrets "DATABASE_URL=ATTENDEE_DATABASE_URL:latest,DJANGO_SECRET_KEY=DJANGO_SECRET_KEY:latest,CREDENTIALS_ENCRYPTION_KEY=CREDENTIALS_ENCRYPTION_KEY:latest,REDIS_URL=REDIS_URL:latest" \
           --args="gunicorn,attendee.wsgi:application,--bind,0.0.0.0:8000,--workers,4,--threads,2"
     waitFor: ['collectstatic']
 
@@ -121,8 +130,9 @@ steps:
           --memory 4Gi \
           --min-instances 1 \
           --max-instances 20 \
+          --vpc-connector ${_VPC_CONNECTOR} \
           --set-env-vars "DJANGO_SETTINGS_MODULE=attendee.settings.production-gke" \
-          --set-secrets "DATABASE_URL=DATABASE_URL:latest,DJANGO_SECRET_KEY=DJANGO_SECRET_KEY:latest,CREDENTIALS_ENCRYPTION_KEY=CREDENTIALS_ENCRYPTION_KEY:latest,CELERY_BROKER_URL=REDIS_URL:latest" \
+          --set-secrets "DATABASE_URL=ATTENDEE_DATABASE_URL:latest,DJANGO_SECRET_KEY=DJANGO_SECRET_KEY:latest,CREDENTIALS_ENCRYPTION_KEY=CREDENTIALS_ENCRYPTION_KEY:latest,REDIS_URL=REDIS_URL:latest,CELERY_BROKER_URL=REDIS_URL:latest" \
           --args="celery,-A,attendee,worker,-l,INFO,--concurrency,4"
     waitFor: ['collectstatic']
 

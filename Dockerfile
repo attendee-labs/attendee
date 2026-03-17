@@ -121,7 +121,8 @@ ENV cwd=/$project
 WORKDIR $cwd
 
 # Copy only what you need; set ownership/perm at copy time
-COPY --chown=app:app --chmod=0755 entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY --chown=app:app entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod 0755 /usr/local/bin/entrypoint.sh
 COPY --chown=app:app . .
 
 # Make STATIC_ROOT writeable for the non-root user so collectstatic can run at startup
