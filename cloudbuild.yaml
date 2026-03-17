@@ -72,10 +72,21 @@ steps:
     args:
       - '-c'
       - |
+        # Deploy (create/update) the job first, then execute it
+        gcloud run jobs deploy ${_SERVICE_NAME}-migrate \
+          --image gcr.io/$PROJECT_ID/${_SERVICE_NAME}:$COMMIT_SHA \
+          --region ${_REGION} \
+          --vpc-connector ${_VPC_CONNECTOR} \
+          --set-env-vars "DJANGO_SETTINGS_MODULE=attendee.settings.production-gke" \
+          --set-secrets "DATABASE_URL=ATTENDEE_DATABASE_URL:latest,DJANGO_SECRET_KEY=DJANGO_SECRET_KEY:latest,CREDENTIALS_ENCRYPTION_KEY=CREDENTIALS_ENCRYPTION_KEY:latest,REDIS_URL=REDIS_URL:latest" \
+          --command "python" \
+          --args "manage.py,migrate,--noinput" \
+          --max-retries 0 \
+          --task-timeout 600 \
+          --quiet && \
         gcloud run jobs execute ${_SERVICE_NAME}-migrate \
           --region ${_REGION} \
-          --wait \
-          --args="python,manage.py,migrate,--noinput"
+          --wait
     waitFor: ['push']
 
   # Step 4: Collect static files
@@ -85,10 +96,21 @@ steps:
     args:
       - '-c'
       - |
+        # Deploy (create/update) the job first, then execute it
+        gcloud run jobs deploy ${_SERVICE_NAME}-collectstatic \
+          --image gcr.io/$PROJECT_ID/${_SERVICE_NAME}:$COMMIT_SHA \
+          --region ${_REGION} \
+          --vpc-connector ${_VPC_CONNECTOR} \
+          --set-env-vars "DJANGO_SETTINGS_MODULE=attendee.settings.production-gke" \
+          --set-secrets "DATABASE_URL=ATTENDEE_DATABASE_URL:latest,DJANGO_SECRET_KEY=DJANGO_SECRET_KEY:latest,CREDENTIALS_ENCRYPTION_KEY=CREDENTIALS_ENCRYPTION_KEY:latest" \
+          --command "python" \
+          --args "manage.py,collectstatic,--noinput" \
+          --max-retries 0 \
+          --task-timeout 300 \
+          --quiet && \
         gcloud run jobs execute ${_SERVICE_NAME}-collectstatic \
           --region ${_REGION} \
-          --wait \
-          --args="python,manage.py,collectstatic,--noinput"
+          --wait
     waitFor: ['migrate']
 
   # Step 5: Deploy to Cloud Run (Web Service)
