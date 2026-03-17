@@ -6,7 +6,7 @@ import threading
 import time
 import traceback
 from base64 import b64decode
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import gi
 import redis
@@ -169,7 +169,7 @@ class BotController:
             video_frame_size=self.bot_in_db.recording_dimensions(),
             record_chat_messages_when_paused=self.bot_in_db.record_chat_messages_when_paused(),
             disable_incoming_video=self.disable_incoming_video_for_web_bots(),
-            record_participant_speech_start_stop_events=self.bot_in_db.record_participant_speech_start_stop_events(),
+            record_participant_speech_start_stop_events=self.should_request_participant_speech_start_stop_events(),
             modify_dom_for_video_recording=self.should_modify_dom_for_video_recording_for_web_bots(),
             google_meet_bot_login_is_available=self.google_meet_bot_login_is_available(),
             google_meet_bot_login_should_be_used=self.bot_in_db.google_meet_login_mode_is_always(),
@@ -208,7 +208,7 @@ class BotController:
             teams_bot_login_credentials=teams_bot_login_credentials.get_credentials() if teams_bot_login_credentials and self.bot_in_db.teams_use_bot_login() else None,
             teams_bot_login_should_be_used=self.bot_in_db.teams_login_mode_is_always(),
             record_chat_messages_when_paused=self.bot_in_db.record_chat_messages_when_paused(),
-            record_participant_speech_start_stop_events=self.bot_in_db.record_participant_speech_start_stop_events(),
+            record_participant_speech_start_stop_events=self.should_request_participant_speech_start_stop_events(),
             disable_incoming_video=self.disable_incoming_video_for_web_bots(),
             modify_dom_for_video_recording=self.should_modify_dom_for_video_recording_for_web_bots(),
         )
@@ -279,7 +279,7 @@ class BotController:
             should_ask_for_recording_permission=self.pipeline_configuration.record_audio or self.pipeline_configuration.rtmp_stream_audio or self.pipeline_configuration.websocket_stream_audio or self.pipeline_configuration.record_video or self.pipeline_configuration.rtmp_stream_video,
             record_chat_messages_when_paused=self.bot_in_db.record_chat_messages_when_paused(),
             disable_incoming_video=self.disable_incoming_video_for_web_bots(),
-            record_participant_speech_start_stop_events=self.bot_in_db.record_participant_speech_start_stop_events(),
+            record_participant_speech_start_stop_events=self.should_request_participant_speech_start_stop_events(),
             zoom_tokens=zoom_tokens,
         )
 
@@ -310,7 +310,7 @@ class BotController:
             zoom_tokens=zoom_tokens,
             zoom_meeting_settings=self.bot_in_db.zoom_meeting_settings(),
             record_chat_messages_when_paused=self.bot_in_db.record_chat_messages_when_paused(),
-            record_participant_speech_start_stop_events=self.bot_in_db.record_participant_speech_start_stop_events(),
+            record_participant_speech_start_stop_events=self.should_request_participant_speech_start_stop_events(),
         )
 
     def get_zoom_rtms_adapter(self):
@@ -750,10 +750,99 @@ class BotController:
             return 19200000  # 19.2 MB / 2 bytes per sample / 32,000 samples per second = 300 seconds of continuous audio
 
     def non_streaming_audio_silence_duration_limit(self):
+        env_silence_duration_limit = os.getenv("TRANSCRIPTION_CHUNK_SILENCE_DURATION_SECONDS")
+        if env_silence_duration_limit is not None:
+            try:
+                parsed_silence_duration_limit = float(env_silence_duration_limit)
+                if parsed_silence_duration_limit > 0:
+                    return parsed_silence_duration_limit
+                logger.warning(
+                    "Ignoring TRANSCRIPTION_CHUNK_SILENCE_DURATION_SECONDS because it is not greater than zero: %s",
+                    env_silence_duration_limit,
+                )
+            except ValueError:
+                logger.warning(
+                    "Ignoring TRANSCRIPTION_CHUNK_SILENCE_DURATION_SECONDS because it is not a valid number: %s",
+                    env_silence_duration_limit,
+                )
+
         if self.get_recording_transcription_provider() == TranscriptionProviders.SARVAM:
             return 1  # seconds
         else:
             return 3  # seconds
+
+    def non_streaming_audio_speech_stop_post_roll_seconds(self):
+        value = os.getenv("NON_STREAMING_AUDIO_SPEECH_STOP_POST_ROLL_SECONDS")
+        if value is None:
+            return PerParticipantNonStreamingAudioInputManager.DEFAULT_SPEECH_STOP_POST_ROLL_SECONDS
+
+        try:
+            parsed_value = float(value)
+            if parsed_value < 0:
+                raise ValueError("value cannot be negative")
+            return parsed_value
+        except (TypeError, ValueError):
+            logger.warning(
+                "Invalid NON_STREAMING_AUDIO_SPEECH_STOP_POST_ROLL_SECONDS=%s, using default of %s",
+                value,
+                PerParticipantNonStreamingAudioInputManager.DEFAULT_SPEECH_STOP_POST_ROLL_SECONDS,
+            )
+            return PerParticipantNonStreamingAudioInputManager.DEFAULT_SPEECH_STOP_POST_ROLL_SECONDS
+
+    def non_streaming_audio_use_speech_events_as_primary_chunking_enabled(self):
+        return os.getenv("TRANSCRIPTION_CHUNK_USE_SPEECH_EVENTS_PRIMARY_CHUNKING_ENABLED", "false").lower() == "true"
+
+    def should_request_participant_speech_start_stop_events(self):
+        if self.bot_in_db.record_participant_speech_start_stop_events():
+            return True
+
+        # Optionally use speech events as primary chunk boundaries without persisting those events.
+        return (
+            self.non_streaming_audio_use_speech_events_as_primary_chunking_enabled()
+            and self.should_capture_audio_chunks()
+            and not self.use_streaming_transcription()
+        )
+
+    def non_streaming_audio_min_speech_duration_limit(self):
+        env_min_speech_duration_limit = os.getenv("TRANSCRIPTION_CHUNK_MIN_SPEECH_DURATION_SECONDS")
+        if env_min_speech_duration_limit is not None:
+            try:
+                parsed_min_speech_duration_limit = float(env_min_speech_duration_limit)
+                if parsed_min_speech_duration_limit > 0:
+                    return parsed_min_speech_duration_limit
+                logger.warning(
+                    "Ignoring TRANSCRIPTION_CHUNK_MIN_SPEECH_DURATION_SECONDS because it is not greater than zero: %s",
+                    env_min_speech_duration_limit,
+                )
+            except ValueError:
+                logger.warning(
+                    "Ignoring TRANSCRIPTION_CHUNK_MIN_SPEECH_DURATION_SECONDS because it is not a valid number: %s",
+                    env_min_speech_duration_limit,
+                )
+
+        return 3  # seconds
+
+    def non_streaming_audio_max_silence_to_append_seconds(self):
+        env_max_silence_to_append = os.getenv("TRANSCRIPTION_CHUNK_MAX_SILENCE_TO_APPEND_SECONDS")
+        if env_max_silence_to_append is not None:
+            try:
+                parsed_max_silence_to_append = float(env_max_silence_to_append)
+                if parsed_max_silence_to_append >= 0:
+                    return parsed_max_silence_to_append
+                logger.warning(
+                    "Ignoring TRANSCRIPTION_CHUNK_MAX_SILENCE_TO_APPEND_SECONDS because it is negative: %s",
+                    env_max_silence_to_append,
+                )
+            except ValueError:
+                logger.warning(
+                    "Ignoring TRANSCRIPTION_CHUNK_MAX_SILENCE_TO_APPEND_SECONDS because it is not a valid number: %s",
+                    env_max_silence_to_append,
+                )
+
+        return 1  # seconds
+
+    def non_streaming_audio_ignore_long_silence_enabled(self):
+        return os.getenv("TRANSCRIPTION_CHUNK_IGNORE_LONG_SILENCE_ENABLED", "true").lower() == "true"
 
     def run(self):
         if self.run_called:
@@ -771,6 +860,10 @@ class BotController:
             sample_rate=self.get_per_participant_audio_sample_rate(),
             utterance_size_limit=self.non_streaming_audio_utterance_size_limit(),
             silence_duration_limit=self.non_streaming_audio_silence_duration_limit(),
+            speech_stop_post_roll_seconds=self.non_streaming_audio_speech_stop_post_roll_seconds(),
+            min_speech_duration_limit=self.non_streaming_audio_min_speech_duration_limit(),
+            ignore_long_silence_enabled=self.non_streaming_audio_ignore_long_silence_enabled(),
+            max_silence_to_append_seconds=self.non_streaming_audio_max_silence_to_append_seconds(),
             should_print_diagnostic_info=self.should_capture_audio_chunks(),
         )
 
@@ -1449,8 +1542,44 @@ class BotController:
     def on_new_participant_event(self, event):
         GLib.idle_add(lambda: self.add_participant_event(event))
 
+    def add_participant_speech_event_to_audio_chunking(self, event):
+        if event["event_type"] not in [ParticipantEventTypes.SPEECH_START, ParticipantEventTypes.SPEECH_STOP]:
+            return
+
+        if not self.should_capture_audio_chunks() or self.use_streaming_transcription():
+            return
+
+        if not self.non_streaming_audio_use_speech_events_as_primary_chunking_enabled():
+            return
+
+        if not self.per_participant_non_streaming_audio_input_manager:
+            return
+
+        event_timestamp_ms = event.get("timestamp_ms")
+        if event_timestamp_ms is None:
+            event_time = datetime.utcnow()
+        else:
+            try:
+                event_time = datetime.utcfromtimestamp(int(event_timestamp_ms) / 1000)
+            except (TypeError, ValueError):
+                logger.warning(f"Invalid participant speech event timestamp_ms: {event_timestamp_ms}, falling back to current time")
+                event_time = datetime.utcnow()
+
+        if event["event_type"] == ParticipantEventTypes.SPEECH_START:
+            self.per_participant_non_streaming_audio_input_manager.add_speech_start_event(event["participant_uuid"], event_time)
+        elif event["event_type"] == ParticipantEventTypes.SPEECH_STOP:
+            self.per_participant_non_streaming_audio_input_manager.add_speech_stop_event(event["participant_uuid"], event_time)
+
     def add_participant_event(self, event):
         logger.info(f"Adding participant event: {event}")
+
+        self.add_participant_speech_event_to_audio_chunking(event)
+
+        if (
+            event["event_type"] in [ParticipantEventTypes.SPEECH_START, ParticipantEventTypes.SPEECH_STOP]
+            and not self.bot_in_db.record_participant_speech_start_stop_events()
+        ):
+            return
 
         participant = self.adapter.get_participant(event["participant_uuid"])
 

@@ -644,7 +644,7 @@ BOT_RECORDING_SETTINGS_SCHEMA = {
         },
         "resolution": {
             "type": "string",
-            "description": "The resolution to use for the recording. The supported resolutions are '1080p' and '720p'. Defaults to '1080p'.",
+            "description": "The resolution to use for the recording. The supported resolutions are '1080p', '720p' and '480p'. Defaults to '1080p'.",
             "enum": RecordingResolutions.values,
         },
         "record_chat_messages_when_paused": {

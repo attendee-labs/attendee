@@ -752,6 +752,59 @@ class BotModelTest(TransactionTestCase):
         self.assertEqual(response_format, "diarized_json")
         self.assertEqual(chunking_strategy, "auto")
 
+    @mock.patch.dict(
+        "os.environ",
+        {
+            "OPENAI_MODEL_NAME": "gpt-4o-transcribe-diarize",
+            "OPENAI_TRANSCRIPTION_SILENCE_DURATION_MS": "350",
+        },
+    )
+    def test_openai_transcription_chunking_strategy_uses_env_silence_duration_when_not_set(self):
+        chunking_strategy = self.bot.transcription_settings.openai_transcription_chunking_strategy()
+        self.assertEqual(chunking_strategy, {"type": "server_vad", "silence_duration_ms": 350})
+
+    @mock.patch.dict(
+        "os.environ",
+        {
+            "OPENAI_MODEL_NAME": "gpt-4o-transcribe-diarize",
+            "OPENAI_TRANSCRIPTION_SILENCE_DURATION_MS": "350",
+        },
+    )
+    def test_openai_transcription_chunking_strategy_does_not_override_explicit_silence_duration(self):
+        self.bot.settings = {
+            "transcription_settings": {
+                "openai": {
+                    "model": "gpt-4o-transcribe-diarize",
+                    "chunking_strategy": {"type": "server_vad", "silence_duration_ms": 120},
+                }
+            }
+        }
+        self.bot.save()
+
+        chunking_strategy = self.bot.transcription_settings.openai_transcription_chunking_strategy()
+        self.assertEqual(chunking_strategy, {"type": "server_vad", "silence_duration_ms": 120})
+
+    @mock.patch.dict(
+        "os.environ",
+        {
+            "OPENAI_MODEL_NAME": "gpt-4o-transcribe-diarize",
+            "OPENAI_TRANSCRIPTION_SILENCE_DURATION_MS": "350",
+        },
+    )
+    def test_openai_transcription_chunking_strategy_fills_missing_silence_duration_from_env(self):
+        self.bot.settings = {
+            "transcription_settings": {
+                "openai": {
+                    "model": "gpt-4o-transcribe-diarize",
+                    "chunking_strategy": {"type": "server_vad"},
+                }
+            }
+        }
+        self.bot.save()
+
+        chunking_strategy = self.bot.transcription_settings.openai_transcription_chunking_strategy()
+        self.assertEqual(chunking_strategy, {"type": "server_vad", "silence_duration_ms": 350})
+
 
 class GladiaProviderTest(TransactionTestCase):
     """Unit‑tests for bots.tasks.process_utterance_task.get_transcription_via_gladia"""
