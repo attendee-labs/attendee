@@ -137,6 +137,7 @@ steps:
     waitFor: ['collectstatic']
 
   # Step 6: Deploy Celery Worker to Cloud Run
+  # Uses worker_with_healthcheck.py to provide health check endpoint for Cloud Run
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     id: 'deploy-worker'
     entrypoint: 'bash'
@@ -148,6 +149,7 @@ steps:
           --region ${_REGION} \
           --platform managed \
           --no-allow-unauthenticated \
+          --port 8080 \
           --cpu 2 \
           --memory 4Gi \
           --min-instances 1 \
@@ -155,7 +157,8 @@ steps:
           --vpc-connector ${_VPC_CONNECTOR} \
           --set-env-vars "DJANGO_SETTINGS_MODULE=attendee.settings.production-gke" \
           --set-secrets "DATABASE_URL=ATTENDEE_DATABASE_URL:latest,DJANGO_SECRET_KEY=DJANGO_SECRET_KEY:latest,CREDENTIALS_ENCRYPTION_KEY=CREDENTIALS_ENCRYPTION_KEY:latest,REDIS_URL=REDIS_URL:latest,CELERY_BROKER_URL=REDIS_URL:latest" \
-          --args="celery,-A,attendee,worker,-l,INFO,--concurrency,4"
+          --command "python" \
+          --args "worker_with_healthcheck.py,-A,attendee,worker,-l,INFO,--concurrency,4"
     waitFor: ['collectstatic']
 
 images:
