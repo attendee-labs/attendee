@@ -1067,6 +1067,12 @@ class ZoomBotAdapter(BotAdapter):
                         "zoom_result_code": iResult,
                     }
                 )
+            elif iResult == zoom.MeetingFailCode.MEETING_FAIL_ENFORCE_LOGIN:
+                self.send_message_callback(
+                    {
+                        "message": self.Messages.LOGIN_REQUIRED,
+                    }
+                )
             elif failed_because_onbehalf_token_user_not_in_meeting:
                 self.handle_failed_to_join_because_onbehalf_token_user_not_in_meeting()
             else:
