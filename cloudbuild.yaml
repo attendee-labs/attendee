@@ -102,7 +102,7 @@ steps:
           --region ${_REGION} \
           --vpc-connector ${_VPC_CONNECTOR} \
           --set-env-vars "DJANGO_SETTINGS_MODULE=attendee.settings.production-gke" \
-          --set-secrets "DATABASE_URL=ATTENDEE_DATABASE_URL:latest,DJANGO_SECRET_KEY=DJANGO_SECRET_KEY:latest,CREDENTIALS_ENCRYPTION_KEY=CREDENTIALS_ENCRYPTION_KEY:latest" \
+          --set-secrets "DATABASE_URL=ATTENDEE_DATABASE_URL:latest,DJANGO_SECRET_KEY=DJANGO_SECRET_KEY:latest,CREDENTIALS_ENCRYPTION_KEY=CREDENTIALS_ENCRYPTION_KEY:latest,REDIS_URL=REDIS_URL:latest" \
           --command "python" \
           --args "manage.py,collectstatic,--noinput" \
           --max-retries 0 \
