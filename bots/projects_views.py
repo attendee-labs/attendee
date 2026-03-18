@@ -1236,6 +1236,18 @@ class CreateCheckoutSessionView(LoginRequiredMixin, ProjectUrlContextMixin, View
                 "credit_amount": str(credit_amount),
             },
             api_key=os.getenv("STRIPE_SECRET_KEY"),
+            # Optional company name field
+            name_collection={
+                "business": {
+                    "enabled": True,
+                    "optional": True,
+                }
+            },
+            # Optional VAT / tax ID field
+            tax_id_collection={
+                "enabled": True,
+                "required": "never",  # optional; can also be omitted
+            },
         )
 
         # Redirect directly to the Stripe checkout page
