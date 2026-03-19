@@ -252,7 +252,7 @@ def get_local_recording_token_via_zoom_oauth_app(bot: Bot) -> str | None:
     if not zoom_oauth_app:
         return None
 
-    meeting_id, password, registrant_token = parse_zoom_join_url(meeting_url)
+    meeting_id, password = parse_zoom_join_url(meeting_url)
     if not meeting_id:
         logger.info(f"No meeting id found in join url {meeting_url}")
         return None

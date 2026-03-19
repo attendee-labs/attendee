@@ -237,7 +237,7 @@ def normalize_meeting_url_raw(url):
     return None, None
 
 
-# Returns (meeting_id, password, registrant_token) from a Zoom join URL.
+# Returns (meeting_id, password) from a Zoom join URL.
 def parse_zoom_join_url(join_url):
     # Parse the URL into components
     parsed = urlparse(join_url)
@@ -246,9 +246,19 @@ def parse_zoom_join_url(join_url):
     meeting_id_match = re.search(r"(\d+)", parsed.path)
     meeting_id = meeting_id_match.group(1) if meeting_id_match else None
 
-    # Extract password and registrant token from query parameters
+    # Extract password from query parameters
     query_params = parse_qs(parsed.query)
     password = query_params.get("pwd", [None])[0]
+
+    return (meeting_id, password)
+
+# Returns registrant token from a Zoom join URL, for meetings or webinars that require registration.
+def parse_zoom_registrant_token(join_url):
+    # Parse the URL into components
+    parsed = urlparse(join_url)
+
+    # Extract registrant token from query parameters
+    query_params = parse_qs(parsed.query)
     registrant_token = query_params.get("tk", [None])[0]
 
-    return (meeting_id, password, registrant_token)
+    return registrant_token

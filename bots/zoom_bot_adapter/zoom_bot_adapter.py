@@ -96,7 +96,7 @@ class ZoomBotAdapter(BotAdapter):
         self.record_participant_speech_start_stop_events = record_participant_speech_start_stop_events
 
         self._jwt_token = generate_jwt(zoom_client_id, zoom_client_secret)
-        self.meeting_id, self.meeting_password = parse_zoom_join_url(meeting_url)[:2]
+        self.meeting_id, self.meeting_password = parse_zoom_join_url(meeting_url)
 
         self.meeting_service = None
         self.setting_service = None
@@ -184,7 +184,6 @@ class ZoomBotAdapter(BotAdapter):
         self.breakout_room_ctrl = None
         self.breakout_room_ctrl_event = None
         self.is_joining_or_leaving_breakout_room = False
-        self.is_reconnecting = False
 
         # Waiting room controller
         self.waiting_room_ctrl = None
@@ -242,8 +241,7 @@ class ZoomBotAdapter(BotAdapter):
             return
 
         # In a webinar, attendees cannot see the participant list, so do not trigger auto-leave.
-        # Also skip during reconnects as participant IDs are reassigned and not yet fetchable.
-        if self.is_webinar or self.is_reconnecting:
+        if self.is_webinar:
             return
 
         # If nobody (excluding other bots) other than the bot was ever in the meeting, then don't activate this. We only want to activate if someone else was in the meeting and left
@@ -575,7 +573,6 @@ class ZoomBotAdapter(BotAdapter):
     def on_join(self):
         # Reset transition flags
         self.is_joining_or_leaving_breakout_room = False
-        self.is_reconnecting = False
 
         # Meeting reminder controller
         self.joined_at = time.time()
@@ -622,6 +619,11 @@ class ZoomBotAdapter(BotAdapter):
         # See here for more details: https://devforum.zoom.us/t/cant-record-audio-with-linux-meetingsdk-after-6-3-5-6495-error-code-32/130689/5
         self.audio_ctrl.JoinVoip()
 
+        meeting_info = self.meeting_service.GetMeetingInfo()
+        meeting_type = meeting_info.GetMeetingType()
+        if meeting_type == zoom.MeetingType.MEETING_TYPE_WEBINAR:
+            self.is_webinar = True
+
         if self.use_raw_recording:
             self.recording_ctrl = self.meeting_service.GetMeetingRecordingController()
 
@@ -655,13 +657,6 @@ class ZoomBotAdapter(BotAdapter):
                 logger.info(f"is_support_request_local_recording_privilege_result = {is_support_request_local_recording_privilege_result}")
                 # This means the host is using a zoom client that is incapable of displaying the popup to allow recording (Only known client where this happens is Zoom Rooms)
                 if is_support_request_local_recording_privilege_result == zoom.SDKERR_MEETING_DONT_SUPPORT_FEATURE:
-                    self.handle_recording_permission_denied(reason=BotAdapter.BOT_RECORDING_PERMISSION_DENIED_REASON.HOST_CLIENT_CANNOT_GRANT_PERMISSION)
-                elif is_support_request_local_recording_privilege_result == zoom.SDKERR_WRONG_USAGE:
-                    # Hacky, but we're assuming SDKERR_WRONG_USAGE means we are in a webinar where requesting
-                    # local recording privilege is not applicable (bot joined as attendee, not yet promoted to panelist).
-                    logger.info("Webinar context detected (SDKERR_WRONG_USAGE). Treating as permission denied.")
-                    logger.info("Bot joined as webinar attendee; waiting for host to promote to panelist.")
-                    self.is_webinar = True
                     self.handle_recording_permission_denied(reason=BotAdapter.BOT_RECORDING_PERMISSION_DENIED_REASON.HOST_CLIENT_CANNOT_GRANT_PERMISSION)
                 else:
                     self.recording_ctrl.RequestLocalRecordingPrivilege()
@@ -1049,9 +1044,6 @@ class ZoomBotAdapter(BotAdapter):
             self.is_joining_or_leaving_breakout_room = True
             self.send_message_callback({"message": self.Messages.LEAVING_BREAKOUT_ROOM})
 
-        if status == zoom.MEETING_STATUS_RECONNECTING:
-            self.is_reconnecting = True
-
         if status == zoom.MEETING_STATUS_CONNECTING:
             self.wait_to_get_out_of_connecting_state()
 
@@ -1063,7 +1055,8 @@ class ZoomBotAdapter(BotAdapter):
             GLib.timeout_add_seconds(self.automatic_leave_configuration.waiting_room_timeout_seconds, self.leave_meeting_if_still_in_waiting_room)
 
         if status == zoom.MEETING_STATUS_INMEETING:
-            self.send_message_callback({"message": self.Messages.BOT_JOINED_MEETING})
+            if not self.joined_at:
+                self.send_message_callback({"message": self.Messages.BOT_JOINED_MEETING})
 
         if status == zoom.MEETING_STATUS_ENDED:
             if self.should_retry_after_meeting_ends:
