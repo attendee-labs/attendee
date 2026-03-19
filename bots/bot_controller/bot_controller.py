@@ -174,6 +174,7 @@ class BotController:
             "session_id": session_id,
             "login_email": least_used_google_meet_bot_login.email,
             "login_domain": least_used_google_meet_bot_login.workspace_domain,
+            "sso_mode": least_used_google_meet_bot_login.sso_mode,
         }
 
     def google_meet_bot_login_is_available(self):

@@ -561,6 +561,7 @@ class WebBotAdapter(BotAdapter):
         options.add_argument("--disable-application-cache")
         options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--disable-blink-features=AutomationControlled")
+        options.add_argument("--lang=en-US")
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
 
         if os.getenv("ENABLE_CHROME_SANDBOX", "false").lower() != "true":
@@ -573,6 +574,7 @@ class WebBotAdapter(BotAdapter):
         prefs = {
             "credentials_enable_service": False,
             "profile.password_manager_enabled": False,
+            "intl.accept_languages": "en-US,en",
         }
         options.add_experimental_option("prefs", prefs)
 

@@ -3,13 +3,14 @@
         <h5 class="mb-0">Google Meet Bot Logins</h5>
     </div>
     <div class="card-body">
-        {% if google_meet_bot_login_group and google_meet_bot_login_group.google_meet_bot_logins.exists %}            
+        {% if google_meet_bot_login_group and google_meet_bot_login_group.google_meet_bot_logins.exists %}
             <div class="table-responsive">
                 <table class="table table-hover">
                     <thead>
                         <tr>
                             <th>Email</th>
                             <th>Workspace Domain</th>
+                            <th>SSO Mode</th>
                             <th>Last Used</th>
                             <th>Actions</th>
                         </tr>
@@ -19,6 +20,7 @@
                         <tr>
                             <td>{{ login.email }}</td>
                             <td>{{ login.workspace_domain }}</td>
+                            <td><span class="badge bg-secondary">{{ login.get_sso_mode_display }}</span></td>
                             <td>
                                 {% if login.last_used_at %}
                                     {{ login.last_used_at|date:"M d, Y H:i" }}
@@ -27,7 +29,7 @@
                                 {% endif %}
                             </td>
                             <td>
-                                <form 
+                                <form
                                     hx-post="{% url 'bots:delete-google-meet-bot-login' project.object_id login.object_id %}"
                                     hx-target="#google-meet-bot-login-container"
                                     hx-select="#google-meet-bot-login-container"
@@ -45,7 +47,7 @@
                     </tbody>
                 </table>
             </div>
-            
+
             <button class="btn btn-primary mt-2" data-bs-toggle="modal" data-bs-target="#googleMeetBotLoginModal">
                 <i class="bi bi-plus-circle"></i> Add Login
             </button>
@@ -69,81 +71,106 @@
             <div class="modal-body">
                 <div class="alert alert-info mb-3">
                     <i class="bi bi-info-circle"></i>
-                    Need help setting up signed-in bots for Google Meet? See our 
+                    Need help setting up signed-in bots for Google Meet? See our
                     <a href="https://docs.attendee.dev/guides/signed-in-bots#signed-in-bots__signed-in-google-meet-bots" target="_blank" rel="noopener noreferrer">
                         documentation
                     </a>.
                 </div>
-                
+
                 <form id="google-meet-bot-login-form" autocomplete="off"
                     hx-post="{% url 'bots:create-google-meet-bot-login' project.object_id %}"
                     hx-target="#google-meet-bot-login-container"
                     hx-select="#google-meet-bot-login-container"
                     hx-swap="outerHTML"
-                    hx-on::after-request="clearGoogleMeetBotLoginForm()"
+                    hx-on::after-request="handleGoogleMeetBotLoginResponse(event)"
                     onsubmit="return validateGoogleMeetBotLoginForm()"
                 >
                     {% csrf_token %}
-                    
+
+                    <div class="mb-3">
+                        <label class="form-label">SSO Mode</label>
+                        <div>
+                            <div class="form-check form-check-inline">
+                                <input class="form-check-input" type="radio" name="sso_mode" id="sso_mode_saml" value="saml" checked onchange="toggleSsoModeFields()">
+                                <label class="form-check-label" for="sso_mode_saml">SAML</label>
+                            </div>
+                            <div class="form-check form-check-inline">
+                                <input class="form-check-input" type="radio" name="sso_mode" id="sso_mode_oidc" value="oidc" onchange="toggleSsoModeFields()">
+                                <label class="form-check-label" for="sso_mode_oidc">OIDC</label>
+                            </div>
+                        </div>
+                        <div class="form-text">SAML requires uploading a certificate and private key. OIDC auto-generates client credentials.</div>
+                    </div>
+
                     <div class="mb-3">
                         <label for="workspace_domain" class="form-label">Workspace Domain</label>
-                        <input type="text" 
-                            class="form-control" 
-                            id="workspace_domain" 
-                            name="workspace_domain" 
+                        <input type="text"
+                            class="form-control"
+                            id="workspace_domain"
+                            name="workspace_domain"
                             required
                             placeholder="example.com">
                         <div class="form-text">The Google Workspace domain for this account</div>
                     </div>
-                    
+
                     <div class="mb-3">
                         <label for="email" class="form-label">Email</label>
-                        <input type="email" 
-                            class="form-control" 
-                            id="email" 
-                            name="email" 
+                        <input type="email"
+                            class="form-control"
+                            id="email"
+                            name="email"
                             required
                             placeholder="bot@example.com">
                         <div class="form-text">The email address of the bot account</div>
                     </div>
-                    
-                    <div class="mb-3">
-                        <label for="private_key_file" class="form-label">Private Key</label>
-                        <input type="file" 
-                            class="form-control" 
-                            id="private_key_file" 
-                            accept=".pem,.key,.txt"
-                            required>
-                        <div class="form-text">Upload the private key file for client certificate authentication</div>
-                        <textarea 
-                            class="form-control font-monospace d-none" 
-                            id="private_key" 
-                            name="private_key"></textarea>
-                        <div id="private_key_preview" class="mt-2 p-2 bg-light border rounded font-monospace small" style="display: none; max-height: 150px; overflow-y: auto;">
-                            <pre id="private_key_preview_content" class="mb-0" style="white-space: pre-wrap; word-break: break-all;"></pre>
+
+                    <div id="saml-fields">
+                        <div class="mb-3">
+                            <label for="private_key_file" class="form-label">Private Key</label>
+                            <input type="file"
+                                class="form-control"
+                                id="private_key_file"
+                                accept=".pem,.key,.txt"
+                                required>
+                            <div class="form-text">Upload the private key file for client certificate authentication</div>
+                            <textarea
+                                class="form-control font-monospace d-none"
+                                id="private_key"
+                                name="private_key"></textarea>
+                            <div id="private_key_preview" class="mt-2 p-2 bg-light border rounded font-monospace small" style="display: none; max-height: 150px; overflow-y: auto;">
+                                <pre id="private_key_preview_content" class="mb-0" style="white-space: pre-wrap; word-break: break-all;"></pre>
+                            </div>
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="cert_file" class="form-label">Certificate</label>
+                            <input type="file"
+                                class="form-control"
+                                id="cert_file"
+                                accept=".pem,.crt,.cer,.txt"
+                                required>
+                            <div class="form-text">Upload the client certificate file</div>
+                            <textarea
+                                class="form-control font-monospace d-none"
+                                id="cert"
+                                name="cert"></textarea>
+                            <div id="cert_preview" class="mt-2 p-2 bg-light border rounded font-monospace small" style="display: none; max-height: 150px; overflow-y: auto;">
+                                <pre id="cert_preview_content" class="mb-0" style="white-space: pre-wrap; word-break: break-all;"></pre>
+                            </div>
                         </div>
                     </div>
-                    
-                    <div class="mb-3">
-                        <label for="cert_file" class="form-label">Certificate</label>
-                        <input type="file" 
-                            class="form-control" 
-                            id="cert_file" 
-                            accept=".pem,.crt,.cer,.txt"
-                            required>
-                        <div class="form-text">Upload the client certificate file</div>
-                        <textarea 
-                            class="form-control font-monospace d-none" 
-                            id="cert" 
-                            name="cert"></textarea>
-                        <div id="cert_preview" class="mt-2 p-2 bg-light border rounded font-monospace small" style="display: none; max-height: 150px; overflow-y: auto;">
-                            <pre id="cert_preview_content" class="mb-0" style="white-space: pre-wrap; word-break: break-all;"></pre>
+
+                    <div id="oidc-fields" style="display: none;">
+                        <div class="alert alert-success mb-3">
+                            <i class="bi bi-check-circle"></i>
+                            OIDC client credentials will be auto-generated when you create this login.
+                            You'll be shown the credentials once — make sure to copy them.
                         </div>
                     </div>
-                    
+
                     <div class="mt-3">
                         <button type="submit" class="btn btn-primary">Add Login</button>
-                        <button type="button" 
+                        <button type="button"
                                 class="btn btn-secondary ms-2"
                                 data-bs-dismiss="modal">
                             Cancel
@@ -156,23 +183,68 @@
 </div>
 
 <script>
+    function toggleSsoModeFields() {
+        const isSaml = document.getElementById('sso_mode_saml').checked;
+        const samlFields = document.getElementById('saml-fields');
+        const oidcFields = document.getElementById('oidc-fields');
+        const privateKeyFile = document.getElementById('private_key_file');
+        const certFile = document.getElementById('cert_file');
+
+        if (isSaml) {
+            samlFields.style.display = '';
+            oidcFields.style.display = 'none';
+            privateKeyFile.required = true;
+            certFile.required = true;
+        } else {
+            samlFields.style.display = 'none';
+            oidcFields.style.display = '';
+            privateKeyFile.required = false;
+            certFile.required = false;
+        }
+    }
+
     function validateGoogleMeetBotLoginForm() {
+        const isSaml = document.getElementById('sso_mode_saml').checked;
+        if (!isSaml) {
+            return true;  // OIDC doesn't need file validation
+        }
+
         const privateKey = document.getElementById('private_key').value;
         const cert = document.getElementById('cert').value;
-        
+
         if (!privateKey || privateKey.trim() === '') {
             alert('Please upload a private key file.');
             document.getElementById('private_key_file').focus();
             return false;
         }
-        
+
         if (!cert || cert.trim() === '') {
             alert('Please upload a certificate file.');
             document.getElementById('cert_file').focus();
             return false;
         }
-        
+
         return true;
+    }
+
+    function handleGoogleMeetBotLoginResponse(event) {
+        // Check if the response contains the OIDC credentials modal
+        var xhr = event.detail.xhr;
+        if (xhr && xhr.responseText && xhr.responseText.indexOf('oidc-credentials-modal') !== -1) {
+            // The response is the credentials modal — show it
+            var tempDiv = document.createElement('div');
+            tempDiv.innerHTML = xhr.responseText;
+            var modalEl = tempDiv.querySelector('#oidcCredentialsModal');
+            if (modalEl) {
+                document.body.appendChild(modalEl);
+                var modal = new bootstrap.Modal(modalEl);
+                modal.show();
+                modalEl.addEventListener('hidden.bs.modal', function() {
+                    modalEl.remove();
+                });
+            }
+        }
+        clearGoogleMeetBotLoginForm();
     }
 
     function clearGoogleMeetBotLoginForm() {
@@ -181,11 +253,17 @@
             form.reset();
         }
         // Clear previews
-        document.getElementById('private_key_preview').style.display = 'none';
-        document.getElementById('cert_preview').style.display = 'none';
-        document.getElementById('private_key').value = '';
-        document.getElementById('cert').value = '';
-        
+        var pkPreview = document.getElementById('private_key_preview');
+        var certPreview = document.getElementById('cert_preview');
+        var pkInput = document.getElementById('private_key');
+        var certInput = document.getElementById('cert');
+        if (pkPreview) pkPreview.style.display = 'none';
+        if (certPreview) certPreview.style.display = 'none';
+        if (pkInput) pkInput.value = '';
+        if (certInput) certInput.value = '';
+        // Reset to SAML mode
+        toggleSsoModeFields();
+
         const modalElement = document.getElementById('googleMeetBotLoginModal');
         if (modalElement) {
             const modalInstance = bootstrap.Modal.getInstance(modalElement);
@@ -263,11 +341,15 @@
                 form.reset();
             }
             // Clear previews
-            document.getElementById('private_key_preview').style.display = 'none';
-            document.getElementById('cert_preview').style.display = 'none';
-            document.getElementById('private_key').value = '';
-            document.getElementById('cert').value = '';
+            var pkPreview = document.getElementById('private_key_preview');
+            var certPreview = document.getElementById('cert_preview');
+            var pkInput = document.getElementById('private_key');
+            var certInput = document.getElementById('cert');
+            if (pkPreview) pkPreview.style.display = 'none';
+            if (certPreview) certPreview.style.display = 'none';
+            if (pkInput) pkInput.value = '';
+            if (certInput) certInput.value = '';
+            toggleSsoModeFields();
         });
     }
 </script>
-

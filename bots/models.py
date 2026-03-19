@@ -80,6 +80,9 @@ class GoogleMeetBotLoginGroup(models.Model):
 
 class GoogleMeetBotLogin(models.Model):
     OBJECT_ID_PREFIX = "gbl_"
+
+    SSO_MODE_CHOICES = [("saml", "SAML"), ("oidc", "OIDC")]
+
     group = models.ForeignKey(GoogleMeetBotLoginGroup, on_delete=models.CASCADE, related_name="google_meet_bot_logins")
     object_id = models.CharField(max_length=32, unique=True, editable=False)
 
@@ -90,6 +93,7 @@ class GoogleMeetBotLogin(models.Model):
 
     workspace_domain = models.CharField(max_length=255)
     email = models.CharField(max_length=255)
+    sso_mode = models.CharField(max_length=10, choices=SSO_MODE_CHOICES, default="saml")
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -103,6 +107,14 @@ class GoogleMeetBotLogin(models.Model):
     @property
     def private_key(self):
         return self.get_credentials().get("private_key")
+
+    @property
+    def client_id(self):
+        return self.get_credentials().get("client_id")
+
+    @property
+    def client_secret(self):
+        return self.get_credentials().get("client_secret")
 
     def set_credentials(self, credentials_dict):
         """Encrypt and save credentials"""
