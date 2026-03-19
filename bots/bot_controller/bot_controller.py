@@ -148,8 +148,11 @@ class BotController:
         if not self.websocket_client_manager:
             return
 
+        participant = self.get_participant(speaker_id)
+        participant_name = participant.get("participant_full_name", str(speaker_id)) if participant else str(speaker_id)
         payload = per_participant_audio_websocket_payload(
             participant_uuid=speaker_id,
+            participant_name=participant_name,
             chunk=chunk_bytes,
             input_sample_rate=self.get_per_participant_audio_sample_rate(),
             output_sample_rate=self.bot_in_db.websocket_per_participant_audio_sample_rate(),

@@ -2,13 +2,9 @@ import logging
 import time
 from base64 import b64encode
 
-from bots.models import RealtimeTriggerTypes
-
-logger = logging.getLogger(__name__)
-
-
 import audioop
-import logging
+
+from bots.models import RealtimeTriggerTypes
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +45,7 @@ def mixed_audio_websocket_payload(chunk: bytes, input_sample_rate: int, output_s
     }
 
 
-def per_participant_audio_websocket_payload(participant_uuid: str, chunk: bytes, input_sample_rate: int, output_sample_rate: int, bot_object_id: str) -> dict:
+def per_participant_audio_websocket_payload(participant_uuid: str, participant_name: str, chunk: bytes, input_sample_rate: int, output_sample_rate: int, bot_object_id: str) -> dict:
     """
     Down-sample (if needed) and package for websocket.
     """
@@ -60,6 +56,7 @@ def per_participant_audio_websocket_payload(participant_uuid: str, chunk: bytes,
         "bot_id": bot_object_id,
         "data": {
             "participant_uuid": str(participant_uuid),
+            "participant_name": participant_name,
             "chunk": b64encode(chunk_downsampled).decode("ascii"),
             "timestamp_ms": int(time.time() * 1000),
             "sample_rate": output_sample_rate,
