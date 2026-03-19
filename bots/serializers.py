@@ -1361,8 +1361,9 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
         if "audio" in value and value.get("audio"):
             audio_url = value.get("audio", {}).get("url")
             if audio_url:
-                if not audio_url.lower().startswith("wss://"):
-                    raise serializers.ValidationError({"audio": {"url": "URL must start with wss://"}})
+                if not audio_url.lower().startswith("wss://") and not audio_url.lower().startswith("ws://"):
+                    raise serializers.ValidationError({"audio": {"url": "URL must start with wss:// or ws://"}})
+
 
         return value
 
