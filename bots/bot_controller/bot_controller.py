@@ -780,6 +780,11 @@ class BotController:
         else:
             return 3  # seconds
 
+    def k8s_webpage_streamer_service_hostname(self):
+        if os.getenv("BOT_RUNNER_UUID"):
+            return f"bot-runner-{os.getenv('BOT_RUNNER_UUID')}-webpage-streamer-service.attendee-webpage-streamer.svc.cluster.local"
+        return self.bot_in_db.k8s_webpage_streamer_service_hostname()
+
     def run(self):
         if self.run_called:
             raise Exception("Run already called, exiting")
@@ -881,7 +886,7 @@ class BotController:
                 play_bot_output_media_stream_callback=self.adapter.webpage_streamer_play_bot_output_media_stream,
                 stop_bot_output_media_stream_callback=self.adapter.webpage_streamer_stop_bot_output_media_stream,
                 on_message_that_webpage_streamer_connection_can_start_callback=self.on_message_that_webpage_streamer_connection_can_start,
-                webpage_streamer_service_hostname=self.bot_in_db.k8s_webpage_streamer_service_hostname(),
+                webpage_streamer_service_hostname=self.k8s_webpage_streamer_service_hostname(),
             )
             self.webpage_streamer_manager.init()
 

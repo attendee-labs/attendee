@@ -221,7 +221,16 @@ class BotPodCreator:
         memory_limit = os.getenv("BOT_MEMORY_LIMIT", "4Gi")
         ephemeral_storage_request = os.getenv("BOT_EPHEMERAL_STORAGE_REQUEST", "10Gi")
 
-        args = ["python", "manage.py", "run_bot", "--botid", str(self.bot_id)]
+        bot_pod_env_vars = [
+                            # Env var so that the bot pod can know that it is a bot pod
+                            client.V1EnvVar(name="IS_A_BOT_POD", value="true"),
+                        ]
+
+        if self.bot_runner_uuid:
+            args = ["python", "manage.py", "wait_for_bot_runner_assignment"]
+            bot_pod_env_vars.append(client.V1EnvVar(name="BOT_RUNNER_UUID", value=self.bot_runner_uuid))
+        else:
+            args = ["python", "manage.py", "run_bot", "--botid", str(self.bot_id)]
 
         return client.V1Container(
                         name="bot-proc",
@@ -252,10 +261,7 @@ class BotPodCreator:
                                 )
                             )
                         ],
-                        env=[
-                            # Env var so that the bot pod can know that it is a bot pod
-                            client.V1EnvVar(name="IS_A_BOT_POD", value="true"),
-                        ],
+                        env=bot_pod_env_vars,
                         security_context = self.get_bot_container_security_context(),
                         volume_mounts=self.get_bot_container_volume_mounts(),
                     )
@@ -298,6 +304,7 @@ class BotPodCreator:
         add_webpage_streamer: Optional[bool] = False,
         add_persistent_storage: Optional[bool] = False,
         bot_pod_spec_type: Optional[str] = BotPodSpecType.DEFAULT,
+        bot_runner_uuid: Optional[str] = None,
     ) -> Dict:
         """
         Create a bot pod with configuration from environment.
@@ -311,9 +318,17 @@ class BotPodCreator:
             bot_pod_spec_type: Name of the bot pod spec to use (e.g. DEFAULT, SCHEDULED, or any custom name).
                               Will look up BOT_POD_SPEC_{name} from environment variables.
         """
-        if bot_name is None:
+
+        if bot_runner_uuid:
+            if bot_id:
+                raise ValueError("bot_runner_uuid and bot_id cannot both be provided")
+            if bot_name:
+                raise ValueError("bot_runner_uuid and bot_name cannot both be provided")
+        
+        if bot_name is None and not bot_runner_uuid:
             bot_name = f"bot-{bot_id}-{uuid.uuid4().hex[:8]}"
 
+        self.bot_runner_uuid = bot_runner_uuid
         self.bot_id = bot_id
         self.bot_cpu_request = bot_cpu_request
         self.add_persistent_storage = add_persistent_storage
@@ -331,6 +346,10 @@ class BotPodCreator:
             "app": "bot-proc",
             "bot-pod-spec-type": bot_pod_spec_type,
         }
+        if bot_runner_uuid:
+            bot_pod_labels["is-bot-runner"] = "true"
+            bot_pod_labels["assigned-bot-id"] = "none"
+
         if add_webpage_streamer:
             bot_pod_labels["network-role"] = "attendee-webpage-streamer-receiver"
 
@@ -345,9 +364,14 @@ class BotPodCreator:
             annotations["karpenter.sh/do-not-disrupt"] = "true"
             annotations["karpenter.sh/do-not-evict"] = "true"
 
+        if bot_runner_uuid:
+            bot_pod_name = f"bot-runner-{bot_runner_uuid}"
+        else:
+            bot_pod_name = bot_name
+
         bot_pod = client.V1Pod(
             metadata=client.V1ObjectMeta(
-                name=bot_name,
+                name=bot_pod_name,
                 namespace=self.namespace,
                 labels=bot_pod_labels,
                 annotations=annotations
@@ -370,12 +394,12 @@ class BotPodCreator:
             # Create specific labels for the webpage streamer pod
             webpage_streamer_labels = {
                 "app": "webpage-streamer",
-                "bot-id": bot_name
+                "bot-id": bot_pod_name
             }
             
             webpage_streamer_pod = client.V1Pod(
                 metadata=client.V1ObjectMeta(
-                    name=f"{bot_name}-webpage-streamer",
+                    name=f"{bot_pod_name}-webpage-streamer",
                     namespace=self.webpage_streamer_namespace,
                     labels=webpage_streamer_labels,
                     annotations=annotations
@@ -422,7 +446,7 @@ class BotPodCreator:
                     ),
                     spec=client.V1ServiceSpec(
                         # Selector is used to connect the service to the streaming pod
-                        selector={"app": "webpage-streamer", "bot-id": bot_name},
+                        selector={"app": "webpage-streamer", "bot-id": bot_pod_name},
                         ports=[client.V1ServicePort(name="http", port=8000, target_port=8000)],
                         type="ClusterIP",
                     ),
@@ -439,6 +463,14 @@ class BotPodCreator:
             }
             
         except client.ApiException as e:
+            if bot_runner_uuid:
+                return {
+                    "name": f"bot-runner-{bot_runner_uuid}",
+                    "status": "Error",
+                    "created": False,
+                    "error": str(e)
+                }
+
             return {
                 "name": bot_name,
                 "status": "Error",
