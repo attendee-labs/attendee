@@ -252,6 +252,7 @@ def parse_zoom_join_url(join_url):
 
     return (meeting_id, password)
 
+
 # Returns registrant token from a Zoom join URL, for meetings or webinars that require registration.
 def parse_zoom_registrant_token(join_url):
     # Parse the URL into components

@@ -310,7 +310,6 @@ class BotController:
             disable_incoming_video=self.disable_incoming_video_for_web_bots(),
             record_participant_speech_start_stop_events=self.bot_in_db.record_participant_speech_start_stop_events(),
             zoom_tokens=zoom_tokens,
-            zoom_user_email=self.bot_in_db.zoom_user_email(),
         )
 
     def get_zoom_bot_adapter(self):
