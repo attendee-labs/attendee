@@ -28,6 +28,7 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
         self.create_google_meet_bot_login_session_callback = create_google_meet_bot_login_session_callback
         self.google_meet_bot_login_session = None
         self.modify_dom_for_video_recording = modify_dom_for_video_recording
+        self.number_of_times_blocked_by_google = 0
 
     def should_retry_joining_meeting_that_requires_login_by_logging_in(self):
         # If we don't have the ability to login, we can't retry

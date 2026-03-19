@@ -84,6 +84,7 @@ def create_mock_zoom_sdk():
     class MeetingFailCode:
         MEETING_FAIL_BLOCKED_BY_ACCOUNT_ADMIN = "100"
         MEETING_FAIL_UNABLE_TO_JOIN_EXTERNAL_MEETING = zoom.MeetingFailCode.MEETING_FAIL_UNABLE_TO_JOIN_EXTERNAL_MEETING
+        MEETING_FAIL_ENFORCE_LOGIN = zoom.MeetingFailCode.MEETING_FAIL_ENFORCE_LOGIN
 
     base_mock.MeetingFailCode = MeetingFailCode
 

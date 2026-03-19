@@ -90,6 +90,18 @@ class GoogleMeetUIMethods:
         if cannot_join_element:
             # This means google is blocking us for whatever reason, but we can retry
             element_text = cannot_join_element.text
+
+            # We need to track how many times this has happened so far.
+            self.number_of_times_blocked_by_google += 1
+
+            # If we have the ability to login, but we aren't using it, then we should raise an error that login is required.
+            # Logging in will get us unblocked.
+            if self.google_meet_bot_login_is_available and not self.google_meet_bot_login_should_be_used:
+                if self.number_of_times_blocked_by_google > 1:
+                    logger.warning("Google is blocking us for whatever reason and we have the ability to login but we aren't using it, so we should raise a UiLoginRequiredException. Logging in will get us unblocked.")
+                    raise UiLoginRequiredException("Login required to get around blocking", step)
+                logger.warning(f"Google is blocking us for whatever reason and we have the ability to login. So far it has only happened {self.number_of_times_blocked_by_google} times, so we will simply retry.")
+
             logger.warning(f"Google is blocking us for whatever reason, but we can retry. Element text: '{element_text}'. Raising UiGoogleBlockingUsException")
             raise UiGoogleBlockingUsException("You can't join this video call", step)
 

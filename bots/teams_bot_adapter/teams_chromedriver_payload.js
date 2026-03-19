@@ -23,6 +23,7 @@ class StyleManager {
         this.frameStyleElement = null;
         this.frameAdjustInterval = null;
         this.neededInteractionsInterval = null;
+        this.fakeUserActivityInterval = null;
 
         // Stream used which combines the audio tracks from the meeting. Does NOT include the bot's audio
         this.meetingAudioStream = null;
@@ -58,6 +59,21 @@ class StyleManager {
                 isSilent: false
             });
         }
+    }
+
+    // Prevents Teams from going into mode where it stops receiving chat messages
+    fakeUserActivity() {
+        const clientX = Math.random() * 500;
+        const clientY = Math.random() * 500;
+        document.body.dispatchEvent(new MouseEvent("mousemove", {
+            bubbles: true,
+            clientX: clientX,
+            clientY: clientY,
+          }));
+        window.ws?.sendJson({
+            type: 'FakeUserActivity',
+            activity: `mousemove: ${clientX}, ${clientY}`
+        });
     }
 
     checkNeededInteractions() {
@@ -146,6 +162,10 @@ class StyleManager {
             clearInterval(this.neededInteractionsInterval);
         }
                 
+        if (this.fakeUserActivityInterval) {
+            clearInterval(this.fakeUserActivityInterval);
+        }
+
         // Check for audio activity every second
         this.silenceCheckInterval = setInterval(() => {
             this.checkAudioActivity();
@@ -155,6 +175,11 @@ class StyleManager {
         this.neededInteractionsInterval = setInterval(() => {
             this.checkNeededInteractions();
         }, 5000);
+
+        // Perform fake user activity every 4 minutes
+        this.fakeUserActivityInterval = setInterval(() => {
+            this.fakeUserActivity();
+        }, 240000);
 
         this.meetingAudioStream = destination.stream;
     }
@@ -363,6 +388,11 @@ class StyleManager {
         if (this.neededInteractionsInterval) {
             clearInterval(this.neededInteractionsInterval);
             this.neededInteractionsInterval = null;
+        }
+        
+        if (this.fakeUserActivityInterval) {
+            clearInterval(this.fakeUserActivityInterval);
+            this.fakeUserActivityInterval = null;
         }
         
         // Restore original frame layout
@@ -942,6 +972,16 @@ class ChatMessageManager {
                 return;
             if (!chatMessage.originalArrivalTime)
                 return;
+            // messageTypes we care about are: RichText, RichText/Html, Text, RichText/Sms
+            const allowedMessageTypes = ['RichText', 'RichText/Html', 'Text', 'RichText/Sms'];
+            if (!allowedMessageTypes.includes(chatMessage.messageType))
+            {
+                window.ws.sendJson({
+                    type: 'chatMessageHadWrongMessageTypeError',
+                    chatMessage: chatMessage,
+                });
+                return;
+            }
             if (!this.isNewOrUpdatedChatMessage(chatMessage))
                 return;
 
@@ -958,6 +998,10 @@ class ChatMessageManager {
         }
         catch (error) {
             console.error('Error in handleChatMessage', error);
+            this.ws?.sendJson({
+                type: 'ErrorInHandleChatMessage',
+                message: error.message
+            });
         }
     }
 }
@@ -2725,22 +2769,31 @@ window.botOutputManager = botOutputManager;
 (function () {
     const _bind = Function.prototype.bind;
     Function.prototype.bind = function (thisArg, ...args) {
-      if (this.name === 'onMessageReceived') {
-        const bound = _bind.apply(this, [thisArg, ...args]);
-        return function (...callArgs) {
-          const eventData = callArgs[0];
-          if (eventData?.data?.chatServiceBatchEvent?.[0]?.message)
-          {
-            const message = eventData.data.chatServiceBatchEvent[0].message;
-            realConsole?.log('chatMessage', message);
-            window.chatMessageManager?.handleChatMessage(message);
-          }
-          return bound.apply(this, callArgs);
-        };
-      }
-      return _bind.apply(this, [thisArg, ...args]);
+        if (this.name === 'onMessageReceived') {
+            const bound = _bind.apply(this, [thisArg, ...args]);
+            return function (...callArgs) {
+                const eventData = callArgs[0];
+                if (eventData?.data?.chatServiceBatchEvent)
+                {
+                    const batchEvents = eventData.data.chatServiceBatchEvent;
+                    if (Array.isArray(batchEvents))
+                    {
+                        for (const event of batchEvents) 
+                        {
+                            if (event?.message)
+                            {
+                                realConsole?.log('chatMessage', event.message);
+                                window.chatMessageManager?.handleChatMessage(event.message);
+                            }
+                        }
+                    }
+                }
+                return bound.apply(this, callArgs);
+            };
+        }
+        return _bind.apply(this, [thisArg, ...args]);
     };
-  })();
+})();
 
 class CallManager {
     constructor() {

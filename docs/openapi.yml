@@ -2530,6 +2530,26 @@ components:
               required:
               - url
               additionalProperties: false
+            per_participant_audio:
+              type: object
+              properties:
+                url:
+                  type: string
+                  description: The URL of the websocket to use for receiving per participant
+                    meeting audio in real time. It must start with wss://. See https://docs.attendee.dev/guides/realtime-audio-input-and-output
+                    for details on how to receive per participant audio through the
+                    websocket connection.
+                sample_rate:
+                  type: integer
+                  enum:
+                  - 8000
+                  - 16000
+                  default: 16000
+                  description: The sample rate of the per participant audio to send.
+                    Can be 8000, 16000. Defaults to 16000.
+              required:
+              - url
+              additionalProperties: false
           required: []
           additionalProperties: false
           description: 'The websocket settings for the bot, e.g. {''audio'': {''url'':

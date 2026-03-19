@@ -455,6 +455,63 @@ class WebhookDeliveryTest(TransactionTestCase):
         num_attempts = trigger_webhook(webhook_trigger_type=WebhookTriggerTypes.TRANSCRIPT_UPDATE, bot=self.bot, payload=test_payload)
         self.assertEqual(num_attempts, 1)
 
+    @patch("bots.tasks.deliver_webhook_task.requests.post")
+    @patch("bots.tasks.deliver_webhook_task.is_global_webhook_rate_limit_reached")
+    def test_webhook_delivery_global_rate_limit(self, mock_rate_limit, mock_post):
+        """Test that webhook delivery is retried without counting as an attempt when the global rate limit is reached"""
+        mock_rate_limit.return_value = True
+        mock_post.return_value.status_code = 200
+        mock_post.return_value.text = "OK"
+
+        attempt = WebhookDeliveryAttempt.objects.create(
+            webhook_subscription=self.webhook_subscription,
+            webhook_trigger_type=WebhookTriggerTypes.BOT_STATE_CHANGE,
+            bot=self.bot,
+            idempotency_key=uuid.uuid4(),
+            payload={"test": "data"},
+        )
+
+        with self.assertRaises(Exception) as ctx:
+            deliver_webhook.apply(args=[attempt.id]).get()
+
+        self.assertIn("global webhook rate limit", str(ctx.exception))
+
+        attempt.refresh_from_db()
+
+        mock_post.assert_not_called()
+        self.assertEqual(attempt.attempt_count, 0)
+        self.assertEqual(attempt.status, WebhookDeliveryAttemptStatus.PENDING)
+
+    @patch("bots.tasks.deliver_webhook_task.requests.post")
+    @patch("bots.tasks.deliver_webhook_task.is_global_webhook_rate_limit_reached")
+    def test_webhook_delivery_succeeds_after_rate_limit_clears(self, mock_rate_limit, mock_post):
+        """Test that webhook delivery succeeds once the global rate limit clears"""
+        mock_post.return_value.status_code = 200
+        mock_post.return_value.text = "OK"
+
+        attempt = WebhookDeliveryAttempt.objects.create(
+            webhook_subscription=self.webhook_subscription,
+            webhook_trigger_type=WebhookTriggerTypes.BOT_STATE_CHANGE,
+            bot=self.bot,
+            idempotency_key=uuid.uuid4(),
+            payload={"test": "data"},
+        )
+
+        # First call hits the rate limit, second call succeeds
+        mock_rate_limit.side_effect = [True, False]
+
+        with self.assertRaises(Exception):
+            deliver_webhook.apply(args=[attempt.id]).get()
+
+        deliver_webhook.apply(args=[attempt.id])
+
+        attempt.refresh_from_db()
+
+        mock_post.assert_called_once()
+        self.assertEqual(attempt.status, WebhookDeliveryAttemptStatus.SUCCESS)
+        self.assertEqual(attempt.attempt_count, 1)
+        self.assertIsNotNone(attempt.succeeded_at)
+
     @patch("bots.tasks.deliver_webhook_task.deliver_webhook")
     def test_trigger_webhook_uses_distinct_attempt_ids_for_multiple_subscriptions(self, mock_deliver):
         """
