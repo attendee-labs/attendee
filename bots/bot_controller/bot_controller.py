@@ -1674,6 +1674,11 @@ class BotController:
                 )
 
     def take_action_based_on_message_from_adapter(self, message):
+        if message.get("message") == BotAdapter.Messages.BEING_PROMOTED_TO_PANELIST:
+            logger.info("Received message that bot is being promoted to panelist")
+            BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.BOT_BEGAN_BEING_PROMOTED_TO_PANELIST)
+            return
+
         if message.get("message") == BotAdapter.Messages.JOINING_BREAKOUT_ROOM:
             logger.info("Received message that bot is joining breakout room")
             BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.BOT_BEGAN_JOINING_BREAKOUT_ROOM)
@@ -1931,6 +1936,11 @@ class BotController:
             return
 
         if message.get("message") == BotAdapter.Messages.BOT_JOINED_MEETING:
+            if self.bot_in_db.state == BotStates.BEING_PROMOTED_TO_PANELIST:
+                logger.info("Received message that bot was promoted to panelist")
+                BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.BOT_PROMOTED_TO_PANELIST)
+                return
+
             if self.bot_in_db.state == BotStates.JOINING_BREAKOUT_ROOM:
                 logger.info("Received message that bot joined breakout room")
                 BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.BOT_JOINED_BREAKOUT_ROOM)
@@ -1981,6 +1991,8 @@ class BotController:
                 event_sub_type_for_permission_denied = BotEventSubTypes.BOT_RECORDING_PERMISSION_DENIED_REQUEST_TIMED_OUT
             elif message.get("denied_reason") == BotAdapter.BOT_RECORDING_PERMISSION_DENIED_REASON.HOST_CLIENT_CANNOT_GRANT_PERMISSION:
                 event_sub_type_for_permission_denied = BotEventSubTypes.BOT_RECORDING_PERMISSION_DENIED_HOST_CLIENT_CANNOT_GRANT_PERMISSION
+            elif message.get("denied_reason") == BotAdapter.BOT_RECORDING_PERMISSION_DENIED_REASON.WEBINAR_ATTENDEE_NEEDS_PANELIST_PROMOTION:
+                event_sub_type_for_permission_denied = BotEventSubTypes.BOT_RECORDING_PERMISSION_DENIED_WEBINAR_ATTENDEE_NEEDS_PANELIST_PROMOTION
             else:
                 raise Exception(f"Received unexpected denied reason from bot adapter: {message.get('denied_reason')}")
 
