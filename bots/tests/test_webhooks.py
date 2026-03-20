@@ -1,11 +1,14 @@
+import time as time_module
 import uuid
 from unittest.mock import patch
 
+import redis
+from django.conf import settings
 from django.contrib.messages.storage.fallback import FallbackStorage
 from django.db import transaction
 from django.http import Http404, HttpRequest
 from django.http.request import QueryDict
-from django.test import TransactionTestCase
+from django.test import TransactionTestCase, override_settings
 
 from accounts.models import User
 from bots.models import (
@@ -561,3 +564,52 @@ class WebhookDeliveryTest(TransactionTestCase):
         # With correct code, the sets match (two distinct IDs).
         # With the buggy lambda, attempt_ids_called will contain the same ID twice.
         self.assertEqual(set(attempt_ids_called), set(attempt_ids_in_db))
+
+
+class IsGlobalWebhookRateLimitReachedTest(TransactionTestCase):
+    def setUp(self):
+        self.redis_client = redis.from_url(settings.REDIS_URL_WITH_PARAMS)
+
+    def tearDown(self):
+        for key in self.redis_client.keys("global_webhook_rate_limit:*"):
+            self.redis_client.delete(key)
+        self.redis_client.close()
+
+    def test_disabled_when_setting_is_none(self):
+        from bots.tasks.deliver_webhook_task import is_global_webhook_rate_limit_reached
+
+        with self.settings(GLOBAL_WEBHOOK_DELIVERIES_PER_SECOND_RATE_LIMIT=None):
+            self.assertFalse(is_global_webhook_rate_limit_reached())
+
+    def test_disabled_when_setting_is_zero(self):
+        from bots.tasks.deliver_webhook_task import is_global_webhook_rate_limit_reached
+
+        with self.settings(GLOBAL_WEBHOOK_DELIVERIES_PER_SECOND_RATE_LIMIT=0):
+            self.assertFalse(is_global_webhook_rate_limit_reached())
+
+    @override_settings(GLOBAL_WEBHOOK_DELIVERIES_PER_SECOND_RATE_LIMIT=5)
+    def test_not_reached_when_under_limit(self):
+        from bots.tasks.deliver_webhook_task import is_global_webhook_rate_limit_reached
+
+        for _ in range(5):
+            self.assertFalse(is_global_webhook_rate_limit_reached())
+
+    @override_settings(GLOBAL_WEBHOOK_DELIVERIES_PER_SECOND_RATE_LIMIT=3)
+    def test_reached_when_over_limit(self):
+        from bots.tasks.deliver_webhook_task import is_global_webhook_rate_limit_reached
+
+        for _ in range(3):
+            self.assertFalse(is_global_webhook_rate_limit_reached())
+        self.assertTrue(is_global_webhook_rate_limit_reached())
+
+    @override_settings(GLOBAL_WEBHOOK_DELIVERIES_PER_SECOND_RATE_LIMIT=2)
+    def test_resets_in_next_time_bucket(self):
+        from bots.tasks.deliver_webhook_task import is_global_webhook_rate_limit_reached
+
+        for _ in range(2):
+            self.assertFalse(is_global_webhook_rate_limit_reached())
+        self.assertTrue(is_global_webhook_rate_limit_reached())
+
+        with patch("bots.tasks.deliver_webhook_task.time") as mock_time:
+            mock_time.time.return_value = time_module.time() + 2
+            self.assertFalse(is_global_webhook_rate_limit_reached())
