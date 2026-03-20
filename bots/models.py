@@ -470,7 +470,6 @@ class BotStates(models.IntegerChoices):
     JOINING_BREAKOUT_ROOM = 14, "Joining Breakout Room"
     LEAVING_BREAKOUT_ROOM = 15, "Leaving Breakout Room"
     JOINED_RECORDING_PERMISSION_DENIED = 16, "Joined - Recording Permission Denied"
-    BEING_PROMOTED_TO_PANELIST = 17, "Being Promoted to Panelist"
 
     # App session states
     CONNECTING = 100, "Connecting"
@@ -497,7 +496,6 @@ class BotStates(models.IntegerChoices):
             cls.JOINING_BREAKOUT_ROOM: "joining_breakout_room",
             cls.LEAVING_BREAKOUT_ROOM: "leaving_breakout_room",
             cls.JOINED_RECORDING_PERMISSION_DENIED: "joined_recording_permission_denied",
-            cls.BEING_PROMOTED_TO_PANELIST: "being_promoted_to_panelist",
             cls.CONNECTING: "connecting",
             cls.CONNECTED: "connected",
             cls.DISCONNECTING: "disconnecting",
@@ -1158,8 +1156,6 @@ class BotEventTypes(models.IntegerChoices):
     BOT_BEGAN_JOINING_BREAKOUT_ROOM = 17, "Bot began joining breakout room"
     BOT_BEGAN_LEAVING_BREAKOUT_ROOM = 18, "Bot began leaving breakout room"
     BOT_RECORDING_PERMISSION_DENIED = 19, "Bot recording permission denied"
-    BOT_BEGAN_BEING_PROMOTED_TO_PANELIST = 20, "Bot began being promoted to panelist"
-    BOT_PROMOTED_TO_PANELIST = 21, "Bot promoted to panelist"
 
     # App session events
     APP_SESSION_CONNECTION_REQUESTED = 100, "App Session Connection Requested"
@@ -1190,8 +1186,6 @@ class BotEventTypes(models.IntegerChoices):
             cls.BOT_BEGAN_JOINING_BREAKOUT_ROOM: "began_joining_breakout_room",
             cls.BOT_BEGAN_LEAVING_BREAKOUT_ROOM: "began_leaving_breakout_room",
             cls.BOT_RECORDING_PERMISSION_DENIED: "recording_permission_denied",
-            cls.BOT_BEGAN_BEING_PROMOTED_TO_PANELIST: "began_being_promoted_to_panelist",
-            cls.BOT_PROMOTED_TO_PANELIST: "promoted_to_panelist",
             cls.APP_SESSION_CONNECTION_REQUESTED: "app_session_connection_requested",
             cls.APP_SESSION_CONNECTED: "app_session_connected",
             cls.APP_SESSION_DISCONNECT_REQUESTED: "app_session_disconnect_requested",
@@ -1266,7 +1260,6 @@ class BotEventSubTypes(models.IntegerChoices):
     LEAVE_REQUESTED_AUTO_LEAVE_COULD_NOT_ENABLE_CLOSED_CAPTIONS = 26, "Leave requested - Auto leave could not enable closed captions"
     COULD_NOT_JOIN_MEETING_AUTHORIZED_USER_NOT_IN_MEETING_TIMEOUT_EXCEEDED = 27, "Bot could not join meeting - Authorized user not in meeting timeout exceeded. See https://developers.zoom.us/blog/transition-to-obf-token-meetingsdk-apps/"
     COULD_NOT_JOIN_MEETING_BLOCKED_BY_CAPTCHA = 28, "Bot could not join meeting - Blocked by captcha (Verification challenge)."
-    BOT_RECORDING_PERMISSION_DENIED_WEBINAR_ATTENDEE_NEEDS_PANELIST_PROMOTION = 29, "Bot recording permission denied - Bot joined webinar as attendee and needs to be promoted to panelist to record"
 
     @classmethod
     def sub_type_to_api_code(cls, value):
@@ -1300,7 +1293,6 @@ class BotEventSubTypes(models.IntegerChoices):
             cls.LEAVE_REQUESTED_AUTO_LEAVE_COULD_NOT_ENABLE_CLOSED_CAPTIONS: "auto_leave_could_not_enable_closed_captions",
             cls.COULD_NOT_JOIN_MEETING_AUTHORIZED_USER_NOT_IN_MEETING_TIMEOUT_EXCEEDED: "authorized_user_not_in_meeting_timeout_exceeded",
             cls.COULD_NOT_JOIN_MEETING_BLOCKED_BY_CAPTCHA: "blocked_by_captcha",
-            cls.BOT_RECORDING_PERMISSION_DENIED_WEBINAR_ATTENDEE_NEEDS_PANELIST_PROMOTION: "webinar_attendee_needs_panelist_promotion",
         }
         return mapping.get(value)
 
@@ -1367,7 +1359,7 @@ class BotEvent(models.Model):
                     (Q(event_type=BotEventTypes.LEAVE_REQUESTED) & (Q(event_sub_type=BotEventSubTypes.LEAVE_REQUESTED_USER_REQUESTED) | Q(event_sub_type=BotEventSubTypes.LEAVE_REQUESTED_AUTO_LEAVE_SILENCE) | Q(event_sub_type=BotEventSubTypes.LEAVE_REQUESTED_AUTO_LEAVE_ONLY_PARTICIPANT_IN_MEETING) | Q(event_sub_type=BotEventSubTypes.LEAVE_REQUESTED_AUTO_LEAVE_MAX_UPTIME_EXCEEDED) | Q(event_sub_type=BotEventSubTypes.LEAVE_REQUESTED_AUTO_LEAVE_COULD_NOT_ENABLE_CLOSED_CAPTIONS) | Q(event_sub_type__isnull=True)))
                     |
                     # For BOT_RECORDING_PERMISSION_DENIED event type, must have one of the valid event subtypes
-                    (Q(event_type=BotEventTypes.BOT_RECORDING_PERMISSION_DENIED) & (Q(event_sub_type=BotEventSubTypes.BOT_RECORDING_PERMISSION_DENIED_HOST_DENIED_PERMISSION) | Q(event_sub_type=BotEventSubTypes.BOT_RECORDING_PERMISSION_DENIED_REQUEST_TIMED_OUT) | Q(event_sub_type=BotEventSubTypes.BOT_RECORDING_PERMISSION_DENIED_HOST_CLIENT_CANNOT_GRANT_PERMISSION) | Q(event_sub_type=BotEventSubTypes.BOT_RECORDING_PERMISSION_DENIED_WEBINAR_ATTENDEE_NEEDS_PANELIST_PROMOTION)))
+                    (Q(event_type=BotEventTypes.BOT_RECORDING_PERMISSION_DENIED) & (Q(event_sub_type=BotEventSubTypes.BOT_RECORDING_PERMISSION_DENIED_HOST_DENIED_PERMISSION) | Q(event_sub_type=BotEventSubTypes.BOT_RECORDING_PERMISSION_DENIED_REQUEST_TIMED_OUT) | Q(event_sub_type=BotEventSubTypes.BOT_RECORDING_PERMISSION_DENIED_HOST_CLIENT_CANNOT_GRANT_PERMISSION)))
                     |
                     # For all other events, event_sub_type must be null
                     (~Q(event_type=BotEventTypes.FATAL_ERROR) & ~Q(event_type=BotEventTypes.COULD_NOT_JOIN) & ~Q(event_type=BotEventTypes.LEAVE_REQUESTED) & Q(event_sub_type__isnull=True))
@@ -1420,7 +1412,6 @@ class BotEventManager:
                 BotStates.SCHEDULED,
                 BotStates.JOINING_BREAKOUT_ROOM,
                 BotStates.LEAVING_BREAKOUT_ROOM,
-                BotStates.BEING_PROMOTED_TO_PANELIST,
                 BotStates.CONNECTING,
                 BotStates.DISCONNECTING,
                 BotStates.CONNECTED,
@@ -1450,7 +1441,6 @@ class BotEventManager:
                 BotStates.LEAVING,
                 BotStates.JOINING_BREAKOUT_ROOM,
                 BotStates.LEAVING_BREAKOUT_ROOM,
-                BotStates.BEING_PROMOTED_TO_PANELIST,
             ],
             "to": BotStates.POST_PROCESSING,
         },
@@ -1464,7 +1454,6 @@ class BotEventManager:
                 BotStates.JOINING,
                 BotStates.JOINING_BREAKOUT_ROOM,
                 BotStates.LEAVING_BREAKOUT_ROOM,
-                BotStates.BEING_PROMOTED_TO_PANELIST,
             ],
             "to": BotStates.LEAVING,
         },
@@ -1507,14 +1496,6 @@ class BotEventManager:
         BotEventTypes.BOT_BEGAN_LEAVING_BREAKOUT_ROOM: {
             "from": [BotStates.JOINED_NOT_RECORDING, BotStates.JOINED_RECORDING_PERMISSION_DENIED, BotStates.JOINED_RECORDING, BotStates.JOINED_RECORDING_PAUSED],
             "to": BotStates.LEAVING_BREAKOUT_ROOM,
-        },
-        BotEventTypes.BOT_BEGAN_BEING_PROMOTED_TO_PANELIST: {
-            "from": BotStates.JOINED_RECORDING_PERMISSION_DENIED,
-            "to": BotStates.BEING_PROMOTED_TO_PANELIST,
-        },
-        BotEventTypes.BOT_PROMOTED_TO_PANELIST: {
-            "from": BotStates.BEING_PROMOTED_TO_PANELIST,
-            "to": BotStates.JOINED_NOT_RECORDING,
         },
         BotEventTypes.BOT_RECORDING_PERMISSION_DENIED: {
             "from": [BotStates.JOINED_NOT_RECORDING, BotStates.JOINED_RECORDING_PERMISSION_DENIED, BotStates.JOINED_RECORDING, BotStates.JOINED_RECORDING_PAUSED],
