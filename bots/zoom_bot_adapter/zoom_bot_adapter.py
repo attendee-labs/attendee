@@ -658,9 +658,12 @@ class ZoomBotAdapter(BotAdapter):
                 # This means the host is using a zoom client that is incapable of displaying the popup to allow recording (Only known client where this happens is Zoom Rooms)
                 if is_support_request_local_recording_privilege_result == zoom.SDKERR_MEETING_DONT_SUPPORT_FEATURE:
                     self.handle_recording_permission_denied(reason=BotAdapter.BOT_RECORDING_PERMISSION_DENIED_REASON.HOST_CLIENT_CANNOT_GRANT_PERMISSION)
-
-                self.recording_ctrl.RequestLocalRecordingPrivilege()
-                logger.info("Requesting recording privilege.")
+                elif self.is_webinar and is_support_request_local_recording_privilege_result == zoom.SDKERR_WRONG_USAGE:
+                    # SDKERR_WRONG_USAGE from IsSupportRequestLocalRecordingPrivilege in a webinar means the bot is an attendee and needs to be promoted to panelist
+                    self.handle_recording_permission_denied(reason=BotAdapter.BOT_RECORDING_PERMISSION_DENIED_REASON.WEBINAR_ATTENDEE_NEEDS_PANELIST_PROMOTION)
+                else:
+                    self.recording_ctrl.RequestLocalRecordingPrivilege()
+                    logger.info("Requesting recording privilege.")
             else:
                 self.handle_recording_permission_granted()
 
@@ -1057,6 +1060,8 @@ class ZoomBotAdapter(BotAdapter):
         if status == zoom.MEETING_STATUS_INMEETING:
             if not self.joined_at:
                 self.send_message_callback({"message": self.Messages.BOT_JOINED_MEETING})
+            elif self.is_webinar:
+                self.send_message_callback({"message": self.Messages.WEBINAR_BOT_PROMOTED_TO_PANELIST})
 
         if status == zoom.MEETING_STATUS_ENDED:
             if self.should_retry_after_meeting_ends:
