@@ -138,6 +138,7 @@ class ZoomBotAdapter(BotAdapter):
         self.automatic_leave_configuration = automatic_leave_configuration
 
         self.only_one_participant_in_meeting_at = None
+        self.is_webinar = False
         self.last_audio_received_at = None
         self.silence_detection_activated = False
         self.cleaned_up = False
@@ -237,6 +238,10 @@ class ZoomBotAdapter(BotAdapter):
 
     def update_only_one_participant_in_meeting_at(self):
         if not self.joined_at:
+            return
+
+        # In a webinar, attendees cannot see the participant list, so do not trigger auto-leave.
+        if self.is_webinar:
             return
 
         # If nobody (excluding other bots) other than the bot was ever in the meeting, then don't activate this. We only want to activate if someone else was in the meeting and left
@@ -614,6 +619,11 @@ class ZoomBotAdapter(BotAdapter):
         # See here for more details: https://devforum.zoom.us/t/cant-record-audio-with-linux-meetingsdk-after-6-3-5-6495-error-code-32/130689/5
         self.audio_ctrl.JoinVoip()
 
+        meeting_info = self.meeting_service.GetMeetingInfo()
+        meeting_type = meeting_info.GetMeetingType()
+        if meeting_type == zoom.MeetingType.MEETING_TYPE_WEBINAR:
+            self.is_webinar = True
+
         if self.use_raw_recording:
             self.recording_ctrl = self.meeting_service.GetMeetingRecordingController()
 
@@ -648,9 +658,12 @@ class ZoomBotAdapter(BotAdapter):
                 # This means the host is using a zoom client that is incapable of displaying the popup to allow recording (Only known client where this happens is Zoom Rooms)
                 if is_support_request_local_recording_privilege_result == zoom.SDKERR_MEETING_DONT_SUPPORT_FEATURE:
                     self.handle_recording_permission_denied(reason=BotAdapter.BOT_RECORDING_PERMISSION_DENIED_REASON.HOST_CLIENT_CANNOT_GRANT_PERMISSION)
-
-                self.recording_ctrl.RequestLocalRecordingPrivilege()
-                logger.info("Requesting recording privilege.")
+                elif self.is_webinar and is_support_request_local_recording_privilege_result == zoom.SDKERR_WRONG_USAGE:
+                    # SDKERR_WRONG_USAGE from IsSupportRequestLocalRecordingPrivilege in a webinar means the bot is an attendee and needs to be promoted to panelist
+                    self.handle_recording_permission_denied(reason=BotAdapter.BOT_RECORDING_PERMISSION_DENIED_REASON.WEBINAR_ATTENDEE_NEEDS_PANELIST_PROMOTION)
+                else:
+                    self.recording_ctrl.RequestLocalRecordingPrivilege()
+                    logger.info("Requesting recording privilege.")
             else:
                 self.handle_recording_permission_granted()
 
@@ -943,6 +956,10 @@ class ZoomBotAdapter(BotAdapter):
             param.app_privilege_token = self.zoom_tokens.get("app_privilege_token")
         if self.zoom_tokens.get("onbehalf_token"):
             param.onBehalfToken = self.zoom_tokens.get("onbehalf_token")
+        # Set the webinarToken only if joining a webinar as an attendee (in webinars, all attendees are in Guest Mode).
+        # If joining as a signed-in bot (for panelists and co-hosts), use the ZAK token instead, and leave the webinarToken as NULL.
+        if self.zoom_tokens.get("registrant_token") and not self.zoom_tokens.get("zak_token"):
+            param.webinarToken = self.zoom_tokens.get("registrant_token")
 
         param.eAudioRawdataSamplingRate = zoom.AudioRawdataSamplingRate.AudioRawdataSamplingRate_32K
 
@@ -1041,7 +1058,10 @@ class ZoomBotAdapter(BotAdapter):
             GLib.timeout_add_seconds(self.automatic_leave_configuration.waiting_room_timeout_seconds, self.leave_meeting_if_still_in_waiting_room)
 
         if status == zoom.MEETING_STATUS_INMEETING:
-            self.send_message_callback({"message": self.Messages.BOT_JOINED_MEETING})
+            if not self.joined_at:
+                self.send_message_callback({"message": self.Messages.BOT_JOINED_MEETING})
+            elif self.is_webinar:
+                self.send_message_callback({"message": self.Messages.WEBINAR_BOT_PROMOTED_TO_PANELIST})
 
         if status == zoom.MEETING_STATUS_ENDED:
             if self.should_retry_after_meeting_ends:

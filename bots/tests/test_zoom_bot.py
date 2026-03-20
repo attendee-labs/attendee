@@ -2894,7 +2894,8 @@ class TestZoomBot(TransactionTestCase):
         # Mock the JWT token generation
         mock_jwt.encode.return_value = "fake_jwt_token"
 
-        # Setup bot with callback url
+        # Setup bot with callback url and registrant token in URL
+        self.bot.meeting_url = "https://zoom.us/j/123456789?pwd=password123&tk=registrant-token"
         self.bot.settings = {"callback_settings": {"zoom_tokens_url": "https://example.com/zoom-tokens"}}
         self.bot.save()
 
@@ -2951,6 +2952,7 @@ class TestZoomBot(TransactionTestCase):
         join_call_args = controller.adapter.meeting_service.Join.call_args
         join_param = join_call_args.args[0]
         self.assertEqual(join_param.param.userZAK, "fake_zak_token")
+        self.assertIsInstance(join_param.param.webinarToken, MagicMock)
         self.assertEqual(join_param.param.join_token, "fake_join_token")
         self.assertEqual(join_param.param.app_privilege_token, "fake_app_privilege_token")
         self.assertEqual(join_param.param.onBehalfToken, "fake_onbehalf_token")
@@ -3079,6 +3081,59 @@ class TestZoomBot(TransactionTestCase):
         self.assertIsInstance(join_param.param.app_privilege_token, MagicMock)
 
         # Cleanup
+        controller.cleanup()
+        bot_thread.join(timeout=5)
+
+    @patch("bots.external_callback_utils.requests.post")
+    @patch(
+        "bots.zoom_bot_adapter.video_input_manager.zoom",
+        new_callable=create_mock_zoom_sdk,
+    )
+    @patch("bots.zoom_bot_adapter.zoom_bot_adapter.zoom", new_callable=create_mock_zoom_sdk)
+    @patch("bots.zoom_bot_adapter.zoom_bot_adapter.jwt")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
+    def test_bot_sets_webinar_token_when_registrant_token_present_and_no_zak(
+        self,
+        MockFileUploader,
+        mock_jwt,
+        mock_zoom_sdk_adapter,
+        mock_zoom_sdk_video,
+        mock_requests_post,
+    ):
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+        mock_jwt.encode.return_value = "fake_jwt_token"
+
+        self.bot.meeting_url = "https://zoom.us/j/123456789?pwd=password123&tk=registrant-token"
+        self.bot.settings = {"callback_settings": {"zoom_tokens_url": "https://example.com/zoom-tokens"}}
+        self.bot.save()
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {}
+        mock_requests_post.return_value = mock_response
+
+        controller = BotController(self.bot.id)
+        bot_thread = threading.Thread(target=controller.run)
+        bot_thread.daemon = True
+        bot_thread.start()
+
+        def simulate_auth_flow():
+            time.sleep(2)
+            if not hasattr(controller, "adapter") or not controller.adapter:
+                connection.close()
+                return
+            controller.adapter.auth_event.onAuthenticationReturnCallback(mock_zoom_sdk_adapter.AUTHRET_SUCCESS)
+            connection.close()
+
+        threading.Timer(1, simulate_auth_flow).start()
+        time.sleep(4)
+
+        controller.adapter.meeting_service.Join.assert_called_once()
+        join_param = controller.adapter.meeting_service.Join.call_args.args[0]
+        self.assertEqual(join_param.param.webinarToken, "registrant-token")
+        self.assertIsInstance(join_param.param.userZAK, MagicMock)
+
         controller.cleanup()
         bot_thread.join(timeout=5)
 
