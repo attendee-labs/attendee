@@ -1,17 +1,5 @@
-from packaging.version import Version
-
-_redis_version = None
-
 # Lua fallback for Redis < 7 which doesn't support EXPIRE ... NX.
 _redis_lua_script_incr_and_expire_nx = None
-
-
-def get_redis_version(redis_client):
-    """Return the Redis server version as a packaging.version.Version object."""
-    global _redis_version
-    if _redis_version is None:
-        _redis_version = Version(redis_client.info("server")["redis_version"])
-    return _redis_version
 
 
 def _get_redis_lua_script_incr_and_expire_nx(redis_client):
@@ -37,13 +25,6 @@ def incr_and_expire_nx(redis_client, key, ttl):
 
     Returns (count, ttl_set) where ttl_set indicates whether EXPIRE was applied.
     """
-    if get_redis_version(redis_client) >= Version("7.0"):
-        with redis_client.pipeline() as pipe:
-            pipe.incr(key)
-            pipe.expire(key, ttl, nx=True)
-            count, ttl_set = pipe.execute()
-    else:
-        script = _get_redis_lua_script_incr_and_expire_nx(redis_client)
-        count, ttl_set = script(keys=[key], args=[ttl])
-
+    script = _get_redis_lua_script_incr_and_expire_nx(redis_client)
+    count, ttl_set = script(keys=[key], args=[ttl])
     return count, ttl_set
