@@ -237,7 +237,7 @@ def normalize_meeting_url_raw(url):
     return None, None
 
 
-# Returns (meeting_id, password) from a Zoom join URL.
+# Returns (meeting_id, password) from a Zoom join URL
 def parse_zoom_join_url(join_url):
     # Parse the URL into components
     parsed = urlparse(join_url)

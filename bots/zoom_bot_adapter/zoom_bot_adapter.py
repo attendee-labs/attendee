@@ -571,7 +571,7 @@ class ZoomBotAdapter(BotAdapter):
         return self.ready_to_send_chat_messages
 
     def on_join(self):
-        # Reset transition flags
+        # Reset breakout room transition flag
         self.is_joining_or_leaving_breakout_room = False
 
         # Meeting reminder controller
@@ -658,9 +658,9 @@ class ZoomBotAdapter(BotAdapter):
                 # This means the host is using a zoom client that is incapable of displaying the popup to allow recording (Only known client where this happens is Zoom Rooms)
                 if is_support_request_local_recording_privilege_result == zoom.SDKERR_MEETING_DONT_SUPPORT_FEATURE:
                     self.handle_recording_permission_denied(reason=BotAdapter.BOT_RECORDING_PERMISSION_DENIED_REASON.HOST_CLIENT_CANNOT_GRANT_PERMISSION)
-                else:
-                    self.recording_ctrl.RequestLocalRecordingPrivilege()
-                    logger.info("Requesting recording privilege.")
+
+                self.recording_ctrl.RequestLocalRecordingPrivilege()
+                logger.info("Requesting recording privilege.")
             else:
                 self.handle_recording_permission_granted()
 
