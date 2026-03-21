@@ -70,7 +70,7 @@ class BotVideoOutputStream {
             );
         }
 
-        const blob = new Blob([buffer], { type: "image/png" });
+        const blob = new Blob([buffer], { type: this._detectImageType(buffer) });
         const url = URL.createObjectURL(blob);
         try {
             this.imageToDraw = await this._loadImage(url);
@@ -100,6 +100,14 @@ class BotVideoOutputStream {
             img.onerror = (err) => reject(err);
             img.src = url;
         });
+    }
+
+    _detectImageType(buffer) {
+        const bytes = new Uint8Array(buffer);
+        if (bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF) {
+            return "image/jpeg";
+        }
+        return "image/png";
     }
 
     ensureInputOn() {
