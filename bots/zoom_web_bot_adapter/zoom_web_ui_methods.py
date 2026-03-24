@@ -8,7 +8,7 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
-from bots.web_bot_adapter.ui_methods import UiAuthorizedUserNotInMeetingTimeoutExceededException, UiBlockedByCaptchaException, UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiIncorrectPasswordException, UiInfinitelyRetryableException
+from bots.web_bot_adapter.ui_methods import UiAuthorizedUserNotInMeetingTimeoutExceededException, UiBlockedByCaptchaException, UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiIncorrectPasswordException, UiInfinitelyRetryableException, UiLoginRequiredException
 
 from .zoom_web_static_server import start_zoom_web_static_server
 
@@ -141,6 +141,7 @@ class ZoomWebUIMethods:
             except TimeoutException as e:
                 self.check_if_blocked_by_captcha()
                 self.check_if_passcode_incorrect()
+                self.check_if_login_required()
                 self.check_if_failed_to_join_because_onbehalf_token_user_not_in_meeting()
                 self.check_if_failed_to_join_because_generic_join_error()
 
@@ -231,6 +232,20 @@ class ZoomWebUIMethods:
         if passcode_incorrect_element and passcode_incorrect_element.is_displayed():
             logger.info("Passcode incorrect. Raising UiIncorrectPasswordException")
             raise UiIncorrectPasswordException("Passcode incorrect")
+
+    def check_if_login_required(self):
+        login_required_element = None
+        try:
+            login_required_element = self.driver.find_element(
+                By.XPATH,
+                '//*[contains(text(), "The host requires authentication on the commercial Zoom platform to join this meeting")] | //button[contains(@class, "login-btn-zoom") and contains(text(), "Sign in Zoom")]',
+            )
+        except:
+            return
+
+        if login_required_element and login_required_element.is_displayed():
+            logger.info("Login required. Raising UiLoginRequiredException")
+            raise UiLoginRequiredException("Login required")
 
     def check_if_blocked_by_captcha(self):
         """

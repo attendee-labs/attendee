@@ -143,6 +143,7 @@ class ZoomBotAdapter(BotAdapter):
         self.cleaned_up = False
         self.requested_leave = False
         self.joined_at = None
+        self.is_webinar = False
 
         if self.use_video:
             self.video_input_manager = VideoInputManager(
@@ -237,6 +238,10 @@ class ZoomBotAdapter(BotAdapter):
 
     def update_only_one_participant_in_meeting_at(self):
         if not self.joined_at:
+            return
+
+        # In a webinar, attendees cannot see the participant list, so do not trigger auto-leave.
+        if self.is_webinar:
             return
 
         # If nobody (excluding other bots) other than the bot was ever in the meeting, then don't activate this. We only want to activate if someone else was in the meeting and left
@@ -614,6 +619,15 @@ class ZoomBotAdapter(BotAdapter):
         # See here for more details: https://devforum.zoom.us/t/cant-record-audio-with-linux-meetingsdk-after-6-3-5-6495-error-code-32/130689/5
         self.audio_ctrl.JoinVoip()
 
+        # Check if the bot is in a webinar and if it is an attendee. If it is, the user must promote the bot to panelist to record.
+        meeting_info = self.meeting_service.GetMeetingInfo()
+        meeting_type = meeting_info.GetMeetingType()
+        if meeting_type == zoom.MeetingType.MEETING_TYPE_WEBINAR:
+            self.is_webinar = True
+            if self.participants_ctrl.GetMySelfUser().GetUserRole() == zoom.UserRole.USERROLE_ATTENDEE:
+                logger.info("Bot is an attendee in a webinar, which has no recording privileges. Need to promote to panelist to record.")
+                self.handle_recording_permission_denied(reason=BotAdapter.BOT_RECORDING_PERMISSION_DENIED_REASON.WEBINAR_ATTENDEE_NEEDS_PANELIST_PROMOTION)
+
         if self.use_raw_recording:
             self.recording_ctrl = self.meeting_service.GetMeetingRecordingController()
 
@@ -943,6 +957,10 @@ class ZoomBotAdapter(BotAdapter):
             param.app_privilege_token = self.zoom_tokens.get("app_privilege_token")
         if self.zoom_tokens.get("onbehalf_token"):
             param.onBehalfToken = self.zoom_tokens.get("onbehalf_token")
+        # Set the webinarToken only if joining a webinar as an attendee (in webinars, all attendees are in Guest Mode).
+        # If joining as a signed-in bot (for panelists and co-hosts), use the ZAK token instead, and leave the webinarToken as NULL.
+        if self.zoom_tokens.get("registrant_token") and not self.zoom_tokens.get("zak_token"):
+            param.webinarToken = self.zoom_tokens.get("registrant_token")
 
         param.eAudioRawdataSamplingRate = zoom.AudioRawdataSamplingRate.AudioRawdataSamplingRate_32K
 
@@ -1040,6 +1058,9 @@ class ZoomBotAdapter(BotAdapter):
             self.send_message_callback({"message": self.Messages.BOT_PUT_IN_WAITING_ROOM})
             GLib.timeout_add_seconds(self.automatic_leave_configuration.waiting_room_timeout_seconds, self.leave_meeting_if_still_in_waiting_room)
 
+        if status == zoom.MEETING_STATUS_WEBINAR_PROMOTE:
+            self.send_message_callback({"message": self.Messages.WEBINAR_BOT_PROMOTED_TO_PANELIST})
+
         if status == zoom.MEETING_STATUS_INMEETING:
             self.send_message_callback({"message": self.Messages.BOT_JOINED_MEETING})
 
@@ -1065,6 +1086,20 @@ class ZoomBotAdapter(BotAdapter):
                     {
                         "message": self.Messages.ZOOM_MEETING_STATUS_FAILED_UNABLE_TO_JOIN_EXTERNAL_MEETING,
                         "zoom_result_code": iResult,
+                    }
+                )
+            # This error happens when ZAK / OBF token is required to join a meeting but was not provided.
+            elif iResult == zoom.MeetingFailCode.MEETING_FAIL_APP_CAN_NOT_ANONYMOUS_JOIN_MEETING:
+                self.send_message_callback(
+                    {
+                        "message": self.Messages.ZOOM_MEETING_STATUS_FAILED_APP_CAN_NOT_ANONYMOUS_JOIN_MEETING,
+                        "zoom_result_code": iResult,
+                    }
+                )
+            elif iResult == zoom.MeetingFailCode.MEETING_FAIL_ENFORCE_LOGIN:
+                self.send_message_callback(
+                    {
+                        "message": self.Messages.LOGIN_REQUIRED,
                     }
                 )
             elif failed_because_onbehalf_token_user_not_in_meeting:

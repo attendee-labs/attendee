@@ -3,7 +3,7 @@ import base64
 import json
 import unittest
 
-from bots.meeting_url_utils import MeetingTypes, domain_and_subdomain_from_url, meeting_type_from_url, normalize_meeting_url, root_domain_from_url
+from bots.meeting_url_utils import MeetingTypes, domain_and_subdomain_from_url, meeting_type_from_url, normalize_meeting_url, parse_zoom_join_url, parse_zoom_registrant_token, root_domain_from_url
 
 
 class TestMeetingUrlUtils(unittest.TestCase):
@@ -49,6 +49,8 @@ class TestMeetingUrlUtils(unittest.TestCase):
         fake_coord = fake_coord.decode("utf-8").rstrip("=")
         self.assertEqual(normalize_meeting_url(f"https://teams.microsoft.com/light-meetings/launch?agent=web&version=25072001100&coords={fake_coord}%3D&deeplinkId=0ac0a241-11111-111-8ddc-4a4b333dd286&correlationId=1111111-1111-1111-1111-11111111111")[1], "https://teams.microsoft.com/l/meetup-join/" + coord_json["conversationId"] + f"/0?context={json.dumps({'Tid': coord_json['tenantId'], 'Oid': coord_json['organizerId']}, separators=(',', ':'))}")
 
+        self.assertEqual(normalize_meeting_url("https://zoom.us/w/123456789?pwd=AbC9xYpQ2LmN7RkT5sVuH4ZbJe1DfG.1&tk=ZkPqN8f2LrS4XyT6wVaE9mHuCdJg5QbA1sDoRtUvWxY.DQkAAAAATESTTOKEN1234567890AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")[1], "https://zoom.us/w/123456789?pwd=AbC9xYpQ2LmN7RkT5sVuH4ZbJe1DfG.1&tk=ZkPqN8f2LrS4XyT6wVaE9mHuCdJg5QbA1sDoRtUvWxY.DQkAAAAATESTTOKEN1234567890AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+
     def test_meeting_type_from_url(self):
         self.assertEqual(meeting_type_from_url("https://zoom.us/j/123456789"), MeetingTypes.ZOOM)
         self.assertEqual(meeting_type_from_url("https://zoom.us/j/test"), None)
@@ -61,6 +63,13 @@ class TestMeetingUrlUtils(unittest.TestCase):
         self.assertIsNone(meeting_type_from_url(""))
         self.assertIsNone(meeting_type_from_url(None))
         self.assertEqual(meeting_type_from_url("https://teams.microsoft.com/l/meetup-join/19%3ameeting_OTA0nTDmYgItYTlTti00MmRkLTgxODItZGFmNWVmNTJmOGQ4%40thread.v2"), None)
+
+    def test_parse_zoom_webinar_url(self):
+        meeting_id, password = parse_zoom_join_url("https://zoom.us/w/111222333?pwd=AbC9xYpQ2LmN7RkT5sVuH4ZbJe1DfG.1&tk=ZkPqN8f2LrS4XyT6wVaE9mHuCdJg5QbA1sDoRtUvWxY.DQkAAAAATESTTOKEN1234567890AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+        registrant_token = parse_zoom_registrant_token("https://zoom.us/w/111222333?pwd=AbC9xYpQ2LmN7RkT5sVuH4ZbJe1DfG.1&tk=ZkPqN8f2LrS4XyT6wVaE9mHuCdJg5QbA1sDoRtUvWxY.DQkAAAAATESTTOKEN1234567890AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+        self.assertEqual(meeting_id, "111222333")
+        self.assertEqual(password, "AbC9xYpQ2LmN7RkT5sVuH4ZbJe1DfG.1")
+        self.assertEqual(registrant_token, "ZkPqN8f2LrS4XyT6wVaE9mHuCdJg5QbA1sDoRtUvWxY.DQkAAAAATESTTOKEN1234567890AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
 
 
 if __name__ == "__main__":

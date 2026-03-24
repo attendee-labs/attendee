@@ -150,6 +150,16 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
             )
             return
 
+        # Special case for app can not anonymous join meeting
+        if reason.get("errorCode") == 4012:
+            self.send_message_callback(
+                {
+                    "message": self.Messages.ZOOM_MEETING_STATUS_FAILED_APP_CAN_NOT_ANONYMOUS_JOIN_MEETING,
+                    "zoom_result_code": str(reason.get("errorCode")) + ": " + str(reason.get("errorMessage")),
+                }
+            )
+            return
+
         self.send_message_callback(
             {
                 "message": self.Messages.ZOOM_MEETING_STATUS_FAILED,

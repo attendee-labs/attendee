@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, call, patch
 
 import kubernetes
 from django.db import connection
+from django.test import tag
 from django.test.testcases import TransactionTestCase, override_settings
 from django.utils import timezone
 from selenium.common.exceptions import TimeoutException
@@ -79,6 +80,7 @@ from bots.web_bot_adapter.ui_methods import UiLoginRequiredException, UiRetryabl
         "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
     },
 )
+@tag("google_meet_tests")
 class TestGoogleMeetBot2(TransactionTestCase):
     @classmethod
     def setUpClass(cls):
