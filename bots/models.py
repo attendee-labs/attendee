@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 import math
 import os
 import secrets
@@ -22,6 +23,8 @@ from accounts.models import Organization, User, UserRole
 from bots.bot_pod_creator.bot_pod_spec import BotPodSpecType
 from bots.storage import StorageAlias, download_blob_from_remote_storage, remote_storage_url
 from bots.webhook_utils import trigger_webhook
+
+logger = logging.getLogger(__name__)
 
 
 class Project(models.Model):
@@ -742,6 +745,9 @@ class Bot(models.Model):
 
             # Delete all webhook delivery attempts that have a trigger other than BOT_STATE_CHANGE, since these contain sensitive data
             webhook_delivery_attempts_with_sensitive_data = self.webhook_delivery_attempts.exclude(webhook_trigger_type=WebhookTriggerTypes.BOT_STATE_CHANGE)
+            # Log all the ids of the webhook delivery attempts with sensitive data
+            for webhook_delivery_attempt in webhook_delivery_attempts_with_sensitive_data:
+                logger.info("Deleting webhook delivery attempt with id=%s and webhook_subscription=%s and trigger_type=%s and bot_id=%s", webhook_delivery_attempt.id, webhook_delivery_attempt.webhook_subscription_id, webhook_delivery_attempt.webhook_trigger_type, webhook_delivery_attempt.bot_id)
             webhook_delivery_attempts_with_sensitive_data.delete()
 
             BotEventManager.create_event(bot=self, event_type=BotEventTypes.DATA_DELETED)
@@ -2972,6 +2978,14 @@ class WebhookDeliveryAttempt(models.Model):
     response_body_list = models.JSONField(default=list)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        logger.info("WebhookDeliveryAttempt saved with id=%s and webhook_subscription=%s and trigger_type=%s and bot_id=%s", self.pk, self.webhook_subscription_id, self.webhook_trigger_type, self.bot_id)
+
+    def delete(self, *args, **kwargs):
+        logger.info("WebhookDeliveryAttempt deleting with id=%s and webhook_subscription=%s and trigger_type=%s and bot_id=%s", self.pk, self.webhook_subscription_id, self.webhook_trigger_type, self.bot_id)
+        super().delete(*args, **kwargs)
 
     def add_to_response_body_list(self, response_body):
         """Add content to the response body list without saving."""

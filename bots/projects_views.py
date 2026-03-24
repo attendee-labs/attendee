@@ -1101,6 +1101,9 @@ class CreateWebhookView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 class DeleteWebhookView(LoginRequiredMixin, ProjectUrlContextMixin, View):
     def delete(self, request, object_id, webhook_object_id):
         webhook = get_webhook_subscription_for_user(user=request.user, webhook_subscription_object_id=webhook_object_id)
+        # Log all the associated webhook delivery attempts
+        for webhook_delivery_attempt in webhook.webhookdelivery_attempts.all():
+            logger.info("Deleting webhook delivery attempt with id=%s and webhook_subscription=%s and trigger_type=%s and bot_id=%s", webhook_delivery_attempt.id, webhook_delivery_attempt.webhook_subscription_id, webhook_delivery_attempt.webhook_trigger_type, webhook_delivery_attempt.bot_id)
         webhook.delete()
         context = self.get_project_context(object_id, webhook.project)
         context["webhooks"] = WebhookSubscription.objects.filter(project=webhook.project, bot__isnull=True).order_by("-created_at")
