@@ -483,6 +483,8 @@ def transcription_provider_from_bot_creation_data(data):
         return TranscriptionProviders.ELEVENLABS
     elif "kyutai" in settings:
         return TranscriptionProviders.KYUTAI
+    elif "azure" in settings:
+        return TranscriptionProviders.AZURE
     elif "custom_async" in settings:
         return TranscriptionProviders.CUSTOM_ASYNC
     elif "meeting_closed_captions" in settings:
