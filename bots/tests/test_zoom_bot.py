@@ -2591,9 +2591,16 @@ class TestZoomBot(TransactionTestCase):
         # Verify that we received some data
         self.assertGreater(len(uploaded_data), 100, "Uploaded data length is not correct")
 
-        # Check for FLAC file signature
-        flac_signature_found = b"fLaC" in uploaded_data[:1000]
-        self.assertTrue(flac_signature_found, "FLAC signature not found in uploaded data")
+        # Check for either FLAC fallback or MP3 output (ID3 header or frame sync bytes)
+        header_bytes = bytes(uploaded_data[:1000])
+        flac_signature_found = b"fLaC" in header_bytes
+        mp3_signature_found = (
+            b"ID3" in header_bytes
+            or b"\xff\xfb" in header_bytes
+            or b"\xff\xf3" in header_bytes
+            or b"\xff\xf2" in header_bytes
+        )
+        self.assertTrue(flac_signature_found or mp3_signature_found, "Neither FLAC nor MP3 signature found in uploaded data")
 
         # Additional verification for FileUploader
         mock_uploader.upload_file.assert_called()

@@ -89,7 +89,23 @@ class BotController:
     # Default wait time for utterance termination (5 minutes)
     UTTERANCE_TERMINATION_WAIT_TIME_SECONDS = 300
 
+    def provider_supports_true_streaming_transcription(self):
+        provider = self.get_recording_transcription_provider()
+        return provider in [TranscriptionProviders.DEEPGRAM, TranscriptionProviders.KYUTAI, TranscriptionProviders.OPENAI]
+
+    def transcription_mode_override(self):
+        return self.bot_in_db.transcription_runtime_mode_override()
+
+    def use_low_latency_chunks_for_realtime_mode(self):
+        return self.transcription_mode_override() == "realtime" and not self.provider_supports_true_streaming_transcription()
+
     def use_streaming_transcription(self):
+        mode_override = self.transcription_mode_override()
+        if mode_override == "chunks":
+            return False
+        if mode_override == "realtime":
+            return self.provider_supports_true_streaming_transcription()
+
         provider = self.get_recording_transcription_provider()
         if provider == TranscriptionProviders.KYUTAI:
             return True
@@ -440,6 +456,19 @@ class BotController:
         elif meeting_type == MeetingTypes.TEAMS:
             return GstreamerPipeline.AUDIO_FORMAT_FLOAT
 
+    def configured_recording_audio_bitrate_kbps(self):
+        configured_audio_bitrate_kbps = self.bot_in_db.recording_audio_bitrate_kbps()
+        if configured_audio_bitrate_kbps is not None:
+            return configured_audio_bitrate_kbps
+
+        if self.bot_in_db.recording_type() == RecordingTypes.AUDIO_ONLY:
+            return 192
+
+        return 128
+
+    def configured_recording_audio_bitrate_bps(self):
+        return self.configured_recording_audio_bitrate_kbps() * 1000
+
     def get_sleep_time_between_audio_output_chunks_seconds(self):
         meeting_type = self.get_meeting_type()
         if meeting_type == MeetingTypes.ZOOM:
@@ -773,16 +802,45 @@ class BotController:
     # Sarvam has this 30 second limit on audio clips, so we need to change the max utterance duration to 30 seconds
     # and make the silence duration lower so it generates a bunch of small clips
     def non_streaming_audio_utterance_size_limit(self):
+        max_segment_seconds_override = self.bot_in_db.transcription_runtime_max_segment_seconds_override()
+        if max_segment_seconds_override is not None:
+            return self.get_per_participant_audio_sample_rate() * 2 * max_segment_seconds_override
+
+        if self.use_low_latency_chunks_for_realtime_mode():
+            return self.get_per_participant_audio_sample_rate() * 2 * 2
+
         if self.get_recording_transcription_provider() == TranscriptionProviders.SARVAM:
             return 1920000  # 30 seconds of audio at 32kHz
         else:
             return 19200000  # 19.2 MB / 2 bytes per sample / 32,000 samples per second = 300 seconds of continuous audio
 
     def non_streaming_audio_silence_duration_limit(self):
+        silence_duration_seconds_override = self.bot_in_db.transcription_runtime_silence_duration_seconds_override()
+        if silence_duration_seconds_override is not None:
+            return silence_duration_seconds_override
+
+        if self.use_low_latency_chunks_for_realtime_mode():
+            return 0.5
+
         if self.get_recording_transcription_provider() == TranscriptionProviders.SARVAM:
             return 1  # seconds
         else:
             return 3  # seconds
+
+    def non_streaming_audio_minimum_segment_for_silence_closure_seconds(self):
+        minimum_segment_enabled_override = self.bot_in_db.transcription_runtime_minimum_segment_for_silence_closure_enabled_override()
+        minimum_segment_seconds_override = self.bot_in_db.transcription_runtime_minimum_segment_for_silence_closure_seconds_override()
+
+        if minimum_segment_enabled_override is False:
+            return None
+
+        if minimum_segment_seconds_override is not None:
+            return minimum_segment_seconds_override
+
+        if minimum_segment_enabled_override is True:
+            return 10
+
+        return None
 
     def run(self):
         if self.run_called:
@@ -800,6 +858,7 @@ class BotController:
             sample_rate=self.get_per_participant_audio_sample_rate(),
             utterance_size_limit=self.non_streaming_audio_utterance_size_limit(),
             silence_duration_limit=self.non_streaming_audio_silence_duration_limit(),
+            minimum_segment_for_silence_closure_seconds=self.non_streaming_audio_minimum_segment_for_silence_closure_seconds(),
             should_print_diagnostic_info=self.should_capture_audio_chunks(),
         )
 
@@ -834,6 +893,7 @@ class BotController:
                 on_new_sample_callback=self.on_new_sample_from_gstreamer_pipeline,
                 video_frame_size=self.bot_in_db.recording_dimensions(),
                 audio_format=self.get_audio_format(),
+                audio_bitrate_bps=self.configured_recording_audio_bitrate_bps(),
                 output_format=self.get_gstreamer_output_format(),
                 sink_type=self.get_gstreamer_sink_type(),
                 file_location=self.get_recording_file_location(),
@@ -846,6 +906,7 @@ class BotController:
                 file_location=self.get_recording_file_location(),
                 recording_dimensions=self.bot_in_db.recording_dimensions(),
                 audio_only=not (self.pipeline_configuration.record_video or self.pipeline_configuration.rtmp_stream_video),
+                audio_bitrate_kbps=self.configured_recording_audio_bitrate_kbps(),
             )
 
         self.websocket_client_manager = None

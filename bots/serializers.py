@@ -35,6 +35,7 @@ from .models import (
     ChatMessageToOptions,
     MediaBlob,
     MeetingTypes,
+    OUTPUT_FILE_AUDIO_BITRATE_OPTIONS_KBPS,
     ParticipantEventTypes,
     Recording,
     RecordingFormats,
@@ -518,6 +519,18 @@ class BotValidationMixin:
         if view not in [RecordingViews.SPEAKER_VIEW, RecordingViews.GALLERY_VIEW, RecordingViews.SPEAKER_VIEW_NO_SIDEBAR, None]:
             raise serializers.ValidationError({"view": "View must be speaker_view or gallery_view or speaker_view_no_sidebar"})
 
+        audio_bitrate_kbps = value.get("audio_bitrate_kbps")
+        if audio_bitrate_kbps == "automatic":
+            value["audio_bitrate_kbps"] = None
+        elif isinstance(audio_bitrate_kbps, str):
+            if audio_bitrate_kbps.isdigit():
+                value["audio_bitrate_kbps"] = int(audio_bitrate_kbps)
+            else:
+                raise serializers.ValidationError({"audio_bitrate_kbps": "audio_bitrate_kbps must be 'automatic' or one of the supported integer kbps values"})
+
+        if value.get("audio_bitrate_kbps") is not None and value.get("audio_bitrate_kbps") not in OUTPUT_FILE_AUDIO_BITRATE_OPTIONS_KBPS:
+            raise serializers.ValidationError({"audio_bitrate_kbps": f"audio_bitrate_kbps must be one of {list(OUTPUT_FILE_AUDIO_BITRATE_OPTIONS_KBPS)} or 'automatic'"})
+
         # You can only reserve additional storage if you're using Kubernetes to launch the bot
         if value.get("reserve_additional_storage") and os.getenv("LAUNCH_BOT_METHOD") != "kubernetes":
             raise serializers.ValidationError({"reserve_additional_storage": "Not supported unless using Kubernetes"})
@@ -627,6 +640,7 @@ BOT_RECORDING_SETTINGS_DEFAULT_VALUES = {
     "format": RecordingFormats.MP4,
     "view": RecordingViews.SPEAKER_VIEW,
     "resolution": RecordingResolutions.HD_1080P,
+    "audio_bitrate_kbps": None,
     "record_chat_messages_when_paused": False,
     "record_async_transcription_audio_chunks": False,
     "record_participant_speech_start_stop_events": False,
@@ -645,8 +659,16 @@ BOT_RECORDING_SETTINGS_SCHEMA = {
         },
         "resolution": {
             "type": "string",
-            "description": "The resolution to use for the recording. The supported resolutions are '1080p' and '720p'. Defaults to '1080p'.",
+            "description": "The resolution to use for the recording. The supported resolutions are '1080p', '720p' and '480p'. Defaults to '1080p'.",
             "enum": RecordingResolutions.values,
+        },
+        "audio_bitrate_kbps": {
+            "oneOf": [
+                {"type": "null"},
+                {"type": "string", "enum": ["automatic"]},
+                {"type": "integer", "enum": list(OUTPUT_FILE_AUDIO_BITRATE_OPTIONS_KBPS)},
+            ],
+            "description": "Optional output audio bitrate in kbps. Use 'automatic' to preserve default behavior.",
         },
         "record_chat_messages_when_paused": {
             "type": "boolean",

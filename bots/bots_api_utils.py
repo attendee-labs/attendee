@@ -27,6 +27,7 @@ from .models import (
     MeetingTypes,
     Project,
     Recording,
+    RecordingFormats,
     TranscriptionProviders,
     TranscriptionSettings,
     TranscriptionTypes,
@@ -228,6 +229,25 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
     kubernetes_settings = serializer.validated_data["kubernetes_settings"]
     initial_state = BotStates.SCHEDULED if join_at else BotStates.READY
 
+    recording_settings_from_request = data.get("recording_settings")
+    if not isinstance(recording_settings_from_request, dict):
+        recording_settings_from_request = {}
+
+    output_file_defaults = project.effective_output_file_defaults()
+    transcription_runtime_settings = project.transcription_runtime_overrides()
+
+    recording_settings = dict(recording_settings or {})
+
+    if "format" not in recording_settings_from_request:
+        recording_settings["format"] = RecordingFormats.MP4 if output_file_defaults["output_mode"] == "video" else RecordingFormats.MP3
+
+    if "resolution" not in recording_settings_from_request:
+        recording_settings["resolution"] = output_file_defaults["video_resolution"]
+
+    if "audio_bitrate_kbps" not in recording_settings_from_request:
+        if recording_settings.get("format") == RecordingFormats.MP3 and output_file_defaults["audio_bitrate_kbps"] != "automatic":
+            recording_settings["audio_bitrate_kbps"] = output_file_defaults["audio_bitrate_kbps"]
+
     error = validate_external_media_storage_settings(external_media_storage_settings, project)
     if error:
         return None, error
@@ -250,6 +270,7 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
         "external_media_storage_settings": external_media_storage_settings,
         "voice_agent_settings": voice_agent_settings,
         "kubernetes_settings": kubernetes_settings,
+        "transcription_runtime_settings": transcription_runtime_settings,
     }
 
     try:
