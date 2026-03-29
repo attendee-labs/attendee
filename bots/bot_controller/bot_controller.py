@@ -83,6 +83,30 @@ from gi.repository import GLib
 
 logger = logging.getLogger(__name__)
 
+from Xlib import X, display
+from Xlib.ext import xtest
+
+class X11Input:
+    def __init__(self):
+        self.disp = display.Display()
+        self.root = self.disp.screen().root
+
+    def move_rel(self, dx: int, dy: int):
+        ptr = self.root.query_pointer()._data
+        new_x = ptr["root_x"] + dx
+        new_y = ptr["root_y"] + dy
+        xtest.fake_input(self.disp, X.MotionNotify, x=new_x, y=new_y)
+        self.disp.sync()
+
+    def left_click(self):
+        xtest.fake_input(self.disp, X.ButtonPress, 1)
+        xtest.fake_input(self.disp, X.ButtonRelease, 1)
+        self.disp.sync()
+
+    def key(self, keycode: int):
+        xtest.fake_input(self.disp, X.KeyPress, keycode)
+        xtest.fake_input(self.disp, X.KeyRelease, keycode)
+        self.disp.sync()
 
 class BotController:
     # Default wait time for utterance termination (5 minutes)
@@ -768,7 +792,6 @@ class BotController:
             return 3  # seconds
 
     def on_new_video_frame_from_screen_and_audio_recorder(self, frame):
-        logger.info(f"on_new_video_frame_from_screen_and_audio_recorder called with frame size {len(frame)}")
 
         if not self.websocket_video_client:
             return
@@ -1543,7 +1566,32 @@ class BotController:
             self.websocket_audio_error_ticker += 1
 
     def on_message_from_websocket_video(self, message_json: str):
-        logger.debug("Received message from websocket video (currently unhandled): %s", message_json[:200])
+        try:
+            message = json.loads(message_json)
+        except json.JSONDecodeError:
+            logger.warning("Received non-JSON message from websocket video: %s", message_json[:200])
+            return
+
+        #logger.info("Received message from websocket video: %s", message)
+
+        msg_type = message.get("type")
+        if msg_type == "mouse_delta":
+            if not hasattr(self, "_x11input"):
+                logger.info(
+                    "Creating X11Input with DISPLAY=%r XAUTHORITY=%r",
+                    os.environ.get("DISPLAY"),
+                    os.environ.get("XAUTHORITY"),
+                )
+                self._x11input = X11Input()
+                logger.info("Created X11Input")
+
+            dx = int(message.get("dx", 0))
+            dy = int(message.get("dy", 0))
+            #logger.info("Moving mouse by %d, %d", dx, dy)
+            self._x11input.move_rel(dx, dy)
+            #logger.info("Moved mouse by %d, %d", dx, dy)
+        else:
+            logger.info("Received unhandled message type from websocket video: %s", message_json[:200])
 
     def save_debug_artifacts(self, message, new_bot_event):
         screenshot_available = message.get("screenshot_path") is not None

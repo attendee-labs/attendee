@@ -241,6 +241,7 @@ class GoogleMeetUIMethods:
             try:
                 name_input = self.retrieve_name_input_element()
                 logger.info(f"name input found: {name_input}")
+                time.sleep(120)
                 self.bezier_mouse_move_to_target_element(name_input)
                 time.sleep(random.uniform(0.1, 0.3))
                 self.check_for_failed_logged_in_bot_attempt()

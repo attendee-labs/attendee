@@ -47,7 +47,7 @@ RUN apt-get update  \
     libpq-dev
 
 # Install Chrome dependencies
-RUN apt-get install -y xvfb x11-xkb-utils xfonts-100dpi xfonts-75dpi xfonts-scalable xfonts-cyrillic x11-apps libvulkan1 fonts-liberation xdg-utils wget
+RUN apt-get install -y xvfb xauth x11-xkb-utils xfonts-100dpi xfonts-75dpi xfonts-scalable xfonts-cyrillic x11-apps libvulkan1 fonts-liberation xdg-utils wget
 # Install a specific version of Chrome.
 RUN wget -q http://dl.google.com/linux/chrome/deb/pool/main/g/google-chrome-stable/google-chrome-stable_144.0.7559.96-1_amd64.deb
 RUN apt-get install -y ./google-chrome-stable_144.0.7559.96-1_amd64.deb
