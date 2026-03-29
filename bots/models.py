@@ -862,6 +862,12 @@ class Bot(models.Model):
         websocket_audio_settings = websocket_settings.get("audio") or {}
         return websocket_audio_settings.get("sample_rate", 16000)
 
+    def websocket_video_url(self):
+        """Websocket URL is used to send video frames from the bot"""
+        websocket_settings = self.settings.get("websocket_settings") or {}
+        websocket_video_settings = websocket_settings.get("video") or {}
+        return websocket_video_settings.get("url")
+
     def voice_agent_url(self):
         voice_agent_settings = self.settings.get("voice_agent_settings", {}) or {}
         return voice_agent_settings.get("url", None) or voice_agent_settings.get("screenshare_url", None)
@@ -1167,6 +1173,7 @@ class BotEventTypes(models.IntegerChoices):
 class RealtimeTriggerTypes(models.IntegerChoices):
     MIXED_AUDIO_CHUNK = 101, "Mixed audio chunk"
     BOT_OUTPUT_AUDIO_CHUNK = 102, "Bot output audio chunk"
+    VIDEO_FRAME = 201, "Video frame"
 
     @classmethod
     def type_to_api_code(cls, value):
@@ -1174,6 +1181,7 @@ class RealtimeTriggerTypes(models.IntegerChoices):
         mapping = {
             cls.MIXED_AUDIO_CHUNK: "realtime_audio.mixed",
             cls.BOT_OUTPUT_AUDIO_CHUNK: "realtime_audio.bot_output",
+            cls.VIDEO_FRAME: "realtime_video.frame",
         }
         return mapping.get(value)
 

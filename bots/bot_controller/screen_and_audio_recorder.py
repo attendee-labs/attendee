@@ -1,17 +1,21 @@
+import gi
+
+gi.require_version("Gst", "1.0")
+
 import logging
-import os
-import shlex
-import subprocess
-import signal
 import time
+
+from gi.repository import Gst
 
 logger = logging.getLogger(__name__)
 
+Gst.init(None)
+
 
 class ScreenAndAudioRecorder:
-    def __init__(self, file_location, recording_dimensions, audio_only):
-        self.file_location = os.path.abspath(file_location)
-        self._gst_proc: subprocess.Popen | None = None
+    def __init__(self, new_video_frame_callback, recording_dimensions, audio_only):
+        self.new_video_frame_callback = new_video_frame_callback
+        self.pipeline = None
         self.screen_dimensions = (recording_dimensions[0] + 10, recording_dimensions[1] + 10)
 
     def pause_recording(self):
@@ -21,74 +25,79 @@ class ScreenAndAudioRecorder:
         return True
 
     # ------------------------------------------------------------------ #
+    def _on_new_sample(self, sink):
+        sample = sink.emit("pull-sample")
+        if sample is None:
+            return Gst.FlowReturn.ERROR
+
+        buf = sample.get_buffer()
+        data = buf.extract_dup(0, buf.get_size())
+        self.new_video_frame_callback(data)
+        return Gst.FlowReturn.OK
+
+    # ------------------------------------------------------------------ #
     def start_recording(self, display_var: str):
-        """Launch a GStreamer capture pipeline and verify it is alive."""
+        """Launch a GStreamer capture pipeline and deliver raw frames via callback."""
         width, height = self.screen_dimensions
         crop = dict(top=10, left=10, right=0, bottom=0,
                     width=self.screen_dimensions[0] - 10,
                     height=self.screen_dimensions[1] - 10)
 
-        pipeline = f"""
-            ximagesrc display-name={display_var} use-damage=0
-                ! video/x-raw,framerate=5/1,width={width},height={height}
-                ! videocrop top={crop['top']} left={crop['left']}
-                           right={crop['right']} bottom={crop['bottom']}
-                ! video/x-raw,width={crop['width']},height={crop['height']}
-                ! videoconvert
-                ! x264enc tune=zerolatency speed-preset=ultrafast key-int-max=30
-                ! queue
-                ! mp4mux faststart=true
-                ! filesink location="{self.file_location}" sync=false
-        """
-
-        gst_cmd = ["gst-launch-1.0", "-e"] + shlex.split(pipeline)
-        logger.debug("GStreamer command: %s", " ".join(gst_cmd))
-
-        # Capture STDERR → Python logger so we can read the errors
-        self._gst_proc = subprocess.Popen(
-            gst_cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,   # keep on RAM, we’ll read it below
-            text=True,
+        pipeline_str = (
+            f"ximagesrc display-name={display_var} use-damage=0 "
+            f"! video/x-raw,framerate=5/1 "
+            f"! videocrop top={crop['top']} left={crop['left']} "
+            f"right={crop['right']} bottom={crop['bottom']} "
+            f"! videoscale "
+            f"! video/x-raw,width={crop['width']//2},height={crop['height']//2} "
+            f"! videoconvert "
+            f"! video/x-raw,format=RGB "
+            f"! appsink name=sink emit-signals=true sync=false drop=true"
         )
 
-        # Give GStreamer a moment to spin up, then check if it quit
+        logger.debug("GStreamer pipeline: %s", pipeline_str)
+        self.pipeline = Gst.parse_launch(pipeline_str)
+
+        sink = self.pipeline.get_by_name("sink")
+        sink.connect("new-sample", self._on_new_sample)
+
+        bus = self.pipeline.get_bus()
+        bus.add_signal_watch()
+        bus.connect("message::error", self._on_bus_error)
+
+        self.pipeline.set_state(Gst.State.PLAYING)
+
         time.sleep(2)
-        if self._gst_proc.poll() is not None:           # already exited
-            stderr = self._gst_proc.stderr.read()
-            logger.error("GStreamer pipeline exited early:\n%s", stderr)
-            raise RuntimeError("GStreamer failed; see log above")
+        state_ret, current, _ = self.pipeline.get_state(0)
+        if current != Gst.State.PLAYING:
+            logger.error("GStreamer pipeline failed to reach PLAYING state")
+            raise RuntimeError("GStreamer failed to start; see log above")
 
-        logger.info(
-            "Recording started for display %s -> %s", display_var, self.file_location
-        )
+        logger.info("Recording started for display %s (frames via callback)", display_var)
+
+    # ------------------------------------------------------------------ #
+    def _on_bus_error(self, bus, message):
+        err, debug = message.parse_error()
+        src_name = message.src.name if message.src else "unknown"
+        logger.error("GStreamer error from %s: %s  debug: %s", src_name, err, debug)
 
     # ------------------------------------------------------------------ #
     def stop_recording(self):
-        if not self._gst_proc:
+        if not self.pipeline:
             return
 
         logger.info("Stopping screen recorder …")
-        # Graceful EOS: SIGINT lets mp4mux write headers
-        self._gst_proc.send_signal(signal.SIGINT)
-        try:
-            self._gst_proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            logger.warning("Pipeline did not stop in time; killing")
-            self._gst_proc.kill()
-            self._gst_proc.wait()
+        self.pipeline.send_event(Gst.Event.new_eos())
 
-        # Log any final errors
-        stderr = self._gst_proc.stderr.read()
-        if stderr:
-            logger.debug("GStreamer stderr:\n%s", stderr)
+        bus = self.pipeline.get_bus()
+        bus.timed_pop_filtered(5 * Gst.SECOND, Gst.MessageType.EOS | Gst.MessageType.ERROR)
 
-        self._gst_proc = None
-        logger.info("Screen recorder stopped (%s)", self.file_location)
+        self.pipeline.set_state(Gst.State.NULL)
+        bus.remove_signal_watch()
+        self.pipeline = None
+        logger.info("Screen recorder stopped")
 
     # ------------------------------------------------------------------ #
-    # … get_seekable_path / cleanup / make_file_seekable unchanged …
-
     def cleanup(self):
-        if self._gst_proc:
+        if self.pipeline:
             self.stop_recording()

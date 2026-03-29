@@ -47,3 +47,10 @@ def mixed_audio_websocket_payload(chunk: bytes, input_sample_rate: int, output_s
             "sample_rate": output_sample_rate,
         },
     }
+
+
+def video_frame_websocket_payload(frame: bytes) -> bytes:
+    """
+    Return the raw RGB frame bytes for sending as a binary websocket message.
+    """
+    return frame

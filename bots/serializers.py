@@ -1266,7 +1266,7 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
 
         return value
 
-    websocket_settings = WebsocketSettingsJSONField(help_text="The websocket settings for the bot, e.g. {'audio': {'url': 'wss://example.com/audio', 'sample_rate': 16000}}", required=False, default=None)
+    websocket_settings = WebsocketSettingsJSONField(help_text="The websocket settings for the bot, e.g. {'audio': {'url': 'wss://example.com/audio', 'sample_rate': 16000}, 'video': {'url': 'wss://example.com/video'}}", required=False, default=None)
 
     WEBSOCKET_SETTINGS_SCHEMA = {
         "type": "object",
@@ -1285,7 +1285,18 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
                 },
                 "required": ["url"],
                 "additionalProperties": False,
-            }
+            },
+            "video": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "The URL of the websocket to use for sending video frames from the meeting in real time. It must start with wss://.",
+                    },
+                },
+                "required": ["url"],
+                "additionalProperties": False,
+            },
         },
         "required": [],
         "additionalProperties": False,
@@ -1311,6 +1322,12 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
             if audio_url:
                 if not audio_url.lower().startswith("wss://"):
                     raise serializers.ValidationError({"audio": {"url": "URL must start with wss://"}})
+
+        if "video" in value and value.get("video"):
+            video_url = value.get("video", {}).get("url")
+            if video_url:
+                if not video_url.lower().startswith("wss://"):
+                    raise serializers.ValidationError({"video": {"url": "URL must start with wss://"}})
 
         return value
 

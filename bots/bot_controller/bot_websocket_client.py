@@ -62,7 +62,7 @@ class BotWebsocketClient:
         finally:
             self.connection_state = self.STOPPED
 
-    def send_async(self, message: dict):
+    def send_async(self, message):
         if self.connection_state == self.CONNECTED:
             self.send_queue.put(message)
         else:
@@ -146,7 +146,7 @@ class BotWebsocketClient:
                 continue  # nothing queued yet
 
             try:
-                self.websocket.send(json.dumps(message))
+                self.websocket.send(message if isinstance(message, bytes) else json.dumps(message))
             except Exception as e:
                 logger.info("BotWebsocketClient send failed (%s). Leaving loop.", e)
                 break

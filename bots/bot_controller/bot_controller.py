@@ -58,7 +58,7 @@ from bots.models import (
 )
 from bots.webhook_payloads import chat_message_webhook_payload, participant_event_webhook_payload, utterance_webhook_payload
 from bots.webhook_utils import trigger_webhook
-from bots.websocket_payloads import mixed_audio_websocket_payload
+from bots.websocket_payloads import mixed_audio_websocket_payload, video_frame_websocket_payload
 from bots.zoom_oauth_connections_utils import get_zoom_tokens_via_zoom_oauth_app
 from bots.zoom_rtms_adapter.rtms_gstreamer_pipeline import RTMSGstreamerPipeline
 
@@ -272,7 +272,7 @@ class BotController:
             video_frame_size=self.bot_in_db.recording_dimensions(),
             zoom_oauth_credentials_callback=self.get_zoom_oauth_credentials,
             zoom_closed_captions_language=self.bot_in_db.transcription_settings.zoom_closed_captions_language(),
-            should_ask_for_recording_permission=self.pipeline_configuration.record_audio or self.pipeline_configuration.rtmp_stream_audio or self.pipeline_configuration.websocket_stream_audio or self.pipeline_configuration.record_video or self.pipeline_configuration.rtmp_stream_video,
+            should_ask_for_recording_permission=self.pipeline_configuration.record_audio or self.pipeline_configuration.rtmp_stream_audio or self.pipeline_configuration.websocket_stream_audio or self.pipeline_configuration.record_video or self.pipeline_configuration.rtmp_stream_video or self.pipeline_configuration.websocket_stream_video,
             record_chat_messages_when_paused=self.bot_in_db.record_chat_messages_when_paused(),
             disable_incoming_video=self.disable_incoming_video_for_web_bots(),
             zoom_tokens=zoom_tokens,
@@ -580,6 +580,10 @@ class BotController:
             logger.info("Telling websocket audio client to cleanup...")
             self.websocket_audio_client.cleanup()
 
+        if self.websocket_video_client:
+            logger.info("Telling websocket video client to cleanup...")
+            self.websocket_video_client.cleanup()
+
         if self.get_recording_file_location():
             self.upload_recording_to_external_media_storage_if_enabled()
 
@@ -635,24 +639,34 @@ class BotController:
 
     def get_pipeline_configuration(self):
         # This is sloppy, we won't be able to rely on these predefined configurations forever, but it will be ok for now
+        has_websocket_audio = bool(self.bot_in_db.websocket_audio_url())
+        has_websocket_video = bool(self.bot_in_db.websocket_video_url())
 
         if self.bot_in_db.rtmp_destination_url():
             return PipelineConfiguration.rtmp_streaming_bot()
 
         if self.bot_in_db.recording_type() == RecordingTypes.AUDIO_ONLY:
-            if self.bot_in_db.websocket_audio_url():
+            if has_websocket_audio:
                 return PipelineConfiguration.audio_recorder_bot_with_websocket_audio()
             else:
                 return PipelineConfiguration.audio_recorder_bot()
 
         if self.bot_in_db.recording_type() == RecordingTypes.NO_RECORDING:
-            if self.bot_in_db.websocket_audio_url():
+            if has_websocket_audio and has_websocket_video:
+                return PipelineConfiguration.pure_transcription_bot_with_websocket_audio_and_video()
+            elif has_websocket_audio:
                 return PipelineConfiguration.pure_transcription_bot_with_websocket_audio()
+            elif has_websocket_video:
+                return PipelineConfiguration.pure_transcription_bot_with_websocket_video()
             else:
                 return PipelineConfiguration.pure_transcription_bot()
 
-        if self.bot_in_db.websocket_audio_url():
+        if has_websocket_audio and has_websocket_video:
+            return PipelineConfiguration.recorder_bot_with_websocket_audio_and_video()
+        elif has_websocket_audio:
             return PipelineConfiguration.recorder_bot_with_websocket_audio()
+        elif has_websocket_video:
+            return PipelineConfiguration.recorder_bot_with_websocket_video()
 
         return PipelineConfiguration.recorder_bot()
 
@@ -710,9 +724,18 @@ class BotController:
     def should_create_websocket_client(self):
         return self.pipeline_configuration.websocket_stream_audio
 
+    def should_create_websocket_video_client(self):
+        return self.pipeline_configuration.websocket_stream_video
+
     def should_create_screen_and_audio_recorder(self):
-        # if we're not recording audio or video and not doing rtmp streaming, then we don't need to create a screen and audio recorder
-        if not self.pipeline_configuration.record_audio and not self.pipeline_configuration.record_video and not self.pipeline_configuration.rtmp_stream_audio and not self.pipeline_configuration.rtmp_stream_video:
+        needs_screen_recording = (
+            self.pipeline_configuration.record_audio
+            or self.pipeline_configuration.record_video
+            or self.pipeline_configuration.rtmp_stream_audio
+            or self.pipeline_configuration.rtmp_stream_video
+            or self.pipeline_configuration.websocket_stream_video
+        )
+        if not needs_screen_recording:
             return False
 
         return not self.should_create_gstreamer_pipeline()
@@ -743,6 +766,21 @@ class BotController:
             return 1  # seconds
         else:
             return 3  # seconds
+
+    def on_new_video_frame_from_screen_and_audio_recorder(self, frame):
+        logger.info(f"on_new_video_frame_from_screen_and_audio_recorder called with frame size {len(frame)}")
+
+        if not self.websocket_video_client:
+            return
+
+        if not self.websocket_video_client.started():
+            logger.info("Starting websocket video client...")
+            self.websocket_video_client.start()
+
+        payload = video_frame_websocket_payload(frame=frame)
+
+        self.websocket_video_client.send_async(payload)
+
 
     def run(self):
         if self.run_called:
@@ -803,7 +841,7 @@ class BotController:
         self.screen_and_audio_recorder = None
         if self.should_create_screen_and_audio_recorder():
             self.screen_and_audio_recorder = ScreenAndAudioRecorder(
-                file_location=self.get_recording_file_location(),
+                new_video_frame_callback=self.on_new_video_frame_from_screen_and_audio_recorder,
                 recording_dimensions=self.bot_in_db.recording_dimensions(),
                 audio_only=not (self.pipeline_configuration.record_video or self.pipeline_configuration.rtmp_stream_video),
             )
@@ -813,6 +851,13 @@ class BotController:
             self.websocket_audio_client = BotWebsocketClient(
                 url=self.bot_in_db.websocket_audio_url(),
                 on_message_callback=self.on_message_from_websocket_audio,
+            )
+
+        self.websocket_video_client = None
+        if self.should_create_websocket_video_client():
+            self.websocket_video_client = BotWebsocketClient(
+                url=self.bot_in_db.websocket_video_url(),
+                on_message_callback=self.on_message_from_websocket_video,
             )
 
         self.adapter = self.get_bot_adapter()
@@ -1496,6 +1541,9 @@ class BotController:
             if self.websocket_audio_error_ticker % 1000 == 0:
                 logger.error(f"Error processing message from websocket: {e}")
             self.websocket_audio_error_ticker += 1
+
+    def on_message_from_websocket_video(self, message_json: str):
+        logger.debug("Received message from websocket video (currently unhandled): %s", message_json[:200])
 
     def save_debug_artifacts(self, message, new_bot_event):
         screenshot_available = message.get("screenshot_path") is not None
