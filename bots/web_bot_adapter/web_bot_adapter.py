@@ -23,7 +23,6 @@ from bots.bot_adapter import BotAdapter
 from bots.models import ParticipantEventTypes, RecordingViews
 from bots.utils import half_ceil, scale_i420
 
-from .debug_screen_recorder import DebugScreenRecorder
 from .ui_methods import UiAuthorizedUserNotInMeetingTimeoutExceededException, UiBlockedByCaptchaException, UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiIncorrectPasswordException, UiInfinitelyRetryableException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableException, UiRetryableExpectedException
 
 logger = logging.getLogger(__name__)
@@ -100,7 +99,6 @@ class WebBotAdapter(BotAdapter):
         self.automatic_leave_configuration = automatic_leave_configuration
 
         self.should_create_debug_recording = should_create_debug_recording
-        self.debug_screen_recorder = None
 
         self.silence_detection_activated = False
         self.joined_at = None
@@ -628,13 +626,12 @@ class WebBotAdapter(BotAdapter):
         self.display_var_for_debug_recording = os.environ.get("DISPLAY")
         if os.environ.get("DISPLAY") is None:
             # Create virtual display only if no real display is available
-            self.display = Display(visible=0, size=(1930, 1090))
+            self.display = Display(visible=0, size=(self.video_frame_size[0] + 10, self.video_frame_size[1] + 10))
             self.display.start()
             self.display_var_for_debug_recording = self.display.new_display_var
 
-        if self.should_create_debug_recording:
-            self.debug_screen_recorder = DebugScreenRecorder(self.display_var_for_debug_recording, self.video_frame_size, BotAdapter.DEBUG_RECORDING_FILE_PATH)
-            self.debug_screen_recorder.start()
+        if self.start_recording_screen_callback:
+            self.start_recording_screen_callback(self.display_var_for_debug_recording)
 
         # Start websocket server in a separate thread
         websocket_thread = threading.Thread(target=self.run_websocket_server, daemon=True)
@@ -769,7 +766,6 @@ class WebBotAdapter(BotAdapter):
         self.send_message_callback({"message": self.Messages.BOT_JOINED_MEETING})
         self.joined_at = time.time()
         self.update_only_one_participant_in_meeting_at()
-        self.stop_debug_screen_recording()
 
     def after_bot_recording_permission_denied(self):
         self.send_message_callback({"message": self.Messages.BOT_RECORDING_PERMISSION_DENIED, "denied_reason": BotAdapter.BOT_RECORDING_PERMISSION_DENIED_REASON.HOST_DENIED_PERMISSION})
@@ -784,15 +780,7 @@ class WebBotAdapter(BotAdapter):
         self.driver.execute_script("window.ws?.enableMediaSending();")
         self.first_buffer_timestamp_ms_offset = self.driver.execute_script("return performance.timeOrigin;")
 
-        if self.start_recording_screen_callback:
-            sleep(2)
-            self.start_recording_screen_callback(self.display_var_for_debug_recording)
-
         self.media_sending_enable_timestamp_ms = time.time() * 1000
-
-    def stop_debug_screen_recording(self):
-        if self.debug_screen_recorder:
-            self.debug_screen_recorder.stop()
 
     def leave(self):
         if self.left_meeting:
@@ -854,9 +842,6 @@ class WebBotAdapter(BotAdapter):
                     logger.warning(f"Error quitting driver: {e}")
         except Exception as e:
             logger.warning(f"Error during cleanup: {e}")
-
-        if self.debug_screen_recorder:
-            self.debug_screen_recorder.stop()
 
         # Properly shutdown the websocket server
         if self.websocket_server:

@@ -44,8 +44,8 @@ class ScreenAndAudioRecorder:
                     height=self.screen_dimensions[1] - 10)
 
         pipeline_str = (
-            f"ximagesrc display-name={display_var} use-damage=0 "
-            f"! video/x-raw,framerate=5/1 "
+            f"ximagesrc display-name={display_var} use-damage=0 show-pointer=true "
+            f"! video/x-raw,framerate=4/1 "
             f"! videocrop top={crop['top']} left={crop['left']} "
             f"right={crop['right']} bottom={crop['bottom']} "
             f"! videoscale "
