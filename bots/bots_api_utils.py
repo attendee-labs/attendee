@@ -299,7 +299,8 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
             return None, {"error": "Deduplication key already in use. A bot in a non-terminal state with this deduplication key already exists. Please use a different deduplication key or wait for that bot to terminate."}
 
         error_id = str(uuid.uuid4())
-        logger.error(f"Error creating bot (error_id={error_id}): {e}")
+        import traceback
+        logger.error(f"Error creating bot (error_id={error_id}): {e}\n{traceback.format_exc()}")
         return None, {"error": f"An error occurred while creating the bot. Error ID: {error_id}"}
 
 

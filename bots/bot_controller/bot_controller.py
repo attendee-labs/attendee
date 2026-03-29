@@ -459,6 +459,10 @@ class BotController:
             return self.get_google_meet_bot_adapter()
         elif meeting_type == MeetingTypes.TEAMS:
             return self.get_teams_bot_adapter()
+        # WASEL CUSTOMIZATION
+        elif meeting_type == MeetingTypes.WEBEX:
+            from wasel_bots.utils.webex_controller_hooks import get_webex_bot_adapter
+            return get_webex_bot_adapter(self)
 
     def get_first_buffer_timestamp_ms(self):
         if self.screen_and_audio_recorder:

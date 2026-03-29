@@ -149,6 +149,8 @@ def get_partial_for_credential_type(credential_type, request, context):
         return render(request, "projects/partials/kyutai_credentials.html", context)
     elif credential_type == Credentials.CredentialTypes.EXTERNAL_MEDIA_STORAGE:
         return render(request, "projects/partials/external_media_storage_credentials.html", context)
+    elif credential_type == Credentials.CredentialTypes.WEBEX:
+        return render(request, "projects/partials/webex_bot_connection.html", context)
     else:
         return HttpResponse("Cannot render the partial for this credential type", status=400)
 
@@ -362,6 +364,19 @@ class CreateCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 
                 if not credentials_data.get("access_key_id") or not credentials_data.get("access_key_secret") or (not credentials_data.get("endpoint_url") and not credentials_data.get("region_name")):
                     return HttpResponse("Missing required credentials data", status=400)
+            elif credential_type == Credentials.CredentialTypes.WEBEX:
+                credentials_data = {"client_id": request.POST.get("client_id"), "client_secret": request.POST.get("client_secret"), "refresh_token": request.POST.get("refresh_token")}
+                if not all(credentials_data.values()):
+                    return HttpResponse("Missing required credentials data", status=400)
+                from wasel_bots.api.webex_bot_connections_api_utils import _validate_webex_service_app_credentials
+                try:
+                    validation_result = _validate_webex_service_app_credentials(**credentials_data)
+                    credentials_data["access_token"] = validation_result.get("access_token")
+                    credentials_data["expires_at"] = validation_result.get("expires_at")
+                    if validation_result.get("refresh_token"):
+                        credentials_data["refresh_token"] = validation_result.get("refresh_token")
+                except Exception as e:
+                    return HttpResponse(str(e), status=400)
             else:
                 return HttpResponse("Unsupported credential type", status=400)
 
@@ -441,6 +456,7 @@ class ProjectCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
         teams_bot_login_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.TEAMS_BOT_LOGIN).first()
 
         external_media_storage_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.EXTERNAL_MEDIA_STORAGE).first()
+        webex_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.WEBEX).first()
 
         context = self.get_project_context(object_id, project)
         context.update(
@@ -469,6 +485,8 @@ class ProjectCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
                 "teams_bot_login_credential_type": Credentials.CredentialTypes.TEAMS_BOT_LOGIN,
                 "external_media_storage_credentials": external_media_storage_credentials.get_credentials() if external_media_storage_credentials else None,
                 "external_media_storage_credential_type": Credentials.CredentialTypes.EXTERNAL_MEDIA_STORAGE,
+                "webex_credentials": webex_credentials.get_credentials() if webex_credentials else None,
+                "webex_credential_type": Credentials.CredentialTypes.WEBEX,
             }
         )
 

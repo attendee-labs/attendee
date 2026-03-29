@@ -90,6 +90,12 @@ def normalize_meeting_url_raw(url):
     root_domain = root_domain_from_url(url)
     domain_and_subdomain = domain_and_subdomain_from_url(url)
 
+    # WASEL CUSTOMIZATION
+    from wasel_bots.utils.meeting_url_utils import parse_wasel_meeting_url
+    wasel_type, wasel_url = parse_wasel_meeting_url(url)
+    if wasel_type:
+        return wasel_type, wasel_url
+
     if root_domain == "zoom.us":
         # Parse the URL and keep only the 'pwd' query parameter
         parsed_url = urlparse(url)

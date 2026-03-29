@@ -451,6 +451,7 @@ class MeetingTypes(models.TextChoices):
     ZOOM = "zoom"
     GOOGLE_MEET = "google_meet"
     TEAMS = "teams"
+    WEBEX = "webex"  # WASEL CUSTOMIZATION
 
 
 class BotStates(models.IntegerChoices):
@@ -2539,6 +2540,7 @@ class Credentials(models.Model):
         EXTERNAL_MEDIA_STORAGE = 9, "External Media Storage"
         ELEVENLABS = 10, "ElevenLabs"
         KYUTAI = 11, "Kyutai"
+        WEBEX = 13, "Webex"  # WASEL CUSTOMIZATION
 
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="credentials")
     credential_type = models.IntegerField(choices=CredentialTypes.choices, null=False)
