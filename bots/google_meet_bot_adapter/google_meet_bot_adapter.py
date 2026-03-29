@@ -98,6 +98,7 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
     def add_subclass_specific_chrome_options(self, options):
         if self.google_meet_bot_login_should_be_used:
             options.add_argument("--guest")
+        #options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 OPR/65.0.3467.48")
 
     def subclass_specific_before_driver_close(self):
         if self.google_meet_bot_login_session:
