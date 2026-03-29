@@ -235,19 +235,20 @@ class GoogleMeetUIMethods:
             ActionChains(self.driver).move_to_element(target_element).perform()
 
     def fill_out_name_input(self):
-        num_attempts_to_look_for_name_input = 30
+        num_attempts_to_look_for_name_input = 300
         logger.info("Waiting for the name input field...")
         for attempt_to_look_for_name_input_index in range(num_attempts_to_look_for_name_input):
             try:
                 name_input = self.retrieve_name_input_element()
-                logger.info(f"name input found: {name_input}")
-                time.sleep(120)
-                self.bezier_mouse_move_to_target_element(name_input)
-                time.sleep(random.uniform(0.1, 0.3))
-                self.check_for_failed_logged_in_bot_attempt()
-                logger.info("name input found")
-                self.human_type_with_typos(name_input, self.display_name)
-                return
+                time.sleep(5)
+                #logger.info(f"name input found: {name_input}")
+                #time.sleep(120)
+                #self.bezier_mouse_move_to_target_element(name_input)
+                #time.sleep(random.uniform(0.1, 0.3))
+                #self.check_for_failed_logged_in_bot_attempt()
+                #logger.info("name input found")
+                #self.human_type_with_typos(name_input, self.display_name)
+                #return
             except TimeoutException as e:
                 self.look_for_blocked_element("name_input")
                 self.look_for_login_required_element("name_input")
