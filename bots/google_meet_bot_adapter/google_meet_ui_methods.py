@@ -5,12 +5,12 @@ import random
 import time
 from urllib.parse import urlparse
 
+import numpy as np
 import requests
 from django.conf import settings
 from selenium.common.exceptions import ElementNotInteractableException, NoSuchElementException, TimeoutException
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
@@ -229,6 +229,96 @@ class GoogleMeetUIMethods:
     def retrieve_name_input_element(self):
         return WebDriverWait(self.driver, 1).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'input[type="text"][aria-label="Your name"]')))
 
+
+    def _bezier_path(self, x0, y0, x1, y1, distance):
+        """Cubic Bézier with randomized control points + Gaussian noise."""
+        steps = max(80, min(350, int(distance / random.uniform(4.0, 10.0))))
+
+        # Control points: pull perpendicular to the line, with randomized magnitude
+        dx, dy = x1 - x0, y1 - y0
+        perp_x, perp_y = -dy, dx  # perpendicular vector
+
+        # Spread controls asymmetrically for natural curvature
+        spread1 = random.gauss(0, 0.2)
+        spread2 = random.gauss(0, 0.15)
+        cp1 = (
+            x0 + dx * random.uniform(0.2, 0.45) + perp_x * spread1,
+            y0 + dy * random.uniform(0.2, 0.45) + perp_y * spread1,
+        )
+        cp2 = (
+            x0 + dx * random.uniform(0.55, 0.8) + perp_x * spread2,
+            y0 + dy * random.uniform(0.55, 0.8) + perp_y * spread2,
+        )
+
+        # Noise amplitude scales with distance, decays near endpoint
+        base_noise = max(1.0, distance * 0.008)
+
+        points = []
+        for i in range(1, steps + 1):
+            t = i / steps
+            # De Casteljau evaluation of cubic Bézier
+            u = 1 - t
+            bx = u**3 * x0 + 3 * u**2 * t * cp1[0] + 3 * u * t**2 * cp2[0] + t**3 * x1
+            by = u**3 * y0 + 3 * u**2 * t * cp1[1] + 3 * u * t**2 * cp2[1] + t**3 * y1
+
+            # Gaussian noise envelope: peaks mid-path, dies near start/end
+            envelope = math.sin(t * math.pi) ** 1.5
+            noise_x = random.gauss(0, base_noise * envelope)
+            noise_y = random.gauss(0, base_noise * envelope)
+
+            points.append((int(round(bx + noise_x)), int(round(by + noise_y))))
+
+        # Ensure final point is exact target
+        points[-1] = (x1, y1)
+        return points
+
+
+    def _generate_timings(self, n_points, distance):
+        """
+        Variable inter-step delays modelling a bell-shaped velocity profile:
+        slow start → fast middle → slow end, with micro-jitter.
+        """
+        # Base duration scales with distance (Fitts's law-ish)
+        base_duration = 0.15 + (distance / 2000.0) * random.uniform(0.8, 1.3)
+
+        timings = []
+        for i in range(n_points):
+            t = i / max(n_points - 1, 1)
+            # Bell-shaped speed: slow at edges, fast in center
+            speed_factor = 0.3 + 0.7 * math.sin(t * math.pi)
+            # Invert: high speed → short delay
+            delay = (base_duration / n_points) / max(speed_factor, 0.1)
+            # Add micro-jitter (human motor noise)
+            delay *= random.uniform(0.85, 1.2)
+            # Occasional micro-pause (~2% chance, like a hesitation)
+            if random.random() < 0.02:
+                delay += random.uniform(0.02, 0.06)
+            timings.append(max(delay, 0.002))
+        return timings
+
+
+    def _overshoot_correct(self, target_x, target_y, distance):
+        """Simulate overshoot past the target followed by a corrective arc back."""
+        overshoot_dist = random.uniform(8, min(35, distance * 0.08))
+        angle = random.uniform(0, 2 * math.pi)
+        overshoot_x = int(target_x + math.cos(angle) * overshoot_dist)
+        overshoot_y = int(target_y + math.sin(angle) * overshoot_dist)
+
+        # Quick overshoot path (fewer steps, fast)
+        correction_points = self._bezier_path(target_x, target_y, overshoot_x, overshoot_y, overshoot_dist)
+        # Then arc back
+        return_points = self._bezier_path(overshoot_x, overshoot_y, target_x, target_y, overshoot_dist)
+
+        ptr = self.x11_input.root.query_pointer()._data
+        prev_x, prev_y = int(ptr["root_x"]), int(ptr["root_y"])
+
+        for px, py in correction_points + return_points:
+            rdx, rdy = px - prev_x, py - prev_y
+            if rdx or rdy:
+                self.x11_input.move_rel(rdx, rdy)
+                prev_x, prev_y = px, py
+            time.sleep(random.uniform(0.004, 0.015))
+
     def human_navigate_to_element(self, target_element):
         self.ensure_x11_input()
 
@@ -264,11 +354,10 @@ class GoogleMeetUIMethods:
             if width <= 0 or height <= 0:
                 raise RuntimeError(f"Element has invalid size: {width}x{height}")
 
-            # Aim near the center, with a little randomness.
-            target_css_x = left + width * random.uniform(0.4, 0.6)
-            target_css_y = top + height * random.uniform(0.4, 0.6)
+            # Target with bivariate Gaussian around center
+            target_css_x = left + width * np.clip(random.gauss(0.5, 0.12), 0.15, 0.85)
+            target_css_y = top + height * np.clip(random.gauss(0.5, 0.12), 0.15, 0.85)
 
-            # Convert viewport CSS coords to global X11 root coords in physical pixels.
             target_root_x = int(round((screen_x + target_css_x) * dpr))
             target_root_y = int(round((screen_y + target_css_y) * dpr))
 
@@ -276,7 +365,7 @@ class GoogleMeetUIMethods:
             start_x = int(ptr["root_x"])
             start_y = int(ptr["root_y"])
 
-            logger.info(f"Starting mouse move from {start_x}, {start_y} to {target_root_x}, {target_root_y}")
+            logger.info(f"Starting mouse move from {start_x},{start_y} to {target_root_x},{target_root_y}")
 
             total_dx = target_root_x - start_x
             total_dy = target_root_y - start_y
@@ -286,42 +375,31 @@ class GoogleMeetUIMethods:
                 logger.info(f"Distance is less than 1, so not moving mouse")
                 return
 
-            # Human-ish motion: more distance -> more steps.
-            steps = max(8, min(10, int(distance / random.uniform(8.0, 16.0))))
+            # Generate the path and walk it
+            points = self._bezier_path(start_x, start_y, target_root_x, target_root_y, distance)
+            timings = self._generate_timings(len(points), distance)
 
-            prev_x = start_x
-            prev_y = start_y
-
-            for i in range(1, steps + 1):
-                t = i / steps
-
-                # Ease out a bit so it slows near the end.
-                eased_t = 1.0 - (1.0 - t) ** 3
-
-                next_x = int(round(start_x + total_dx * eased_t))
-                next_y = int(round(start_y + total_dy * eased_t))
-
-                rel_dx = next_x - prev_x
-                rel_dy = next_y - prev_y
-
+            prev_x, prev_y = start_x, start_y
+            for (nx, ny), dt in zip(points, timings):
+                rel_dx = nx - prev_x
+                rel_dy = ny - prev_y
                 if rel_dx or rel_dy:
                     self.x11_input.move_rel(rel_dx, rel_dy)
-                    logger.info(f"Moved mouse to {next_x}, {next_y}")
-                    prev_x = next_x
-                    prev_y = next_y
+                    prev_x, prev_y = nx, ny
+                time.sleep(dt)
 
-                time.sleep(random.uniform(0.3, 1.0))
+            # Optional overshoot-and-correct (~30% of the time for longer moves)
+            if distance > 120 and random.random() < 0.3:
+                self._overshoot_correct(target_root_x, target_root_y, distance)
 
-            # Final correction in case of rounding drift.
+            # Final sub-pixel correction
             ptr = self.x11_input.root.query_pointer()._data
-            final_x = int(ptr["root_x"])
-            final_y = int(ptr["root_y"])
-            correction_dx = target_root_x - final_x
-            correction_dy = target_root_y - final_y
-            if correction_dx or correction_dy:
-                self.x11_input.move_rel(correction_dx, correction_dy)
+            cdx = target_root_x - int(ptr["root_x"])
+            cdy = target_root_y - int(ptr["root_y"])
+            if cdx or cdy:
+                self.x11_input.move_rel(cdx, cdy)
 
-            time.sleep(random.uniform(0.03, 0.08))
+            time.sleep(random.uniform(0.04, 0.12))
 
         except Exception as e:
             logger.warning(f"Error navigating mouse to element: {e}")
@@ -331,27 +409,42 @@ class GoogleMeetUIMethods:
                 e,
             )
 
-    NEARBY_KEYS = {
-        'a': 'sqwz', 'b': 'vghn', 'c': 'xdfv', 'd': 'sfec',
-        'e': 'wrd', 'f': 'dgrc', 'g': 'fhtv', 'h': 'gjyn',
-        'i': 'uok', 'j': 'hkun', 'k': 'jlim', 'l': 'kop',
-        'm': 'njk', 'n': 'bhjm', 'o': 'iplk', 'p': 'ol',
-        'q': 'wa', 'r': 'etf', 's': 'adwx', 't': 'rgy',
-        'u': 'yij', 'v': 'cfgb', 'w': 'qeas', 'x': 'zsdc',
-        'y': 'tuh', 'z': 'xas',
-    }
-
     UNSHIFTED_PUNCTUATION = {
-        '-': 'minus', '=': 'equal', '[': 'bracketleft', ']': 'bracketright',
-        '\\': 'backslash', ';': 'semicolon', "'": 'apostrophe',
-        ',': 'comma', '.': 'period', '/': 'slash', '`': 'grave',
+        "-": "minus",
+        "=": "equal",
+        "[": "bracketleft",
+        "]": "bracketright",
+        "\\": "backslash",
+        ";": "semicolon",
+        "'": "apostrophe",
+        ",": "comma",
+        ".": "period",
+        "/": "slash",
+        "`": "grave",
     }
 
     SHIFTED_PUNCTUATION = {
-        '~': 'grave', '!': '1', '@': '2', '#': '3', '$': '4', '%': '5',
-        '^': '6', '&': '7', '*': '8', '(': '9', ')': '0', '_': 'minus',
-        '+': 'equal', '{': 'bracketleft', '}': 'bracketright', '|': 'backslash',
-        ':': 'semicolon', '"': 'apostrophe', '<': 'comma', '>': 'period', '?': 'slash',
+        "~": "grave",
+        "!": "1",
+        "@": "2",
+        "#": "3",
+        "$": "4",
+        "%": "5",
+        "^": "6",
+        "&": "7",
+        "*": "8",
+        "(": "9",
+        ")": "0",
+        "_": "minus",
+        "+": "equal",
+        "{": "bracketleft",
+        "}": "bracketright",
+        "|": "backslash",
+        ":": "semicolon",
+        '"': "apostrophe",
+        "<": "comma",
+        ">": "period",
+        "?": "slash",
     }
 
     def _x11_type_char(self, char):
@@ -373,35 +466,27 @@ class GoogleMeetUIMethods:
         if needs_shift:
             self.x11_input.key_release("Shift")
 
-    def human_type_with_typos(self, text):
+    def human_type(self, text):
         self.ensure_x11_input()
 
-        typo_rate = 0.06
-
-        for char in text:
-            if random.random() < typo_rate and char.lower() in self.NEARBY_KEYS:
-                wrong_char = random.choice(self.NEARBY_KEYS[char.lower()])
-                self._x11_type_char(wrong_char)
-                time.sleep(random.uniform(0.15, 0.4))
-                self.x11_input.key_press("Backspace")
-                self.x11_input.key_release("Backspace")
-                time.sleep(random.uniform(0.05, 0.15))
+        for i, char in enumerate(text):
+            if i == 0:
+                time.sleep(random.uniform(0.15, 0.35))
 
             self._x11_type_char(char)
 
-            if random.random() < 0.1:
-                time.sleep(random.uniform(0.12, 0.25))
-            else:
-                time.sleep(random.uniform(0.04, 0.10))
+            time.sleep(random.uniform(0.24, 0.48))
 
     def human_click_element(self, element):
+        time.sleep(random.uniform(0.125, 0.25))
         self.ensure_x11_input()
         self.x11_input.left_click()
-        time.sleep(random.uniform(0.3, 1.0))
+        time.sleep(random.uniform(0.125, 0.25))
 
     def ensure_x11_input(self):
         if not hasattr(self, "x11_input"):
             from .x11_input import X11Input
+
             self.x11_input = X11Input()
 
     def fill_out_name_input(self):
@@ -415,7 +500,7 @@ class GoogleMeetUIMethods:
                 if self.ui_interaction_mode == "human":
                     self.human_navigate_to_element(name_input)
                     self.human_click_element(name_input)
-                    self.human_type_with_typos(self.display_name)
+                    self.human_type(self.display_name)
                 else:
                     name_input.send_keys(self.display_name)
                 return
