@@ -12,8 +12,8 @@ from bots.models import (
     Calendar,
     CalendarEvent,
     CalendarPlatform,
-    GoogleMeetBotLogin,
-    GoogleMeetBotLoginGroup,
+    BotLogin,
+    BotLoginGroup,
     Project,
     ProjectAccess,
     WebhookSubscription,
@@ -123,24 +123,24 @@ class ObjectAccessIntegrationTest(TransactionTestCase):
         self.zoom_oauth_app_b1.set_credentials({"client_secret": "test_secret_b1", "webhook_secret": "test_webhook_secret_b1"})
 
         # Create Google Meet bot login groups and logins
-        self.google_meet_bot_login_group_a1 = GoogleMeetBotLoginGroup.objects.create(project=self.project_a1)
-        self.google_meet_bot_login_a1 = GoogleMeetBotLogin.objects.create(
+        self.google_meet_bot_login_group_a1 = BotLoginGroup.objects.create(project=self.project_a1)
+        self.google_meet_bot_login_a1 = BotLogin.objects.create(
             group=self.google_meet_bot_login_group_a1,
             workspace_domain="workspace-a1.com",
             email="bot-a1@workspace-a1.com",
         )
         self.google_meet_bot_login_a1.set_credentials({"private_key": "test_private_key_a1", "cert": "test_cert_a1"})
 
-        self.google_meet_bot_login_group_a2 = GoogleMeetBotLoginGroup.objects.create(project=self.project_a2)
-        self.google_meet_bot_login_a2 = GoogleMeetBotLogin.objects.create(
+        self.google_meet_bot_login_group_a2 = BotLoginGroup.objects.create(project=self.project_a2)
+        self.google_meet_bot_login_a2 = BotLogin.objects.create(
             group=self.google_meet_bot_login_group_a2,
             workspace_domain="workspace-a2.com",
             email="bot-a2@workspace-a2.com",
         )
         self.google_meet_bot_login_a2.set_credentials({"private_key": "test_private_key_a2", "cert": "test_cert_a2"})
 
-        self.google_meet_bot_login_group_b1 = GoogleMeetBotLoginGroup.objects.create(project=self.project_b1)
-        self.google_meet_bot_login_b1 = GoogleMeetBotLogin.objects.create(
+        self.google_meet_bot_login_group_b1 = BotLoginGroup.objects.create(project=self.project_b1)
+        self.google_meet_bot_login_b1 = BotLogin.objects.create(
             group=self.google_meet_bot_login_group_b1,
             workspace_domain="workspace-b1.com",
             email="bot-b1@workspace-b1.com",
@@ -612,10 +612,10 @@ class ObjectAccessIntegrationTest(TransactionTestCase):
         self.assertEqual(response.status_code, 200)
 
         # Assert that expected objects in the database are created
-        self.assertTrue(GoogleMeetBotLoginGroup.objects.filter(project=self.project_a1).exists())
-        self.assertTrue(GoogleMeetBotLogin.objects.filter(group=self.google_meet_bot_login_group_a1).exists())
-        self.assertTrue(GoogleMeetBotLogin.objects.filter(group=self.google_meet_bot_login_group_a2).exists())
-        self.assertTrue(GoogleMeetBotLogin.objects.filter(group=self.google_meet_bot_login_group_b1).exists())
+        self.assertTrue(BotLoginGroup.objects.filter(project=self.project_a1).exists())
+        self.assertTrue(BotLogin.objects.filter(group=self.google_meet_bot_login_group_a1).exists())
+        self.assertTrue(BotLogin.objects.filter(group=self.google_meet_bot_login_group_a2).exists())
+        self.assertTrue(BotLogin.objects.filter(group=self.google_meet_bot_login_group_b1).exists())
 
         # Regular user can create Google Meet bot logins in projects they have access to
         self.client.force_login(self.regular_user_a)
@@ -666,10 +666,10 @@ class ObjectAccessIntegrationTest(TransactionTestCase):
         )
         self.assertEqual(response.status_code, 200)
         # Verify the login was deleted
-        self.assertFalse(GoogleMeetBotLogin.objects.filter(id=self.google_meet_bot_login_a1.id).exists())
+        self.assertFalse(BotLogin.objects.filter(id=self.google_meet_bot_login_a1.id).exists())
 
         # Recreate the login for further testing
-        self.google_meet_bot_login_a1 = GoogleMeetBotLogin.objects.create(
+        self.google_meet_bot_login_a1 = BotLogin.objects.create(
             group=self.google_meet_bot_login_group_a1,
             workspace_domain="workspace-a1.com",
             email="bot-a1@workspace-a1.com",
@@ -686,7 +686,7 @@ class ObjectAccessIntegrationTest(TransactionTestCase):
         )
         self.assertEqual(response.status_code, 200)
         # Verify the login was deleted
-        self.assertFalse(GoogleMeetBotLogin.objects.filter(id=self.google_meet_bot_login_a1.id).exists())
+        self.assertFalse(BotLogin.objects.filter(id=self.google_meet_bot_login_a1.id).exists())
 
         # Regular user cannot delete Google Meet bot logins in projects they don't have access to
         response = self.client.post(
@@ -697,7 +697,7 @@ class ObjectAccessIntegrationTest(TransactionTestCase):
         )
         self.assertEqual(response.status_code, 403)
         # Verify the login still exists
-        self.assertTrue(GoogleMeetBotLogin.objects.filter(id=self.google_meet_bot_login_a2.id).exists())
+        self.assertTrue(BotLogin.objects.filter(id=self.google_meet_bot_login_a2.id).exists())
 
         # Users cannot delete Google Meet bot logins in different organizations
         response = self.client.post(
@@ -708,7 +708,7 @@ class ObjectAccessIntegrationTest(TransactionTestCase):
         )
         self.assertEqual(response.status_code, 404)
         # Verify the login still exists
-        self.assertTrue(GoogleMeetBotLogin.objects.filter(id=self.google_meet_bot_login_b1.id).exists())
+        self.assertTrue(BotLogin.objects.filter(id=self.google_meet_bot_login_b1.id).exists())
 
     def test_unauthenticated_access_redirects_to_login(self):
         """Test that unauthenticated users are redirected to login"""

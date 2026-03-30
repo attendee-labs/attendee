@@ -41,8 +41,8 @@ from bots.models import (
     ChatMessage,
     ChatMessageToOptions,
     Credentials,
-    GoogleMeetBotLogin,
-    GoogleMeetBotLoginGroup,
+    BotLogin,
+    BotLoginGroup,
     MeetingTypes,
     Participant,
     ParticipantEvent,
@@ -165,7 +165,7 @@ class BotController:
     def create_google_meet_bot_login_session(self):
         if not self.bot_in_db.google_meet_use_bot_login():
             return None
-        first_google_meet_bot_login_group = GoogleMeetBotLoginGroup.objects.filter(project=self.bot_in_db.project).first()
+        first_google_meet_bot_login_group = BotLoginGroup.objects.filter(project=self.bot_in_db.project).first()
         if not first_google_meet_bot_login_group:
             return None
         least_used_google_meet_bot_login = first_google_meet_bot_login_group.google_meet_bot_logins.order_by(F("last_used_at").asc(nulls_first=True)).first()
@@ -181,7 +181,7 @@ class BotController:
         }
 
     def google_meet_bot_login_is_available(self):
-        return self.bot_in_db.google_meet_use_bot_login() and GoogleMeetBotLogin.objects.filter(group__project=self.bot_in_db.project).exists()
+        return self.bot_in_db.google_meet_use_bot_login() and BotLogin.objects.filter(group__project=self.bot_in_db.project).exists()
 
     def get_google_meet_bot_adapter(self):
         from bots.google_meet_bot_adapter import GoogleMeetBotAdapter

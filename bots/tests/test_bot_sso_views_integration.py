@@ -17,7 +17,7 @@ from django.urls import reverse
 
 from accounts.models import Organization
 from bots.bot_sso_utils import create_google_meet_sign_in_session
-from bots.models import Bot, GoogleMeetBotLogin, GoogleMeetBotLoginGroup, Project
+from bots.models import Bot, BotLogin, BotLoginGroup, Project
 
 
 def _generate_rsa_key_and_self_signed_cert():
@@ -117,8 +117,8 @@ class BotSsoViewsIntegrationTest(TransactionTestCase):
         )
 
         # Create GoogleMeetBotLoginGroup and GoogleMeetBotLogin
-        self.google_meet_bot_login_group = GoogleMeetBotLoginGroup.objects.create(project=self.project)
-        self.google_meet_bot_login = GoogleMeetBotLogin.objects.create(
+        self.google_meet_bot_login_group = BotLoginGroup.objects.create(project=self.project)
+        self.google_meet_bot_login = BotLogin.objects.create(
             group=self.google_meet_bot_login_group,
             workspace_domain="test-workspace.com",
             email="test-bot@test-workspace.com",
@@ -286,7 +286,7 @@ class BotSsoViewsIntegrationTest(TransactionTestCase):
     def test_sign_in_view_with_invalid_cert_or_key(self):
         """Test GoogleMeetSignInView with invalid certificate or private key"""
         # Create a new bot login with invalid credentials
-        invalid_bot_login = GoogleMeetBotLogin.objects.create(
+        invalid_bot_login = BotLogin.objects.create(
             group=self.google_meet_bot_login_group,
             workspace_domain="invalid-workspace.com",
             email="invalid-bot@invalid-workspace.com",
