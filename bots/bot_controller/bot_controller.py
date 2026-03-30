@@ -86,10 +86,72 @@ logger = logging.getLogger(__name__)
 from Xlib import X, XK, display
 from Xlib.ext import xtest
 
+class InputEventRecorder:
+    def __init__(self):
+        self._events = []
+        self._last_time = None
+
+    def _elapsed(self):
+        now = time.time()
+        if self._last_time is None:
+            dt = 0.0
+        else:
+            dt = now - self._last_time
+        self._last_time = now
+        return round(dt, 6)
+
+    def record_mouse_move(self, dx, dy, global_x, global_y):
+        self._events.append({
+            "type": "mouse_move",
+            "dt": self._elapsed(),
+            "dx": dx,
+            "dy": dy,
+            "global_x": global_x,
+            "global_y": global_y,
+        })
+
+    def record_mouse_click(self, button, state):
+        self._events.append({
+            "type": "mouse_click",
+            "dt": self._elapsed(),
+            "button": button,
+            "state": state,
+        })
+
+    def record_key_event(self, key, state):
+        self._events.append({
+            "type": "key_event",
+            "dt": self._elapsed(),
+            "key": key,
+            "state": state,
+        })
+
+    def flush_to_file(self, path):
+        if not self._events:
+            logger.info("No input events to flush")
+            return
+        try:
+            with open(path, "w") as f:
+                json.dump(self._events, f, indent=2)
+            logger.info(
+                "Flushed %d input events to %s: %s",
+                len(self._events),
+                path,
+                json.dumps(self._events),
+            )
+        except Exception:
+            logger.exception("Failed to write input events to %s", path)
+        self._events = []
+
+
 class X11Input:
     def __init__(self):
         self.disp = display.Display()
         self.root = self.disp.screen().root
+
+    def query_position(self):
+        ptr = self.root.query_pointer()._data
+        return ptr["root_x"], ptr["root_y"]
 
     def move_rel(self, dx: int, dy: int):
         ptr = self.root.query_pointer()._data
@@ -719,6 +781,8 @@ class BotController:
         self.pubsub_channel = f"bot_{self.bot_in_db.id}"
 
         self.automatic_leave_configuration = AutomaticLeaveConfiguration(**self.bot_in_db.automatic_leave_settings())
+
+        self._input_recorder = InputEventRecorder()
 
         self.pipeline_configuration = self.get_pipeline_configuration()
 
@@ -1636,6 +1700,10 @@ class BotController:
         #logger.info("Received message from websocket video: %s", message)
 
         msg_type = message.get("type")
+        if msg_type == "pointer_lock_exit":
+            self._flush_input_events()
+            return
+
         if msg_type in ("mouse_delta", "mouse_click", "key_event"):
             if not hasattr(self, "_x11input"):
                 logger.info(
@@ -1650,6 +1718,8 @@ class BotController:
                 dx = int(message.get("dx", 0))
                 dy = int(message.get("dy", 0))
                 self._x11input.move_rel(dx, dy)
+                gx, gy = self._x11input.query_position()
+                self._input_recorder.record_mouse_move(dx, dy, gx, gy)
             elif msg_type == "mouse_click":
                 button = message.get("button", "left")
                 state = message.get("state", "down")
@@ -1657,6 +1727,7 @@ class BotController:
                     self._x11input.button_press(button)
                 else:
                     self._x11input.button_release(button)
+                self._input_recorder.record_mouse_click(button, state)
             elif msg_type == "key_event":
                 key = message.get("key", "")
                 state = message.get("state", "down")
@@ -1664,8 +1735,12 @@ class BotController:
                     self._x11input.key_press(key)
                 else:
                     self._x11input.key_release(key)
+                self._input_recorder.record_key_event(key, state)
         else:
             logger.info("Received unhandled message type from websocket video: %s", message_json[:200])
+
+    def _flush_input_events(self):
+        self._input_recorder.flush_to_file(f"/tmp/input_events_{self.bot_in_db.id}.json")
 
     def save_debug_artifacts(self, message, new_bot_event):
         screenshot_available = message.get("screenshot_path") is not None
