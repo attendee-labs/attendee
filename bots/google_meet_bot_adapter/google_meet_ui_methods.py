@@ -1,3 +1,4 @@
+import json
 import logging
 import math
 import os
@@ -229,7 +230,6 @@ class GoogleMeetUIMethods:
     def retrieve_name_input_element(self):
         return WebDriverWait(self.driver, 1).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'input[type="text"][aria-label="Your name"]')))
 
-
     def _bezier_path(self, x0, y0, x1, y1, distance):
         """Cubic Bézier with randomized control points + Gaussian noise."""
         steps = max(80, min(350, int(distance / random.uniform(4.0, 10.0))))
@@ -272,7 +272,6 @@ class GoogleMeetUIMethods:
         points[-1] = (x1, y1)
         return points
 
-
     def _generate_timings(self, n_points, distance):
         """
         Variable inter-step delays modelling a bell-shaped velocity profile:
@@ -295,7 +294,6 @@ class GoogleMeetUIMethods:
                 delay += random.uniform(0.02, 0.06)
             timings.append(max(delay, 0.002))
         return timings
-
 
     def _overshoot_correct(self, target_x, target_y, distance):
         """Simulate overshoot past the target followed by a corrective arc back."""
@@ -372,7 +370,7 @@ class GoogleMeetUIMethods:
             distance = math.hypot(total_dx, total_dy)
 
             if distance < 1:
-                logger.info(f"Distance is less than 1, so not moving mouse")
+                logger.info("Distance is less than 1, so not moving mouse")
                 return
 
             # Generate the path and walk it
@@ -937,12 +935,103 @@ class GoogleMeetUIMethods:
         logger.warning(f"Cookie names: {names}. Any Google auth cookies present: {any_google_auth_cookies_present}.")
         return any_google_auth_cookies_present
 
+    def use_mocap_to_position_mouse(self):
+        self.ensure_x11_input()
+
+        mocap_file = os.path.join(os.path.dirname(__file__), "join_mocap_720p.json")
+        with open(mocap_file, "r") as f:
+            events = json.load(f)
+
+        if not events:
+            return
+
+        first = events[0]
+        ptr = self.x11_input.root.query_pointer()._data
+        start_x = first["global_x"] - first.get("dx", 0)
+        start_y = first["global_y"] - first.get("dy", 0)
+        init_dx = start_x - int(ptr["root_x"])
+        init_dy = start_y - int(ptr["root_y"])
+        if init_dx or init_dy:
+            self.x11_input.move_rel(init_dx, init_dy)
+            logger.info(f"Positioned mouse at ({start_x}, {start_y})")
+
+    def use_mocap_to_fill_out_name_input_turn_off_media_inputs_and_click_join_button(self):
+        self.ensure_x11_input()
+
+        mocap_file = os.path.join(os.path.dirname(__file__), "join_mocap_720p.json")
+        with open(mocap_file, "r") as f:
+            events = json.load(f)
+
+        logger.info(f"Loaded {len(events)} mocap events from {mocap_file}")
+
+        if not events:
+            return
+
+        time.sleep(8)
+
+        # global_x/y is the position *after* the move, so the starting
+        # position is (global_x - dx, global_y - dy) of the first event.
+        first = events[0]
+        ptr = self.x11_input.root.query_pointer()._data
+        start_x = first["global_x"] - first.get("dx", 0)
+        start_y = first["global_y"] - first.get("dy", 0)
+        init_dx = start_x - int(ptr["root_x"])
+        init_dy = start_y - int(ptr["root_y"])
+        if init_dx or init_dy:
+            self.x11_input.move_rel(init_dx, init_dy)
+
+        name_typed = False
+
+        for event in events:
+            dt = event.get("dt", 0)
+            event_type = event["type"]
+            logger.info(f"Processing event: {event_type}, dt: {dt}")
+
+            if dt > 0:
+                time.sleep(dt)
+
+            if event_type == "mouse_move":
+                dx = event.get("dx", 0)
+                dy = event.get("dy", 0)
+                if dx or dy:
+                    self.x11_input.move_rel(dx, dy)
+
+            elif event_type == "mouse_click":
+                button = event.get("button", "left")
+                state = event.get("state")
+                if state == "down":
+                    self.x11_input.button_press(button)
+                elif state == "up":
+                    self.x11_input.button_release(button)
+
+            elif event_type == "key_event":
+                if not name_typed:
+                    # The recording typed a placeholder name; substitute
+                    # with the real display_name on the first key-down.
+                    if event.get("state") == "down":
+                        self.human_type(self.display_name)
+                        name_typed = True
+                else:
+                    key = event.get("key", "")
+                    state = event.get("state")
+                    if state == "down":
+                        self.x11_input.key_press(key)
+                    elif state == "up":
+                        self.x11_input.key_release(key)
+
+        # Final click
+        self.x11_input.left_click()
+        logger.info("Mocap replay completed")
+
     # returns nothing if succeeded, raises an exception if failed
     def attempt_to_join_meeting(self):
         if self.google_meet_bot_login_is_available and self.google_meet_bot_login_should_be_used:
             self.login_to_google_meet_account_with_retries()
 
         layout_to_select = self.get_layout_to_select()
+
+        if self.ui_interaction_mode == "mocap":
+            self.use_mocap_to_position_mouse()
 
         self.driver.get(self.meeting_url)
 
@@ -961,22 +1050,25 @@ class GoogleMeetUIMethods:
 
         self.check_if_meeting_is_found()
 
-        self.fill_out_name_input()
-
-        self.turn_off_media_inputs()
-
-        logger.info("Waiting for the 'Ask to join' or 'Join now' button...")
-        join_button = self.locate_element(
-            step="join_button",
-            condition=EC.presence_of_element_located((By.XPATH, self.join_now_button_selector())),
-            wait_time_seconds=60,
-        )
-        logger.info("Clicking the join button...")
-        if self.ui_interaction_mode == "human":
-            self.human_navigate_to_element(join_button)
-            self.human_click_element(join_button)
+        if self.ui_interaction_mode == "mocap":
+            self.use_mocap_to_fill_out_name_input_turn_off_media_inputs_and_click_join_button()
         else:
-            self.click_element(join_button, "join_button")
+            self.fill_out_name_input()
+
+            self.turn_off_media_inputs()
+
+            logger.info("Waiting for the 'Ask to join' or 'Join now' button...")
+            join_button = self.locate_element(
+                step="join_button",
+                condition=EC.presence_of_element_located((By.XPATH, self.join_now_button_selector())),
+                wait_time_seconds=60,
+            )
+            logger.info("Clicking the join button...")
+            if self.ui_interaction_mode == "human":
+                self.human_navigate_to_element(join_button)
+                self.human_click_element(join_button)
+            else:
+                self.click_element(join_button, "join_button")
 
         self.click_captions_button()
 
