@@ -6,14 +6,22 @@ from django.db import migrations, models
 
 def backfill_bot_login_groups(apps, schema_editor):
     BotLoginGroup = apps.get_model("bots", "BotLoginGroup")
+    BotLogin = apps.get_model("bots", "BotLogin")
 
     for project_id in BotLoginGroup.objects.values_list("project_id", flat=True).distinct():
         groups = BotLoginGroup.objects.filter(project_id=project_id).order_by("id")
 
         for index, group in enumerate(groups, start=1):
+            if group.object_id.startswith("gbg_"):
+                group.object_id = f"blg_{group.object_id[4:]}"
             group.platform = "google_meet"
             group.name = "Google Meet Group 1" if index == 1 else f"Google Meet Group {index}"
-            group.save(update_fields=["platform", "name"])
+            group.save(update_fields=["object_id", "platform", "name"])
+
+    for login in BotLogin.objects.all():
+        if login.object_id.startswith("gbl_"):
+            login.object_id = f"bl_{login.object_id[4:]}"
+        login.save(update_fields=["object_id"])
 
 
 class Migration(migrations.Migration):
@@ -62,5 +70,13 @@ class Migration(migrations.Migration):
         migrations.AddConstraint(
             model_name='botlogingroup',
             constraint=models.UniqueConstraint(fields=('project', 'platform', 'name'), name='unique_bot_login_group_project_platform_name'),
+        ),
+        migrations.RemoveConstraint(
+            model_name='botlogin',
+            name='unique_google_meet_bot_login_email',
+        ),
+        migrations.AddConstraint(
+            model_name='botlogin',
+            constraint=models.UniqueConstraint(fields=('group', 'email'), name='unique_bot_login_email_per_group'),
         ),
     ]
