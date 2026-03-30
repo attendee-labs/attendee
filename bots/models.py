@@ -59,7 +59,7 @@ class Project(models.Model):
         return self.name
 
 
-class GoogleMeetBotLoginGroup(models.Model):
+class BotLoginGroup(models.Model):
     OBJECT_ID_PREFIX = "gbg_"
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="google_meet_bot_login_groups")
     object_id = models.CharField(max_length=32, unique=True, editable=False)
@@ -76,11 +76,14 @@ class GoogleMeetBotLoginGroup(models.Model):
 
     def __str__(self):
         return f"{self.project.name} - {self.object_id}"
+    
+    class Meta:
+        db_table = "bots_googlemeetbotlogingroup"
 
 
-class GoogleMeetBotLogin(models.Model):
+class BotLogin(models.Model):
     OBJECT_ID_PREFIX = "gbl_"
-    group = models.ForeignKey(GoogleMeetBotLoginGroup, on_delete=models.CASCADE, related_name="google_meet_bot_logins")
+    group = models.ForeignKey(BotLoginGroup, on_delete=models.CASCADE, related_name="google_meet_bot_logins")
     object_id = models.CharField(max_length=32, unique=True, editable=False)
 
     _encrypted_data = models.BinaryField(
@@ -130,7 +133,8 @@ class GoogleMeetBotLogin(models.Model):
         return f"{self.email} - {self.object_id}"
 
     class Meta:
-        # Within a Google Meet Bot Login Group, we don't want to allow Google Meet Bot Logins with the same email
+        db_table = "bots_googlemeetbotlogin"
+        # Within a Bot Login Group, we don't want to allow Bot Logins with the same email
         constraints = [
             models.UniqueConstraint(fields=["group", "email"], name="unique_google_meet_bot_login_email"),
         ]

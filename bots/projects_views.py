@@ -34,8 +34,8 @@ from .models import (
     ChatMessage,
     Credentials,
     CreditTransaction,
-    GoogleMeetBotLogin,
-    GoogleMeetBotLoginGroup,
+    BotLogin,
+    BotLoginGroup,
     Participant,
     ParticipantEventTypes,
     Project,
@@ -102,7 +102,7 @@ def get_calendar_event_for_user(user, calendar_event_object_id):
 
 
 def get_google_meet_bot_login_for_user(user, google_meet_bot_login_object_id):
-    google_meet_bot_login = get_object_or_404(GoogleMeetBotLogin, object_id=google_meet_bot_login_object_id, group__project__organization=user.organization)
+    google_meet_bot_login = get_object_or_404(BotLogin, object_id=google_meet_bot_login_object_id, group__project__organization=user.organization)
     # If you're an admin you can access any Google Meet bot login in the organization
     if user.role != UserRole.ADMIN and not ProjectAccess.objects.filter(project=google_meet_bot_login.group.project, user=user).exists():
         raise PermissionDenied
@@ -417,7 +417,7 @@ class ProjectCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
         zoom_oauth_app = ZoomOAuthApp.objects.filter(project=project).first()
 
         # Try to get existing google meet bot login group
-        google_meet_bot_login_group = GoogleMeetBotLoginGroup.objects.filter(project=project).first()
+        google_meet_bot_login_group = BotLoginGroup.objects.filter(project=project).first()
 
         # Try to get existing credentials
         zoom_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.ZOOM_OAUTH).first()
@@ -1415,7 +1415,7 @@ class CreateGoogleMeetBotLoginView(LoginRequiredMixin, ProjectUrlContextMixin, V
 
         try:
             # Get or create GoogleMeetBotLoginGroup for this project
-            google_meet_bot_login_group, created = GoogleMeetBotLoginGroup.objects.get_or_create(project=project)
+            google_meet_bot_login_group, created = BotLoginGroup.objects.get_or_create(project=project)
 
             # Extract fields from request
             workspace_domain = request.POST.get("workspace_domain", "").strip()
@@ -1428,7 +1428,7 @@ class CreateGoogleMeetBotLoginView(LoginRequiredMixin, ProjectUrlContextMixin, V
                 return HttpResponse("Missing required fields: workspace_domain, email, private_key, and cert are all required", status=400)
 
             # Create the GoogleMeetBotLogin
-            google_meet_bot_login = GoogleMeetBotLogin.objects.create(
+            google_meet_bot_login = BotLogin.objects.create(
                 group=google_meet_bot_login_group,
                 workspace_domain=workspace_domain,
                 email=email,
