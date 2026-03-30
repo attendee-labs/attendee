@@ -18,11 +18,12 @@ from bots.models import (
     BotEventManager,
     BotEventSubTypes,
     BotEventTypes,
+    BotLogin,
+    BotLoginGroup,
+    BotLoginPlatform,
     BotStates,
     ChatMessage,
     Credentials,
-    BotLogin,
-    BotLoginGroup,
     Organization,
     Participant,
     ParticipantEvent,
@@ -1524,7 +1525,7 @@ class TestGoogleMeetBot2(TransactionTestCase):
         """
 
         # Set up Google Meet bot login credentials
-        google_meet_bot_login_group = BotLoginGroup.objects.create(project=self.project)
+        google_meet_bot_login_group = BotLoginGroup.objects.create(project=self.project, platform=BotLoginPlatform.GOOGLE_MEET, name="Google Meet Bot Login Group")
         google_meet_bot_login = BotLogin.objects.create(
             group=google_meet_bot_login_group,
             workspace_domain="example.com",

@@ -60,8 +60,9 @@ class Project(models.Model):
 
 
 class BotLoginPlatform(models.TextChoices):
-        GOOGLE_MEET = "google_meet", "Google Meet"
-        TEAMS = "teams", "Teams"
+    GOOGLE_MEET = "google_meet", "Google Meet"
+    TEAMS = "teams", "Teams"
+
 
 class BotLoginGroup(models.Model):
     OBJECT_ID_PREFIX = "gbg_"
@@ -83,7 +84,7 @@ class BotLoginGroup(models.Model):
 
     def __str__(self):
         return f"{self.project.name} - {self.object_id}"
-    
+
     class Meta:
         db_table = "bots_googlemeetbotlogingroup"
         constraints = [
