@@ -124,7 +124,7 @@ class ObjectAccessIntegrationTest(TransactionTestCase):
         self.zoom_oauth_app_b1.set_credentials({"client_secret": "test_secret_b1", "webhook_secret": "test_webhook_secret_b1"})
 
         # Create Google Meet bot login groups and logins
-        self.google_meet_bot_login_group_a1 = BotLoginGroup.objects.create(project=self.project_a1, platform=BotLoginPlatform.GOOGLE_MEET, name="Google Meet Bot Login Group A1")
+        self.google_meet_bot_login_group_a1 = BotLoginGroup.objects.create(project=self.project_a1, platform=BotLoginPlatform.GOOGLE_MEET, name="Google Meet Group 1 A1")
         self.google_meet_bot_login_a1 = BotLogin.objects.create(
             group=self.google_meet_bot_login_group_a1,
             workspace_domain="workspace-a1.com",
@@ -132,7 +132,7 @@ class ObjectAccessIntegrationTest(TransactionTestCase):
         )
         self.google_meet_bot_login_a1.set_credentials({"private_key": "test_private_key_a1", "cert": "test_cert_a1"})
 
-        self.google_meet_bot_login_group_a2 = BotLoginGroup.objects.create(project=self.project_a2, platform=BotLoginPlatform.GOOGLE_MEET, name="Google Meet Bot Login Group A2")
+        self.google_meet_bot_login_group_a2 = BotLoginGroup.objects.create(project=self.project_a2, platform=BotLoginPlatform.GOOGLE_MEET, name="Google Meet Group 1 A2")
         self.google_meet_bot_login_a2 = BotLogin.objects.create(
             group=self.google_meet_bot_login_group_a2,
             workspace_domain="workspace-a2.com",
@@ -140,7 +140,7 @@ class ObjectAccessIntegrationTest(TransactionTestCase):
         )
         self.google_meet_bot_login_a2.set_credentials({"private_key": "test_private_key_a2", "cert": "test_cert_a2"})
 
-        self.google_meet_bot_login_group_b1 = BotLoginGroup.objects.create(project=self.project_b1, platform=BotLoginPlatform.GOOGLE_MEET, name="Google Meet Bot Login Group B1")
+        self.google_meet_bot_login_group_b1 = BotLoginGroup.objects.create(project=self.project_b1, platform=BotLoginPlatform.GOOGLE_MEET, name="Google Meet Group 1 B1")
         self.google_meet_bot_login_b1 = BotLogin.objects.create(
             group=self.google_meet_bot_login_group_b1,
             workspace_domain="workspace-b1.com",
@@ -617,9 +617,9 @@ class ObjectAccessIntegrationTest(TransactionTestCase):
         self.assertTrue(BotLogin.objects.filter(group=self.google_meet_bot_login_group_a1).exists())
         self.assertTrue(BotLogin.objects.filter(group=self.google_meet_bot_login_group_a2).exists())
         self.assertTrue(BotLogin.objects.filter(group=self.google_meet_bot_login_group_b1).exists())
-        self.assertEqual(BotLogin.objects.get(group=self.google_meet_bot_login_group_a1).group.name, "Google Meet Bot Login Group A1")
-        self.assertEqual(BotLogin.objects.get(group=self.google_meet_bot_login_group_a2).group.name, "Google Meet Bot Login Group A2")
-        self.assertEqual(BotLogin.objects.get(group=self.google_meet_bot_login_group_b1).group.name, "Google Meet Bot Login Group B1")
+        self.assertEqual(BotLogin.objects.get(group=self.google_meet_bot_login_group_a1).group.name, "Google Meet Group 1 A1")
+        self.assertEqual(BotLogin.objects.get(group=self.google_meet_bot_login_group_a2).group.name, "Google Meet Group 1 A2")
+        self.assertEqual(BotLogin.objects.get(group=self.google_meet_bot_login_group_b1).group.name, "Google Meet Group 1 B1")
 
         # Regular user can create Google Meet bot logins in projects they have access to
         self.client.force_login(self.regular_user_a)

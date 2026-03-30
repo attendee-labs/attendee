@@ -65,7 +65,7 @@ class BotLoginPlatform(models.TextChoices):
 
 
 class BotLoginGroup(models.Model):
-    OBJECT_ID_PREFIX = "gbg_"
+    OBJECT_ID_PREFIX = "blg_"
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="bot_login_groups")
     object_id = models.CharField(max_length=32, unique=True, editable=False)
 
@@ -93,7 +93,7 @@ class BotLoginGroup(models.Model):
 
 
 class BotLogin(models.Model):
-    OBJECT_ID_PREFIX = "gbl_"
+    OBJECT_ID_PREFIX = "bl_"
     group = models.ForeignKey(BotLoginGroup, on_delete=models.CASCADE, related_name="bot_logins")
     object_id = models.CharField(max_length=32, unique=True, editable=False)
 
@@ -145,9 +145,9 @@ class BotLogin(models.Model):
 
     class Meta:
         db_table = "bots_googlemeetbotlogin"
-        # Within a Bot Login Group, we don't want to allow Bot Logins with the same email
+        # Within a BotLoginGroup, we don't want to allow BotLogins with the same email
         constraints = [
-            models.UniqueConstraint(fields=["group", "email"], name="unique_google_meet_bot_login_email"),
+            models.UniqueConstraint(fields=["group", "email"], name="unique_bot_login_email_per_group"),
         ]
 
 

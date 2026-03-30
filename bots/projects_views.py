@@ -1416,7 +1416,7 @@ class CreateGoogleMeetBotLoginView(LoginRequiredMixin, ProjectUrlContextMixin, V
 
         try:
             # Get or create GoogleMeet BotLoginGroup for this project
-            google_meet_bot_login_group, created = BotLoginGroup.objects.get_or_create(project=project, platform=BotLoginPlatform.GOOGLE_MEET, name="Google Meet Bot Login Group") # todo: update api to require name
+            google_meet_bot_login_group, created = BotLoginGroup.objects.get_or_create(project=project, platform=BotLoginPlatform.GOOGLE_MEET, name="Google Meet Group 1")  # todo: update api to require name
 
             # Extract fields from request
             workspace_domain = request.POST.get("workspace_domain", "").strip()

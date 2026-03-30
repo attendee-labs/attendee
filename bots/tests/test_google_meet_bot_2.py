@@ -1451,7 +1451,7 @@ class TestGoogleMeetBot2(TransactionTestCase):
         """
 
         # Set up Google Meet bot login credentials
-        google_meet_bot_login_group = BotLoginGroup.objects.create(project=self.project, platform=BotLoginPlatform.GOOGLE_MEET, name="Google Meet Bot Login Group")
+        google_meet_bot_login_group = BotLoginGroup.objects.create(project=self.project, platform=BotLoginPlatform.GOOGLE_MEET, name="Google Meet Group 1")
         google_meet_bot_login = BotLogin.objects.create(
             group=google_meet_bot_login_group,
             workspace_domain="example.com",
