@@ -232,8 +232,8 @@ class GoogleMeetUIMethods:
             from oxymouse import OxyMouse
 
             rect = target_element.rect
-            end_x = int(rect["x"] + rect["width"] / 2)
-            end_y = int(rect["y"] + rect["height"] / 2)
+            end_x = int(rect["x"] + rect["width"] / 2) + random.randint(-10, 10)
+            end_y = int(rect["y"] + rect["height"] / 2) + random.randint(-10, 10)
 
             viewport_w = int(self.driver.execute_script("return window.innerWidth;"))
             viewport_h = int(self.driver.execute_script("return window.innerHeight;"))
@@ -241,7 +241,7 @@ class GoogleMeetUIMethods:
             start_x = random.randint(int(viewport_w * 0.1), int(viewport_w * 0.9))
             start_y = random.randint(int(viewport_h * 0.1), int(viewport_h * 0.9))
 
-            mouse = OxyMouse(algorithm="oxy")
+            mouse = OxyMouse(algorithm="gaussian")
             movements = mouse.generate_coordinates(
                 from_x=start_x,
                 from_y=start_y,
@@ -249,9 +249,16 @@ class GoogleMeetUIMethods:
                 to_y=end_y,
             )
 
+            # Downsample. Keep first and last, but in between, only keep 1/3
+            downsampled_movements = [movements[0]]
+            for i in range(1, len(movements) - 1):
+                if i % 4 == 0:
+                    downsampled_movements.append(movements[i])
+            downsampled_movements.append(movements[-1])
+
             action = ActionChains(self.driver)
 
-            for x, y in movements:
+            for x, y in downsampled_movements:
                 x = max(1, min(viewport_w - 1, int(x)))
                 y = max(1, min(viewport_h - 1, int(y)))
 
@@ -259,7 +266,7 @@ class GoogleMeetUIMethods:
                 offset_y = y - end_y
 
                 action.move_to_element_with_offset(target_element, offset_x, offset_y)
-                action.pause(random.uniform(0.005, 0.03))
+                action.pause(random.uniform(0.00005, 0.0003))
 
             action.move_to_element(target_element)
             action.perform()
