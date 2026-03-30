@@ -11,6 +11,10 @@ class X11Input:
         self.disp = display.Display()
         self.root = self.disp.screen().root
 
+    def move_abs(self, x: int, y: int):
+        xtest.fake_input(self.disp, X.MotionNotify, x=x, y=y)
+        self.disp.sync()
+
     def move_rel(self, dx: int, dy: int):
         ptr = self.root.query_pointer()._data
         new_x = ptr["root_x"] + dx

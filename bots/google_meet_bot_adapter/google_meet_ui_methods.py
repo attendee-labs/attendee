@@ -946,16 +946,14 @@ class GoogleMeetUIMethods:
             return
 
         first = events[0]
-        ptr = self.x11_input.root.query_pointer()._data
         start_x = first["global_x"] - first.get("dx", 0)
         start_y = first["global_y"] - first.get("dy", 0)
-        init_dx = start_x - int(ptr["root_x"])
-        init_dy = start_y - int(ptr["root_y"])
-        if init_dx or init_dy:
-            self.x11_input.move_rel(init_dx, init_dy)
-            logger.info(f"Positioned mouse at ({start_x}, {start_y})")
+        self.x11_input.move_abs(start_x, start_y)
+        logger.info(f"Positioned mouse at ({start_x}, {start_y})")
 
     def use_mocap_to_fill_out_name_input_turn_off_media_inputs_and_click_join_button(self):
+        time.sleep(4)
+
         self.ensure_x11_input()
 
         mocap_file = os.path.join(os.path.dirname(__file__), "join_mocap_720p.json")
@@ -967,18 +965,12 @@ class GoogleMeetUIMethods:
         if not events:
             return
 
-        time.sleep(8)
-
         # global_x/y is the position *after* the move, so the starting
         # position is (global_x - dx, global_y - dy) of the first event.
         first = events[0]
-        ptr = self.x11_input.root.query_pointer()._data
         start_x = first["global_x"] - first.get("dx", 0)
         start_y = first["global_y"] - first.get("dy", 0)
-        init_dx = start_x - int(ptr["root_x"])
-        init_dy = start_y - int(ptr["root_y"])
-        if init_dx or init_dy:
-            self.x11_input.move_rel(init_dx, init_dy)
+        self.x11_input.move_abs(start_x, start_y)
 
         name_typed = False
 
@@ -988,13 +980,10 @@ class GoogleMeetUIMethods:
             logger.info(f"Processing event: {event_type}, dt: {dt}")
 
             if dt > 0:
-                time.sleep(dt)
+                time.sleep(dt / 2.0)
 
             if event_type == "mouse_move":
-                dx = event.get("dx", 0)
-                dy = event.get("dy", 0)
-                if dx or dy:
-                    self.x11_input.move_rel(dx, dy)
+                self.x11_input.move_abs(event["global_x"], event["global_y"])
 
             elif event_type == "mouse_click":
                 button = event.get("button", "left")
@@ -1020,6 +1009,7 @@ class GoogleMeetUIMethods:
                         self.x11_input.key_release(key)
 
         # Final click
+        time.sleep(0.05)
         self.x11_input.left_click()
         logger.info("Mocap replay completed")
 
@@ -1048,11 +1038,11 @@ class GoogleMeetUIMethods:
             },
         )
 
-        self.check_if_meeting_is_found()
-
         if self.ui_interaction_mode == "mocap":
             self.use_mocap_to_fill_out_name_input_turn_off_media_inputs_and_click_join_button()
         else:
+            self.check_if_meeting_is_found()
+
             self.fill_out_name_input()
 
             self.turn_off_media_inputs()
