@@ -275,15 +275,18 @@ class GoogleMeetUIMethods:
             start_x = int(ptr["root_x"])
             start_y = int(ptr["root_y"])
 
+            logger.info(f"Starting mouse move from {start_x}, {start_y} to {target_root_x}, {target_root_y}")
+
             total_dx = target_root_x - start_x
             total_dy = target_root_y - start_y
             distance = math.hypot(total_dx, total_dy)
 
             if distance < 1:
+                logger.info(f"Distance is less than 1, so not moving mouse")
                 return
 
             # Human-ish motion: more distance -> more steps.
-            steps = max(8, min(50, int(distance / random.uniform(8.0, 16.0))))
+            steps = max(8, min(10, int(distance / random.uniform(8.0, 16.0))))
 
             prev_x = start_x
             prev_y = start_y
@@ -302,10 +305,11 @@ class GoogleMeetUIMethods:
 
                 if rel_dx or rel_dy:
                     self.x11_input.move_rel(rel_dx, rel_dy)
+                    logger.info(f"Moved mouse to {next_x}, {next_y}")
                     prev_x = next_x
                     prev_y = next_y
 
-                time.sleep(random.uniform(0.003, 0.01))
+                time.sleep(random.uniform(0.3, 1.0))
 
             # Final correction in case of rounding drift.
             ptr = self.x11_input.root.query_pointer()._data
