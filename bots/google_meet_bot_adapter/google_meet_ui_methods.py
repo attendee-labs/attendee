@@ -171,7 +171,9 @@ class GoogleMeetUIMethods:
             logger.info("Clicking the microphone button...")
             if self.ui_interaction_mode == "human":
                 self.human_navigate_to_element(microphone_button)
-            self.click_element(microphone_button, "turn_off_microphone_button")
+                self.human_click_element(microphone_button)
+            else:
+                self.click_element(microphone_button, "turn_off_microphone_button")
 
             # Wait for confirmation that microphone is off
             try:
@@ -194,7 +196,9 @@ class GoogleMeetUIMethods:
             logger.info("Clicking the camera button...")
             if self.ui_interaction_mode == "human":
                 self.human_navigate_to_element(camera_button)
-            self.click_element(camera_button, "turn_off_camera_button")
+                self.human_click_element(camera_button)
+            else:
+                self.click_element(camera_button, "turn_off_camera_button")
 
             # Wait for confirmation that camera is off
             try:
@@ -226,10 +230,7 @@ class GoogleMeetUIMethods:
         return WebDriverWait(self.driver, 1).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'input[type="text"][aria-label="Your name"]')))
 
     def human_navigate_to_element(self, target_element):
-        if not hasattr(self, "x11_input"):
-            from .x11_input import X11Input
-
-            self.x11_input = X11Input()
+        self.ensure_x11_input()
 
         try:
             metrics = self.driver.execute_script(
@@ -330,16 +331,78 @@ class GoogleMeetUIMethods:
                 e,
             )
 
-    def human_type_with_typos(self, element, text, typo_rate=0.03):
+    NEARBY_KEYS = {
+        'a': 'sqwz', 'b': 'vghn', 'c': 'xdfv', 'd': 'sfec',
+        'e': 'wrd', 'f': 'dgrc', 'g': 'fhtv', 'h': 'gjyn',
+        'i': 'uok', 'j': 'hkun', 'k': 'jlim', 'l': 'kop',
+        'm': 'njk', 'n': 'bhjm', 'o': 'iplk', 'p': 'ol',
+        'q': 'wa', 'r': 'etf', 's': 'adwx', 't': 'rgy',
+        'u': 'yij', 'v': 'cfgb', 'w': 'qeas', 'x': 'zsdc',
+        'y': 'tuh', 'z': 'xas',
+    }
+
+    UNSHIFTED_PUNCTUATION = {
+        '-': 'minus', '=': 'equal', '[': 'bracketleft', ']': 'bracketright',
+        '\\': 'backslash', ';': 'semicolon', "'": 'apostrophe',
+        ',': 'comma', '.': 'period', '/': 'slash', '`': 'grave',
+    }
+
+    SHIFTED_PUNCTUATION = {
+        '~': 'grave', '!': '1', '@': '2', '#': '3', '$': '4', '%': '5',
+        '^': '6', '&': '7', '*': '8', '(': '9', ')': '0', '_': 'minus',
+        '+': 'equal', '{': 'bracketleft', '}': 'bracketright', '|': 'backslash',
+        ':': 'semicolon', '"': 'apostrophe', '<': 'comma', '>': 'period', '?': 'slash',
+    }
+
+    def _x11_type_char(self, char):
+        needs_shift = char.isupper() or char in self.SHIFTED_PUNCTUATION
+
+        if char in self.SHIFTED_PUNCTUATION:
+            base = self.SHIFTED_PUNCTUATION[char]
+        elif char in self.UNSHIFTED_PUNCTUATION:
+            base = self.UNSHIFTED_PUNCTUATION[char]
+        elif char.isupper():
+            base = char.lower()
+        else:
+            base = char
+
+        if needs_shift:
+            self.x11_input.key_press("Shift")
+        self.x11_input.key_press(base)
+        self.x11_input.key_release(base)
+        if needs_shift:
+            self.x11_input.key_release("Shift")
+
+    def human_type_with_typos(self, text):
+        self.ensure_x11_input()
+
+        typo_rate = 0.06
+
         for char in text:
-            if random.random() < typo_rate:
-                wrong = random.choice("abcdefghijklmnopqrstuvwxyz")
-                element.send_keys(wrong)
-                time.sleep(random.uniform(0.1, 0.3))
-                element.send_keys(Keys.BACKSPACE)
-                time.sleep(random.uniform(0.05, 0.2))
-            element.send_keys(char)
-            time.sleep(random.uniform(0.04, 0.18))
+            if random.random() < typo_rate and char.lower() in self.NEARBY_KEYS:
+                wrong_char = random.choice(self.NEARBY_KEYS[char.lower()])
+                self._x11_type_char(wrong_char)
+                time.sleep(random.uniform(0.15, 0.4))
+                self.x11_input.key_press("Backspace")
+                self.x11_input.key_release("Backspace")
+                time.sleep(random.uniform(0.05, 0.15))
+
+            self._x11_type_char(char)
+
+            if random.random() < 0.1:
+                time.sleep(random.uniform(0.12, 0.25))
+            else:
+                time.sleep(random.uniform(0.04, 0.10))
+
+    def human_click_element(self, element):
+        self.ensure_x11_input()
+        self.x11_input.left_click()
+        time.sleep(random.uniform(0.3, 1.0))
+
+    def ensure_x11_input(self):
+        if not hasattr(self, "x11_input"):
+            from .x11_input import X11Input
+            self.x11_input = X11Input()
 
     def fill_out_name_input(self):
         num_attempts_to_look_for_name_input = 30
@@ -351,7 +414,8 @@ class GoogleMeetUIMethods:
                 logger.info("name input found")
                 if self.ui_interaction_mode == "human":
                     self.human_navigate_to_element(name_input)
-                    self.human_type_with_typos(name_input, self.display_name)
+                    self.human_click_element(name_input)
+                    self.human_type_with_typos(self.display_name)
                 else:
                     name_input.send_keys(self.display_name)
                 return
@@ -825,7 +889,9 @@ class GoogleMeetUIMethods:
         logger.info("Clicking the join button...")
         if self.ui_interaction_mode == "human":
             self.human_navigate_to_element(join_button)
-        self.click_element(join_button, "join_button")
+            self.human_click_element(join_button)
+        else:
+            self.click_element(join_button, "join_button")
 
         self.click_captions_button()
 
