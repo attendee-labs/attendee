@@ -12,7 +12,6 @@ import gi
 import redis
 from django.conf import settings
 from django.core.files.base import ContentFile
-from django.db.models import F
 from django.utils import timezone
 
 from bots.automatic_leave_configuration import AutomaticLeaveConfiguration
@@ -43,7 +42,6 @@ from bots.models import (
     BotStates,
     ChatMessage,
     ChatMessageToOptions,
-    Credentials,
     MeetingTypes,
     Participant,
     ParticipantEvent,
@@ -162,23 +160,26 @@ class BotController:
     def create_google_meet_bot_login_session(self):
         if not self.bot_in_db.google_meet_use_bot_login():
             return None
-        first_google_meet_bot_login_group = BotLoginGroup.objects.filter(project=self.bot_in_db.project, platform=BotLoginPlatform.GOOGLE_MEET).first()
-        if not first_google_meet_bot_login_group:
+        google_meet_bot_login = BotLoginGroup.first_available_login(
+            project=self.bot_in_db.project,
+            platform=BotLoginPlatform.GOOGLE_MEET,
+        )
+        if not google_meet_bot_login:
             return None
-        least_used_google_meet_bot_login = first_google_meet_bot_login_group.bot_logins.order_by(F("last_used_at").asc(nulls_first=True)).first()
-        if not least_used_google_meet_bot_login:
-            return None
-        least_used_google_meet_bot_login.last_used_at = timezone.now()
-        least_used_google_meet_bot_login.save()
-        session_id = create_google_meet_sign_in_session(self.bot_in_db, least_used_google_meet_bot_login)
+        google_meet_bot_login.last_used_at = timezone.now()
+        google_meet_bot_login.save()
+        session_id = create_google_meet_sign_in_session(self.bot_in_db, google_meet_bot_login)
         return {
             "session_id": session_id,
-            "login_email": least_used_google_meet_bot_login.email,
-            "login_domain": least_used_google_meet_bot_login.workspace_domain,
+            "login_email": google_meet_bot_login.email,
+            "login_domain": google_meet_bot_login.workspace_domain,
         }
 
     def google_meet_bot_login_is_available(self):
-        return self.bot_in_db.google_meet_use_bot_login() and BotLogin.objects.filter(group__project=self.bot_in_db.project, group__platform=BotLoginPlatform.GOOGLE_MEET).exists()
+        return self.bot_in_db.google_meet_use_bot_login() and BotLoginGroup.first_available_login(
+            project=self.bot_in_db.project,
+            platform=BotLoginPlatform.GOOGLE_MEET,
+        ) is not None
 
     def get_google_meet_bot_adapter(self):
         from bots.google_meet_bot_adapter import GoogleMeetBotAdapter
@@ -214,7 +215,12 @@ class BotController:
     def get_teams_bot_adapter(self):
         from bots.teams_bot_adapter import TeamsBotAdapter
 
-        teams_bot_login_credentials = self.bot_in_db.project.credentials.filter(credential_type=Credentials.CredentialTypes.TEAMS_BOT_LOGIN).first()
+        teams_bot_login = None
+        if self.bot_in_db.teams_use_bot_login():
+            teams_bot_login = BotLoginGroup.first_available_login(
+                project=self.bot_in_db.project,
+                platform=BotLoginPlatform.TEAMS,
+            )
 
         return TeamsBotAdapter(
             display_name=self.bot_in_db.name,
@@ -235,7 +241,7 @@ class BotController:
             start_recording_screen_callback=self.screen_and_audio_recorder.start_recording if self.screen_and_audio_recorder else None,
             stop_recording_screen_callback=self.screen_and_audio_recorder.stop_recording if self.screen_and_audio_recorder else None,
             video_frame_size=self.bot_in_db.recording_dimensions(),
-            teams_bot_login_credentials=teams_bot_login_credentials.get_credentials() if teams_bot_login_credentials and self.bot_in_db.teams_use_bot_login() else None,
+            teams_bot_login_credentials={"username": teams_bot_login.email, "password": teams_bot_login.get_credentials().get("password")} if teams_bot_login else None,
             teams_bot_login_should_be_used=self.bot_in_db.teams_login_mode_is_always(),
             record_chat_messages_when_paused=self.bot_in_db.record_chat_messages_when_paused(),
             record_participant_speech_start_stop_events=self.bot_in_db.record_participant_speech_start_stop_events(),
