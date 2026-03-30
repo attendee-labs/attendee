@@ -59,10 +59,17 @@ class Project(models.Model):
         return self.name
 
 
+class BotLoginPlatform(models.TextChoices):
+        GOOGLE_MEET = "google_meet", "Google Meet"
+        TEAMS = "teams", "Teams"
+
 class BotLoginGroup(models.Model):
     OBJECT_ID_PREFIX = "gbg_"
-    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="google_meet_bot_login_groups")
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="bot_login_groups")
     object_id = models.CharField(max_length=32, unique=True, editable=False)
+
+    platform = models.CharField(max_length=32, choices=BotLoginPlatform.choices)
+    name = models.CharField(max_length=255)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -79,11 +86,14 @@ class BotLoginGroup(models.Model):
     
     class Meta:
         db_table = "bots_googlemeetbotlogingroup"
+        constraints = [
+            models.UniqueConstraint(fields=["project", "platform", "name"], name="unique_bot_login_group_project_platform_name"),
+        ]
 
 
 class BotLogin(models.Model):
     OBJECT_ID_PREFIX = "gbl_"
-    group = models.ForeignKey(BotLoginGroup, on_delete=models.CASCADE, related_name="google_meet_bot_logins")
+    group = models.ForeignKey(BotLoginGroup, on_delete=models.CASCADE, related_name="bot_logins")
     object_id = models.CharField(max_length=32, unique=True, editable=False)
 
     _encrypted_data = models.BinaryField(
@@ -91,7 +101,7 @@ class BotLogin(models.Model):
         editable=False,  # Prevents editing through admin/forms
     )
 
-    workspace_domain = models.CharField(max_length=255)
+    workspace_domain = models.CharField(max_length=255, null=True, blank=True)
     email = models.CharField(max_length=255)
 
     created_at = models.DateTimeField(auto_now_add=True)

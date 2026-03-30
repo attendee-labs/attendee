@@ -168,7 +168,7 @@ class BotController:
         first_google_meet_bot_login_group = BotLoginGroup.objects.filter(project=self.bot_in_db.project).first()
         if not first_google_meet_bot_login_group:
             return None
-        least_used_google_meet_bot_login = first_google_meet_bot_login_group.google_meet_bot_logins.order_by(F("last_used_at").asc(nulls_first=True)).first()
+        least_used_google_meet_bot_login = first_google_meet_bot_login_group.bot_logins.order_by(F("last_used_at").asc(nulls_first=True)).first()
         if not least_used_google_meet_bot_login:
             return None
         least_used_google_meet_bot_login.last_used_at = timezone.now()
