@@ -42,6 +42,7 @@ from bots.models import (
     BotStates,
     ChatMessage,
     ChatMessageToOptions,
+    Credentials,
     MeetingTypes,
     Participant,
     ParticipantEvent,
