@@ -714,6 +714,12 @@ GOOGLE_MEET_SETTINGS_SCHEMA = {
             "description": "The mode to use for the Google Meet bot login. 'always' means the bot will always login, 'only_if_required' means the bot will only login if the meeting requires authentication.",
             "default": "always",
         },
+        "ui_interaction_mode": {
+            "type": "string",
+            "enum": ["standard", "human"],
+            "description": "The UI interaction mode for the Google Meet bot. 'standard' uses the default automated interaction strategy, 'human' uses a more human-like interaction strategy.",
+            "default": "human",
+        },
     },
     "required": [],
     "additionalProperties": False,
@@ -1404,7 +1410,7 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
     google_meet_settings = GoogleMeetSettingsJSONField(
         help_text="The Google Meet-specific settings for the bot.",
         required=False,
-        default={"use_login": False, "login_mode": "always"},
+        default={"use_login": False, "login_mode": "always", "ui_interaction_mode": "human"},
     )
 
     def validate_google_meet_settings(self, value):
@@ -1412,7 +1418,7 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
             return value
 
         # Define defaults
-        defaults = {"use_login": False, "login_mode": "always"}
+        defaults = {"use_login": False, "login_mode": "always", "ui_interaction_mode": "human"}
 
         try:
             jsonschema.validate(instance=value, schema=GOOGLE_MEET_SETTINGS_SCHEMA)

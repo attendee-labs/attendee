@@ -1,5 +1,6 @@
 import logging
 import os
+import random
 import time
 from urllib.parse import urlparse
 
@@ -8,6 +9,7 @@ from django.conf import settings
 from selenium.common.exceptions import ElementNotInteractableException, NoSuchElementException, TimeoutException
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
@@ -166,6 +168,8 @@ class GoogleMeetUIMethods:
                 wait_time_seconds=6,
             )
             logger.info("Clicking the microphone button...")
+            if self.ui_interaction_mode == "human":
+                self.human_navigate_to_element(microphone_button)
             self.click_element(microphone_button, "turn_off_microphone_button")
 
             # Wait for confirmation that microphone is off
@@ -187,6 +191,8 @@ class GoogleMeetUIMethods:
                 wait_time_seconds=6,
             )
             logger.info("Clicking the camera button...")
+            if self.ui_interaction_mode == "human":
+                self.human_navigate_to_element(camera_button)
             self.click_element(camera_button, "turn_off_camera_button")
 
             # Wait for confirmation that camera is off
@@ -218,6 +224,63 @@ class GoogleMeetUIMethods:
     def retrieve_name_input_element(self):
         return WebDriverWait(self.driver, 1).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'input[type="text"][aria-label="Your name"]')))
 
+    def human_navigate_to_element(self, target_element, num_points=20):
+        logger.info("Navigating to element %s using human interaction mode", target_element)
+        """Move the mouse to the target element using Oxylabs OxyMouse ('oxy' algorithm)."""
+        time.sleep(random.uniform(0.1, 0.3))
+        try:
+            from oxymouse import OxyMouse
+
+            rect = target_element.rect
+            end_x = int(rect["x"] + rect["width"] / 2)
+            end_y = int(rect["y"] + rect["height"] / 2)
+
+            viewport_w = int(self.driver.execute_script("return window.innerWidth;"))
+            viewport_h = int(self.driver.execute_script("return window.innerHeight;"))
+
+            start_x = random.randint(int(viewport_w * 0.1), int(viewport_w * 0.9))
+            start_y = random.randint(int(viewport_h * 0.1), int(viewport_h * 0.9))
+
+            mouse = OxyMouse(algorithm="oxy")
+            movements = mouse.generate_coordinates(
+                from_x=start_x,
+                from_y=start_y,
+                to_x=end_x,
+                to_y=end_y,
+            )
+
+            action = ActionChains(self.driver)
+
+            for x, y in movements:
+                x = max(1, min(viewport_w - 1, int(x)))
+                y = max(1, min(viewport_h - 1, int(y)))
+
+                offset_x = x - end_x
+                offset_y = y - end_y
+
+                action.move_to_element_with_offset(target_element, offset_x, offset_y)
+                action.pause(random.uniform(0.005, 0.03))
+
+            action.move_to_element(target_element)
+            action.perform()
+            time.sleep(random.uniform(0.1, 0.3))
+            logger.info("Navigated to element %s using human interaction mode", target_element)
+
+        except Exception as e:
+            logger.warning(f"OxyMouse move failed ({type(e).__name__}: {e}), falling back to direct move")
+            ActionChains(self.driver).move_to_element(target_element).perform()
+
+    def human_type_with_typos(self, element, text, typo_rate=0.03):
+        for char in text:
+            if random.random() < typo_rate:
+                wrong = random.choice("abcdefghijklmnopqrstuvwxyz")
+                element.send_keys(wrong)
+                time.sleep(random.uniform(0.1, 0.3))
+                element.send_keys(Keys.BACKSPACE)
+                time.sleep(random.uniform(0.05, 0.2))
+            element.send_keys(char)
+            time.sleep(random.uniform(0.04, 0.18))
+
     def fill_out_name_input(self):
         num_attempts_to_look_for_name_input = 30
         logger.info("Waiting for the name input field...")
@@ -226,7 +289,11 @@ class GoogleMeetUIMethods:
                 name_input = self.retrieve_name_input_element()
                 self.check_for_failed_logged_in_bot_attempt()
                 logger.info("name input found")
-                name_input.send_keys(self.display_name)
+                if self.ui_interaction_mode == "human":
+                    self.human_navigate_to_element(name_input)
+                    self.human_type_with_typos(name_input, self.display_name)
+                else:
+                    name_input.send_keys(self.display_name)
                 return
             except TimeoutException as e:
                 self.look_for_blocked_element("name_input")
@@ -696,6 +763,8 @@ class GoogleMeetUIMethods:
             wait_time_seconds=60,
         )
         logger.info("Clicking the join button...")
+        if self.ui_interaction_mode == "human":
+            self.human_navigate_to_element(join_button)
         self.click_element(join_button, "join_button")
 
         self.click_captions_button()
