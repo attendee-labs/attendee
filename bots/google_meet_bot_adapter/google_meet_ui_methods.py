@@ -980,7 +980,7 @@ class GoogleMeetUIMethods:
             logger.info(f"Processing event: {event_type}, dt: {dt}")
 
             if dt > 0:
-                time.sleep(dt / 2.0)
+                time.sleep(dt)
 
             if event_type == "mouse_move":
                 self.x11_input.move_abs(event["global_x"], event["global_y"])
