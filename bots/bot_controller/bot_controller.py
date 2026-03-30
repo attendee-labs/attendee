@@ -1633,7 +1633,7 @@ class BotController:
             logger.warning("Received non-JSON message from websocket video: %s", message_json[:200])
             return
 
-        logger.info("Received message from websocket video: %s", message)
+        #logger.info("Received message from websocket video: %s", message)
 
         msg_type = message.get("type")
         if msg_type in ("mouse_delta", "mouse_click", "key_event"):
