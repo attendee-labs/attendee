@@ -3,7 +3,7 @@
         <h5 class="mb-0">Google Meet Bot Logins</h5>
     </div>
     <div class="card-body">
-        {% if google_meet_bot_login_group and google_meet_bot_login_group.google_meet_bot_logins.exists %}            
+        {% if google_meet_bot_login_group and google_meet_bot_login_group.bot_logins.exists %}            
             <div class="table-responsive">
                 <table class="table table-hover">
                     <thead>
@@ -15,7 +15,7 @@
                         </tr>
                     </thead>
                     <tbody>
-                        {% for login in google_meet_bot_login_group.google_meet_bot_logins.all %}
+                        {% for login in google_meet_bot_login_group.bot_logins.all %}
                         <tr>
                             <td>{{ login.email }}</td>
                             <td>{{ login.workspace_domain }}</td>
