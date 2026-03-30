@@ -1,4 +1,5 @@
 import logging
+import math
 import os
 import random
 import time
@@ -224,58 +225,106 @@ class GoogleMeetUIMethods:
     def retrieve_name_input_element(self):
         return WebDriverWait(self.driver, 1).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'input[type="text"][aria-label="Your name"]')))
 
-    def human_navigate_to_element(self, target_element, num_points=20):
-        logger.info("Navigating to element %s using human interaction mode", target_element)
-        """Move the mouse to the target element using Oxylabs OxyMouse ('oxy' algorithm)."""
-        time.sleep(random.uniform(0.1, 0.3))
+    def human_navigate_to_element(self, target_element):
+        if not hasattr(self, "x11_input"):
+            from .x11_input import X11Input
+
+            self.x11_input = X11Input()
+
         try:
-            from oxymouse import OxyMouse
-
-            rect = target_element.rect
-            end_x = int(rect["x"] + rect["width"] / 2) + random.randint(-10, 10)
-            end_y = int(rect["y"] + rect["height"] / 2) + random.randint(-10, 10)
-
-            viewport_w = int(self.driver.execute_script("return window.innerWidth;"))
-            viewport_h = int(self.driver.execute_script("return window.innerHeight;"))
-
-            start_x = random.randint(int(viewport_w * 0.1), int(viewport_w * 0.9))
-            start_y = random.randint(int(viewport_h * 0.1), int(viewport_h * 0.9))
-
-            mouse = OxyMouse(algorithm="gaussian")
-            movements = mouse.generate_coordinates(
-                from_x=start_x,
-                from_y=start_y,
-                to_x=end_x,
-                to_y=end_y,
+            metrics = self.driver.execute_script(
+                """
+                const el = arguments[0];
+                const r = el.getBoundingClientRect();
+                return {
+                    left: r.left,
+                    top: r.top,
+                    width: r.width,
+                    height: r.height,
+                    screenX: window.screenX,
+                    screenY: window.screenY,
+                    dpr: window.devicePixelRatio || 1
+                };
+                """,
+                target_element,
             )
 
-            # Downsample. Keep first and last, but in between, only keep 1/3
-            downsampled_movements = [movements[0]]
-            for i in range(1, len(movements) - 1):
-                if i % 4 == 0:
-                    downsampled_movements.append(movements[i])
-            downsampled_movements.append(movements[-1])
+            if not metrics:
+                raise RuntimeError("No metrics returned from execute_script")
 
-            action = ActionChains(self.driver)
+            left = float(metrics["left"])
+            top = float(metrics["top"])
+            width = float(metrics["width"])
+            height = float(metrics["height"])
+            screen_x = float(metrics["screenX"])
+            screen_y = float(metrics["screenY"])
+            dpr = float(metrics["dpr"])
 
-            for x, y in downsampled_movements:
-                x = max(1, min(viewport_w - 1, int(x)))
-                y = max(1, min(viewport_h - 1, int(y)))
+            if width <= 0 or height <= 0:
+                raise RuntimeError(f"Element has invalid size: {width}x{height}")
 
-                offset_x = x - end_x
-                offset_y = y - end_y
+            # Aim near the center, with a little randomness.
+            target_css_x = left + width * random.uniform(0.4, 0.6)
+            target_css_y = top + height * random.uniform(0.4, 0.6)
 
-                action.move_to_element_with_offset(target_element, offset_x, offset_y)
-                action.pause(random.uniform(0.00005, 0.0003))
+            # Convert viewport CSS coords to global X11 root coords in physical pixels.
+            target_root_x = int(round((screen_x + target_css_x) * dpr))
+            target_root_y = int(round((screen_y + target_css_y) * dpr))
 
-            action.move_to_element(target_element)
-            action.perform()
-            time.sleep(random.uniform(0.1, 0.3))
-            logger.info("Navigated to element %s using human interaction mode", target_element)
+            ptr = self.x11_input.root.query_pointer()._data
+            start_x = int(ptr["root_x"])
+            start_y = int(ptr["root_y"])
+
+            total_dx = target_root_x - start_x
+            total_dy = target_root_y - start_y
+            distance = math.hypot(total_dx, total_dy)
+
+            if distance < 1:
+                return
+
+            # Human-ish motion: more distance -> more steps.
+            steps = max(8, min(50, int(distance / random.uniform(8.0, 16.0))))
+
+            prev_x = start_x
+            prev_y = start_y
+
+            for i in range(1, steps + 1):
+                t = i / steps
+
+                # Ease out a bit so it slows near the end.
+                eased_t = 1.0 - (1.0 - t) ** 3
+
+                next_x = int(round(start_x + total_dx * eased_t))
+                next_y = int(round(start_y + total_dy * eased_t))
+
+                rel_dx = next_x - prev_x
+                rel_dy = next_y - prev_y
+
+                if rel_dx or rel_dy:
+                    self.x11_input.move_rel(rel_dx, rel_dy)
+                    prev_x = next_x
+                    prev_y = next_y
+
+                time.sleep(random.uniform(0.003, 0.01))
+
+            # Final correction in case of rounding drift.
+            ptr = self.x11_input.root.query_pointer()._data
+            final_x = int(ptr["root_x"])
+            final_y = int(ptr["root_y"])
+            correction_dx = target_root_x - final_x
+            correction_dy = target_root_y - final_y
+            if correction_dx or correction_dy:
+                self.x11_input.move_rel(correction_dx, correction_dy)
+
+            time.sleep(random.uniform(0.03, 0.08))
 
         except Exception as e:
-            logger.warning(f"OxyMouse move failed ({type(e).__name__}: {e}), falling back to direct move")
-            ActionChains(self.driver).move_to_element(target_element).perform()
+            logger.warning(f"Error navigating mouse to element: {e}")
+            raise UiCouldNotLocateElementException(
+                "Error navigating mouse to element",
+                "human_navigate_to_element",
+                e,
+            )
 
     def human_type_with_typos(self, element, text, typo_rate=0.03):
         for char in text:
