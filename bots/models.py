@@ -13,7 +13,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.files.storage import Storage, storages
 from django.db import models, transaction
-from django.db.models import Q
+from django.db.models import F, Q
 from django.db.utils import IntegrityError
 from django.utils import timezone
 from django.utils.crypto import get_random_string
@@ -85,6 +85,20 @@ class BotLoginGroup(models.Model):
     def __str__(self):
         return f"{self.project.name} - {self.object_id}"
 
+    @classmethod
+    def first_available_login(cls, project, platform, group_name=None):
+        groups = cls.objects.filter(project=project, platform=platform)
+        if group_name is not None:
+            groups = groups.filter(name=group_name)
+        groups = groups.order_by("created_at", "id")
+
+        for group in groups:
+            available_login = group.bot_logins.filter(is_active=True).order_by(F("last_used_at").asc(nulls_first=True), "id").first()
+            if available_login:
+                return available_login
+
+        return None
+
     class Meta:
         db_table = "bots_googlemeetbotlogingroup"
         constraints = [
@@ -109,14 +123,6 @@ class BotLogin(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
     is_active = models.BooleanField(default=True)
     last_used_at = models.DateTimeField(null=True, blank=True)
-
-    @property
-    def cert(self):
-        return self.get_credentials().get("cert")
-
-    @property
-    def private_key(self):
-        return self.get_credentials().get("private_key")
 
     def set_credentials(self, credentials_dict):
         """Encrypt and save credentials"""

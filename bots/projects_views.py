@@ -295,6 +295,35 @@ class CreateCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
             if credential_type not in [choice[0] for choice in Credentials.CredentialTypes.choices]:
                 return HttpResponse("Invalid credential type", status=400)
 
+            if credential_type == Credentials.CredentialTypes.TEAMS_BOT_LOGIN:
+                username = request.POST.get("username")
+                password = request.POST.get("password")
+
+                if not username or not password:
+                    return HttpResponse("Missing required credentials data", status=400)
+
+                group = BotLoginGroup.objects.filter(
+                    project=project,
+                    platform=BotLoginPlatform.TEAMS,
+                ).first()
+                if not group:
+                    group, _ = BotLoginGroup.objects.get_or_create(
+                        project=project,
+                        platform=BotLoginPlatform.TEAMS,
+                        name="Teams Group 1",
+                    )
+
+                bot_login = group.bot_logins.filter(email=username).first()
+                if not bot_login:
+                    bot_login = BotLogin(group=group, email=username)
+                bot_login.is_active = True
+                bot_login.set_credentials({"password": password})
+
+                context = self.get_project_context(object_id, project)
+                context["credentials"] = {"username": bot_login.email, "password": password}
+                context["credential_type"] = credential_type
+                return render(request, "projects/partials/teams_bot_login_credentials.html", context)
+
             # Get or create the credential instance
             credential, created = Credentials.objects.get_or_create(project=project, credential_type=credential_type)
 
@@ -354,11 +383,6 @@ class CreateCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 
                 if not all(credentials_data.values()):
                     return HttpResponse("Missing required credentials data", status=400)
-            elif credential_type == Credentials.CredentialTypes.TEAMS_BOT_LOGIN:
-                credentials_data = {"username": request.POST.get("username"), "password": request.POST.get("password")}
-
-                if not all(credentials_data.values()):
-                    return HttpResponse("Missing required credentials data", status=400)
             elif credential_type == Credentials.CredentialTypes.EXTERNAL_MEDIA_STORAGE:
                 credentials_data = {"access_key_id": request.POST.get("access_key_id"), "access_key_secret": request.POST.get("access_key_secret"), "endpoint_url": request.POST.get("endpoint_url"), "region_name": request.POST.get("region_name")}
 
@@ -390,6 +414,17 @@ class DeleteCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
             credential_type = int(request.POST.get("credential_type"))
             if credential_type not in [choice[0] for choice in Credentials.CredentialTypes.choices]:
                 return HttpResponse("Invalid credential type", status=400)
+
+            if credential_type == Credentials.CredentialTypes.TEAMS_BOT_LOGIN:
+                BotLogin.objects.filter(
+                    group__project=project,
+                    group__platform=BotLoginPlatform.TEAMS,
+                ).delete()
+
+                context = self.get_project_context(object_id, project)
+                context["credentials"] = None
+                context["credential_type"] = credential_type
+                return render(request, "projects/partials/teams_bot_login_credentials.html", context)
 
             # Find and delete the credential
             credential = Credentials.objects.filter(project=project, credential_type=credential_type).first()
@@ -440,7 +475,7 @@ class ProjectCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 
         kyutai_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.KYUTAI).first()
 
-        teams_bot_login_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.TEAMS_BOT_LOGIN).first()
+        teams_bot_login_credentials = BotLoginGroup.first_available_login(project=project, platform=BotLoginPlatform.TEAMS)
 
         external_media_storage_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.EXTERNAL_MEDIA_STORAGE).first()
 
@@ -467,7 +502,7 @@ class ProjectCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
                 "elevenlabs_credential_type": Credentials.CredentialTypes.ELEVENLABS,
                 "kyutai_credentials": kyutai_credentials.get_credentials() if kyutai_credentials else None,
                 "kyutai_credential_type": Credentials.CredentialTypes.KYUTAI,
-                "teams_bot_login_credentials": teams_bot_login_credentials.get_credentials() if teams_bot_login_credentials else None,
+                "teams_bot_login_credentials": {"username": teams_bot_login_credentials.email, "password": teams_bot_login_credentials.get_credentials().get("password")}  if teams_bot_login_credentials else None,
                 "teams_bot_login_credential_type": Credentials.CredentialTypes.TEAMS_BOT_LOGIN,
                 "external_media_storage_credentials": external_media_storage_credentials.get_credentials() if external_media_storage_credentials else None,
                 "external_media_storage_credential_type": Credentials.CredentialTypes.EXTERNAL_MEDIA_STORAGE,
