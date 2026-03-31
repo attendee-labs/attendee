@@ -147,6 +147,14 @@ def get_bot_login_group_context(project):
     }
 
 
+def render_bot_login_groups_partial(request, platform, context):
+    if platform == BotLoginPlatform.GOOGLE_MEET:
+        return render(request, "projects/partials/google_meet_bot_login_groups.html", context)
+    if platform == BotLoginPlatform.TEAMS:
+        return render(request, "projects/partials/teams_bot_login_groups.html", context)
+    return HttpResponse("Invalid bot login platform", status=400)
+
+
 def get_partial_for_credential_type(credential_type, request, context):
     if credential_type == Credentials.CredentialTypes.ZOOM_OAUTH:
         return render(request, "projects/partials/zoom_credentials.html", context)
@@ -1438,7 +1446,7 @@ class CreateBotLoginGroupView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 
             context = self.get_project_context(object_id, project)
             context.update(get_bot_login_group_context(project))
-            return render(request, "projects/project_bot_login_groups.html", context)
+            return render_bot_login_groups_partial(request, platform, context)
 
         except Exception as e:
             error_id = str(uuid.uuid4())
@@ -1468,7 +1476,7 @@ class EditBotLoginGroupView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 
             context = self.get_project_context(object_id, project)
             context.update(get_bot_login_group_context(project))
-            return render(request, "projects/project_bot_login_groups.html", context)
+            return render_bot_login_groups_partial(request, bot_login_group.platform, context)
         except Exception as e:
             error_id = str(uuid.uuid4())
             logger.error(f"Error editing bot login group (error_id={error_id}): {e}")
@@ -1478,10 +1486,12 @@ class EditBotLoginGroupView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 class DeleteBotLoginGroupView(LoginRequiredMixin, ProjectUrlContextMixin, View):
     def post(self, request, object_id, bot_login_group_object_id):
         project = get_project_for_user(user=request.user, project_object_id=object_id)
-        get_bot_login_group_for_user(user=request.user, bot_login_group_object_id=bot_login_group_object_id).delete()
+        bot_login_group = get_bot_login_group_for_user(user=request.user, bot_login_group_object_id=bot_login_group_object_id)
+        platform = bot_login_group.platform
+        bot_login_group.delete()
         context = self.get_project_context(object_id, project)
         context.update(get_bot_login_group_context(project))
-        return render(request, "projects/project_bot_login_groups.html", context)
+        return render_bot_login_groups_partial(request, platform, context)
 
 
 class CreateGoogleMeetBotLoginView(LoginRequiredMixin, ProjectUrlContextMixin, View):
@@ -1523,7 +1533,7 @@ class CreateGoogleMeetBotLoginView(LoginRequiredMixin, ProjectUrlContextMixin, V
 
             context = self.get_project_context(object_id, project)
             context.update(get_bot_login_group_context(project))
-            return render(request, "projects/project_bot_login_groups.html", context)
+            return render_bot_login_groups_partial(request, BotLoginPlatform.GOOGLE_MEET, context)
 
         except Exception as e:
             error_id = str(uuid.uuid4())
@@ -1564,7 +1574,7 @@ class CreateTeamsBotLoginView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 
             context = self.get_project_context(object_id, project)
             context.update(get_bot_login_group_context(project))
-            return render(request, "projects/project_bot_login_groups.html", context)
+            return render_bot_login_groups_partial(request, BotLoginPlatform.TEAMS, context)
 
         except Exception as e:
             error_id = str(uuid.uuid4())
@@ -1576,7 +1586,8 @@ class DeleteBotLoginView(LoginRequiredMixin, ProjectUrlContextMixin, View):
     def post(self, request, object_id, bot_login_object_id):
         bot_login = get_bot_login_for_user(user=request.user, bot_login_object_id=bot_login_object_id)
         project = get_project_for_user(user=request.user, project_object_id=object_id)
+        platform = bot_login.group.platform
         bot_login.delete()
         context = self.get_project_context(object_id, project)
         context.update(get_bot_login_group_context(project))
-        return render(request, "projects/project_bot_login_groups.html", context)
+        return render_bot_login_groups_partial(request, platform, context)
