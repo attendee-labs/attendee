@@ -27,9 +27,9 @@ class MocapManager:
     def _generate_perturbed_sequences(self):
         original_sequences = list(self.sequences)
         for seq in original_sequences:
-            for i in range(10):
-                angle = -5 + (10 / 11) * (i + 1)
-                if angle == 0:
+            for i in range(21):
+                angle = -10 + (10 / 11) * (i + 1)
+                if i == 10:
                     continue
                 rad = math.radians(angle)
                 cos_a = math.cos(rad)
@@ -50,18 +50,17 @@ class MocapManager:
                     perturbed_mov["dy"] = new_dy
                     perturbed_movements.append(perturbed_mov)
 
-                self.sequences.append(PrimitiveMocapSequence(
-                    movements=perturbed_movements,
-                    total_dx=total_dx,
-                    total_dy=total_dy,
-                    click_down_dt=seq.click_down_dt,
-                    click_up_dt=seq.click_up_dt,
-                ))
+                self.sequences.append(
+                    PrimitiveMocapSequence(
+                        movements=perturbed_movements,
+                        total_dx=total_dx,
+                        total_dy=total_dy,
+                        click_down_dt=seq.click_down_dt,
+                        click_up_dt=seq.click_up_dt,
+                    )
+                )
 
-        logger.info(
-            f"Generated {len(self.sequences) - len(original_sequences)} "
-            f"perturbed sequences ({len(self.sequences)} total)"
-        )
+        logger.info(f"Generated {len(self.sequences) - len(original_sequences)} perturbed sequences ({len(self.sequences)} total)")
 
     def _load_all_scramble_files(self):
         directory = os.path.dirname(__file__)
@@ -94,13 +93,15 @@ class MocapManager:
                 click_down_dt = event.get("dt", 0.0)
 
             elif event["type"] == "mouse_click" and event.get("state") == "up":
-                primitives.append(PrimitiveMocapSequence(
-                    movements=current_movements,
-                    total_dx=dx_acc,
-                    total_dy=dy_acc,
-                    click_down_dt=click_down_dt,
-                    click_up_dt=event.get("dt", 0.0),
-                ))
+                primitives.append(
+                    PrimitiveMocapSequence(
+                        movements=current_movements,
+                        total_dx=dx_acc,
+                        total_dy=dy_acc,
+                        click_down_dt=click_down_dt,
+                        click_up_dt=event.get("dt", 0.0),
+                    )
+                )
                 current_movements = []
                 dx_acc = 0
                 dy_acc = 0
@@ -117,11 +118,7 @@ class MocapManager:
         rect_right: int,
         rect_bottom: int,
     ) -> PrimitiveMocapSequence | None:
-        matching = [
-            seq for seq in self.sequences
-            if rect_left <= current_x + seq.total_dx <= rect_right
-            and rect_top <= current_y + seq.total_dy <= rect_bottom
-        ]
+        matching = [seq for seq in self.sequences if rect_left <= current_x + seq.total_dx <= rect_right and rect_top <= current_y + seq.total_dy <= rect_bottom]
         logger.info(f"Found {len(matching)} sequences matching the rect")
         if not matching:
             return None

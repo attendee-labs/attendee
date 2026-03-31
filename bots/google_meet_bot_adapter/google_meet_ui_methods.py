@@ -533,8 +533,8 @@ class GoogleMeetUIMethods:
             raise RuntimeError(f"Element has invalid size: {width}x{height}")
 
         # Clickable rect: half the width and half the height, centered
-        inset_x = width / 80
-        inset_y = height / 80
+        inset_x = 0
+        inset_y = 0
         clickable_css_left = left + inset_x
         clickable_css_right = left + width - inset_x
         clickable_css_top = top + inset_y
@@ -549,26 +549,40 @@ class GoogleMeetUIMethods:
         current_x = int(ptr["root_x"])
         current_y = int(ptr["root_y"])
 
-        logger.info(
-            f"mocap_scrambled: mouse at ({current_x},{current_y}), "
-            f"clickable rect [({rect_left},{rect_top})-({rect_right},{rect_bottom})]"
-        )
+        logger.info(f"mocap_scrambled: mouse at ({current_x},{current_y}), clickable rect [({rect_left},{rect_top})-({rect_right},{rect_bottom})]")
 
-        seq = self.mocap_manager.find_random_sequence_landing_in_rect(
-            current_x, current_y, rect_left, rect_top, rect_right, rect_bottom
-        )
+        seq = None
+        num_seq_attempts = 10
+        for attempt in range(num_seq_attempts):
+            seq = self.mocap_manager.find_random_sequence_landing_in_rect(current_x, current_y, rect_left, rect_top, rect_right, rect_bottom)
 
-        if seq is None:
-            raise RuntimeError(
-                f"No mocap sequence lands inside clickable rect "
-                f"from ({current_x},{current_y}) to "
-                f"[({rect_left},{rect_top})-({rect_right},{rect_bottom})]"
+            if seq is None:
+                raise RuntimeError(f"No mocap sequence lands inside clickable rect from ({current_x},{current_y}) to [({rect_left},{rect_top})-({rect_right},{rect_bottom})]")
+
+            endpoint_monitor_x = current_x + seq.total_dx
+            endpoint_monitor_y = current_y + seq.total_dy
+            endpoint_page_x = endpoint_monitor_x / dpr - screen_x
+            endpoint_page_y = endpoint_monitor_y / dpr - screen_y
+
+            is_element_at_endpoint = self.driver.execute_script(
+                """
+                var el = document.elementFromPoint(arguments[0], arguments[1]);
+                var expected = arguments[2];
+                return !!el && (el === expected || expected.contains(el) || el.contains(expected));
+                """,
+                endpoint_page_x,
+                endpoint_page_y,
+                element,
             )
 
-        logger.info(
-            f"mocap_scrambled: selected sequence with {len(seq.movements)} movements, "
-            f"total_dx={seq.total_dx}, total_dy={seq.total_dy}"
-        )
+            if is_element_at_endpoint:
+                break
+
+            logger.info(f"mocap_scrambled: endpoint page coords ({endpoint_page_x:.1f}, {endpoint_page_y:.1f}) not on target element, retrying (attempt {attempt + 1}/{num_seq_attempts})")
+        else:
+            raise RuntimeError(f"Could not find mocap sequence landing on target element after {num_seq_attempts} attempts")
+
+        logger.info(f"mocap_scrambled: selected sequence with {len(seq.movements)} movements, total_dx={seq.total_dx}, total_dy={seq.total_dy}")
 
         for move in seq.movements:
             dt = move.get("dt", 0)
