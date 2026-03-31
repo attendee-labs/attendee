@@ -52,6 +52,11 @@ urlpatterns = [
         name="project-credentials",
     ),
     path(
+        "<str:object_id>/login-groups",
+        projects_views.ProjectBotLoginGroupsView.as_view(),
+        name="project-bot-login-groups",
+    ),
+    path(
         "<str:object_id>/project",
         projects_views.ProjectProjectView.as_view(),
         name="project-project",
@@ -183,7 +188,7 @@ urlpatterns = [
     ),
     path(
         "<str:object_id>/settings/google-meet-bot-login/<str:login_object_id>/delete/",
-        projects_views.DeleteGoogleMeetBotLoginView.as_view(),
+        projects_views.DeleteBotLoginView.as_view(),
         name="delete-google-meet-bot-login",
     ),
     # Don't put anything after this, it will redirect to the dashboard

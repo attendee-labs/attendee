@@ -25,7 +25,7 @@ from bots.projects_views import (
     get_api_key_for_user,
     get_calendar_event_for_user,
     get_calendar_for_user,
-    get_google_meet_bot_login_for_user,
+    get_bot_login_for_user,
     get_project_for_user,
     get_webhook_subscription_for_user,
 )
@@ -305,31 +305,31 @@ class ObjectAccessIntegrationTest(TransactionTestCase):
     # Tests for get_google_meet_bot_login_for_user()
     def test_get_google_meet_bot_login_for_user_admin_access_same_org(self):
         """Test that admin users can access any Google Meet bot login in their organization"""
-        google_meet_bot_login = get_google_meet_bot_login_for_user(self.admin_user_a, self.google_meet_bot_login_a1.object_id)
+        google_meet_bot_login = get_bot_login_for_user(self.admin_user_a, self.google_meet_bot_login_a1.object_id)
         self.assertEqual(google_meet_bot_login, self.google_meet_bot_login_a1)
 
-        google_meet_bot_login = get_google_meet_bot_login_for_user(self.admin_user_a, self.google_meet_bot_login_a2.object_id)
+        google_meet_bot_login = get_bot_login_for_user(self.admin_user_a, self.google_meet_bot_login_a2.object_id)
         self.assertEqual(google_meet_bot_login, self.google_meet_bot_login_a2)
 
     def test_get_google_meet_bot_login_for_user_admin_denied_different_org(self):
         """Test that admin users cannot access Google Meet bot logins in different organizations"""
         with self.assertRaises(Http404):
-            get_google_meet_bot_login_for_user(self.admin_user_a, self.google_meet_bot_login_b1.object_id)
+            get_bot_login_for_user(self.admin_user_a, self.google_meet_bot_login_b1.object_id)
 
     def test_get_google_meet_bot_login_for_user_regular_access_with_permission(self):
         """Test that regular users can access Google Meet bot logins in projects they have access to"""
-        google_meet_bot_login = get_google_meet_bot_login_for_user(self.regular_user_a, self.google_meet_bot_login_a1.object_id)
+        google_meet_bot_login = get_bot_login_for_user(self.regular_user_a, self.google_meet_bot_login_a1.object_id)
         self.assertEqual(google_meet_bot_login, self.google_meet_bot_login_a1)
 
     def test_get_google_meet_bot_login_for_user_regular_denied_no_permission(self):
         """Test that regular users cannot access Google Meet bot logins in projects they don't have access to"""
         with self.assertRaises(PermissionDenied):
-            get_google_meet_bot_login_for_user(self.regular_user_a, self.google_meet_bot_login_a2.object_id)
+            get_bot_login_for_user(self.regular_user_a, self.google_meet_bot_login_a2.object_id)
 
     def test_get_google_meet_bot_login_for_user_regular_denied_different_org(self):
         """Test that regular users cannot access Google Meet bot logins in different organizations"""
         with self.assertRaises(Http404):
-            get_google_meet_bot_login_for_user(self.regular_user_a, self.google_meet_bot_login_b1.object_id)
+            get_bot_login_for_user(self.regular_user_a, self.google_meet_bot_login_b1.object_id)
 
     # Tests for view-level access control through HTTP requests
     def test_project_dashboard_access_control(self):
