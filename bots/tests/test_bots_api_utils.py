@@ -8,7 +8,7 @@ from django.utils import timezone
 from accounts.models import Organization
 from bots.bots_api_utils import BotCreationSource, build_site_url, create_bot, create_webhook_subscription, patch_bot, validate_bot_concurrency_limit, validate_meeting_url_and_credentials
 from bots.calendars_api_utils import create_calendar
-from bots.models import Bot, BotEventManager, BotEventTypes, BotStates, CalendarEvent, CalendarPlatform, Project, TranscriptionProviders, WebhookSubscription, WebhookTriggerTypes, ZoomOAuthApp
+from bots.models import Bot, BotEventManager, BotEventTypes, BotLoginGroup, BotLoginPlatform, BotStates, CalendarEvent, CalendarPlatform, Project, TranscriptionProviders, WebhookSubscription, WebhookTriggerTypes, ZoomOAuthApp
 
 
 class TestBuildSiteUrl(TestCase):
@@ -107,6 +107,25 @@ class TestCreateBot(TestCase):
         teams_url_normalized = 'https://teams.microsoft.com/l/meetup-join/19:meeting_ttttttttttttttttttttttcqqqqqqqqqqqqqqqqqqqqqqqqq@thread.v2/0?context={"Tid":"b8291b4b-f793-49bc-1111-111111111111","Oid":"216d2e11-ffff-ffff-1111-ffffffffffff"}'
         self.assertEqual(bot.meeting_url, teams_url_normalized)
         self.assertIsNone(error)
+
+    def test_create_teams_bot_with_login_group_name(self):
+        BotLoginGroup.objects.create(project=self.project, platform=BotLoginPlatform.TEAMS, name="Acme Teams")
+        bot, error = create_bot(data={"meeting_url": "https://teams.microsoft.com/meet/123?p=123", "bot_name": "Test Bot", "teams_settings": {"use_login": True, "login_group_name": "Acme Teams"}}, source=BotCreationSource.API, project=self.project)
+        self.assertIsNotNone(bot)
+        self.assertIsNone(error)
+        self.assertEqual(bot.settings["teams_settings"]["login_group_name"], "Acme Teams")
+
+    def test_create_bot_with_login_group_name(self):
+        BotLoginGroup.objects.create(project=self.project, platform=BotLoginPlatform.GOOGLE_MEET, name="Acme Support")
+        bot, error = create_bot(data={"meeting_url": "https://meet.google.com/abc-defg-hij", "bot_name": "Test Bot", "google_meet_settings": {"use_login": True, "login_group_name": "Acme Support"}}, source=BotCreationSource.API, project=self.project)
+        self.assertIsNotNone(bot)
+        self.assertIsNone(error)
+        self.assertEqual(bot.settings["google_meet_settings"]["login_group_name"], "Acme Support")
+
+    def test_create_bot_with_missing_login_group_name_returns_error(self):
+        bot, error = create_bot(data={"meeting_url": "https://meet.google.com/abc-defg-hij", "bot_name": "Test Bot", "google_meet_settings": {"use_login": True, "login_group_name": "Missing Group"}}, source=BotCreationSource.API, project=self.project)
+        self.assertIsNone(bot)
+        self.assertEqual(error, {"error": "Google Meet bot login group 'Missing Group' does not exist in this project."})
 
     def test_create_bot_with_explicit_transcription_settings(self):
         """Test creating bots with explicit transcription settings for different providers and meeting types"""
