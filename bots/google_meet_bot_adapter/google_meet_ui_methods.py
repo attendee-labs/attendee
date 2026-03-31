@@ -376,7 +376,7 @@ class GoogleMeetUIMethods:
                 """
                 var el = document.elementFromPoint(arguments[0], arguments[1]);
                 var expected = arguments[2];
-                return !!el && (el === expected || expected.contains(el) || el.contains(expected));
+                return !!el && (el === expected || expected.contains(el));
                 """,
                 endpoint_page_x,
                 endpoint_page_y,
