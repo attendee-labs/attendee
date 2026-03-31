@@ -1,4 +1,3 @@
-import json
 import logging
 import os
 import random
@@ -862,22 +861,16 @@ class GoogleMeetUIMethods:
         logger.warning(f"Cookie names: {names}. Any Google auth cookies present: {any_google_auth_cookies_present}.")
         return any_google_auth_cookies_present
 
-    # Position mouse in the center of the screen with some wiggle
     def position_mouse_for_humanized_interaction(self):
         self.ensure_x11_input()
+        self.ensure_mocap_manager()
 
-        mocap_file = os.path.join(os.path.dirname(__file__), f"join_mocap_scramble_0_{self.video_frame_size[1]}p.json")
-        with open(mocap_file, "r") as f:
-            events = json.load(f)
-
-        if not events:
+        position = self.mocap_manager.get_initial_mouse_position()
+        if position is None:
             return
 
-        first = events[0]
-        start_x = first["global_x"] - first.get("dx", 0)
-        start_y = first["global_y"] - first.get("dy", 0)
-        self.x11_input.move_abs(start_x, start_y)
-        logger.info(f"Positioned mouse at ({start_x}, {start_y})")
+        self.x11_input.move_abs(*position)
+        logger.info(f"Positioned mouse at {position}")
 
     # returns nothing if succeeded, raises an exception if failed
     def attempt_to_join_meeting(self):

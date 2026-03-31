@@ -22,6 +22,7 @@ class MocapManager:
     def __init__(self, video_frame_size: tuple[int, int]):
         self.video_frame_size = video_frame_size
         self.sequences: list[PrimitiveMocapSequence] = []
+        self._initial_mouse_position: tuple[int, int] | None = None
         self._load_all_scramble_files()
         self._generate_perturbed_sequences()
 
@@ -73,6 +74,12 @@ class MocapManager:
         for file_path in file_paths:
             with open(file_path, "r") as f:
                 events = json.load(f)
+            if self._initial_mouse_position is None and events:
+                first = events[0]
+                self._initial_mouse_position = (
+                    first["global_x"] - first.get("dx", 0),
+                    first["global_y"] - first.get("dy", 0),
+                )
             primitives = self._parse_primitives(events)
             logger.info(f"Parsed {len(primitives)} primitive sequences from {os.path.basename(file_path)}")
             self.sequences.extend(primitives)
@@ -109,6 +116,9 @@ class MocapManager:
                 click_down_dt = 0.0
 
         return primitives
+
+    def get_initial_mouse_position(self) -> tuple[int, int] | None:
+        return self._initial_mouse_position
 
     def find_random_sequence_landing_in_rect(
         self,
