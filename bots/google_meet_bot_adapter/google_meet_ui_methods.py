@@ -1,12 +1,10 @@
 import json
 import logging
-import math
 import os
 import random
 import time
 from urllib.parse import urlparse
 
-import numpy as np
 import requests
 from django.conf import settings
 from selenium.common.exceptions import ElementNotInteractableException, NoSuchElementException, TimeoutException
@@ -172,11 +170,8 @@ class GoogleMeetUIMethods:
                 wait_time_seconds=6,
             )
             logger.info("Clicking the microphone button...")
-            if self.ui_interaction_mode == "human":
-                self.human_navigate_to_element(microphone_button)
-                self.human_click_element(microphone_button)
-            elif self.ui_interaction_mode == "mocap_scrambled":
-                self.mocap_scrambled_navigate_to_and_click_element(microphone_button)
+            if self.ui_interaction_mode == "humanized":
+                self.humanized_navigate_to_and_click_element(microphone_button)
             else:
                 self.click_element(microphone_button, "turn_off_microphone_button")
 
@@ -199,11 +194,8 @@ class GoogleMeetUIMethods:
                 wait_time_seconds=6,
             )
             logger.info("Clicking the camera button...")
-            if self.ui_interaction_mode == "human":
-                self.human_navigate_to_element(camera_button)
-                self.human_click_element(camera_button)
-            elif self.ui_interaction_mode == "mocap_scrambled":
-                self.mocap_scrambled_navigate_to_and_click_element(camera_button)
+            if self.ui_interaction_mode == "humanized":
+                self.humanized_navigate_to_and_click_element(camera_button)
             else:
                 self.click_element(camera_button, "turn_off_camera_button")
 
@@ -235,183 +227,6 @@ class GoogleMeetUIMethods:
 
     def retrieve_name_input_element(self):
         return WebDriverWait(self.driver, 1).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'input[type="text"][aria-label="Your name"]')))
-
-    def _bezier_path(self, x0, y0, x1, y1, distance):
-        """Cubic Bézier with randomized control points + Gaussian noise."""
-        steps = max(80, min(350, int(distance / random.uniform(4.0, 10.0))))
-
-        # Control points: pull perpendicular to the line, with randomized magnitude
-        dx, dy = x1 - x0, y1 - y0
-        perp_x, perp_y = -dy, dx  # perpendicular vector
-
-        # Spread controls asymmetrically for natural curvature
-        spread1 = random.gauss(0, 0.2)
-        spread2 = random.gauss(0, 0.15)
-        cp1 = (
-            x0 + dx * random.uniform(0.2, 0.45) + perp_x * spread1,
-            y0 + dy * random.uniform(0.2, 0.45) + perp_y * spread1,
-        )
-        cp2 = (
-            x0 + dx * random.uniform(0.55, 0.8) + perp_x * spread2,
-            y0 + dy * random.uniform(0.55, 0.8) + perp_y * spread2,
-        )
-
-        # Noise amplitude scales with distance, decays near endpoint
-        base_noise = max(1.0, distance * 0.008)
-
-        points = []
-        for i in range(1, steps + 1):
-            t = i / steps
-            # De Casteljau evaluation of cubic Bézier
-            u = 1 - t
-            bx = u**3 * x0 + 3 * u**2 * t * cp1[0] + 3 * u * t**2 * cp2[0] + t**3 * x1
-            by = u**3 * y0 + 3 * u**2 * t * cp1[1] + 3 * u * t**2 * cp2[1] + t**3 * y1
-
-            # Gaussian noise envelope: peaks mid-path, dies near start/end
-            envelope = math.sin(t * math.pi) ** 1.5
-            noise_x = random.gauss(0, base_noise * envelope)
-            noise_y = random.gauss(0, base_noise * envelope)
-
-            points.append((int(round(bx + noise_x)), int(round(by + noise_y))))
-
-        # Ensure final point is exact target
-        points[-1] = (x1, y1)
-        return points
-
-    def _generate_timings(self, n_points, distance):
-        """
-        Variable inter-step delays modelling a bell-shaped velocity profile:
-        slow start → fast middle → slow end, with micro-jitter.
-        """
-        # Base duration scales with distance (Fitts's law-ish)
-        base_duration = 0.15 + (distance / 2000.0) * random.uniform(0.8, 1.3)
-
-        timings = []
-        for i in range(n_points):
-            t = i / max(n_points - 1, 1)
-            # Bell-shaped speed: slow at edges, fast in center
-            speed_factor = 0.3 + 0.7 * math.sin(t * math.pi)
-            # Invert: high speed → short delay
-            delay = (base_duration / n_points) / max(speed_factor, 0.1)
-            # Add micro-jitter (human motor noise)
-            delay *= random.uniform(0.85, 1.2)
-            # Occasional micro-pause (~2% chance, like a hesitation)
-            if random.random() < 0.02:
-                delay += random.uniform(0.02, 0.06)
-            timings.append(max(delay, 0.002))
-        return timings
-
-    def _overshoot_correct(self, target_x, target_y, distance):
-        """Simulate overshoot past the target followed by a corrective arc back."""
-        overshoot_dist = random.uniform(8, min(35, distance * 0.08))
-        angle = random.uniform(0, 2 * math.pi)
-        overshoot_x = int(target_x + math.cos(angle) * overshoot_dist)
-        overshoot_y = int(target_y + math.sin(angle) * overshoot_dist)
-
-        # Quick overshoot path (fewer steps, fast)
-        correction_points = self._bezier_path(target_x, target_y, overshoot_x, overshoot_y, overshoot_dist)
-        # Then arc back
-        return_points = self._bezier_path(overshoot_x, overshoot_y, target_x, target_y, overshoot_dist)
-
-        ptr = self.x11_input.root.query_pointer()._data
-        prev_x, prev_y = int(ptr["root_x"]), int(ptr["root_y"])
-
-        for px, py in correction_points + return_points:
-            rdx, rdy = px - prev_x, py - prev_y
-            if rdx or rdy:
-                self.x11_input.move_rel(rdx, rdy)
-                prev_x, prev_y = px, py
-            time.sleep(random.uniform(0.004, 0.015))
-
-    def human_navigate_to_element(self, target_element):
-        self.ensure_x11_input()
-
-        try:
-            metrics = self.driver.execute_script(
-                """
-                const el = arguments[0];
-                const r = el.getBoundingClientRect();
-                return {
-                    left: r.left,
-                    top: r.top,
-                    width: r.width,
-                    height: r.height,
-                    screenX: window.screenX,
-                    screenY: window.screenY,
-                    dpr: window.devicePixelRatio || 1
-                };
-                """,
-                target_element,
-            )
-
-            if not metrics:
-                raise RuntimeError("No metrics returned from execute_script")
-
-            left = float(metrics["left"])
-            top = float(metrics["top"])
-            width = float(metrics["width"])
-            height = float(metrics["height"])
-            screen_x = float(metrics["screenX"])
-            screen_y = float(metrics["screenY"])
-            dpr = float(metrics["dpr"])
-
-            if width <= 0 or height <= 0:
-                raise RuntimeError(f"Element has invalid size: {width}x{height}")
-
-            # Target with bivariate Gaussian around center
-            target_css_x = left + width * np.clip(random.gauss(0.5, 0.12), 0.15, 0.85)
-            target_css_y = top + height * np.clip(random.gauss(0.5, 0.12), 0.15, 0.85)
-
-            target_root_x = int(round((screen_x + target_css_x) * dpr))
-            target_root_y = int(round((screen_y + target_css_y) * dpr))
-
-            ptr = self.x11_input.root.query_pointer()._data
-            start_x = int(ptr["root_x"])
-            start_y = int(ptr["root_y"])
-
-            logger.info(f"Starting mouse move from {start_x},{start_y} to {target_root_x},{target_root_y}")
-
-            total_dx = target_root_x - start_x
-            total_dy = target_root_y - start_y
-            distance = math.hypot(total_dx, total_dy)
-
-            if distance < 1:
-                logger.info("Distance is less than 1, so not moving mouse")
-                return
-
-            # Generate the path and walk it
-            points = self._bezier_path(start_x, start_y, target_root_x, target_root_y, distance)
-            timings = self._generate_timings(len(points), distance)
-
-            prev_x, prev_y = start_x, start_y
-            for (nx, ny), dt in zip(points, timings):
-                rel_dx = nx - prev_x
-                rel_dy = ny - prev_y
-                if rel_dx or rel_dy:
-                    self.x11_input.move_rel(rel_dx, rel_dy)
-                    prev_x, prev_y = nx, ny
-                time.sleep(dt)
-
-            # Optional overshoot-and-correct (~30% of the time for longer moves)
-            if distance > 120 and random.random() < 0.3:
-                self._overshoot_correct(target_root_x, target_root_y, distance)
-
-            # Final sub-pixel correction
-            ptr = self.x11_input.root.query_pointer()._data
-            cdx = target_root_x - int(ptr["root_x"])
-            cdy = target_root_y - int(ptr["root_y"])
-            if cdx or cdy:
-                self.x11_input.move_rel(cdx, cdy)
-
-            time.sleep(random.uniform(0.04, 0.12))
-
-        except Exception as e:
-            logger.warning(f"Error navigating mouse to element: {e}")
-            raise UiCouldNotLocateElementException(
-                "Error navigating mouse to element",
-                "human_navigate_to_element",
-                e,
-            )
 
     UNSHIFTED_PUNCTUATION = {
         "-": "minus",
@@ -481,12 +296,6 @@ class GoogleMeetUIMethods:
 
             time.sleep(random.uniform(0.24, 0.48))
 
-    def human_click_element(self, element):
-        time.sleep(random.uniform(0.125, 0.25))
-        self.ensure_x11_input()
-        self.x11_input.left_click()
-        time.sleep(random.uniform(0.125, 0.25))
-
     def ensure_x11_input(self):
         if not hasattr(self, "x11_input"):
             from .x11_input import X11Input
@@ -497,7 +306,7 @@ class GoogleMeetUIMethods:
         if not hasattr(self, "mocap_manager"):
             self.mocap_manager = MocapManager(video_frame_size=self.video_frame_size)
 
-    def mocap_scrambled_navigate_to_and_click_element(self, element):
+    def humanized_navigate_to_and_click_element(self, element):
         self.ensure_x11_input()
         self.ensure_mocap_manager()
 
@@ -549,7 +358,7 @@ class GoogleMeetUIMethods:
         current_x = int(ptr["root_x"])
         current_y = int(ptr["root_y"])
 
-        logger.info(f"mocap_scrambled: mouse at ({current_x},{current_y}), clickable rect [({rect_left},{rect_top})-({rect_right},{rect_bottom})]")
+        logger.info(f"humanized interaction: mouse at ({current_x},{current_y}), clickable rect [({rect_left},{rect_top})-({rect_right},{rect_bottom})]")
 
         seq = None
         num_seq_attempts = 10
@@ -578,11 +387,11 @@ class GoogleMeetUIMethods:
             if is_element_at_endpoint:
                 break
 
-            logger.info(f"mocap_scrambled: endpoint page coords ({endpoint_page_x:.1f}, {endpoint_page_y:.1f}) not on target element, retrying (attempt {attempt + 1}/{num_seq_attempts})")
+            logger.info(f"humanized interaction: endpoint page coords ({endpoint_page_x:.1f}, {endpoint_page_y:.1f}) not on target element, retrying (attempt {attempt + 1}/{num_seq_attempts})")
         else:
             raise RuntimeError(f"Could not find mocap sequence landing on target element after {num_seq_attempts} attempts")
 
-        logger.info(f"mocap_scrambled: selected sequence with {len(seq.movements)} movements, total_dx={seq.total_dx}, total_dy={seq.total_dy}")
+        logger.info(f"humanized interaction: selected sequence with {len(seq.movements)} movements, total_dx={seq.total_dx}, total_dy={seq.total_dy}")
 
         for move in seq.movements:
             dt = move.get("dt", 0)
@@ -609,16 +418,12 @@ class GoogleMeetUIMethods:
                 name_input = self.retrieve_name_input_element()
                 self.check_for_failed_logged_in_bot_attempt()
                 logger.info("name input found")
-                if self.ui_interaction_mode == "human":
-                    self.human_navigate_to_element(name_input)
-                    self.human_click_element(name_input)
-                    self.human_type(self.display_name)
-                elif self.ui_interaction_mode == "mocap_scrambled":
+                if self.ui_interaction_mode == "humanized":
                     logger.info("Waiting for got it button...")
                     got_it_button = self.find_element_by_selector(By.XPATH, '//button[.//span[text()="Got it"]]')
-                    self.mocap_scrambled_navigate_to_and_click_element(got_it_button)
+                    self.humanized_navigate_to_and_click_element(got_it_button)
                     logger.info("Got it button clicked")
-                    self.mocap_scrambled_navigate_to_and_click_element(name_input)
+                    self.humanized_navigate_to_and_click_element(name_input)
                     logger.info("Name input clicked")
                     self.human_type(self.display_name)
                 else:
@@ -1057,24 +862,8 @@ class GoogleMeetUIMethods:
         logger.warning(f"Cookie names: {names}. Any Google auth cookies present: {any_google_auth_cookies_present}.")
         return any_google_auth_cookies_present
 
-    def use_mocap_to_position_mouse(self):
-        self.ensure_x11_input()
-
-        mocap_file = os.path.join(os.path.dirname(__file__), f"join_mocap_{self.video_frame_size[1]}p.json")
-        with open(mocap_file, "r") as f:
-            events = json.load(f)
-
-        if not events:
-            return
-
-        first = events[0]
-        start_x = first["global_x"] - first.get("dx", 0)
-        start_y = first["global_y"] - first.get("dy", 0)
-        self.x11_input.move_abs(start_x, start_y)
-        logger.info(f"Positioned mouse at ({start_x}, {start_y})")
-
     # Position mouse in the center of the screen with some wiggle
-    def use_mocap_scrambled_to_position_mouse(self):
+    def position_mouse_for_humanized_interaction(self):
         self.ensure_x11_input()
 
         mocap_file = os.path.join(os.path.dirname(__file__), f"join_mocap_scramble_0_{self.video_frame_size[1]}p.json")
@@ -1090,68 +879,6 @@ class GoogleMeetUIMethods:
         self.x11_input.move_abs(start_x, start_y)
         logger.info(f"Positioned mouse at ({start_x}, {start_y})")
 
-    def use_mocap_to_fill_out_name_input_turn_off_media_inputs_and_click_join_button(self):
-        time.sleep(4)
-
-        self.ensure_x11_input()
-
-        mocap_file = os.path.join(os.path.dirname(__file__), f"join_mocap_{self.video_frame_size[1]}p.json")
-        with open(mocap_file, "r") as f:
-            events = json.load(f)
-
-        logger.info(f"Loaded {len(events)} mocap events from {mocap_file}")
-
-        if not events:
-            return
-
-        # global_x/y is the position *after* the move, so the starting
-        # position is (global_x - dx, global_y - dy) of the first event.
-        first = events[0]
-        start_x = first["global_x"] - first.get("dx", 0)
-        start_y = first["global_y"] - first.get("dy", 0)
-        self.x11_input.move_abs(start_x, start_y)
-
-        name_typed = False
-
-        for event in events:
-            dt = event.get("dt", 0)
-            event_type = event["type"]
-            logger.info(f"Processing event: {event_type}, dt: {dt}")
-
-            if dt > 0:
-                time.sleep(dt)
-
-            if event_type == "mouse_move":
-                self.x11_input.move_abs(event["global_x"], event["global_y"])
-
-            elif event_type == "mouse_click":
-                button = event.get("button", "left")
-                state = event.get("state")
-                if state == "down":
-                    self.x11_input.button_press(button)
-                elif state == "up":
-                    self.x11_input.button_release(button)
-
-            elif event_type == "key_event":
-                if not name_typed:
-                    # The recording typed a placeholder name; substitute
-                    # with the real display_name on the first key-down.
-                    if event.get("state") == "down":
-                        self.human_type(self.display_name)
-                        name_typed = True
-                else:
-                    key = event.get("key", "")
-                    state = event.get("state")
-                    if state == "down":
-                        self.x11_input.key_press(key)
-                    elif state == "up":
-                        self.x11_input.key_release(key)
-
-        # Final click
-        time.sleep(0.05)
-        self.x11_input.left_click()
-        logger.info("Mocap replay completed")
-
     # returns nothing if succeeded, raises an exception if failed
     def attempt_to_join_meeting(self):
         if self.google_meet_bot_login_is_available and self.google_meet_bot_login_should_be_used:
@@ -1159,10 +886,8 @@ class GoogleMeetUIMethods:
 
         layout_to_select = self.get_layout_to_select()
 
-        if self.ui_interaction_mode == "mocap":
-            self.use_mocap_to_position_mouse()
-        elif self.ui_interaction_mode == "mocap_scrambled":
-            self.use_mocap_scrambled_to_position_mouse()
+        if self.ui_interaction_mode == "humanized":
+            self.position_mouse_for_humanized_interaction()
 
         self.driver.get(self.meeting_url)
 
@@ -1179,29 +904,23 @@ class GoogleMeetUIMethods:
             },
         )
 
-        if self.ui_interaction_mode == "mocap":
-            self.use_mocap_to_fill_out_name_input_turn_off_media_inputs_and_click_join_button()
+        self.check_if_meeting_is_found()
+
+        self.fill_out_name_input()
+
+        self.turn_off_media_inputs()
+
+        logger.info("Waiting for the 'Ask to join' or 'Join now' button...")
+        join_button = self.locate_element(
+            step="join_button",
+            condition=EC.presence_of_element_located((By.XPATH, self.join_now_button_selector())),
+            wait_time_seconds=60,
+        )
+        logger.info("Clicking the join button...")
+        if self.ui_interaction_mode == "humanized":
+            self.humanized_navigate_to_and_click_element(join_button)
         else:
-            self.check_if_meeting_is_found()
-
-            self.fill_out_name_input()
-
-            self.turn_off_media_inputs()
-
-            logger.info("Waiting for the 'Ask to join' or 'Join now' button...")
-            join_button = self.locate_element(
-                step="join_button",
-                condition=EC.presence_of_element_located((By.XPATH, self.join_now_button_selector())),
-                wait_time_seconds=60,
-            )
-            logger.info("Clicking the join button...")
-            if self.ui_interaction_mode == "human":
-                self.human_navigate_to_element(join_button)
-                self.human_click_element(join_button)
-            elif self.ui_interaction_mode == "mocap_scrambled":
-                self.mocap_scrambled_navigate_to_and_click_element(join_button)
-            else:
-                self.click_element(join_button, "join_button")
+            self.click_element(join_button, "join_button")
 
         self.click_captions_button()
 
