@@ -533,8 +533,8 @@ class GoogleMeetUIMethods:
             raise RuntimeError(f"Element has invalid size: {width}x{height}")
 
         # Clickable rect: half the width and half the height, centered
-        inset_x = width / 4
-        inset_y = height / 4
+        inset_x = width / 80
+        inset_y = height / 80
         clickable_css_left = left + inset_x
         clickable_css_right = left + width - inset_x
         clickable_css_top = top + inset_y
@@ -551,8 +551,7 @@ class GoogleMeetUIMethods:
 
         logger.info(
             f"mocap_scrambled: mouse at ({current_x},{current_y}), "
-            f"clickable rect [({rect_left},{rect_top})-({rect_right},{rect_bottom})], "
-            f"{len(self.mocap_manager.sequences)} sequences available"
+            f"clickable rect [({rect_left},{rect_top})-({rect_right},{rect_bottom})]"
         )
 
         seq = self.mocap_manager.find_random_sequence_landing_in_rect(
@@ -601,9 +600,12 @@ class GoogleMeetUIMethods:
                     self.human_click_element(name_input)
                     self.human_type(self.display_name)
                 elif self.ui_interaction_mode == "mocap_scrambled":
+                    logger.info("Waiting for got it button...")
                     got_it_button = self.find_element_by_selector(By.XPATH, '//button[.//span[text()="Got it"]]')
                     self.mocap_scrambled_navigate_to_and_click_element(got_it_button)
+                    logger.info("Got it button clicked")
                     self.mocap_scrambled_navigate_to_and_click_element(name_input)
+                    logger.info("Name input clicked")
                     self.human_type(self.display_name)
                 else:
                     name_input.send_keys(self.display_name)
@@ -1059,16 +1061,20 @@ class GoogleMeetUIMethods:
 
     # Position mouse in the center of the screen with some wiggle
     def use_mocap_scrambled_to_position_mouse(self):
-        return self.use_mocap_to_position_mouse()
         self.ensure_x11_input()
-        # Shift mouse by random amount of pixels up to 10 pixels. Use random angle.
-        angle = random.uniform(0, 2 * math.pi)
-        radius = random.uniform(0, 10)
-        dx = radius * math.cos(angle)
-        dy = radius * math.sin(angle)
-        self.x11_input.move_rel(int(dx), int(dy))
-        logger.info(f"Positioned mouse at ({self.x11_input.root.query_pointer()._data['root_x']}, {self.x11_input.root.query_pointer()._data['root_y']})")
 
+        mocap_file = os.path.join(os.path.dirname(__file__), "join_mocap_scramble_0_720p.json")
+        with open(mocap_file, "r") as f:
+            events = json.load(f)
+
+        if not events:
+            return
+
+        first = events[0]
+        start_x = first["global_x"] - first.get("dx", 0)
+        start_y = first["global_y"] - first.get("dy", 0)
+        self.x11_input.move_abs(start_x, start_y)
+        logger.info(f"Positioned mouse at ({start_x}, {start_y})")
 
     def use_mocap_to_fill_out_name_input_turn_off_media_inputs_and_click_join_button(self):
         time.sleep(4)
