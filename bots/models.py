@@ -864,11 +864,17 @@ class Bot(models.Model):
     def google_meet_login_mode_is_always(self):
         return self.settings.get("google_meet_settings", {}).get("login_mode", "always") == "always"
 
+    def google_meet_login_group_name(self):
+        return self.settings.get("google_meet_settings", {}).get("login_group_name")
+
     def teams_use_bot_login(self):
         return self.settings.get("teams_settings", {}).get("use_login", False)
 
     def teams_login_mode_is_always(self):
         return self.settings.get("teams_settings", {}).get("login_mode", "always") == "always"
+
+    def teams_login_group_name(self):
+        return self.settings.get("teams_settings", {}).get("login_group_name")
 
     def use_zoom_web_adapter(self):
         return self.settings.get("zoom_settings", {}).get("sdk", "native") == "web"

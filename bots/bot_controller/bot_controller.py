@@ -164,6 +164,7 @@ class BotController:
         google_meet_bot_login = BotLoginGroup.first_available_login(
             project=self.bot_in_db.project,
             platform=BotLoginPlatform.GOOGLE_MEET,
+            group_name=self.bot_in_db.google_meet_login_group_name(),
         )
         if not google_meet_bot_login:
             return None
@@ -180,6 +181,7 @@ class BotController:
         return self.bot_in_db.google_meet_use_bot_login() and BotLoginGroup.first_available_login(
             project=self.bot_in_db.project,
             platform=BotLoginPlatform.GOOGLE_MEET,
+            group_name=self.bot_in_db.google_meet_login_group_name(),
         ) is not None
 
     def get_google_meet_bot_adapter(self):
@@ -221,6 +223,7 @@ class BotController:
             teams_bot_login = BotLoginGroup.first_available_login(
                 project=self.bot_in_db.project,
                 platform=BotLoginPlatform.TEAMS,
+                group_name=self.bot_in_db.teams_login_group_name(),
             )
 
         return TeamsBotAdapter(

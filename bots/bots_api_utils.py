@@ -17,6 +17,8 @@ from .models import (
     BotChatMessageRequest,
     BotEventManager,
     BotEventTypes,
+    BotLoginGroup,
+    BotLoginPlatform,
     BotMediaRequest,
     BotMediaRequestMediaTypes,
     BotMediaRequestStates,
@@ -43,6 +45,30 @@ from .serializers import (
 from .utils import transcription_provider_from_bot_creation_data
 
 logger = logging.getLogger(__name__)
+
+
+def validate_bot_login_group_settings(project, google_meet_settings, teams_settings):
+    if google_meet_settings and google_meet_settings.get("login_group_name"):
+        if not BotLoginGroup.objects.filter(
+            project=project,
+            platform=BotLoginPlatform.GOOGLE_MEET,
+            name=google_meet_settings["login_group_name"],
+        ).exists():
+            return {
+                "error": f"Google Meet bot login group '{google_meet_settings['login_group_name']}' does not exist in this project."
+            }
+
+    if teams_settings and teams_settings.get("login_group_name"):
+        if not BotLoginGroup.objects.filter(
+            project=project,
+            platform=BotLoginPlatform.TEAMS,
+            name=teams_settings["login_group_name"],
+        ).exists():
+            return {
+                "error": f"Teams bot login group '{teams_settings['login_group_name']}' does not exist in this project."
+            }
+
+    return None
 
 
 def build_site_url(path=""):
@@ -229,6 +255,10 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
     initial_state = BotStates.SCHEDULED if join_at else BotStates.READY
 
     error = validate_external_media_storage_settings(external_media_storage_settings, project)
+    if error:
+        return None, error
+
+    error = validate_bot_login_group_settings(project, google_meet_settings, teams_settings)
     if error:
         return None, error
 
