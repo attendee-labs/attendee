@@ -49,7 +49,7 @@ class ScreenAndAudioRecorder:
             f"! videocrop top={crop['top']} left={crop['left']} "
             f"right={crop['right']} bottom={crop['bottom']} "
             f"! videoscale "
-            f"! video/x-raw,width={crop['width']//2},height={crop['height']//2} "
+            f"! video/x-raw,width={640},height={360} "
             f"! videoconvert "
             f"! video/x-raw,format=RGB "
             f"! appsink name=sink emit-signals=true sync=false drop=true"
