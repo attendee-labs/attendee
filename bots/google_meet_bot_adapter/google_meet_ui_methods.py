@@ -19,6 +19,8 @@ from bots.bot_sso_utils import get_google_meet_set_cookie_url
 from bots.models import RecordingViews
 from bots.web_bot_adapter.ui_methods import UiCouldNotClickElementException, UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableExpectedException
 
+from .mocap_manager import MocapManager
+
 logger = logging.getLogger(__name__)
 
 
@@ -173,6 +175,8 @@ class GoogleMeetUIMethods:
             if self.ui_interaction_mode == "human":
                 self.human_navigate_to_element(microphone_button)
                 self.human_click_element(microphone_button)
+            elif self.ui_interaction_mode == "mocap_scrambled":
+                self.mocap_scrambled_navigate_to_and_click_element(microphone_button)
             else:
                 self.click_element(microphone_button, "turn_off_microphone_button")
 
@@ -198,6 +202,8 @@ class GoogleMeetUIMethods:
             if self.ui_interaction_mode == "human":
                 self.human_navigate_to_element(camera_button)
                 self.human_click_element(camera_button)
+            elif self.ui_interaction_mode == "mocap_scrambled":
+                self.mocap_scrambled_navigate_to_and_click_element(camera_button)
             else:
                 self.click_element(camera_button, "turn_off_camera_button")
 
@@ -487,6 +493,101 @@ class GoogleMeetUIMethods:
 
             self.x11_input = X11Input()
 
+    def ensure_mocap_manager(self):
+        if not hasattr(self, "mocap_manager"):
+            self.mocap_manager = MocapManager()
+
+    def mocap_scrambled_navigate_to_and_click_element(self, element):
+        self.ensure_x11_input()
+        self.ensure_mocap_manager()
+
+        metrics = self.driver.execute_script(
+            """
+            const el = arguments[0];
+            const r = el.getBoundingClientRect();
+            return {
+                left: r.left,
+                top: r.top,
+                width: r.width,
+                height: r.height,
+                screenX: window.screenX,
+                screenY: window.screenY,
+                dpr: window.devicePixelRatio || 1
+            };
+            """,
+            element,
+        )
+
+        if not metrics:
+            raise RuntimeError("No metrics returned from execute_script")
+
+        left = float(metrics["left"])
+        top = float(metrics["top"])
+        width = float(metrics["width"])
+        height = float(metrics["height"])
+        screen_x = float(metrics["screenX"])
+        screen_y = float(metrics["screenY"])
+        dpr = float(metrics["dpr"])
+
+        if width <= 0 or height <= 0:
+            raise RuntimeError(f"Element has invalid size: {width}x{height}")
+
+        # Clickable rect: half the width and half the height, centered
+        inset_x = width / 4
+        inset_y = height / 4
+        clickable_css_left = left + inset_x
+        clickable_css_right = left + width - inset_x
+        clickable_css_top = top + inset_y
+        clickable_css_bottom = top + height - inset_y
+
+        rect_left = int(round((screen_x + clickable_css_left) * dpr))
+        rect_top = int(round((screen_y + clickable_css_top) * dpr))
+        rect_right = int(round((screen_x + clickable_css_right) * dpr))
+        rect_bottom = int(round((screen_y + clickable_css_bottom) * dpr))
+
+        ptr = self.x11_input.root.query_pointer()._data
+        current_x = int(ptr["root_x"])
+        current_y = int(ptr["root_y"])
+
+        logger.info(
+            f"mocap_scrambled: mouse at ({current_x},{current_y}), "
+            f"clickable rect [({rect_left},{rect_top})-({rect_right},{rect_bottom})], "
+            f"{len(self.mocap_manager.sequences)} sequences available"
+        )
+
+        seq = self.mocap_manager.find_random_sequence_landing_in_rect(
+            current_x, current_y, rect_left, rect_top, rect_right, rect_bottom
+        )
+
+        if seq is None:
+            raise RuntimeError(
+                f"No mocap sequence lands inside clickable rect "
+                f"from ({current_x},{current_y}) to "
+                f"[({rect_left},{rect_top})-({rect_right},{rect_bottom})]"
+            )
+
+        logger.info(
+            f"mocap_scrambled: selected sequence with {len(seq.movements)} movements, "
+            f"total_dx={seq.total_dx}, total_dy={seq.total_dy}"
+        )
+
+        for move in seq.movements:
+            dt = move.get("dt", 0)
+            if dt > 0:
+                time.sleep(dt)
+            dx = move.get("dx", 0)
+            dy = move.get("dy", 0)
+            if dx or dy:
+                self.x11_input.move_rel(dx, dy)
+
+        if seq.click_down_dt > 0:
+            time.sleep(seq.click_down_dt)
+        self.x11_input.button_press("left")
+
+        if seq.click_up_dt > 0:
+            time.sleep(seq.click_up_dt)
+        self.x11_input.button_release("left")
+
     def fill_out_name_input(self):
         num_attempts_to_look_for_name_input = 30
         logger.info("Waiting for the name input field...")
@@ -498,6 +599,11 @@ class GoogleMeetUIMethods:
                 if self.ui_interaction_mode == "human":
                     self.human_navigate_to_element(name_input)
                     self.human_click_element(name_input)
+                    self.human_type(self.display_name)
+                elif self.ui_interaction_mode == "mocap_scrambled":
+                    got_it_button = self.find_element_by_selector(By.XPATH, '//button[.//span[text()="Got it"]]')
+                    self.mocap_scrambled_navigate_to_and_click_element(got_it_button)
+                    self.mocap_scrambled_navigate_to_and_click_element(name_input)
                     self.human_type(self.display_name)
                 else:
                     name_input.send_keys(self.display_name)
@@ -951,6 +1057,19 @@ class GoogleMeetUIMethods:
         self.x11_input.move_abs(start_x, start_y)
         logger.info(f"Positioned mouse at ({start_x}, {start_y})")
 
+    # Position mouse in the center of the screen with some wiggle
+    def use_mocap_scrambled_to_position_mouse(self):
+        return self.use_mocap_to_position_mouse()
+        self.ensure_x11_input()
+        # Shift mouse by random amount of pixels up to 10 pixels. Use random angle.
+        angle = random.uniform(0, 2 * math.pi)
+        radius = random.uniform(0, 10)
+        dx = radius * math.cos(angle)
+        dy = radius * math.sin(angle)
+        self.x11_input.move_rel(int(dx), int(dy))
+        logger.info(f"Positioned mouse at ({self.x11_input.root.query_pointer()._data['root_x']}, {self.x11_input.root.query_pointer()._data['root_y']})")
+
+
     def use_mocap_to_fill_out_name_input_turn_off_media_inputs_and_click_join_button(self):
         time.sleep(4)
 
@@ -1022,6 +1141,8 @@ class GoogleMeetUIMethods:
 
         if self.ui_interaction_mode == "mocap":
             self.use_mocap_to_position_mouse()
+        elif self.ui_interaction_mode == "mocap_scrambled":
+            self.use_mocap_scrambled_to_position_mouse()
 
         self.driver.get(self.meeting_url)
 
@@ -1057,6 +1178,8 @@ class GoogleMeetUIMethods:
             if self.ui_interaction_mode == "human":
                 self.human_navigate_to_element(join_button)
                 self.human_click_element(join_button)
+            elif self.ui_interaction_mode == "mocap_scrambled":
+                self.mocap_scrambled_navigate_to_and_click_element(join_button)
             else:
                 self.click_element(join_button, "join_button")
 

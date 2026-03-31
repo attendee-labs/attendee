@@ -716,7 +716,7 @@ GOOGLE_MEET_SETTINGS_SCHEMA = {
         },
         "ui_interaction_mode": {
             "type": "string",
-            "enum": ["standard", "human", "mocap"],
+            "enum": ["standard", "human", "mocap", "mocap_scrambled"],
             "description": "The UI interaction mode for the Google Meet bot. 'standard' uses the default automated interaction strategy, 'human' uses a more human-like interaction strategy.",
             "default": "human",
         },
