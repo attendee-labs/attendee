@@ -19,7 +19,8 @@ class PrimitiveMocapSequence:
 
 
 class MocapManager:
-    def __init__(self):
+    def __init__(self, video_frame_size: tuple[int, int]):
+        self.video_frame_size = video_frame_size
         self.sequences: list[PrimitiveMocapSequence] = []
         self._load_all_scramble_files()
         self._generate_perturbed_sequences()
@@ -64,7 +65,7 @@ class MocapManager:
 
     def _load_all_scramble_files(self):
         directory = os.path.dirname(__file__)
-        pattern = os.path.join(directory, "join_mocap_scramble_*_720p.json")
+        pattern = os.path.join(directory, f"join_mocap_scramble_*_{self.video_frame_size[1]}p.json")
         file_paths = sorted(glob.glob(pattern))
 
         logger.info(f"Found {len(file_paths)} mocap scramble files")

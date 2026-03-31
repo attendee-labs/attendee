@@ -495,7 +495,7 @@ class GoogleMeetUIMethods:
 
     def ensure_mocap_manager(self):
         if not hasattr(self, "mocap_manager"):
-            self.mocap_manager = MocapManager()
+            self.mocap_manager = MocapManager(video_frame_size=self.video_frame_size)
 
     def mocap_scrambled_navigate_to_and_click_element(self, element):
         self.ensure_x11_input()
@@ -1060,7 +1060,7 @@ class GoogleMeetUIMethods:
     def use_mocap_to_position_mouse(self):
         self.ensure_x11_input()
 
-        mocap_file = os.path.join(os.path.dirname(__file__), "join_mocap_720p.json")
+        mocap_file = os.path.join(os.path.dirname(__file__), f"join_mocap_{self.video_frame_size[1]}p.json")
         with open(mocap_file, "r") as f:
             events = json.load(f)
 
@@ -1077,7 +1077,7 @@ class GoogleMeetUIMethods:
     def use_mocap_scrambled_to_position_mouse(self):
         self.ensure_x11_input()
 
-        mocap_file = os.path.join(os.path.dirname(__file__), "join_mocap_scramble_0_720p.json")
+        mocap_file = os.path.join(os.path.dirname(__file__), f"join_mocap_scramble_0_{self.video_frame_size[1]}p.json")
         with open(mocap_file, "r") as f:
             events = json.load(f)
 
@@ -1095,7 +1095,7 @@ class GoogleMeetUIMethods:
 
         self.ensure_x11_input()
 
-        mocap_file = os.path.join(os.path.dirname(__file__), "join_mocap_720p.json")
+        mocap_file = os.path.join(os.path.dirname(__file__), f"join_mocap_{self.video_frame_size[1]}p.json")
         with open(mocap_file, "r") as f:
             events = json.load(f)
 
