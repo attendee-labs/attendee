@@ -5,6 +5,7 @@ class BotAdapter:
         ZOOM_AUTHORIZATION_FAILED = "Zoom authorization failed"
         ZOOM_MEETING_STATUS_FAILED = "Zoom meeting status failed"
         ZOOM_MEETING_STATUS_FAILED_UNABLE_TO_JOIN_EXTERNAL_MEETING = "Zoom meeting status failed - unable to join external meeting"
+        ZOOM_MEETING_STATUS_FAILED_APP_CAN_NOT_ANONYMOUS_JOIN_MEETING = "Zoom meeting status failed - app can not anonymous join meeting"
         ZOOM_SDK_INTERNAL_ERROR = "Zoom SDK Internal Error"
         BOT_PUT_IN_WAITING_ROOM = "Bot put in waiting room"
         BOT_JOINED_MEETING = "Bot joined meeting"
@@ -24,6 +25,7 @@ class BotAdapter:
         BLOCKED_BY_CAPTCHA = "Blocked by captcha"
         JOINING_BREAKOUT_ROOM = "Joining breakout room"
         LEAVING_BREAKOUT_ROOM = "Leaving breakout room"
+        WEBINAR_BOT_PROMOTED_TO_PANELIST = "Webinar bot promoted to panelist"
         BOT_RECORDING_PERMISSION_DENIED = "Bot recording permission denied"
         AUTHORIZED_USER_NOT_IN_MEETING_TIMEOUT_EXCEEDED = "Authorized user not in meeting timeout exceeded"
         COULD_NOT_ENABLE_CLOSED_CAPTIONS = "Could not enable closed captions"
@@ -37,6 +39,7 @@ class BotAdapter:
         HOST_DENIED_PERMISSION = "HOST_DENIED_PERMISSION"
         REQUEST_TIMED_OUT = "REQUEST_TIMED_OUT"
         HOST_CLIENT_CANNOT_GRANT_PERMISSION = "HOST_CLIENT_CANNOT_GRANT_PERMISSION"
+        WEBINAR_ATTENDEE_NEEDS_PANELIST_PROMOTION = "WEBINAR_ATTENDEE_NEEDS_PANELIST_PROMOTION"
 
     class LEAVE_REASON:
         AUTO_LEAVE_SILENCE = "AUTO_LEAVE_SILENCE"

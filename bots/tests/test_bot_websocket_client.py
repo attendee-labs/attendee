@@ -100,7 +100,8 @@ class TestBotWebsocketClient(unittest.TestCase):
 
         # Should have tried 3 times total
         self.assertEqual(mock_connect.call_count, 3)
-        self.assertEqual(mock_sleep.call_count, 2)  # Sleep between retries (not after last success)
+        retry_sleep_calls = [c for c in mock_sleep.call_args_list if c == call(self.client._retry_delay_s)]
+        self.assertEqual(len(retry_sleep_calls), 2)
         self.assertEqual(self.client.connection_state, BotWebsocketClient.CONNECTED)
 
     @patch("bots.bot_controller.bot_websocket_client.connect")

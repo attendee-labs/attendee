@@ -1351,15 +1351,116 @@ class AssemblyAIProviderTest(TransactionTestCase):
             self.assertIsNone(failure)
             self.assertEqual(transcript["transcript"], "hello assembly")
 
-            # Check that the transcript creation request included keyterms_prompt and speech_model
-            # The second call to requests.post is the transcript creation
+            # Check that the transcript creation request included keyterms_prompt and speech_models
+            # The singular speech_model setting is mapped to the speech_models list
             transcript_call = m_post.call_args_list[1]
             _, kwargs = transcript_call
             data = kwargs["json"]
             self.assertIn("keyterms_prompt", data)
             self.assertEqual(data["keyterms_prompt"], ["aws", "azure", "google cloud"])
-            self.assertIn("speech_model", data)
-            self.assertEqual(data["speech_model"], "slam-1")
+            self.assertIn("speech_models", data)
+            self.assertEqual(data["speech_models"], ["slam-1"])
+
+    def test_default_speech_models(self):
+        """Test that the default speech_models are included when no speech_model settings are configured."""
+        with (
+            self._patch_creds(),
+            mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3"),
+            mock.patch("bots.tasks.process_utterance_task.requests.post") as m_post,
+            mock.patch("bots.tasks.process_utterance_task.requests.get") as m_get,
+            mock.patch("bots.tasks.process_utterance_task.requests.delete") as m_delete,
+        ):
+            upload_response = mock.Mock(status_code=200)
+            upload_response.json.return_value = {"upload_url": "https://cdn.assemblyai.com/upload/123"}
+            transcript_response = mock.Mock(status_code=200)
+            transcript_response.json.return_value = {"id": "transcript-abc"}
+            m_post.side_effect = [upload_response, transcript_response]
+
+            done_response = mock.Mock(status_code=200)
+            done_response.json.return_value = {"status": "completed", "text": "hello", "words": []}
+            m_get.return_value = done_response
+            m_delete.return_value = mock.Mock(status_code=200)
+
+            transcript, failure = get_transcription_via_assemblyai(self.utterance)
+
+            self.assertIsNone(failure)
+            transcript_call = m_post.call_args_list[1]
+            _, kwargs = transcript_call
+            data = kwargs["json"]
+            self.assertEqual(data["speech_models"], ["universal-3-pro", "universal-2"])
+
+    def test_speech_models_plural_overrides_default(self):
+        """Test that the speech_models (plural) setting overrides the default speech_models."""
+        self.bot.settings = {
+            "transcription_settings": {
+                "assembly_ai": {
+                    "speech_models": ["universal-2"],
+                }
+            }
+        }
+        self.bot.save()
+        with (
+            self._patch_creds(),
+            mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3"),
+            mock.patch("bots.tasks.process_utterance_task.requests.post") as m_post,
+            mock.patch("bots.tasks.process_utterance_task.requests.get") as m_get,
+            mock.patch("bots.tasks.process_utterance_task.requests.delete") as m_delete,
+        ):
+            upload_response = mock.Mock(status_code=200)
+            upload_response.json.return_value = {"upload_url": "https://cdn.assemblyai.com/upload/123"}
+            transcript_response = mock.Mock(status_code=200)
+            transcript_response.json.return_value = {"id": "transcript-abc"}
+            m_post.side_effect = [upload_response, transcript_response]
+
+            done_response = mock.Mock(status_code=200)
+            done_response.json.return_value = {"status": "completed", "text": "hello", "words": []}
+            m_get.return_value = done_response
+            m_delete.return_value = mock.Mock(status_code=200)
+
+            transcript, failure = get_transcription_via_assemblyai(self.utterance)
+
+            self.assertIsNone(failure)
+            transcript_call = m_post.call_args_list[1]
+            _, kwargs = transcript_call
+            data = kwargs["json"]
+            self.assertEqual(data["speech_models"], ["universal-2"])
+
+    def test_speech_models_plural_overrides_singular(self):
+        """Test that speech_models (plural) takes precedence over speech_model (singular)."""
+        self.bot.settings = {
+            "transcription_settings": {
+                "assembly_ai": {
+                    "speech_model": "slam-1",
+                    "speech_models": ["universal-3-pro"],
+                }
+            }
+        }
+        self.bot.save()
+        with (
+            self._patch_creds(),
+            mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3"),
+            mock.patch("bots.tasks.process_utterance_task.requests.post") as m_post,
+            mock.patch("bots.tasks.process_utterance_task.requests.get") as m_get,
+            mock.patch("bots.tasks.process_utterance_task.requests.delete") as m_delete,
+        ):
+            upload_response = mock.Mock(status_code=200)
+            upload_response.json.return_value = {"upload_url": "https://cdn.assemblyai.com/upload/123"}
+            transcript_response = mock.Mock(status_code=200)
+            transcript_response.json.return_value = {"id": "transcript-abc"}
+            m_post.side_effect = [upload_response, transcript_response]
+
+            done_response = mock.Mock(status_code=200)
+            done_response.json.return_value = {"status": "completed", "text": "hello", "words": []}
+            m_get.return_value = done_response
+            m_delete.return_value = mock.Mock(status_code=200)
+
+            transcript, failure = get_transcription_via_assemblyai(self.utterance)
+
+            self.assertIsNone(failure)
+            transcript_call = m_post.call_args_list[1]
+            _, kwargs = transcript_call
+            data = kwargs["json"]
+            self.assertEqual(data["speech_models"], ["universal-3-pro"])
 
 
 from unittest import mock

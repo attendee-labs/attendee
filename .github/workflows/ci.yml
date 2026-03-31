@@ -11,11 +11,22 @@ permissions:
 
 jobs:
   test:
-    name: Run test suite
+    name: "Tests: ${{ matrix.test_suite }}"
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - test_suite: zoom
+            test_args: "--tag zoom_tests"
+          - test_suite: google_meet
+            test_args: "--tag google_meet_tests"
+          - test_suite: teams_and_zoom_web
+            test_args: "--tag teams_tests --tag zoom_web_tests"
+          - test_suite: others
+            test_args: "--exclude-tag zoom_tests --exclude-tag google_meet_tests --exclude-tag teams_tests --exclude-tag zoom_web_tests"
 
-    # Add service containers
     services:
       postgres:
         image: postgres:15.3-alpine
@@ -62,7 +73,7 @@ jobs:
         cache-from: type=gha
         cache-to: type=gha,mode=max
 
-    - name: Run build script in Docker container
+    - name: "Run ${{ matrix.test_suite }} tests"
       env:
         POSTGRES_HOST: localhost
         REDIS_URL: redis://localhost:6379/5
@@ -76,9 +87,9 @@ jobs:
           attendee-test:latest bash -lc '
             set -e
             python init_env.py > /tmp/.env
-            python -m dotenv -f /tmp/.env run -- python manage.py test --keepdb --parallel 4 --tag zoom_tests
-            python -m dotenv -f /tmp/.env run -- python manage.py test --keepdb --parallel 4 --exclude-tag zoom_tests
+            python -m dotenv -f /tmp/.env run -- python manage.py test --keepdb ${{ matrix.test_args }} --verbosity 2
           '
+
   lint:
     name: Run linting
     runs-on: ubuntu-latest

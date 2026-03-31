@@ -13,6 +13,7 @@ class PipelineConfiguration:
     rtmp_stream_audio: bool
     rtmp_stream_video: bool
     websocket_stream_audio: bool
+    websocket_stream_per_participant_audio: bool
 
     def __post_init__(self):
         # Convert to FrozenSet of FrozenSet[str]
@@ -26,12 +27,24 @@ class PipelineConfiguration:
                 frozenset({"rtmp_stream_audio", "rtmp_stream_video", "transcribe_audio"}),
                 # Basic meeting bot configuration with websocket audio
                 frozenset({"record_audio", "record_video", "transcribe_audio", "websocket_stream_audio"}),
+                # Basic meeting bot configuration with websocket per participant audio
+                frozenset({"record_audio", "record_video", "transcribe_audio", "websocket_stream_per_participant_audio"}),
+                # Basic meeting bot configuration with websocket audio and per participant audio
+                frozenset({"record_audio", "record_video", "transcribe_audio", "websocket_stream_audio", "websocket_stream_per_participant_audio"}),
                 # Audio only recording configuration with websocket audio
                 frozenset({"record_audio", "transcribe_audio", "websocket_stream_audio"}),
+                # Audio only recording configuration with websocket per participant audio
+                frozenset({"record_audio", "transcribe_audio", "websocket_stream_per_participant_audio"}),
+                # Audio only recording configuration with websocket audio and per participant audio
+                frozenset({"record_audio", "transcribe_audio", "websocket_stream_audio", "websocket_stream_per_participant_audio"}),
                 # Pure transcription configuration
                 frozenset({"transcribe_audio"}),
                 # Pure transcription configuration with websocket audio
                 frozenset({"transcribe_audio", "websocket_stream_audio"}),
+                # Pure transcription configuration with websocket per participant audio
+                frozenset({"transcribe_audio", "websocket_stream_per_participant_audio"}),
+                # Pure transcription configuration with websocket audio and per participant audio
+                frozenset({"transcribe_audio", "websocket_stream_audio", "websocket_stream_per_participant_audio"}),
             }
         )
 
@@ -51,6 +64,7 @@ class PipelineConfiguration:
             rtmp_stream_audio=False,
             rtmp_stream_video=False,
             websocket_stream_audio=False,
+            websocket_stream_per_participant_audio=False,
         )
 
     @classmethod
@@ -62,6 +76,7 @@ class PipelineConfiguration:
             rtmp_stream_audio=False,
             rtmp_stream_video=False,
             websocket_stream_audio=False,
+            websocket_stream_per_participant_audio=False,
         )
 
     @classmethod
@@ -73,6 +88,7 @@ class PipelineConfiguration:
             rtmp_stream_audio=True,
             rtmp_stream_video=True,
             websocket_stream_audio=False,
+            websocket_stream_per_participant_audio=False,
         )
 
     @classmethod
@@ -84,6 +100,31 @@ class PipelineConfiguration:
             rtmp_stream_audio=False,
             rtmp_stream_video=False,
             websocket_stream_audio=True,
+            websocket_stream_per_participant_audio=False,
+        )
+
+    @classmethod
+    def recorder_bot_with_websocket_per_participant_audio(cls) -> "PipelineConfiguration":
+        return cls(
+            record_video=True,
+            record_audio=True,
+            transcribe_audio=True,
+            rtmp_stream_audio=False,
+            rtmp_stream_video=False,
+            websocket_stream_audio=False,
+            websocket_stream_per_participant_audio=True,
+        )
+
+    @classmethod
+    def recorder_bot_with_websocket_audio_and_websocket_per_participant_audio(cls) -> "PipelineConfiguration":
+        return cls(
+            record_video=True,
+            record_audio=True,
+            transcribe_audio=True,
+            rtmp_stream_audio=False,
+            rtmp_stream_video=False,
+            websocket_stream_audio=True,
+            websocket_stream_per_participant_audio=True,
         )
 
     @classmethod
@@ -95,6 +136,31 @@ class PipelineConfiguration:
             rtmp_stream_audio=False,
             rtmp_stream_video=False,
             websocket_stream_audio=True,
+            websocket_stream_per_participant_audio=False,
+        )
+
+    @classmethod
+    def audio_recorder_bot_with_websocket_per_participant_audio(cls) -> "PipelineConfiguration":
+        return cls(
+            record_video=False,
+            record_audio=True,
+            transcribe_audio=True,
+            rtmp_stream_audio=False,
+            rtmp_stream_video=False,
+            websocket_stream_audio=False,
+            websocket_stream_per_participant_audio=True,
+        )
+
+    @classmethod
+    def audio_recorder_bot_with_websocket_audio_and_websocket_per_participant_audio(cls) -> "PipelineConfiguration":
+        return cls(
+            record_video=False,
+            record_audio=True,
+            transcribe_audio=True,
+            rtmp_stream_audio=False,
+            rtmp_stream_video=False,
+            websocket_stream_audio=True,
+            websocket_stream_per_participant_audio=True,
         )
 
     @classmethod
@@ -106,6 +172,7 @@ class PipelineConfiguration:
             rtmp_stream_audio=False,
             rtmp_stream_video=False,
             websocket_stream_audio=False,
+            websocket_stream_per_participant_audio=False,
         )
 
     @classmethod
@@ -117,4 +184,29 @@ class PipelineConfiguration:
             rtmp_stream_audio=False,
             rtmp_stream_video=False,
             websocket_stream_audio=True,
+            websocket_stream_per_participant_audio=False,
+        )
+
+    @classmethod
+    def pure_transcription_bot_with_websocket_per_participant_audio(cls) -> "PipelineConfiguration":
+        return cls(
+            record_video=False,
+            record_audio=False,
+            transcribe_audio=True,
+            rtmp_stream_audio=False,
+            rtmp_stream_video=False,
+            websocket_stream_audio=False,
+            websocket_stream_per_participant_audio=True,
+        )
+
+    @classmethod
+    def pure_transcription_bot_with_websocket_audio_and_websocket_per_participant_audio(cls) -> "PipelineConfiguration":
+        return cls(
+            record_video=False,
+            record_audio=False,
+            transcribe_audio=True,
+            rtmp_stream_audio=False,
+            rtmp_stream_video=False,
+            websocket_stream_audio=True,
+            websocket_stream_per_participant_audio=True,
         )

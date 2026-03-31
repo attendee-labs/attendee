@@ -7,7 +7,7 @@ from django.db import IntegrityError, transaction
 from .app_session_serializers import (
     CreateAppSessionSerializer,
 )
-from .bots_api_utils import BotCreationSource, create_webhook_subscriptions
+from .bots_api_utils import BotCreationSource, create_webhook_subscriptions, validate_bot_concurrency_limit, validate_external_media_storage_settings
 from .models import (
     Bot,
     BotEventManager,
@@ -37,6 +37,7 @@ def create_app_session(data: dict, source: BotCreationSource, project: Project) 
     rtmp_settings = serializer.validated_data["rtmp_settings"]
     recording_settings = serializer.validated_data["recording_settings"]
     debug_settings = serializer.validated_data["debug_settings"]
+    external_media_storage_settings = serializer.validated_data["external_media_storage_settings"]
 
     metadata = serializer.validated_data["metadata"]
     websocket_settings = serializer.validated_data["websocket_settings"]
@@ -45,12 +46,21 @@ def create_app_session(data: dict, source: BotCreationSource, project: Project) 
     zoom_rtms = serializer.validated_data["zoom_rtms"]
     initial_state = BotStates.READY
 
+    error = validate_external_media_storage_settings(external_media_storage_settings, project)
+    if error:
+        return None, error
+
+    error = validate_bot_concurrency_limit(project)
+    if error:
+        return None, error
+
     settings = {
         "transcription_settings": transcription_settings,
         "rtmp_settings": rtmp_settings,
         "recording_settings": recording_settings,
         "debug_settings": debug_settings,
         "websocket_settings": websocket_settings,
+        "external_media_storage_settings": external_media_storage_settings,
         "zoom_rtms": zoom_rtms,
     }
 
