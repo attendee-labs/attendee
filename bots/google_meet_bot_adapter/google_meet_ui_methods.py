@@ -26,6 +26,11 @@ class UiGoogleBlockingUsException(UiRetryableExpectedException):
         super().__init__(message, step, inner_exception)
 
 
+class UiGoogleWrongAudioConfigurationException(UiRetryableExpectedException):
+    def __init__(self, message, step=None, inner_exception=None):
+        super().__init__(message, step, inner_exception)
+
+
 class GoogleMeetUIMethods:
     def locate_element(self, step, condition, wait_time_seconds=60):
         try:
@@ -901,6 +906,8 @@ class GoogleMeetUIMethods:
 
         self.fill_out_name_input()
 
+        self.verify_expected_audio_configuration()
+
         self.turn_off_media_inputs()
 
         logger.info("Waiting for the 'Ask to join' or 'Join now' button...")
@@ -931,6 +938,21 @@ class GoogleMeetUIMethods:
             self.turn_off_reactions()
 
         self.ready_to_show_bot_image()
+
+    def verify_expected_audio_configuration(self):
+        # Just in case we don't want to run this check anymore, we'll have an env var to bypass it.
+        if os.getenv("VERIFY_EXPECTED_AUDIO_CONFIGURATION_FOR_GOOGLE_MEET_BOT", "true") == "false":
+            return
+
+        audio_elements = self.driver.find_elements(By.CSS_SELECTOR, "audio")
+        logger.info(f"{len(audio_elements)} audio elements are present")
+
+        # Google Meet is testing an alternate way of orchestrating audio. If no audio elements are present
+        # then we've hit this case and should raise an exception, so that we retry. We will most likely get the
+        # standard configuration after a retry, it's a random ab test.
+        if len(audio_elements) == 0:
+            logger.info("audio elements are not present. Raising UiGoogleWrongAudioConfigurationException")
+            raise UiGoogleWrongAudioConfigurationException("audio elements are not present", "verify_audio_elements_are_present")
 
     def scroll_element_into_view(self, element, step):
         try:
