@@ -580,7 +580,7 @@ class TestTeamsBot(TransactionTestCase):
         def mock_fill_out_name_input(*args, **kwargs):
             """Mock that raises an exception only on first join attempt.
 
-            When teams_bot_login_credentials are available and teams_bot_login_should_be_used is False,
+            When teams_bot_login_is_available is True and teams_bot_login_should_be_used is False,
             attempt_to_join_meeting() wraps this and converts ANY exception to UiLoginRequiredException.
             """
             fill_out_name_input_call_count[0] += 1
@@ -654,9 +654,6 @@ class TestTeamsBot(TransactionTestCase):
 
             # Verify that teams_bot_login_should_be_used was set to True after the first failed attempt
             self.assertTrue(controller.adapter.teams_bot_login_should_be_used, "Expected teams_bot_login_should_be_used to be True after retry")
-
-            # Verify that teams_bot_login_credentials was available
-            self.assertIsNotNone(controller.adapter.teams_bot_login_credentials, "Expected teams_bot_login_credentials to be set")
 
             # Verify that the recording was finished
             self.recording.refresh_from_db()
