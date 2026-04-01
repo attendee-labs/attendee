@@ -109,7 +109,7 @@
                         hx-target="#teams-bot-login-section"
                         hx-select="#teams-bot-login-section"
                         hx-swap="outerHTML"
-                        hx-on::after-request="bootstrap.Modal.getInstance(document.getElementById('editBotLoginGroupModal-{{ group.object_id }}'))?.hide()">
+                        hx-on::before-request="bootstrap.Modal.getInstance(document.getElementById('editBotLoginGroupModal-{{ group.object_id }}'))?.hide()">
                         {% csrf_token %}
                         <div class="mb-3">
                             <label for="teams-group-name-{{ group.object_id }}" class="form-label">Group Name</label>
@@ -147,7 +147,7 @@
                         hx-target="#teams-bot-login-section"
                         hx-select="#teams-bot-login-section"
                         hx-swap="outerHTML"
-                        hx-on::after-request="clearTeamsBotLoginForm('{{ group.object_id }}')">
+                        hx-on::before-request="hideModalById('teamsBotLoginCredentialsModal-{{ group.object_id }}')">
                         {% csrf_token %}
                         <input type="hidden" name="bot_login_group_object_id" value="{{ group.object_id }}">
 
@@ -201,7 +201,7 @@
                     hx-target="#teams-bot-login-section"
                     hx-select="#teams-bot-login-section"
                     hx-swap="outerHTML"
-                    hx-on::after-request="bootstrap.Modal.getInstance(document.getElementById('createTeamsBotLoginGroupModal'))?.hide()">
+                    hx-on::before-request="bootstrap.Modal.getInstance(document.getElementById('createTeamsBotLoginGroupModal'))?.hide()">
                     {% csrf_token %}
                     <input type="hidden" name="platform" value="teams">
                     <div class="mb-3">

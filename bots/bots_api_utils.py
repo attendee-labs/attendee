@@ -47,8 +47,9 @@ from .utils import transcription_provider_from_bot_creation_data
 logger = logging.getLogger(__name__)
 
 
-def validate_bot_login_group_settings(project, google_meet_settings, teams_settings):
-    if google_meet_settings and google_meet_settings.get("login_group_name"):
+def validate_bot_login_group_settings(project, google_meet_settings, teams_settings, meeting_url):
+    meeting_type = meeting_type_from_url(meeting_url)
+    if meeting_type == MeetingTypes.GOOGLE_MEET and google_meet_settings and google_meet_settings.get("login_group_name"):
         if not BotLoginGroup.objects.filter(
             project=project,
             platform=BotLoginPlatform.GOOGLE_MEET,
@@ -56,7 +57,7 @@ def validate_bot_login_group_settings(project, google_meet_settings, teams_setti
         ).exists():
             return {"error": f"Google Meet bot login group '{google_meet_settings['login_group_name']}' does not exist in this project."}
 
-    if teams_settings and teams_settings.get("login_group_name"):
+    if meeting_type == MeetingTypes.TEAMS and teams_settings and teams_settings.get("login_group_name"):
         if not BotLoginGroup.objects.filter(
             project=project,
             platform=BotLoginPlatform.TEAMS,
@@ -254,7 +255,7 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
     if error:
         return None, error
 
-    error = validate_bot_login_group_settings(project, google_meet_settings, teams_settings)
+    error = validate_bot_login_group_settings(project, google_meet_settings, teams_settings, meeting_url)
     if error:
         return None, error
 
