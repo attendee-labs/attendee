@@ -128,6 +128,17 @@
         attachFilePreviewHandlers("private_key_file_", "private_key_", "private_key_preview_", "private_key_preview_content_");
         attachFilePreviewHandlers("cert_file_", "cert_", "cert_preview_", "cert_preview_content_");
 
+        ["createGoogleMeetBotLoginGroupModal", "createTeamsBotLoginGroupModal"].forEach((modalId) => {
+            const modalElement = document.getElementById(modalId);
+            if (!modalElement || modalElement.dataset.clearHandlerAttached === "true") {
+                return;
+            }
+            modalElement.addEventListener("hidden.bs.modal", function() {
+                resetModalForm(modalId);
+            });
+            modalElement.dataset.clearHandlerAttached = "true";
+        });
+
         attachModalHiddenReset("teamsBotLoginCredentialsModal-", function(suffix) {
             resetModalForm(`teamsBotLoginCredentialsModal-${suffix}`);
         });

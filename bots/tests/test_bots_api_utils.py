@@ -127,6 +127,18 @@ class TestCreateBot(TestCase):
         self.assertIsNone(bot)
         self.assertEqual(error, {"error": "Google Meet bot login group 'Missing Group' does not exist in this project."})
 
+    def test_create_google_meet_bot_ignores_teams_login_group_name_validation(self):
+        BotLoginGroup.objects.create(project=self.project, platform=BotLoginPlatform.GOOGLE_MEET, name="Acme Support")
+        bot, error = create_bot(data={"meeting_url": "https://meet.google.com/abc-defg-hij", "bot_name": "Test Bot", "google_meet_settings": {"use_login": True, "login_group_name": "Acme Support"}, "teams_settings": {"use_login": True, "login_group_name": "Missing Teams Group"}}, source=BotCreationSource.API, project=self.project)
+        self.assertIsNotNone(bot)
+        self.assertIsNone(error)
+
+    def test_create_teams_bot_ignores_google_meet_login_group_name_validation(self):
+        BotLoginGroup.objects.create(project=self.project, platform=BotLoginPlatform.TEAMS, name="Acme Teams")
+        bot, error = create_bot(data={"meeting_url": "https://teams.microsoft.com/meet/123?p=123", "bot_name": "Test Bot", "teams_settings": {"use_login": True, "login_group_name": "Acme Teams"}, "google_meet_settings": {"use_login": True, "login_group_name": "Missing Google Meet Group"}}, source=BotCreationSource.API, project=self.project)
+        self.assertIsNotNone(bot)
+        self.assertIsNone(error)
+
     def test_create_bot_with_explicit_transcription_settings(self):
         """Test creating bots with explicit transcription settings for different providers and meeting types"""
 
