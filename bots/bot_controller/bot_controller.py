@@ -164,7 +164,7 @@ class BotController:
     def create_google_meet_bot_login_session(self):
         if not self.bot_in_db.google_meet_use_bot_login():
             return None
-        least_used_google_meet_bot_login = BotLoginGroup.first_available_login(project=self.bot_in_db.project, platform=BotLoginPlatform.GOOGLE_MEET)
+        least_used_google_meet_bot_login = BotLoginGroup.first_available_login(project=self.bot_in_db.project, platform=BotLoginPlatform.GOOGLE_MEET, group_name=self.bot_in_db.google_meet_login_group_name())
         if not least_used_google_meet_bot_login:
             return None
         least_used_google_meet_bot_login.last_used_at = timezone.now()
@@ -179,11 +179,7 @@ class BotController:
     def google_meet_bot_login_is_available(self):
         return (
             self.bot_in_db.google_meet_use_bot_login()
-            and BotLoginGroup.first_available_login(
-                project=self.bot_in_db.project,
-                platform=BotLoginPlatform.GOOGLE_MEET,
-                group_name=self.bot_in_db.google_meet_login_group_name(),
-            )
+            and BotLoginGroup.first_available_login(project=self.bot_in_db.project, platform=BotLoginPlatform.GOOGLE_MEET, group_name=self.bot_in_db.google_meet_login_group_name())
             is not None
         )
 
@@ -225,11 +221,7 @@ class BotController:
 
         teams_bot_login = None
         if self.bot_in_db.teams_use_bot_login():
-            teams_bot_login = BotLoginGroup.first_available_login(
-                project=self.bot_in_db.project,
-                platform=BotLoginPlatform.TEAMS,
-                group_name=self.bot_in_db.teams_login_group_name(),
-            )
+            teams_bot_login = BotLoginGroup.first_available_login(project=self.bot_in_db.project, platform=BotLoginPlatform.TEAMS, group_name=self.bot_in_db.teams_login_group_name())
 
         return TeamsBotAdapter(
             display_name=self.bot_in_db.name,
