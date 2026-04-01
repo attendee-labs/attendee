@@ -1456,8 +1456,10 @@ class CreateBotLoginGroupView(LoginRequiredMixin, ProjectUrlContextMixin, View):
                 return HttpResponse("Missing required fields: platform and name are required", status=400)
             if platform not in BotLoginPlatform.values:
                 return HttpResponse("Invalid platform", status=400)
+            if BotLoginGroup.objects.filter(project=project, platform=platform, name=name).exists():
+                return HttpResponse("A bot login group with this name already exists", status=400)
 
-            bot_login_group, created = BotLoginGroup.objects.get_or_create(project=project, platform=platform, name=name)
+            BotLoginGroup.objects.create(project=project, platform=platform, name=name)
 
             context = self.get_project_context(object_id, project)
             context.update(get_bot_login_group_context(project))
@@ -1473,6 +1475,8 @@ class EditBotLoginGroupView(LoginRequiredMixin, ProjectUrlContextMixin, View):
     def post(self, request, object_id, bot_login_group_object_id):
         project = get_project_for_user(user=request.user, project_object_id=object_id)
         bot_login_group = get_bot_login_group_for_user(user=request.user, bot_login_group_object_id=bot_login_group_object_id)
+        if bot_login_group.project_id != project.id:
+            return HttpResponse("Bot login group does not belong to this project", status=404)
 
         try:
             name = request.POST.get("name")
@@ -1506,6 +1510,8 @@ class DeleteBotLoginGroupView(LoginRequiredMixin, ProjectUrlContextMixin, View):
     def post(self, request, object_id, bot_login_group_object_id):
         project = get_project_for_user(user=request.user, project_object_id=object_id)
         bot_login_group = get_bot_login_group_for_user(user=request.user, bot_login_group_object_id=bot_login_group_object_id)
+        if bot_login_group.project_id != project.id:
+            return HttpResponse("Bot login group does not belong to this project", status=404)
         platform = bot_login_group.platform
         bot_login_group.delete()
         context = self.get_project_context(object_id, project)
@@ -1516,13 +1522,10 @@ class DeleteBotLoginGroupView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 class CreateGoogleMeetBotLoginView(LoginRequiredMixin, ProjectUrlContextMixin, View):
     def post(self, request, object_id):
         project = get_project_for_user(user=request.user, project_object_id=object_id)
+        bot_login_group_object_id = request.POST.get("bot_login_group_object_id")
+        google_meet_bot_login_group = get_bot_login_group_for_user(user=request.user, bot_login_group_object_id=bot_login_group_object_id)
 
         try:
-            bot_login_group_object_id = request.POST.get("bot_login_group_object_id")
-            google_meet_bot_login_group = get_bot_login_group_for_user(
-                user=request.user,
-                bot_login_group_object_id=bot_login_group_object_id,
-            )
             if google_meet_bot_login_group.project_id != project.id or google_meet_bot_login_group.platform != BotLoginPlatform.GOOGLE_MEET:
                 return HttpResponse("Invalid Google Meet bot login group", status=400)
 
@@ -1563,12 +1566,9 @@ class CreateGoogleMeetBotLoginView(LoginRequiredMixin, ProjectUrlContextMixin, V
 class CreateTeamsBotLoginView(LoginRequiredMixin, ProjectUrlContextMixin, View):
     def post(self, request, object_id):
         project = get_project_for_user(user=request.user, project_object_id=object_id)
+        bot_login_group_object_id = request.POST.get("bot_login_group_object_id")
+        teams_bot_login_group = get_bot_login_group_for_user(user=request.user, bot_login_group_object_id=bot_login_group_object_id)
         try:
-            bot_login_group_object_id = request.POST.get("bot_login_group_object_id")
-            teams_bot_login_group = get_bot_login_group_for_user(
-                user=request.user,
-                bot_login_group_object_id=bot_login_group_object_id,
-            )
             if teams_bot_login_group.project_id != project.id or teams_bot_login_group.platform != BotLoginPlatform.TEAMS:
                 return HttpResponse("Invalid Teams bot login group", status=400)
 
@@ -1605,6 +1605,8 @@ class DeleteBotLoginView(LoginRequiredMixin, ProjectUrlContextMixin, View):
     def post(self, request, object_id, bot_login_object_id):
         bot_login = get_bot_login_for_user(user=request.user, bot_login_object_id=bot_login_object_id)
         project = get_project_for_user(user=request.user, project_object_id=object_id)
+        if bot_login.group.project_id != project.id:
+            return HttpResponse("Bot login does not belong to this project", status=404)
         platform = bot_login.group.platform
         bot_login.delete()
         context = self.get_project_context(object_id, project)
