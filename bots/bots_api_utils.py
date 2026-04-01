@@ -54,9 +54,7 @@ def validate_bot_login_group_settings(project, google_meet_settings, teams_setti
             platform=BotLoginPlatform.GOOGLE_MEET,
             name=google_meet_settings["login_group_name"],
         ).exists():
-            return {
-                "error": f"Google Meet bot login group '{google_meet_settings['login_group_name']}' does not exist in this project."
-            }
+            return {"error": f"Google Meet bot login group '{google_meet_settings['login_group_name']}' does not exist in this project."}
 
     if teams_settings and teams_settings.get("login_group_name"):
         if not BotLoginGroup.objects.filter(
@@ -64,9 +62,7 @@ def validate_bot_login_group_settings(project, google_meet_settings, teams_setti
             platform=BotLoginPlatform.TEAMS,
             name=teams_settings["login_group_name"],
         ).exists():
-            return {
-                "error": f"Teams bot login group '{teams_settings['login_group_name']}' does not exist in this project."
-            }
+            return {"error": f"Teams bot login group '{teams_settings['login_group_name']}' does not exist in this project."}
 
     return None
 
