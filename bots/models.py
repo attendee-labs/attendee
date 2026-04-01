@@ -87,13 +87,22 @@ class BotLoginGroup(models.Model):
 
     @classmethod
     def first_available_login(cls, project, platform, group_name=None):
+        """
+        Returns the least recently used BotLogin for the specified project and platform.
+
+        - If a group_name is provided, only considers logins in that named group.
+        - If no group_name is given, iterates through all groups (ordered by creation date and id)
+          for the given project and platform, returning the first available login it.
+
+        If no valid login is found, returns None.
+        """
         groups = cls.objects.filter(project=project, platform=platform)
         if group_name is not None:
             groups = groups.filter(name=group_name)
         groups = groups.order_by("created_at", "id")
 
         for group in groups:
-            available_login = group.bot_logins.filter(is_active=True).order_by(F("last_used_at").asc(nulls_first=True), "id").first()
+            available_login = group.bot_logins.order_by(F("last_used_at").asc(nulls_first=True), "id").first()
             if available_login:
                 return available_login
 
