@@ -213,7 +213,6 @@ class BotController:
             create_google_meet_bot_login_session_callback=self.create_google_meet_bot_login_session,
         )
 
-
     def create_teams_bot_login_credentials(self):
         if not self.bot_in_db.teams_use_bot_login():
             return None
