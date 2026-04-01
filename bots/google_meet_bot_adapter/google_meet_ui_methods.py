@@ -6,7 +6,7 @@ from urllib.parse import urlparse
 
 import requests
 from django.conf import settings
-from selenium.common.exceptions import ElementNotInteractableException, NoSuchElementException, TimeoutException
+from selenium.common.exceptions import ElementNotInteractableException, NoSuchElementException, StaleElementReferenceException, TimeoutException
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
@@ -225,7 +225,7 @@ class GoogleMeetUIMethods:
         return False
 
     def retrieve_name_input_element(self):
-        return WebDriverWait(self.driver, 1).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'input[type="text"][aria-label="Your name"]')))
+        return WebDriverWait(self.driver, 1).until(EC.element_to_be_clickable((By.CSS_SELECTOR, 'input[type="text"][aria-label="Your name"]')))
 
     UNSHIFTED_PUNCTUATION = {
         "-": "minus",
@@ -441,12 +441,12 @@ class GoogleMeetUIMethods:
                     logger.warning("Could not find name input. Timed out. Raising UiCouldNotLocateElementException")
                     raise UiCouldNotLocateElementException("Could not find name input. Timed out.", "name_input", e)
 
-            except ElementNotInteractableException as e:
-                logger.warning("Name input is not interactable. Going to try again.")
-                last_check_non_interactable = attempt_to_look_for_name_input_index == num_attempts_to_look_for_name_input - 1
-                if last_check_non_interactable:
-                    logger.warning("Could not find name input. Non interactable. Raising UiCouldNotLocateElementException")
-                    raise UiCouldNotLocateElementException("Could not find name input. Non interactable.", "name_input", e)
+            except (ElementNotInteractableException, StaleElementReferenceException) as e:
+                logger.warning(f"Name input is not interactable or stale. Exception type: {type(e)}. Going to try again.")
+                last_check_non_interactable_or_stale = attempt_to_look_for_name_input_index == num_attempts_to_look_for_name_input - 1
+                if last_check_non_interactable_or_stale:
+                    logger.warning(f"Could not find name input. Non interactable or stale. Exception type: {type(e)}. Raising UiCouldNotLocateElementException")
+                    raise UiCouldNotLocateElementException("Could not find name input. Non interactable or stale.", "name_input", e)
 
             except UiLoginAttemptFailedException as e:
                 raise e
