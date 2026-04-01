@@ -164,20 +164,16 @@ class BotController:
     def create_google_meet_bot_login_session(self):
         if not self.bot_in_db.google_meet_use_bot_login():
             return None
-        google_meet_bot_login = BotLoginGroup.first_available_login(
-            project=self.bot_in_db.project,
-            platform=BotLoginPlatform.GOOGLE_MEET,
-            group_name=self.bot_in_db.google_meet_login_group_name(),
-        )
-        if not google_meet_bot_login:
+        least_used_google_meet_bot_login = BotLoginGroup.first_available_login(project=self.bot_in_db.project, platform=BotLoginPlatform.GOOGLE_MEET)
+        if not least_used_google_meet_bot_login:
             return None
-        google_meet_bot_login.last_used_at = timezone.now()
-        google_meet_bot_login.save()
-        session_id = create_google_meet_sign_in_session(self.bot_in_db, google_meet_bot_login)
+        least_used_google_meet_bot_login.last_used_at = timezone.now()
+        least_used_google_meet_bot_login.save()
+        session_id = create_google_meet_sign_in_session(self.bot_in_db, least_used_google_meet_bot_login)
         return {
             "session_id": session_id,
-            "login_email": google_meet_bot_login.email,
-            "login_domain": google_meet_bot_login.workspace_domain,
+            "login_email": least_used_google_meet_bot_login.email,
+            "login_domain": least_used_google_meet_bot_login.workspace_domain,
         }
 
     def google_meet_bot_login_is_available(self):
