@@ -109,6 +109,7 @@ def get_bot_login_group_for_user(user, bot_login_group_object_id):
         raise PermissionDenied
     return bot_login_group
 
+
 def get_bot_login_for_user(user, bot_login_object_id):
     bot_login = get_object_or_404(BotLogin, object_id=bot_login_object_id, group__project__organization=user.organization)
     # If you're an admin you can access any bot login in the organization
@@ -488,6 +489,7 @@ class ProjectCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
         )
 
         return render(request, "projects/project_credentials.html", context)
+
 
 class ProjectBotsView(LoginRequiredMixin, ProjectUrlContextMixin, ListView):
     template_name = "projects/project_bots.html"
@@ -1434,14 +1436,14 @@ class ProjectBotLoginGroupsView(LoginRequiredMixin, ProjectUrlContextMixin, View
 class CreateBotLoginGroupView(LoginRequiredMixin, ProjectUrlContextMixin, View):
     def post(self, request, object_id):
         project = get_project_for_user(user=request.user, project_object_id=object_id)
-        try: 
+        try:
             platform = request.POST.get("platform")
             name = request.POST.get("name")
             if not platform or not name:
                 return HttpResponse("Missing required fields: platform and name are required", status=400)
             if platform not in BotLoginPlatform.values:
                 return HttpResponse("Invalid platform", status=400)
-            
+
             bot_login_group, created = BotLoginGroup.objects.get_or_create(project=project, platform=platform, name=name)
 
             context = self.get_project_context(object_id, project)
@@ -1464,11 +1466,15 @@ class EditBotLoginGroupView(LoginRequiredMixin, ProjectUrlContextMixin, View):
             if not name:
                 return HttpResponse("Missing required field: name is required", status=400)
 
-            if BotLoginGroup.objects.filter(
-                project=project,
-                platform=bot_login_group.platform,
-                name=name,
-            ).exclude(id=bot_login_group.id).exists():
+            if (
+                BotLoginGroup.objects.filter(
+                    project=project,
+                    platform=bot_login_group.platform,
+                    name=name,
+                )
+                .exclude(id=bot_login_group.id)
+                .exists()
+            ):
                 return HttpResponse("A bot login group with this name already exists", status=400)
 
             bot_login_group.name = name

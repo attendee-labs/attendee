@@ -9,7 +9,7 @@ from django.test import TransactionTestCase, tag
 
 from bots.bot_controller.bot_controller import BotController
 from bots.bots_api_views import send_sync_command
-from bots.models import Bot, BotChatMessageRequest, BotChatMessageRequestStates, BotChatMessageToOptions, BotEventManager, BotEventSubTypes, BotEventTypes, BotLogin, BotLoginGroup, BotLoginPlatform, BotMediaRequest, BotMediaRequestMediaTypes, BotMediaRequestStates, BotStates, Credentials, MediaBlob, Organization, Project, Recording, RecordingStates, RecordingTypes, TranscriptionProviders, TranscriptionTypes
+from bots.models import Bot, BotChatMessageRequest, BotChatMessageRequestStates, BotChatMessageToOptions, BotEventManager, BotEventSubTypes, BotEventTypes, BotLogin, BotLoginGroup, BotLoginPlatform, BotMediaRequest, BotMediaRequestMediaTypes, BotMediaRequestStates, BotStates, MediaBlob, Organization, Project, Recording, RecordingStates, RecordingTypes, TranscriptionProviders, TranscriptionTypes
 from bots.teams_bot_adapter.teams_ui_methods import TeamsUIMethods, UiTeamsBlockingUsException
 from bots.web_bot_adapter.ui_methods import UiLoginRequiredException
 
@@ -700,6 +700,34 @@ class TestTeamsBot(TransactionTestCase):
             MockDisplay=MockDisplay,
             MockSaveDebugRecording=MockSaveDebugRecording,
         )
+
+    def test_get_teams_signed_in_bot_uses_named_login_group(self):
+        first_group = BotLoginGroup.objects.create(project=self.project, platform=BotLoginPlatform.TEAMS, name="Primary Group")
+        first_group_login = BotLogin.objects.create(group=first_group, email="primary@example.com")
+        first_group_login.set_credentials({"password": "primary-password"})
+
+        named_group = BotLoginGroup.objects.create(project=self.project, platform=BotLoginPlatform.TEAMS, name="Named Group")
+        named_group_login = BotLogin.objects.create(group=named_group, email="named@example.com")
+        named_group_login.set_credentials({"password": "named-group-password"})
+
+        self.bot.settings = {
+            "teams_settings": {
+                "use_login": True,
+                "login_mode": "always",
+                "login_group_name": "Named Group",
+            },
+            "recording_settings": {"format": "none"},
+        }
+        self.bot.save()
+
+        controller = BotController(self.bot.id)
+        controller.per_participant_non_streaming_audio_input_manager = MagicMock()
+        controller.closed_caption_manager = MagicMock()
+        controller.screen_and_audio_recorder = None
+        adapter = controller.get_teams_bot_adapter()
+
+        self.assertEqual(adapter.teams_bot_login_credentials, {"username": "named@example.com", "password": "named-group-password"})
+        self.assertTrue(adapter.teams_bot_login_should_be_used)
 
     @patch.dict("os.environ", {"ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME": "true"})
     @patch("bots.web_bot_adapter.web_bot_adapter.settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME", True)

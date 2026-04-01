@@ -23,9 +23,9 @@ from bots.models import (
 )
 from bots.projects_views import (
     get_api_key_for_user,
+    get_bot_login_for_user,
     get_calendar_event_for_user,
     get_calendar_for_user,
-    get_bot_login_for_user,
     get_project_for_user,
     get_webhook_subscription_for_user,
 )
@@ -715,7 +715,6 @@ class ObjectAccessIntegrationTest(TransactionTestCase):
         )
         self.assertEqual(response.status_code, 403)
         self.assertTrue(BotLoginGroup.objects.filter(id=self.teams_bot_login_group_a2.id).exists())
-        
 
     def test_google_meet_bot_login_creation_access_control(self):
         """Test that Google Meet bot login creation is properly controlled"""
@@ -793,6 +792,7 @@ class ObjectAccessIntegrationTest(TransactionTestCase):
             },
         )
         self.assertEqual(response.status_code, 404)
+
     def test_teams_bot_login_creation_access_control(self):
         """Test that Teams bot login creation is properly controlled"""
         # Admin can create Teams bot logins in any project in their org
