@@ -40,10 +40,7 @@ class TestBotLoginGroups(TestCase):
         second_group = BotLoginGroup.objects.create(project=self.project, platform=BotLoginPlatform.GOOGLE_MEET, name="Second Group")
         expected_login = BotLogin.objects.create(group=second_group, email="active@example.com")
 
-        selected_login = BotLoginGroup.first_available_login(
-            project=self.project,
-            platform=BotLoginPlatform.GOOGLE_MEET,
-        )
+        selected_login = BotLoginGroup.first_available_login(project=self.project, platform=BotLoginPlatform.GOOGLE_MEET)
 
         self.assertEqual(selected_login, expected_login)
 
