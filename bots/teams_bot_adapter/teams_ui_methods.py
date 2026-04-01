@@ -101,7 +101,7 @@ class TeamsUIMethods:
             except TimeoutException as e:
                 self.look_for_microsoft_login_form_element("name_input")
 
-                if self.teams_bot_login_credentials and self.teams_bot_login_should_be_used and self.join_now_button_is_present():
+                if self.teams_bot_login_is_available and self.teams_bot_login_should_be_used and self.join_now_button_is_present():
                     logger.info("Join now button is present. Assuming name input is not present because we don't need to fill it out, so returning.")
                     return
 
@@ -268,7 +268,7 @@ class TeamsUIMethods:
 
     # Returns nothing if succeeded, raises an exception if failed
     def attempt_to_join_meeting(self):
-        if self.teams_bot_login_credentials and self.teams_bot_login_should_be_used:
+        if self.teams_bot_login_is_available and self.teams_bot_login_should_be_used:
             self.login_to_microsoft_account()
 
         self.driver.get(self.meeting_url)
@@ -371,13 +371,20 @@ class TeamsUIMethods:
         time.sleep(1)
 
     def login_to_microsoft_account(self):
+        credentials = None
+        if self.create_teams_bot_login_credentials_callback:
+            credentials = self.create_teams_bot_login_credentials_callback()
+
+        if not credentials:
+            raise UiLoginAttemptFailedException("Teams bot login credentials are not available", "login_to_microsoft_account")
+
         logger.info("Navigate to login screen")
         self.driver.get("https://www.office.com/login")
 
         logger.info("Waiting for the username input...")
         username_input = self.locate_element(step="username_input", condition=EC.presence_of_element_located((By.CSS_SELECTOR, 'input[name="loginfmt"]')), wait_time_seconds=10)
         logger.info("Filling in the username...")
-        username_input.send_keys(self.teams_bot_login_credentials["username"])
+        username_input.send_keys(credentials["username"])
 
         time.sleep(1)
 
@@ -391,7 +398,7 @@ class TeamsUIMethods:
         logger.info("Waiting for the password input...")
         password_input = self.locate_element(step="password_input", condition=EC.presence_of_element_located((By.CSS_SELECTOR, 'input[name="passwd"]')), wait_time_seconds=10)
         logger.info("Filling in the password...")
-        password_input.send_keys(self.teams_bot_login_credentials["password"])
+        password_input.send_keys(credentials["password"])
 
         time.sleep(1)
 

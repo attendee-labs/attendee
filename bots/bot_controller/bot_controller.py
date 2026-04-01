@@ -160,16 +160,17 @@ class BotController:
     def create_google_meet_bot_login_session(self):
         if not self.bot_in_db.google_meet_use_bot_login():
             return None
-        least_used_google_meet_bot_login = BotLoginGroup.first_available_login(project=self.bot_in_db.project, platform=BotLoginPlatform.GOOGLE_MEET, group_name=self.bot_in_db.google_meet_login_group_name())
-        if not least_used_google_meet_bot_login:
+        # LRU for least recently used in the group
+        lru_google_meet_bot_login = BotLoginGroup.first_available_login(project=self.bot_in_db.project, platform=BotLoginPlatform.GOOGLE_MEET, group_name=self.bot_in_db.google_meet_login_group_name())
+        if not lru_google_meet_bot_login:
             return None
-        least_used_google_meet_bot_login.last_used_at = timezone.now()
-        least_used_google_meet_bot_login.save()
-        session_id = create_google_meet_sign_in_session(self.bot_in_db, least_used_google_meet_bot_login)
+        lru_google_meet_bot_login.last_used_at = timezone.now()
+        lru_google_meet_bot_login.save(update_fields=["last_used_at"])
+        session_id = create_google_meet_sign_in_session(self.bot_in_db, lru_google_meet_bot_login)
         return {
             "session_id": session_id,
-            "login_email": least_used_google_meet_bot_login.email,
-            "login_domain": least_used_google_meet_bot_login.workspace_domain,
+            "login_email": lru_google_meet_bot_login.email,
+            "login_domain": lru_google_meet_bot_login.workspace_domain,
         }
 
     def google_meet_bot_login_is_available(self):
@@ -206,12 +207,26 @@ class BotController:
             create_google_meet_bot_login_session_callback=self.create_google_meet_bot_login_session,
         )
 
+
+    def create_teams_bot_login_credentials(self):
+        if not self.bot_in_db.teams_use_bot_login():
+            return None
+        # LRU for least recently used in the group
+        lru_teams_bot_login = BotLoginGroup.first_available_login(project=self.bot_in_db.project, platform=BotLoginPlatform.TEAMS, group_name=self.bot_in_db.teams_login_group_name())
+        if not lru_teams_bot_login:
+            return None
+        lru_teams_bot_login.last_used_at = timezone.now()
+        lru_teams_bot_login.save(update_fields=["last_used_at"])
+        return {
+            "username": lru_teams_bot_login.email,
+            "password": lru_teams_bot_login.get_credentials().get("password"),
+        }
+
+    def teams_bot_login_is_available(self):
+        return self.bot_in_db.teams_use_bot_login() and BotLoginGroup.first_available_login(project=self.bot_in_db.project, platform=BotLoginPlatform.TEAMS, group_name=self.bot_in_db.teams_login_group_name()) is not None
+
     def get_teams_bot_adapter(self):
         from bots.teams_bot_adapter import TeamsBotAdapter
-
-        teams_bot_login = None
-        if self.bot_in_db.teams_use_bot_login():
-            teams_bot_login = BotLoginGroup.first_available_login(project=self.bot_in_db.project, platform=BotLoginPlatform.TEAMS, group_name=self.bot_in_db.teams_login_group_name())
 
         return TeamsBotAdapter(
             display_name=self.bot_in_db.name,
@@ -232,8 +247,9 @@ class BotController:
             start_recording_screen_callback=self.screen_and_audio_recorder.start_recording if self.screen_and_audio_recorder else None,
             stop_recording_screen_callback=self.screen_and_audio_recorder.stop_recording if self.screen_and_audio_recorder else None,
             video_frame_size=self.bot_in_db.recording_dimensions(),
-            teams_bot_login_credentials={"username": teams_bot_login.email, "password": teams_bot_login.get_credentials().get("password")} if teams_bot_login else None,
+            teams_bot_login_is_available=self.teams_bot_login_is_available(),
             teams_bot_login_should_be_used=self.bot_in_db.teams_login_mode_is_always(),
+            create_teams_bot_login_credentials_callback=self.create_teams_bot_login_credentials,
             record_chat_messages_when_paused=self.bot_in_db.record_chat_messages_when_paused(),
             record_participant_speech_start_stop_events=self.bot_in_db.record_participant_speech_start_stop_events(),
             disable_incoming_video=self.disable_incoming_video_for_web_bots(),

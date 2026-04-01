@@ -579,7 +579,7 @@ class TestTeamsBot(TransactionTestCase):
         def mock_fill_out_name_input(*args, **kwargs):
             """Mock that raises an exception only on first join attempt.
 
-            When teams_bot_login_credentials are available and teams_bot_login_should_be_used is False,
+            When teams_bot_login_is_available is True and teams_bot_login_should_be_used is False,
             attempt_to_join_meeting() wraps this and converts ANY exception to UiLoginRequiredException.
             """
             fill_out_name_input_call_count[0] += 1
@@ -654,9 +654,6 @@ class TestTeamsBot(TransactionTestCase):
             # Verify that teams_bot_login_should_be_used was set to True after the first failed attempt
             self.assertTrue(controller.adapter.teams_bot_login_should_be_used, "Expected teams_bot_login_should_be_used to be True after retry")
 
-            # Verify that teams_bot_login_credentials was available
-            self.assertIsNotNone(controller.adapter.teams_bot_login_credentials, "Expected teams_bot_login_credentials to be set")
-
             # Verify that the recording was finished
             self.recording.refresh_from_db()
             self.assertEqual(self.recording.state, RecordingStates.COMPLETE)
@@ -726,8 +723,12 @@ class TestTeamsBot(TransactionTestCase):
         controller.screen_and_audio_recorder = None
         adapter = controller.get_teams_bot_adapter()
 
-        self.assertEqual(adapter.teams_bot_login_credentials, {"username": "named@example.com", "password": "named-group-password"})
+        self.assertTrue(adapter.teams_bot_login_is_available)
         self.assertTrue(adapter.teams_bot_login_should_be_used)
+        self.assertEqual(
+            adapter.create_teams_bot_login_credentials_callback(),
+            {"username": "named@example.com", "password": "named-group-password"},
+        )
 
     @patch.dict("os.environ", {"ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME": "true"})
     @patch("bots.web_bot_adapter.web_bot_adapter.settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME", True)
