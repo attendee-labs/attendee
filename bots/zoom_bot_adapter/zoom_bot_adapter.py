@@ -11,7 +11,7 @@ import zoom_meeting_sdk as zoom
 from bots.automatic_leave_utils import participant_is_another_bot
 from bots.bot_adapter import BotAdapter
 from bots.meeting_url_utils import parse_zoom_join_url
-from bots.utils import png_to_yuv420_frame, scale_i420
+from bots.utils import image_to_yuv420_frame, scale_i420
 
 from .mp4_demuxer import MP4Demuxer
 from .video_input_manager import VideoInputManager
@@ -732,13 +732,13 @@ class ZoomBotAdapter(BotAdapter):
             logger.info("suggested_video_cap is None so cannot compute current image to send")
             return None
 
-        yuv420_image_bytes, original_width, original_height = png_to_yuv420_frame(self.current_raw_image_to_send)
+        yuv420_image_bytes, original_width, original_height = image_to_yuv420_frame(self.current_raw_image_to_send)
         # We have to scale the image to the zoom video capability width and height for it to display properly
         yuv420_image_bytes_scaled = scale_i420(yuv420_image_bytes, (original_width, original_height), (self.suggested_video_cap.width, self.suggested_video_cap.height))
 
         return yuv420_image_bytes_scaled
 
-    def send_raw_image(self, png_image_bytes):
+    def send_raw_image(self, image_bytes):
         if not self.meeting_video_controller:
             logger.info("meeting_video_controller is None so cannot send raw image")
             return
@@ -746,7 +746,7 @@ class ZoomBotAdapter(BotAdapter):
         if not self.unmute_webcam():
             return
 
-        self.current_raw_image_to_send = png_image_bytes
+        self.current_raw_image_to_send = image_bytes
         # We can't compute the scaled image immediately because the video caps may have not arrived yet. So set it to None, which indicates it needs to be recomputed.
         self.current_image_to_send = None
 

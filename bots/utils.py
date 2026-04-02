@@ -276,21 +276,20 @@ def scale_i420(frame, frame_size, new_size):
     return np.concatenate([final_y.flatten(), final_u.flatten(), final_v.flatten()]).astype(np.uint8).tobytes()
 
 
-def png_to_yuv420_frame(png_bytes: bytes) -> tuple:
+def image_to_yuv420_frame(image_bytes: bytes) -> tuple:
     """
-    Convert PNG image bytes to YUV420 (I420) format without resizing,
+    Convert image bytes (PNG, JPEG, etc.) to YUV420 (I420) format without resizing,
     and return the dimensions of the resulting image. The conversion does not work unless the
     image dimensions are even, so the image is cropped slightly to make the dimensions even.
 
     Args:
-        png_bytes (bytes): Input PNG image as bytes
+        image_bytes (bytes): Input image as bytes (any format supported by OpenCV)
 
     Returns:
         tuple: (YUV420 formatted frame data, width, height)
     """
-    # Convert PNG bytes to numpy array
-    png_array = np.frombuffer(png_bytes, np.uint8)
-    bgr_frame = cv2.imdecode(png_array, cv2.IMREAD_COLOR)
+    img_array = np.frombuffer(image_bytes, np.uint8)
+    bgr_frame = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
 
     # Get original dimensions
     height, width = bgr_frame.shape[:2]
@@ -316,6 +315,10 @@ def png_to_yuv420_frame(png_bytes: bytes) -> tuple:
 
     # Return frame data and dimensions
     return yuv_frame.tobytes(), width, height
+
+
+# Backward-compatible alias
+png_to_yuv420_frame = image_to_yuv420_frame
 
 
 def utterance_words(utterance, offset=0.0):
@@ -618,19 +621,60 @@ def is_valid_png(image_data: bytes) -> bool:
         bool: True if the data is a valid PNG image, False otherwise
     """
     try:
-        # First check for the PNG signature (first 8 bytes)
         png_signature = b"\x89PNG\r\n\x1a\n"
         if not image_data.startswith(png_signature):
             return False
 
-        # Try to decode the image using OpenCV
         img_array = np.frombuffer(image_data, np.uint8)
         img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
 
-        # If img is None, the decoding failed
         return img is not None
     except Exception:
         return False
+
+
+def is_valid_jpeg(image_data: bytes) -> bool:
+    """
+    Validates whether the provided bytes data is a valid JPEG image.
+
+    Args:
+        image_data (bytes): The image data to validate
+
+    Returns:
+        bool: True if the data is a valid JPEG image, False otherwise
+    """
+    try:
+        jpeg_signature = b"\xff\xd8\xff"
+        if not image_data.startswith(jpeg_signature):
+            return False
+
+        img_array = np.frombuffer(image_data, np.uint8)
+        img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+
+        return img is not None
+    except Exception:
+        return False
+
+
+def is_valid_image(image_data: bytes, content_type: str) -> bool:
+    """
+    Validates whether the provided bytes data is a valid image of the given content type.
+
+    Args:
+        image_data (bytes): The image data to validate
+        content_type (str): The MIME type, e.g. "image/png" or "image/jpeg"
+
+    Returns:
+        bool: True if the data is a valid image matching the content type, False otherwise
+    """
+    validators = {
+        "image/png": is_valid_png,
+        "image/jpeg": is_valid_jpeg,
+    }
+    validator = validators.get(content_type)
+    if validator is None:
+        return False
+    return validator(image_data)
 
 
 """
