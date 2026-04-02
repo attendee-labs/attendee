@@ -2,6 +2,7 @@ import base64
 import json
 import logging
 import os
+import secrets as python_secrets
 import uuid
 
 import stripe
@@ -1420,30 +1421,66 @@ class CreateGoogleMeetBotLoginView(LoginRequiredMixin, ProjectUrlContextMixin, V
             # Extract fields from request
             workspace_domain = request.POST.get("workspace_domain", "").strip()
             email = request.POST.get("email", "").strip()
-            private_key = request.POST.get("private_key", "").strip()
-            cert = request.POST.get("cert", "").strip()
+            sso_mode = request.POST.get("sso_mode", "saml").strip()
 
-            # Validate required fields
-            if not all([workspace_domain, email, private_key, cert]):
-                return HttpResponse("Missing required fields: workspace_domain, email, private_key, and cert are all required", status=400)
+            if sso_mode not in ("saml", "oidc"):
+                return HttpResponse("Invalid sso_mode: must be 'saml' or 'oidc'", status=400)
 
-            # Create the GoogleMeetBotLogin
-            google_meet_bot_login = GoogleMeetBotLogin.objects.create(
-                group=google_meet_bot_login_group,
-                workspace_domain=workspace_domain,
-                email=email,
-            )
+            if sso_mode == "saml":
+                private_key = request.POST.get("private_key", "").strip()
+                cert = request.POST.get("cert", "").strip()
 
-            # Set the encrypted credentials
-            credentials_data = {
-                "private_key": private_key,
-                "cert": cert,
-            }
-            google_meet_bot_login.set_credentials(credentials_data)
+                # Validate required fields
+                if not all([workspace_domain, email, private_key, cert]):
+                    return HttpResponse("Missing required fields: workspace_domain, email, private_key, and cert are all required", status=400)
 
-            context = self.get_project_context(object_id, project)
-            context["google_meet_bot_login_group"] = google_meet_bot_login_group
-            return render(request, "projects/partials/google_meet_bot_login_group.html", context)
+                # Create the GoogleMeetBotLogin
+                google_meet_bot_login = GoogleMeetBotLogin.objects.create(
+                    group=google_meet_bot_login_group,
+                    workspace_domain=workspace_domain,
+                    email=email,
+                    sso_mode="saml",
+                )
+
+                # Set the encrypted credentials
+                credentials_data = {
+                    "private_key": private_key,
+                    "cert": cert,
+                }
+                google_meet_bot_login.set_credentials(credentials_data)
+
+                context = self.get_project_context(object_id, project)
+                context["google_meet_bot_login_group"] = google_meet_bot_login_group
+                return render(request, "projects/partials/google_meet_bot_login_group.html", context)
+
+            else:  # oidc
+                if not all([workspace_domain, email]):
+                    return HttpResponse("Missing required fields: workspace_domain and email are required", status=400)
+
+                # Auto-generate client credentials
+                client_id = str(uuid.uuid4())
+                client_secret = python_secrets.token_urlsafe(48)
+
+                # Create the GoogleMeetBotLogin
+                google_meet_bot_login = GoogleMeetBotLogin.objects.create(
+                    group=google_meet_bot_login_group,
+                    workspace_domain=workspace_domain,
+                    email=email,
+                    sso_mode="oidc",
+                )
+
+                # Set the encrypted credentials
+                credentials_data = {
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                }
+                google_meet_bot_login.set_credentials(credentials_data)
+
+                context = self.get_project_context(object_id, project)
+                context["google_meet_bot_login_group"] = google_meet_bot_login_group
+                context["oidc_client_id"] = client_id
+                context["oidc_client_secret"] = client_secret
+                return render(request, "projects/partials/google_meet_bot_login_created_modal.html", context)
 
         except Exception as e:
             error_id = str(uuid.uuid4())

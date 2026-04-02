@@ -610,6 +610,85 @@ class GoogleMeetUIMethods:
 
         self.driver.get(redirect_url_from_google)
 
+    def enter_email_on_google_sign_in_page(self):
+        """Type the login email on Google's sign-in identifier page and submit.
+        This is needed for OIDC SSO, which requires the user to enter their email
+        before Google redirects to the IdP."""
+        login_email = self.google_meet_bot_login_session.get("login_email")
+        if not login_email:
+            logger.warning("No login_email in session, skipping email entry")
+            return
+
+        try:
+            email_input = WebDriverWait(self.driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'input[type="email"]')))
+            # Wait for the page JS to fully initialize
+            time.sleep(3)
+            logger.info(f"Found Google sign-in email input, entering email: {login_email}")
+            email_input.clear()
+            email_input.send_keys(login_email)
+            time.sleep(1)
+
+            # Use Selenium's native click (generates trusted isTrusted=true events)
+            try:
+                next_button = self.driver.find_element(By.ID, "identifierNext")
+                ActionChains(self.driver).move_to_element(next_button).click().perform()
+                logger.info("Clicked Next via ActionChains (trusted event)")
+            except Exception as e:
+                logger.warning(f"ActionChains click failed: {e}, falling back to send_keys Enter")
+                email_input.send_keys("\n")
+
+            # Wait for page to transition
+            url_before = self.driver.current_url
+            for i in range(25):
+                time.sleep(1)
+                current_url = self.driver.current_url
+                if current_url != url_before:
+                    logger.info(f"Page transitioned after email submit. New URL: {current_url}")
+                    return
+                # Log any error messages on the page
+                if i == 3:
+                    try:
+                        error_msgs = self.driver.execute_script("""
+                            var errors = [];
+                            var errDivs = document.querySelectorAll('[jsname="B34EJ"], .o6cuMc, .dEOOab, [role="alert"]');
+                            errDivs.forEach(function(d) { if (d.textContent.trim()) errors.push(d.textContent.trim()); });
+                            var alertDivs = document.querySelectorAll('.LXRPh, .GQ8Pzc');
+                            alertDivs.forEach(function(d) { if (d.textContent.trim()) errors.push(d.textContent.trim()); });
+                            return errors;
+                        """)
+                        if error_msgs:
+                            logger.warning(f"Google sign-in error messages found: {error_msgs}")
+                    except Exception:
+                        pass
+                # Retry with different methods at intervals
+                if i == 7:
+                    logger.info(f"Still on identifier page after {i}s, retrying with Enter key")
+                    try:
+                        email_input = self.driver.find_element(By.CSS_SELECTOR, 'input[type="email"]')
+                        email_input.send_keys("\n")
+                    except Exception:
+                        pass
+                if i == 12:
+                    logger.info(f"Still on identifier page after {i}s, retrying with Selenium click")
+                    try:
+                        next_button = self.driver.find_element(By.ID, "identifierNext")
+                        next_button.click()
+                    except Exception:
+                        pass
+                if i == 17:
+                    logger.info(f"Still on identifier page after {i}s, retrying with form submit")
+                    try:
+                        self.driver.execute_script("""
+                            var form = document.querySelector('form');
+                            if (form) form.submit();
+                        """)
+                    except Exception:
+                        pass
+
+            logger.warning(f"Page did not transition after 25s. Still at: {self.driver.current_url}. Title: {self.driver.title}")
+        except TimeoutException:
+            logger.info("No Google sign-in email input found, page may have auto-redirected")
+
     def navigate_to_gmail_domain_url(self):
         if os.getenv("USE_SAFE_NAVIGATION_FOR_SIGNED_IN_GOOGLE_MEET_BOTS", "false") == "true":
             self.safely_navigate_to_gmail_domain_url()
@@ -618,6 +697,11 @@ class GoogleMeetUIMethods:
         gmail_domain_url = f"https://mail.google.com/a/{self.google_meet_bot_login_session.get('login_domain')}"
         logger.info(f"Navigating to gmail domain url: {gmail_domain_url}")
         self.driver.get(gmail_domain_url)
+
+        # For OIDC SSO, Google shows a sign-in page instead of auto-redirecting.
+        # We need to enter the email so Google triggers the OIDC redirect to our IdP.
+        if self.google_meet_bot_login_session.get("sso_mode") == "oidc":
+            self.enter_email_on_google_sign_in_page()
 
     def login_to_google_meet_account(self):
         self.google_meet_bot_login_session = self.create_google_meet_bot_login_session_callback()
