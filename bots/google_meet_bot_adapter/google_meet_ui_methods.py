@@ -1,5 +1,6 @@
 import logging
 import os
+import random
 import time
 from urllib.parse import urlparse
 
@@ -15,10 +16,17 @@ from bots.bot_sso_utils import get_google_meet_set_cookie_url
 from bots.models import RecordingViews
 from bots.web_bot_adapter.ui_methods import UiCouldNotClickElementException, UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableExpectedException
 
+from .mocap_manager import MocapManager
+
 logger = logging.getLogger(__name__)
 
 
 class UiGoogleBlockingUsException(UiRetryableExpectedException):
+    def __init__(self, message, step=None, inner_exception=None):
+        super().__init__(message, step, inner_exception)
+
+
+class UiGoogleWrongAudioConfigurationException(UiRetryableExpectedException):
     def __init__(self, message, step=None, inner_exception=None):
         super().__init__(message, step, inner_exception)
 
@@ -166,7 +174,10 @@ class GoogleMeetUIMethods:
                 wait_time_seconds=6,
             )
             logger.info("Clicking the microphone button...")
-            self.click_element(microphone_button, "turn_off_microphone_button")
+            if self.ui_interaction_mode == "humanized":
+                self.humanized_navigate_to_and_click_element(microphone_button)
+            else:
+                self.click_element(microphone_button, "turn_off_microphone_button")
 
             # Wait for confirmation that microphone is off
             try:
@@ -187,7 +198,10 @@ class GoogleMeetUIMethods:
                 wait_time_seconds=6,
             )
             logger.info("Clicking the camera button...")
-            self.click_element(camera_button, "turn_off_camera_button")
+            if self.ui_interaction_mode == "humanized":
+                self.humanized_navigate_to_and_click_element(camera_button)
+            else:
+                self.click_element(camera_button, "turn_off_camera_button")
 
             # Wait for confirmation that camera is off
             try:
@@ -218,6 +232,188 @@ class GoogleMeetUIMethods:
     def retrieve_name_input_element(self):
         return WebDriverWait(self.driver, 1).until(EC.element_to_be_clickable((By.CSS_SELECTOR, 'input[type="text"][aria-label="Your name"]')))
 
+    UNSHIFTED_PUNCTUATION = {
+        "-": "minus",
+        "=": "equal",
+        "[": "bracketleft",
+        "]": "bracketright",
+        "\\": "backslash",
+        ";": "semicolon",
+        "'": "apostrophe",
+        ",": "comma",
+        ".": "period",
+        "/": "slash",
+        "`": "grave",
+    }
+
+    SHIFTED_PUNCTUATION = {
+        "~": "grave",
+        "!": "1",
+        "@": "2",
+        "#": "3",
+        "$": "4",
+        "%": "5",
+        "^": "6",
+        "&": "7",
+        "*": "8",
+        "(": "9",
+        ")": "0",
+        "_": "minus",
+        "+": "equal",
+        "{": "bracketleft",
+        "}": "bracketright",
+        "|": "backslash",
+        ":": "semicolon",
+        '"': "apostrophe",
+        "<": "comma",
+        ">": "period",
+        "?": "slash",
+    }
+
+    def _x11_type_char(self, char):
+        needs_shift = char.isupper() or char in self.SHIFTED_PUNCTUATION
+
+        if char in self.SHIFTED_PUNCTUATION:
+            base = self.SHIFTED_PUNCTUATION[char]
+        elif char in self.UNSHIFTED_PUNCTUATION:
+            base = self.UNSHIFTED_PUNCTUATION[char]
+        elif char.isupper():
+            base = char.lower()
+        else:
+            base = char
+
+        if needs_shift:
+            self.x11_input.key_press("Shift")
+        self.x11_input.key_press(base)
+        self.x11_input.key_release(base)
+        if needs_shift:
+            self.x11_input.key_release("Shift")
+
+    def human_type(self, text):
+        self.ensure_x11_input()
+
+        for i, char in enumerate(text):
+            if i == 0:
+                time.sleep(random.uniform(0.15, 0.35))
+
+            self._x11_type_char(char)
+
+            time.sleep(random.uniform(0.24, 0.48))
+
+    def ensure_x11_input(self):
+        if not hasattr(self, "x11_input"):
+            from .x11_input import X11Input
+
+            self.x11_input = X11Input()
+
+    def ensure_mocap_manager(self):
+        if not hasattr(self, "mocap_manager"):
+            self.mocap_manager = MocapManager(video_frame_size=self.video_frame_size)
+
+    def humanized_navigate_to_and_click_element(self, element):
+        self.ensure_x11_input()
+        self.ensure_mocap_manager()
+
+        metrics = self.driver.execute_script(
+            """
+            const el = arguments[0];
+            const r = el.getBoundingClientRect();
+            return {
+                left: r.left,
+                top: r.top,
+                width: r.width,
+                height: r.height,
+                screenX: window.screenX,
+                screenY: window.screenY,
+                dpr: window.devicePixelRatio || 1
+            };
+            """,
+            element,
+        )
+
+        if not metrics:
+            raise RuntimeError("No metrics returned from execute_script")
+
+        left = float(metrics["left"])
+        top = float(metrics["top"])
+        width = float(metrics["width"])
+        height = float(metrics["height"])
+        screen_x = float(metrics["screenX"])
+        screen_y = float(metrics["screenY"])
+        dpr = float(metrics["dpr"])
+
+        if width <= 0 or height <= 0:
+            raise RuntimeError(f"Element has invalid size: {width}x{height}")
+
+        # Clickable rect: half the width and half the height, centered
+        inset_x = 0
+        inset_y = 0
+        clickable_css_left = left + inset_x
+        clickable_css_right = left + width - inset_x
+        clickable_css_top = top + inset_y
+        clickable_css_bottom = top + height - inset_y
+
+        rect_left = int(round((screen_x + clickable_css_left) * dpr))
+        rect_top = int(round((screen_y + clickable_css_top) * dpr))
+        rect_right = int(round((screen_x + clickable_css_right) * dpr))
+        rect_bottom = int(round((screen_y + clickable_css_bottom) * dpr))
+
+        ptr = self.x11_input.root.query_pointer()._data
+        current_x = int(ptr["root_x"])
+        current_y = int(ptr["root_y"])
+
+        logger.info(f"humanized interaction: mouse at ({current_x},{current_y}), clickable rect [({rect_left},{rect_top})-({rect_right},{rect_bottom})]")
+
+        seq = None
+        num_seq_attempts = 10
+        for attempt in range(num_seq_attempts):
+            seq = self.mocap_manager.find_random_sequence_landing_in_rect(current_x, current_y, rect_left, rect_top, rect_right, rect_bottom)
+
+            if seq is None:
+                raise RuntimeError(f"No mocap sequence lands inside clickable rect from ({current_x},{current_y}) to [({rect_left},{rect_top})-({rect_right},{rect_bottom})]")
+
+            endpoint_monitor_x = current_x + seq.total_dx
+            endpoint_monitor_y = current_y + seq.total_dy
+            endpoint_page_x = endpoint_monitor_x / dpr - screen_x
+            endpoint_page_y = endpoint_monitor_y / dpr - screen_y
+
+            is_element_at_endpoint = self.driver.execute_script(
+                """
+                var el = document.elementFromPoint(arguments[0], arguments[1]);
+                var expected = arguments[2];
+                return !!el && (el === expected || expected.contains(el));
+                """,
+                endpoint_page_x,
+                endpoint_page_y,
+                element,
+            )
+
+            if is_element_at_endpoint:
+                break
+
+            logger.info(f"humanized interaction: endpoint page coords ({endpoint_page_x:.1f}, {endpoint_page_y:.1f}) not on target element, retrying (attempt {attempt + 1}/{num_seq_attempts})")
+        else:
+            raise RuntimeError(f"Could not find mocap sequence landing on target element after {num_seq_attempts} attempts")
+
+        logger.info(f"humanized interaction: selected sequence with {len(seq.movements)} movements, total_dx={seq.total_dx}, total_dy={seq.total_dy}")
+
+        for move in seq.movements:
+            dt = move.get("dt", 0)
+            if dt > 0:
+                time.sleep(dt)
+            dx = move.get("dx", 0)
+            dy = move.get("dy", 0)
+            if dx or dy:
+                self.x11_input.move_rel(dx, dy)
+
+        if seq.click_down_dt > 0:
+            time.sleep(seq.click_down_dt)
+        self.x11_input.button_press("left")
+
+        if seq.click_up_dt > 0:
+            time.sleep(seq.click_up_dt)
+        self.x11_input.button_release("left")
+
     def fill_out_name_input(self):
         num_attempts_to_look_for_name_input = 30
         logger.info("Waiting for the name input field...")
@@ -226,7 +422,16 @@ class GoogleMeetUIMethods:
                 name_input = self.retrieve_name_input_element()
                 self.check_for_failed_logged_in_bot_attempt()
                 logger.info("name input found")
-                name_input.send_keys(self.display_name)
+                if self.ui_interaction_mode == "humanized":
+                    logger.info("Waiting for got it button...")
+                    got_it_button = self.find_element_by_selector(By.XPATH, '//button[.//span[text()="Got it"]]')
+                    self.humanized_navigate_to_and_click_element(got_it_button)
+                    logger.info("Got it button clicked")
+                    self.humanized_navigate_to_and_click_element(name_input)
+                    logger.info("Name input clicked")
+                    self.human_type(self.display_name)
+                else:
+                    name_input.send_keys(self.display_name)
                 return
             except TimeoutException as e:
                 self.look_for_blocked_element("name_input")
@@ -661,12 +866,26 @@ class GoogleMeetUIMethods:
         logger.warning(f"Cookie names: {names}. Any Google auth cookies present: {any_google_auth_cookies_present}.")
         return any_google_auth_cookies_present
 
+    def position_mouse_for_humanized_interaction(self):
+        self.ensure_x11_input()
+        self.ensure_mocap_manager()
+
+        position = self.mocap_manager.get_initial_mouse_position()
+        if position is None:
+            return
+
+        self.x11_input.move_abs(*position)
+        logger.info(f"Positioned mouse at {position}")
+
     # returns nothing if succeeded, raises an exception if failed
     def attempt_to_join_meeting(self):
         if self.google_meet_bot_login_is_available and self.google_meet_bot_login_should_be_used:
             self.login_to_google_meet_account_with_retries()
 
         layout_to_select = self.get_layout_to_select()
+
+        if self.ui_interaction_mode == "humanized":
+            self.position_mouse_for_humanized_interaction()
 
         self.driver.get(self.meeting_url)
 
@@ -687,6 +906,8 @@ class GoogleMeetUIMethods:
 
         self.fill_out_name_input()
 
+        self.verify_expected_audio_configuration()
+
         self.turn_off_media_inputs()
 
         logger.info("Waiting for the 'Ask to join' or 'Join now' button...")
@@ -696,7 +917,10 @@ class GoogleMeetUIMethods:
             wait_time_seconds=60,
         )
         logger.info("Clicking the join button...")
-        self.click_element(join_button, "join_button")
+        if self.ui_interaction_mode == "humanized":
+            self.humanized_navigate_to_and_click_element(join_button)
+        else:
+            self.click_element(join_button, "join_button")
 
         self.click_captions_button()
 
@@ -714,6 +938,21 @@ class GoogleMeetUIMethods:
             self.turn_off_reactions()
 
         self.ready_to_show_bot_image()
+
+    def verify_expected_audio_configuration(self):
+        # Just in case we don't want to run this check anymore, we'll have an env var to bypass it.
+        if os.getenv("VERIFY_EXPECTED_AUDIO_CONFIGURATION_FOR_GOOGLE_MEET_BOT", "true") == "false":
+            return
+
+        audio_elements = self.driver.find_elements(By.CSS_SELECTOR, "audio")
+        logger.info(f"{len(audio_elements)} audio elements are present")
+
+        # Google Meet is testing an alternate way of orchestrating audio. If no audio elements are present
+        # then we've hit this case and should raise an exception, so that we retry. We will most likely get the
+        # standard configuration after a retry, it's a random ab test.
+        if len(audio_elements) == 0:
+            logger.info("audio elements are not present. Raising UiGoogleWrongAudioConfigurationException")
+            raise UiGoogleWrongAudioConfigurationException("audio elements are not present", "verify_audio_elements_are_present")
 
     def scroll_element_into_view(self, element, step):
         try:

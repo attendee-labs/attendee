@@ -843,6 +843,9 @@ class Bot(models.Model):
     def google_meet_login_mode_is_always(self):
         return self.settings.get("google_meet_settings", {}).get("login_mode", "always") == "always"
 
+    def google_meet_ui_interaction_mode(self):
+        return self.settings.get("google_meet_settings", {}).get("ui_interaction_mode", "humanized")
+
     def teams_use_bot_login(self):
         return self.settings.get("teams_settings", {}).get("use_login", False)
 
