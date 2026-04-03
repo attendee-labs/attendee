@@ -18,11 +18,12 @@ from bots.models import (
     BotEventManager,
     BotEventSubTypes,
     BotEventTypes,
+    BotLogin,
+    BotLoginGroup,
+    BotLoginPlatform,
     BotStates,
     ChatMessage,
     Credentials,
-    GoogleMeetBotLogin,
-    GoogleMeetBotLoginGroup,
     Organization,
     Participant,
     ParticipantEvent,
@@ -1450,8 +1451,8 @@ class TestGoogleMeetBot2(TransactionTestCase):
         """
 
         # Set up Google Meet bot login credentials
-        google_meet_bot_login_group = GoogleMeetBotLoginGroup.objects.create(project=self.project)
-        google_meet_bot_login = GoogleMeetBotLogin.objects.create(
+        google_meet_bot_login_group = BotLoginGroup.objects.create(project=self.project, platform=BotLoginPlatform.GOOGLE_MEET, name="Google Meet Group 1")
+        google_meet_bot_login = BotLogin.objects.create(
             group=google_meet_bot_login_group,
             workspace_domain="example.com",
             email="bot@example.com",
@@ -1601,6 +1602,74 @@ class TestGoogleMeetBot2(TransactionTestCase):
 
             # Close the database connection since we're in a thread
             connection.close()
+
+    @patch("bots.bot_controller.bot_controller.create_google_meet_sign_in_session", return_value="test-session-id")
+    def test_google_meet_signed_in_bot_uses_named_login_group(
+        self,
+        mock_create_google_meet_sign_in_session,
+    ):
+        first_group = BotLoginGroup.objects.create(
+            project=self.project,
+            platform=BotLoginPlatform.GOOGLE_MEET,
+            name="Primary Group",
+        )
+        first_group_login = BotLogin.objects.create(
+            group=first_group,
+            workspace_domain="primary.example.com",
+            email="primary@example.com",
+        )
+        first_group_login.set_credentials(
+            {
+                "cert": "primary-cert",
+                "private_key": "primary-private-key",
+            }
+        )
+
+        named_group = BotLoginGroup.objects.create(
+            project=self.project,
+            platform=BotLoginPlatform.GOOGLE_MEET,
+            name="Named Group",
+        )
+        named_group_login = BotLogin.objects.create(
+            group=named_group,
+            workspace_domain="named.example.com",
+            email="named@example.com",
+        )
+        named_group_login.set_credentials(
+            {
+                "cert": "named-cert",
+                "private_key": "named-private-key",
+            }
+        )
+
+        self.bot.settings = {
+            "google_meet_settings": {
+                "use_login": True,
+                "login_mode": "always",
+                "login_group_name": "Named Group",
+            }
+        }
+        self.bot.save()
+
+        controller = BotController(self.bot.id)
+        controller.per_participant_non_streaming_audio_input_manager = MagicMock()
+        controller.closed_caption_manager = MagicMock()
+        controller.screen_and_audio_recorder = None
+        adapter = controller.get_google_meet_bot_adapter()
+
+        self.assertTrue(adapter.google_meet_bot_login_is_available)
+        self.assertTrue(adapter.google_meet_bot_login_should_be_used)
+
+        login_session = controller.create_google_meet_bot_login_session()
+
+        self.assertEqual(
+            login_session,
+            {
+                "session_id": "test-session-id",
+                "login_email": "named@example.com",
+                "login_domain": "named.example.com",
+            },
+        )
 
     @patch("bots.models.Bot.create_debug_recording", return_value=False)
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")

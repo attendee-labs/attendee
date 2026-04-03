@@ -9,7 +9,7 @@ from django.test import TransactionTestCase, tag
 
 from bots.bot_controller.bot_controller import BotController
 from bots.bots_api_views import send_sync_command
-from bots.models import Bot, BotChatMessageRequest, BotChatMessageRequestStates, BotChatMessageToOptions, BotEventManager, BotEventSubTypes, BotEventTypes, BotMediaRequest, BotMediaRequestMediaTypes, BotMediaRequestStates, BotStates, Credentials, MediaBlob, Organization, Project, Recording, RecordingStates, RecordingTypes, TranscriptionProviders, TranscriptionTypes
+from bots.models import Bot, BotChatMessageRequest, BotChatMessageRequestStates, BotChatMessageToOptions, BotEventManager, BotEventSubTypes, BotEventTypes, BotLogin, BotLoginGroup, BotLoginPlatform, BotMediaRequest, BotMediaRequestMediaTypes, BotMediaRequestStates, BotStates, MediaBlob, Organization, Project, Recording, RecordingStates, RecordingTypes, TranscriptionProviders, TranscriptionTypes
 from bots.teams_bot_adapter.teams_ui_methods import TeamsUIMethods, UiTeamsBlockingUsException
 from bots.web_bot_adapter.ui_methods import UiLoginRequiredException
 
@@ -536,13 +536,17 @@ class TestTeamsBot(TransactionTestCase):
             exception_to_raise: The exception instance to raise on first join attempt
         """
         # Set up Teams bot login credentials
-        teams_credentials = Credentials.objects.create(
+        teams_bot_login_group, _ = BotLoginGroup.objects.get_or_create(
             project=self.project,
-            credential_type=Credentials.CredentialTypes.TEAMS_BOT_LOGIN,
+            platform=BotLoginPlatform.TEAMS,
+            defaults={"name": "Teams Bot Login Group"},
         )
-        teams_credentials.set_credentials(
+        teams_bot_login, _ = BotLogin.objects.get_or_create(
+            group=teams_bot_login_group,
+            email="testbot@example.com",
+        )
+        teams_bot_login.set_credentials(
             {
-                "username": "testbot@example.com",
                 "password": "testpassword123",
             }
         )
@@ -575,7 +579,7 @@ class TestTeamsBot(TransactionTestCase):
         def mock_fill_out_name_input(*args, **kwargs):
             """Mock that raises an exception only on first join attempt.
 
-            When teams_bot_login_credentials are available and teams_bot_login_should_be_used is False,
+            When teams_bot_login_is_available is True and teams_bot_login_should_be_used is False,
             attempt_to_join_meeting() wraps this and converts ANY exception to UiLoginRequiredException.
             """
             fill_out_name_input_call_count[0] += 1
@@ -650,9 +654,6 @@ class TestTeamsBot(TransactionTestCase):
             # Verify that teams_bot_login_should_be_used was set to True after the first failed attempt
             self.assertTrue(controller.adapter.teams_bot_login_should_be_used, "Expected teams_bot_login_should_be_used to be True after retry")
 
-            # Verify that teams_bot_login_credentials was available
-            self.assertIsNotNone(controller.adapter.teams_bot_login_credentials, "Expected teams_bot_login_credentials to be set")
-
             # Verify that the recording was finished
             self.recording.refresh_from_db()
             self.assertEqual(self.recording.state, RecordingStates.COMPLETE)
@@ -695,6 +696,38 @@ class TestTeamsBot(TransactionTestCase):
             MockChromeDriver=MockChromeDriver,
             MockDisplay=MockDisplay,
             MockSaveDebugRecording=MockSaveDebugRecording,
+        )
+
+    def test_get_teams_signed_in_bot_uses_named_login_group(self):
+        first_group = BotLoginGroup.objects.create(project=self.project, platform=BotLoginPlatform.TEAMS, name="Primary Group")
+        first_group_login = BotLogin.objects.create(group=first_group, email="primary@example.com")
+        first_group_login.set_credentials({"password": "primary-password"})
+
+        named_group = BotLoginGroup.objects.create(project=self.project, platform=BotLoginPlatform.TEAMS, name="Named Group")
+        named_group_login = BotLogin.objects.create(group=named_group, email="named@example.com")
+        named_group_login.set_credentials({"password": "named-group-password"})
+
+        self.bot.settings = {
+            "teams_settings": {
+                "use_login": True,
+                "login_mode": "always",
+                "login_group_name": "Named Group",
+            },
+            "recording_settings": {"format": "none"},
+        }
+        self.bot.save()
+
+        controller = BotController(self.bot.id)
+        controller.per_participant_non_streaming_audio_input_manager = MagicMock()
+        controller.closed_caption_manager = MagicMock()
+        controller.screen_and_audio_recorder = None
+        adapter = controller.get_teams_bot_adapter()
+
+        self.assertTrue(adapter.teams_bot_login_is_available)
+        self.assertTrue(adapter.teams_bot_login_should_be_used)
+        self.assertEqual(
+            adapter.create_teams_bot_login_credentials_callback(),
+            {"username": "named@example.com", "password": "named-group-password"},
         )
 
     @patch.dict("os.environ", {"ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME": "true"})

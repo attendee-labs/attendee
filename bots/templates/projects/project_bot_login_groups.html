@@ -1,0 +1,164 @@
+{% extends 'projects/sidebar.html' %}
+
+{% block content %}
+<div class="container mt-4">
+    <h2>Bot Login Groups</h2>
+
+    {% include 'projects/partials/teams_bot_login_groups.html' %}
+    {% include 'projects/partials/google_meet_bot_login_groups.html' %}
+</div>
+
+
+<script>
+    function hideModalById(modalId) {
+        const modalElement = document.getElementById(modalId);
+        if (!modalElement) {
+            return;
+        }
+
+        const modalInstance = bootstrap.Modal.getInstance(modalElement);
+        if (modalInstance) {
+            modalInstance.hide();
+        }
+    }
+
+    function resetModalForm(modalId) {
+        const modalElement = document.getElementById(modalId);
+        if (!modalElement) {
+            return;
+        }
+
+        const form = modalElement.querySelector("form");
+        if (form) {
+            form.reset();
+        }
+    }
+
+    function clearGoogleMeetCredentialFields(groupObjectId) {
+        const privateKeyPreview = document.getElementById(`private_key_preview_${groupObjectId}`);
+        const certPreview = document.getElementById(`cert_preview_${groupObjectId}`);
+        const privateKey = document.getElementById(`private_key_${groupObjectId}`);
+        const cert = document.getElementById(`cert_${groupObjectId}`);
+
+        if (privateKeyPreview) privateKeyPreview.style.display = "none";
+        if (certPreview) certPreview.style.display = "none";
+        if (privateKey) privateKey.value = "";
+        if (cert) cert.value = "";
+    }
+
+    function attachModalHiddenReset(modalPrefix, onHidden) {
+        document.querySelectorAll(`[id^="${modalPrefix}"]`).forEach((modalElement) => {
+            if (modalElement.dataset.clearHandlerAttached === "true") {
+                return;
+            }
+            modalElement.addEventListener("hidden.bs.modal", function() {
+                const suffix = modalElement.id.replace(modalPrefix, "");
+                onHidden(suffix, modalElement);
+            });
+            modalElement.dataset.clearHandlerAttached = "true";
+        });
+    }
+
+    function attachFilePreviewHandlers(inputPrefix, hiddenFieldPrefix, previewPrefix, previewContentPrefix) {
+        document.querySelectorAll(`input[id^="${inputPrefix}"]`).forEach((fileInput) => {
+            if (fileInput.dataset.previewHandlerAttached === "true") {
+                return;
+            }
+            fileInput.addEventListener("change", function(event) {
+                const file = event.target.files[0];
+                const suffix = fileInput.id.replace(inputPrefix, "");
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onload = function(e) {
+                        const content = e.target.result;
+                        document.getElementById(`${hiddenFieldPrefix}${suffix}`).value = content;
+                        const preview = getFirstNLines(content, 2);
+                        document.getElementById(`${previewContentPrefix}${suffix}`).textContent = preview;
+                        document.getElementById(`${previewPrefix}${suffix}`).style.display = "block";
+                    };
+                    reader.readAsText(file);
+                }
+            });
+            fileInput.dataset.previewHandlerAttached = "true";
+        });
+    }
+
+    function clearTeamsBotLoginForm(groupObjectId) {
+        resetModalForm(`teamsBotLoginCredentialsModal-${groupObjectId}`);
+        hideModalById(`teamsBotLoginCredentialsModal-${groupObjectId}`);
+    }
+
+    function validateGoogleMeetBotLoginForm() {
+        const activeModal = document.querySelector('.modal.show');
+        if (!activeModal) {
+            return true;
+        }
+
+        const privateKey = activeModal.querySelector('textarea[name="private_key"]')?.value;
+        const cert = activeModal.querySelector('textarea[name="cert"]')?.value;
+
+        if (!privateKey || privateKey.trim() === '') {
+            alert('Please upload a private key file.');
+            activeModal.querySelector('input[type="file"][id^="private_key_file"]')?.focus();
+            return false;
+        }
+
+        if (!cert || cert.trim() === '') {
+            alert('Please upload a certificate file.');
+            activeModal.querySelector('input[type="file"][id^="cert_file"]')?.focus();
+            return false;
+        }
+
+        return true;
+    }
+
+    function clearGoogleMeetBotLoginForm(groupObjectId) {
+        resetModalForm(`googleMeetBotLoginModal-${groupObjectId}`);
+        clearGoogleMeetCredentialFields(groupObjectId);
+        hideModalById(`googleMeetBotLoginModal-${groupObjectId}`);
+    }
+
+    function getFirstNLines(text, n) {
+        const lines = text.split('\n');
+        const firstLines = lines.slice(0, n);
+        return firstLines.join('\n');
+    }
+
+    function initializeGoogleMeetBotLoginForm() {
+        attachFilePreviewHandlers("private_key_file_", "private_key_", "private_key_preview_", "private_key_preview_content_");
+        attachFilePreviewHandlers("cert_file_", "cert_", "cert_preview_", "cert_preview_content_");
+
+        ["createGoogleMeetBotLoginGroupModal", "createTeamsBotLoginGroupModal"].forEach((modalId) => {
+            const modalElement = document.getElementById(modalId);
+            if (!modalElement || modalElement.dataset.clearHandlerAttached === "true") {
+                return;
+            }
+            modalElement.addEventListener("hidden.bs.modal", function() {
+                resetModalForm(modalId);
+            });
+            modalElement.dataset.clearHandlerAttached = "true";
+        });
+
+        attachModalHiddenReset("teamsBotLoginCredentialsModal-", function(suffix) {
+            resetModalForm(`teamsBotLoginCredentialsModal-${suffix}`);
+        });
+
+        attachModalHiddenReset("googleMeetBotLoginModal-", function(suffix) {
+            resetModalForm(`googleMeetBotLoginModal-${suffix}`);
+            clearGoogleMeetCredentialFields(suffix);
+        });
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initializeGoogleMeetBotLoginForm);
+    } else {
+        initializeGoogleMeetBotLoginForm();
+    }
+
+    document.body.addEventListener('htmx:afterSwap', function(event) {
+        if (event.detail.target.id === 'google-meet-bot-login-section' || event.detail.target.id === 'teams-bot-login-section') {
+            initializeGoogleMeetBotLoginForm();
+        }
+    });
+</script>
+{% endblock %}

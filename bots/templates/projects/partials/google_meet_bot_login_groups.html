@@ -1,0 +1,272 @@
+<div id="google-meet-bot-login-section">
+    <div class="card mt-4">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <h5 class="mb-0">Google Meet Login Groups</h5>
+            <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#createGoogleMeetBotLoginGroupModal">
+                <i class="bi bi-plus-circle"></i> Create Login Group
+            </button>
+        </div>
+        <div class="card-body">
+            {% if google_meet_bot_login_groups %}
+                {% for group in google_meet_bot_login_groups %}
+                    <div class="border rounded p-3 bg-white {% if not forloop.first %}mt-3{% endif %}">
+                        <div class="d-flex justify-content-between align-items-start gap-3 mb-3">
+                            <div>
+                                <h5 class="mb-1">{{ group.name }}</h5>
+                                <small class="text-muted">{{ group.bot_logins.count }} login{{ group.bot_logins.count|pluralize }}</small>
+                            </div>
+                            <div class="d-flex align-items-center gap-2 flex-wrap justify-content-end">
+                                <button type="button"
+                                        class="btn btn-outline-secondary"
+                                        data-bs-toggle="modal"
+                                        data-bs-target="#editBotLoginGroupModal-{{ group.object_id }}"
+                                        title="Edit group name">
+                                    Edit Group Name
+                                </button>
+                                <form
+                                    hx-post="{% url 'projects:delete-bot-login-group' project.object_id group.object_id %}"
+                                    hx-target="#google-meet-bot-login-section"
+                                    hx-select="#google-meet-bot-login-section"
+                                    hx-swap="outerHTML"
+                                    hx-confirm="Are you sure you want to delete this Google Meet bot login group and all its items?"
+                                    style="display: inline;">
+                                    {% csrf_token %}
+                                    <button type="submit" class="btn btn-outline-danger">
+                                        Delete Group
+                                    </button>
+                                </form>
+                            </div>
+                        </div>
+
+                        {% if group.bot_logins.exists %}
+                            <div class="table-responsive">
+                                <table class="table table-hover mb-0">
+                                    <thead>
+                                        <tr>
+                                            <th>Email</th>
+                                            <th>Workspace Domain</th>
+                                            <th>Last Used</th>
+                                            <th>Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {% for login in group.bot_logins.all %}
+                                        <tr>
+                                            <td>{{ login.email }}</td>
+                                            <td>{{ login.workspace_domain }}</td>
+                                            <td>
+                                                {% if login.last_used_at %}
+                                                    {{ login.last_used_at|date:"M d, Y H:i" }}
+                                                {% else %}
+                                                    <span class="text-muted">Never</span>
+                                                {% endif %}
+                                            </td>
+                                            <td>
+                                                <form
+                                                    hx-post="{% url 'projects:delete-bot-login' project.object_id login.object_id %}"
+                                                    hx-target="#google-meet-bot-login-section"
+                                                    hx-select="#google-meet-bot-login-section"
+                                                    hx-swap="outerHTML"
+                                                    hx-confirm="Are you sure you want to delete this Google Meet bot login?"
+                                                    style="display: inline;">
+                                                    {% csrf_token %}
+                                                    <button type="submit" class="btn btn-outline-danger">
+                                                        Delete
+                                                    </button>
+                                                </form>
+                                            </td>
+                                        </tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                            </div>
+                        {% else %}
+                            <p class="text-muted mb-0">No logins in this group yet.</p>
+                        {% endif %}
+
+                        <button class="btn btn-primary mt-3"
+                                data-bs-toggle="modal"
+                                data-bs-target="#googleMeetBotLoginModal-{{ group.object_id }}">
+                            <i class="bi bi-plus-circle"></i> Add Login
+                        </button>
+                    </div>
+                {% endfor %}
+            {% else %}
+                <p>Create a Google Meet login group first, then add one or more logins inside it.</p>
+            {% endif %}
+        </div>
+    </div>
+
+    {% for group in google_meet_bot_login_groups %}
+    <div class="modal fade" id="editBotLoginGroupModal-{{ group.object_id }}" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Edit Google Meet Login Group</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form
+                        hx-post="{% url 'projects:edit-bot-login-group' project.object_id group.object_id %}"
+                        hx-target="#google-meet-bot-login-section"
+                        hx-select="#google-meet-bot-login-section"
+                        hx-swap="outerHTML"
+                        hx-on::before-request="bootstrap.Modal.getInstance(document.getElementById('editBotLoginGroupModal-{{ group.object_id }}'))?.hide()">
+                        {% csrf_token %}
+                        <div class="mb-3">
+                            <label for="google-meet-group-name-{{ group.object_id }}" class="form-label">Group Name</label>
+                            <input type="text"
+                                   class="form-control"
+                                   id="google-meet-group-name-{{ group.object_id }}"
+                                   name="name"
+                                   value="{{ group.name }}"
+                                   required>
+                        </div>
+                        <div class="mt-3">
+                            <button type="submit" class="btn btn-primary">Save</button>
+                            <button type="button" class="btn btn-secondary ms-2" data-bs-dismiss="modal">
+                                Cancel
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+
+    {% for group in google_meet_bot_login_groups %}
+    <div class="modal fade" id="googleMeetBotLoginModal-{{ group.object_id }}" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Add Google Meet Bot Login</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="alert alert-info mb-3">
+                        <i class="bi bi-info-circle"></i>
+                        Need help setting up signed-in bots for Google Meet? See our
+                        <a href="https://docs.attendee.dev/guides/signed-in-bots#signed-in-bots__signed-in-google-meet-bots" target="_blank" rel="noopener noreferrer">
+                            documentation
+                        </a>.
+                    </div>
+
+                    <form id="google-meet-bot-login-form-{{ group.object_id }}" autocomplete="off"
+                        hx-post="{% url 'projects:create-google-meet-bot-login' project.object_id %}"
+                        hx-target="#google-meet-bot-login-section"
+                        hx-select="#google-meet-bot-login-section"
+                        hx-swap="outerHTML"
+                        hx-on::before-request="hideModalById('googleMeetBotLoginModal-{{ group.object_id }}')"
+                        onsubmit="return validateGoogleMeetBotLoginForm()">
+                        {% csrf_token %}
+                        <input type="hidden" name="bot_login_group_object_id" value="{{ group.object_id }}">
+
+                        <div class="mb-3">
+                            <label for="workspace_domain_{{ group.object_id }}" class="form-label">Workspace Domain</label>
+                            <input type="text"
+                                class="form-control"
+                                id="workspace_domain_{{ group.object_id }}"
+                                name="workspace_domain"
+                                required
+                                placeholder="example.com">
+                            <div class="form-text">The Google Workspace domain for this account</div>
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="email_{{ group.object_id }}" class="form-label">Email</label>
+                            <input type="email"
+                                class="form-control"
+                                id="email_{{ group.object_id }}"
+                                name="email"
+                                required
+                                placeholder="bot@example.com">
+                            <div class="form-text">The email address of the bot account</div>
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="private_key_file_{{ group.object_id }}" class="form-label">Private Key</label>
+                            <input type="file"
+                                class="form-control"
+                                id="private_key_file_{{ group.object_id }}"
+                                accept=".pem,.key,.txt"
+                                required>
+                            <div class="form-text">Upload the private key file for client certificate authentication</div>
+                            <textarea
+                                class="form-control font-monospace d-none"
+                                id="private_key_{{ group.object_id }}"
+                                name="private_key"></textarea>
+                            <div id="private_key_preview_{{ group.object_id }}" class="mt-2 p-2 bg-light border rounded font-monospace small" style="display: none; max-height: 150px; overflow-y: auto;">
+                                <pre id="private_key_preview_content_{{ group.object_id }}" class="mb-0" style="white-space: pre-wrap; word-break: break-all;"></pre>
+                            </div>
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="cert_file_{{ group.object_id }}" class="form-label">Certificate</label>
+                            <input type="file"
+                                class="form-control"
+                                id="cert_file_{{ group.object_id }}"
+                                accept=".pem,.crt,.cer,.txt"
+                                required>
+                            <div class="form-text">Upload the client certificate file</div>
+                            <textarea
+                                class="form-control font-monospace d-none"
+                                id="cert_{{ group.object_id }}"
+                                name="cert"></textarea>
+                            <div id="cert_preview_{{ group.object_id }}" class="mt-2 p-2 bg-light border rounded font-monospace small" style="display: none; max-height: 150px; overflow-y: auto;">
+                                <pre id="cert_preview_content_{{ group.object_id }}" class="mb-0" style="white-space: pre-wrap; word-break: break-all;"></pre>
+                            </div>
+                        </div>
+
+                        <div class="mt-3">
+                            <button type="submit" class="btn btn-primary">Add Login</button>
+                            <button type="button"
+                                    class="btn btn-secondary ms-2"
+                                    data-bs-dismiss="modal">
+                                Cancel
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<div class="modal fade" id="createGoogleMeetBotLoginGroupModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Create Google Meet Login Group</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form
+                    hx-post="{% url 'projects:create-bot-login-group' project.object_id %}"
+                    hx-target="#google-meet-bot-login-section"
+                    hx-select="#google-meet-bot-login-section"
+                    hx-swap="outerHTML"
+                    hx-on::before-request="bootstrap.Modal.getInstance(document.getElementById('createGoogleMeetBotLoginGroupModal'))?.hide()">
+                    {% csrf_token %}
+                    <input type="hidden" name="platform" value="google_meet">
+                    <div class="mb-3">
+                        <label for="create-google-meet-group-name" class="form-label">Group Name</label>
+                        <input type="text"
+                               class="form-control"
+                               id="create-google-meet-group-name"
+                               name="name"
+                               required
+                               placeholder="e.g. Google Meet EU, Google Meet US">
+                    </div>
+                    <div class="mt-3">
+                        <button type="submit" class="btn btn-primary">Create Group</button>
+                        <button type="button" class="btn btn-secondary ms-2" data-bs-dismiss="modal">
+                            Cancel
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>

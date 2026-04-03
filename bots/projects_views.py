@@ -26,6 +26,9 @@ from .models import (
     BotEvent,
     BotEventSubTypes,
     BotEventTypes,
+    BotLogin,
+    BotLoginGroup,
+    BotLoginPlatform,
     BotStates,
     Calendar,
     CalendarEvent,
@@ -34,8 +37,6 @@ from .models import (
     ChatMessage,
     Credentials,
     CreditTransaction,
-    GoogleMeetBotLogin,
-    GoogleMeetBotLoginGroup,
     Participant,
     ParticipantEventTypes,
     Project,
@@ -101,12 +102,20 @@ def get_calendar_event_for_user(user, calendar_event_object_id):
     return calendar_event
 
 
-def get_google_meet_bot_login_for_user(user, google_meet_bot_login_object_id):
-    google_meet_bot_login = get_object_or_404(GoogleMeetBotLogin, object_id=google_meet_bot_login_object_id, group__project__organization=user.organization)
-    # If you're an admin you can access any Google Meet bot login in the organization
-    if user.role != UserRole.ADMIN and not ProjectAccess.objects.filter(project=google_meet_bot_login.group.project, user=user).exists():
+def get_bot_login_group_for_user(user, bot_login_group_object_id):
+    bot_login_group = get_object_or_404(BotLoginGroup, object_id=bot_login_group_object_id, project__organization=user.organization)
+    # If you're an admin you can access any bot login group in the organization
+    if user.role != UserRole.ADMIN and not ProjectAccess.objects.filter(project=bot_login_group.project, user=user).exists():
         raise PermissionDenied
-    return google_meet_bot_login
+    return bot_login_group
+
+
+def get_bot_login_for_user(user, bot_login_object_id):
+    bot_login = get_object_or_404(BotLogin, object_id=bot_login_object_id, group__project__organization=user.organization)
+    # If you're an admin you can access any bot login in the organization
+    if user.role != UserRole.ADMIN and not ProjectAccess.objects.filter(project=bot_login.group.project, user=user).exists():
+        raise PermissionDenied
+    return bot_login
 
 
 def get_webhook_delivery_attempt_for_user(user, idempotency_key):
@@ -126,6 +135,27 @@ def get_webhook_options_for_project(project):
     return trigger_types
 
 
+def get_bot_login_group_context(project):
+    return {
+        "google_meet_bot_login_groups": BotLoginGroup.objects.filter(
+            project=project,
+            platform=BotLoginPlatform.GOOGLE_MEET,
+        ).order_by("created_at", "id"),
+        "teams_bot_login_groups": BotLoginGroup.objects.filter(
+            project=project,
+            platform=BotLoginPlatform.TEAMS,
+        ).order_by("created_at", "id"),
+    }
+
+
+def render_bot_login_groups_partial(request, platform, context):
+    if platform == BotLoginPlatform.GOOGLE_MEET:
+        return render(request, "projects/partials/google_meet_bot_login_groups.html", context)
+    if platform == BotLoginPlatform.TEAMS:
+        return render(request, "projects/partials/teams_bot_login_groups.html", context)
+    return HttpResponse("Invalid bot login platform", status=400)
+
+
 def get_partial_for_credential_type(credential_type, request, context):
     if credential_type == Credentials.CredentialTypes.ZOOM_OAUTH:
         return render(request, "projects/partials/zoom_credentials.html", context)
@@ -143,13 +173,12 @@ def get_partial_for_credential_type(credential_type, request, context):
         return render(request, "projects/partials/sarvam_credentials.html", context)
     elif credential_type == Credentials.CredentialTypes.ELEVENLABS:
         return render(request, "projects/partials/elevenlabs_credentials.html", context)
-    elif credential_type == Credentials.CredentialTypes.TEAMS_BOT_LOGIN:
-        return render(request, "projects/partials/teams_bot_login_credentials.html", context)
     elif credential_type == Credentials.CredentialTypes.KYUTAI:
         return render(request, "projects/partials/kyutai_credentials.html", context)
     elif credential_type == Credentials.CredentialTypes.EXTERNAL_MEDIA_STORAGE:
         return render(request, "projects/partials/external_media_storage_credentials.html", context)
     else:
+        # Credential type TEAMS_BOT_LOGIN is no longer supported in CreateCredentialsView
         return HttpResponse("Cannot render the partial for this credential type", status=400)
 
 
@@ -290,7 +319,7 @@ class CreateCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 
         try:
             credential_type = int(request.POST.get("credential_type"))
-            if credential_type not in [choice[0] for choice in Credentials.CredentialTypes.choices]:
+            if credential_type not in [choice[0] for choice in Credentials.CredentialTypes.choices] or credential_type == Credentials.CredentialTypes.TEAMS_BOT_LOGIN:
                 return HttpResponse("Invalid credential type", status=400)
 
             # Get or create the credential instance
@@ -352,11 +381,6 @@ class CreateCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 
                 if not all(credentials_data.values()):
                     return HttpResponse("Missing required credentials data", status=400)
-            elif credential_type == Credentials.CredentialTypes.TEAMS_BOT_LOGIN:
-                credentials_data = {"username": request.POST.get("username"), "password": request.POST.get("password")}
-
-                if not all(credentials_data.values()):
-                    return HttpResponse("Missing required credentials data", status=400)
             elif credential_type == Credentials.CredentialTypes.EXTERNAL_MEDIA_STORAGE:
                 credentials_data = {"access_key_id": request.POST.get("access_key_id"), "access_key_secret": request.POST.get("access_key_secret"), "endpoint_url": request.POST.get("endpoint_url"), "region_name": request.POST.get("region_name")}
 
@@ -386,7 +410,7 @@ class DeleteCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 
         try:
             credential_type = int(request.POST.get("credential_type"))
-            if credential_type not in [choice[0] for choice in Credentials.CredentialTypes.choices]:
+            if credential_type not in [choice[0] for choice in Credentials.CredentialTypes.choices] or credential_type == Credentials.CredentialTypes.TEAMS_BOT_LOGIN:
                 return HttpResponse("Invalid credential type", status=400)
 
             # Find and delete the credential
@@ -416,9 +440,6 @@ class ProjectCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
         # Try to get existing zoom oauth app
         zoom_oauth_app = ZoomOAuthApp.objects.filter(project=project).first()
 
-        # Try to get existing google meet bot login group
-        google_meet_bot_login_group = GoogleMeetBotLoginGroup.objects.filter(project=project).first()
-
         # Try to get existing credentials
         zoom_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.ZOOM_OAUTH).first()
 
@@ -438,15 +459,12 @@ class ProjectCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 
         kyutai_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.KYUTAI).first()
 
-        teams_bot_login_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.TEAMS_BOT_LOGIN).first()
-
         external_media_storage_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.EXTERNAL_MEDIA_STORAGE).first()
 
         context = self.get_project_context(object_id, project)
         context.update(
             {
                 "zoom_oauth_app": zoom_oauth_app,
-                "google_meet_bot_login_group": google_meet_bot_login_group,
                 "zoom_credentials": zoom_credentials.get_credentials() if zoom_credentials else None,
                 "zoom_credential_type": Credentials.CredentialTypes.ZOOM_OAUTH,
                 "deepgram_credentials": deepgram_credentials.get_credentials() if deepgram_credentials else None,
@@ -465,8 +483,6 @@ class ProjectCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
                 "elevenlabs_credential_type": Credentials.CredentialTypes.ELEVENLABS,
                 "kyutai_credentials": kyutai_credentials.get_credentials() if kyutai_credentials else None,
                 "kyutai_credential_type": Credentials.CredentialTypes.KYUTAI,
-                "teams_bot_login_credentials": teams_bot_login_credentials.get_credentials() if teams_bot_login_credentials else None,
-                "teams_bot_login_credential_type": Credentials.CredentialTypes.TEAMS_BOT_LOGIN,
                 "external_media_storage_credentials": external_media_storage_credentials.get_credentials() if external_media_storage_credentials else None,
                 "external_media_storage_credential_type": Credentials.CredentialTypes.EXTERNAL_MEDIA_STORAGE,
             }
@@ -1409,13 +1425,96 @@ class ProjectAutopayView(AdminRequiredMixin, View):
             return HttpResponse("Error saving autopay settings", status=500)
 
 
+class ProjectBotLoginGroupsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
+    def get(self, request, object_id):
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
+        context = self.get_project_context(object_id, project)
+        context.update(get_bot_login_group_context(project))
+        return render(request, "projects/project_bot_login_groups.html", context)
+
+
+class CreateBotLoginGroupView(LoginRequiredMixin, ProjectUrlContextMixin, View):
+    def post(self, request, object_id):
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
+        try:
+            platform = request.POST.get("platform")
+            name = request.POST.get("name")
+            if not platform or not name:
+                return HttpResponse("Missing required fields: platform and name are required", status=400)
+            if platform not in BotLoginPlatform.values:
+                return HttpResponse("Invalid platform", status=400)
+            if BotLoginGroup.objects.filter(project=project, platform=platform, name=name).exists():
+                return HttpResponse("A bot login group with this name already exists", status=400)
+
+            BotLoginGroup.objects.create(project=project, platform=platform, name=name)
+
+            context = self.get_project_context(object_id, project)
+            context.update(get_bot_login_group_context(project))
+            return render_bot_login_groups_partial(request, platform, context)
+
+        except Exception as e:
+            error_id = str(uuid.uuid4())
+            logger.error(f"Error creating bot login group (error_id={error_id}): {e}")
+            return HttpResponse(f"Error creating bot login group. Error ID: {error_id}", status=400)
+
+
+class EditBotLoginGroupView(LoginRequiredMixin, ProjectUrlContextMixin, View):
+    def post(self, request, object_id, bot_login_group_object_id):
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
+        bot_login_group = get_bot_login_group_for_user(user=request.user, bot_login_group_object_id=bot_login_group_object_id)
+        if bot_login_group.project_id != project.id:
+            return HttpResponse("Bot login group does not belong to this project", status=404)
+
+        try:
+            name = request.POST.get("name")
+            if not name:
+                return HttpResponse("Missing required field: name is required", status=400)
+
+            if (
+                BotLoginGroup.objects.filter(
+                    project=project,
+                    platform=bot_login_group.platform,
+                    name=name,
+                )
+                .exclude(id=bot_login_group.id)
+                .exists()
+            ):
+                return HttpResponse("A bot login group with this name already exists", status=400)
+
+            bot_login_group.name = name
+            bot_login_group.save(update_fields=["name"])
+
+            context = self.get_project_context(object_id, project)
+            context.update(get_bot_login_group_context(project))
+            return render_bot_login_groups_partial(request, bot_login_group.platform, context)
+        except Exception as e:
+            error_id = str(uuid.uuid4())
+            logger.error(f"Error editing bot login group (error_id={error_id}): {e}")
+            return HttpResponse(f"Error editing bot login group. Error ID: {error_id}", status=400)
+
+
+class DeleteBotLoginGroupView(LoginRequiredMixin, ProjectUrlContextMixin, View):
+    def post(self, request, object_id, bot_login_group_object_id):
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
+        bot_login_group = get_bot_login_group_for_user(user=request.user, bot_login_group_object_id=bot_login_group_object_id)
+        if bot_login_group.project_id != project.id:
+            return HttpResponse("Bot login group does not belong to this project", status=404)
+        platform = bot_login_group.platform
+        bot_login_group.delete()
+        context = self.get_project_context(object_id, project)
+        context.update(get_bot_login_group_context(project))
+        return render_bot_login_groups_partial(request, platform, context)
+
+
 class CreateGoogleMeetBotLoginView(LoginRequiredMixin, ProjectUrlContextMixin, View):
     def post(self, request, object_id):
         project = get_project_for_user(user=request.user, project_object_id=object_id)
+        bot_login_group_object_id = request.POST.get("bot_login_group_object_id")
+        google_meet_bot_login_group = get_bot_login_group_for_user(user=request.user, bot_login_group_object_id=bot_login_group_object_id)
 
         try:
-            # Get or create GoogleMeetBotLoginGroup for this project
-            google_meet_bot_login_group, created = GoogleMeetBotLoginGroup.objects.get_or_create(project=project)
+            if google_meet_bot_login_group.project_id != project.id or google_meet_bot_login_group.platform != BotLoginPlatform.GOOGLE_MEET:
+                return HttpResponse("Invalid Google Meet bot login group", status=400)
 
             # Extract fields from request
             workspace_domain = request.POST.get("workspace_domain", "").strip()
@@ -1427,8 +1526,8 @@ class CreateGoogleMeetBotLoginView(LoginRequiredMixin, ProjectUrlContextMixin, V
             if not all([workspace_domain, email, private_key, cert]):
                 return HttpResponse("Missing required fields: workspace_domain, email, private_key, and cert are all required", status=400)
 
-            # Create the GoogleMeetBotLogin
-            google_meet_bot_login = GoogleMeetBotLogin.objects.create(
+            # Create the GoogleMeet BotLogin
+            google_meet_bot_login = BotLogin.objects.create(
                 group=google_meet_bot_login_group,
                 workspace_domain=workspace_domain,
                 email=email,
@@ -1442,8 +1541,8 @@ class CreateGoogleMeetBotLoginView(LoginRequiredMixin, ProjectUrlContextMixin, V
             google_meet_bot_login.set_credentials(credentials_data)
 
             context = self.get_project_context(object_id, project)
-            context["google_meet_bot_login_group"] = google_meet_bot_login_group
-            return render(request, "projects/partials/google_meet_bot_login_group.html", context)
+            context.update(get_bot_login_group_context(project))
+            return render_bot_login_groups_partial(request, BotLoginPlatform.GOOGLE_MEET, context)
 
         except Exception as e:
             error_id = str(uuid.uuid4())
@@ -1451,12 +1550,52 @@ class CreateGoogleMeetBotLoginView(LoginRequiredMixin, ProjectUrlContextMixin, V
             return HttpResponse(f"Error creating Google Meet bot login. Error ID: {error_id}", status=400)
 
 
-class DeleteGoogleMeetBotLoginView(LoginRequiredMixin, ProjectUrlContextMixin, View):
-    def post(self, request, object_id, login_object_id):
-        google_meet_bot_login = get_google_meet_bot_login_for_user(user=request.user, google_meet_bot_login_object_id=login_object_id)
+class CreateTeamsBotLoginView(LoginRequiredMixin, ProjectUrlContextMixin, View):
+    def post(self, request, object_id):
         project = get_project_for_user(user=request.user, project_object_id=object_id)
-        google_meet_bot_login_group = google_meet_bot_login.group
-        google_meet_bot_login.delete()
+        bot_login_group_object_id = request.POST.get("bot_login_group_object_id")
+        teams_bot_login_group = get_bot_login_group_for_user(user=request.user, bot_login_group_object_id=bot_login_group_object_id)
+        try:
+            if teams_bot_login_group.project_id != project.id or teams_bot_login_group.platform != BotLoginPlatform.TEAMS:
+                return HttpResponse("Invalid Teams bot login group", status=400)
+
+            # Extract fields from request
+            email = request.POST.get("email", "").strip()
+            password = request.POST.get("password", "").strip()
+
+            if not email or not password:
+                return HttpResponse("Missing required fields: email and password are required", status=400)
+
+            # Create the Teams BotLogin
+            teams_bot_login = BotLogin.objects.create(
+                group=teams_bot_login_group,
+                email=email,
+            )
+
+            # Set the encrypted credentials
+            credentials_data = {
+                "password": password,
+            }
+            teams_bot_login.set_credentials(credentials_data)
+
+            context = self.get_project_context(object_id, project)
+            context.update(get_bot_login_group_context(project))
+            return render_bot_login_groups_partial(request, BotLoginPlatform.TEAMS, context)
+
+        except Exception as e:
+            error_id = str(uuid.uuid4())
+            logger.error(f"Error creating Teams bot login (error_id={error_id}): {e}")
+            return HttpResponse(f"Error creating Teams bot login. Error ID: {error_id}", status=400)
+
+
+class DeleteBotLoginView(LoginRequiredMixin, ProjectUrlContextMixin, View):
+    def post(self, request, object_id, bot_login_object_id):
+        bot_login = get_bot_login_for_user(user=request.user, bot_login_object_id=bot_login_object_id)
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
+        if bot_login.group.project_id != project.id:
+            return HttpResponse("Bot login does not belong to this project", status=404)
+        platform = bot_login.group.platform
+        bot_login.delete()
         context = self.get_project_context(object_id, project)
-        context["google_meet_bot_login_group"] = google_meet_bot_login_group
-        return render(request, "projects/partials/google_meet_bot_login_group.html", context)
+        context.update(get_bot_login_group_context(project))
+        return render_bot_login_groups_partial(request, platform, context)

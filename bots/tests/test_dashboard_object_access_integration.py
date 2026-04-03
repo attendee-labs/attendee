@@ -9,11 +9,12 @@ from accounts.models import Organization, User, UserRole
 from bots.models import (
     ApiKey,
     Bot,
+    BotLogin,
+    BotLoginGroup,
+    BotLoginPlatform,
     Calendar,
     CalendarEvent,
     CalendarPlatform,
-    GoogleMeetBotLogin,
-    GoogleMeetBotLoginGroup,
     Project,
     ProjectAccess,
     WebhookSubscription,
@@ -22,9 +23,9 @@ from bots.models import (
 )
 from bots.projects_views import (
     get_api_key_for_user,
+    get_bot_login_for_user,
     get_calendar_event_for_user,
     get_calendar_for_user,
-    get_google_meet_bot_login_for_user,
     get_project_for_user,
     get_webhook_subscription_for_user,
 )
@@ -123,29 +124,51 @@ class ObjectAccessIntegrationTest(TransactionTestCase):
         self.zoom_oauth_app_b1.set_credentials({"client_secret": "test_secret_b1", "webhook_secret": "test_webhook_secret_b1"})
 
         # Create Google Meet bot login groups and logins
-        self.google_meet_bot_login_group_a1 = GoogleMeetBotLoginGroup.objects.create(project=self.project_a1)
-        self.google_meet_bot_login_a1 = GoogleMeetBotLogin.objects.create(
+        self.google_meet_bot_login_group_a1 = BotLoginGroup.objects.create(project=self.project_a1, platform=BotLoginPlatform.GOOGLE_MEET, name="Google Meet Group 1 A1")
+        self.google_meet_bot_login_a1 = BotLogin.objects.create(
             group=self.google_meet_bot_login_group_a1,
             workspace_domain="workspace-a1.com",
             email="bot-a1@workspace-a1.com",
         )
         self.google_meet_bot_login_a1.set_credentials({"private_key": "test_private_key_a1", "cert": "test_cert_a1"})
 
-        self.google_meet_bot_login_group_a2 = GoogleMeetBotLoginGroup.objects.create(project=self.project_a2)
-        self.google_meet_bot_login_a2 = GoogleMeetBotLogin.objects.create(
+        self.google_meet_bot_login_group_a2 = BotLoginGroup.objects.create(project=self.project_a2, platform=BotLoginPlatform.GOOGLE_MEET, name="Google Meet Group 1 A2")
+        self.google_meet_bot_login_a2 = BotLogin.objects.create(
             group=self.google_meet_bot_login_group_a2,
             workspace_domain="workspace-a2.com",
             email="bot-a2@workspace-a2.com",
         )
         self.google_meet_bot_login_a2.set_credentials({"private_key": "test_private_key_a2", "cert": "test_cert_a2"})
 
-        self.google_meet_bot_login_group_b1 = GoogleMeetBotLoginGroup.objects.create(project=self.project_b1)
-        self.google_meet_bot_login_b1 = GoogleMeetBotLogin.objects.create(
+        self.google_meet_bot_login_group_b1 = BotLoginGroup.objects.create(project=self.project_b1, platform=BotLoginPlatform.GOOGLE_MEET, name="Google Meet Group 1 B1")
+        self.google_meet_bot_login_b1 = BotLogin.objects.create(
             group=self.google_meet_bot_login_group_b1,
             workspace_domain="workspace-b1.com",
             email="bot-b1@workspace-b1.com",
         )
         self.google_meet_bot_login_b1.set_credentials({"private_key": "test_private_key_b1", "cert": "test_cert_b1"})
+
+        # Create Teams bot login groups and logins
+        self.teams_bot_login_group_a1 = BotLoginGroup.objects.create(project=self.project_a1, platform=BotLoginPlatform.TEAMS, name="Teams Group 1 A1")
+        self.teams_bot_login_a1 = BotLogin.objects.create(
+            group=self.teams_bot_login_group_a1,
+            email="teams-a1@example.com",
+        )
+        self.teams_bot_login_a1.set_credentials({"password": "test_password_a1"})
+
+        self.teams_bot_login_group_a2 = BotLoginGroup.objects.create(project=self.project_a2, platform=BotLoginPlatform.TEAMS, name="Teams Group 1 A2")
+        self.teams_bot_login_a2 = BotLogin.objects.create(
+            group=self.teams_bot_login_group_a2,
+            email="teams-a2@example.com",
+        )
+        self.teams_bot_login_a2.set_credentials({"password": "test_password_a2"})
+
+        self.teams_bot_login_group_b1 = BotLoginGroup.objects.create(project=self.project_b1, platform=BotLoginPlatform.TEAMS, name="Teams Group 1 B1")
+        self.teams_bot_login_b1 = BotLogin.objects.create(
+            group=self.teams_bot_login_group_b1,
+            email="teams-b1@example.com",
+        )
+        self.teams_bot_login_b1.set_credentials({"password": "test_password_b1"})
 
     # Tests for get_project_for_user()
     def test_get_project_for_user_admin_access_same_org(self):
@@ -304,31 +327,31 @@ class ObjectAccessIntegrationTest(TransactionTestCase):
     # Tests for get_google_meet_bot_login_for_user()
     def test_get_google_meet_bot_login_for_user_admin_access_same_org(self):
         """Test that admin users can access any Google Meet bot login in their organization"""
-        google_meet_bot_login = get_google_meet_bot_login_for_user(self.admin_user_a, self.google_meet_bot_login_a1.object_id)
+        google_meet_bot_login = get_bot_login_for_user(self.admin_user_a, self.google_meet_bot_login_a1.object_id)
         self.assertEqual(google_meet_bot_login, self.google_meet_bot_login_a1)
 
-        google_meet_bot_login = get_google_meet_bot_login_for_user(self.admin_user_a, self.google_meet_bot_login_a2.object_id)
+        google_meet_bot_login = get_bot_login_for_user(self.admin_user_a, self.google_meet_bot_login_a2.object_id)
         self.assertEqual(google_meet_bot_login, self.google_meet_bot_login_a2)
 
     def test_get_google_meet_bot_login_for_user_admin_denied_different_org(self):
         """Test that admin users cannot access Google Meet bot logins in different organizations"""
         with self.assertRaises(Http404):
-            get_google_meet_bot_login_for_user(self.admin_user_a, self.google_meet_bot_login_b1.object_id)
+            get_bot_login_for_user(self.admin_user_a, self.google_meet_bot_login_b1.object_id)
 
     def test_get_google_meet_bot_login_for_user_regular_access_with_permission(self):
         """Test that regular users can access Google Meet bot logins in projects they have access to"""
-        google_meet_bot_login = get_google_meet_bot_login_for_user(self.regular_user_a, self.google_meet_bot_login_a1.object_id)
+        google_meet_bot_login = get_bot_login_for_user(self.regular_user_a, self.google_meet_bot_login_a1.object_id)
         self.assertEqual(google_meet_bot_login, self.google_meet_bot_login_a1)
 
     def test_get_google_meet_bot_login_for_user_regular_denied_no_permission(self):
         """Test that regular users cannot access Google Meet bot logins in projects they don't have access to"""
         with self.assertRaises(PermissionDenied):
-            get_google_meet_bot_login_for_user(self.regular_user_a, self.google_meet_bot_login_a2.object_id)
+            get_bot_login_for_user(self.regular_user_a, self.google_meet_bot_login_a2.object_id)
 
     def test_get_google_meet_bot_login_for_user_regular_denied_different_org(self):
         """Test that regular users cannot access Google Meet bot logins in different organizations"""
         with self.assertRaises(Http404):
-            get_google_meet_bot_login_for_user(self.regular_user_a, self.google_meet_bot_login_b1.object_id)
+            get_bot_login_for_user(self.regular_user_a, self.google_meet_bot_login_b1.object_id)
 
     # Tests for view-level access control through HTTP requests
     def test_project_dashboard_access_control(self):
@@ -585,6 +608,114 @@ class ObjectAccessIntegrationTest(TransactionTestCase):
         # Verify the app still exists
         self.assertTrue(ZoomOAuthApp.objects.filter(project=self.project_b1).exists())
 
+    def test_bot_login_group_creation_access_control(self):
+        """Test that bot login group creation is properly controlled"""
+        self.client.force_login(self.admin_user_a)
+        response = self.client.post(
+            reverse("bots:create-bot-login-group", kwargs={"object_id": self.project_a1.object_id}),
+            data={"platform": BotLoginPlatform.GOOGLE_MEET, "name": "Admin Created Group"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(
+            BotLoginGroup.objects.filter(
+                project=self.project_a1,
+                platform=BotLoginPlatform.GOOGLE_MEET,
+                name="Admin Created Group",
+            ).exists()
+        )
+
+        self.client.force_login(self.regular_user_a)
+        response = self.client.post(
+            reverse("bots:create-bot-login-group", kwargs={"object_id": self.project_a1.object_id}),
+            data={"platform": BotLoginPlatform.TEAMS, "name": "Regular User Group"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(
+            BotLoginGroup.objects.filter(
+                project=self.project_a1,
+                platform=BotLoginPlatform.TEAMS,
+                name="Regular User Group",
+            ).exists()
+        )
+
+        response = self.client.post(
+            reverse("bots:create-bot-login-group", kwargs={"object_id": self.project_a2.object_id}),
+            data={"platform": BotLoginPlatform.TEAMS, "name": "Unauthorized Group"},
+        )
+        self.assertEqual(response.status_code, 403)
+
+        response = self.client.post(
+            reverse("bots:create-bot-login-group", kwargs={"object_id": self.project_b1.object_id}),
+            data={"platform": BotLoginPlatform.TEAMS, "name": "Cross Org Group"},
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_bot_login_group_edit_access_control(self):
+        """Test that bot login group editing is properly controlled"""
+        self.client.force_login(self.admin_user_a)
+        response = self.client.post(
+            reverse(
+                "bots:edit-bot-login-group",
+                kwargs={
+                    "object_id": self.project_a1.object_id,
+                    "bot_login_group_object_id": self.google_meet_bot_login_group_a1.object_id,
+                },
+            ),
+            data={"name": "Renamed Group"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.google_meet_bot_login_group_a1.refresh_from_db()
+        self.assertEqual(self.google_meet_bot_login_group_a1.name, "Renamed Group")
+
+        self.client.force_login(self.regular_user_a)
+        response = self.client.post(
+            reverse(
+                "bots:edit-bot-login-group",
+                kwargs={
+                    "object_id": self.project_a2.object_id,
+                    "bot_login_group_object_id": self.google_meet_bot_login_group_a2.object_id,
+                },
+            ),
+            data={"name": "Unauthorized Rename"},
+        )
+        self.assertEqual(response.status_code, 403)
+        self.google_meet_bot_login_group_a2.refresh_from_db()
+        self.assertEqual(self.google_meet_bot_login_group_a2.name, "Google Meet Group 1 A2")
+
+    def test_bot_login_group_deletion_access_control(self):
+        """Test that bot login group deletion is properly controlled"""
+        self.client.force_login(self.admin_user_a)
+        response = self.client.post(
+            reverse(
+                "bots:delete-bot-login-group",
+                kwargs={
+                    "object_id": self.project_a1.object_id,
+                    "bot_login_group_object_id": self.teams_bot_login_group_a1.object_id,
+                },
+            )
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(BotLoginGroup.objects.filter(id=self.teams_bot_login_group_a1.id).exists())
+
+        self.teams_bot_login_group_a1 = BotLoginGroup.objects.create(
+            project=self.project_a1,
+            platform=BotLoginPlatform.TEAMS,
+            name="Teams Group 1 A1 Recreated",
+        )
+
+        self.client.force_login(self.regular_user_a)
+        response = self.client.post(
+            reverse(
+                "bots:delete-bot-login-group",
+                kwargs={
+                    "object_id": self.project_a2.object_id,
+                    "bot_login_group_object_id": self.teams_bot_login_group_a2.object_id,
+                },
+            )
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertTrue(BotLoginGroup.objects.filter(id=self.teams_bot_login_group_a2.id).exists())
+
     def test_google_meet_bot_login_creation_access_control(self):
         """Test that Google Meet bot login creation is properly controlled"""
         # Admin can create Google Meet bot logins in any project in their org
@@ -592,6 +723,7 @@ class ObjectAccessIntegrationTest(TransactionTestCase):
         response = self.client.post(
             reverse("bots:create-google-meet-bot-login", kwargs={"object_id": self.project_a1.object_id}),
             data={
+                "bot_login_group_object_id": self.google_meet_bot_login_group_a1.object_id,
                 "workspace_domain": "new-workspace-a1.com",
                 "email": "new-bot@new-workspace-a1.com",
                 "private_key": "new_private_key",
@@ -603,6 +735,7 @@ class ObjectAccessIntegrationTest(TransactionTestCase):
         response = self.client.post(
             reverse("bots:create-google-meet-bot-login", kwargs={"object_id": self.project_a2.object_id}),
             data={
+                "bot_login_group_object_id": self.google_meet_bot_login_group_a2.object_id,
                 "workspace_domain": "new-workspace-a2.com",
                 "email": "new-bot@new-workspace-a2.com",
                 "private_key": "new_private_key",
@@ -612,16 +745,20 @@ class ObjectAccessIntegrationTest(TransactionTestCase):
         self.assertEqual(response.status_code, 200)
 
         # Assert that expected objects in the database are created
-        self.assertTrue(GoogleMeetBotLoginGroup.objects.filter(project=self.project_a1).exists())
-        self.assertTrue(GoogleMeetBotLogin.objects.filter(group=self.google_meet_bot_login_group_a1).exists())
-        self.assertTrue(GoogleMeetBotLogin.objects.filter(group=self.google_meet_bot_login_group_a2).exists())
-        self.assertTrue(GoogleMeetBotLogin.objects.filter(group=self.google_meet_bot_login_group_b1).exists())
+        self.assertTrue(BotLoginGroup.objects.filter(project=self.project_a1, platform=BotLoginPlatform.GOOGLE_MEET).exists())
+        self.assertTrue(BotLogin.objects.filter(group=self.google_meet_bot_login_group_a1).exists())
+        self.assertTrue(BotLogin.objects.filter(group=self.google_meet_bot_login_group_a2).exists())
+        self.assertTrue(BotLogin.objects.filter(group=self.google_meet_bot_login_group_b1).exists())
+        self.assertEqual(BotLoginGroup.objects.get(id=self.google_meet_bot_login_group_a1.id).name, "Google Meet Group 1 A1")
+        self.assertEqual(BotLoginGroup.objects.get(id=self.google_meet_bot_login_group_a2.id).name, "Google Meet Group 1 A2")
+        self.assertEqual(BotLoginGroup.objects.get(id=self.google_meet_bot_login_group_b1.id).name, "Google Meet Group 1 B1")
 
         # Regular user can create Google Meet bot logins in projects they have access to
         self.client.force_login(self.regular_user_a)
         response = self.client.post(
             reverse("bots:create-google-meet-bot-login", kwargs={"object_id": self.project_a1.object_id}),
             data={
+                "bot_login_group_object_id": self.google_meet_bot_login_group_a1.object_id,
                 "workspace_domain": "another-workspace-a1.com",
                 "email": "another-bot@another-workspace-a1.com",
                 "private_key": "another_private_key",
@@ -634,6 +771,7 @@ class ObjectAccessIntegrationTest(TransactionTestCase):
         response = self.client.post(
             reverse("bots:create-google-meet-bot-login", kwargs={"object_id": self.project_a2.object_id}),
             data={
+                "bot_login_group_object_id": self.google_meet_bot_login_group_a2.object_id,
                 "workspace_domain": "unauthorized-workspace.com",
                 "email": "unauthorized-bot@unauthorized-workspace.com",
                 "private_key": "unauthorized_private_key",
@@ -646,6 +784,7 @@ class ObjectAccessIntegrationTest(TransactionTestCase):
         response = self.client.post(
             reverse("bots:create-google-meet-bot-login", kwargs={"object_id": self.project_b1.object_id}),
             data={
+                "bot_login_group_object_id": self.google_meet_bot_login_group_b1.object_id,
                 "workspace_domain": "cross-org-workspace.com",
                 "email": "cross-org-bot@cross-org-workspace.com",
                 "private_key": "cross_org_private_key",
@@ -654,61 +793,104 @@ class ObjectAccessIntegrationTest(TransactionTestCase):
         )
         self.assertEqual(response.status_code, 404)
 
-    def test_google_meet_bot_login_deletion_access_control(self):
-        """Test that Google Meet bot login deletion is properly controlled"""
-        # Admin can delete Google Meet bot logins in any project in their org
+    def test_teams_bot_login_creation_access_control(self):
+        """Test that Teams bot login creation is properly controlled"""
+        # Admin can create Teams bot logins in any project in their org
+        self.client.force_login(self.admin_user_a)
+        response = self.client.post(
+            reverse("bots:create-teams-bot-login", kwargs={"object_id": self.project_a1.object_id}),
+            data={
+                "bot_login_group_object_id": self.teams_bot_login_group_a1.object_id,
+                "email": "new-teams-a1@example.com",
+                "password": "new_password_a1",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(
+            BotLogin.objects.filter(
+                group=self.teams_bot_login_group_a1,
+                email="new-teams-a1@example.com",
+            ).exists()
+        )
+
+        # Regular user cannot create Teams bot logins in projects they don't have access to
+        self.client.force_login(self.regular_user_a)
+        response = self.client.post(
+            reverse("bots:create-teams-bot-login", kwargs={"object_id": self.project_a2.object_id}),
+            data={
+                "bot_login_group_object_id": self.teams_bot_login_group_a2.object_id,
+                "email": "unauthorized@example.com",
+                "password": "unauthorized_password",
+            },
+        )
+        self.assertEqual(response.status_code, 403)
+
+        # Users cannot create Teams bot logins in different organizations
+        response = self.client.post(
+            reverse("bots:create-teams-bot-login", kwargs={"object_id": self.project_b1.object_id}),
+            data={
+                "bot_login_group_object_id": self.teams_bot_login_group_b1.object_id,
+                "email": "cross-org-teams@example.com",
+                "password": "cross_org_password",
+            },
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_bot_login_deletion_access_control(self):
+        """Test that bot login (generic) deletion is properly controlled"""
+        # Admin can delete bot logins in any project in their org
         self.client.force_login(self.admin_user_a)
         response = self.client.post(
             reverse(
-                "bots:delete-google-meet-bot-login",
-                kwargs={"object_id": self.project_a1.object_id, "login_object_id": self.google_meet_bot_login_a1.object_id},
+                "bots:delete-bot-login",
+                kwargs={"object_id": self.project_a1.object_id, "bot_login_object_id": self.google_meet_bot_login_a1.object_id},
             )
         )
         self.assertEqual(response.status_code, 200)
         # Verify the login was deleted
-        self.assertFalse(GoogleMeetBotLogin.objects.filter(id=self.google_meet_bot_login_a1.id).exists())
+        self.assertFalse(BotLogin.objects.filter(id=self.google_meet_bot_login_a1.id).exists())
 
         # Recreate the login for further testing
-        self.google_meet_bot_login_a1 = GoogleMeetBotLogin.objects.create(
+        self.google_meet_bot_login_a1 = BotLogin.objects.create(
             group=self.google_meet_bot_login_group_a1,
             workspace_domain="workspace-a1.com",
             email="bot-a1@workspace-a1.com",
         )
         self.google_meet_bot_login_a1.set_credentials({"private_key": "test_private_key_a1", "cert": "test_cert_a1"})
 
-        # Regular user can delete Google Meet bot logins in projects they have access to
+        # Regular user can delete bot logins in projects they have access to
         self.client.force_login(self.regular_user_a)
         response = self.client.post(
             reverse(
-                "bots:delete-google-meet-bot-login",
-                kwargs={"object_id": self.project_a1.object_id, "login_object_id": self.google_meet_bot_login_a1.object_id},
+                "bots:delete-bot-login",
+                kwargs={"object_id": self.project_a1.object_id, "bot_login_object_id": self.google_meet_bot_login_a1.object_id},
             )
         )
         self.assertEqual(response.status_code, 200)
         # Verify the login was deleted
-        self.assertFalse(GoogleMeetBotLogin.objects.filter(id=self.google_meet_bot_login_a1.id).exists())
+        self.assertFalse(BotLogin.objects.filter(id=self.google_meet_bot_login_a1.id).exists())
 
-        # Regular user cannot delete Google Meet bot logins in projects they don't have access to
+        # Regular user cannot delete bot logins in projects they don't have access to
         response = self.client.post(
             reverse(
-                "bots:delete-google-meet-bot-login",
-                kwargs={"object_id": self.project_a2.object_id, "login_object_id": self.google_meet_bot_login_a2.object_id},
+                "bots:delete-bot-login",
+                kwargs={"object_id": self.project_a2.object_id, "bot_login_object_id": self.google_meet_bot_login_a2.object_id},
             )
         )
         self.assertEqual(response.status_code, 403)
         # Verify the login still exists
-        self.assertTrue(GoogleMeetBotLogin.objects.filter(id=self.google_meet_bot_login_a2.id).exists())
+        self.assertTrue(BotLogin.objects.filter(id=self.google_meet_bot_login_a2.id).exists())
 
-        # Users cannot delete Google Meet bot logins in different organizations
+        # Users cannot delete bot logins in different organizations
         response = self.client.post(
             reverse(
-                "bots:delete-google-meet-bot-login",
-                kwargs={"object_id": self.project_b1.object_id, "login_object_id": self.google_meet_bot_login_b1.object_id},
+                "bots:delete-bot-login",
+                kwargs={"object_id": self.project_b1.object_id, "bot_login_object_id": self.google_meet_bot_login_b1.object_id},
             )
         )
         self.assertEqual(response.status_code, 404)
         # Verify the login still exists
-        self.assertTrue(GoogleMeetBotLogin.objects.filter(id=self.google_meet_bot_login_b1.id).exists())
+        self.assertTrue(BotLogin.objects.filter(id=self.google_meet_bot_login_b1.id).exists())
 
     def test_unauthenticated_access_redirects_to_login(self):
         """Test that unauthenticated users are redirected to login"""
