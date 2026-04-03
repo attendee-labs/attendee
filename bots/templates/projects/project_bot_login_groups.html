@@ -124,9 +124,66 @@
         return firstLines.join('\n');
     }
 
+    function setEditBotLoginGroupError(form, message) {
+        const errorElement = form.querySelector(".js-modal-error");
+        if (!errorElement) {
+            return;
+        }
+
+        if (message) {
+            errorElement.textContent = message;
+            errorElement.classList.remove("d-none");
+            return;
+        }
+
+        errorElement.textContent = "";
+        errorElement.classList.add("d-none");
+    }
+
+    function initializeEditBotLoginGroupForms() {
+        document.querySelectorAll(".js-edit-bot-login-group-form").forEach((form) => {
+            if (form.dataset.submitHandlerAttached === "true") {
+                return;
+            }
+
+            form.addEventListener("submit", async function(event) {
+                event.preventDefault();
+                setEditBotLoginGroupError(form, "");
+
+                const formData = new FormData(form);
+
+                try {
+                    const response = await fetch(form.action, {
+                        method: "POST",
+                        body: formData,
+                        headers: {
+                            "X-CSRFToken": formData.get("csrfmiddlewaretoken"),
+                            "X-Requested-With": "XMLHttpRequest",
+                        },
+                    });
+
+                    if (response.ok) {
+                        hideModalById(form.dataset.modalId);
+                        window.location.reload();
+                        return;
+                    }
+
+                    const message = await response.text();
+                    setEditBotLoginGroupError(form, message || "An unexpected error occurred. Please try again.");
+                } catch (error) {
+                    console.error(error);
+                    setEditBotLoginGroupError(form, "An unexpected error occurred. Please try again.");
+                }
+            });
+
+            form.dataset.submitHandlerAttached = "true";
+        });
+    }
+
     function initializeGoogleMeetBotLoginForm() {
         attachFilePreviewHandlers("private_key_file_", "private_key_", "private_key_preview_", "private_key_preview_content_");
         attachFilePreviewHandlers("cert_file_", "cert_", "cert_preview_", "cert_preview_content_");
+        initializeEditBotLoginGroupForms();
 
         ["createGoogleMeetBotLoginGroupModal", "createTeamsBotLoginGroupModal"].forEach((modalId) => {
             const modalElement = document.getElementById(modalId);
@@ -146,6 +203,13 @@
         attachModalHiddenReset("googleMeetBotLoginModal-", function(suffix) {
             resetModalForm(`googleMeetBotLoginModal-${suffix}`);
             clearGoogleMeetCredentialFields(suffix);
+        });
+
+        attachModalHiddenReset("editBotLoginGroupModal-", function(suffix, modalElement) {
+            const form = modalElement.querySelector("form");
+            if (form) {
+                setEditBotLoginGroupError(form, "");
+            }
         });
     }
 

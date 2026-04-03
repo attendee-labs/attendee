@@ -105,12 +105,12 @@
                 </div>
                 <div class="modal-body">
                     <form
-                        hx-post="{% url 'projects:edit-bot-login-group' project.object_id group.object_id %}"
-                        hx-target="#teams-bot-login-section"
-                        hx-select="#teams-bot-login-section"
-                        hx-swap="outerHTML"
-                        hx-on::before-request="bootstrap.Modal.getInstance(document.getElementById('editBotLoginGroupModal-{{ group.object_id }}'))?.hide()">
+                        action="{% url 'projects:edit-bot-login-group' project.object_id group.object_id %}"
+                        method="post"
+                        class="js-edit-bot-login-group-form"
+                        data-modal-id="editBotLoginGroupModal-{{ group.object_id }}">
                         {% csrf_token %}
+                        <div class="alert alert-danger js-modal-error d-none" role="alert"></div>
                         <div class="mb-3">
                             <label for="teams-group-name-{{ group.object_id }}" class="form-label">Group Name</label>
                             <input type="text"
