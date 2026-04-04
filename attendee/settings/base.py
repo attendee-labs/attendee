@@ -41,6 +41,7 @@ INSTALLED_APPS = [
     "accounts",
     "bots",
     "wasel_bots",
+    "notifications",
     "rest_framework",
     "concurrency",
     "allauth.socialaccount.providers.google",

@@ -2540,6 +2540,7 @@ class Credentials(models.Model):
         EXTERNAL_MEDIA_STORAGE = 9, "External Media Storage"
         ELEVENLABS = 10, "ElevenLabs"
         KYUTAI = 11, "Kyutai"
+        FIREBASE_FCM = 12, "Firebase FCM"
         WEBEX = 13, "Webex"  # WASEL CUSTOMIZATION
 
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="credentials")
