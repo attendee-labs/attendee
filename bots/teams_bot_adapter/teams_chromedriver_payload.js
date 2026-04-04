@@ -14,9 +14,9 @@ const handleVideoTrackForRealTimePerParticipantVideo = async ({ track, streams }
         const frameIntervalMs = 1000 / desiredFPS;
         let lastSentAt = 0;
 
-        const targetWidth = 640;
-        const targetHeight = 360;
-        const jpegQuality = 0.7;
+        const targetWidth = window.initialData.PerParticipantVideoFrameWidth;
+        const targetHeight = window.initialData.PerParticipantVideoFrameHeight;
+        const jpegQuality = window.initialData.PerParticipantVideoFrameJpegQuality / 100;
         const canvas = document.createElement("canvas");
         canvas.width = targetWidth;
         canvas.height = targetHeight;

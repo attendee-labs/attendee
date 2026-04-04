@@ -20,6 +20,7 @@ from .video_input_manager import VideoInputManager
 gi.require_version("GLib", "2.0")
 import logging
 
+from django.conf import settings
 from gi.repository import GLib
 
 from bots.automatic_leave_configuration import AutomaticLeaveConfiguration
@@ -163,6 +164,9 @@ class ZoomBotAdapter(BotAdapter):
                 get_participants_ctrl_callback=self.get_participants_ctrl,
                 get_meeting_sharing_controller_callback=self.get_meeting_sharing_controller,
                 get_recording_is_paused_callback=self.get_recording_is_paused,
+                target_width=settings.PER_PARTICIPANT_VIDEO_FRAME_WIDTH,
+                target_height=settings.PER_PARTICIPANT_VIDEO_FRAME_HEIGHT,
+                jpeg_quality=settings.PER_PARTICIPANT_VIDEO_FRAME_JPEG_QUALITY,
             )
         else:
             self.realtime_per_participant_video_frame_generator = None
