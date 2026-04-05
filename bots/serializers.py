@@ -343,7 +343,8 @@ TRANSCRIPTION_SETTINGS_SCHEMA = {
                     "description": "Whether to automatically detect the spoken language.",
                 },
                 "keyterms_prompt": {"type": "array", "items": {"type": "string"}, "description": "List of words or phrases to boost in the transcript. Only supported for when using the 'slam-1' speech model. See AssemblyAI docs for details."},
-                "speech_model": {"type": "string", "enum": ["best", "nano", "slam-1", "universal"], "description": "The speech model to use for transcription. See AssemblyAI docs for details."},
+                "speech_model": {"type": "string", "enum": ["best", "nano", "slam-1", "universal", "universal-2", "universal-3-pro"], "description": "The speech model to use for transcription. See AssemblyAI docs for details. This parameter is deprecated, use the speech_models param instead."},
+                "speech_models": {"type": "array", "items": {"type": "string", "enum": ["universal-2", "universal-3-pro"]}, "uniqueItems": True, "description": "The speech models to use for transcription in order of preference. Defaults to ['universal-3-pro', 'universal-2']. See AssemblyAI docs for details."},
                 "speaker_labels": {"type": "boolean", "description": "Whether to enable AssemblyAI's ML-based diarization. Only needed if multiple people are speaking into a single microphone. Defaults to false."},
                 "use_eu_server": {"type": "boolean", "description": "Whether to use the EU server for transcription. Defaults to false."},
                 "language_detection_options": {"type": "object", "properties": {"expected_languages": {"type": "array", "items": {"type": "string"}}, "fallback_language": {"type": "string"}}, "description": "Options for controlling the automatic language detection. See AssemblyAI docs for details.", "additionalProperties": False},
@@ -992,32 +993,73 @@ class OutputVideoRequestSerializer(serializers.Serializer):
         return value
 
 
-@extend_schema_field(
-    {
-        "type": "object",
-        "properties": {
-            "audio": {
-                "type": "object",
-                "properties": {
-                    "url": {
-                        "type": "string",
-                        "description": "The URL of the websocket to use for receiving meeting audio in real time and having the bot output audio in real time. It must start with wss://. See https://docs.attendee.dev/guides/realtime-audio-input-and-output for details on how to receive and send audio through the websocket connection.",
-                    },
-                    "sample_rate": {
-                        "type": "integer",
-                        "enum": [8000, 16000, 24000],
-                        "default": 16000,
-                        "description": "The sample rate of the audio to send. Can be 8000, 16000, or 24000. Defaults to 16000.",
-                    },
+WEBSOCKET_SETTINGS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "audio": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "The URL of the websocket to use for receiving meeting audio in real time and having the bot output audio in real time. It must start with wss://. See https://docs.attendee.dev/guides/realtimeaudio for details on how to receive and send audio through the websocket connection.",
                 },
-                "required": ["url"],
-                "additionalProperties": False,
-            }
+                "sample_rate": {
+                    "type": "integer",
+                    "enum": [8000, 16000, 24000],
+                    "default": 16000,
+                    "description": "The sample rate of the audio to send. Can be 8000, 16000, or 24000. Defaults to 16000.",
+                },
+            },
+            "required": ["url"],
+            "additionalProperties": False,
         },
-        "required": [],
-        "additionalProperties": False,
-    }
-)
+        "per_participant_audio": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "The URL of the websocket to use for receiving per participant meeting audio in real time. It must start with wss://. See https://docs.attendee.dev/guides/realtimeaudio#per-participant-audio-streaming for details on how to receive per participant audio through the websocket connection.",
+                },
+                "sample_rate": {
+                    "type": "integer",
+                    "enum": [8000, 16000],
+                    "default": 16000,
+                    "description": "The sample rate of the per participant audio to send. Can be 8000, 16000. Defaults to 16000.",
+                },
+            },
+            "required": ["url"],
+            "additionalProperties": False,
+        },
+        "per_participant_video": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "The URL of the websocket to use for receiving per-participant video and screenshare in real time. It must start with wss://. See https://docs.attendee.dev/guides/realtimevideo for details on how to receive video through the websocket connection.",
+                },
+                "webcam_resolution": {
+                    "type": "string",
+                    "enum": ["none", "360p", "720p", "1080p"],
+                    "default": "360p",
+                    "description": "Resolution for per-participant webcam video. 'none' disables webcam streaming. Framerate and JPEG quality are determined by resolution: 360p (2fps, quality 70), 720p (1fps, quality 60), 1080p (1fps, quality 50). Defaults to '360p'.",
+                },
+                "screenshare_resolution": {
+                    "type": "string",
+                    "enum": ["none", "360p", "720p", "1080p"],
+                    "default": "360p",
+                    "description": "Resolution for per-participant screenshare video. 'none' disables screenshare streaming. Framerate and JPEG quality are determined by resolution: 360p (2fps, quality 70), 720p (1fps, quality 60), 1080p (1fps, quality 50). Defaults to '360p'.",
+                },
+            },
+            "required": ["url"],
+            "additionalProperties": False,
+        },
+    },
+    "required": [],
+    "additionalProperties": False,
+}
+
+
+@extend_schema_field(WEBSOCKET_SETTINGS_SCHEMA)
 class WebsocketSettingsJSONField(serializers.JSONField):
     pass
 
@@ -1044,7 +1086,7 @@ VOICE_AGENT_SETTINGS_SCHEMA = {
     "properties": {
         "url": {
             "type": "string",
-            "description": "URL of a website containing a voice agent that gets the user's responses from the microphone. The bot will load this website and stream its video and audio to the meeting. The audio from the meeting will be sent to website via the microphone. See https://docs.attendee.dev/guides/voice-agents for further details. The video will be displayed through the bot's webcam. To display the video through screenshare, use the screenshare_url parameter instead.",
+            "description": "URL of a website containing a voice agent that gets the user's responses from the microphone. The bot will load this website and stream its video and audio to the meeting. The audio from the meeting will be sent to website via the microphone. See https://docs.attendee.dev/guides/voiceagents for further details. The video will be displayed through the bot's webcam. To display the video through screenshare, use the screenshare_url parameter instead.",
         },
         "screenshare_url": {
             "type": "string",
@@ -1341,49 +1383,32 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
 
     websocket_settings = WebsocketSettingsJSONField(help_text="The websocket settings for the bot, e.g. {'audio': {'url': 'wss://example.com/audio', 'sample_rate': 16000}}", required=False, default=None)
 
-    WEBSOCKET_SETTINGS_SCHEMA = {
-        "type": "object",
-        "properties": {
-            "audio": {
-                "type": "object",
-                "properties": {
-                    "url": {
-                        "type": "string",
-                        "description": "The URL of the websocket to use for receiving meeting audio in real time and having the bot output audio in real time. It must start with wss://. See https://docs.attendee.dev/guides/realtime-audio-input-and-output for details on how to receive and send audio through the websocket connection.",
-                    },
-                    "sample_rate": {
-                        "type": "integer",
-                        "enum": [8000, 16000, 24000],
-                    },
-                },
-                "required": ["url"],
-                "additionalProperties": False,
-            }
-        },
-        "required": [],
-        "additionalProperties": False,
-    }
-
     def validate_websocket_settings(self, value):
         if value is None:
             return value
 
-        # Set default sample rate before validation
-        if "audio" in value and value.get("audio"):
-            if "sample_rate" not in value["audio"]:
-                value["audio"]["sample_rate"] = 16000
+        # Set default sample rates before validation
+        for audio_type in ["audio", "per_participant_audio"]:
+            if audio_type in value and value.get(audio_type) and isinstance(value[audio_type], dict):
+                if "sample_rate" not in value[audio_type]:
+                    value[audio_type]["sample_rate"] = 16000
 
         try:
-            jsonschema.validate(instance=value, schema=self.WEBSOCKET_SETTINGS_SCHEMA)
+            jsonschema.validate(instance=value, schema=WEBSOCKET_SETTINGS_SCHEMA)
         except jsonschema.exceptions.ValidationError as e:
             raise serializers.ValidationError(e.message)
 
         # Validate websocket URL format if provided
-        if "audio" in value and value.get("audio"):
-            audio_url = value.get("audio", {}).get("url")
-            if audio_url:
-                if not audio_url.lower().startswith("wss://"):
-                    raise serializers.ValidationError({"audio": {"url": "URL must start with wss://"}})
+        for audio_type in ["audio", "per_participant_audio", "per_participant_video"]:
+            if audio_type in value and value.get(audio_type):
+                audio_url = value.get(audio_type, {}).get("url")
+                if audio_url:
+                    if not audio_url.lower().startswith("wss://"):
+                        raise serializers.ValidationError({audio_type: {"url": "URL must start with wss://"}})
+
+        # Make sure we haven't hit the case where both webcam and screenshare are disabled
+        if value.get("per_participant_video", {}).get("url") and value.get("per_participant_video", {}).get("webcam_resolution") == "none" and value.get("per_participant_video", {}).get("screenshare_resolution") == "none":
+            raise serializers.ValidationError({"per_participant_video": "At least one of webcam_resolution or screenshare_resolution must be set to a non-none value."})
 
         return value
 
@@ -1884,7 +1909,7 @@ class ParticipantEventSerializer(serializers.Serializer):
 
 
 class PatchBotVoiceAgentSettingsSerializer(serializers.Serializer):
-    url = serializers.CharField(required=False, allow_null=False, allow_blank=True, help_text="URL of a website containing a voice agent that gets the user's responses from the microphone. The bot will load this website and stream its video and audio to the meeting. The audio from the meeting will be sent to website via the microphone. See https://docs.attendee.dev/guides/voice-agents for further details. The video will be displayed through the bot's webcam. To display the video through screenshare, use the screenshare_url parameter instead. Set to \"\" to turn off.")
+    url = serializers.CharField(required=False, allow_null=False, allow_blank=True, help_text="URL of a website containing a voice agent that gets the user's responses from the microphone. The bot will load this website and stream its video and audio to the meeting. The audio from the meeting will be sent to website via the microphone. See https://docs.attendee.dev/guides/voiceagents for further details. The video will be displayed through the bot's webcam. To display the video through screenshare, use the screenshare_url parameter instead. Set to \"\" to turn off.")
     screenshare_url = serializers.CharField(required=False, allow_null=False, allow_blank=True, help_text='Behaves the same as url, but the video will be displayed through screenshare instead of the bot\'s webcam. Currently, you cannot provide both url and screenshare_url. Set to "" to turn off.')
 
     def validate_url(self, value):

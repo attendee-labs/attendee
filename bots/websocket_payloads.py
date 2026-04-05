@@ -47,3 +47,37 @@ def mixed_audio_websocket_payload(chunk: bytes, input_sample_rate: int, output_s
             "sample_rate": output_sample_rate,
         },
     }
+
+
+def per_participant_audio_websocket_payload(participant_uuid: str, chunk: bytes, input_sample_rate: int, output_sample_rate: int, bot_object_id: str) -> dict:
+    """
+    Down-sample (if needed) and package for websocket.
+    """
+    chunk_downsampled = _downsample(chunk, input_sample_rate, output_sample_rate)
+
+    return {
+        "trigger": RealtimeTriggerTypes.type_to_api_code(RealtimeTriggerTypes.PER_PARTICIPANT_AUDIO_CHUNK),
+        "bot_id": bot_object_id,
+        "data": {
+            "participant_uuid": str(participant_uuid),
+            "chunk": b64encode(chunk_downsampled).decode("ascii"),
+            "timestamp_ms": int(time.time() * 1000),
+            "sample_rate": output_sample_rate,
+        },
+    }
+
+
+def per_participant_video_websocket_payload(frame: bytes, bot_object_id: str, participant_uuid: str, source: str) -> dict:
+    if source not in ["webcam", "screenshare"]:
+        raise ValueError(f"Invalid source: {source}")
+
+    return {
+        "trigger": RealtimeTriggerTypes.type_to_api_code(RealtimeTriggerTypes.PER_PARTICIPANT_VIDEO_FRAME),
+        "bot_id": bot_object_id,
+        "data": {
+            "frame": frame.decode("ascii"),
+            "format": "jpeg",
+            "participant_uuid": str(participant_uuid),
+            "source": source,
+        },
+    }

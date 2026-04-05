@@ -197,6 +197,12 @@ CELERY_TASK_ROUTES = {
         "queue": os.getenv("DELIVER_WEBHOOK_CELERY_QUEUE", "celery"),
     },
 }
+
+if os.getenv("LAUNCH_BOT_METHOD") != "kubernetes" and os.getenv("LAUNCH_BOT_METHOD") != "docker-compose-multi-host":
+    # This setting means that each celery worker process will be recreated after each task.
+    # Needed because latest Zoom SDK has segfault issue unless we recreate the process after each bot.
+    CELERY_WORKER_MAX_TASKS_PER_CHILD = 1
+
 if os.getenv("IS_A_BOT_POD", "false") == "true" and os.getenv("CONSERVE_BOT_POD_REDIS_CONNECTIONS", "false") == "true":
     # Setting this to 1 means that bot pods keep one celery broker pool connection alive for the duration of the bot.
     # Note: this results in 2 underlying Redis connections (one for commands, one for pub/sub).
@@ -305,6 +311,7 @@ SITE_DOMAIN = os.getenv("SITE_DOMAIN", "app.attendee.dev")
 MASK_TRANSCRIPT_IN_LOGS = os.getenv("MASK_TRANSCRIPT_IN_LOGS", "false") == "true"
 ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME = os.getenv("ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME", "false") == "true"
 CUSTOM_BOT_POD_SPEC_TYPES = os.getenv("CUSTOM_BOT_POD_SPEC_TYPES", "").split(",") if os.getenv("CUSTOM_BOT_POD_SPEC_TYPES") else []
+GLOBAL_WEBHOOK_DELIVERIES_PER_SECOND_RATE_LIMIT = int(os.getenv("GLOBAL_WEBHOOK_DELIVERIES_PER_SECOND_RATE_LIMIT")) if os.getenv("GLOBAL_WEBHOOK_DELIVERIES_PER_SECOND_RATE_LIMIT") else None
 
 # Initialize Sentry (only if SENTRY_DSN is set)
 init_sentry()

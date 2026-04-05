@@ -438,7 +438,7 @@ class RTMSClient:
 
                     handshake["media_params"] = {
                         "audio": {
-                            "content_type": 1,
+                            "content_type": 2,
                             "sample_rate": 1,
                             "channel": 1,
                             "codec": 1,
@@ -446,6 +446,7 @@ class RTMSClient:
                             "send_rate": 100,
                         },
                         "video": {
+                            "content_type": 3,
                             "codec": 7,  # H264
                             "resolution": video_resolution_for_media_params,  # HD
                             "fps": 15,

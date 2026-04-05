@@ -638,7 +638,7 @@ class DeleteDataView(APIView):
         except Bot.DoesNotExist:
             return Response({"error": "Bot not found"}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
-            logging.error(f"Error deleting bot data: {str(e)} (bot_id={object_id})")
+            logging.exception(f"Error deleting bot data: {str(e)}", extra={"bot_id": object_id})
             return Response(
                 {"error": str(e)},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -683,7 +683,7 @@ class BotLeaveView(APIView):
 
             return Response(BotSerializer(bot).data, status=status.HTTP_200_OK)
         except ValidationError as e:
-            logging.error(f"Error leaving meeting: {str(e)} (bot_id={object_id})")
+            logging.exception(f"Error leaving meeting: {str(e)}", extra={"bot_id": object_id})
             return Response({"error": e.messages[0]}, status=status.HTTP_400_BAD_REQUEST)
         except Bot.DoesNotExist:
             return Response({"error": "Bot not found"}, status=status.HTTP_404_NOT_FOUND)

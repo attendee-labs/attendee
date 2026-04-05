@@ -119,8 +119,13 @@ def normalize_meeting_url_raw(url):
                 sanitized_pwd = match.group(1)
                 filtered_params["pwd"] = [sanitized_pwd]
             # If password doesn't match expected pattern, skip it for security
+        if "tk" in query_params:
+            # Registrant token for meetings or webinars that require registration
+            tk_value = query_params["tk"][0]
+            if tk_value and tk_value.strip():
+                filtered_params["tk"] = [tk_value.strip()]
 
-        # Reconstruct the URL with sanitized path and only the pwd parameter
+        # Reconstruct the URL with sanitized path and only the pwd/tk parameters
         new_query = "&".join([f"{key}={value[0]}" for key, value in filtered_params.items()])
         normalized_url = urlunparse(("https", parsed_url.netloc, sanitized_path, "", new_query, ""))
 
@@ -246,3 +251,15 @@ def parse_zoom_join_url(join_url):
     password = query_params.get("pwd", [None])[0]
 
     return (meeting_id, password)
+
+
+# Returns registrant token from a Zoom join URL, for meetings or webinars that require registration.
+def parse_zoom_registrant_token(join_url):
+    # Parse the URL into components
+    parsed = urlparse(join_url)
+
+    # Extract registrant token from query parameters
+    query_params = parse_qs(parsed.query)
+    registrant_token = query_params.get("tk", [None])[0]
+
+    return registrant_token

@@ -2161,7 +2161,7 @@ components:
               description: URL of a website containing a voice agent that gets the
                 user's responses from the microphone. The bot will load this website
                 and stream its video and audio to the meeting. The audio from the
-                meeting will be sent to website via the microphone. See https://docs.attendee.dev/guides/voice-agents
+                meeting will be sent to website via the microphone. See https://docs.attendee.dev/guides/voiceagents
                 for further details. The video will be displayed through the bot's
                 webcam. To display the video through screenshare, use the screenshare_url
                 parameter instead.
@@ -2414,8 +2414,22 @@ components:
                   - nano
                   - slam-1
                   - universal
+                  - universal-2
+                  - universal-3-pro
                   description: The speech model to use for transcription. See AssemblyAI
-                    docs for details.
+                    docs for details. This parameter is deprecated, use the speech_models
+                    param instead.
+                speech_models:
+                  type: array
+                  items:
+                    type: string
+                    enum:
+                    - universal-2
+                    - universal-3-pro
+                  uniqueItems: true
+                  description: The speech models to use for transcription in order
+                    of preference. Defaults to ['universal-3-pro', 'universal-2'].
+                    See AssemblyAI docs for details.
                 speaker_labels:
                   type: boolean
                   description: Whether to enable AssemblyAI's ML-based diarization.
@@ -2515,7 +2529,7 @@ components:
                   type: string
                   description: The URL of the websocket to use for receiving meeting
                     audio in real time and having the bot output audio in real time.
-                    It must start with wss://. See https://docs.attendee.dev/guides/realtime-audio-input-and-output
+                    It must start with wss://. See https://docs.attendee.dev/guides/realtimeaudio
                     for details on how to receive and send audio through the websocket
                     connection.
                 sample_rate:
@@ -2530,6 +2544,59 @@ components:
               required:
               - url
               additionalProperties: false
+            per_participant_audio:
+              type: object
+              properties:
+                url:
+                  type: string
+                  description: The URL of the websocket to use for receiving per participant
+                    meeting audio in real time. It must start with wss://. See https://docs.attendee.dev/guides/realtimeaudio#per-participant-audio-streaming
+                    for details on how to receive per participant audio through the
+                    websocket connection.
+                sample_rate:
+                  type: integer
+                  enum:
+                  - 8000
+                  - 16000
+                  default: 16000
+                  description: The sample rate of the per participant audio to send.
+                    Can be 8000, 16000. Defaults to 16000.
+              required:
+              - url
+              additionalProperties: false
+            per_participant_video:
+              type: object
+              properties:
+                url:
+                  type: string
+                  description: The URL of the websocket to use for receiving per-participant
+                    video and screenshare in real time. It must start with wss://.
+                    See https://docs.attendee.dev/guides/realtimevideo for details
+                    on how to receive video through the websocket connection.
+                webcam_resolution:
+                  type: string
+                  enum:
+                  - none
+                  - 360p
+                  - 720p
+                  - 1080p
+                  default: 360p
+                  description: 'Resolution for per-participant webcam video. ''none''
+                    disables webcam streaming. Framerate and JPEG quality are determined
+                    by resolution: 360p (2fps, quality 70), 720p (1fps, quality 60),
+                    1080p (1fps, quality 50). Defaults to ''360p''.'
+                screenshare_resolution:
+                  type: string
+                  enum:
+                  - none
+                  - 360p
+                  - 720p
+                  - 1080p
+                  default: 360p
+                  description: 'Resolution for per-participant screenshare video.
+                    ''none'' disables screenshare streaming. Framerate and JPEG quality
+                    are determined by resolution: 360p (2fps, quality 70), 720p (1fps,
+                    quality 60), 1080p (1fps, quality 50). Defaults to ''360p''.'
           required: []
           additionalProperties: false
           description: 'The websocket settings for the bot, e.g. {''audio'': {''url'':
@@ -3081,7 +3148,7 @@ components:
           description: URL of a website containing a voice agent that gets the user's
             responses from the microphone. The bot will load this website and stream
             its video and audio to the meeting. The audio from the meeting will be
-            sent to website via the microphone. See https://docs.attendee.dev/guides/voice-agents
+            sent to website via the microphone. See https://docs.attendee.dev/guides/voiceagents
             for further details. The video will be displayed through the bot's webcam.
             To display the video through screenshare, use the screenshare_url parameter
             instead. Set to "" to turn off.

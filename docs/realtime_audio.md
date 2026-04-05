@@ -1,6 +1,6 @@
 # Realtime Audio Input and Output
 
-Attendee supports bidirectional realtime audio streaming through websockets. You can receive audio from meetings and have your bot output audio into meetings in real-time.
+Attendee supports bidirectional realtime audio streaming through websockets. You can receive mixed or per-participant audio from meetings and have your bot output audio into meetings in real-time.
 
 ## Setup
 
@@ -70,6 +70,42 @@ Connect directly to OpenAI's realtime API by forwarding audio chunks. Set an out
 ## Code Samples
 
 A simple example app showing how to integrate with Deepgram's voice agent API: https://github.com/attendee-labs/voice-agent-example
+
+## Per Participant Audio Streaming
+
+Instead of receiving a single mixed audio stream, you can receive separate audio streams for each individual participant by configuring the `websocket_settings.per_participant_audio` parameter when creating a bot:
+
+```json
+{
+  "meeting_url": "https://meet.google.com/abc-def-ghi",
+  "bot_name": "Audio Bot",
+  "websocket_settings": {
+    "per_participant_audio": {
+      "url": "wss://your-server.com/attendee-websocket",
+      "sample_rate": 16000
+    }
+  }
+}
+```
+
+The `sample_rate` can be `8000` or `16000` and defaults to `16000`.
+
+The websocket message payload is identical to the mixed audio payload, except the `trigger` is `realtime_audio.per_participant` and the `data` object includes a `participant_uuid` field identifying which participant the audio belongs to. To resolve a `participant_uuid` to a full participant object subscribe to the `participant_events.join_leave` webhook event which will send the full participant object when they join the meeting.
+
+```json
+{
+  "bot_id": "bot_12345abcdef",
+  "trigger": "realtime_audio.per_participant",
+  "data": {
+    "participant_uuid": "participant_abc123",
+    "chunk": "UklGRiQAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAABACAAAGRLVEE...",
+    "sample_rate": 16000,
+    "timestamp_ms": 1703123456789
+  }
+}
+```
+
+ See [here](https://github.com/attendee-labs/realtime-per-participant-video-and-audio-example) for an example program showing how use per-participant audio streaming.
 
 ## Retries on Websocket Connections
 

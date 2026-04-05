@@ -1,19 +1,53 @@
 import logging
+import os
+import time
 
+import redis
 import requests
 from celery import shared_task
+from django.conf import settings
 from django.utils import timezone
 
 from bots.models import SessionTypes, WebhookDeliveryAttempt, WebhookDeliveryAttemptStatus, WebhookTriggerTypes
+from bots.redis_utils import incr_and_expire_nx
 from bots.webhook_utils import sign_payload
 
 logger = logging.getLogger(__name__)
+
+_deliver_webhook_task_redis_client = None
+
+
+# Create a singleton Redis client instance that will share connections across all tasks in the same process.
+def get_deliver_webhook_task_redis_client():
+    global _deliver_webhook_task_redis_client
+    if _deliver_webhook_task_redis_client is None:
+        _deliver_webhook_task_redis_client = redis.from_url(settings.REDIS_URL_WITH_PARAMS)
+    return _deliver_webhook_task_redis_client
+
+
+def is_global_webhook_rate_limit_reached():
+    if not settings.GLOBAL_WEBHOOK_DELIVERIES_PER_SECOND_RATE_LIMIT:
+        return False
+
+    redis_client = get_deliver_webhook_task_redis_client()
+    rate_limit_key = f"global_webhook_rate_limit:{int(time.time())}"
+    count, _ = incr_and_expire_nx(redis_client, rate_limit_key, ttl=2)
+
+    return count > settings.GLOBAL_WEBHOOK_DELIVERIES_PER_SECOND_RATE_LIMIT
+
+
+# This is how many times we will try to deliver the webhook before giving up.
+MAX_WEBHOOK_DELIVERY_ATTEMPTS = int(os.getenv("MAX_WEBHOOK_DELIVERY_ATTEMPTS", 3))
+# This is how many times the task can be retried before giving up.
+# This is distinct from MAX_WEBHOOK_DELIVERY_ATTEMPTS because the task can also be retried for
+# reasons other than delivery failures (e.g., rate limiting enforced by Attendee via GLOBAL_WEBHOOK_DELIVERIES_PER_SECOND_RATE_LIMIT or unexpected exceptions).
+DELIVER_WEBHOOK_TASK_MAX_RETRIES = int(os.getenv("DELIVER_WEBHOOK_TASK_MAX_RETRIES", MAX_WEBHOOK_DELIVERY_ATTEMPTS))
 
 
 @shared_task(
     bind=True,
     retry_backoff=True,  # Enable exponential backoff
-    max_retries=3,
+    max_retries=DELIVER_WEBHOOK_TASK_MAX_RETRIES,
     autoretry_for=(Exception,),
 )
 def deliver_webhook(self, delivery_id):
@@ -72,6 +106,20 @@ def deliver_webhook(self, delivery_id):
     active_secret = subscription.project.webhook_secrets.filter().order_by("-created_at").first()
     signature = sign_payload(webhook_data, active_secret.get_secret())
 
+    # Check if the global webhook rate limit has been reached before delivering.
+    if is_global_webhook_rate_limit_reached():
+        retry_delay = int(os.getenv("GLOBAL_WEBHOOK_RATE_LIMIT_RETRY_DELAY_SECONDS", 3))
+        logger.warning(
+            "Global webhook deliveries per second rate limit of %s reached; retrying webhook delivery %s in %s seconds",
+            settings.GLOBAL_WEBHOOK_DELIVERIES_PER_SECOND_RATE_LIMIT,
+            delivery.id,
+            retry_delay,
+        )
+        raise self.retry(
+            exc=Exception("Retry due to global webhook rate limit"),
+            countdown=retry_delay,
+        )
+
     # Increment attempt counter
     delivery.attempt_count += 1
     delivery.last_attempt_at = timezone.now()
@@ -87,13 +135,14 @@ def deliver_webhook(self, delivery_id):
                 "X-Webhook-Signature": signature,
             },
             timeout=10,  # 10-second timeout
+            verify=os.getenv("DELIVER_WEBHOOK_VERIFY_SSL", "true").lower() != "false",
         )
 
         # Update the delivery attempt with the response
         delivery.response_status_code = response.status_code
 
         # Limit response body storage to prevent DB issues with large responses
-        response_body = response.text[:10000]
+        response_body = response.text[:1000]
         delivery.add_to_response_body_list(response_body)
 
         # Check if the delivery was successful (2xx status code)
@@ -121,8 +170,8 @@ def deliver_webhook(self, delivery_id):
 
     if delivery.status == WebhookDeliveryAttemptStatus.FAILURE:
         # Check if this was the last retry attempt
-        if delivery.attempt_count >= self.max_retries:
+        if delivery.attempt_count >= MAX_WEBHOOK_DELIVERY_ATTEMPTS:
             logger.error(f"Webhook delivery failed after {delivery.attempt_count} attempts. " + f"Webhook ID: {delivery.id}, URL: {subscription.url}, " + f"Event: {delivery.webhook_trigger_type}, Status: {delivery.status}")
         else:
-            logger.info(f"Retrying webhook delivery {delivery.id} (attempt {delivery.attempt_count}/{self.max_retries})")
+            logger.info(f"Retrying webhook delivery {delivery.id} (attempt {delivery.attempt_count}/{MAX_WEBHOOK_DELIVERY_ATTEMPTS})")
             raise Exception("Retry due to failure")

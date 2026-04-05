@@ -12,7 +12,7 @@ This makes it easy to integrate AI agents that work with both audio and video.
 
 ## Advantages of loading a webpage containing a voice agent
 
-While Attendee also supports voice agents via passing audio packets over [websockets](https://docs.attendee.dev/guides/realtime-audio-input-and-output), loading a webpage offers several advantages:
+While Attendee also supports voice agents via passing audio packets over [websockets](https://docs.attendee.dev/guides/realtimeaudio), loading a webpage offers several advantages:
 
 1. **Video support**  
    You can stream an avatar for the voice agent, in addition to audio.

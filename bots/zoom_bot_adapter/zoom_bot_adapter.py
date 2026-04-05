@@ -14,6 +14,7 @@ from bots.meeting_url_utils import parse_zoom_join_url
 from bots.utils import png_to_yuv420_frame, scale_i420
 
 from .mp4_demuxer import MP4Demuxer
+from .realtime_per_participant_video_frame_generator import RealtimePerParticipantVideoFrameGenerator
 from .video_input_manager import VideoInputManager
 
 gi.require_version("GLib", "2.0")
@@ -23,6 +24,7 @@ from gi.repository import GLib
 
 from bots.automatic_leave_configuration import AutomaticLeaveConfiguration
 from bots.models import ParticipantEventTypes
+from bots.per_participant_realtime_video_configuration import PerParticipantRealtimeVideoConfiguration
 
 logger = logging.getLogger(__name__)
 
@@ -70,9 +72,11 @@ class ZoomBotAdapter(BotAdapter):
         add_video_frame_callback,
         wants_any_video_frames_callback,
         add_mixed_audio_chunk_callback,
+        add_per_participant_video_frame_callback,
         upsert_chat_message_callback,
         add_participant_event_callback,
         automatic_leave_configuration: AutomaticLeaveConfiguration,
+        per_participant_realtime_video_configuration: PerParticipantRealtimeVideoConfiguration,
         video_frame_size: tuple[int, int],
         zoom_tokens: dict,
         zoom_meeting_settings: dict,
@@ -88,6 +92,7 @@ class ZoomBotAdapter(BotAdapter):
         self.add_mixed_audio_chunk_callback = add_mixed_audio_chunk_callback
         self.add_video_frame_callback = add_video_frame_callback
         self.wants_any_video_frames_callback = wants_any_video_frames_callback
+        self.add_per_participant_video_frame_callback = add_per_participant_video_frame_callback
         self.upsert_chat_message_callback = upsert_chat_message_callback
         self.add_participant_event_callback = add_participant_event_callback
         self.zoom_tokens = zoom_tokens
@@ -143,6 +148,7 @@ class ZoomBotAdapter(BotAdapter):
         self.cleaned_up = False
         self.requested_leave = False
         self.joined_at = None
+        self.is_webinar = False
 
         if self.use_video:
             self.video_input_manager = VideoInputManager(
@@ -152,6 +158,17 @@ class ZoomBotAdapter(BotAdapter):
             )
         else:
             self.video_input_manager = None
+
+        if self.add_per_participant_video_frame_callback:
+            self.realtime_per_participant_video_frame_generator = RealtimePerParticipantVideoFrameGenerator(
+                frame_callback=self.add_per_participant_video_frame_callback,
+                get_participants_ctrl_callback=self.get_participants_ctrl,
+                get_meeting_sharing_controller_callback=self.get_meeting_sharing_controller,
+                get_recording_is_paused_callback=self.get_recording_is_paused,
+                per_participant_realtime_video_configuration=per_participant_realtime_video_configuration,
+            )
+        else:
+            self.realtime_per_participant_video_frame_generator = None
 
         self.meeting_sharing_controller = None
         self.meeting_share_ctrl_event = None
@@ -239,6 +256,10 @@ class ZoomBotAdapter(BotAdapter):
         if not self.joined_at:
             return
 
+        # In a webinar, attendees cannot see the participant list, so do not trigger auto-leave.
+        if self.is_webinar:
+            return
+
         # If nobody (excluding other bots) other than the bot was ever in the meeting, then don't activate this. We only want to activate if someone else was in the meeting and left
         if self.number_of_participants_ever_in_meeting_excluding_other_bots() <= 1:
             return
@@ -295,6 +316,9 @@ class ZoomBotAdapter(BotAdapter):
         if self.active_speaker_id == user_ids[0]:
             return
 
+        if self.realtime_per_participant_video_frame_generator:
+            self.realtime_per_participant_video_frame_generator.update_last_active_speaker_time(user_ids[0])
+
         self.create_participant_events_for_active_speaker_change(
             new_speaker_id=user_ids[0],
             old_speaker_id=self.active_speaker_id,
@@ -302,6 +326,15 @@ class ZoomBotAdapter(BotAdapter):
 
         self.active_speaker_id = user_ids[0]
         self.set_video_input_manager_based_on_state()
+
+    def get_participants_ctrl(self):
+        return self.participants_ctrl
+
+    def get_meeting_sharing_controller(self):
+        return self.meeting_sharing_controller
+
+    def get_recording_is_paused(self):
+        return self.recording_is_paused
 
     def set_video_input_manager_based_on_state(self):
         if not self.raw_recording_active and self.video_input_manager:
@@ -324,6 +357,9 @@ class ZoomBotAdapter(BotAdapter):
 
         if not self.video_input_manager:
             return
+
+        if self.realtime_per_participant_video_frame_generator:
+            self.realtime_per_participant_video_frame_generator.start()
 
         logger.info(f"set_video_input_manager_based_on_state self.active_speaker_id = {self.active_speaker_id}, self.active_sharer_id = {self.active_sharer_id}, self.active_sharer_source_id = {self.active_sharer_source_id}")
         if self.active_sharer_id:
@@ -613,6 +649,15 @@ class ZoomBotAdapter(BotAdapter):
         # This is work-around to get it to work again.
         # See here for more details: https://devforum.zoom.us/t/cant-record-audio-with-linux-meetingsdk-after-6-3-5-6495-error-code-32/130689/5
         self.audio_ctrl.JoinVoip()
+
+        # Check if the bot is in a webinar and if it is an attendee. If it is, the user must promote the bot to panelist to record.
+        meeting_info = self.meeting_service.GetMeetingInfo()
+        meeting_type = meeting_info.GetMeetingType()
+        if meeting_type == zoom.MeetingType.MEETING_TYPE_WEBINAR:
+            self.is_webinar = True
+            if self.participants_ctrl.GetMySelfUser().GetUserRole() == zoom.UserRole.USERROLE_ATTENDEE:
+                logger.info("Bot is an attendee in a webinar, which has no recording privileges. Need to promote to panelist to record.")
+                self.handle_recording_permission_denied(reason=BotAdapter.BOT_RECORDING_PERMISSION_DENIED_REASON.WEBINAR_ATTENDEE_NEEDS_PANELIST_PROMOTION)
 
         if self.use_raw_recording:
             self.recording_ctrl = self.meeting_service.GetMeetingRecordingController()
@@ -943,6 +988,10 @@ class ZoomBotAdapter(BotAdapter):
             param.app_privilege_token = self.zoom_tokens.get("app_privilege_token")
         if self.zoom_tokens.get("onbehalf_token"):
             param.onBehalfToken = self.zoom_tokens.get("onbehalf_token")
+        # Set the webinarToken only if joining a webinar as an attendee (in webinars, all attendees are in Guest Mode).
+        # If joining as a signed-in bot (for panelists and co-hosts), use the ZAK token instead, and leave the webinarToken as NULL.
+        if self.zoom_tokens.get("registrant_token") and not self.zoom_tokens.get("zak_token"):
+            param.webinarToken = self.zoom_tokens.get("registrant_token")
 
         param.eAudioRawdataSamplingRate = zoom.AudioRawdataSamplingRate.AudioRawdataSamplingRate_32K
 
@@ -1040,6 +1089,9 @@ class ZoomBotAdapter(BotAdapter):
             self.send_message_callback({"message": self.Messages.BOT_PUT_IN_WAITING_ROOM})
             GLib.timeout_add_seconds(self.automatic_leave_configuration.waiting_room_timeout_seconds, self.leave_meeting_if_still_in_waiting_room)
 
+        if status == zoom.MEETING_STATUS_WEBINAR_PROMOTE:
+            self.send_message_callback({"message": self.Messages.WEBINAR_BOT_PROMOTED_TO_PANELIST})
+
         if status == zoom.MEETING_STATUS_INMEETING:
             self.send_message_callback({"message": self.Messages.BOT_JOINED_MEETING})
 
@@ -1057,7 +1109,7 @@ class ZoomBotAdapter(BotAdapter):
         if status == zoom.MEETING_STATUS_FAILED:
             # This is a hacky way to determine if the bot failed to join because the onbehalf token user is not in the meeting.
             # On our current version of the Zoom SDK, there is no specific error code for this.
-            failed_because_onbehalf_token_user_not_in_meeting = iResult == 65535 and self.zoom_tokens.get("onbehalf_token")
+            failed_because_onbehalf_token_user_not_in_meeting = iResult == zoom.MEETING_FAIL_AUTHORIZED_USER_NOT_INMEETING and self.zoom_tokens.get("onbehalf_token")
 
             # Since the unable to join external meeting issue is so common, we'll handle it separately
             if iResult == zoom.MeetingFailCode.MEETING_FAIL_UNABLE_TO_JOIN_EXTERNAL_MEETING:
@@ -1065,6 +1117,20 @@ class ZoomBotAdapter(BotAdapter):
                     {
                         "message": self.Messages.ZOOM_MEETING_STATUS_FAILED_UNABLE_TO_JOIN_EXTERNAL_MEETING,
                         "zoom_result_code": iResult,
+                    }
+                )
+            # This error happens when ZAK / OBF token is required to join a meeting but was not provided.
+            elif iResult == zoom.MeetingFailCode.MEETING_FAIL_APP_CAN_NOT_ANONYMOUS_JOIN_MEETING:
+                self.send_message_callback(
+                    {
+                        "message": self.Messages.ZOOM_MEETING_STATUS_FAILED_APP_CAN_NOT_ANONYMOUS_JOIN_MEETING,
+                        "zoom_result_code": iResult,
+                    }
+                )
+            elif iResult == zoom.MeetingFailCode.MEETING_FAIL_ENFORCE_LOGIN:
+                self.send_message_callback(
+                    {
+                        "message": self.Messages.LOGIN_REQUIRED,
                     }
                 )
             elif failed_because_onbehalf_token_user_not_in_meeting:

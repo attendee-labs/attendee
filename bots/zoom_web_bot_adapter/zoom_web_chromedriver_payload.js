@@ -59,38 +59,6 @@ class DominantSpeakerManager {
 
 const handleAudioTrack = async (event) => {
     let lastAudioFormat = null;  // Track last seen format
-    const audioDataQueue = [];
-    const ACTIVE_SPEAKER_LATENCY_MS = 2000;
-    
-    // Start continuous background processing of the audio queue
-    const processAudioQueue = () => {
-        while (audioDataQueue.length > 0 && 
-            Date.now() - audioDataQueue[0].audioArrivalTime >= ACTIVE_SPEAKER_LATENCY_MS) {
-            const { audioData, audioArrivalTime } = audioDataQueue.shift();
-
-            // Get the dominant speaker and assume that's who the participant speaking is
-            const dominantSpeakerId = dominantSpeakerManager.getLastSpeakerIdForTimestampMs(audioArrivalTime);
-
-            // Send audio data through websocket
-            if (dominantSpeakerId) {
-                ws.sendPerParticipantAudio(dominantSpeakerId, audioData);
-            }
-        }
-    };
-
-    // Set up background processing every 100ms
-    const queueProcessingInterval = setInterval(processAudioQueue, 100);
-    
-    // Clean up interval when track ends
-    event.track.addEventListener('ended', () => {
-        clearInterval(queueProcessingInterval);
-        console.log('Audio track ended, cleared queue processing interval');
-    });
-
-    window.ws.sendJson({
-        type: 'AudioTrackStarted',
-        trackId: event.track.id
-    });
     
     try {
       // Create processor to get raw frames
@@ -101,6 +69,18 @@ const handleAudioTrack = async (event) => {
       const readable = processor.readable;
       const writable = generator.writable;
   
+      const firstStreamId = event.streams[0]?.id;
+      if (!firstStreamId) {
+        window.ws?.sendJson({
+            type: 'AudioTrackError',
+            message: 'No stream ID found for audio track'
+        });
+        return;
+      }
+      var userIdForStreamId = null;
+      var numAttemptsToMapToUserId = 0;
+      
+        
       // Transform stream to intercept frames
       const transformStream = new TransformStream({
           async transform(frame, controller) {
@@ -166,18 +146,33 @@ const handleAudioTrack = async (event) => {
                       });
                   }
   
-                  // If the audioData buffer is all zeros, we still want to send it. It's only one mixed audio stream.
-                  // It seems to help with the transcription.
-                  //if (audioData.every(value => value === 0)) {
-                  //    return;
-                  //}
-
-                  // Add to queue with timestamp - the background thread will process it
-                  audioDataQueue.push({
-                    audioArrivalTime: Date.now(),
-                    audioData: audioData
-                  });
-
+                  // If the audioData buffer is all zeros, then we don't want to send it
+                  if (audioData.every(value => value === 0)) {
+                      return;
+                  }
+  
+                  if (!userIdForStreamId) {
+                    userIdForStreamId = window.userManager?.getUserIdFromStreamId(firstStreamId);
+                    if (userIdForStreamId) {
+                        window.ws?.sendJson({
+                                type: 'AudioTrackMappedToUserId',
+                                trackId: event.track.id,
+                                streamId: firstStreamId,
+                                userId: userIdForStreamId
+                        });
+                    }
+                    numAttemptsToMapToUserId++;
+                    if (numAttemptsToMapToUserId === 1000 && !userIdForStreamId) {
+                        window.ws?.sendJson({
+                            type: 'AudioTrackMappedToUserIdTimedOut',
+                            trackId: event.track.id,
+                            streamId: firstStreamId,
+                        });
+                    }
+                  }
+                  if (userIdForStreamId)
+                    ws.sendPerParticipantAudio(userIdForStreamId, audioData);
+                      
                   // Pass through the original frame
                   controller.enqueue(frame);
               } catch (error) {
@@ -187,8 +182,6 @@ const handleAudioTrack = async (event) => {
           },
           flush() {
               console.log('Transform stream flush called');
-              // Clear the interval when the stream ends
-              clearInterval(queueProcessingInterval);
           }
       });
   
@@ -206,84 +199,249 @@ const handleAudioTrack = async (event) => {
                   if (error.name !== 'AbortError') {
                       console.error('Pipeline error:', error);
                   }
-                  // Clear the interval on error
-                  clearInterval(queueProcessingInterval);
               });
       } catch (error) {
           console.error('Stream pipeline error:', error);
           abortController.abort();
-          // Clear the interval on error
-          clearInterval(queueProcessingInterval);
       }
   
     } catch (error) {
         console.error('Error setting up audio interceptor:', error);
-        // Clear the interval on error
-        clearInterval(queueProcessingInterval);
     }
   };
+  
+
+class RTCInterceptor {
+    constructor(callbacks) {
+        // Store the original RTCPeerConnection
+        const originalRTCPeerConnection = window.RTCPeerConnection;
+        
+        // Store callbacks
+        const onPeerConnectionCreate = callbacks.onPeerConnectionCreate || (() => {});
+        const onDataChannelCreate = callbacks.onDataChannelCreate || (() => {});
+        
+        // Override the RTCPeerConnection constructor
+        window.RTCPeerConnection = function(...args) {
+            // Create instance using the original constructor
+            const peerConnection = Reflect.construct(
+                originalRTCPeerConnection, 
+                args
+            );
+            
+            // Notify about the creation
+            onPeerConnectionCreate(peerConnection);
+            
+            // Override createDataChannel
+            const originalCreateDataChannel = peerConnection.createDataChannel.bind(peerConnection);
+            peerConnection.createDataChannel = (label, options) => {
+                const dataChannel = originalCreateDataChannel(label, options);
+                onDataChannelCreate(dataChannel, peerConnection);
+                return dataChannel;
+            };
+            
+            return peerConnection;
+        };
+    }
+}
+
+new RTCInterceptor({
+    onPeerConnectionCreate: (peerConnection) => {
+        console.log('New RTCPeerConnection created:', peerConnection);
+
+        peerConnection.addEventListener('track', (event) => {
+            console.log('New track:', {
+                trackId: event.track.id,
+                trackKind: event.track.kind,
+                streams: event.streams,
+            });
+
+            window.ws?.sendJson({
+                type: 'WebRTCTrackStarted',
+                trackId: event.track.id,
+                trackKind: event.track.kind,
+                streams: event.streams?.map(stream => stream?.id),
+            });
+
+            // We need to capture every audio track in the meeting,
+            // but we don't need to do anything with the video tracks
+            if (event.track.kind === 'audio') {
+                window.mixedAudioStreamManager?.addAudioTrackFromTrackEvent(event);
+                if (window.initialData.sendPerParticipantAudio) {
+                    handleAudioTrack(event);
+                }
+            }
+        });
+    },
+});
+
+class MixedAudioStreamManager {
+    constructor() {
+        this.audioTracks = [];
+        this.meetingAudioStream = null;
+        this.audioTracksToBeAdded = [];
+        this.audioContext = null;
+        this.destination = null;
+        this.seenTrackIds = new Set();
+    }
+
+
+    addAudioStream(audioStream) {
+        const track = audioStream.getAudioTracks()[0];
+        if (track) {
+            this.addAudioTrack(track);
+        }
+    }
+
+    addAudioTrackFromTrackEvent(trackEvent) {
+        if (!trackEvent.track)
+            return;
+        const firstStreamId = trackEvent.streams[0]?.id;
+        // streamId must contain +CS+ in it, which means it's from Zoom, not from a voice agent.
+        if (!firstStreamId?.includes('+CS+')) {
+            window.ws?.sendJson({
+                type: 'AudioTrackNotAddedToMeetingAudioStream',
+                trackId: trackEvent.track.id,
+                streams: trackEvent.streams?.map(stream => stream?.id),
+            });
+            return;
+        }
+        window.ws?.sendJson({
+            type: 'AudioTrackAddedToMeetingAudioStream',
+            trackId: trackEvent.track.id,
+            streams: trackEvent.streams?.map(stream => stream?.id),
+        });
+        this.addAudioTrack(trackEvent.track);
+    }
+
+    addAudioTrack(track) {
+        if (!track || this.seenTrackIds.has(track.id)) {
+            return;
+        }
+
+        // If start() already ran, patch the new track into the existing mix.
+        if (this.audioContext && this.destination) {
+            const mediaStream = new MediaStream([track]);
+            const source = this.audioContext.createMediaStreamSource(mediaStream);
+            source.connect(this.destination);
+            this.seenTrackIds.add(track.id);
+        }
+        else {
+            this.audioTracksToBeAdded.push(track);
+        }
+    }
+
+    createStream() {
+        if (this.meetingAudioStream)
+            return;
+        this.audioContext = new AudioContext({ sampleRate: 48000 });
+        this.destination = this.audioContext.createMediaStreamDestination();
+
+        this.audioTracksToBeAdded.forEach(track => this.addAudioTrack(track));
+
+        this.meetingAudioStream = this.destination.stream;
+
+        // Create a source from the destination's stream so that it actually plays
+        this.audioContext.createMediaStreamSource(this.destination.stream);
+
+        window.ws?.sendJson({
+            type: 'MeetingAudioStreamCreated',
+            message: 'Meeting audio stream created',
+        });
+    }
+
+    getMeetingAudioStream() {
+        this.createStream();
+        return this.meetingAudioStream;
+    }
+}
 
 // Style manager
 class StyleManager {
     constructor() {
-        this.meetingAudioStream = null;
-        this.audioStreams = []
-    }
-
-    addAudioStream(audioStream) {
-        this.audioStreams.push(audioStream);
+        this.started = false;
     }
 
     async start() {
         console.log('StyleManager start');
 
-        // This code is just grabbing a unified audio stream
+        this.started = true;
 
-        // Retrieve all <audio> elements on the page
-        const audioElements = document.querySelectorAll('audio');
-
-        this.audioContext = new AudioContext({ sampleRate: 48000 });
-
-        // Combine the audioStreams we've accumulated with anything from audioElements in the DOM.
-        const audioStreamTracks = this.audioStreams.map(stream => {
-            return stream.getAudioTracks()[0];
-        })
-        const audioElementTracks = Array.from(audioElements).map(audioElement => {
-            return audioElement.srcObject.getAudioTracks()[0];
-        });
-        this.audioTracks = audioStreamTracks.concat(audioElementTracks);
-
-        this.audioSources = this.audioTracks.map(track => {
-            const mediaStream = new MediaStream([track]);
-            return this.audioContext.createMediaStreamSource(mediaStream);
-        });
-
-        // Create a destination node
-        const destination = this.audioContext.createMediaStreamDestination();
-
-        // Connect all sources to the destination
-        this.audioSources.forEach(source => {
-            source.connect(destination);
-        });
-
-        this.meetingAudioStream = destination.stream;
-
-        if (this.meetingAudioStream.getAudioTracks().length == 0)
-        {
-            console.log("this.meetingAudioStream.getAudioTracks() had length 0")
-            return;
+        if (window.zoomInitialData.modifyDomForVideoRecording) {
+            this.onlyShowSubsetofZoomUI();
         }
-
-        if (initialData.sendPerParticipantAudio)
-            handleAudioTrack({track: this.meetingAudioStream.getAudioTracks()[0]});  
     }
     
     getMeetingAudioStream() {
-        return this.meetingAudioStream;
+        if (!this.started)
+            return null;
+        return window.mixedAudioStreamManager?.getMeetingAudioStream();
     }
 
     async stop() {
         console.log('StyleManager stop');
+        if (window.zoomInitialData.modifyDomForVideoRecording) {
+            this.showAllOfZoomUI();
+        }
+    }
+
+    onlyShowSubsetofZoomUI() {
+        try {
+            // Find the main element that contains all the video elements
+            this.mainElement = document.querySelector('#video-pip-container');
+            if (!this.mainElement) {
+                console.error('No #video-pip-container element found in the DOM');
+                window.ws.sendJson({
+                    type: 'Error',
+                    message: 'No #video-pip-container element found in the DOM'
+                });
+                return;
+            }
+
+            const ancestors = [];
+            let parent = this.mainElement.parentElement;
+            while (parent) {
+                ancestors.push(parent);
+                parent = parent.parentElement;
+            }
+            
+            // Hide all elements except main, its ancestors, and its descendants
+            document.querySelectorAll('body *').forEach(element => {
+                if (element !== this.mainElement && 
+                    !ancestors.includes(element) && 
+                    !this.mainElement.contains(element)) {
+                    element.style.display = 'none';
+                }
+            });
+        } catch (error) {
+            console.error('Error in onlyShowSubsetofZoomUI:', error);
+            window.ws.sendJson({
+                type: 'Error',
+                message: 'Error in onlyShowSubsetofZoomUI: ' + error.message
+            });
+        }
+    }
+
+
+    showAllOfZoomUI() {
+        // Restore all elements that were hidden by onlyShowSubsetofZoomUI
+        document.querySelectorAll('body *').forEach(element => {
+            if (element.style.display === 'none') {
+                // Only reset display property if we set it to 'none'
+                // We can check if the element is a direct child of body or not in main/ancestors
+                const isInMainTree = this.mainElement && 
+                    (this.mainElement === element || 
+                     this.mainElement.contains(element) || 
+                     element.contains(this.mainElement));
+                
+                if (!isInMainTree) {
+                    // Reset the display property to its default or empty string
+                    // This will restore the element's original display value
+                    element.style.display = '';
+                }
+            }
+        });
+        
+        console.log('Restored all hidden elements to their original display values');
     }
 }
 
@@ -465,6 +623,21 @@ class UserManager {
         this.ws = ws;
     }
 
+    getUserIdFromStreamId(streamId) {
+        const decoded = decodeURIComponent(streamId);
+        const match = decoded.match(/^(\d+)\+/);
+        if (match) {
+            const rawId = Number(match[1]);
+            const participantId = rawId >> 10 << 10;
+            // Check if this exists in the current users map
+            if (this.currentUsersMap.has(participantId.toString())) {
+                return participantId.toString();
+            }
+            return null;
+        }
+        return null;
+    }
+
     getUserByDeviceId(deviceId) {
         return this.allUsersMap.get(deviceId);
     }
@@ -595,7 +768,7 @@ class UserManager {
           ctx.__captureTee = { tee, tap };
           const capturedStream = tap.stream;
           if (capturedStream)
-            window.styleManager.addAudioStream(capturedStream);
+            window.mixedAudioStreamManager.addAudioStream(capturedStream);
         }
         catch (error) {
             console.error('Error in AudioNodeInterceptor:', error);
@@ -620,7 +793,8 @@ const userManager = new UserManager(ws);
 window.userManager = userManager;
 const participantSpeechStartStopManager = new ParticipantSpeechStartStopManager();
 window.participantSpeechStartStopManager = participantSpeechStartStopManager;
-
+const mixedAudioStreamManager = new MixedAudioStreamManager();
+window.mixedAudioStreamManager = mixedAudioStreamManager;
 
 const turnOnCameraArialLabel = "start my video"
 const turnOffCameraArialLabel = "stop my video"
