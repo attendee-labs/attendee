@@ -1,3 +1,100 @@
+const handleVideoTrackForRealTimePerParticipantVideo = async ({ track, streams }) => {
+    try {
+        const firstStreamId = streams?.[0]?.id;
+
+        if (!firstStreamId)
+            return;
+
+        const userForTrack = window.userManager?.getUserByStreamId(firstStreamId);
+
+        if (!userForTrack)
+            return;
+
+        const isScreenShare = !!userForTrack.parentDeviceId;
+        const participantId = userForTrack.parentDeviceId || userForTrack.deviceId;
+
+        if (!participantId)
+            return;
+
+        const videoConfig = window.initialData.perParticipantRealtimeVideoConfiguration;
+        const sourceConfig = isScreenShare ? videoConfig.screenshare_configuration : videoConfig.webcam_configuration;
+
+        if (!sourceConfig.enabled)
+            return;
+
+        videoTrackManager.upsertVideoTrack(track, firstStreamId, isScreenShare);
+        
+        track.addEventListener("ended", () => {
+            console.log("Video track ended:", track.id);
+            videoTrackManager.deleteVideoTrack(track);
+        });
+
+        const processor = new MediaStreamTrackProcessor({ track });
+        const reader = processor.readable.getReader();
+
+        const desiredFPS = sourceConfig.framerate;
+        const frameIntervalMs = 1000 / desiredFPS;
+        let lastSentAt = 0;
+
+        const targetWidth = sourceConfig.width;
+        const targetHeight = sourceConfig.height;
+        const jpegQuality = sourceConfig.jpeg_quality / 100;
+        const canvas = document.createElement("canvas");
+        canvas.width = targetWidth;
+        canvas.height = targetHeight;
+        const ctx = canvas.getContext("2d");
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = "high";
+
+        while (true) {
+            const { value: frame, done } = await reader.read();
+            if (done) break;
+            if (!frame) continue;
+
+            try {
+                const now = performance.now();
+                const shouldSend = now - lastSentAt >= frameIntervalMs;
+
+                if (!shouldSend) continue;
+
+                const srcW = frame.displayWidth;
+                const srcH = frame.displayHeight;
+                if (!srcW || !srcH) continue;
+
+                const srcAspect = srcW / srcH;
+                const targetAspect = targetWidth / targetHeight;
+
+                let drawW, drawH;
+                if (srcAspect > targetAspect) {
+                    drawW = targetWidth;
+                    drawH = Math.round(targetWidth / srcAspect);
+                } else {
+                    drawH = targetHeight;
+                    drawW = Math.round(targetHeight * srcAspect);
+                }
+
+                const offsetX = Math.round((targetWidth - drawW) / 2);
+                const offsetY = Math.round((targetHeight - drawH) / 2);
+
+                ctx.fillStyle = "black";
+                ctx.fillRect(0, 0, targetWidth, targetHeight);
+                ctx.drawImage(frame, 0, 0, srcW, srcH, offsetX, offsetY, drawW, drawH);
+
+                const base64 = canvas.toDataURL("image/jpeg", jpegQuality).split(",", 2)[1];
+                window.ws?.sendPerParticipantVideo(participantId, isScreenShare, base64);
+
+                lastSentAt = now;
+            } catch (err) {
+                console.error("Error processing frame:", err);
+            } finally {
+                frame.close();
+            }
+        }
+    } catch (err) {
+        console.error("Error setting up video interceptor:", err);
+    }
+};
+
 function sendChatMessage(text) {
     
     // First try to find the chat input textarea
@@ -1027,7 +1124,8 @@ class WebSocketClient {
       VIDEO: 2,
       AUDIO: 3,
       ENCODED_MP4_CHUNK: 4,
-      PER_PARTICIPANT_AUDIO: 5
+      PER_PARTICIPANT_AUDIO: 5,
+      PER_PARTICIPANT_VIDEO: 6,
   };
 
   constructor() {
@@ -1261,6 +1359,50 @@ class WebSocketClient {
         this.ws.send(message.buffer);
     } catch (error) {
         console.error('Error sending WebSocket audio message:', error);
+    }
+  }
+
+  sendPerParticipantVideo(participantId, isScreenShare, videoData) {
+    if (this.ws.readyState !== WebSocket.OPEN) {
+      console.error('WebSocket is not connected for per participant video send', this.ws.readyState);
+      return;
+    }
+
+    if (!this.mediaSendingEnabled) {
+      return;
+    }
+
+    try {
+        // Convert participantId to UTF-8 bytes
+        const participantIdBytes = new TextEncoder().encode(participantId);
+        
+        // Convert videoData string to UTF-8 bytes
+        const videoDataBytes = new TextEncoder().encode(videoData);
+        
+        // Create final message: type (4 bytes) + participantId length (1 byte) + 
+        // participantId bytes + isScreenShare (1 byte) + video data
+        const message = new Uint8Array(4 + 1 + participantIdBytes.length + 1 + videoDataBytes.length);
+        const dataView = new DataView(message.buffer);
+        
+        // Set message type (6 for PER_PARTICIPANT_VIDEO)
+        dataView.setInt32(0, WebSocketClient.MESSAGE_TYPES.PER_PARTICIPANT_VIDEO, true);
+        
+        // Set participantId length as uint8 (1 byte)
+        dataView.setUint8(4, participantIdBytes.length);
+        
+        // Copy participantId bytes
+        message.set(participantIdBytes, 5);
+        
+        // Set isScreenShare byte (0 = webcam, 1 = screenshare)
+        dataView.setUint8(5 + participantIdBytes.length, isScreenShare ? 1 : 0);
+        
+        // Copy video data after type, length, participantId, and isScreenShare
+        message.set(videoDataBytes, 5 + participantIdBytes.length + 1);
+        
+        // Send the binary message
+        this.ws.send(message.buffer);
+    } catch (error) {
+        console.error('Error sending WebSocket video message:', error);
     }
   }
 
@@ -1990,6 +2132,9 @@ new RTCInterceptor({
             }
             if (event.track.kind === 'video') {
                 window.styleManager.addVideoTrack(event);
+                if (window.initialData.sendPerParticipantVideo) {
+                    handleVideoTrackForRealTimePerParticipantVideo(event);
+                }
             }
         });
 

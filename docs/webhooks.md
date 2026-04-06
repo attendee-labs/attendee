@@ -158,7 +158,7 @@ For webhooks triggered by `chat_messages.update`, the `data` field contains a si
 }
 ```
 
-### Payload for `participant_events.join_leave` and `participant_events.speech_start_stop` triggers
+### Payload for `participant_events.join_leave` and `participant_events.speech_start_stop`
 
 For webhooks triggered by `participant_events.join_leave` and `participant_events.speech_start_stop`, the `data` field contains a single participant event:
 
