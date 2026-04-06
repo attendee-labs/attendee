@@ -66,7 +66,7 @@ class MocapManager:
 
     def _load_all_scramble_files(self):
         directory = os.path.dirname(__file__)
-        pattern = os.path.join(directory, f"join_mocap_scramble_*_{self.video_frame_size[1]}p.json")
+        pattern = os.path.join(directory, "mocap", f"join_mocap_{self.video_frame_size[1]}p_*.json")
         file_paths = sorted(glob.glob(pattern))
 
         logger.info(f"Found {len(file_paths)} mocap scramble files")

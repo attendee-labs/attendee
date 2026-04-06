@@ -423,13 +423,10 @@ class GoogleMeetUIMethods:
                 self.check_for_failed_logged_in_bot_attempt()
                 logger.info("name input found")
                 if self.ui_interaction_mode == "humanized":
-                    logger.info("Waiting for got it button...")
-                    got_it_button = self.find_element_by_selector(By.XPATH, '//button[.//span[text()="Got it"]]')
-                    self.humanized_navigate_to_and_click_element(got_it_button)
-                    logger.info("Got it button clicked")
                     self.humanized_navigate_to_and_click_element(name_input)
                     logger.info("Name input clicked")
                     self.human_type(self.display_name)
+                    logger.info("Name input filled out")
                 else:
                     name_input.send_keys(self.display_name)
                 return
