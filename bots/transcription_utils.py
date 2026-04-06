@@ -270,8 +270,8 @@ def _split_transcription_by_speaker_events_build_intervals(events: list, recordi
             # Close any already-active interval for this participant
             if pid in active:
                 start, participant = active[pid]
-                start_adjusted = start-0.4
-                end_adjusted = t - 1.2
+                start_adjusted = start
+                end_adjusted = t
                 if end_adjusted > start_adjusted:
                     intervals.append(_Interval(participant, start_adjusted, end_adjusted, len(intervals)))
             active[pid] = (t, ev.participant)
@@ -280,8 +280,8 @@ def _split_transcription_by_speaker_events_build_intervals(events: list, recordi
             if pid not in active:
                 continue
             start, participant = active.pop(pid)
-            start_adjusted = start-0.4
-            end_adjusted = t - 1.2
+            start_adjusted = start
+            end_adjusted = t
             if end_adjusted > start_adjusted:
                 intervals.append(_Interval(participant, start_adjusted, end_adjusted, len(intervals)))
 
@@ -336,6 +336,84 @@ def _split_transcription_by_speaker_events_make_utterance(interval: _Interval, w
     ]
     return {
         "participant": interval.participant,
+        "transcription": {
+            "transcript": " ".join(w.get("word", "") for w in adjusted_words).strip(),
+            "words": adjusted_words,
+            "language": language,
+        },
+        "start_time": utterance_start,
+        "duration": words[-1]["end"] - utterance_start,
+    }
+
+
+def split_transcription_by_ai_diarization(
+    transcription_result: dict,
+    speaker_events: Sequence[ParticipantEvent],
+) -> list[dict]:
+    """
+    Split a full-recording transcription into per-speaker utterance chunks
+    using AssemblyAI's speaker_labels (the 'speaker' attribute on each word).
+
+    Speaker label 'A' maps to the first participant with any speaking events,
+    'B' maps to the second, and so on (ordered by first SPEECH_START timestamp).
+
+    Output format matches split_transcription_by_speaker_events.
+    """
+    language = transcription_result.get("language")
+    words = list(transcription_result.get("words") or [])
+    if not words:
+        return []
+
+    words.sort(key=lambda w: (w["start"], w["end"]))
+
+    # Build speaker label → participant mapping based on the order participants
+    # first appear in SPEECH_START events.
+    seen = set()
+    ordered_participants = []
+    for ev in sorted(speaker_events, key=lambda e: e.timestamp_ms):
+        if ev.event_type != ParticipantEventTypes.SPEECH_START:
+            continue
+        if ev.participant_id not in seen:
+            seen.add(ev.participant_id)
+            ordered_participants.append(ev.participant)
+
+    label_to_participant = {}
+    for i, participant in enumerate(ordered_participants):
+        label = chr(ord("A") + i)
+        label_to_participant[label] = participant
+
+    utterances = []
+    prev_speaker = None
+    current_words = []
+
+    for word in words:
+        speaker = word.get("speaker")
+        if speaker == prev_speaker:
+            current_words.append(word)
+        else:
+            if current_words and prev_speaker is not None:
+                participant = label_to_participant.get(prev_speaker)
+                if participant is not None:
+                    utterances.append(_make_diarized_utterance(participant, current_words, language))
+            prev_speaker = speaker
+            current_words = [word]
+
+    if current_words and prev_speaker is not None:
+        participant = label_to_participant.get(prev_speaker)
+        if participant is not None:
+            utterances.append(_make_diarized_utterance(participant, current_words, language))
+
+    return utterances
+
+
+def _make_diarized_utterance(participant, words: list[dict], language: str | None) -> dict:
+    utterance_start = words[0]["start"]
+    adjusted_words = [
+        {**w, "start": w["start"] - utterance_start, "end": w["end"] - utterance_start}
+        for w in words
+    ]
+    return {
+        "participant": participant,
         "transcription": {
             "transcript": " ".join(w.get("word", "") for w in adjusted_words).strip(),
             "words": adjusted_words,
@@ -430,6 +508,10 @@ def get_transcription_via_assemblyai_for_utterance_group(utterances):
 
 
 def get_transcription_via_assemblyai_for_speaker_events(speaker_events, recording, transcription_settings):
+    transcription_settings_with_speaker_labels = TranscriptionSettings(transcription_settings._settings)
+    transcription_settings_with_speaker_labels._settings["assembly_ai"]["speaker_labels"] = True
+    transcription_settings_with_speaker_labels._settings["assembly_ai"]["speakers_expected"] = len({e.participant_id for e in speaker_events})
+
     transcription, error = get_transcription_via_assemblyai_from_mp3(
         retrieve_mp3_data_url_callback=lambda: recording.url,
         duration_ms=(recording.completed_at - recording.started_at).total_seconds() * 1000,
@@ -440,7 +522,8 @@ def get_transcription_via_assemblyai_for_speaker_events(speaker_events, recordin
     if error:
         return None, error
 
-    return split_transcription_by_speaker_events(transcription, speaker_events, recording.first_buffer_timestamp_ms), None
+    return split_transcription_by_ai_diarization(transcription, speaker_events), None
+    #return split_transcription_by_speaker_events(transcription, speaker_events, recording.first_buffer_timestamp_ms), None
 
 
 def get_transcription_via_assemblyai_from_mp3(
@@ -514,6 +597,10 @@ def get_transcription_via_assemblyai_from_mp3(
 
     if transcription_settings.assemblyai_speaker_labels():
         data["speaker_labels"] = True
+
+    speakers_expected = transcription_settings.assemblyai_speakers_expected()
+    if speakers_expected:
+        data["speakers_expected"] = speakers_expected
 
     language_detection_options = transcription_settings.assemblyai_language_detection_options()
     if language_detection_options:

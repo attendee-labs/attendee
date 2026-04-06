@@ -593,6 +593,9 @@ class TranscriptionSettings:
     def assemblyai_speaker_labels(self):
         return self._settings.get("assembly_ai", {}).get("speaker_labels", False)
 
+    def assemblyai_speakers_expected(self):
+        return self._settings.get("assembly_ai", {}).get("speakers_expected", None)
+
     def assemblyai_base_url(self):
         if os.getenv("ASSEMBLYAI_BASE_URL"):
             return os.getenv("ASSEMBLYAI_BASE_URL")
