@@ -901,9 +901,9 @@ class GoogleMeetUIMethods:
 
         self.check_if_meeting_is_found()
 
-        self.fill_out_name_input()
-
         self.verify_expected_audio_configuration()
+
+        self.fill_out_name_input()
 
         self.turn_off_media_inputs()
 
