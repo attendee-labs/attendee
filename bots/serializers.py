@@ -716,8 +716,8 @@ GOOGLE_MEET_SETTINGS_SCHEMA = {
         },
         "ui_interaction_mode": {
             "type": "string",
-            "enum": ["standard", "humanized"],
-            "description": "The UI interaction mode for the Google Meet bot. 'humanized' performs more human-like interactions to evade bot detection, but the bot will take about 20 seconds longer to join the meeting.",
+            "enum": ["robotic", "humanized"],
+            "description": "The UI interaction mode for the Google Meet bot. 'humanized' performs more human-like interactions to evade bot detection, but the bot will take about 10 seconds longer to join the meeting.",
             "default": "humanized",
         },
     },

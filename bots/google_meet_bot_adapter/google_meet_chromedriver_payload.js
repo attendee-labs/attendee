@@ -1363,6 +1363,7 @@ class WebSocketClient {
   }
 
   sendPerParticipantVideo(participantId, isScreenShare, videoData) {
+    this.ensureConnected();
     if (this.ws.readyState !== WebSocket.OPEN) {
       console.error('WebSocket is not connected for per participant video send', this.ws.readyState);
       return;
