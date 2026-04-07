@@ -29,8 +29,8 @@ class MocapManager:
     def _generate_perturbed_sequences(self):
         original_sequences = list(self.sequences)
         for seq in original_sequences:
-            for i in range(10):
-                angle = -5 + (10 / 11) * (i + 1)
+            for i in range(40):
+                angle = -5 + (10 / 41) * (i + 1)
                 if angle == 0:
                     continue
                 rad = math.radians(angle)
