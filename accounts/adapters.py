@@ -1,4 +1,5 @@
 from allauth.account.adapter import DefaultAccountAdapter
+from allauth.socialaccount.adapter import DefaultSocialAccountAdapter
 from django.contrib.auth import login
 from django.urls import reverse
 
@@ -30,4 +31,14 @@ class StandardAccountAdapter(DefaultAccountAdapter):
 
 class NoNewUsersAccountAdapter(StandardAccountAdapter):
     def is_open_for_signup(self, request):
+        return False
+
+
+class NoNewUsersSocialAccountAdapter(DefaultSocialAccountAdapter):
+    """Blocks new user signup via social accounts (Google OAuth) when signup is disabled."""
+
+    def is_open_for_signup(self, request, sociallogin):
+        # Allow existing users to login via Google, but block new signups
+        if sociallogin.is_existing:
+            return True
         return False

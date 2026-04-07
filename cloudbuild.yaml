@@ -1,7 +1,6 @@
 # Cloud Build configuration for attendee
 #
-# This configuration builds and deploys the attendee application to Google Cloud.
-# It supports deployment to both Cloud Run and GKE.
+# This configuration builds and deploys the attendee application to Cloud Run.
 #
 # Usage:
 #   # Deploy to staging
@@ -20,15 +19,14 @@
 #   - REDIS_URL: Redis/Memorystore connection (e.g., redis://10.0.0.3:6379)
 #
 # Required infrastructure:
-#   - VPC Connector: For Cloud Run to access Memorystore (private IP)
+#   - VPC Connector: For Cloud Run Services/Jobs to access Memorystore (private IP)
+#   - Direct VPC: Worker Pools use --network/--subnet instead of VPC Connector
 #   - Memorystore for Redis: Create instance in same region/VPC
 
 substitutions:
   _ENV: staging
   _REGION: us-west2
   _SERVICE_NAME: attendee
-  _GKE_CLUSTER: attendee-cluster
-  _GKE_ZONE: us-west2-a
   _VPC_CONNECTOR: attendee-vpc-connector
 
 options:
@@ -130,34 +128,32 @@ steps:
           --min-instances 1 \
           --max-instances 10 \
           --vpc-connector ${_VPC_CONNECTOR} \
-          --set-env-vars "DJANGO_SETTINGS_MODULE=attendee.settings.production-gke" \
+          --set-env-vars "DJANGO_SETTINGS_MODULE=attendee.settings.production-gke,DISABLE_SIGNUP=true" \
           --set-secrets "DATABASE_URL=ATTENDEE_DATABASE_URL:latest,DJANGO_SECRET_KEY=DJANGO_SECRET_KEY:latest,CREDENTIALS_ENCRYPTION_KEY=CREDENTIALS_ENCRYPTION_KEY:latest,REDIS_URL=REDIS_URL:latest" \
           --args="gunicorn,attendee.wsgi:application,--bind,0.0.0.0:8000,--workers,4,--threads,2"
     waitFor: ['collectstatic']
 
-  # Step 6: Deploy Celery Worker to Cloud Run
-  # Uses worker_with_healthcheck.py to provide health check endpoint for Cloud Run
+  # Step 6: Deploy Celery Worker + Scheduler to Cloud Run Worker Pool
+  # Worker Pools are designed for continuous background work (no HTTP endpoint needed)
+  # Uses Direct VPC instead of VPC Connector for network access
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     id: 'deploy-worker'
     entrypoint: 'bash'
     args:
       - '-c'
       - |
-        gcloud run deploy ${_SERVICE_NAME}-worker \
+        gcloud beta run worker-pools deploy ${_SERVICE_NAME}-worker \
           --image gcr.io/$PROJECT_ID/${_SERVICE_NAME}:$COMMIT_SHA \
           --region ${_REGION} \
-          --platform managed \
-          --no-allow-unauthenticated \
-          --port 8080 \
+          --network default \
+          --subnet default \
+          --instances 1 \
           --cpu 2 \
           --memory 4Gi \
-          --min-instances 1 \
-          --max-instances 20 \
-          --vpc-connector ${_VPC_CONNECTOR} \
-          --set-env-vars "DJANGO_SETTINGS_MODULE=attendee.settings.production-gke" \
-          --set-secrets "DATABASE_URL=ATTENDEE_DATABASE_URL:latest,DJANGO_SECRET_KEY=DJANGO_SECRET_KEY:latest,CREDENTIALS_ENCRYPTION_KEY=CREDENTIALS_ENCRYPTION_KEY:latest,REDIS_URL=REDIS_URL:latest,CELERY_BROKER_URL=REDIS_URL:latest" \
+          --set-env-vars "DJANGO_SETTINGS_MODULE=attendee.settings.production-gke,RUN_SCHEDULER=true" \
+          --set-secrets "DATABASE_URL=ATTENDEE_DATABASE_URL:latest,DJANGO_SECRET_KEY=DJANGO_SECRET_KEY:latest,CREDENTIALS_ENCRYPTION_KEY=CREDENTIALS_ENCRYPTION_KEY:latest,REDIS_URL=REDIS_URL:latest" \
           --command "python" \
-          --args "worker_with_healthcheck.py,-A,attendee,worker,-l,INFO,--concurrency,4"
+          --args "worker_entrypoint.py"
     waitFor: ['collectstatic']
 
 images:

@@ -61,6 +61,7 @@ AUTHENTICATION_BACKENDS = [
 SITE_ID = 1
 if os.getenv("DISABLE_SIGNUP") and os.getenv("DISABLE_SIGNUP") != "false":
     ACCOUNT_ADAPTER = "accounts.adapters.NoNewUsersAccountAdapter"
+    SOCIALACCOUNT_ADAPTER = "accounts.adapters.NoNewUsersSocialAccountAdapter"
 else:
     ACCOUNT_ADAPTER = "accounts.adapters.StandardAccountAdapter"
 ACCOUNT_AUTHENTICATION_METHOD = "email"
@@ -114,6 +115,7 @@ TEMPLATES = [
                 "django.template.context_processors.request",
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
+                "accounts.context_processors.signup_status",
             ],
         },
     },

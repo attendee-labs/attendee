@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """
-Celery worker wrapper with HTTP health check for Cloud Run.
-Runs a simple health check server alongside the Celery worker.
+Combined Celery worker + scheduler with HTTP health check for Cloud Run.
+Runs worker, scheduler, and health check server in a single container.
 """
 
 import os
@@ -12,10 +12,8 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 
 
 class HealthCheckHandler(BaseHTTPRequestHandler):
-    """Simple health check handler."""
-
     def do_GET(self):
-        if self.path == "/health" or self.path == "/":
+        if self.path in ("/health", "/"):
             self.send_response(200)
             self.send_header("Content-Type", "text/plain")
             self.end_headers()
@@ -25,31 +23,38 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
     def log_message(self, format, *args):
-        # Suppress health check logs to reduce noise
         pass
 
 
 def run_health_server(port):
-    """Run the health check server."""
     server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
     print(f"Health check server running on port {port}")
     server.serve_forever()
 
 
+def run_scheduler():
+    """Run the scheduler in a background thread."""
+    cmd = ["python", "manage.py", "run_scheduler"]
+    print(f"Starting Scheduler: {' '.join(cmd)}")
+    process = subprocess.Popen(cmd)
+    process.wait()
+
+
 def main():
-    # Get port from environment (Cloud Run sets PORT)
     port = int(os.environ.get("PORT", 8080))
 
-    # Start health check server in background thread
+    # Start health check server
     health_thread = threading.Thread(target=run_health_server, args=(port,), daemon=True)
     health_thread.start()
 
-    # Build celery command from remaining args or use defaults
+    # Start scheduler in background
+    scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
+    scheduler_thread.start()
+
+    # Run Celery worker in foreground
     celery_args = sys.argv[1:] if len(sys.argv) > 1 else [
         "-A", "attendee", "worker", "-l", "INFO", "--concurrency", "4"
     ]
-
-    # Run celery worker in foreground
     celery_cmd = ["celery"] + celery_args
     print(f"Starting Celery: {' '.join(celery_cmd)}")
 

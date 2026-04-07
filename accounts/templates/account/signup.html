@@ -13,58 +13,22 @@
                     <div class="text-center mb-3">
                         <img src="{% static 'images/logo_with_text.svg' %}" alt="Attendee Logo" class="img-fluid" style="min-width: 170px; max-width: 250px;">
                     </div>
+
+                    <!-- Signup Closed Message -->
                     <div class="text-center mb-4">
-                        <h4 class="text-dark">Create account</h4>
+                        <h4 class="text-dark">Registration Closed</h4>
+                        <p class="text-muted mt-3">
+                            New account registration is by invitation only.
+                        </p>
+                        <p class="text-muted">
+                            Please contact your team administrator to request an invitation.
+                        </p>
                     </div>
-
-                    <!-- Google Sign In Button -->
-                    <div class="d-grid gap-2 mt-3">
-                        {% include "account/partials/_google_signin_button.html" with label="Sign up with Google" %}
-                    </div>
-
-                    <!-- Signup Form -->
-                    <form method="post" id="signupForm" action="{% url 'account_signup' %}">
-                        {% csrf_token %}
-                        
-                        <!-- Email Field -->
-                        <div class="form-floating mb-3">
-                            <input type="email" name="email" class="form-control" id="id_email" placeholder="name@example.com" required>
-                            <label for="id_email">Email Address</label>
-                        </div>
-
-                        <!-- Password Field -->
-                        <div class="form-floating mb-3">
-                            <input type="password" name="password1" class="form-control" id="id_password1" placeholder="Password" required>
-                            <label for="id_password1">Password</label>
-                        </div>
-
-                        <!-- Password Confirmation Field -->
-                        <div class="form-floating mb-3">
-                            <input type="password" name="password2" class="form-control" id="id_password2" placeholder="Confirm Password" required>
-                            <label for="id_password2">Confirm Password</label>
-                        </div>
-
-                        <!-- Submit Button -->
-                        <div class="d-grid">
-                            <button class="btn btn-primary btn-lg" type="submit" id="submitBtn">Create Account</button>
-                        </div>
-
-                        <!-- Form Messages -->
-                        {% if form.errors %}
-                            <div class="alert alert-danger mt-3">
-                                {% for field, errors in form.errors.items %}
-                                    {% for error in errors %}
-                                        <p class="mb-0">{{ error }}</p>
-                                    {% endfor %}
-                                {% endfor %}
-                            </div>
-                        {% endif %}
-                    </form>
 
                     <!-- Links -->
                     <div class="text-center mt-4">
                         <p class="small mb-0">
-                            Already have an account? 
+                            Already have an account?
                             <a href="{% url 'account_login' %}" class="text-primary">Sign In</a>
                         </p>
                     </div>
@@ -73,22 +37,4 @@
         </div>
     </div>
 </div>
-
-<script>
-    document.addEventListener('DOMContentLoaded', function() {
-        const form = document.getElementById('signupForm');
-        const submitBtn = document.getElementById('submitBtn');
-        
-        form.onsubmit = function(e) {
-            if (form.classList.contains('submitting')) {
-                e.preventDefault();
-                return;
-            }
-            
-            form.classList.add('submitting');
-            submitBtn.disabled = true;
-            submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Creating Account...';
-        };
-    });
-</script>
 {% endblock %}
