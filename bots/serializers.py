@@ -1382,8 +1382,8 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
             if audio_type in value and value.get(audio_type):
                 audio_url = value.get(audio_type, {}).get("url")
                 if audio_url:
-                    if not audio_url.lower().startswith("wss://"):
-                        raise serializers.ValidationError({audio_type: {"url": "URL must start with wss://"}})
+                    if not audio_url.lower().startswith("wss://") and not audio_url.lower().startswith("ws://"):
+                        raise serializers.ValidationError({audio_type: {"url": "URL must start with wss:// or ws://"}})
 
         # Make sure we haven't hit the case where both webcam and screenshare are disabled
         if value.get("per_participant_video", {}).get("url") and value.get("per_participant_video", {}).get("webcam_resolution") == "none" and value.get("per_participant_video", {}).get("screenshare_resolution") == "none":
