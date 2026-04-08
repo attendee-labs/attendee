@@ -4,6 +4,7 @@ import logging
 import os
 import uuid
 
+import rollbar
 import stripe
 from allauth.account.utils import send_email_confirmation
 from django.conf import settings
@@ -1069,6 +1070,7 @@ class InviteUserView(AdminRequiredMixin, ProjectUrlContextMixin, View):
 
         except Exception as e:
             logger.error(f"Error creating invited user: {str(e)}")
+            rollbar.report_exc_info(extra_data={"email": email, "is_admin": is_admin})
             return HttpResponse("An error occurred while sending the invitation", status=500)
 
 
