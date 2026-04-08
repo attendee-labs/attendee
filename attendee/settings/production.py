@@ -39,14 +39,12 @@ else:
     SESSION_COOKIE_SECURE = False
     CSRF_COOKIE_SECURE = False
 
-# Email configuration using Postmark SMTP
+# Email configuration using Postmark API (via django-anymail)
 if os.getenv("DISABLE_EMAIL", "false") != "true":
-    EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
-    EMAIL_HOST = "smtp.postmarkapp.com"
-    EMAIL_HOST_USER = os.getenv("POSTMARK_API_TOKEN")
-    EMAIL_HOST_PASSWORD = os.getenv("POSTMARK_API_TOKEN")
-    EMAIL_PORT = 587
-    EMAIL_USE_TLS = True
+    EMAIL_BACKEND = "anymail.backends.postmark.EmailBackend"
+    ANYMAIL = {
+        "POSTMARK_SERVER_TOKEN": os.getenv("POSTMARK_API_TOKEN"),
+    }
     DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "noreply@oppy.pro")
 
 ADMINS = []
