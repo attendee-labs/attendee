@@ -99,6 +99,10 @@ MIDDLEWARE = [
     "allauth.account.middleware.AccountMiddleware",
 ]
 
+# Add Rollbar middleware if configured
+if os.getenv("ROLLBAR_ACCESS_TOKEN"):
+    MIDDLEWARE.insert(0, "rollbar.contrib.django.middleware.RollbarNotifierMiddleware")
+
 ROOT_URLCONF = "attendee.urls"
 
 TEMPLATES = [
@@ -314,6 +318,16 @@ MASK_TRANSCRIPT_IN_LOGS = os.getenv("MASK_TRANSCRIPT_IN_LOGS", "false") == "true
 ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME = os.getenv("ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME", "false") == "true"
 CUSTOM_BOT_POD_SPEC_TYPES = os.getenv("CUSTOM_BOT_POD_SPEC_TYPES", "").split(",") if os.getenv("CUSTOM_BOT_POD_SPEC_TYPES") else []
 GLOBAL_WEBHOOK_DELIVERIES_PER_SECOND_RATE_LIMIT = int(os.getenv("GLOBAL_WEBHOOK_DELIVERIES_PER_SECOND_RATE_LIMIT")) if os.getenv("GLOBAL_WEBHOOK_DELIVERIES_PER_SECOND_RATE_LIMIT") else None
+
+# Rollbar configuration (only if ROLLBAR_ACCESS_TOKEN is set)
+if os.getenv("ROLLBAR_ACCESS_TOKEN"):
+    ROLLBAR = {
+        "access_token": os.getenv("ROLLBAR_ACCESS_TOKEN"),
+        "environment": os.getenv("ROLLBAR_ENVIRONMENT", "production"),
+        "code_version": os.getenv("ROLLBAR_CODE_VERSION", "1.0"),
+        "root": BASE_DIR,
+        "branch": "main",
+    }
 
 # Initialize Sentry (only if SENTRY_DSN is set)
 init_sentry()
