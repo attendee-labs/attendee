@@ -1,5 +1,6 @@
 import logging
 
+from csp.decorators import csp_exempt
 from django.http import HttpResponse, HttpResponseBadRequest
 from django.utils.decorators import method_decorator
 from django.views import View
@@ -42,6 +43,7 @@ class GoogleMeetSetCookieView(View):
         return response
 
 
+@method_decorator(csp_exempt, name="dispatch")
 @method_decorator(csrf_exempt, name="dispatch")
 class GoogleMeetSignInView(View):
     """
