@@ -10,6 +10,8 @@ import time
 from time import sleep
 from urllib.parse import unquote, urlparse
 
+
+import zendriver as zd
 import numpy as np
 import requests
 from django.conf import settings
@@ -536,7 +538,11 @@ class WebBotAdapter(BotAdapter):
     def add_subclass_specific_chrome_options(self, options):
         pass
 
-    def init_driver(self):
+    async def init_driver(self):
+        browser = await zd.start(sandbox=False)
+        tab = await browser.get("https://meet.google.com/zas-baki-rbq?authuser=0")
+        time.sleep(1000)
+        return
         self.write_chrome_policies_file()
 
         options = webdriver.ChromeOptions()
@@ -658,7 +664,8 @@ class WebBotAdapter(BotAdapter):
 
         while num_retries <= max_retries:
             try:
-                self.init_driver()
+                asyncio.run(self.init_driver())
+                time.sleep(400)
                 self.attempt_to_join_meeting()
                 logger.info("Successfully joined meeting")
                 break
