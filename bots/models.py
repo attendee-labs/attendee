@@ -2600,6 +2600,7 @@ class MediaBlob(models.Model):
     VALID_VIDEO_CONTENT_TYPES = []
     VALID_IMAGE_CONTENT_TYPES = [
         ("image/png", "PNG Image"),
+        ("image/jpeg", "JPEG Image"),
     ]
 
     OBJECT_ID_PREFIX = "blob_"

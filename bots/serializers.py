@@ -239,13 +239,13 @@ def get_elevenlabs_language_codes():
 
 
 from .meeting_url_utils import meeting_type_from_url, normalize_meeting_url
-from .utils import is_valid_png, transcription_provider_from_bot_creation_data
+from .utils import is_valid_image, transcription_provider_from_bot_creation_data
 
 # Define the schema once
 BOT_IMAGE_SCHEMA = {
     "type": "object",
     "properties": {
-        "type": {"type": "string", "enum": ["image/png"]},
+        "type": {"type": "string", "enum": ["image/png", "image/jpeg"]},
         "data": {
             "type": "string",
         },
@@ -535,18 +535,26 @@ class ImageJSONField(serializers.JSONField):
 @extend_schema_serializer(
     examples=[
         OpenApiExample(
-            "Valid image",
+            "Valid PNG image",
             value={
                 "type": "image/png",
                 "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
             },
             description="An image of a red pixel encoded in base64 in PNG format",
-        )
+        ),
+        OpenApiExample(
+            "Valid JPEG image",
+            value={
+                "type": "image/jpeg",
+                "data": "/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDABcQERQRDhcUEhQaGBcbIjklIh8fIkYyNSk5UkhXVVFIUE5bZoNvW2F8Yk5QcptzfIeLkpSSWG2grJ+OqoOPko3/2wBDARgaGiIeIkMlJUONXlBejY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY3/wAARCAABAAEDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwDoqKKK+UNz/9k=",
+            },
+            description="An image of a single pixel encoded in base64 in JPEG format",
+        ),
     ]
 )
 class BotImageSerializer(serializers.Serializer):
-    type = serializers.ChoiceField(choices=[ct[0] for ct in MediaBlob.VALID_IMAGE_CONTENT_TYPES], help_text="Image content type. Currently only PNG is supported.")  # image/png
-    data = serializers.CharField(help_text="Base64 encoded image data. Simple example of a red pixel encoded in PNG format: iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")  # base64 encoded image data
+    type = serializers.ChoiceField(choices=[ct[0] for ct in MediaBlob.VALID_IMAGE_CONTENT_TYPES], help_text="Image content type. Supported formats: PNG and JPEG.")
+    data = serializers.CharField(help_text="Base64 encoded image data.")
 
     def validate_type(self, value):
         """Validate the content type"""
@@ -557,16 +565,15 @@ class BotImageSerializer(serializers.Serializer):
     def validate(self, data):
         """Validate the entire image data"""
         try:
-            # Decode base64 data
             image_data = base64.b64decode(data.get("data", ""))
         except Exception:
             raise serializers.ValidationError("Invalid base64 encoded data")
 
-        # Validate that it's a proper PNG image
-        if not is_valid_png(image_data):
-            raise serializers.ValidationError("Data is not a valid PNG image. This site can generate base64 encoded PNG images to test with: https://png-pixel.com")
+        content_type = data.get("type", "")
+        if not is_valid_image(image_data, content_type):
+            humanized_content_type = content_type.split("/")[1] if len(content_type.split("/")) > 1 else content_type
+            raise serializers.ValidationError(f"Data is not a valid {humanized_content_type} image.")
 
-        # Add the decoded data to the validated data
         data["decoded_data"] = image_data
         return data
 
@@ -1973,7 +1980,7 @@ class PatchBotTranscriptionSettingsSerializer(serializers.Serializer):
                 "bot_name": "My Updated Bot",
                 "bot_image": {"type": "image/png", "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="},
             },
-            description="Example of updating the bot name and/or image",
+            description="Example of updating the bot name and/or image (supports PNG and JPEG)",
         ),
     ]
 )
