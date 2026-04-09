@@ -1,6 +1,7 @@
 import logging
 import os
 import random
+import subprocess
 import time
 from urllib.parse import urlparse
 
@@ -300,6 +301,22 @@ class GoogleMeetUIMethods:
 
             time.sleep(random.uniform(0.24, 0.48))
 
+    def human_copy_and_paste(self, text):
+        self.ensure_x11_input()
+
+        subprocess.run(
+            ["xclip", "-selection", "clipboard"],
+            input=text.encode("utf-8"),
+            check=True,
+        )
+
+        time.sleep(random.uniform(0.15, 0.35))
+
+        self.x11_input.key_press("Control")
+        self.x11_input.key_press("v")
+        self.x11_input.key_release("v")
+        self.x11_input.key_release("Control")
+
     def ensure_x11_input(self):
         if not hasattr(self, "x11_input"):
             from .x11_input import X11Input
@@ -425,7 +442,7 @@ class GoogleMeetUIMethods:
                 if self.ui_interaction_mode == "humanized":
                     self.humanized_navigate_to_and_click_element(name_input)
                     logger.info("Name input clicked")
-                    self.human_type(self.display_name)
+                    self.human_copy_and_paste(self.display_name)
                     logger.info("Name input filled out")
                 else:
                     name_input.send_keys(self.display_name)
