@@ -2,8 +2,6 @@
   const ORIGINAL_GET_USER_MEDIA =
     navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
 
-  const UPSTREAM_URL = "http://localhost:8000/offer_meeting_audio";
-
   let pc = null;
   let virtualAudioTrack = null;
   let virtualMicPromise = null;
@@ -72,14 +70,45 @@
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
 
-        const res = await fetch(UPSTREAM_URL, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+        // We can't make a request to the /offer_meeting_audio endpoint because chrome started
+        // blocking requests to localhost unless user gives permission.  We could have
+        // added a policy to turn that off, but are not doing that, because it does enhance security.
+        // So instead, we create this object and the python process constantly checks to if it was set
+        // and if so, we make the request in the python process.
+        window.__attendeeUpstreamAudioRequest = {
+          status: "pending",
+          offer: {
             sdp: pc.localDescription.sdp,
             type: pc.localDescription.type,
-          }),
-        });
+          },
+          answer: null,
+          error: null,
+        };
+        
+        while (true) {
+          const req = window.__attendeeUpstreamAudioRequest;
+        
+          if (!req) {
+            reject(new Error("Upstream audio bridge state disappeared"));
+            return;
+          }
+        
+          if (req.status === "done" && req.answer) {
+            await pc.setRemoteDescription(req.answer);
+            window.__attendeeUpstreamAudioRequest = null;
+            break;
+          }
+        
+          if (req.status === "error") {
+            const errorMsg = req.error || "Unknown upstream audio error";
+            showErrorOnDom(errorMsg);
+            window.__attendeeUpstreamAudioRequest = null;
+            reject(new Error(errorMsg));
+            return;
+          }
+        
+          await new Promise((r) => setTimeout(r, 50));
+        }
 
         if (!res.ok) {
           const t = await res.text().catch(() => "");
