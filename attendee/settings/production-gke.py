@@ -7,7 +7,7 @@ from .base import *
 from .base import LOG_FORMATTERS
 
 DEBUG = False
-ALLOWED_HOSTS = ["*"]
+ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "api.attendee.dev").split(",")
 
 DATABASES = {
     "default": dj_database_url.config(
