@@ -5,6 +5,8 @@ import hashlib
 import json
 import logging
 import os
+import shutil
+import subprocess
 import threading
 import time
 from time import sleep
@@ -14,7 +16,6 @@ import numpy as np
 import requests
 from django.conf import settings
 from pyvirtualdisplay import Display
-from selenium import webdriver
 from websockets.sync.server import serve
 
 from bots.automatic_leave_configuration import AutomaticLeaveConfiguration
@@ -23,9 +24,116 @@ from bots.bot_adapter import BotAdapter
 from bots.models import ParticipantEventTypes, RecordingViews
 from bots.utils import half_ceil, scale_i420
 
+from .debug_screen_recorder import DebugScreenRecorder
 from .ui_methods import UiAuthorizedUserNotInMeetingTimeoutExceededException, UiBlockedByCaptchaException, UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiIncorrectPasswordException, UiInfinitelyRetryableException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableException, UiRetryableExpectedException
 
 logger = logging.getLogger(__name__)
+
+
+class _ChromeServiceStub:
+    def __init__(self):
+        self.port = None
+
+
+class NormalChromeProcess:
+    """Launch stock Chrome directly without WebDriver.
+
+    This intentionally uses Chrome's normal profile behavior. Because current
+    Chrome ignores remote-debugging flags against the default profile, this
+    wrapper does not attempt to attach CDP. Methods such as execute_script()
+    and execute_cdp_cmd() are therefore best-effort no-ops so the rest of this
+    adapter can keep running without Selenium.
+    """
+
+    def __init__(self, *, meeting_url: str | None, window_size: tuple[int, int], extra_args: list[str] | None = None):
+        self.meeting_url = meeting_url
+        self.window_size = window_size
+        self.extra_args = extra_args or []
+        self.proc = None
+        self.service = _ChromeServiceStub()
+        self.chrome_binary = self._find_chrome_binary()
+
+    @staticmethod
+    def _find_chrome_binary() -> str:
+        candidates = [
+            os.getenv("CHROME_BIN"),
+            "google-chrome",
+            "google-chrome-stable",
+            "chrome",
+            "chromium",
+            "chromium-browser",
+        ]
+        for candidate in candidates:
+            if not candidate:
+                continue
+            resolved = shutil.which(candidate) if os.path.sep not in candidate else candidate
+            if resolved and os.path.exists(resolved):
+                return resolved
+        raise FileNotFoundError(
+            "Could not find a Chrome binary. Set CHROME_BIN or install google-chrome/google-chrome-stable."
+        )
+
+    def launch(self) -> None:
+        if self.proc and self.proc.poll() is None:
+            logger.info("Chrome is already running with pid %s", self.proc.pid)
+            return
+
+        width, height = self.window_size
+        cmd = [
+            self.chrome_binary,
+            "--new-window",
+            f"--window-size={width},{height}",
+            "--autoplay-policy=no-user-gesture-required",
+            "--use-fake-device-for-media-stream",
+            "--use-fake-ui-for-media-stream",
+            "--disable-gpu",
+            "--disable-extensions",
+            "--disable-application-cache",
+            "--disable-dev-shm-usage",
+            *self.extra_args,
+        ]
+        cmd.append(self.meeting_url or "about:blank")
+
+        logger.info("Launching normal Chrome: %s", cmd)
+        self.proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+
+    def close(self) -> None:
+        self._terminate()
+
+    def quit(self) -> None:
+        self._terminate()
+
+    def _terminate(self) -> None:
+        if not self.proc or self.proc.poll() is not None:
+            return
+
+        logger.info("Stopping Chrome pid %s", self.proc.pid)
+        self.proc.terminate()
+        try:
+            self.proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            logger.warning("Chrome did not exit cleanly; killing pid %s", self.proc.pid)
+            self.proc.kill()
+            self.proc.wait(timeout=5)
+
+    def save_screenshot(self, path: str) -> None:
+        raise NotImplementedError("Screenshots are not available without CDP or WebDriver in this adapter.")
+
+    def execute_cdp_cmd(self, command: str, params: dict):
+        if command == "Page.getNavigationHistory":
+            return {"entries": []}
+        raise NotImplementedError(
+            f"CDP command {command!r} is not available when launching Chrome normally with the default profile."
+        )
+
+    def execute_script(self, script: str, *args):
+        logger.warning("Ignoring execute_script call because Chrome was launched without WebDriver/CDP: %s", script[:120])
+        return None
 
 
 class WebBotAdapter(BotAdapter):
@@ -58,6 +166,7 @@ class WebBotAdapter(BotAdapter):
         self.add_mixed_audio_chunk_callback = add_mixed_audio_chunk_callback
         self.add_video_frame_callback = add_video_frame_callback
         self.wants_any_video_frames_callback = wants_any_video_frames_callback
+        self.add_per_participant_video_frame_callback = None
         self.add_encoded_mp4_chunk_callback = add_encoded_mp4_chunk_callback
         self.upsert_caption_callback = upsert_caption_callback
         self.upsert_chat_message_callback = upsert_chat_message_callback
@@ -67,6 +176,7 @@ class WebBotAdapter(BotAdapter):
         self.recording_view = recording_view
         self.record_chat_messages_when_paused = record_chat_messages_when_paused
         self.disable_incoming_video = disable_incoming_video
+        self.record_participant_speech_start_stop_events = False
         self.meeting_url = meeting_url
 
         # This is an internal ID that comes from the platform. It is currently only used for MS Teams.
@@ -99,6 +209,7 @@ class WebBotAdapter(BotAdapter):
         self.automatic_leave_configuration = automatic_leave_configuration
 
         self.should_create_debug_recording = should_create_debug_recording
+        self.debug_screen_recorder = None
 
         self.silence_detection_activated = False
         self.joined_at = None
@@ -251,6 +362,25 @@ class WebBotAdapter(BotAdapter):
 
             self.add_audio_chunk_callback(participant_id, datetime.datetime.utcnow(), audio_data.tobytes())
 
+    def process_per_participant_video_frame(self, message):
+        if self.recording_paused:
+            return
+
+        self.last_media_message_processed_time = time.time()
+        if len(message) > 12:
+            # Byte 5 contains the participant ID length
+            participant_id_length = int.from_bytes(message[4:5], byteorder="little")
+            participant_id = message[5 : 5 + participant_id_length].decode("utf-8")
+
+            # After the participant ID, the source is the next byte
+            source_raw = message[5 + participant_id_length]
+            source = "webcam" if source_raw == 0 else "screenshare"
+
+            # Get the video frame
+            video_frame = message[5 + participant_id_length + 1 :]
+
+            self.add_per_participant_video_frame_callback(video_frame, participant_id, source)
+
     def number_of_participants_ever_in_meeting_excluding_other_bots(self):
         return len([participant for participant in self.participants_info.values() if not participant_is_another_bot(participant["fullName"], participant["isCurrentUser"], self.automatic_leave_configuration)])
 
@@ -272,7 +402,7 @@ class WebBotAdapter(BotAdapter):
             else:
                 other_bots_in_meeting_names.append(participant["fullName"])
 
-        if len(all_participants_in_meeting_excluding_other_bots) == 1 and all_participants_in_meeting_excluding_other_bots[0]["fullName"] == self.display_name:
+        if len(all_participants_in_meeting_excluding_other_bots) == 1 and all_participants_in_meeting_excluding_other_bots[0]["isCurrentUser"]:
             if self.only_one_participant_in_meeting_at is None:
                 self.only_one_participant_in_meeting_at = time.time()
                 logger.info(f"only_one_participant_in_meeting_at set to {self.only_one_participant_in_meeting_at}. Ignoring other bots in meeting: {other_bots_in_meeting_names}")
@@ -298,6 +428,9 @@ class WebBotAdapter(BotAdapter):
         # Count a caption as audio activity
         self.last_audio_message_processed_time = time.time()
         self.upsert_caption_callback(json_data["caption"])
+
+    def handle_participant_speech_start_stop_event(self, json_data):
+        self.add_participant_event_callback({"participant_uuid": json_data["participantId"], "event_type": ParticipantEventTypes.SPEECH_START if json_data["isSpeechStart"] else ParticipantEventTypes.SPEECH_STOP, "event_data": {}, "timestamp_ms": int(json_data["timestamp"])})
 
     def handle_chat_message(self, json_data):
         if self.recording_paused and not self.record_chat_messages_when_paused:
@@ -345,6 +478,9 @@ class WebBotAdapter(BotAdapter):
                         elif json_data.get("type") == "ChatMessage":
                             self.handle_chat_message(json_data)
 
+                        elif json_data.get("type") == "ParticipantSpeechStartStopEvent":
+                            self.handle_participant_speech_start_stop_event(json_data)
+
                         elif json_data.get("type") == "UsersUpdate":
                             for user in json_data["newUsers"]:
                                 user["active"] = user["humanized_status"] == "in_meeting"
@@ -356,10 +492,8 @@ class WebBotAdapter(BotAdapter):
                                 user["active"] = user["humanized_status"] == "in_meeting"
                                 self.handle_participant_update(user)
 
-                                if user["humanized_status"] == "removed_from_meeting" and user["fullName"] == self.display_name:
-                                    # if this is the only participant with that name in the meeting, then we can assume that it was us who was removed
-                                    if len([x for x in self.participants_info.values() if x["fullName"] == self.display_name]) == 1:
-                                        self.handle_removed_from_meeting()
+                                if user["humanized_status"] == "removed_from_meeting" and user["isCurrentUser"]:
+                                    self.handle_removed_from_meeting()
 
                             self.update_only_one_participant_in_meeting_at()
 
@@ -398,6 +532,8 @@ class WebBotAdapter(BotAdapter):
                     self.process_encoded_mp4_chunk(message)
                 elif message_type == 5:  # PER_PARTICIPANT_AUDIO
                     self.process_per_participant_audio_frame(message)
+                elif message_type == 6:  # PER_PARTICIPANT_VIDEO
+                    self.process_per_participant_video_frame(message)
 
                 self.last_websocket_message_processed_time = time.time()
         except Exception as e:
@@ -539,88 +675,34 @@ class WebBotAdapter(BotAdapter):
     def init_driver(self):
         self.write_chrome_policies_file()
 
-        options = webdriver.ChromeOptions()
+        if self.driver:
+            try:
+                self.driver.close()
+            except Exception as e:
+                logger.warning(f"Error closing existing Chrome process: {e}")
+            try:
+                self.driver.quit()
+            except Exception as e:
+                logger.warning(f"Error quitting existing Chrome process: {e}")
+            self.driver = None
 
-        options.add_argument("--autoplay-policy=no-user-gesture-required")
-        options.add_argument("--use-fake-device-for-media-stream")
-        options.add_argument("--use-fake-ui-for-media-stream")
-
-        options.add_argument(f"--window-size={self.video_frame_size[0]},{self.video_frame_size[1]}")
-        options.add_argument("--start-fullscreen")
-        # options.add_argument('--headless=new')
-        options.add_argument("--disable-gpu")
-        options.add_argument("--disable-extensions")
-        options.add_argument("--disable-application-cache")
-        options.add_argument("--disable-dev-shm-usage")
-        options.add_argument("--disable-blink-features=AutomationControlled")
-        options.add_experimental_option("excludeSwitches", ["enable-automation"])
-
+        chrome_args = []
         if os.getenv("ENABLE_CHROME_SANDBOX", "false").lower() != "true":
-            options.add_argument("--no-sandbox")
-            options.add_argument("--disable-setuid-sandbox")
+            chrome_args.extend(["--no-sandbox", "--disable-setuid-sandbox"])
             logger.info("Chrome sandboxing is disabled")
         else:
             logger.info("Chrome sandboxing is enabled")
 
-        prefs = {
-            "credentials_enable_service": False,
-            "profile.password_manager_enabled": False,
-        }
-        options.add_experimental_option("prefs", prefs)
-
-        self.add_subclass_specific_chrome_options(options)
-
-        if self.driver:
-            # Simulate closing browser window
-            try:
-                self.driver.close()
-            except Exception as e:
-                logger.warning(f"Error closing driver: {e}")
-
-            try:
-                self.driver.quit()
-            except Exception as e:
-                logger.warning(f"Error closing existing driver: {e}")
-            self.driver = None
-
-        self.driver = webdriver.Chrome(options=options)  # , service=Service(executable_path="/usr/local/bin/chromedriver"))
-        logger.info(f"web driver server initialized at port {self.driver.service.port}")
-
-        initial_data_code = f"window.initialData = {{websocketPort: {self.websocket_port}, videoFrameWidth: {self.video_frame_size[0]}, videoFrameHeight: {self.video_frame_size[1]}, botName: {json.dumps(self.display_name)}, addClickRipple: {'true' if self.should_create_debug_recording else 'false'}, recordingView: '{self.recording_view}', sendMixedAudio: {'true' if self.add_mixed_audio_chunk_callback else 'false'}, sendPerParticipantAudio: {'true' if self.add_audio_chunk_callback else 'false'}, collectCaptions: {'true' if self.upsert_caption_callback else 'false'}}}"
-
-        # Define the CDN libraries needed
-        CDN_LIBRARIES = ["https://cdnjs.cloudflare.com/ajax/libs/protobufjs/7.4.0/protobuf.min.js", "https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"]
-
-        # Download all library code
-        libraries_code = ""
-        for url in CDN_LIBRARIES:
-            response = requests.get(url)
-            if response.status_code == 200:
-                libraries_code += response.text + "\n"
-            else:
-                raise Exception(f"Failed to download library from {url}")
-
-        # Get directory of current file
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        # Read your payload using path relative to current file
-        with open(os.path.join(current_dir, "..", self.get_chromedriver_payload_file_name()), "r") as file:
-            payload_code = file.read()
-
-        # Read shared_chromedriver_payload.js
-        with open(os.path.join(current_dir, "shared_chromedriver_payload.js"), "r") as file:
-            shared_chromedriver_payload_code = file.read()
-
-        # Combine them ensuring libraries load first
-        combined_code = f"""
-            {initial_data_code}
-            {self.subclass_specific_initial_data_code()}
-            {libraries_code}
-            {shared_chromedriver_payload_code}
-            {payload_code}
-        """
-
-        # Add the combined script to execute on new document
-        self.driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": combined_code})
+        self.driver = NormalChromeProcess(
+            meeting_url=self.meeting_url,
+            window_size=self.video_frame_size,
+            extra_args=chrome_args,
+        )
+        self.driver.launch()
+        logger.info("normal Chrome process initialized (pid=%s)", getattr(self.driver.proc, "pid", None))
+        logger.info(
+            "Chrome was launched without WebDriver. Default-profile Chrome cannot be attached over CDP on modern Chrome, so script injection is disabled."
+        )
 
     def init(self):
         self.display_var_for_debug_recording = os.environ.get("DISPLAY")
@@ -641,131 +723,23 @@ class WebBotAdapter(BotAdapter):
         if not self.websocket_port:
             raise Exception("WebSocket server failed to start")
 
-        repeatedly_attempt_to_join_meeting_thread = threading.Thread(target=self.repeatedly_attempt_to_join_meeting, daemon=True)
-        repeatedly_attempt_to_join_meeting_thread.start()
+        # In the normal-Chrome path we just launch Chrome directly and do not
+        # attempt Selenium-style UI automation.
+        self.init_driver()
 
     def should_retry_joining_meeting_that_requires_login_by_logging_in(self):
         return False
 
     def repeatedly_attempt_to_join_meeting(self):
-        logger.info(f"Trying to join meeting at {self.meeting_url}")
-
-        # Expected exceptions are ones that we expect to happen and are not a big deal, so we only increment num_retries once every three expected exceptions
-        num_expected_exceptions = 0
-        num_retries = 0
-        max_retries = 3
-        attempts_to_join_started_at = time.time()
-
-        while num_retries <= max_retries:
-            try:
-                self.init_driver()
-                self.attempt_to_join_meeting()
-                logger.info("Successfully joined meeting")
-                break
-
-            except UiLoginRequiredException:
-                if not self.should_retry_joining_meeting_that_requires_login_by_logging_in():
-                    self.send_login_required_message()
-                    return
-
-            except UiLoginAttemptFailedException:
-                self.send_login_attempt_failed_message()
-                return
-
-            except UiRequestToJoinDeniedException:
-                self.send_request_to_join_denied_message()
-                return
-
-            except UiCouldNotJoinMeetingWaitingRoomTimeoutException:
-                self.send_message_callback({"message": self.Messages.LEAVE_MEETING_WAITING_ROOM_TIMEOUT_EXCEEDED})
-                return
-
-            except UiCouldNotJoinMeetingWaitingForHostException:
-                self.send_message_callback({"message": self.Messages.LEAVE_MEETING_WAITING_FOR_HOST})
-                return
-
-            except UiMeetingNotFoundException:
-                self.send_meeting_not_found_message()
-                return
-
-            except UiIncorrectPasswordException:
-                self.send_incorrect_password_message()
-                return
-
-            except UiBlockedByCaptchaException:
-                self.send_blocked_by_captcha_message()
-                return
-
-            except UiAuthorizedUserNotInMeetingTimeoutExceededException:
-                # If the timeout has exceeded, send the message. If not, we will retry again.
-                if time.time() - attempts_to_join_started_at > self.automatic_leave_configuration.authorized_user_not_in_meeting_timeout_seconds:
-                    self.send_message_callback({"message": self.Messages.AUTHORIZED_USER_NOT_IN_MEETING_TIMEOUT_EXCEEDED})
-                    return
-                else:
-                    logger.info(f"Failed to join meeting and the UiAuthorizedUserNotInMeetingTimeoutExceededException exception has occurred but the timeout of {self.automatic_leave_configuration.authorized_user_not_in_meeting_timeout_seconds} seconds has not exceeded, so retrying")
-
-            except UiInfinitelyRetryableException as e:
-                # Exceptions of this type will always be retried, it is up to the adapter to
-                # stop throwing this exception
-
-                if self.left_meeting or self.cleaned_up:
-                    logger.info(f"Failed to join meeting and the {e.__class__.__name__} exception is infinitely retryable but the bot has left the meeting or cleaned up, so returning")
-                    return
-
-                logger.warning(f"Failed to join meeting and the {e.__class__.__name__} exception is infinitely retryable so retrying")
-
-            except UiRetryableExpectedException as e:
-                if num_retries >= max_retries:
-                    logger.info(f"Failed to join meeting and the {e.__class__.__name__} exception is retryable but the number of retries exceeded the limit and there were {num_expected_exceptions} expected exceptions, so returning")
-                    self.send_debug_screenshot_message(step=e.step, exception=e, inner_exception=e.inner_exception)
-                    return
-
-                num_expected_exceptions += 1
-                if num_expected_exceptions % 5 == 0:
-                    num_retries += 1
-                    logger.info(f"Failed to join meeting and the {e.__class__.__name__} exception is expected and {num_expected_exceptions} expected exceptions have occurred, so incrementing num_retries. This usually indicates that the meeting has not started yet, so we will wait for the configured amount of time which is 180 seconds before retrying")
-                    # We're going to start a new pod to see if that fixes the issue
-                    self.send_message_callback({"message": self.Messages.BLOCKED_BY_PLATFORM_REPEATEDLY})
-                    return
-                else:
-                    logger.info(f"Failed to join meeting and the {e.__class__.__name__} exception is expected so not incrementing num_retries, but {num_expected_exceptions} expected exceptions have occurred")
-
-            except UiRetryableException as e:
-                if num_retries >= max_retries:
-                    logger.info(f"Failed to join meeting and the {e.__class__.__name__} exception is retryable but the number of retries exceeded the limit, so returning")
-                    self.send_debug_screenshot_message(step=e.step, exception=e, inner_exception=e.inner_exception)
-                    return
-
-                if self.left_meeting or self.cleaned_up:
-                    logger.info(f"Failed to join meeting and the {e.__class__.__name__} exception is retryable but the bot has left the meeting or cleaned up, so returning")
-                    return
-
-                logger.info(f"Failed to join meeting and the {e.__class__.__name__} exception is retryable so retrying")
-
-                num_retries += 1
-            except Exception as e:
-                if num_retries >= max_retries:
-                    logger.exception(f"Failed to join meeting and the unexpected {e.__class__.__name__} exception with message {e.__str__()} is retryable but the number of retries exceeded the limit, so returning.")
-                    self.send_debug_screenshot_message(step="unknown", exception=e, inner_exception=None)
-                    return
-
-                if self.left_meeting or self.cleaned_up:
-                    logger.exception(f"Failed to join meeting and the unexpected {e.__class__.__name__} exception with message {e.__str__()} is retryable but the bot has left the meeting or cleaned up, so returning.")
-                    return
-
-                logger.exception(f"Failed to join meeting and the unexpected {e.__class__.__name__} exception with message {e.__str__()} is retryable so retrying")
-
-                num_retries += 1
-
-            sleep(1)
-
-        self.after_bot_joined_meeting()
-        self.subclass_specific_after_bot_joined_meeting()
+        logger.info(
+            "repeatedly_attempt_to_join_meeting() is disabled in the normal-Chrome path. Chrome is launched directly in init()."
+        )
 
     def after_bot_joined_meeting(self):
         self.send_message_callback({"message": self.Messages.BOT_JOINED_MEETING})
         self.joined_at = time.time()
         self.update_only_one_participant_in_meeting_at()
+        self.stop_debug_screen_recording()
 
     def after_bot_recording_permission_denied(self):
         self.send_message_callback({"message": self.Messages.BOT_RECORDING_PERMISSION_DENIED, "denied_reason": BotAdapter.BOT_RECORDING_PERMISSION_DENIED_REASON.HOST_DENIED_PERMISSION})
@@ -780,7 +754,15 @@ class WebBotAdapter(BotAdapter):
         self.driver.execute_script("window.ws?.enableMediaSending();")
         self.first_buffer_timestamp_ms_offset = self.driver.execute_script("return performance.timeOrigin;")
 
+        if self.start_recording_screen_callback:
+            sleep(2)
+            self.start_recording_screen_callback(self.display_var_for_debug_recording)
+
         self.media_sending_enable_timestamp_ms = time.time() * 1000
+
+    def stop_debug_screen_recording(self):
+        if self.debug_screen_recorder:
+            self.debug_screen_recorder.stop()
 
     def leave(self):
         if self.left_meeting:
@@ -790,15 +772,25 @@ class WebBotAdapter(BotAdapter):
         if self.stop_recording_screen_callback:
             self.stop_recording_screen_callback()
 
+        # Save a screenshot and mhtml file of the page right before the bot leaves the meeting
+        screenshot_path_right_before_leave = None
+        mhtml_file_path_right_before_leave = None
         try:
             logger.info("disable media sending")
             self.driver.execute_script("window.ws?.disableMediaSending();")
 
+            screenshot_path_right_before_leave, mhtml_file_path_right_before_leave, _ = self.capture_screenshot_and_mhtml_file()
             self.click_leave_button()
         except Exception as e:
             logger.warning(f"Error during leave: {e}")
         finally:
-            self.send_message_callback({"message": self.Messages.MEETING_ENDED})
+            self.send_message_callback(
+                {
+                    "message": self.Messages.MEETING_ENDED,
+                    "mhtml_file_path": mhtml_file_path_right_before_leave,
+                    "screenshot_path": screenshot_path_right_before_leave,
+                }
+            )
             self.left_meeting = True
 
     def abort_join_attempt(self):
@@ -842,6 +834,9 @@ class WebBotAdapter(BotAdapter):
                     logger.warning(f"Error quitting driver: {e}")
         except Exception as e:
             logger.warning(f"Error during cleanup: {e}")
+
+        if self.debug_screen_recorder:
+            self.debug_screen_recorder.stop()
 
         # Properly shutdown the websocket server
         if self.websocket_server:
