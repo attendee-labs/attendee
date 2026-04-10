@@ -2,13 +2,17 @@ import asyncio
 import copy
 import datetime
 import hashlib
+import base64
 import json
 import logging
 import os
 import shutil
+import socket
 import subprocess
+import tempfile
 import threading
 import time
+import uuid
 from time import sleep
 from urllib.parse import unquote, urlparse
 
@@ -16,6 +20,7 @@ import numpy as np
 import requests
 from django.conf import settings
 from pyvirtualdisplay import Display
+from websocket import create_connection
 from websockets.sync.server import serve
 
 from bots.automatic_leave_configuration import AutomaticLeaveConfiguration
@@ -31,27 +36,89 @@ logger = logging.getLogger(__name__)
 
 
 class _ChromeServiceStub:
+    def __init__(self, port=None):
+        self.port = port
+
+
+class _ChromeOptionsShim:
     def __init__(self):
-        self.port = None
+        self.arguments: list[str] = []
+        self.experimental_options: dict[str, object] = {}
+
+    def add_argument(self, argument: str) -> None:
+        self.arguments.append(argument)
+
+    def add_experimental_option(self, name: str, value) -> None:
+        self.experimental_options[name] = value
 
 
-class NormalChromeProcess:
-    """Launch stock Chrome directly without WebDriver.
+class _CdpConnection:
+    def __init__(self, websocket_url: str, timeout: float = 10.0, origin: str | None = None):
+        self.websocket_url = websocket_url
+        self.timeout = timeout
+        self.origin = origin
+        connection_kwargs = {"timeout": timeout, "enable_multithread": True}
+        if origin:
+            connection_kwargs["origin"] = origin
+        self._ws = create_connection(websocket_url, **connection_kwargs)
+        self._lock = threading.Lock()
+        self._next_id = 0
 
-    This intentionally uses Chrome's normal profile behavior. Because current
-    Chrome ignores remote-debugging flags against the default profile, this
-    wrapper does not attempt to attach CDP. Methods such as execute_script()
-    and execute_cdp_cmd() are therefore best-effort no-ops so the rest of this
-    adapter can keep running without Selenium.
+    def call(self, method: str, params: dict | None = None):
+        with self._lock:
+            self._next_id += 1
+            message_id = self._next_id
+            self._ws.send(json.dumps({
+                "id": message_id,
+                "method": method,
+                "params": params or {},
+            }))
+
+            while True:
+                raw_message = self._ws.recv()
+                response = json.loads(raw_message)
+                if response.get("id") != message_id:
+                    continue
+                if "error" in response:
+                    raise RuntimeError(f"CDP command {method} failed: {response['error']}")
+                return response.get("result", {})
+
+    def close(self) -> None:
+        try:
+            self._ws.close()
+        except Exception:
+            pass
+
+
+class CdpChromeProcess:
+    """Launch stock Chrome directly and attach via CDP using a dedicated user-data-dir.
+
+    This keeps ChromeDriver/WebDriver out of the picture while still allowing
+    Page.addScriptToEvaluateOnNewDocument and the small subset of script / CDP
+    operations this adapter relies on.
     """
 
-    def __init__(self, *, meeting_url: str | None, window_size: tuple[int, int], extra_args: list[str] | None = None):
+    def __init__(
+        self,
+        *,
+        meeting_url: str | None,
+        window_size: tuple[int, int],
+        extra_args: list[str] | None = None,
+        prefs: dict | None = None,
+        user_data_dir: str | None = None,
+    ):
         self.meeting_url = meeting_url
         self.window_size = window_size
         self.extra_args = extra_args or []
+        self.prefs = prefs or {}
+        self.user_data_dir = user_data_dir or tempfile.mkdtemp(prefix="attendee-chrome-profile-")
+        self._owns_user_data_dir = user_data_dir is None
         self.proc = None
-        self.service = _ChromeServiceStub()
         self.chrome_binary = self._find_chrome_binary()
+        self.debugging_port = self._pick_debugging_port()
+        self.service = _ChromeServiceStub(port=self.debugging_port)
+        self._cdp = None
+        self.devtools_origin = f"http://127.0.0.1:{self.debugging_port}"
 
     @staticmethod
     def _find_chrome_binary() -> str:
@@ -73,34 +140,85 @@ class NormalChromeProcess:
             "Could not find a Chrome binary. Set CHROME_BIN or install google-chrome/google-chrome-stable."
         )
 
+    @staticmethod
+    def _pick_debugging_port() -> int:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("127.0.0.1", 0))
+            sock.listen(1)
+            return int(sock.getsockname()[1])
+
+    @staticmethod
+    def _merge_pref_path(target: dict, dotted_key: str, value) -> None:
+        cursor = target
+        parts = dotted_key.split(".")
+        for part in parts[:-1]:
+            cursor = cursor.setdefault(part, {})
+        cursor[parts[-1]] = value
+
+    def _write_preferences_file(self) -> None:
+        if not self.prefs:
+            return
+
+        default_dir = os.path.join(self.user_data_dir, "Default")
+        os.makedirs(default_dir, exist_ok=True)
+        prefs_path = os.path.join(default_dir, "Preferences")
+        pref_tree = {}
+        for key, value in self.prefs.items():
+            self._merge_pref_path(pref_tree, key, value)
+        with open(prefs_path, "w", encoding="utf-8") as f:
+            json.dump(pref_tree, f)
+
     def launch(self) -> None:
         if self.proc and self.proc.poll() is None:
             logger.info("Chrome is already running with pid %s", self.proc.pid)
             return
 
+        self._write_preferences_file()
+
         width, height = self.window_size
         cmd = [
             self.chrome_binary,
             "--new-window",
-            f"--window-size={width},{height}",
-            "--autoplay-policy=no-user-gesture-required",
-            "--use-fake-device-for-media-stream",
-            "--use-fake-ui-for-media-stream",
-            "--disable-gpu",
-            "--disable-extensions",
-            "--disable-application-cache",
-            "--disable-dev-shm-usage",
+            f"--remote-debugging-port={self.debugging_port}",
+            f"--user-data-dir={self.user_data_dir}",
+            "--no-first-run",
+            "--no-default-browser-check",
+            f"--remote-allow-origins={self.devtools_origin}",
             *self.extra_args,
+            "about:blank",
         ]
-        cmd.append(self.meeting_url or "about:blank")
 
-        logger.info("Launching normal Chrome: %s", cmd)
+        logger.info("Launching Chrome with dedicated user-data-dir: %s", cmd)
         self.proc = subprocess.Popen(
             cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
+
+        self._attach_cdp()
+
+    def _attach_cdp(self) -> None:
+        deadline = time.time() + 15
+        last_error = None
+        while time.time() < deadline:
+            try:
+                response = requests.get(f"http://127.0.0.1:{self.debugging_port}/json/list", timeout=1)
+                response.raise_for_status()
+                targets = response.json()
+                for target in targets:
+                    if target.get("type") == "page" and target.get("webSocketDebuggerUrl"):
+                        self._cdp = _CdpConnection(target["webSocketDebuggerUrl"], origin=self.devtools_origin)
+                        self._cdp.call("Page.enable")
+                        self._cdp.call("Runtime.enable")
+                        return
+            except Exception as exc:
+                last_error = exc
+            time.sleep(0.2)
+        raise RuntimeError(f"Could not attach to Chrome DevTools on port {self.debugging_port}: {last_error}")
+
+    def navigate(self, url: str) -> None:
+        self.execute_cdp_cmd("Page.navigate", {"url": url})
 
     def close(self) -> None:
         self._terminate()
@@ -109,31 +227,57 @@ class NormalChromeProcess:
         self._terminate()
 
     def _terminate(self) -> None:
-        if not self.proc or self.proc.poll() is not None:
-            return
+        if self._cdp:
+            self._cdp.close()
+            self._cdp = None
 
-        logger.info("Stopping Chrome pid %s", self.proc.pid)
-        self.proc.terminate()
-        try:
-            self.proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            logger.warning("Chrome did not exit cleanly; killing pid %s", self.proc.pid)
-            self.proc.kill()
-            self.proc.wait(timeout=5)
+        if self.proc and self.proc.poll() is None:
+            logger.info("Stopping Chrome pid %s", self.proc.pid)
+            self.proc.terminate()
+            try:
+                self.proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                logger.warning("Chrome did not exit cleanly; killing pid %s", self.proc.pid)
+                self.proc.kill()
+                self.proc.wait(timeout=5)
+
+        if self._owns_user_data_dir:
+            shutil.rmtree(self.user_data_dir, ignore_errors=True)
 
     def save_screenshot(self, path: str) -> None:
-        raise NotImplementedError("Screenshots are not available without CDP or WebDriver in this adapter.")
+        result = self.execute_cdp_cmd("Page.captureScreenshot", {"format": "png", "fromSurface": True})
+        png_bytes = base64.b64decode(result["data"])
+        with open(path, "wb") as f:
+            f.write(png_bytes)
 
     def execute_cdp_cmd(self, command: str, params: dict):
-        if command == "Page.getNavigationHistory":
-            return {"entries": []}
-        raise NotImplementedError(
-            f"CDP command {command!r} is not available when launching Chrome normally with the default profile."
-        )
+        if not self._cdp:
+            raise RuntimeError("Chrome DevTools is not connected")
+        return self._cdp.call(command, params)
 
     def execute_script(self, script: str, *args):
-        logger.warning("Ignoring execute_script call because Chrome was launched without WebDriver/CDP: %s", script[:120])
-        return None
+        window_handle = self.execute_cdp_cmd("Runtime.evaluate", {
+            "expression": "window",
+            "returnByValue": False,
+        })
+        object_id = window_handle["result"]["objectId"]
+
+        response = self.execute_cdp_cmd(
+            "Runtime.callFunctionOn",
+            {
+                "objectId": object_id,
+                "functionDeclaration": f"function(...__chatgpt_args) {{ const arguments = __chatgpt_args; {script} }}",
+                "arguments": [{"value": arg} for arg in args],
+                "returnByValue": True,
+                "awaitPromise": True,
+            },
+        )
+
+        if "exceptionDetails" in response:
+            raise RuntimeError(f"Browser script execution failed: {response['exceptionDetails']}")
+
+        result = response.get("result", {})
+        return result.get("value")
 
 
 class WebBotAdapter(BotAdapter):
@@ -207,6 +351,7 @@ class WebBotAdapter(BotAdapter):
         self.video_frame_ticker = 0
 
         self.automatic_leave_configuration = automatic_leave_configuration
+        self.per_participant_realtime_video_configuration = {}
 
         self.should_create_debug_recording = should_create_debug_recording
         self.debug_screen_recorder = None
@@ -675,6 +820,34 @@ class WebBotAdapter(BotAdapter):
     def init_driver(self):
         self.write_chrome_policies_file()
 
+        options = _ChromeOptionsShim()
+        options.add_argument("--autoplay-policy=no-user-gesture-required")
+        options.add_argument("--use-fake-device-for-media-stream")
+        options.add_argument("--use-fake-ui-for-media-stream")
+        options.add_argument(f"--window-size={self.video_frame_size[0]},{self.video_frame_size[1]}")
+        options.add_argument("--start-fullscreen")
+        options.add_argument("--disable-gpu")
+        options.add_argument("--disable-extensions")
+        options.add_argument("--disable-application-cache")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--disable-blink-features=AutomationControlled")
+        options.add_experimental_option("excludeSwitches", ["enable-automation"])
+
+        if os.getenv("ENABLE_CHROME_SANDBOX", "false").lower() != "true":
+            options.add_argument("--no-sandbox")
+            options.add_argument("--disable-setuid-sandbox")
+            logger.info("Chrome sandboxing is disabled")
+        else:
+            logger.info("Chrome sandboxing is enabled")
+
+        prefs = {
+            "credentials_enable_service": False,
+            "profile.password_manager_enabled": False,
+        }
+        options.add_experimental_option("prefs", prefs)
+
+        self.add_subclass_specific_chrome_options(options)
+
         if self.driver:
             try:
                 self.driver.close()
@@ -686,23 +859,57 @@ class WebBotAdapter(BotAdapter):
                 logger.warning(f"Error quitting existing Chrome process: {e}")
             self.driver = None
 
-        chrome_args = []
-        if os.getenv("ENABLE_CHROME_SANDBOX", "false").lower() != "true":
-            chrome_args.extend(["--no-sandbox", "--disable-setuid-sandbox"])
-            logger.info("Chrome sandboxing is disabled")
-        else:
-            logger.info("Chrome sandboxing is enabled")
+        if options.experimental_options.get("excludeSwitches"):
+            logger.info("Ignoring Chrome experimental option excludeSwitches because ChromeDriver is not being used")
 
-        self.driver = NormalChromeProcess(
+        chrome_user_data_dir = os.getenv("CHROME_USER_DATA_DIR")
+        if chrome_user_data_dir:
+            logger.info("Using Chrome user-data-dir from CHROME_USER_DATA_DIR=%s", chrome_user_data_dir)
+
+        self.driver = CdpChromeProcess(
             meeting_url=self.meeting_url,
             window_size=self.video_frame_size,
-            extra_args=chrome_args,
+            extra_args=options.arguments,
+            prefs=options.experimental_options.get("prefs", {}),
+            user_data_dir=chrome_user_data_dir,
         )
         self.driver.launch()
-        logger.info("normal Chrome process initialized (pid=%s)", getattr(self.driver.proc, "pid", None))
         logger.info(
-            "Chrome was launched without WebDriver. Default-profile Chrome cannot be attached over CDP on modern Chrome, so script injection is disabled."
+            "Chrome initialized without WebDriver using DevTools on port %s and profile dir %s",
+            self.driver.service.port,
+            self.driver.user_data_dir,
         )
+
+        initial_data_code = f"window.initialData = {{websocketPort: {self.websocket_port}, videoFrameWidth: {self.video_frame_size[0]}, videoFrameHeight: {self.video_frame_size[1]}, botName: {json.dumps(self.display_name)}, addClickRipple: {'true' if self.should_create_debug_recording else 'false'}, recordingView: '{self.recording_view}', sendMixedAudio: {'true' if self.add_mixed_audio_chunk_callback else 'false'}, sendPerParticipantAudio: {'true' if self.add_audio_chunk_callback else 'false'}, perParticipantRealtimeVideoConfiguration: {'{}'}, sendPerParticipantVideo: {'true' if self.add_per_participant_video_frame_callback else 'false'}, collectCaptions: {'true' if self.upsert_caption_callback else 'false'}, recordParticipantSpeechStartStopEvents: {'true' if self.record_participant_speech_start_stop_events else 'false'}}}"
+
+        CDN_LIBRARIES = ["https://cdnjs.cloudflare.com/ajax/libs/protobufjs/7.4.0/protobuf.min.js", "https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"]
+
+        libraries_code = ""
+        for url in CDN_LIBRARIES:
+            response = requests.get(url)
+            if response.status_code == 200:
+                libraries_code += response.text + "\n"
+            else:
+                raise Exception(f"Failed to download library from {url}")
+
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        with open(os.path.join(current_dir, "..", self.get_chromedriver_payload_file_name()), "r") as file:
+            payload_code = file.read()
+
+        with open(os.path.join(current_dir, "shared_chromedriver_payload.js"), "r") as file:
+            shared_chromedriver_payload_code = file.read()
+
+        combined_code = f"""
+            {initial_data_code}
+            {self.subclass_specific_initial_data_code()}
+            {libraries_code}
+            {shared_chromedriver_payload_code}
+            {payload_code}
+        """
+
+        self.driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": combined_code})
+        if self.meeting_url:
+            self.driver.navigate(self.meeting_url)
 
     def init(self):
         self.display_var_for_debug_recording = os.environ.get("DISPLAY")
@@ -723,17 +930,13 @@ class WebBotAdapter(BotAdapter):
         if not self.websocket_port:
             raise Exception("WebSocket server failed to start")
 
-        # In the normal-Chrome path we just launch Chrome directly and do not
-        # attempt Selenium-style UI automation.
         self.init_driver()
 
     def should_retry_joining_meeting_that_requires_login_by_logging_in(self):
         return False
 
     def repeatedly_attempt_to_join_meeting(self):
-        logger.info(
-            "repeatedly_attempt_to_join_meeting() is disabled in the normal-Chrome path. Chrome is launched directly in init()."
-        )
+        logger.info("repeatedly_attempt_to_join_meeting() is disabled in the CDP launch path. Chrome is launched directly in init().")
 
     def after_bot_joined_meeting(self):
         self.send_message_callback({"message": self.Messages.BOT_JOINED_MEETING})
