@@ -117,6 +117,11 @@ class TestGoogleMeetBot2(TransactionTestCase):
         patcher5.start()
         self.addCleanup(patcher5.stop)
 
+        # Mock human_copy_and_paste to avoid real interactions
+        patcher6 = patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.human_copy_and_paste", return_value=MagicMock())
+        patcher6.start()
+        self.addCleanup(patcher6.stop)
+
         # Recreate organization and project for each test
         self.organization = Organization.objects.create(name="Test Org")
         self.project = Project.objects.create(name="Test Project", organization=self.organization)
