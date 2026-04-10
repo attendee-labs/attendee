@@ -134,3 +134,135 @@ class MocapManager:
         if not matching:
             return None
         return random.choice(matching)
+
+    def _sequence_lands_in_rect(
+        self,
+        seq: PrimitiveMocapSequence,
+        current_x: int,
+        current_y: int,
+        rect_left: int,
+        rect_top: int,
+        rect_right: int,
+        rect_bottom: int,
+    ) -> bool:
+        final_x = current_x + seq.total_dx
+        final_y = current_y + seq.total_dy
+        return rect_left <= final_x <= rect_right and rect_top <= final_y <= rect_bottom
+
+    def _transform_sequence(
+        self,
+        seq: PrimitiveMocapSequence,
+        scale: float,
+        rotation_degrees: float,
+    ) -> PrimitiveMocapSequence:
+        rad = math.radians(rotation_degrees)
+        cos_a = math.cos(rad)
+        sin_a = math.sin(rad)
+
+        transformed_movements = []
+        total_dx = 0
+        total_dy = 0
+
+        for mov in seq.movements:
+            dx = mov.get("dx", 0)
+            dy = mov.get("dy", 0)
+
+            scaled_dx = dx * scale
+            scaled_dy = dy * scale
+
+            new_dx = round(scaled_dx * cos_a - scaled_dy * sin_a)
+            new_dy = round(scaled_dx * sin_a + scaled_dy * cos_a)
+
+            total_dx += new_dx
+            total_dy += new_dy
+
+            transformed_mov = dict(mov)
+            transformed_mov["dx"] = new_dx
+            transformed_mov["dy"] = new_dy
+            transformed_movements.append(transformed_mov)
+
+        return PrimitiveMocapSequence(
+            movements=transformed_movements,
+            total_dx=total_dx,
+            total_dy=total_dy,
+            click_down_dt=seq.click_down_dt,
+            click_up_dt=seq.click_up_dt,
+        )
+
+    # Fallback for when we absolutely need to find a motion sequence that lands in the rect, even if it means stretching or rotating it
+    def find_random_sequence_landing_in_rect_with_stretch_and_rotation_allowed(
+        self,
+        current_x: int,
+        current_y: int,
+        rect_left: int,
+        rect_top: int,
+        rect_right: int,
+        rect_bottom: int,
+    ) -> PrimitiveMocapSequence | None:
+        tiers = [
+            (0.02, 2),
+            (0.04, 4),
+            (0.06, 6),
+            (0.08, 8),
+            (0.10, 10),
+            (0.15, 15),
+        ]
+
+        best_available: list[PrimitiveMocapSequence] = []
+
+        for scale_pct, max_rot_deg in tiers:
+            matching: list[PrimitiveMocapSequence] = []
+
+            # Symmetric scale samples within the allowed stretch/shrink window.
+            scale_factors = [
+                1.0 - scale_pct,
+                1.0 - scale_pct / 2,
+                1.0,
+                1.0 + scale_pct / 2,
+                1.0 + scale_pct,
+            ]
+
+            # Integer degree samples across the allowed rotation window.
+            angles = list(range(-max_rot_deg, max_rot_deg + 1))
+
+            for seq in self.sequences:
+                for scale in scale_factors:
+                    for angle in angles:
+                        transformed = self._transform_sequence(
+                            seq=seq,
+                            scale=scale,
+                            rotation_degrees=angle,
+                        )
+                        if self._sequence_lands_in_rect(
+                            transformed,
+                            current_x,
+                            current_y,
+                            rect_left,
+                            rect_top,
+                            rect_right,
+                            rect_bottom,
+                        ):
+                            matching.append(transformed)
+
+            logger.info(
+                "Found %s transformed sequences matching rect with up to %.1f%% scaling and %s degrees rotation",
+                len(matching),
+                scale_pct * 100,
+                max_rot_deg,
+            )
+
+            if matching:
+                best_available = matching
+
+            if len(matching) >= 10:
+                return random.choice(matching)
+
+        if best_available:
+            logger.info(
+                "Could not find 10 transformed matches; returning a random choice from the widest tier with %s matches",
+                len(best_available),
+            )
+            return random.choice(best_available)
+
+        logger.info("No transformed sequences matched the rect")
+        return None

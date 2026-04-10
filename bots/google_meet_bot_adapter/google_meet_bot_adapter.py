@@ -30,6 +30,7 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
         self.google_meet_bot_login_session = None
         self.modify_dom_for_video_recording = modify_dom_for_video_recording
         self.number_of_times_blocked_by_google = 0
+        self.number_of_times_mocap_sequence_not_available = 0
         self.ui_interaction_mode = ui_interaction_mode
 
     def should_retry_joining_meeting_that_requires_login_by_logging_in(self):

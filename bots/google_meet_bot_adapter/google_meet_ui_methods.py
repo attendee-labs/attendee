@@ -391,7 +391,14 @@ class GoogleMeetUIMethods:
         for attempt in range(num_seq_attempts):
             seq = self.mocap_manager.find_random_sequence_landing_in_rect(current_x, current_y, rect_left, rect_top, rect_right, rect_bottom)
 
+            # If we have hit dead ends 3 times in the past, we will stretch the mocap path to fit the desired endpoint
+            if self.number_of_times_mocap_sequence_not_available > 2 and seq is None:
+                logger.warning(f"No mocap sequence lands inside clickable rect from ({current_x},{current_y}) to [({rect_left},{rect_top})-({rect_right},{rect_bottom})]. Stretching and rotating the mocap path to fit the desired endpoint.")
+                seq = self.mocap_manager.find_random_sequence_landing_in_rect_with_stretch_and_rotation_allowed(current_x, current_y, rect_left, rect_top, rect_right, rect_bottom)
+
             if seq is None:
+                self.number_of_times_mocap_sequence_not_available += 1
+                # This will trigger a retry
                 raise UiMocapSequenceNotAvailableException(f"No mocap sequence lands inside clickable rect from ({current_x},{current_y}) to [({rect_left},{rect_top})-({rect_right},{rect_bottom})]")
 
             endpoint_monitor_x = current_x + seq.total_dx
