@@ -1364,7 +1364,7 @@ class PauseRecordingView(APIView):
     @extend_schema(
         operation_id="Pause Recording",
         summary="Pause the bot's recording",
-        description="Pauses the recording for the specified bot. This functionality is in beta and only supported for Google Meet and MS Teamsbots.",
+        description="Pauses the recording for the specified bot.",
         responses={
             200: OpenApiResponse(
                 response=BotSerializer,

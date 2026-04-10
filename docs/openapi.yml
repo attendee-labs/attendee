@@ -792,8 +792,7 @@ paths:
   /api/v1/bots/{object_id}/pause_recording:
     post:
       operationId: Pause Recording
-      description: Pauses the recording for the specified bot. This functionality
-        is in beta and only supported for Google Meet and MS Teams bots.
+      description: Pauses the recording for the specified bot.
       summary: Pause the bot's recording
       parameters:
       - in: header
