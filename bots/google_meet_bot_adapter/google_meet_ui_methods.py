@@ -32,6 +32,11 @@ class UiGoogleWrongAudioConfigurationException(UiRetryableExpectedException):
         super().__init__(message, step, inner_exception)
 
 
+class UiMocapSequenceNotAvailableException(UiRetryableExpectedException):
+    def __init__(self, message, step=None, inner_exception=None):
+        super().__init__(message, step, inner_exception)
+
+
 class GoogleMeetUIMethods:
     def locate_element(self, step, condition, wait_time_seconds=60):
         try:
@@ -387,7 +392,7 @@ class GoogleMeetUIMethods:
             seq = self.mocap_manager.find_random_sequence_landing_in_rect(current_x, current_y, rect_left, rect_top, rect_right, rect_bottom)
 
             if seq is None:
-                raise RuntimeError(f"No mocap sequence lands inside clickable rect from ({current_x},{current_y}) to [({rect_left},{rect_top})-({rect_right},{rect_bottom})]")
+                raise UiMocapSequenceNotAvailableException(f"No mocap sequence lands inside clickable rect from ({current_x},{current_y}) to [({rect_left},{rect_top})-({rect_right},{rect_bottom})]")
 
             endpoint_monitor_x = current_x + seq.total_dx
             endpoint_monitor_y = current_y + seq.total_dy
