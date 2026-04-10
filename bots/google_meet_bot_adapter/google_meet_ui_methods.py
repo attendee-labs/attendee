@@ -2,22 +2,51 @@ import logging
 import os
 import random
 import time
+from dataclasses import dataclass
 from urllib.parse import urlparse
 
 import requests
 from django.conf import settings
-from selenium.common.exceptions import ElementNotInteractableException, NoSuchElementException, TimeoutException
-from selenium.webdriver.common.action_chains import ActionChains
-from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.support.ui import WebDriverWait
 
 from bots.bot_sso_utils import get_google_meet_set_cookie_url
 from bots.models import RecordingViews
-from bots.web_bot_adapter.ui_methods import UiCouldNotClickElementException, UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableExpectedException
+from bots.web_bot_adapter.ui_methods import (
+    UiCouldNotClickElementException,
+    UiCouldNotJoinMeetingWaitingForHostException,
+    UiCouldNotJoinMeetingWaitingRoomTimeoutException,
+    UiCouldNotLocateElementException,
+    UiLoginAttemptFailedException,
+    UiLoginRequiredException,
+    UiMeetingNotFoundException,
+    UiRequestToJoinDeniedException,
+    UiRetryableExpectedException,
+)
 
 logger = logging.getLogger(__name__)
+
+
+class By:
+    CSS_SELECTOR = "css"
+    XPATH = "xpath"
+
+
+class TimeoutException(Exception):
+    pass
+
+
+class NoSuchElementException(Exception):
+    pass
+
+
+class ElementNotInteractableException(Exception):
+    pass
+
+
+@dataclass(frozen=True)
+class CdpElement:
+    selector_type: str
+    selector: str
+    index: int | None = None
 
 
 class UiGoogleBlockingUsException(UiRetryableExpectedException):
@@ -26,19 +55,263 @@ class UiGoogleBlockingUsException(UiRetryableExpectedException):
 
 
 class GoogleMeetUIMethods:
-    def locate_element(self, step, condition, wait_time_seconds=60):
+    def _navigate(self, url: str) -> None:
+        self.driver.navigate(url)
+
+    def _current_url(self) -> str:
+        return self.driver.execute_script("return window.location.href;") or ""
+
+    def _get_cookies(self) -> list[dict]:
         try:
-            element = WebDriverWait(self.driver, wait_time_seconds).until(condition)
-            return element
+            result = self.driver.execute_cdp_cmd("Network.getCookies", {})
+            return result.get("cookies", [])
+        except Exception:
+            return []
+
+    def _delete_all_cookies(self) -> None:
+        self.driver.execute_cdp_cmd("Network.clearBrowserCookies", {})
+
+    def _query_element_info(self, selector_type: str, selector: str, index: int | None = None):
+        return self.driver.execute_script(
+            """
+            const [selectorType, selector, index] = arguments;
+
+            function findElement() {
+              if (selectorType === 'css') {
+                const els = Array.from(document.querySelectorAll(selector));
+                if (index == null) return els[0] || null;
+                return els[index] || null;
+              }
+
+              if (selectorType === 'xpath') {
+                const result = document.evaluate(
+                  selector,
+                  document,
+                  null,
+                  XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,
+                  null,
+                );
+                const idx = index == null ? 0 : index;
+                if (result.snapshotLength <= idx) return null;
+                return result.snapshotItem(idx);
+              }
+
+              throw new Error(`Unsupported selector type: ${selectorType}`);
+            }
+
+            const el = findElement();
+            if (!el) return null;
+
+            const rect = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            const visible = (
+              !!style &&
+              style.display !== 'none' &&
+              style.visibility !== 'hidden' &&
+              style.opacity !== '0' &&
+              rect.width > 0 &&
+              rect.height > 0
+            );
+
+            return {
+              text: (el.innerText || el.textContent || '').trim(),
+              html: el.outerHTML,
+              value: ('value' in el) ? el.value : null,
+              visible,
+              disabled: !!el.disabled,
+              checked: !!el.checked,
+              rect: {
+                x: rect.x,
+                y: rect.y,
+                width: rect.width,
+                height: rect.height,
+                top: rect.top,
+                left: rect.left,
+                right: rect.right,
+                bottom: rect.bottom,
+              },
+            };
+            """,
+            selector_type,
+            selector,
+            index,
+        )
+
+    def _element_exists(self, selector_type: str, selector: str, index: int | None = None) -> bool:
+        return self._query_element_info(selector_type, selector, index) is not None
+
+    def _wait_for_element(
+        self,
+        *,
+        step: str,
+        selector_type: str,
+        selector: str,
+        wait_time_seconds: float = 60,
+        visible_only: bool = False,
+        index: int | None = None,
+    ) -> CdpElement:
+        deadline = time.time() + wait_time_seconds
+        last_info = None
+        while time.time() < deadline:
+            info = self._query_element_info(selector_type, selector, index)
+            if info is not None:
+                last_info = info
+                if not visible_only or info.get("visible"):
+                    return CdpElement(selector_type=selector_type, selector=selector, index=index)
+            time.sleep(0.1)
+
+        if last_info is None:
+            raise TimeoutException(f"Timed out waiting for {selector_type} selector {selector}")
+        raise ElementNotInteractableException(f"Element found but not interactable for step {step}")
+
+    def _wait_for_element_to_disappear(self, selector_type: str, selector: str, wait_time_seconds: float) -> bool:
+        deadline = time.time() + wait_time_seconds
+        while time.time() < deadline:
+            if not self._element_exists(selector_type, selector):
+                return True
+            time.sleep(0.1)
+        return False
+
+    def _scroll_element_into_view(self, element: CdpElement) -> None:
+        result = self.driver.execute_script(
+            """
+            const [selectorType, selector, index] = arguments;
+
+            function findElement() {
+              if (selectorType === 'css') {
+                const els = Array.from(document.querySelectorAll(selector));
+                if (index == null) return els[0] || null;
+                return els[index] || null;
+              }
+
+              const result = document.evaluate(
+                selector,
+                document,
+                null,
+                XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,
+                null,
+              );
+              const idx = index == null ? 0 : index;
+              if (result.snapshotLength <= idx) return null;
+              return result.snapshotItem(idx);
+            }
+
+            const el = findElement();
+            if (!el) return false;
+            el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+            return true;
+            """,
+            element.selector_type,
+            element.selector,
+            element.index,
+        )
+        if not result:
+            raise NoSuchElementException(f"Element disappeared before scroll: {element}")
+
+    def _focus_element(self, element: CdpElement) -> None:
+        result = self.driver.execute_script(
+            """
+            const [selectorType, selector, index] = arguments;
+
+            function findElement() {
+              if (selectorType === 'css') {
+                const els = Array.from(document.querySelectorAll(selector));
+                if (index == null) return els[0] || null;
+                return els[index] || null;
+              }
+
+              const result = document.evaluate(
+                selector,
+                document,
+                null,
+                XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,
+                null,
+              );
+              const idx = index == null ? 0 : index;
+              if (result.snapshotLength <= idx) return null;
+              return result.snapshotItem(idx);
+            }
+
+            const el = findElement();
+            if (!el) return false;
+            el.focus();
+            return true;
+            """,
+            element.selector_type,
+            element.selector,
+            element.index,
+        )
+        if not result:
+            raise NoSuchElementException(f"Element disappeared before focus: {element}")
+
+    def _dispatch_mouse_move(self, x: float, y: float) -> None:
+        self.driver.execute_cdp_cmd(
+            "Input.dispatchMouseEvent",
+            {
+                "type": "mouseMoved",
+                "x": float(x),
+                "y": float(y),
+                "button": "none",
+                "buttons": 0,
+            },
+        )
+
+    def _dispatch_mouse_click(self, x: float, y: float) -> None:
+        self.driver.execute_cdp_cmd(
+            "Input.dispatchMouseEvent",
+            {
+                "type": "mousePressed",
+                "x": float(x),
+                "y": float(y),
+                "button": "left",
+                "buttons": 1,
+                "clickCount": 1,
+            },
+        )
+        self.driver.execute_cdp_cmd(
+            "Input.dispatchMouseEvent",
+            {
+                "type": "mouseReleased",
+                "x": float(x),
+                "y": float(y),
+                "button": "left",
+                "buttons": 0,
+                "clickCount": 1,
+            },
+        )
+
+    def _dispatch_key(self, key: str, code: str | None = None, windows_virtual_key_code: int | None = None) -> None:
+        if code is None:
+            code = key
+        payload = {
+            "type": "rawKeyDown",
+            "key": key,
+            "code": code,
+            "windowsVirtualKeyCode": windows_virtual_key_code or (8 if key == "Backspace" else 0),
+            "nativeVirtualKeyCode": windows_virtual_key_code or (8 if key == "Backspace" else 0),
+        }
+        self.driver.execute_cdp_cmd("Input.dispatchKeyEvent", payload)
+        payload["type"] = "keyUp"
+        self.driver.execute_cdp_cmd("Input.dispatchKeyEvent", payload)
+
+    def locate_element(self, step, selector_type, selector, wait_time_seconds=60, visible_only=False, index=None):
+        try:
+            return self._wait_for_element(
+                step=step,
+                selector_type=selector_type,
+                selector=selector,
+                wait_time_seconds=wait_time_seconds,
+                visible_only=visible_only,
+                index=index,
+            )
         except Exception as e:
-            # Take screenshot when any exception occurs
             logger.warning(f"Exception raised in locate_element for {step}")
             raise UiCouldNotLocateElementException(f"Exception raised in locate_element for {step}", step, e)
 
     def find_element_by_selector(self, selector_type, selector):
         try:
-            return self.driver.find_element(selector_type, selector)
-        except NoSuchElementException:
+            if self._element_exists(selector_type, selector):
+                return CdpElement(selector_type=selector_type, selector=selector)
             return None
         except Exception as e:
             logger.warning(f"Unknown error occurred in find_element_by_selector. Exception type = {type(e)}")
@@ -58,29 +331,69 @@ class GoogleMeetUIMethods:
                 if last_attempt:
                     raise e
 
-    # Do it via javascript to avoid the element not being interactable exception
     def click_element_forcefully(self, element, step):
         try:
-            self.driver.execute_script("arguments[0].click();", element)
+            result = self.driver.execute_script(
+                """
+                const [selectorType, selector, index] = arguments;
+
+                function findElement() {
+                  if (selectorType === 'css') {
+                    const els = Array.from(document.querySelectorAll(selector));
+                    if (index == null) return els[0] || null;
+                    return els[index] || null;
+                  }
+
+                  const result = document.evaluate(
+                    selector,
+                    document,
+                    null,
+                    XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,
+                    null,
+                  );
+                  const idx = index == null ? 0 : index;
+                  if (result.snapshotLength <= idx) return null;
+                  return result.snapshotItem(idx);
+                }
+
+                const el = findElement();
+                if (!el) return false;
+                el.click();
+                return true;
+                """,
+                element.selector_type,
+                element.selector,
+                element.index,
+            )
+            if not result:
+                raise NoSuchElementException(f"Element disappeared before force click: {element}")
         except Exception as e:
             logger.warning(f"Error occurred when forcefully clicking element for step {step}, will retry")
             raise UiCouldNotClickElementException("Error occurred when forcefully clicking element", step, e)
 
     def click_element(self, element, step):
         try:
-            element.click()
+            self._scroll_element_into_view(element)
+            info = self._query_element_info(element.selector_type, element.selector, element.index)
+            if not info or not info.get("visible"):
+                raise ElementNotInteractableException(f"Element is not visible for step {step}")
+
+            rect = info["rect"]
+            click_x = rect["x"] + rect["width"] / 2
+            click_y = rect["y"] + rect["height"] / 2
+            self._dispatch_mouse_move(click_x, click_y)
+            time.sleep(random.uniform(0.02, 0.08))
+            self._dispatch_mouse_click(click_x, click_y)
         except Exception as e:
             logger.warning(f"Error occurred when clicking element for step {step}, will retry. Exception class name was {e.__class__.__name__}")
             raise UiCouldNotClickElementException("Error occurred when clicking element", step, e)
 
-    # If the meeting you're about to join is being recorded, gmeet makes you click an additional button after you're admitted to the meeting
     def click_this_meeting_is_being_recorded_join_now_button(self, step):
         this_meeting_is_being_recorded_join_now_button = self.find_element_by_selector(By.XPATH, '//button[.//span[text()="Join now"]]')
         if this_meeting_is_being_recorded_join_now_button:
             logger.info("Clicking this_meeting_is_being_recorded_join_now_button")
             self.click_element(this_meeting_is_being_recorded_join_now_button, step)
 
-    # Some modal that google put up
     def click_others_may_see_your_meeting_differently_button(self, step):
         others_may_see_your_meeting_differently_button = self.find_element_by_selector(By.XPATH, '//button[.//span[text()="Got it"]]')
         if others_may_see_your_meeting_differently_button:
@@ -90,8 +403,7 @@ class GoogleMeetUIMethods:
     def look_for_blocked_element(self, step):
         cannot_join_element = self.find_element_by_selector(By.XPATH, '//*[contains(text(), "You can\'t join this video call") or contains(text(), "There is a problem connecting to this video call")]')
         if cannot_join_element:
-            # This means google is blocking us for whatever reason, but we can retry
-            element_text = cannot_join_element.text
+            element_text = self._query_element_info(cannot_join_element.selector_type, cannot_join_element.selector, cannot_join_element.index).get("text", "")
             logger.warning(f"Google is blocking us for whatever reason, but we can retry. Element text: '{element_text}'. Raising UiGoogleBlockingUsException")
             raise UiGoogleBlockingUsException("You can't join this video call", step)
 
@@ -109,7 +421,7 @@ class GoogleMeetUIMethods:
         if not denied_your_request_element:
             return
 
-        element_text = denied_your_request_element.text
+        element_text = self._query_element_info(denied_your_request_element.selector_type, denied_your_request_element.selector).get("text", "")
 
         if "Someone in the call denied your request to join" in element_text:
             logger.warning("Someone in the call actively denied our request to join. Raising UiRequestToJoinDeniedException")
@@ -117,15 +429,12 @@ class GoogleMeetUIMethods:
         elif "No one responded to your request to join the call" in element_text:
             logger.warning("No one responded to our request to join (timeout). Raising UiRequestToJoinDeniedException")
             raise UiRequestToJoinDeniedException("No one responded to your request to join the call", step)
-        else:  # "You left the meeting"
+        else:
             logger.warning("Saw 'You left the meeting' element. Happens if someone actively denied our request to join. Raising UiRequestToJoinDeniedException")
             raise UiRequestToJoinDeniedException("You left the meeting", step)
 
     def look_for_asking_to_be_let_in_element_after_waiting_period_expired(self, step):
-        asking_to_be_let_in_element = self.find_element_by_selector(
-            By.XPATH,
-            '//*[contains(text(), "Asking to be let in")]',
-        )
+        asking_to_be_let_in_element = self.find_element_by_selector(By.XPATH, '//*[contains(text(), "Asking to be let in")]')
         if asking_to_be_let_in_element:
             logger.warning("Bot was not let in after waiting period expired. Raising UiRequestToJoinDeniedException")
             raise UiRequestToJoinDeniedException("Bot was not let in after waiting period expired", step)
@@ -133,7 +442,6 @@ class GoogleMeetUIMethods:
     def check_if_waiting_room_timeout_exceeded(self, waiting_room_timeout_started_at, step):
         waiting_room_timeout_exceeded = time.time() - waiting_room_timeout_started_at > self.automatic_leave_configuration.waiting_room_timeout_seconds
         if waiting_room_timeout_exceeded:
-            # If there is more than one participant in the meeting, then the bot was just let in and we should not timeout
             if len(self.participants_info) > 1:
                 logger.warning("Waiting room timeout exceeded, but there is more than one participant in the meeting. Not aborting join attempt.")
                 return
@@ -143,11 +451,12 @@ class GoogleMeetUIMethods:
 
     def turn_off_media_inputs(self):
         logger.info("Waiting for the microphone button...")
-        MICROPHONE_BUTTON_SELECTOR = 'div[aria-label="Turn off microphone"], button[aria-label="Turn off microphone"]'
         microphone_button = self.locate_element(
             step="turn_off_microphone_button",
-            condition=EC.presence_of_element_located((By.CSS_SELECTOR, MICROPHONE_BUTTON_SELECTOR)),
+            selector_type=By.CSS_SELECTOR,
+            selector='div[aria-label="Turn off microphone"], button[aria-label="Turn off microphone"]',
             wait_time_seconds=6,
+            visible_only=True,
         )
         self.bezier_mouse_move_to_target_element(microphone_button)
         time.sleep(random.uniform(0.1, 0.3))
@@ -157,11 +466,12 @@ class GoogleMeetUIMethods:
         time.sleep(random.uniform(0.2, 0.5))
 
         logger.info("Waiting for the camera button...")
-        CAMERA_BUTTON_SELECTOR = 'div[aria-label="Turn off camera"], button[aria-label="Turn off camera"]'
         camera_button = self.locate_element(
             step="turn_off_camera_button",
-            condition=EC.presence_of_element_located((By.CSS_SELECTOR, CAMERA_BUTTON_SELECTOR)),
+            selector_type=By.CSS_SELECTOR,
+            selector='div[aria-label="Turn off camera"], button[aria-label="Turn off camera"]',
             wait_time_seconds=6,
+            visible_only=True,
         )
         self.bezier_mouse_move_to_target_element(camera_button)
         time.sleep(random.uniform(0.1, 0.3))
@@ -179,33 +489,68 @@ class GoogleMeetUIMethods:
 
     def join_now_button_is_present(self):
         join_button = self.find_element_by_selector(By.XPATH, self.join_now_button_selector())
-        if join_button:
-            return True
-        return False
+        return bool(join_button)
 
     def retrieve_name_input_element(self):
-        return WebDriverWait(self.driver, 1).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'input[type="text"][aria-label="Your name"]')))
+        return self._wait_for_element(
+            step="name_input",
+            selector_type=By.CSS_SELECTOR,
+            selector='input[type="text"][aria-label="Your name"]',
+            wait_time_seconds=1,
+            visible_only=True,
+        )
 
     def human_type_with_typos(self, element, text, typo_rate=0.03):
+        self._scroll_element_into_view(element)
+        self._focus_element(element)
+        self.driver.execute_script(
+            """
+            const [selectorType, selector, index] = arguments;
+            function findElement() {
+              if (selectorType === 'css') {
+                const els = Array.from(document.querySelectorAll(selector));
+                if (index == null) return els[0] || null;
+                return els[index] || null;
+              }
+              const result = document.evaluate(selector, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+              const idx = index == null ? 0 : index;
+              if (result.snapshotLength <= idx) return null;
+              return result.snapshotItem(idx);
+            }
+            const el = findElement();
+            if (!el) return false;
+            if ('value' in el) el.value = '';
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            return true;
+            """,
+            element.selector_type,
+            element.selector,
+            element.index,
+        )
         for char in text:
             if random.random() < typo_rate:
                 wrong = random.choice("abcdefghijklmnopqrstuvwxyz")
-                element.send_keys(wrong)
+                self.driver.execute_cdp_cmd("Input.insertText", {"text": wrong})
                 time.sleep(random.uniform(0.1, 0.3))
-                element.send_keys(Keys.BACKSPACE)
+                self._dispatch_key("Backspace", code="Backspace", windows_virtual_key_code=8)
                 time.sleep(random.uniform(0.05, 0.2))
-            element.send_keys(char)
+            self.driver.execute_cdp_cmd("Input.insertText", {"text": char})
             time.sleep(random.uniform(0.04, 0.18))
 
     def bezier_mouse_move_to_target_element(self, target_element, num_points=20):
-        """Move the mouse along a quadratic Bézier curve ending at the target element."""
         try:
-            rect = target_element.rect
+            self._scroll_element_into_view(target_element)
+            info = self._query_element_info(target_element.selector_type, target_element.selector, target_element.index)
+            if not info:
+                raise NoSuchElementException(f"Target element disappeared: {target_element}")
+
+            rect = info["rect"]
             end_x = rect["x"] + rect["width"] / 2
             end_y = rect["y"] + rect["height"] / 2
 
-            viewport_w = self.driver.execute_script("return window.innerWidth;")
-            viewport_h = self.driver.execute_script("return window.innerHeight;")
+            viewport = self.driver.execute_script("return { width: window.innerWidth, height: window.innerHeight };")
+            viewport_w = viewport["width"]
+            viewport_h = viewport["height"]
 
             start_x = random.uniform(viewport_w * 0.1, viewport_w * 0.9)
             start_y = random.uniform(viewport_h * 0.1, viewport_h * 0.9)
@@ -214,25 +559,20 @@ class GoogleMeetUIMethods:
             ctrl_x = max(10, min(viewport_w - 10, mid_x + random.randint(-100, 100)))
             ctrl_y = max(10, min(viewport_h - 10, mid_y + random.randint(-100, 100)))
 
-            action = ActionChains(self.driver)
             for i in range(num_points + 1):
                 t = i / num_points
                 x = (1 - t) ** 2 * start_x + 2 * (1 - t) * t * ctrl_x + t**2 * end_x
                 y = (1 - t) ** 2 * start_y + 2 * (1 - t) * t * ctrl_y + t**2 * end_y
-
                 x = max(1, min(viewport_w - 1, x))
                 y = max(1, min(viewport_h - 1, y))
-
-                offset_x = int(x - end_x)
-                offset_y = int(y - end_y)
-                action.move_to_element_with_offset(target_element, offset_x, offset_y)
-                action.pause(random.uniform(0.005, 0.03))
-
-            action.move_to_element(target_element)
-            action.perform()
+                self._dispatch_mouse_move(x, y)
+                time.sleep(random.uniform(0.005, 0.03))
         except Exception as e:
             logger.warning(f"Bézier mouse move failed ({type(e).__name__}: {e}), falling back to direct move")
-            ActionChains(self.driver).move_to_element(target_element).perform()
+            info = self._query_element_info(target_element.selector_type, target_element.selector, target_element.index)
+            if info:
+                rect = info["rect"]
+                self._dispatch_mouse_move(rect["x"] + rect["width"] / 2, rect["y"] + rect["height"] / 2)
 
     def fill_out_name_input(self):
         num_attempts_to_look_for_name_input = 300
@@ -240,15 +580,11 @@ class GoogleMeetUIMethods:
         for attempt_to_look_for_name_input_index in range(num_attempts_to_look_for_name_input):
             try:
                 name_input = self.retrieve_name_input_element()
-                time.sleep(5)
-                #logger.info(f"name input found: {name_input}")
-                #time.sleep(120)
-                #self.bezier_mouse_move_to_target_element(name_input)
-                #time.sleep(random.uniform(0.1, 0.3))
-                #self.check_for_failed_logged_in_bot_attempt()
-                #logger.info("name input found")
-                #self.human_type_with_typos(name_input, self.display_name)
-                #return
+                time.sleep(0.5)
+                self.check_for_failed_logged_in_bot_attempt()
+                logger.info("name input found")
+                self.human_type_with_typos(name_input, self.display_name)
+                return
             except TimeoutException as e:
                 self.look_for_blocked_element("name_input")
                 self.look_for_login_required_element("name_input")
@@ -282,11 +618,23 @@ class GoogleMeetUIMethods:
         waiting_room_timeout_started_at = time.time()
         for attempt_to_look_for_captions_button_index in range(num_attempts_to_look_for_captions_button):
             try:
-                captions_button = WebDriverWait(self.driver, 1).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'button[aria-label="Turn on captions"]')))
+                captions_button = self.locate_element(
+                    step="click_captions_button",
+                    selector_type=By.CSS_SELECTOR,
+                    selector='button[aria-label="Turn on captions"]',
+                    wait_time_seconds=1,
+                    visible_only=True,
+                )
                 logger.info("Captions button found")
                 self.click_element(captions_button, "click_captions_button")
                 logger.info("Waiting for captions to be enabled...")
-                WebDriverWait(self.driver, 5).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'button[aria-label="Turn off captions"]')))
+                self.locate_element(
+                    step="captions_enabled_button",
+                    selector_type=By.CSS_SELECTOR,
+                    selector='button[aria-label="Turn off captions"]',
+                    wait_time_seconds=5,
+                    visible_only=True,
+                )
                 logger.info("Confirmed captions were enabled")
                 return
             except UiCouldNotClickElementException as e:
@@ -296,7 +644,7 @@ class GoogleMeetUIMethods:
                 if last_check_could_not_click_element:
                     logger.warning("Could not click captions button. Raising UiCouldNotClickElementException")
                     raise e
-            except TimeoutException as e:
+            except UiCouldNotLocateElementException as e:
                 self.look_for_blocked_element("click_captions_button")
                 self.look_for_denied_your_request_element("click_captions_button")
                 self.click_this_meeting_is_being_recorded_join_now_button("click_captions_button")
@@ -306,14 +654,13 @@ class GoogleMeetUIMethods:
                 last_check_timed_out = attempt_to_look_for_captions_button_index == num_attempts_to_look_for_captions_button - 1
                 if last_check_timed_out:
                     self.look_for_asking_to_be_let_in_element_after_waiting_period_expired("click_captions_button")
-
                     logger.warning("Could not find captions button. Timed out. Raising UiCouldNotLocateElementException")
                     raise UiCouldNotLocateElementException(
                         "Could not find captions button. Timed out.",
                         "click_captions_button",
                         e,
                     )
-
+                time.sleep(1)
             except Exception as e:
                 logger.warning(f"Could not find captions button. Unknown error {e} of type {type(e)}. Raising UiCouldNotLocateElementException")
                 raise UiCouldNotLocateElementException(
@@ -331,12 +678,10 @@ class GoogleMeetUIMethods:
     def wait_for_host_if_needed(self):
         host_element = self.find_element_by_selector(By.XPATH, '//*[contains(text(), "Waiting for the host to join")]')
         if host_element:
-            # Wait for up to n seconds for the host to join
             wait_time_seconds = self.automatic_leave_configuration.wait_for_host_to_start_meeting_timeout_seconds
             logger.info(f"We must wait for the host to join before we can join the meeting. Waiting for {wait_time_seconds} seconds...")
-            try:
-                WebDriverWait(self.driver, wait_time_seconds).until(EC.invisibility_of_element_located((By.XPATH, '//*[contains(text(), "Waiting for the host to join")]')))
-            except TimeoutException:
+            disappeared = self._wait_for_element_to_disappear(By.XPATH, '//*[contains(text(), "Waiting for the host to join")]', wait_time_seconds)
+            if not disappeared:
                 logger.warning("Host did not join the meeting in time. Raising UiCouldNotJoinMeetingWaitingForHostException")
                 raise UiCouldNotJoinMeetingWaitingForHostException("Host did not join the meeting in time", "wait_for_host_if_needed")
 
@@ -359,11 +704,12 @@ class GoogleMeetUIMethods:
     def attempt_to_turn_off_reactions(self):
         logger.info("Attempting to turn off reactions")
         logger.info("Waiting for the more options button...")
-        MORE_OPTIONS_BUTTON_SELECTOR = 'button[jsname="NakZHc"][aria-label="More options"]'
         more_options_button = self.locate_element(
             step="more_options_button_for_language_selection",
-            condition=EC.presence_of_element_located((By.CSS_SELECTOR, MORE_OPTIONS_BUTTON_SELECTOR)),
+            selector_type=By.CSS_SELECTOR,
+            selector='button[jsname="NakZHc"][aria-label="More options"]',
             wait_time_seconds=6,
+            visible_only=True,
         )
         logger.info("Clicking the more options button...")
         self.click_element(more_options_button, "more_options_button")
@@ -371,8 +717,10 @@ class GoogleMeetUIMethods:
         logger.info("Waiting for the settings list item...")
         settings_list_item = self.locate_element(
             step="settings_list_item",
-            condition=EC.presence_of_element_located((By.XPATH, '//li[.//span[text()="Settings"]]')),
+            selector_type=By.XPATH,
+            selector='//li[.//span[text()="Settings"]]',
             wait_time_seconds=6,
+            visible_only=True,
         )
         logger.info("Clicking the settings list item...")
         self.click_element(settings_list_item, "settings_list_item")
@@ -380,18 +728,30 @@ class GoogleMeetUIMethods:
         logger.info("Waiting for the reactions tab...")
         self.locate_element(
             step="reactions_tab",
-            condition=EC.presence_of_element_located((By.CSS_SELECTOR, 'button[aria-label="Reactions"]')),
+            selector_type=By.CSS_SELECTOR,
+            selector='button[aria-label="Reactions"]',
             wait_time_seconds=6,
+            visible_only=True,
         )
 
-        # Use javascript to click the reactions button
-        self.driver.execute_script("document.querySelector('button[aria-label=\"Show reactions from others\"]').click();")
+        toggle_result = self.driver.execute_script(
+            """
+            const button = document.querySelector('button[aria-label="Show reactions from others"]');
+            if (!button) return false;
+            button.click();
+            return true;
+            """
+        )
+        if not toggle_result:
+            raise UiCouldNotLocateElementException("Could not find reactions toggle", "reactions_toggle")
 
         logger.info("Waiting for the close button")
         close_button = self.locate_element(
             step="close_button_for_language_selection",
-            condition=EC.presence_of_element_located((By.CSS_SELECTOR, 'button[aria-label="Close dialog"]')),
+            selector_type=By.CSS_SELECTOR,
+            selector='button[aria-label="Close dialog"]',
             wait_time_seconds=6,
+            visible_only=True,
         )
         logger.info("Clicking the close button")
         self.click_element(close_button, "close_button")
@@ -399,11 +759,12 @@ class GoogleMeetUIMethods:
     def disable_incoming_video_in_ui(self):
         logger.info("Disabling incoming video")
         logger.info("Waiting for the more options button...")
-        MORE_OPTIONS_BUTTON_SELECTOR = 'button[jsname="NakZHc"][aria-label="More options"]'
         more_options_button = self.locate_element(
             step="more_options_button_for_language_selection",
-            condition=EC.presence_of_element_located((By.CSS_SELECTOR, MORE_OPTIONS_BUTTON_SELECTOR)),
+            selector_type=By.CSS_SELECTOR,
+            selector='button[jsname="NakZHc"][aria-label="More options"]',
             wait_time_seconds=6,
+            visible_only=True,
         )
         logger.info("Clicking the more options button...")
         self.click_element(more_options_button, "disable_incoming_video:more_options_button")
@@ -411,8 +772,10 @@ class GoogleMeetUIMethods:
         logger.info("Waiting for the settings list item...")
         settings_list_item = self.locate_element(
             step="settings_list_item",
-            condition=EC.presence_of_element_located((By.XPATH, '//li[.//span[text()="Settings"]]')),
+            selector_type=By.XPATH,
+            selector='//li[.//span[text()="Settings"]]',
             wait_time_seconds=6,
+            visible_only=True,
         )
         logger.info("Clicking the settings list item...")
         self.click_element(settings_list_item, "disable_incoming_video:settings_list_item")
@@ -420,28 +783,32 @@ class GoogleMeetUIMethods:
         logger.info("Waiting for the video button...")
         video_button = self.locate_element(
             step="video_button",
-            condition=EC.presence_of_element_located((By.CSS_SELECTOR, 'button[aria-label="Video"]')),
+            selector_type=By.CSS_SELECTOR,
+            selector='button[aria-label="Video"]',
             wait_time_seconds=6,
+            visible_only=True,
         )
         logger.info("Clicking the video button...")
         self.click_element(video_button, "disable_incoming_video:video_button")
 
-        # After clicking the video button, select "Audio only" option
         logger.info("Waiting for the Audio only option...")
         audio_only_option = self.locate_element(
             step="audio_only_option",
-            condition=EC.presence_of_element_located((By.CSS_SELECTOR, 'li[aria-label="Audio only"]')),
+            selector_type=By.CSS_SELECTOR,
+            selector='li[aria-label="Audio only"]',
             wait_time_seconds=6,
+            visible_only=True,
         )
         logger.info("Clicking the Audio only option...")
-        # Click the option using javascript
-        self.driver.execute_script("arguments[0].click();", audio_only_option)
+        self.click_element_forcefully(audio_only_option, "disable_incoming_video:audio_only_option")
 
         logger.info("Waiting for the close button")
         close_button = self.locate_element(
             step="close_button",
-            condition=EC.presence_of_element_located((By.CSS_SELECTOR, '[aria-modal="true"] button[aria-label="Close dialog"]')),
+            selector_type=By.CSS_SELECTOR,
+            selector='[aria-modal="true"] button[aria-label="Close dialog"]',
             wait_time_seconds=6,
+            visible_only=True,
         )
         logger.info("Clicking the close button")
         self.click_element(close_button, "disable_incoming_video:close_button")
@@ -462,11 +829,12 @@ class GoogleMeetUIMethods:
 
     def attempt_to_set_layout(self, layout_to_select):
         logger.info("Begin setting layout. Waiting for the more options button...")
-        MORE_OPTIONS_BUTTON_SELECTOR = 'button[jsname="NakZHc"][aria-label="More options"]'
         more_options_button = self.locate_element(
             step="more_options_button",
-            condition=EC.presence_of_element_located((By.CSS_SELECTOR, MORE_OPTIONS_BUTTON_SELECTOR)),
+            selector_type=By.CSS_SELECTOR,
+            selector='button[jsname="NakZHc"][aria-label="More options"]',
             wait_time_seconds=6,
+            visible_only=True,
         )
         logger.info("Clicking the more options button....")
         self.click_element_and_handle_blocking_elements(more_options_button, "more_options_button")
@@ -474,8 +842,10 @@ class GoogleMeetUIMethods:
         logger.info("Waiting for the 'Change layout' list item...")
         change_layout_list_item = self.locate_element(
             step="change_layout_item",
-            condition=EC.presence_of_element_located((By.XPATH, '//li[.//span[text()="Change layout" or text()="Adjust view"] or @jsname="WZerud"]')),
+            selector_type=By.XPATH,
+            selector='//li[.//span[text()="Change layout" or text()="Adjust view"] or @jsname="WZerud"]',
             wait_time_seconds=6,
+            visible_only=True,
         )
         logger.info("Clicking the 'Change layout' list item....")
         self.click_element_and_handle_blocking_elements(change_layout_list_item, "change_layout_list_item")
@@ -484,8 +854,10 @@ class GoogleMeetUIMethods:
             logger.info("Waiting for the 'Spotlight' label element")
             spotlight_label = self.locate_element(
                 step="spotlight_label",
-                condition=EC.presence_of_element_located((By.XPATH, '//label[.//span[text()="Spotlight"]]')),
+                selector_type=By.XPATH,
+                selector='//label[.//span[text()="Spotlight"]]',
                 wait_time_seconds=6,
+                visible_only=True,
             )
             logger.info("Clicking the 'Spotlight' label element")
             self.click_element(spotlight_label, "spotlight_label")
@@ -494,8 +866,10 @@ class GoogleMeetUIMethods:
             logger.info("Waiting for the 'Sidebar' label element")
             sidebar_label = self.locate_element(
                 step="sidebar_label",
-                condition=EC.presence_of_element_located((By.XPATH, '//label[.//span[text()="Sidebar"]]')),
+                selector_type=By.XPATH,
+                selector='//label[.//span[text()="Sidebar"]]',
                 wait_time_seconds=6,
+                visible_only=True,
             )
             logger.info("Clicking the 'Sidebar' label element")
             self.click_element(sidebar_label, "sidebar_label")
@@ -504,55 +878,57 @@ class GoogleMeetUIMethods:
             logger.info("Waiting for the 'Tiled' label element")
             tiled_label = self.locate_element(
                 step="tiled_label",
-                condition=EC.presence_of_element_located((By.XPATH, '//label[.//span[@class="xo15nd" and contains(text(), "Tiled")]]')),
+                selector_type=By.XPATH,
+                selector='//label[.//span[@class="xo15nd" and contains(text(), "Tiled")]]',
                 wait_time_seconds=6,
+                visible_only=True,
             )
             logger.info("Clicking the 'Tiled' label element")
             self.click_element(tiled_label, "tiled_label")
 
             logger.info("Waiting for the tile selector element")
-            tile_selector = self.locate_element(
+            self.locate_element(
                 step="tile_selector",
-                condition=EC.presence_of_element_located((By.CSS_SELECTOR, ".ByPkaf")),
+                selector_type=By.CSS_SELECTOR,
+                selector='.ByPkaf',
                 wait_time_seconds=6,
+                visible_only=True,
             )
 
-            logger.info("Finding all tile options")
-            tile_options = tile_selector.find_elements(By.CSS_SELECTOR, ".gyG0mb-zD2WHb-SYOSDb-OWXEXe-mt1Mkb")
-
-            if tile_options:
-                logger.info("Clicking the last tile option (49 tiles)")
-                last_tile_option = tile_options[-1]
-                self.click_element(last_tile_option, "last_tile_option")
-            else:
+            logger.info("Clicking the last tile option (49 tiles)")
+            clicked = self.driver.execute_script(
+                """
+                const options = Array.from(document.querySelectorAll('.ByPkaf .gyG0mb-zD2WHb-SYOSDb-OWXEXe-mt1Mkb'));
+                if (!options.length) return false;
+                options[options.length - 1].click();
+                return true;
+                """
+            )
+            if not clicked:
                 logger.warning("No tile options found")
 
         logger.info("Waiting for the close button")
         close_button = self.locate_element(
             step="close_button",
-            condition=EC.presence_of_element_located((By.CSS_SELECTOR, '[aria-modal="true"] button[aria-label="Close"]')),
+            selector_type=By.CSS_SELECTOR,
+            selector='[aria-modal="true"] button[aria-label="Close"]',
             wait_time_seconds=6,
+            visible_only=True,
         )
         logger.info("Clicking the close button")
         self.click_element(close_button, "close_button")
 
     def wait_until_url_has_stopped_changing(self, stable_for: float = 1.0, timeout: float = 30.0, poll: float = 0.1) -> bool:
-        """
-        Wait until the browser URL remains unchanged for at least `stable_for` seconds.
-        Returns True if stability was achieved before `timeout`, else False.
-        """
-        last_url = self.driver.current_url
+        last_url = self._current_url()
         last_change = time.monotonic()
         deadline = last_change + timeout
 
         while time.monotonic() < deadline:
-            current_url = self.driver.current_url
+            current_url = self._current_url()
             if current_url != last_url:
-                # URL changed; reset the stability timer
                 last_url = current_url
                 last_change = time.monotonic()
 
-            # Has the URL been stable long enough?
             if (time.monotonic() - last_change) >= stable_for:
                 logger.info("URL has not changed for %.2f seconds, returning (url=%s)", stable_for, current_url)
                 return True
@@ -563,7 +939,6 @@ class GoogleMeetUIMethods:
         return False
 
     def login_to_google_meet_account_with_retries(self):
-        # Blanket guard against transient errors on Google's side
         num_attempts = 3
         for attempt_index in range(num_attempts):
             try:
@@ -574,19 +949,14 @@ class GoogleMeetUIMethods:
                 if last_attempt:
                     raise e
                 logger.warning(f"Error logging in to Google Meet account. Clearing cookies and retrying... Attempts remaining: {num_attempts - attempt_index - 1}")
-                self.driver.delete_all_cookies()
+                self._delete_all_cookies()
 
-    # This is safer because it prevents the browser from navigating to an untrusted url.
-    # It is a bit less robust though and requires SITE_DOMAIN to be set correctly.
-    # So not making it the default, as self-hosters don't need it.
     def safely_navigate_to_gmail_domain_url(self):
         gmail_service_url = f"https://www.google.com/a/{self.google_meet_bot_login_session.get('login_domain')}/ServiceLogin?service=mail"
-        # Make a request to this url and get the redirect header
         logger.info(f"Making request to gmail service url: {gmail_service_url}")
         response = requests.get(gmail_service_url, allow_redirects=False)
         redirect_url_from_google = response.headers.get("Location")
 
-        # If the redirect url's host is not SITE_DOMAIN, the login failed
         redirect_url_from_google_host = None
         try:
             redirect_url_from_google_host = urlparse(redirect_url_from_google).hostname
@@ -598,8 +968,7 @@ class GoogleMeetUIMethods:
             raise UiLoginAttemptFailedException("Redirect url's host is not SITE_DOMAIN", "safe_navigate_to_gmail_domain_url")
 
         logger.info(f"redirect_url_from_google_host = {redirect_url_from_google_host}")
-
-        self.driver.get(redirect_url_from_google)
+        self._navigate(redirect_url_from_google)
 
     def navigate_to_gmail_domain_url(self):
         if os.getenv("USE_SAFE_NAVIGATION_FOR_SIGNED_IN_GOOGLE_MEET_BOTS", "false") == "true":
@@ -608,7 +977,7 @@ class GoogleMeetUIMethods:
 
         gmail_domain_url = f"https://mail.google.com/a/{self.google_meet_bot_login_session.get('login_domain')}"
         logger.info(f"Navigating to gmail domain url: {gmail_domain_url}")
-        self.driver.get(gmail_domain_url)
+        self._navigate(gmail_domain_url)
 
     def login_to_google_meet_account(self):
         self.google_meet_bot_login_session = self.create_google_meet_bot_login_session_callback()
@@ -616,21 +985,19 @@ class GoogleMeetUIMethods:
         session_id = self.google_meet_bot_login_session.get("session_id")
         google_meet_set_cookie_url = get_google_meet_set_cookie_url(session_id)
         logger.info(f"Navigating to Google Meet set cookie URL: {google_meet_set_cookie_url}")
-        self.driver.get(google_meet_set_cookie_url)
+        self._navigate(google_meet_set_cookie_url)
 
         self.navigate_to_gmail_domain_url()
 
-        # Wait for cookies indicating that we have logged in successfully
         start_waiting_at = time.time()
         while not self.has_google_cookies_that_indicate_logged_in(self.driver):
             time.sleep(1)
-            logger.info(f"Waiting for cookies indicating that we have logged in successfully. Current URL: {self.driver.current_url}")
+            logger.info(f"Waiting for cookies indicating that we have logged in successfully. Current URL: {self._current_url()}")
             if time.time() - start_waiting_at > 30:
-                # We'll raise an exception if it's not logged in after 30 seconds
-                logger.warning(f"Login timed out, after 30 seconds, no Google auth cookies were present. Current URL: {self.driver.current_url}")
+                logger.warning(f"Login timed out, after 30 seconds, no Google auth cookies were present. Current URL: {self._current_url()}")
                 raise UiLoginAttemptFailedException("No Google auth cookies were present", "login_to_google_meet_account")
 
-        logger.info(f"After waiting, URL is {self.driver.current_url}")
+        logger.info(f"After waiting, URL is {self._current_url()}")
 
     def has_google_cookies_that_indicate_logged_in(self, driver) -> bool:
         google_auth_cookie_names = {
@@ -646,25 +1013,26 @@ class GoogleMeetUIMethods:
             "SIDCC",
         }
 
-        cookies = driver.get_cookies()
+        cookies = self._get_cookies()
         names = {c.get("name") for c in cookies if c.get("name")}
         any_google_auth_cookies_present = bool(names & google_auth_cookie_names)
         logger.warning(f"Cookie names: {names}. Any Google auth cookies present: {any_google_auth_cookies_present}.")
         return any_google_auth_cookies_present
 
-    # returns nothing if succeeded, raises an exception if failed
     def attempt_to_join_meeting(self):
         if self.google_meet_bot_login_is_available and self.google_meet_bot_login_should_be_used:
             self.login_to_google_meet_account_with_retries()
 
         layout_to_select = self.get_layout_to_select()
 
-        self.driver.get(self.meeting_url)
+        self._navigate(self.meeting_url)
 
+        parsed_url = urlparse(self.meeting_url)
+        meeting_origin = f"{parsed_url.scheme}://{parsed_url.netloc}"
         self.driver.execute_cdp_cmd(
             "Browser.grantPermissions",
             {
-                "origin": self.meeting_url,
+                "origin": meeting_origin,
                 "permissions": [
                     "geolocation",
                     "audioCapture",
@@ -675,16 +1043,16 @@ class GoogleMeetUIMethods:
         )
 
         self.check_if_meeting_is_found()
-
         self.fill_out_name_input()
-
         self.turn_off_media_inputs()
 
         logger.info("Waiting for the 'Ask to join' or 'Join now' button...")
         join_button = self.locate_element(
             step="join_button",
-            condition=EC.presence_of_element_located((By.XPATH, self.join_now_button_selector())),
+            selector_type=By.XPATH,
+            selector=self.join_now_button_selector(),
             wait_time_seconds=60,
+            visible_only=True,
         )
         self.bezier_mouse_move_to_target_element(join_button)
         time.sleep(random.uniform(0.1, 0.3))
@@ -692,9 +1060,7 @@ class GoogleMeetUIMethods:
         self.click_element(join_button, "join_button")
 
         self.click_captions_button()
-
         self.wait_for_host_if_needed()
-
         self.set_layout(layout_to_select)
 
         if self.disable_incoming_video:
@@ -710,8 +1076,7 @@ class GoogleMeetUIMethods:
 
     def scroll_element_into_view(self, element, step):
         try:
-            actions = ActionChains(self.driver)
-            actions.move_to_element(element).perform()
+            self._scroll_element_into_view(element)
             logger.info(f"Scrolled element into view for {step}")
         except Exception as e:
             logger.warning(f"Error scrolling element into view for {step}")
@@ -724,11 +1089,12 @@ class GoogleMeetUIMethods:
     def select_language(self, language):
         logger.info(f"Selecting language: {language}")
         logger.info("Waiting for the more options button...")
-        MORE_OPTIONS_BUTTON_SELECTOR = 'button[jsname="NakZHc"][aria-label="More options"]'
         more_options_button = self.locate_element(
             step="more_options_button_for_language_selection",
-            condition=EC.presence_of_element_located((By.CSS_SELECTOR, MORE_OPTIONS_BUTTON_SELECTOR)),
+            selector_type=By.CSS_SELECTOR,
+            selector='button[jsname="NakZHc"][aria-label="More options"]',
             wait_time_seconds=6,
+            visible_only=True,
         )
         logger.info("Clicking the more options button...")
         self.click_element(more_options_button, "more_options_button")
@@ -736,8 +1102,10 @@ class GoogleMeetUIMethods:
         logger.info("Waiting for the settings list item...")
         settings_list_item = self.locate_element(
             step="settings_list_item",
-            condition=EC.presence_of_element_located((By.XPATH, '//li[.//span[text()="Settings"]]')),
+            selector_type=By.XPATH,
+            selector='//li[.//span[text()="Settings"]]',
             wait_time_seconds=6,
+            visible_only=True,
         )
         logger.info("Clicking the settings list item...")
         self.click_element(settings_list_item, "settings_list_item")
@@ -745,11 +1113,12 @@ class GoogleMeetUIMethods:
         logger.info("Waiting for the captions button")
         self.locate_element(
             step="captions_button",
-            condition=EC.presence_of_element_located((By.CSS_SELECTOR, 'button[jsname="z4Tpl"][aria-label="Captions"]')),
+            selector_type=By.CSS_SELECTOR,
+            selector='button[jsname="z4Tpl"][aria-label="Captions"]',
             wait_time_seconds=6,
+            visible_only=True,
         )
 
-        # Uses javascript to select the language, bypassing the need for the dropdown to be visible
         click_language_option_result = self.driver.execute_script("return clickLanguageOption(arguments[0]);", language)
         logger.info(f"click_language_option_result: {click_language_option_result}")
         if not click_language_option_result:
@@ -758,8 +1127,10 @@ class GoogleMeetUIMethods:
         logger.info("Waiting for the close button")
         close_button = self.locate_element(
             step="close_button_for_language_selection",
-            condition=EC.presence_of_element_located((By.CSS_SELECTOR, 'button[aria-label="Close dialog"]')),
+            selector_type=By.CSS_SELECTOR,
+            selector='button[aria-label="Close dialog"]',
             wait_time_seconds=6,
+            visible_only=True,
         )
         logger.info("Clicking the close button")
         self.click_element(close_button, "close_button")
@@ -768,17 +1139,16 @@ class GoogleMeetUIMethods:
         logger.info("Waiting for the leave button")
         num_attempts = 5
         for attempt_index in range(num_attempts):
-            leave_button = WebDriverWait(self.driver, 16).until(
-                EC.presence_of_element_located(
-                    (
-                        By.CSS_SELECTOR,
-                        'button[jsname="CQylAd"][aria-label="Leave call"]',
-                    )
-                )
+            leave_button = self.locate_element(
+                step="leave_button",
+                selector_type=By.CSS_SELECTOR,
+                selector='button[jsname="CQylAd"][aria-label="Leave call"]',
+                wait_time_seconds=16,
+                visible_only=True,
             )
             logger.info("Clicking the leave button")
             try:
-                leave_button.click()
+                self.click_element(leave_button, "leave_button")
                 return
             except Exception as e:
                 last_attempt = attempt_index == num_attempts - 1

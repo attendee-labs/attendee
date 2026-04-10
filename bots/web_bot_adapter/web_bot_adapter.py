@@ -908,8 +908,6 @@ class WebBotAdapter(BotAdapter):
         """
 
         self.driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": combined_code})
-        if self.meeting_url:
-            self.driver.navigate(self.meeting_url)
 
     def init(self):
         self.display_var_for_debug_recording = os.environ.get("DISPLAY")
@@ -926,17 +924,134 @@ class WebBotAdapter(BotAdapter):
         websocket_thread = threading.Thread(target=self.run_websocket_server, daemon=True)
         websocket_thread.start()
 
-        sleep(0.5)  # Give the websocketserver time to start
+        sleep(0.5)
         if not self.websocket_port:
             raise Exception("WebSocket server failed to start")
 
-        self.init_driver()
+        repeatedly_attempt_to_join_meeting_thread = threading.Thread(
+            target=self.repeatedly_attempt_to_join_meeting,
+            daemon=True,
+        )
+        repeatedly_attempt_to_join_meeting_thread.start()
 
     def should_retry_joining_meeting_that_requires_login_by_logging_in(self):
         return False
 
+
     def repeatedly_attempt_to_join_meeting(self):
-        logger.info("repeatedly_attempt_to_join_meeting() is disabled in the CDP launch path. Chrome is launched directly in init().")
+        logger.info(f"Trying to join meeting at {self.meeting_url}")
+
+        # Expected exceptions are ones that we expect to happen and are not a big deal, so we only increment num_retries once every three expected exceptions
+        num_expected_exceptions = 0
+        num_retries = 0
+        max_retries = 3
+        attempts_to_join_started_at = time.time()
+
+        while num_retries <= max_retries:
+            try:
+                self.init_driver()
+                self.attempt_to_join_meeting()
+                logger.info("Successfully joined meeting")
+                break
+
+            except UiLoginRequiredException:
+                if not self.should_retry_joining_meeting_that_requires_login_by_logging_in():
+                    self.send_login_required_message()
+                    return
+
+            except UiLoginAttemptFailedException:
+                self.send_login_attempt_failed_message()
+                return
+
+            except UiRequestToJoinDeniedException:
+                self.send_request_to_join_denied_message()
+                return
+
+            except UiCouldNotJoinMeetingWaitingRoomTimeoutException:
+                self.send_message_callback({"message": self.Messages.LEAVE_MEETING_WAITING_ROOM_TIMEOUT_EXCEEDED})
+                return
+
+            except UiCouldNotJoinMeetingWaitingForHostException:
+                self.send_message_callback({"message": self.Messages.LEAVE_MEETING_WAITING_FOR_HOST})
+                return
+
+            except UiMeetingNotFoundException:
+                self.send_meeting_not_found_message()
+                return
+
+            except UiIncorrectPasswordException:
+                self.send_incorrect_password_message()
+                return
+
+            except UiBlockedByCaptchaException:
+                self.send_blocked_by_captcha_message()
+                return
+
+            except UiAuthorizedUserNotInMeetingTimeoutExceededException:
+                # If the timeout has exceeded, send the message. If not, we will retry again.
+                if time.time() - attempts_to_join_started_at > self.automatic_leave_configuration.authorized_user_not_in_meeting_timeout_seconds:
+                    self.send_message_callback({"message": self.Messages.AUTHORIZED_USER_NOT_IN_MEETING_TIMEOUT_EXCEEDED})
+                    return
+                else:
+                    logger.info(f"Failed to join meeting and the UiAuthorizedUserNotInMeetingTimeoutExceededException exception has occurred but the timeout of {self.automatic_leave_configuration.authorized_user_not_in_meeting_timeout_seconds} seconds has not exceeded, so retrying")
+
+            except UiInfinitelyRetryableException as e:
+                # Exceptions of this type will always be retried, it is up to the adapter to
+                # stop throwing this exception
+
+                if self.left_meeting or self.cleaned_up:
+                    logger.info(f"Failed to join meeting and the {e.__class__.__name__} exception is infinitely retryable but the bot has left the meeting or cleaned up, so returning")
+                    return
+
+                logger.warning(f"Failed to join meeting and the {e.__class__.__name__} exception is infinitely retryable so retrying")
+
+            except UiRetryableExpectedException as e:
+                if num_retries >= max_retries:
+                    logger.info(f"Failed to join meeting and the {e.__class__.__name__} exception is retryable but the number of retries exceeded the limit and there were {num_expected_exceptions} expected exceptions, so returning")
+                    self.send_debug_screenshot_message(step=e.step, exception=e, inner_exception=e.inner_exception)
+                    return
+
+                num_expected_exceptions += 1
+                if num_expected_exceptions % 5 == 0:
+                    num_retries += 1
+                    logger.info(f"Failed to join meeting and the {e.__class__.__name__} exception is expected and {num_expected_exceptions} expected exceptions have occurred, so incrementing num_retries. This usually indicates that the meeting has not started yet, so we will wait for the configured amount of time which is 180 seconds before retrying")
+                    # We're going to start a new pod to see if that fixes the issue
+                    self.send_message_callback({"message": self.Messages.BLOCKED_BY_PLATFORM_REPEATEDLY})
+                    return
+                else:
+                    logger.info(f"Failed to join meeting and the {e.__class__.__name__} exception is expected so not incrementing num_retries, but {num_expected_exceptions} expected exceptions have occurred")
+
+            except UiRetryableException as e:
+                if num_retries >= max_retries:
+                    logger.info(f"Failed to join meeting and the {e.__class__.__name__} exception is retryable but the number of retries exceeded the limit, so returning")
+                    self.send_debug_screenshot_message(step=e.step, exception=e, inner_exception=e.inner_exception)
+                    return
+
+                if self.left_meeting or self.cleaned_up:
+                    logger.info(f"Failed to join meeting and the {e.__class__.__name__} exception is retryable but the bot has left the meeting or cleaned up, so returning")
+                    return
+
+                logger.info(f"Failed to join meeting and the {e.__class__.__name__} exception is retryable so retrying")
+
+                num_retries += 1
+            except Exception as e:
+                if num_retries >= max_retries:
+                    logger.exception(f"Failed to join meeting and the unexpected {e.__class__.__name__} exception with message {e.__str__()} is retryable but the number of retries exceeded the limit, so returning.")
+                    self.send_debug_screenshot_message(step="unknown", exception=e, inner_exception=None)
+                    return
+
+                if self.left_meeting or self.cleaned_up:
+                    logger.exception(f"Failed to join meeting and the unexpected {e.__class__.__name__} exception with message {e.__str__()} is retryable but the bot has left the meeting or cleaned up, so returning.")
+                    return
+
+                logger.exception(f"Failed to join meeting and the unexpected {e.__class__.__name__} exception with message {e.__str__()} is retryable so retrying")
+
+                num_retries += 1
+
+            sleep(1)
+
+        self.after_bot_joined_meeting()
+        self.subclass_specific_after_bot_joined_meeting()
 
     def after_bot_joined_meeting(self):
         self.send_message_callback({"message": self.Messages.BOT_JOINED_MEETING})
