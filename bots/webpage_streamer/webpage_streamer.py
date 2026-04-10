@@ -12,6 +12,7 @@ from fractions import Fraction
 
 import gi
 import numpy as np
+import requests
 from aiohttp import web
 from aiortc import MediaStreamTrack, RTCPeerConnection, RTCSessionDescription
 from aiortc.contrib.media import MediaRelay
@@ -280,6 +281,87 @@ class WebpageStreamer:
 
         self.load_webapp()
 
+    # This is a workaround to avoid chrome blocking requests to localhost
+    # We constantly check to see if the browser process has set the window.__attendeeUpstreamAudioRequest object.
+    # If it has, we make the request to the /offer_meeting_audio endpoint.
+    # Previously, the browser made this request directly.
+    async def bridge_upstream_audio_requests(self):
+        while True:
+            await asyncio.sleep(0.1)
+
+            try:
+                req = await asyncio.get_running_loop().run_in_executor(
+                    None,
+                    lambda: self.driver.execute_script("return window.__attendeeUpstreamAudioRequest || null;"),
+                )
+            except Exception:
+                continue
+
+            if not req or req.get("status") != "pending" or not req.get("offer"):
+                continue
+
+            logger.info(f"Upstream audio request: {req}")
+
+            try:
+                response = await asyncio.get_running_loop().run_in_executor(
+                    None,
+                    lambda: requests.post(
+                        "http://localhost:8000/offer_meeting_audio",
+                        json=req["offer"],
+                        timeout=10,
+                    ),
+                )
+
+                if not response.ok:
+                    error_text = response.text
+                    await asyncio.get_running_loop().run_in_executor(
+                        None,
+                        lambda: self.driver.execute_script(
+                            """
+                            if (window.__attendeeUpstreamAudioRequest &&
+                                window.__attendeeUpstreamAudioRequest.status === "pending") {
+                                window.__attendeeUpstreamAudioRequest.status = "error";
+                                window.__attendeeUpstreamAudioRequest.error = arguments[0];
+                            }
+                            """,
+                            f"Upstream audio error: {response.status_code} {error_text}",
+                        ),
+                    )
+                    logger.error(f"Upstream audio error: {response.status_code} {error_text}")
+                    continue
+
+                answer = response.json()
+
+                await asyncio.get_running_loop().run_in_executor(
+                    None,
+                    lambda: self.driver.execute_script(
+                        """
+                        if (window.__attendeeUpstreamAudioRequest &&
+                            window.__attendeeUpstreamAudioRequest.status === "pending") {
+                            window.__attendeeUpstreamAudioRequest.status = "done";
+                            window.__attendeeUpstreamAudioRequest.answer = arguments[0];
+                        }
+                        """,
+                        answer,
+                    ),
+                )
+                logger.info(f"Upstream audio answer: {answer}")
+            except Exception as e:
+                await asyncio.get_running_loop().run_in_executor(
+                    None,
+                    lambda: self.driver.execute_script(
+                        """
+                        if (window.__attendeeUpstreamAudioRequest &&
+                            window.__attendeeUpstreamAudioRequest.status === "pending") {
+                            window.__attendeeUpstreamAudioRequest.status = "error";
+                            window.__attendeeUpstreamAudioRequest.error = arguments[0];
+                        }
+                        """,
+                        "Unknown upstream audio error",
+                    ),
+                )
+                logger.error(f"Unknown upstream audio error: {e}")
+
     async def keepalive_monitor(self):
         """Monitor keepalive status and shutdown if no keepalive received in the last 15 minutes."""
 
@@ -427,7 +509,14 @@ class WebpageStreamer:
             asyncio.create_task(self.keepalive_monitor())
             logger.info("Started keepalive monitoring task")
 
+        async def init_upstream_audio_bridge(app):
+            """Initialize upstream audio bridge when the app starts"""
+            logger.info("Starting upstream audio bridge task")
+            asyncio.create_task(self.bridge_upstream_audio_requests())
+            logger.info("Started upstream audio bridge task")
+
         app.on_startup.append(init_keepalive_monitor)
+        app.on_startup.append(init_upstream_audio_bridge)
 
         # Add CORS handling for preflight requests
         async def handle_cors_preflight(request):

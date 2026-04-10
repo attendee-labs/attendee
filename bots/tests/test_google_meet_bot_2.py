@@ -97,6 +97,31 @@ class TestGoogleMeetBot2(TransactionTestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
+        # Mock humanized_navigate_to_and_click_element to avoid real interactions
+        patcher2 = patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.humanized_navigate_to_and_click_element", return_value=MagicMock())
+        patcher2.start()
+        self.addCleanup(patcher2.stop)
+
+        # Mock human_type to avoid real interactions
+        patcher3 = patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.human_type", return_value=MagicMock())
+        patcher3.start()
+        self.addCleanup(patcher3.stop)
+
+        # Mock verify_expected_audio_configuration
+        patcher4 = patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.verify_expected_audio_configuration", return_value=MagicMock())
+        patcher4.start()
+        self.addCleanup(patcher4.stop)
+
+        # Mock position_mouse_for_humanized_interaction to avoid real interactions
+        patcher5 = patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.position_mouse_for_humanized_interaction", return_value=MagicMock())
+        patcher5.start()
+        self.addCleanup(patcher5.stop)
+
+        # Mock human_copy_and_paste to avoid real interactions
+        patcher6 = patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.human_copy_and_paste", return_value=MagicMock())
+        patcher6.start()
+        self.addCleanup(patcher6.stop)
+
         # Recreate organization and project for each test
         self.organization = Organization.objects.create(name="Test Org")
         self.project = Project.objects.create(name="Test Project", organization=self.organization)
