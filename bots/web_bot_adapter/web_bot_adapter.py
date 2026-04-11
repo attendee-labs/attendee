@@ -542,6 +542,8 @@ class WebBotAdapter(BotAdapter):
     async def init_driver(self):
         options = ChromiumOptions()
         options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+
 
         async with Chrome(options=options) as browser:
             tab = await browser.start()
