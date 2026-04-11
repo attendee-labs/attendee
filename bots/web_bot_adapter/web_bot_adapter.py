@@ -9,9 +9,10 @@ import threading
 import time
 from time import sleep
 from urllib.parse import unquote, urlparse
+from pydoll.browser.options import ChromiumOptions
 
 
-import zendriver as zd
+from pydoll.browser import Chrome
 import numpy as np
 import requests
 from django.conf import settings
@@ -539,9 +540,27 @@ class WebBotAdapter(BotAdapter):
         pass
 
     async def init_driver(self):
-        browser = await zd.start(sandbox=False)
-        tab = await browser.get("https://meet.google.com/zas-baki-rbq?authuser=0")
-        time.sleep(1000)
+        options = ChromiumOptions()
+        options.add_argument("--no-sandbox")
+
+        async with Chrome(options=options) as browser:
+            tab = await browser.start()
+            await tab.go_to(self.meeting_url)
+
+            name_input =  await tab.find(tag_name="input", type="text")
+            print(f"Name input: {name_input}")
+
+            time.sleep(80)
+
+            await name_input.type_text(display_name)
+
+            join_button = await tab.find(
+                xpath='//button[.//span[text()="Ask to join" or text()="Join now" or text()="Join the call now"]]',
+                timeout=60,
+            )
+            await join_button.click()
+            print(f"Joined meeting: {await tab.title}")
+            time.sleep(30)
         return
         self.write_chrome_policies_file()
 
