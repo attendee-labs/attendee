@@ -137,15 +137,22 @@ def get_webhook_options_for_project(project):
 
 
 def get_bot_login_group_context(project):
+    ordered_logins = BotLogin.objects.order_by("id")
     return {
         "google_meet_bot_login_groups": BotLoginGroup.objects.filter(
             project=project,
             platform=BotLoginPlatform.GOOGLE_MEET,
-        ).order_by("created_at", "id"),
+        )
+        .annotate(login_count=models.Count("bot_logins"), latest_last_used_at=models.Max("bot_logins__last_used_at"))
+        .prefetch_related(models.Prefetch("bot_logins", queryset=ordered_logins))
+        .order_by("created_at", "id"),
         "teams_bot_login_groups": BotLoginGroup.objects.filter(
             project=project,
             platform=BotLoginPlatform.TEAMS,
-        ).order_by("created_at", "id"),
+        )
+        .annotate(login_count=models.Count("bot_logins"), latest_last_used_at=models.Max("bot_logins__last_used_at"))
+        .prefetch_related(models.Prefetch("bot_logins", queryset=ordered_logins))
+        .order_by("created_at", "id"),
     }
 
 
@@ -1457,7 +1464,7 @@ class CreateBotLoginGroupView(LoginRequiredMixin, ProjectUrlContextMixin, View):
             if platform not in BotLoginPlatform.values:
                 return HttpResponse("Invalid platform", status=400)
             if BotLoginGroup.objects.filter(project=project, platform=platform, name=name).exists():
-                return HttpResponse("A bot login group with this name already exists", status=400)
+                return HttpResponse("A bot login group for this platform with this name already exists", status=400)
 
             BotLoginGroup.objects.create(project=project, platform=platform, name=name)
 
