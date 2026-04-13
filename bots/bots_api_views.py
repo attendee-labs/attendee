@@ -432,6 +432,7 @@ class OutputVideoView(APIView):
             media_type=BotMediaRequestMediaTypes.VIDEO,
             media_url=serializer.validated_data["url"],
             loop=serializer.validated_data["loop"],
+            mute_video=serializer.validated_data["mute_video"],
         )
 
         # Send sync command to notify bot of new media request
