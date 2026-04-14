@@ -188,6 +188,15 @@
                                     <i class="bi bi-credit-card"></i> Billing
                                 </a>
                                 {% endif %}
+                                <a class="nav-link ps-4" 
+                                hx-get="{% url 'projects:project-usage' project.object_id %}" 
+                                hx-select="#content"
+                                hx-target="#content"
+                                hx-swap="outerHTML"
+                                hx-push-url="true"
+                                onclick="setActiveLink(this)">
+                                    <i class="bi bi-bar-chart"></i> Usage
+                                </a>
                             </div>
                         </div>
 
