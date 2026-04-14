@@ -1,3 +1,104 @@
+(() => {
+    const interceptedAudioContexts = [];
+    window.__interceptedAudioContexts = interceptedAudioContexts;
+    window.__skipAudioContextInterception = false;
+
+    function installTap(ctx) {
+        if (ctx.__tapDestination) {
+            return ctx;
+        }
+    
+        const tapGain = ctx.createGain();
+        tapGain.gain.value = 1;
+    
+        const tapDestination = ctx.createMediaStreamDestination();
+        tapGain.connect(tapDestination);
+    
+        ctx.__tapGain = tapGain;
+        ctx.__tapDestination = tapDestination;
+    
+        // Store MediaStreams / source nodes created on this context
+        ctx.__attachedMediaStreams = [];
+        ctx.__attachedMediaStreamSources = [];
+    
+        const originalCreateMediaStreamSource = ctx.createMediaStreamSource.bind(ctx);
+    
+        ctx.createMediaStreamSource = function(stream) {
+            const sourceNode = originalCreateMediaStreamSource(stream);
+    
+            ctx.__attachedMediaStreams.push(stream);
+            ctx.__attachedMediaStreamSources.push({
+                stream,
+                sourceNode,
+                createdAt: Date.now(),
+            });
+    
+            // Optional: make lookup easy from the node side too
+            sourceNode.__sourceMediaStream = stream;
+    
+            return sourceNode;
+        };
+    
+        interceptedAudioContexts.push(ctx);
+        return ctx;
+    }
+
+    function wrapAudioContextConstructor(OriginalCtor) {
+        if (!OriginalCtor) {
+            return OriginalCtor;
+        }
+
+        function WrappedAudioContext(...args) {
+            const ctx = Reflect.construct(
+                OriginalCtor,
+                args,
+                new.target || WrappedAudioContext
+            );
+
+            if (window.__skipAudioContextInterception) {
+                return ctx;
+            }
+
+            return installTap(ctx);
+        }
+
+        WrappedAudioContext.prototype = OriginalCtor.prototype;
+        Object.setPrototypeOf(WrappedAudioContext, OriginalCtor);
+
+        return WrappedAudioContext;
+    }
+
+    window.AudioContext = wrapAudioContextConstructor(window.AudioContext);
+
+    if (window.webkitAudioContext) {
+        window.webkitAudioContext = wrapAudioContextConstructor(window.webkitAudioContext);
+    }
+
+    const originalConnect = AudioNode.prototype.connect;
+
+    AudioNode.prototype.connect = function(...args) {
+        const result = originalConnect.apply(this, args);
+
+        const destination = args[0];
+        const ctx = this.context;
+
+        if (
+            ctx &&
+            ctx.__tapGain &&
+            destination === ctx.destination &&
+            this !== ctx.__tapGain
+        ) {
+            try {
+                originalConnect.call(this, ctx.__tapGain);
+            } catch (err) {
+                console.debug("Failed to mirror node into tap destination", err);
+            }
+        }
+
+        return result;
+    };
+})();
+
 const handleVideoTrackForRealTimePerParticipantVideo = async ({ track, streams }) => {
     try {
         const firstStreamId = streams?.[0]?.id;
@@ -321,13 +422,28 @@ class StyleManager {
 
     startSilenceDetection() {
          // Set up audio context and processing as before
+         window.__skipAudioContextInterception = true;
          this.audioContext = new AudioContext();
 
-         this.audioSources = this.audioTracks.map(track => {
+         const trackSources = this.audioTracks.map(track => {
              const mediaStream = new MediaStream([track]);
              return this.audioContext.createMediaStreamSource(mediaStream);
          });
  
+         const interceptedContextSources = (window.__interceptedAudioContexts || [])
+         .filter(ctx => ctx.state !== 'closed')
+         .map(ctx => ctx.__tapDestination?.stream)
+         .filter(stream => stream && stream.getAudioTracks().length > 0)
+         .map(stream => this.audioContext.createMediaStreamSource(stream));
+
+         console.log('trackSources', trackSources);
+         console.log('interceptedContextSources', interceptedContextSources);
+
+         this.audioSources = [
+            ...trackSources,
+            ...interceptedContextSources,
+        ];
+
          // Create a destination node
          const destination = this.audioContext.createMediaStreamDestination();
  
