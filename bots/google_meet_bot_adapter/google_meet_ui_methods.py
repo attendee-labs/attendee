@@ -930,8 +930,6 @@ class GoogleMeetUIMethods:
 
         self.check_if_meeting_is_found()
 
-        self.verify_expected_audio_configuration()
-
         self.fill_out_name_input()
 
         self.turn_off_media_inputs()
@@ -943,6 +941,8 @@ class GoogleMeetUIMethods:
             wait_time_seconds=60,
         )
         logger.info("Clicking the join button...")
+
+        self.verify_expected_audio_configuration()
         if self.ui_interaction_mode == "humanized":
             self.humanized_navigate_to_and_click_element(join_button)
         else:
@@ -976,7 +976,7 @@ class GoogleMeetUIMethods:
         # Google Meet is testing an alternate way of orchestrating audio. If no audio elements are present
         # then we've hit this case and should raise an exception, so that we retry. We will most likely get the
         # standard configuration after a retry, it's a random ab test.
-        if len(audio_elements) == 0:
+        if len(audio_elements) == 3:
             logger.info("audio elements are not present. Raising UiGoogleWrongAudioConfigurationException")
             raise UiGoogleWrongAudioConfigurationException("audio elements are not present", "verify_audio_elements_are_present")
 
