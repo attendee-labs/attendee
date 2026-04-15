@@ -35,7 +35,7 @@ const rawTrackIdToRawReceiverMap = new Map();
           tappedTrack: tapDest.stream.getAudioTracks()[0] || null,
         };
   
-        if (rawTrackId && rawTrackIdToRawReceiverMap.has(rawTrackId)) {
+        if (rawTrackId) {
             window.__audioTapsByRawTrackId.set(rawTrackId, entry);
         
   
@@ -75,15 +75,15 @@ const rawTrackIdToRawReceiverMap = new Map();
         return;
     }
     if (!receiver) {
-        console.log('no receiver');
-        return;
+        console.log('no receiver, using first receiver');
     }
+    const receiverToUse = receiver || Array.from(rawTrackIdToRawReceiverMap.values())[0];
 
     console.log('sending per participant audio');
 
     handleAudioTrack({
         track: tapEntry.tappedTrack,
-        receiver,
+        receiver: receiverToUse,
     });
 });
 
@@ -1635,6 +1635,57 @@ class RTCInterceptor {
     }
 }
 
+class MessagePortInterceptor {
+    constructor(onMessage) {
+        this.ports = new Set();
+        this.onMessage = onMessage;
+
+        const self = this;
+        const originalStart = MessagePort.prototype.start;
+        const onMessageDescriptor = Object.getOwnPropertyDescriptor(MessagePort.prototype, 'onmessage');
+
+        MessagePort.prototype.start = function() {
+            self._trackPort(this);
+            return originalStart.apply(this, arguments);
+        };
+
+        if (onMessageDescriptor && onMessageDescriptor.set) {
+            const originalSet = onMessageDescriptor.set;
+            Object.defineProperty(MessagePort.prototype, 'onmessage', {
+                get: onMessageDescriptor.get,
+                set: function(handler) {
+                    self._trackPort(this);
+                    originalSet.call(this, handler);
+                },
+                configurable: true,
+                enumerable: onMessageDescriptor.enumerable,
+            });
+        }
+
+        const originalAddEventListener = MessagePort.prototype.addEventListener;
+        MessagePort.prototype.addEventListener = function(type, listener, options) {
+            if (type === 'message') {
+                self._trackPort(this);
+            }
+            return originalAddEventListener.call(this, type, listener, options);
+        };
+    }
+
+    _trackPort(port) {
+        if (this.ports.has(port)) return;
+        this.ports.add(port);
+
+        const self = this;
+        port.addEventListener('message', function(event) {
+            try {
+                self.onMessage(port, event);
+            } catch (e) {
+                console.error('MessagePortInterceptor callback error:', e);
+            }
+        });
+    }
+}
+
 // Message type definitions
 const messageTypes = [
       {
@@ -1837,6 +1888,10 @@ if (window.initialData.sendPerParticipantAudio || window.initialData.recordParti
         receiverManager.updateContributingSources(receiver, result);
     });
 }
+
+const messagePortInterceptor = new MessagePortInterceptor((port, event) => {
+    console.log('MessagePort message intercepted:', event.data);
+});
 
 window.videoTrackManager = videoTrackManager;
 window.userManager = userManager;
@@ -2130,6 +2185,8 @@ const handleAudioTrack = async ({track, receiver}) => {
 
                 const contributingSources = receiverManager.getContributingSources(receiver);
 
+                console.log('contributingSources', contributingSources);
+
                 const usersForContributingSourcesWithAudioLevel = contributingSources.map(source => {
                     return {
                         audioLevel: source?.audioLevel || 0, 
@@ -2137,12 +2194,16 @@ const handleAudioTrack = async ({track, receiver}) => {
                     }
                 }).filter(x => x.user).sort((a, b) => b.audioLevel - a.audioLevel);
 
+                console.log('usersForContributingSourcesWithAudioLevel', usersForContributingSourcesWithAudioLevel);
+
                 const userForContributingSourceWithLoudestAudio = usersForContributingSourcesWithAudioLevel[0]?.user;
 
 
                 //console.log('contributingSources', contributingSources);
                 //console.log('deviceOutputMap', userManager.deviceOutputMap);
                 //console.log('usersForContributingSources', usersForContributingSources);
+
+                console.log('userForContributingSourceWithLoudestAudio', userForContributingSourceWithLoudestAudio);
 
                 // Send audio data through websocket
                 if (userForContributingSourceWithLoudestAudio) {
