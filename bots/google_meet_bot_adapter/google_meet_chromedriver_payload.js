@@ -232,6 +232,9 @@ const rawTrackIdToRawReceiverMap = new Map();
             audioContext: ctx,
           };
   
+          const rms = Math.sqrt(channels[0].reduce((sum, s) => sum + s * s, 0) / channels[0].length);
+          console.log("[meet-pre-fx-tap] volume RMS:", rms.toFixed(4), "dB:", (20 * Math.log10(rms + 1e-10)).toFixed(1));
+
           emitTapData(payload);
         } catch (err) {
           console.error("[meet-pre-fx-tap] onaudioprocess failed", err);
@@ -374,6 +377,47 @@ const rawTrackIdToRawReceiverMap = new Map();
     console.log("[meet-pre-fx-tap] ready");
   })();
 
+  window.onMeetPreFxAudioData = (packet) => {
+    if (!window.ws.mediaSendingEnabled) {
+        return;
+    }
+    // packet.track is the primary track when there is one obvious track
+    // packet.tracks is the full live list from the source stream
+    // packet.channels is Array<Float32Array> with raw PCM for this block
+  
+    const {
+      tapId,
+      contextId,
+      streamId,
+      track,
+      tracks,
+      sampleRate,
+      frameCount,
+      channelCount,
+      channels,
+    } = packet;
+  
+    console.log("tapId:", tapId);
+    console.log("contextId:", contextId);
+    console.log("streamId:", streamId);
+    console.log("track:", track ? { id: track.id, label: track.label } : null);
+    console.log("tracks:", tracks.map(t => ({ id: t.id, label: t.label })));
+    console.log("sampleRate:", sampleRate);
+    console.log("frameCount:", frameCount);
+    console.log("channelCount:", channelCount);
+  
+    // Example: first few samples from channel 0
+    if (channels[0]) {
+      console.log("ch0 first 8 samples:", Array.from(channels[0].slice(0, 8)));
+    }
+
+
+    const rms = Math.sqrt(channels[0].reduce((sum, s) => sum + s * s, 0) / channels[0].length);
+    window.ws.sendJson({
+        type: 'MeetPreFxAudioData',
+        volume: rms,
+    });
+  };
 
 const handleVideoTrackForRealTimePerParticipantVideo = async ({ track, streams }) => {
     try {
