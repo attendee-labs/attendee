@@ -198,7 +198,7 @@ See CONTRIBUTING.md for detailed instructions on how to contribute to Attendee.
 - [x] Scheduled meetings
 - [x] Audio input / output via websockets
 - [x] Attendee-Managed Calendar Integration
-- [x] [ZAK token](https://developers.zoom.us/docs/meeting-sdk/auth/#start-meetings-and-webinars-with-a-zoom-users-zak-token) and [Join token](https://developers.zoom.us/docs/api/meetings/#tag/meetings/GET/meetings/{meetingId}/jointoken/local_recording) support
+- [x] [ZAK token](https://developers.zoom.us/docs/meeting-sdk/auth/#start-meetings-and-webinars-with-a-zoom-users-zak-token), [OnBehalf token](https://developers.zoom.us/blog/transition-to-obf-token-meetingsdk-apps/) and [Join token](https://developers.zoom.us/docs/api/meetings/#tag/in-meeting-features/get/meetings/{meetingId}/jointoken/local_recording) support
 - [x] Stream video and audio from arbitrary website into meeting to support voice agents
 - [ ] Webex Support
 

@@ -13,7 +13,7 @@ if os.getenv("POSTMARK_API_TOKEN"):
     DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "noreply@oppy.pro")
     SERVER_EMAIL = os.getenv("SERVER_EMAIL", "noreply@oppy.pro")
 SITE_DOMAIN = "localhost:8000"
-ALLOWED_HOSTS = ["tendee-stripe-hooks.ngrok.io", "localhost", "127.0.0.1"]
+ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "localhost").split(",")
 
 DATABASES = {
     "default": {

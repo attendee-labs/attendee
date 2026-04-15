@@ -1358,8 +1358,9 @@ class AssemblyAIProviderTest(TransactionTestCase):
             data = kwargs["json"]
             self.assertIn("keyterms_prompt", data)
             self.assertEqual(data["keyterms_prompt"], ["aws", "azure", "google cloud"])
-            self.assertIn("speech_models", data)
-            self.assertEqual(data["speech_models"], ["slam-1"])
+            self.assertIn("speech_model", data)
+            self.assertEqual(data["speech_model"], "slam-1")
+            self.assertNotIn("speech_models", data)
 
     def test_default_speech_models(self):
         """Test that the default speech_models are included when no speech_model settings are configured."""

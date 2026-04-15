@@ -11,9 +11,10 @@ import zoom_meeting_sdk as zoom
 from bots.automatic_leave_utils import participant_is_another_bot
 from bots.bot_adapter import BotAdapter
 from bots.meeting_url_utils import parse_zoom_join_url
-from bots.utils import png_to_yuv420_frame, scale_i420
+from bots.utils import image_to_yuv420_frame, scale_i420
 
 from .mp4_demuxer import MP4Demuxer
+from .realtime_per_participant_video_frame_generator import RealtimePerParticipantVideoFrameGenerator
 from .video_input_manager import VideoInputManager
 
 gi.require_version("GLib", "2.0")
@@ -23,6 +24,7 @@ from gi.repository import GLib
 
 from bots.automatic_leave_configuration import AutomaticLeaveConfiguration
 from bots.models import ParticipantEventTypes
+from bots.per_participant_realtime_video_configuration import PerParticipantRealtimeVideoConfiguration
 
 logger = logging.getLogger(__name__)
 
@@ -70,9 +72,11 @@ class ZoomBotAdapter(BotAdapter):
         add_video_frame_callback,
         wants_any_video_frames_callback,
         add_mixed_audio_chunk_callback,
+        add_per_participant_video_frame_callback,
         upsert_chat_message_callback,
         add_participant_event_callback,
         automatic_leave_configuration: AutomaticLeaveConfiguration,
+        per_participant_realtime_video_configuration: PerParticipantRealtimeVideoConfiguration,
         video_frame_size: tuple[int, int],
         zoom_tokens: dict,
         zoom_meeting_settings: dict,
@@ -88,6 +92,7 @@ class ZoomBotAdapter(BotAdapter):
         self.add_mixed_audio_chunk_callback = add_mixed_audio_chunk_callback
         self.add_video_frame_callback = add_video_frame_callback
         self.wants_any_video_frames_callback = wants_any_video_frames_callback
+        self.add_per_participant_video_frame_callback = add_per_participant_video_frame_callback
         self.upsert_chat_message_callback = upsert_chat_message_callback
         self.add_participant_event_callback = add_participant_event_callback
         self.zoom_tokens = zoom_tokens
@@ -153,6 +158,17 @@ class ZoomBotAdapter(BotAdapter):
             )
         else:
             self.video_input_manager = None
+
+        if self.add_per_participant_video_frame_callback:
+            self.realtime_per_participant_video_frame_generator = RealtimePerParticipantVideoFrameGenerator(
+                frame_callback=self.add_per_participant_video_frame_callback,
+                get_participants_ctrl_callback=self.get_participants_ctrl,
+                get_meeting_sharing_controller_callback=self.get_meeting_sharing_controller,
+                get_recording_is_paused_callback=self.get_recording_is_paused,
+                per_participant_realtime_video_configuration=per_participant_realtime_video_configuration,
+            )
+        else:
+            self.realtime_per_participant_video_frame_generator = None
 
         self.meeting_sharing_controller = None
         self.meeting_share_ctrl_event = None
@@ -300,6 +316,9 @@ class ZoomBotAdapter(BotAdapter):
         if self.active_speaker_id == user_ids[0]:
             return
 
+        if self.realtime_per_participant_video_frame_generator:
+            self.realtime_per_participant_video_frame_generator.update_last_active_speaker_time(user_ids[0])
+
         self.create_participant_events_for_active_speaker_change(
             new_speaker_id=user_ids[0],
             old_speaker_id=self.active_speaker_id,
@@ -307,6 +326,15 @@ class ZoomBotAdapter(BotAdapter):
 
         self.active_speaker_id = user_ids[0]
         self.set_video_input_manager_based_on_state()
+
+    def get_participants_ctrl(self):
+        return self.participants_ctrl
+
+    def get_meeting_sharing_controller(self):
+        return self.meeting_sharing_controller
+
+    def get_recording_is_paused(self):
+        return self.recording_is_paused
 
     def set_video_input_manager_based_on_state(self):
         if not self.raw_recording_active and self.video_input_manager:
@@ -329,6 +357,9 @@ class ZoomBotAdapter(BotAdapter):
 
         if not self.video_input_manager:
             return
+
+        if self.realtime_per_participant_video_frame_generator:
+            self.realtime_per_participant_video_frame_generator.start()
 
         logger.info(f"set_video_input_manager_based_on_state self.active_speaker_id = {self.active_speaker_id}, self.active_sharer_id = {self.active_sharer_id}, self.active_sharer_source_id = {self.active_sharer_source_id}")
         if self.active_sharer_id:
@@ -732,13 +763,13 @@ class ZoomBotAdapter(BotAdapter):
             logger.info("suggested_video_cap is None so cannot compute current image to send")
             return None
 
-        yuv420_image_bytes, original_width, original_height = png_to_yuv420_frame(self.current_raw_image_to_send)
+        yuv420_image_bytes, original_width, original_height = image_to_yuv420_frame(self.current_raw_image_to_send)
         # We have to scale the image to the zoom video capability width and height for it to display properly
         yuv420_image_bytes_scaled = scale_i420(yuv420_image_bytes, (original_width, original_height), (self.suggested_video_cap.width, self.suggested_video_cap.height))
 
         return yuv420_image_bytes_scaled
 
-    def send_raw_image(self, png_image_bytes):
+    def send_raw_image(self, image_bytes):
         if not self.meeting_video_controller:
             logger.info("meeting_video_controller is None so cannot send raw image")
             return
@@ -746,7 +777,7 @@ class ZoomBotAdapter(BotAdapter):
         if not self.unmute_webcam():
             return
 
-        self.current_raw_image_to_send = png_image_bytes
+        self.current_raw_image_to_send = image_bytes
         # We can't compute the scaled image immediately because the video caps may have not arrived yet. So set it to None, which indicates it needs to be recomputed.
         self.current_image_to_send = None
 

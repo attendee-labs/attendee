@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, mock_open, patch
 
 from django.db import connection
 from django.test import TransactionTestCase, tag
+from selenium.common.exceptions import TimeoutException
 
 from bots.bot_controller.bot_controller import BotController
 from bots.bots_api_views import send_sync_command
@@ -696,6 +697,169 @@ class TestTeamsBot(TransactionTestCase):
             MockDisplay=MockDisplay,
             MockSaveDebugRecording=MockSaveDebugRecording,
         )
+
+    @patch("bots.bot_controller.bot_controller.BotController.save_debug_recording", return_value=None)
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
+    def test_captcha_triggers_login_retry_in_only_if_required_mode(
+        self,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+        MockSaveDebugRecording,
+    ):
+        """Test that a bot with login_mode='only_if_required' retries with login
+        when a captcha is detected during the show-more-button / waiting room phase.
+
+        This exercises the real check_if_blocked_by_captcha() logic that raises
+        UiLoginRequiredException instead of UiBlockedByCaptchaException when
+        login credentials are available but not yet being used. The real
+        click_show_more_button loop, look_for_sign_in_required_element, and
+        check_if_blocked_by_captcha methods all run unmocked — only
+        find_element_by_selector and WebDriverWait are controlled.
+
+        Flow:
+        1. First join attempt: WebDriverWait times out in click_show_more_button
+        2. look_for_sign_in_required_element runs — find_element_by_selector returns None
+        3. check_if_blocked_by_captcha runs — find_element_by_selector returns a captcha element
+        4. Credentials available + login not active → raises UiLoginRequiredException
+        5. Exception caught in repeatedly_attempt_to_join_meeting
+        6. should_retry_joining_meeting_that_requires_login_by_logging_in() returns True
+        7. teams_bot_login_should_be_used flag is set to True
+        8. Second join attempt: login_to_microsoft_account is called,
+           WebDriverWait finds the show-more button, join succeeds
+        """
+        # Set up Teams bot login credentials
+        teams_credentials = Credentials.objects.create(
+            project=self.project,
+            credential_type=Credentials.CredentialTypes.TEAMS_BOT_LOGIN,
+        )
+        teams_credentials.set_credentials(
+            {
+                "username": "testbot@example.com",
+                "password": "testpassword123",
+            }
+        )
+
+        # Configure bot to use login with only_if_required mode
+        self.bot.settings = {
+            "teams_settings": {
+                "use_login": True,
+                "login_mode": "only_if_required",
+            },
+            "recording_settings": {"format": "none"},
+        }
+        self.bot.save()
+
+        # Configure the mock uploader
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        # Mock the Chrome driver
+        mock_driver = create_mock_teams_driver()
+        MockChromeDriver.return_value = mock_driver
+
+        # Mock virtual display
+        mock_display = MagicMock()
+        MockDisplay.return_value = mock_display
+
+        # Control WebDriverWait.until: first call (first join attempt) times out so the
+        # captcha check path runs; second call (retry after login) finds the button.
+        webdriverwait_until_call_count = [0]
+
+        def create_mock_webdriverwait(*args, **kwargs):
+            mock_wait = MagicMock()
+
+            def mock_until(*args, **kwargs):
+                webdriverwait_until_call_count[0] += 1
+                if webdriverwait_until_call_count[0] <= 1:
+                    raise TimeoutException("Mocked timeout")
+                return MagicMock()
+
+            mock_wait.until = mock_until
+            return mock_wait
+
+        def mock_find_element_by_selector(by, selector):
+            """Return a truthy element only for the captcha XPath so that
+            check_if_blocked_by_captcha's real logic fires while
+            look_for_sign_in_required_element sees nothing.
+            """
+            if "Verify you're a real person" in selector:
+                return MagicMock()
+            return None
+
+        with (
+            patch.object(TeamsUIMethods, "fill_out_name_input", return_value=None),
+            patch.object(TeamsUIMethods, "turn_off_media_inputs", return_value=None),
+            patch.object(TeamsUIMethods, "locate_element", return_value=MagicMock()),
+            patch.object(TeamsUIMethods, "click_element", return_value=None),
+            patch("bots.teams_bot_adapter.teams_ui_methods.WebDriverWait", side_effect=create_mock_webdriverwait),
+            patch.object(TeamsUIMethods, "find_element_by_selector", side_effect=mock_find_element_by_selector),
+            patch.object(TeamsUIMethods, "click_captions_button", return_value=None),
+            patch.object(TeamsUIMethods, "set_layout", return_value=None),
+            patch.object(TeamsUIMethods, "disable_incoming_video_in_ui", return_value=None),
+            patch("bots.web_bot_adapter.web_bot_adapter.WebBotAdapter.ready_to_show_bot_image", return_value=None),
+            patch.object(TeamsUIMethods, "login_to_microsoft_account", return_value=None) as mock_login,
+        ):
+            # Create bot controller
+            controller = BotController(self.bot.id)
+
+            # Run the bot in a separate thread since it has an event loop
+            bot_thread = threading.Thread(target=controller.run)
+            bot_thread.daemon = True
+            bot_thread.start()
+
+            def simulate_join_flow():
+                # Sleep to allow initialization and join attempts
+                time.sleep(1)
+
+                # Add participants to keep the bot in the meeting
+                controller.adapter.participants_info["user1"] = {"deviceId": "user1", "fullName": "Test User", "active": True, "isCurrentUser": False}
+
+                # Let the bot run for a bit to "record"
+                time.sleep(1)
+
+                # Trigger auto-leave
+                controller.adapter.only_one_participant_in_meeting_at = time.time() - 10000000000
+                time.sleep(1)
+
+                # Clean up connections in thread
+                connection.close()
+
+            # Run join flow simulation after a short delay
+            threading.Timer(2, simulate_join_flow).start()
+
+            # Give the bot some time to process
+            bot_thread.join(timeout=20)
+
+            time.sleep(1.25)
+
+            # Refresh the bot from the database
+            self.bot.refresh_from_db()
+
+            # Assert that the bot is in the ENDED state
+            self.assertEqual(self.bot.state, BotStates.ENDED)
+
+            # Verify that login was attempted (should be called once on the retry)
+            self.assertEqual(mock_login.call_count, 1, "Expected login_to_microsoft_account to be called once during retry")
+
+            # Verify that teams_bot_login_should_be_used was set to True after the first failed attempt
+            self.assertTrue(controller.adapter.teams_bot_login_should_be_used, "Expected teams_bot_login_should_be_used to be True after retry")
+
+            # Verify that teams_bot_login_credentials was available
+            self.assertIsNotNone(controller.adapter.teams_bot_login_credentials, "Expected teams_bot_login_credentials to be set")
+
+            # Verify that the recording was finished
+            self.recording.refresh_from_db()
+            self.assertEqual(self.recording.state, RecordingStates.COMPLETE)
+
+            # Cleanup
+            controller.cleanup()
+            bot_thread.join(timeout=5)
+
+            # Close the database connection since we're in a thread
+            connection.close()
 
     @patch.dict("os.environ", {"ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME": "true"})
     @patch("bots.web_bot_adapter.web_bot_adapter.settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME", True)

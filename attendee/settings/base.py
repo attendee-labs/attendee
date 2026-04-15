@@ -97,6 +97,7 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    "csp.middleware.CSPMiddleware",
     "allauth.account.middleware.AccountMiddleware",
 ]
 
@@ -328,6 +329,24 @@ if os.getenv("ROLLBAR_ACCESS_TOKEN"):
         "code_version": os.getenv("ROLLBAR_CODE_VERSION", "1.0"),
         "root": BASE_DIR,
         "branch": "main",
+    }
+
+# Content Security Policy
+if os.getenv("ENABLE_CSP", "false") == "true":
+    _csp_media_src = [d for d in os.getenv("CSP_MEDIA_SRC", "").split(",") if d]
+    CONTENT_SECURITY_POLICY = {
+        "DIRECTIVES": {
+            "default-src": ["'self'"],
+            "script-src": ["'self'", "'unsafe-inline'", "https://unpkg.com", "https://cdn.jsdelivr.net"],
+            "style-src": ["'self'", "'unsafe-inline'", "https://cdn.jsdelivr.net"],
+            "font-src": ["'self'", "https://cdn.jsdelivr.net"],
+            "img-src": ["'self'", "data:"] + _csp_media_src,
+            "media-src": ["'self'"] + _csp_media_src,
+            "connect-src": ["'self'", "https://cdn.jsdelivr.net"],
+            "frame-src": ["https://www.loom.com"],
+            "base-uri": ["'self'"],
+            "form-action": ["'self'", "https://*.stripe.com"],
+        },
     }
 
 # Initialize Sentry (only if SENTRY_DSN is set)

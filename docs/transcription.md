@@ -26,7 +26,7 @@ Third-party-based transcription is generally of higher quality than closed capti
 - Kyutai Labs
 - Custom Async (Bring Your Own Platform)
 
-See the [API reference](https://docs.attendee.dev/api-reference#tag/bots/POST/api/v1/bots) for supported parameters for configuring the transcription providers.
+See the [API reference](https://docs.attendee.dev/api-reference/tag/bots/post/api/v1/bots) for supported parameters for configuring the transcription providers.
 
 ### Cost
 
@@ -51,7 +51,7 @@ Closed caption-based transcription is free.
 | **Source**               | Per-participant audio segments                  | Built-in captions from the meeting platform (Zoom, Google Meet) |
 | **Transcription Quality**| High (depends on the provider, e.g., OpenAI, Deepgram)        | Generally lower than third-party-based transcription
 | **Word-level timestamps**| Supported by all providers except OpenAI                         | No.
-| **Speaker Diarization**  | Yes, perfect speaker identification.                          | Yes, perfect speaker identification.                            |
+| **Speaker Diarization**  | Perfect speaker identification for Google Meet and Zoom via separate audio streams. Since the Teams Web client only exposes one mixed audio stream, we use speaker events for Teams diarization. | Perfect speaker identification.
 | **Latency**              | Higher latency due to provider processing and segment size.     | Lower latency, near-instantaneous.                              |
 | **Cost**                 | Incurs costs from third-party transcription providers.        | No additional costs.                     |
 | **Setup**                | Requires configuring a third-party transcription provider.    | No setup required.                  |
@@ -68,7 +68,7 @@ Additionally, the `post-processing complete` bot event will contain a list of tr
 
 ## Configuring transcription in the API call
 
-You can configure transcription settings when creating a bot. This includes selecting the transcription provider and provider-specific options like language, model, etc. See the [API reference](https://docs.attendee.dev/api-reference#tag/bots/POST/api/v1/bots) for details. You will set the parameters in the `transcription_settings` object of the `create bot` request body. It will have the form
+You can configure transcription settings when creating a bot. This includes selecting the transcription provider and provider-specific options like language, model, etc. See the [API reference](https://docs.attendee.dev/api-reference/tag/bots/post/api/v1/bots) for details. You will set the parameters in the `transcription_settings` object of the `create bot` request body. It will have the form
 
 ```json
 {
@@ -93,15 +93,15 @@ For example, if you want to use Deepgram with english and the nova-2 model, you 
 
 You can set up webhooks for real time transcription in the dashboard. Go to the Settings > Webhooks page and click the 'Create Webhook' button.
 
-Make sure the `transcript.update` trigger is enabled for your webhook. This will fire a webhook event every time a new utterance is added to the transcript. See the [webhooks](webhooks.md#payload-for-transcriptupdate-trigger) page for more details on the webhook payload.
+Make sure the `transcript.update` trigger is enabled for your webhook. This will fire a webhook event every time a new utterance is added to the transcript. See the [webhooks](https://docs.attendee.dev/guides/webhooks#payload-for-transcript.update-trigger) page for more details on the webhook payload.
 
 ## Fetching transcripts during and after the meeting
 
-You can fetch transcripts during and after the meeting, by calling the `/transcript` endpoint. See the [API reference](https://docs.attendee.dev/api-reference#tag/bots/GET/api/v1/bots/{object_id}/transcript) for details.
+You can fetch transcripts during and after the meeting, by calling the `/transcript` endpoint. See the [API reference](https://docs.attendee.dev/api-reference/tag/bots/get/api/v1/bots/object_id/transcript) for details.
 
 ## Multilingual transcription
 
-All transcription methods can transcribe audio in different languages, but some methods support different languages than others. See the [API reference](https://docs.attendee.dev/api-reference#tag/bots/POST/api/v1/bots) for details on how to specify the language.
+All transcription methods can transcribe audio in different languages, but some methods support different languages than others. See the [API reference](https://docs.attendee.dev/api-reference/tag/bots/post/api/v1/bots) for details on how to specify the language.
 
 All third-party transcription providers support automatic language detection, but closed caption-based transcription does not. Some third-party providers have the ability to transcribe audio where the speaker is switching languages in the middle of a sentence, see the list below for details.
 

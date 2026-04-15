@@ -239,13 +239,13 @@ def get_elevenlabs_language_codes():
 
 
 from .meeting_url_utils import meeting_type_from_url, normalize_meeting_url
-from .utils import is_valid_png, transcription_provider_from_bot_creation_data
+from .utils import is_valid_image, transcription_provider_from_bot_creation_data
 
 # Define the schema once
 BOT_IMAGE_SCHEMA = {
     "type": "object",
     "properties": {
-        "type": {"type": "string", "enum": ["image/png"]},
+        "type": {"type": "string", "enum": ["image/png", "image/jpeg"]},
         "data": {
             "type": "string",
         },
@@ -535,18 +535,26 @@ class ImageJSONField(serializers.JSONField):
 @extend_schema_serializer(
     examples=[
         OpenApiExample(
-            "Valid image",
+            "Valid PNG image",
             value={
                 "type": "image/png",
                 "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
             },
             description="An image of a red pixel encoded in base64 in PNG format",
-        )
+        ),
+        OpenApiExample(
+            "Valid JPEG image",
+            value={
+                "type": "image/jpeg",
+                "data": "/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDABcQERQRDhcUEhQaGBcbIjklIh8fIkYyNSk5UkhXVVFIUE5bZoNvW2F8Yk5QcptzfIeLkpSSWG2grJ+OqoOPko3/2wBDARgaGiIeIkMlJUONXlBejY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY3/wAARCAABAAEDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwDoqKKK+UNz/9k=",
+            },
+            description="An image of a single pixel encoded in base64 in JPEG format",
+        ),
     ]
 )
 class BotImageSerializer(serializers.Serializer):
-    type = serializers.ChoiceField(choices=[ct[0] for ct in MediaBlob.VALID_IMAGE_CONTENT_TYPES], help_text="Image content type. Currently only PNG is supported.")  # image/png
-    data = serializers.CharField(help_text="Base64 encoded image data. Simple example of a red pixel encoded in PNG format: iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")  # base64 encoded image data
+    type = serializers.ChoiceField(choices=[ct[0] for ct in MediaBlob.VALID_IMAGE_CONTENT_TYPES], help_text="Image content type. Supported formats: PNG and JPEG.")
+    data = serializers.CharField(help_text="Base64 encoded image data.")
 
     def validate_type(self, value):
         """Validate the content type"""
@@ -557,16 +565,15 @@ class BotImageSerializer(serializers.Serializer):
     def validate(self, data):
         """Validate the entire image data"""
         try:
-            # Decode base64 data
             image_data = base64.b64decode(data.get("data", ""))
         except Exception:
             raise serializers.ValidationError("Invalid base64 encoded data")
 
-        # Validate that it's a proper PNG image
-        if not is_valid_png(image_data):
-            raise serializers.ValidationError("Data is not a valid PNG image. This site can generate base64 encoded PNG images to test with: https://png-pixel.com")
+        content_type = data.get("type", "")
+        if not is_valid_image(image_data, content_type):
+            humanized_content_type = content_type.split("/")[1] if len(content_type.split("/")) > 1 else content_type
+            raise serializers.ValidationError(f"Data is not a valid {humanized_content_type} image.")
 
-        # Add the decoded data to the validated data
         data["decoded_data"] = image_data
         return data
 
@@ -980,7 +987,7 @@ WEBSOCKET_SETTINGS_SCHEMA = {
             "properties": {
                 "url": {
                     "type": "string",
-                    "description": "The URL of the websocket to use for receiving meeting audio in real time and having the bot output audio in real time. It must start with wss://. See https://docs.attendee.dev/guides/realtime-audio-input-and-output for details on how to receive and send audio through the websocket connection.",
+                    "description": "The URL of the websocket to use for receiving meeting audio in real time and having the bot output audio in real time. It must start with wss://. See https://docs.attendee.dev/guides/realtimeaudio for details on how to receive and send audio through the websocket connection.",
                 },
                 "sample_rate": {
                     "type": "integer",
@@ -997,13 +1004,36 @@ WEBSOCKET_SETTINGS_SCHEMA = {
             "properties": {
                 "url": {
                     "type": "string",
-                    "description": "The URL of the websocket to use for receiving per participant meeting audio in real time. It must start with wss://. See https://docs.attendee.dev/guides/realtime-audio-input-and-output for details on how to receive per participant audio through the websocket connection.",
+                    "description": "The URL of the websocket to use for receiving per participant meeting audio in real time. It must start with wss://. See https://docs.attendee.dev/guides/realtimeaudio#per-participant-audio-streaming for details on how to receive per participant audio through the websocket connection.",
                 },
                 "sample_rate": {
                     "type": "integer",
                     "enum": [8000, 16000],
                     "default": 16000,
                     "description": "The sample rate of the per participant audio to send. Can be 8000, 16000. Defaults to 16000.",
+                },
+            },
+            "required": ["url"],
+            "additionalProperties": False,
+        },
+        "per_participant_video": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "The URL of the websocket to use for receiving per-participant video and screenshare in real time. It must start with wss://. See https://docs.attendee.dev/guides/realtimevideo for details on how to receive video through the websocket connection.",
+                },
+                "webcam_resolution": {
+                    "type": "string",
+                    "enum": ["none", "360p", "720p", "1080p"],
+                    "default": "360p",
+                    "description": "Resolution for per-participant webcam video. 'none' disables webcam streaming. Framerate and JPEG quality are determined by resolution: 360p (2fps, quality 70), 720p (1fps, quality 60), 1080p (1fps, quality 50). Defaults to '360p'.",
+                },
+                "screenshare_resolution": {
+                    "type": "string",
+                    "enum": ["none", "360p", "720p", "1080p"],
+                    "default": "360p",
+                    "description": "Resolution for per-participant screenshare video. 'none' disables screenshare streaming. Framerate and JPEG quality are determined by resolution: 360p (2fps, quality 70), 720p (1fps, quality 60), 1080p (1fps, quality 50). Defaults to '360p'.",
                 },
             },
             "required": ["url"],
@@ -1042,7 +1072,7 @@ VOICE_AGENT_SETTINGS_SCHEMA = {
     "properties": {
         "url": {
             "type": "string",
-            "description": "URL of a website containing a voice agent that gets the user's responses from the microphone. The bot will load this website and stream its video and audio to the meeting. The audio from the meeting will be sent to website via the microphone. See https://docs.attendee.dev/guides/voice-agents for further details. The video will be displayed through the bot's webcam. To display the video through screenshare, use the screenshare_url parameter instead.",
+            "description": "URL of a website containing a voice agent that gets the user's responses from the microphone. The bot will load this website and stream its video and audio to the meeting. The audio from the meeting will be sent to website via the microphone. See https://docs.attendee.dev/guides/voiceagents for further details. The video will be displayed through the bot's webcam. To display the video through screenshare, use the screenshare_url parameter instead.",
         },
         "screenshare_url": {
             "type": "string",
@@ -1355,12 +1385,16 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
             raise serializers.ValidationError(e.message)
 
         # Validate websocket URL format if provided
-        for audio_type in ["audio", "per_participant_audio"]:
+        for audio_type in ["audio", "per_participant_audio", "per_participant_video"]:
             if audio_type in value and value.get(audio_type):
                 audio_url = value.get(audio_type, {}).get("url")
                 if audio_url:
                     if not audio_url.lower().startswith("wss://"):
                         raise serializers.ValidationError({audio_type: {"url": "URL must start with wss://"}})
+
+        # Make sure we haven't hit the case where both webcam and screenshare are disabled
+        if value.get("per_participant_video", {}).get("url") and value.get("per_participant_video", {}).get("webcam_resolution") == "none" and value.get("per_participant_video", {}).get("screenshare_resolution") == "none":
+            raise serializers.ValidationError({"per_participant_video": "At least one of webcam_resolution or screenshare_resolution must be set to a non-none value."})
 
         return value
 
@@ -1861,7 +1895,7 @@ class ParticipantEventSerializer(serializers.Serializer):
 
 
 class PatchBotVoiceAgentSettingsSerializer(serializers.Serializer):
-    url = serializers.CharField(required=False, allow_null=False, allow_blank=True, help_text="URL of a website containing a voice agent that gets the user's responses from the microphone. The bot will load this website and stream its video and audio to the meeting. The audio from the meeting will be sent to website via the microphone. See https://docs.attendee.dev/guides/voice-agents for further details. The video will be displayed through the bot's webcam. To display the video through screenshare, use the screenshare_url parameter instead. Set to \"\" to turn off.")
+    url = serializers.CharField(required=False, allow_null=False, allow_blank=True, help_text="URL of a website containing a voice agent that gets the user's responses from the microphone. The bot will load this website and stream its video and audio to the meeting. The audio from the meeting will be sent to website via the microphone. See https://docs.attendee.dev/guides/voiceagents for further details. The video will be displayed through the bot's webcam. To display the video through screenshare, use the screenshare_url parameter instead. Set to \"\" to turn off.")
     screenshare_url = serializers.CharField(required=False, allow_null=False, allow_blank=True, help_text='Behaves the same as url, but the video will be displayed through screenshare instead of the bot\'s webcam. Currently, you cannot provide both url and screenshare_url. Set to "" to turn off.')
 
     def validate_url(self, value):
@@ -1940,7 +1974,7 @@ class PatchBotTranscriptionSettingsSerializer(serializers.Serializer):
                 "bot_name": "My Updated Bot",
                 "bot_image": {"type": "image/png", "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="},
             },
-            description="Example of updating the bot name and/or image",
+            description="Example of updating the bot name and/or image (supports PNG and JPEG)",
         ),
     ]
 )

@@ -117,6 +117,11 @@ urlpatterns = [
         name="resend-webhook-delivery-attempt",
     ),
     path(
+        "<str:object_id>/usage/",
+        projects_views.ProjectUsageView.as_view(),
+        name="project-usage",
+    ),
+    path(
         "<str:object_id>/billing/",
         projects_views.ProjectBillingView.as_view(),
         name="project-billing",
