@@ -57,13 +57,35 @@ const rawTrackIdToRawReceiverMap = new Map();
   })();
 
   window.addEventListener('audio-tap-created', ({ detail }) => {
-  
+    const { rawTrackId } = detail;
+
+    const tapEntry = window.__audioTapsByRawTrackId.get(rawTrackId);
+    const receiver = rawTrackIdToRawReceiverMap.get(rawTrackId);
+
     console.log('matched raw track to tapped stream', detail);
-    
-  
-    // raw.track / raw.receiver = identity + participant correlation
-    // tap.tappedTrack           = PCM source you can process
-  });
+    console.log('tapEntry', tapEntry);
+    console.log('receiver', receiver);
+
+    if (!window.initialData.sendPerParticipantAudio) {
+        console.log('not sending per participant audio');
+        return;
+    }
+    if (!tapEntry?.tappedTrack) {
+        console.log('no tapped track');
+        return;
+    }
+    if (!receiver) {
+        console.log('no receiver');
+        return;
+    }
+
+    console.log('sending per participant audio');
+
+    handleAudioTrack({
+        track: tapEntry.tappedTrack,
+        receiver,
+    });
+});
 
 const handleVideoTrackForRealTimePerParticipantVideo = async ({ track, streams }) => {
     try {
@@ -2192,7 +2214,7 @@ new RTCInterceptor({
                 rawTrackIdToRawReceiverMap.set(event.track.id, event.receiver);
                 window.styleManager.addAudioTrack(event.track);
                 if (window.initialData.sendPerParticipantAudio) {
-                    handleAudioTrack({track: event.track, receiver: event.receiver});
+                    //handleAudioTrack({track: event.track, receiver: event.receiver});
                 }
             }
             if (event.track.kind === 'video') {
