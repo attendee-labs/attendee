@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 import math
 import os
 import secrets
@@ -22,6 +23,8 @@ from accounts.models import Organization, User, UserRole
 from bots.bot_pod_creator.bot_pod_spec import BotPodSpecType
 from bots.storage import StorageAlias, download_blob_from_remote_storage, remote_storage_url
 from bots.webhook_utils import trigger_webhook
+
+logger = logging.getLogger(__name__)
 
 
 class Project(models.Model):
@@ -1858,6 +1861,22 @@ class BotEventManager:
                             "created_at": event.created_at.isoformat(),
                         },
                     )
+
+                    # If we are configured to log bot state changes, log it
+                    if settings.LOG_BOT_STATE_CHANGES:
+                        logger.info(
+                            "Bot state change",
+                            extra={
+                                "bot_id": bot.object_id,
+                                "bot_metadata": bot.metadata,
+                                "event_type": BotEventTypes.type_to_api_code(event_type),
+                                "event_sub_type": BotEventSubTypes.sub_type_to_api_code(event_sub_type),
+                                "event_metadata": event_metadata,
+                                "old_state": BotStates.state_to_api_code(old_state),
+                                "new_state": BotStates.state_to_api_code(bot.state),
+                                "created_at": event.created_at.isoformat(),
+                            },
+                        )
 
                     return event
 
