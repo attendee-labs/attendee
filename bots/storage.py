@@ -69,10 +69,11 @@ def download_blob_from_remote_storage(url: str, max_retries: int) -> memoryview:
 
 
 def remote_storage_url(file_field):
-    if settings.STORAGE_PROTOCOL == "azure":
+    if settings.STORAGE_PROTOCOL in ("azure", "gcs"):
+        # Azure and GCS backends handle signed URLs via .url property
         return file_field.url
 
-    # Generate a temporary signed URL that expires in 30 minutes (1800 seconds)
+    # S3: Generate a temporary signed URL that expires in 30 minutes (1800 seconds)
     return file_field.storage.bucket.meta.client.generate_presigned_url(
         "get_object",
         Params={"Bucket": file_field.storage.bucket_name, "Key": file_field.name},

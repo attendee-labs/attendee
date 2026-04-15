@@ -2135,10 +2135,11 @@ class Recording(models.Model):
         if not self.file.name:
             return None
 
-        if settings.STORAGE_PROTOCOL == "azure":
+        if settings.STORAGE_PROTOCOL in ("azure", "gcs"):
+            # Azure and GCS backends handle signed URLs via .url property
             return self.file.url
 
-        # Generate a temporary signed URL that expires in 30 minutes (1800 seconds)
+        # S3: Generate a temporary signed URL that expires in 30 minutes (1800 seconds)
         return self.file.storage.bucket.meta.client.generate_presigned_url(
             "get_object",
             Params={"Bucket": self.file.storage.bucket_name, "Key": self.file.name},
@@ -2864,10 +2865,11 @@ class BotDebugScreenshot(models.Model):
         if not self.file.name:
             return None
 
-        if settings.STORAGE_PROTOCOL == "azure":
+        if settings.STORAGE_PROTOCOL in ("azure", "gcs"):
+            # Azure and GCS backends handle signed URLs via .url property
             return self.file.url
 
-        # Generate a temporary signed URL that expires in 30 minutes (1800 seconds)
+        # S3: Generate a temporary signed URL that expires in 30 minutes (1800 seconds)
         return self.file.storage.bucket.meta.client.generate_presigned_url(
             "get_object",
             Params={"Bucket": self.file.storage.bucket_name, "Key": self.file.name},

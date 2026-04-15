@@ -45,7 +45,7 @@ This document lists all supported environment variables for the Attendee applica
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `STORAGE_PROTOCOL` | String | `s3` | Storage backend to use: `s3` (AWS S3) or `azure` (Azure Blob Storage). |
+| `STORAGE_PROTOCOL` | String | `s3` | Storage backend to use: `s3` (AWS S3), `azure` (Azure Blob Storage), or `gcs` (Google Cloud Storage). |
 
 ### AWS S3 Configuration
 
@@ -70,6 +70,16 @@ This document lists all supported environment variables for the Attendee applica
 | `AZURE_AUDIO_CHUNK_STORAGE_CONTAINER_NAME` | String | (Uses recording container) | Azure Blob Container name for audio chunks. Falls back to `AZURE_RECORDING_STORAGE_CONTAINER_NAME` if not set. |
 | `AZURE_STORAGE_USE_PERMANENT_LINKS` | Boolean | `false` | Generate permanent links instead of expiring ones for Azure storage. |
 | `AZURE_STORAGE_LINK_EXPIRATION_SECONDS` | Integer | `1800` | Expiration time (in seconds) for Azure storage links. Ignored if `AZURE_STORAGE_USE_PERMANENT_LINKS` is `true`. |
+
+### Google Cloud Storage Configuration
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `GCS_PROJECT_ID` | String | (None) | Google Cloud project ID. Optional if using Application Default Credentials or Workload Identity. |
+| `GCS_CREDENTIALS_FILE` | String | (None) | Path to service account JSON credentials file. If not provided, uses Application Default Credentials (ADC) or Workload Identity. |
+| `GCS_RECORDING_STORAGE_BUCKET_NAME` | String | **Required** (if using GCS) | GCS bucket name for storing meeting recordings. |
+| `GCS_AUDIO_CHUNK_STORAGE_BUCKET_NAME` | String | (Uses recording bucket) | GCS bucket name for storing audio chunks. Falls back to `GCS_RECORDING_STORAGE_BUCKET_NAME` if not set. |
+| `GCS_STORAGE_LINK_EXPIRATION_SECONDS` | Integer | `1800` | Expiration time (in seconds) for GCS signed URLs. |
 
 ### Audio Chunk Storage
 

@@ -252,16 +252,18 @@ LOG_FORMATTERS = {
 }
 
 # Set up django storage backend
-# Use s3 by default, but if the STORAGE_PROTOCOL env var is set to "azure", use azure storage
+# Supports: s3 (AWS S3), azure (Azure Blob Storage), gcs (Google Cloud Storage)
 STORAGE_PROTOCOL = os.getenv("STORAGE_PROTOCOL", "s3")
 AWS_RECORDING_STORAGE_BUCKET_NAME = os.getenv("AWS_RECORDING_STORAGE_BUCKET_NAME")
 AZURE_RECORDING_STORAGE_CONTAINER_NAME = os.getenv("AZURE_RECORDING_STORAGE_CONTAINER_NAME")
+GCS_RECORDING_STORAGE_BUCKET_NAME = os.getenv("GCS_RECORDING_STORAGE_BUCKET_NAME")
 
 # Audio chunk storage settings
 USE_REMOTE_STORAGE_FOR_AUDIO_CHUNKS = os.getenv("USE_REMOTE_STORAGE_FOR_AUDIO_CHUNKS", "false") == "true"
 FALLBACK_TO_DB_STORAGE_FOR_AUDIO_CHUNKS_IF_REMOTE_STORAGE_FAILS = os.getenv("FALLBACK_TO_DB_STORAGE_FOR_AUDIO_CHUNKS_IF_REMOTE_STORAGE_FAILS", "false") == "true"
 AWS_AUDIO_CHUNK_STORAGE_BUCKET_NAME = os.getenv("AWS_AUDIO_CHUNK_STORAGE_BUCKET_NAME") or AWS_RECORDING_STORAGE_BUCKET_NAME
 AZURE_AUDIO_CHUNK_STORAGE_CONTAINER_NAME = os.getenv("AZURE_AUDIO_CHUNK_STORAGE_CONTAINER_NAME") or AZURE_RECORDING_STORAGE_CONTAINER_NAME
+GCS_AUDIO_CHUNK_STORAGE_BUCKET_NAME = os.getenv("GCS_AUDIO_CHUNK_STORAGE_BUCKET_NAME") or GCS_RECORDING_STORAGE_BUCKET_NAME
 
 if STORAGE_PROTOCOL == "azure":
     DEFAULT_STORAGE_BACKEND = {
@@ -278,7 +280,32 @@ if STORAGE_PROTOCOL == "azure":
 
     AUDIO_CHUNK_STORAGE_BACKEND = copy.deepcopy(DEFAULT_STORAGE_BACKEND)
     AUDIO_CHUNK_STORAGE_BACKEND["OPTIONS"]["azure_container"] = AZURE_AUDIO_CHUNK_STORAGE_CONTAINER_NAME
+elif STORAGE_PROTOCOL == "gcs":
+    # Google Cloud Storage backend
+    # Supports: service account JSON file, Workload Identity, or Application Default Credentials
+    _gcs_credentials_file = os.getenv("GCS_CREDENTIALS_FILE")
+    _gcs_project_id = os.getenv("GCS_PROJECT_ID")
+    _gcs_expiration = int(os.getenv("GCS_STORAGE_LINK_EXPIRATION_SECONDS", 1800))
+
+    DEFAULT_STORAGE_BACKEND = {
+        "BACKEND": "storages.backends.gcloud.GoogleCloudStorage",
+        "OPTIONS": {
+            "project_id": _gcs_project_id,
+            "querystring_auth": True,
+            "expiration": _gcs_expiration,
+        },
+    }
+    # Add credentials file path if provided (otherwise uses Application Default Credentials)
+    if _gcs_credentials_file:
+        DEFAULT_STORAGE_BACKEND["OPTIONS"]["credentials"] = _gcs_credentials_file
+
+    RECORDING_STORAGE_BACKEND = copy.deepcopy(DEFAULT_STORAGE_BACKEND)
+    RECORDING_STORAGE_BACKEND["OPTIONS"]["bucket_name"] = GCS_RECORDING_STORAGE_BUCKET_NAME
+
+    AUDIO_CHUNK_STORAGE_BACKEND = copy.deepcopy(DEFAULT_STORAGE_BACKEND)
+    AUDIO_CHUNK_STORAGE_BACKEND["OPTIONS"]["bucket_name"] = GCS_AUDIO_CHUNK_STORAGE_BUCKET_NAME
 else:
+    # Default: S3 storage
     DEFAULT_STORAGE_BACKEND = {
         "BACKEND": "storages.backends.s3.S3Storage",
         "OPTIONS": {
