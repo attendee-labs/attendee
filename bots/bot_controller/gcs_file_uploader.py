@@ -2,6 +2,8 @@ import logging
 import threading
 from pathlib import Path
 
+import rollbar
+
 try:
     from google.cloud import storage
 
@@ -78,6 +80,16 @@ class GCSFileUploader:
 
             if file_size == 0:
                 logger.warning(f"Warning: File {file_path} is empty (0 bytes)")
+                rollbar.report_message(
+                    message="GCS upload attempted with 0-byte file",
+                    level="warning",
+                    extra_data={
+                        "file_path": str(file_path),
+                        "bucket_name": self.bucket_name,
+                        "blob_name": self.filename,
+                        "context": "gcs_file_uploader",
+                    },
+                )
 
             # Determine content type based on file extension
             content_type = None
@@ -106,12 +118,32 @@ class GCSFileUploader:
 
             if uploaded_size != file_size:
                 logger.warning(f"Size mismatch! Local: {file_size} bytes, Uploaded: {uploaded_size} bytes")
+                rollbar.report_message(
+                    message="GCS upload size mismatch",
+                    level="error",
+                    extra_data={
+                        "file_path": str(file_path),
+                        "bucket_name": self.bucket_name,
+                        "blob_name": self.filename,
+                        "local_size": file_size,
+                        "uploaded_size": uploaded_size,
+                        "context": "gcs_file_uploader",
+                    },
+                )
 
             if callback:
                 callback(True)
 
         except Exception as e:
             logger.error(f"Upload error: {e}")
+            rollbar.report_exc_info(
+                extra_data={
+                    "file_path": str(file_path) if file_path else None,
+                    "bucket_name": self.bucket_name,
+                    "blob_name": self.filename,
+                    "context": "gcs_file_uploader",
+                },
+            )
             if callback:
                 callback(False)
 
