@@ -617,7 +617,7 @@ class WebBotAdapter(BotAdapter):
                 logger.warning(f"Error closing existing driver: {e}")
             self.driver = None
 
-        self.driver = webdriver.Chrome(options=options, service=Service(executable_path="/usr/local/bin/chromedriver"))
+        self.driver = webdriver.Chrome(options=options)#, service=Service(executable_path="/usr/local/bin/chromedriver"))
         logger.info(f"web driver server initialized at port {self.driver.service.port}")
 
         initial_data_code = f"window.initialData = {{websocketPort: {self.websocket_port}, videoFrameWidth: {self.video_frame_size[0]}, videoFrameHeight: {self.video_frame_size[1]}, botName: {json.dumps(self.display_name)}, addClickRipple: {'true' if self.should_create_debug_recording else 'false'}, recordingView: '{self.recording_view}', sendMixedAudio: {'true' if self.add_mixed_audio_chunk_callback else 'false'}, sendPerParticipantAudio: {'true' if self.add_audio_chunk_callback else 'false'}, perParticipantRealtimeVideoConfiguration: {json.dumps(self.per_participant_realtime_video_configuration.to_dict())}, sendPerParticipantVideo: {'true' if self.add_per_participant_video_frame_callback else 'false'}, collectCaptions: {'true' if self.upsert_caption_callback else 'false'}, recordParticipantSpeechStartStopEvents: {'true' if self.record_participant_speech_start_stop_events else 'false'}}}"
@@ -688,7 +688,7 @@ class WebBotAdapter(BotAdapter):
         # Expected exceptions are ones that we expect to happen and are not a big deal, so we only increment num_retries once every three expected exceptions
         num_expected_exceptions = 0
         num_retries = 0
-        max_retries = 3
+        max_retries = 300
         attempts_to_join_started_at = time.time()
 
         while num_retries <= max_retries:
@@ -756,7 +756,7 @@ class WebBotAdapter(BotAdapter):
                     return
 
                 num_expected_exceptions += 1
-                if num_expected_exceptions % 5 == 0:
+                if num_expected_exceptions % 500 == 0:
                     num_retries += 1
                     logger.info(f"Failed to join meeting and the {e.__class__.__name__} exception is expected and {num_expected_exceptions} expected exceptions have occurred, so incrementing num_retries. This usually indicates that the meeting has not started yet, so we will wait for the configured amount of time which is 180 seconds before retrying")
                     # We're going to start a new pod to see if that fixes the issue
