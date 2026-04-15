@@ -10,6 +10,7 @@ from datetime import timedelta
 
 import gi
 import redis
+import rollbar
 from django.conf import settings
 from django.core.files.base import ContentFile
 from django.db.models import F
@@ -187,6 +188,8 @@ class BotController:
         from bots.google_meet_bot_adapter import GoogleMeetBotAdapter
 
         return GoogleMeetBotAdapter(
+            bot_id=self.bot_in_db.id,
+            bot_object_id=self.bot_in_db.object_id,
             display_name=self.bot_in_db.name,
             send_message_callback=self.on_message_from_adapter,
             add_audio_chunk_callback=self.get_per_participant_audio_chunk_callback(),
@@ -222,6 +225,8 @@ class BotController:
         teams_bot_login_credentials = self.bot_in_db.project.credentials.filter(credential_type=Credentials.CredentialTypes.TEAMS_BOT_LOGIN).first()
 
         return TeamsBotAdapter(
+            bot_id=self.bot_in_db.id,
+            bot_object_id=self.bot_in_db.object_id,
             display_name=self.bot_in_db.name,
             send_message_callback=self.on_message_from_adapter,
             add_audio_chunk_callback=self.get_per_participant_audio_chunk_callback(),
@@ -294,6 +299,8 @@ class BotController:
         zoom_tokens = self.get_zoom_tokens()
 
         return ZoomWebBotAdapter(
+            bot_id=self.bot_in_db.id,
+            bot_object_id=self.bot_in_db.object_id,
             display_name=self.bot_in_db.name,
             send_message_callback=self.on_message_from_adapter,
             add_audio_chunk_callback=self.get_per_participant_audio_chunk_callback(),
@@ -1818,28 +1825,50 @@ class BotController:
             logger.info(f"Created bot event for #{self.bot_in_db.object_id} for UI element not found. Exception info: {message}")
 
             if screenshot_available:
-                # Create debug screenshot
-                debug_screenshot = BotDebugScreenshot.objects.create(bot_event=new_bot_event)
+                try:
+                    # Create debug screenshot
+                    debug_screenshot = BotDebugScreenshot.objects.create(bot_event=new_bot_event)
 
-                # Read the file content from the path
-                with open(message.get("screenshot_path"), "rb") as f:
-                    screenshot_content = f.read()
-                    debug_screenshot.file.save(
-                        f"debug_screenshot_{debug_screenshot.object_id}.png",
-                        ContentFile(screenshot_content),
-                        save=True,
+                    # Read the file content from the path
+                    with open(message.get("screenshot_path"), "rb") as f:
+                        screenshot_content = f.read()
+                        debug_screenshot.file.save(
+                            f"debug_screenshot_{debug_screenshot.object_id}.png",
+                            ContentFile(screenshot_content),
+                            save=True,
+                        )
+                except Exception as e:
+                    logger.exception(f"Failed to save debug screenshot for bot {self.bot_in_db.object_id}: {e}")
+                    rollbar.report_exc_info(
+                        extra_data={
+                            "bot_id": str(self.bot_in_db.id),
+                            "bot_object_id": self.bot_in_db.object_id,
+                            "context": "save_debug_screenshot",
+                            "storage_bucket_configured": bool(settings.AWS_RECORDING_STORAGE_BUCKET_NAME),
+                        },
                     )
 
             if mhtml_file_available:
-                # Create debug screenshot
-                mhtml_debug_screenshot = BotDebugScreenshot.objects.create(bot_event=new_bot_event)
+                try:
+                    # Create debug screenshot
+                    mhtml_debug_screenshot = BotDebugScreenshot.objects.create(bot_event=new_bot_event)
 
-                with open(message.get("mhtml_file_path"), "rb") as f:
-                    mhtml_content = f.read()
-                    mhtml_debug_screenshot.file.save(
-                        f"debug_screenshot_{mhtml_debug_screenshot.object_id}.mhtml",
-                        ContentFile(mhtml_content),
-                        save=True,
+                    with open(message.get("mhtml_file_path"), "rb") as f:
+                        mhtml_content = f.read()
+                        mhtml_debug_screenshot.file.save(
+                            f"debug_screenshot_{mhtml_debug_screenshot.object_id}.mhtml",
+                            ContentFile(mhtml_content),
+                            save=True,
+                        )
+                except Exception as e:
+                    logger.exception(f"Failed to save mhtml debug screenshot for bot {self.bot_in_db.object_id}: {e}")
+                    rollbar.report_exc_info(
+                        extra_data={
+                            "bot_id": str(self.bot_in_db.id),
+                            "bot_object_id": self.bot_in_db.object_id,
+                            "context": "save_mhtml_debug_screenshot",
+                            "storage_bucket_configured": bool(settings.AWS_RECORDING_STORAGE_BUCKET_NAME),
+                        },
                     )
 
             self.cleanup()

@@ -12,6 +12,7 @@ from urllib.parse import unquote, urlparse
 
 import numpy as np
 import requests
+import rollbar
 from django.conf import settings
 from pyvirtualdisplay import Display
 from selenium import webdriver
@@ -35,6 +36,8 @@ class WebBotAdapter(BotAdapter):
     def __init__(
         self,
         *,
+        bot_id,
+        bot_object_id,
         display_name,
         send_message_callback,
         meeting_url,
@@ -58,6 +61,8 @@ class WebBotAdapter(BotAdapter):
         disable_incoming_video: bool,
         record_participant_speech_start_stop_events: bool,
     ):
+        self.bot_id = bot_id
+        self.bot_object_id = bot_object_id
         self.display_name = display_name
         self.send_message_callback = send_message_callback
         self.add_audio_chunk_callback = add_audio_chunk_callback
@@ -781,6 +786,20 @@ class WebBotAdapter(BotAdapter):
             except Exception as e:
                 if num_retries >= max_retries:
                     logger.exception(f"Failed to join meeting and the unexpected {e.__class__.__name__} exception with message {e.__str__()} is retryable but the number of retries exceeded the limit, so returning.")
+                    # Report to Rollbar with full context
+                    rollbar.report_exc_info(
+                        extra_data={
+                            "bot_id": str(self.bot_id),
+                            "bot_object_id": self.bot_object_id,
+                            "meeting_url": self.meeting_url,
+                            "num_retries": num_retries,
+                            "max_retries": max_retries,
+                            "time_spent_joining_seconds": time.time() - attempts_to_join_started_at,
+                            "exception_type": e.__class__.__name__,
+                            "exception_message": str(e),
+                            "context": "repeatedly_attempt_to_join_meeting_max_retries_exceeded",
+                        },
+                    )
                     self.send_debug_screenshot_message(step="unknown", exception=e, inner_exception=None)
                     return
 
