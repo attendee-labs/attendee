@@ -1626,12 +1626,23 @@ class BotController:
         # Find the bot's last event
         last_bot_event = self.bot_in_db.last_bot_event()
         if last_bot_event:
-            debug_screenshot = BotDebugScreenshot.objects.create(bot_event=last_bot_event)
+            try:
+                debug_screenshot = BotDebugScreenshot.objects.create(bot_event=last_bot_event)
 
-            # Save the file directly from the file path
-            with open(BotAdapter.DEBUG_RECORDING_FILE_PATH, "rb") as f:
-                debug_screenshot.file.save(f"debug_screen_recording_{debug_screenshot.object_id}.mp4", f, save=True)
-            logger.info(f"Saved debug recording with ID {debug_screenshot.object_id}")
+                # Save the file directly from the file path
+                with open(BotAdapter.DEBUG_RECORDING_FILE_PATH, "rb") as f:
+                    debug_screenshot.file.save(f"debug_screen_recording_{debug_screenshot.object_id}.mp4", f, save=True)
+                logger.info(f"Saved debug recording with ID {debug_screenshot.object_id}")
+            except Exception as e:
+                logger.exception(f"Failed to save debug recording for bot {self.bot_in_db.object_id}: {e}")
+                rollbar.report_exc_info(
+                    extra_data={
+                        "bot_id": str(self.bot_in_db.id),
+                        "bot_object_id": self.bot_in_db.object_id,
+                        "context": "save_debug_recording",
+                        "storage_bucket_configured": bool(settings.AWS_RECORDING_STORAGE_BUCKET_NAME),
+                    },
+                )
 
     def on_message_from_websocket_audio(self, message_json: str):
         try:
@@ -1663,35 +1674,55 @@ class BotController:
         if screenshot_available:
             if not os.path.exists(message.get("screenshot_path")):
                 logger.warning(f"Warning: Screenshot file at {message.get('screenshot_path')} does not exist, not saving")
-                return
+            else:
+                try:
+                    # Create debug screenshot
+                    debug_screenshot = BotDebugScreenshot.objects.create(bot_event=new_bot_event)
 
-            # Create debug screenshot
-            debug_screenshot = BotDebugScreenshot.objects.create(bot_event=new_bot_event)
-
-            # Read the file content from the path
-            with open(message.get("screenshot_path"), "rb") as f:
-                screenshot_content = f.read()
-                debug_screenshot.file.save(
-                    f"debug_screenshot_{debug_screenshot.object_id}.png",
-                    ContentFile(screenshot_content),
-                    save=True,
-                )
+                    # Read the file content from the path
+                    with open(message.get("screenshot_path"), "rb") as f:
+                        screenshot_content = f.read()
+                        debug_screenshot.file.save(
+                            f"debug_screenshot_{debug_screenshot.object_id}.png",
+                            ContentFile(screenshot_content),
+                            save=True,
+                        )
+                except Exception as e:
+                    logger.exception(f"Failed to save debug screenshot for bot {self.bot_in_db.object_id}: {e}")
+                    rollbar.report_exc_info(
+                        extra_data={
+                            "bot_id": str(self.bot_in_db.id),
+                            "bot_object_id": self.bot_in_db.object_id,
+                            "context": "save_debug_artifacts_screenshot",
+                            "storage_bucket_configured": bool(settings.AWS_RECORDING_STORAGE_BUCKET_NAME),
+                        },
+                    )
 
         if mhtml_file_available:
             if not os.path.exists(message.get("mhtml_file_path")):
                 logger.warning(f"Warning: MHTML file at {message.get('mhtml_file_path')} does not exist, not saving")
-                return
+            else:
+                try:
+                    # Create debug screenshot
+                    mhtml_debug_screenshot = BotDebugScreenshot.objects.create(bot_event=new_bot_event)
 
-            # Create debug screenshot
-            mhtml_debug_screenshot = BotDebugScreenshot.objects.create(bot_event=new_bot_event)
-
-            with open(message.get("mhtml_file_path"), "rb") as f:
-                mhtml_content = f.read()
-                mhtml_debug_screenshot.file.save(
-                    f"debug_screenshot_{mhtml_debug_screenshot.object_id}.mhtml",
-                    ContentFile(mhtml_content),
-                    save=True,
-                )
+                    with open(message.get("mhtml_file_path"), "rb") as f:
+                        mhtml_content = f.read()
+                        mhtml_debug_screenshot.file.save(
+                            f"debug_screenshot_{mhtml_debug_screenshot.object_id}.mhtml",
+                            ContentFile(mhtml_content),
+                            save=True,
+                        )
+                except Exception as e:
+                    logger.exception(f"Failed to save debug mhtml for bot {self.bot_in_db.object_id}: {e}")
+                    rollbar.report_exc_info(
+                        extra_data={
+                            "bot_id": str(self.bot_in_db.id),
+                            "bot_object_id": self.bot_in_db.object_id,
+                            "context": "save_debug_artifacts_mhtml",
+                            "storage_bucket_configured": bool(settings.AWS_RECORDING_STORAGE_BUCKET_NAME),
+                        },
+                    )
 
     def take_action_based_on_message_from_adapter(self, message):
         if message.get("message") == BotAdapter.Messages.JOINING_BREAKOUT_ROOM:
