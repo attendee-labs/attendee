@@ -1,206 +1,379 @@
 const rawTrackIdToRawReceiverMap = new Map();
 
 (() => {
-    window.__audioTapsByRawTrackId = new Map();
+    if (window.__meetPreFxAudioTapInstalled) {
+      console.warn("[meet-pre-fx-tap] already installed");
+      return;
+    }
+    window.__meetPreFxAudioTapInstalled = true;
   
-    function install(proto) {
-      if (!proto || proto.__tapInstalled) return;
-      proto.__tapInstalled = true;
+    const origCreateMediaStreamSource = AudioContext.prototype.createMediaStreamSource;
+    const origCreateMediaStreamTrackSource = AudioContext.prototype.createMediaStreamTrackSource;
+    const origDisconnect = AudioNode.prototype.disconnect;
   
-      const orig = proto.createMediaStreamSource;
-      if (typeof orig !== 'function') return;
+    let nextContextId = 1;
+    let nextTapId = 1;
   
-      proto.createMediaStreamSource = function(stream) {
-        const realSource = orig.call(this, stream);
+    const contextIds = new WeakMap();
+    const sourceMeta = new WeakMap();
+    const tappedNodes = new WeakSet();
   
-        // The important identity: original input track
-        const sourceTrack = stream.getAudioTracks()[0] || null;
-        const rawTrackId = sourceTrack?.id || null;
+    function getContextId(ctx) {
+      let id = contextIds.get(ctx);
+      if (!id) {
+        id = `ctx-${nextContextId++}`;
+        contextIds.set(ctx, id);
+      }
+      return id;
+    }
   
-        const proxy = this.createGain();
-        const tapDest = this.createMediaStreamDestination();
+    function safeCloneTrackInfo(track) {
+      if (!track) return null;
   
-        realSource.connect(proxy);    // app path
-        realSource.connect(tapDest);  // your tee
+      let settings = null;
+      let constraints = null;
+      let capabilities = null;
   
-        const entry = {
-          context: this,
-          sourceStream: stream,
-          sourceTrack,
-          rawTrackId,
-          realSource,
-          proxy,
-          tapDest,
-          tappedStream: tapDest.stream,
-          tappedTrack: tapDest.stream.getAudioTracks()[0] || null,
-        };
+      try { settings = track.getSettings ? track.getSettings() : null; } catch (_) {}
+      try { constraints = track.getConstraints ? track.getConstraints() : null; } catch (_) {}
+      try { capabilities = track.getCapabilities ? track.getCapabilities() : null; } catch (_) {}
   
-        if (rawTrackId && rawTrackIdToRawReceiverMap.has(rawTrackId)) {
-            window.__audioTapsByRawTrackId.set(rawTrackId, entry);
-        
-  
-            window.dispatchEvent(new CustomEvent('audio-tap-created', {
-            detail: {
-                rawTrackId,
-                tappedTrackId: entry.tappedTrack?.id || null,
-                sourceStreamId: stream.id || null,
-            }
-            }));
-        }
-  
-        return proxy;
+      return {
+        id: track.id,
+        kind: track.kind,
+        label: track.label,
+        enabled: track.enabled,
+        muted: track.muted,
+        readyState: track.readyState,
+        settings,
+        constraints,
+        capabilities,
       };
     }
   
-    install(window.AudioContext?.prototype);
-    install(window.webkitAudioContext?.prototype);
+    function copyInputBuffer(inputBuffer) {
+      const channelCount = inputBuffer.numberOfChannels;
+      const channels = new Array(channelCount);
+  
+      for (let ch = 0; ch < channelCount; ch++) {
+        const src = inputBuffer.getChannelData(ch);
+        const dst = new Float32Array(src.length);
+        dst.set(src);
+        channels[ch] = dst;
+      }
+  
+      return channels;
+    }
+  
+    function zeroOutputBuffer(outputBuffer) {
+      for (let ch = 0; ch < outputBuffer.numberOfChannels; ch++) {
+        outputBuffer.getChannelData(ch).fill(0);
+      }
+    }
+  
+    function emitTapData(payload) {
+      try {
+        window.dispatchEvent(
+          new CustomEvent("meet-pre-fx-audio-data", { detail: payload })
+        );
+      } catch (err) {
+        console.error("[meet-pre-fx-tap] dispatch failed", err);
+      }
+  
+      try {
+        if (typeof window.onMeetPreFxAudioData === "function") {
+          window.onMeetPreFxAudioData(payload);
+        }
+      } catch (err) {
+        console.error("[meet-pre-fx-tap] onMeetPreFxAudioData failed", err);
+      }
+    }
+  
+    function emitTapLifecycle(type, payload) {
+      try {
+        window.dispatchEvent(
+          new CustomEvent("meet-pre-fx-audio-lifecycle", {
+            detail: { type, ...payload },
+          })
+        );
+      } catch (err) {
+        console.error("[meet-pre-fx-tap] lifecycle dispatch failed", err);
+      }
+    }
+  
+    function makeBaseMeta({
+      ctx,
+      kind,
+      stream = null,
+      track = null,
+      sourceNode,
+    }) {
+      const tracks = stream
+        ? stream.getAudioTracks()
+        : track
+          ? [track]
+          : [];
+  
+      const trackInfos = tracks.map(safeCloneTrackInfo);
+      const primaryTrack = track || tracks[0] || null;
+  
+      return {
+        tapId: `tap-${nextTapId++}`,
+        contextId: getContextId(ctx),
+        kind, // "stream-source" or "track-source"
+        context: ctx,
+        sourceNode,
+        stream,
+        streamId: stream ? stream.id : null,
+        tracks,
+        trackInfos,
+        primaryTrack,
+        primaryTrackInfo: safeCloneTrackInfo(primaryTrack),
+        processor: null,
+        muteGain: null,
+        bufferSize: null,
+        installedAt: Date.now(),
+      };
+    }
+  
+    function attachTrackListeners(meta) {
+      for (const track of meta.tracks) {
+        if (!track || track.__meetTapListenersAttached) continue;
+        track.__meetTapListenersAttached = true;
+  
+        track.addEventListener("mute", () => {
+          emitTapLifecycle("track-mute", {
+            tapId: meta.tapId,
+            contextId: meta.contextId,
+            track: safeCloneTrackInfo(track),
+            streamId: meta.streamId,
+          });
+        });
+  
+        track.addEventListener("unmute", () => {
+          emitTapLifecycle("track-unmute", {
+            tapId: meta.tapId,
+            contextId: meta.contextId,
+            track: safeCloneTrackInfo(track),
+            streamId: meta.streamId,
+          });
+        });
+  
+        track.addEventListener("ended", () => {
+          emitTapLifecycle("track-ended", {
+            tapId: meta.tapId,
+            contextId: meta.contextId,
+            track: safeCloneTrackInfo(track),
+            streamId: meta.streamId,
+          });
+        });
+      }
+    }
+  
+    function shouldTap(meta) {
+      // Customize this if you need exclusions.
+      // Example: skip your own bot track by ID or stream ID.
+      // return meta.primaryTrack?.id !== "some-track-id";
+      return true;
+    }
+  
+    function tapSourceNode(sourceNode, meta, options = {}) {
+      if (!sourceNode || !meta) return;
+      if (tappedNodes.has(sourceNode)) return;
+      if (!shouldTap(meta)) return;
+  
+      const ctx = meta.context;
+      if (!ctx) return;
+  
+      const bufferSize = options.bufferSize || 4096;
+      const inputChannels = 2;
+      const outputChannels = 2;
+  
+      const processor = ctx.createScriptProcessor(
+        bufferSize,
+        inputChannels,
+        outputChannels
+      );
+  
+      const muteGain = ctx.createGain();
+      muteGain.gain.value = 0;
+  
+      processor.onaudioprocess = (event) => {
+        try {
+          const input = event.inputBuffer;
+          const output = event.outputBuffer;
+  
+          const channels = copyInputBuffer(input);
+          zeroOutputBuffer(output);
+  
+          const liveTracks = meta.stream
+            ? meta.stream.getAudioTracks()
+            : meta.track
+              ? [meta.track]
+              : [];
+  
+          const payload = {
+            tapId: meta.tapId,
+            contextId: meta.contextId,
+            kind: meta.kind,
+            streamId: meta.streamId,
+            stream: meta.stream || null,
+            track: meta.primaryTrack || null,
+            trackId: meta.primaryTrack ? meta.primaryTrack.id : null,
+            tracks: liveTracks,
+            trackInfos: liveTracks.map(safeCloneTrackInfo),
+            sampleRate: input.sampleRate,
+            channelCount: input.numberOfChannels,
+            frameCount: input.length,
+            currentTime: ctx.currentTime,
+            wallClockTime: performance.now(),
+            channels, // Array<Float32Array>
+            sourceNode,
+            audioContext: ctx,
+          };
+  
+          emitTapData(payload);
+        } catch (err) {
+          console.error("[meet-pre-fx-tap] onaudioprocess failed", err);
+        }
+      };
+  
+      // Parallel silent branch:
+      // sourceNode -> ScriptProcessorNode -> muteGain(0) -> destination
+      //
+      // This does not replace Meet's own graph. It just forces audio to flow
+      // through the processor so you can read pre-processing PCM.
+      sourceNode.connect(processor);
+      processor.connect(muteGain);
+      muteGain.connect(ctx.destination);
+  
+      meta.processor = processor;
+      meta.muteGain = muteGain;
+      meta.bufferSize = bufferSize;
+  
+      sourceMeta.set(sourceNode, meta);
+      tappedNodes.add(sourceNode);
+      attachTrackListeners(meta);
+  
+      emitTapLifecycle("tap-installed", {
+        tapId: meta.tapId,
+        contextId: meta.contextId,
+        kind: meta.kind,
+        streamId: meta.streamId,
+        track: meta.primaryTrackInfo,
+        tracks: meta.trackInfos,
+        sampleRate: ctx.sampleRate,
+        bufferSize,
+      });
+  
+      console.log("[meet-pre-fx-tap] installed", {
+        tapId: meta.tapId,
+        contextId: meta.contextId,
+        kind: meta.kind,
+        streamId: meta.streamId,
+        trackId: meta.primaryTrackInfo?.id || null,
+        bufferSize,
+        sampleRate: ctx.sampleRate,
+      });
+    }
+  
+    AudioContext.prototype.createMediaStreamSource = function(stream) {
+      const sourceNode = origCreateMediaStreamSource.call(this, stream);
+  
+      try {
+        const meta = makeBaseMeta({
+          ctx: this,
+          kind: "stream-source",
+          stream,
+          sourceNode,
+        });
+  
+        tapSourceNode(sourceNode, meta, {
+          bufferSize: 4096,
+        });
+      } catch (err) {
+        console.error("[meet-pre-fx-tap] createMediaStreamSource hook failed", err);
+      }
+  
+      return sourceNode;
+    };
+  
+    if (typeof origCreateMediaStreamTrackSource === "function") {
+      AudioContext.prototype.createMediaStreamTrackSource = function(track) {
+        const sourceNode = origCreateMediaStreamTrackSource.call(this, track);
+  
+        try {
+          const stream = new MediaStream([track]);
+          const meta = makeBaseMeta({
+            ctx: this,
+            kind: "track-source",
+            stream,
+            track,
+            sourceNode,
+          });
+  
+          tapSourceNode(sourceNode, meta, {
+            bufferSize: 4096,
+          });
+        } catch (err) {
+          console.error("[meet-pre-fx-tap] createMediaStreamTrackSource hook failed", err);
+        }
+  
+        return sourceNode;
+      };
+    }
+  
+    AudioNode.prototype.disconnect = function(...args) {
+      try {
+        const meta = sourceMeta.get(this);
+        if (meta) {
+          // Let the real disconnect run. We only log lifecycle here.
+          emitTapLifecycle("source-disconnect", {
+            tapId: meta.tapId,
+            contextId: meta.contextId,
+            streamId: meta.streamId,
+            track: safeCloneTrackInfo(meta.primaryTrack),
+          });
+        }
+      } catch (err) {
+        console.error("[meet-pre-fx-tap] disconnect hook failed", err);
+      }
+  
+      return origDisconnect.apply(this, args);
+    };
+  
+    window.meetPreFxAudioTap = {
+      getSourceMeta(sourceNode) {
+        return sourceMeta.get(sourceNode) || null;
+      },
+  
+      listActiveTaps() {
+        const out = [];
+        // WeakMap is not iterable, so keep state via DOM events or your own registry
+        // if you need a global list. This method is just a placeholder.
+        console.warn(
+          "[meet-pre-fx-tap] listActiveTaps() is not globally enumerable with current WeakMap-only storage"
+        );
+        return out;
+      },
+  
+      uninstall() {
+        AudioContext.prototype.createMediaStreamSource = origCreateMediaStreamSource;
+  
+        if (typeof origCreateMediaStreamTrackSource === "function") {
+          AudioContext.prototype.createMediaStreamTrackSource = origCreateMediaStreamTrackSource;
+        }
+  
+        AudioNode.prototype.disconnect = origDisconnect;
+  
+        delete window.__meetPreFxAudioTapInstalled;
+        console.log("[meet-pre-fx-tap] hooks removed");
+      },
+    };
+  
+    console.log("[meet-pre-fx-tap] ready");
   })();
 
-  function startTappedNodePCM({ tapEntry, receiver }) {
-    if (tapEntry.__pcmTapStarted) {
-        return;
-    }
-    tapEntry.__pcmTapStarted = true;
-
-    const ctx = tapEntry.context;
-    const sourceNode = tapEntry.realSource;
-
-    // Minimal fix: tap PCM directly from the Web Audio graph.
-    // Deprecated, but much smaller than wiring up an AudioWorklet module.
-    const processor = ctx.createScriptProcessor(2048);
-    const silentGain = ctx.createGain();
-    silentGain.gain.value = 0.5;
-
-    tapEntry.tapProcessor = processor;
-    tapEntry.tapSilentGain = silentGain;
-
-    sourceNode.connect(processor);
-    processor.connect(silentGain);
-    silentGain.connect(ctx.destination);
-
-    let lastAudioFormat = null;
-
-    const cleanup = () => {
-        processor.onaudioprocess = null;
-        try { sourceNode.disconnect(processor); } catch {}
-        try { processor.disconnect(); } catch {}
-        try { silentGain.disconnect(); } catch {}
-        tapEntry.__pcmTapStarted = false;
-    };
-
-    //tapEntry.sourceTrack?.addEventListener('ended', cleanup, { once: true });
-    //tapEntry.tappedTrack?.addEventListener('ended', cleanup, { once: true });
-
-    processor.onaudioprocess = (event) => {
-        try {
-            const input = event.inputBuffer;
-            if (!input) {
-                return;
-            }
-
-            const numChannels = input.numberOfChannels;
-            const numSamples = input.length;
-            const audioData = new Float32Array(numSamples);
-
-            for (let channel = 0; channel < numChannels; channel++) {
-                const channelData = input.getChannelData(channel);
-                for (let i = 0; i < numSamples; i++) {
-                    audioData[i] += channelData[i];
-                }
-            }
-
-            console.log('audioData', audioData);
-
-            if (numChannels > 1) {
-                for (let i = 0; i < numSamples; i++) {
-                    audioData[i] /= numChannels;
-                }
-            }
-
-            const currentFormat = {
-                numberOfChannels: 1,
-                originalNumberOfChannels: numChannels,
-                numberOfFrames: numSamples,
-                sampleRate: input.sampleRate,
-                format: 'f32',
-                duration: numSamples / input.sampleRate,
-            };
-
-            if (
-                !lastAudioFormat ||
-                JSON.stringify(currentFormat) !== JSON.stringify(lastAudioFormat)
-            ) {
-                lastAudioFormat = currentFormat;
-                ws.sendJson({
-                    type: 'AudioFormatUpdate',
-                    fromTappedTrack: true,
-                    format: currentFormat,
-                });
-            }
-
-            let hasNonZero = false;
-            for (let i = 0; i < audioData.length; i++) {
-                if (audioData[i] !== 0) {
-                    hasNonZero = true;
-                    break;
-                }
-            }
-            if (!hasNonZero) {
-                return;
-            }
-
-            const contributingSources = receiverManager.getContributingSources(receiver);
-
-            const usersForContributingSourcesWithAudioLevel = contributingSources
-                .map(source => ({
-                    audioLevel: source?.audioLevel || 0,
-                    user: userManager.getUserByStreamId(source.source.toString()),
-                }))
-                .filter(x => x.user)
-                .sort((a, b) => b.audioLevel - a.audioLevel);
-
-            const firstUserId =
-                usersForContributingSourcesWithAudioLevel[0]?.user?.deviceId;
-
-            if (firstUserId) {
-                ws.sendPerParticipantAudio(firstUserId, audioData);
-            }
-        } catch (error) {
-            console.error('Error processing tapped node audio:', error);
-        }
-    };
-}
-
-window.addEventListener('audio-tap-created', ({ detail }) => {
-    const { rawTrackId } = detail;
-
-    const tapEntry = window.__audioTapsByRawTrackId.get(rawTrackId);
-    const receiver = rawTrackIdToRawReceiverMap.get(rawTrackId);
-
-    console.log('matched raw track to tapped stream', detail);
-    console.log('tapEntry', tapEntry);
-    console.log('receiver', receiver);
-
-    if (!window.initialData.sendPerParticipantAudio) {
-        console.log('not sending per participant audio');
-        return;
-    }
-    if (!tapEntry?.realSource) {
-        console.log('no realSource');
-        return;
-    }
-    if (!receiver) {
-        console.log('no receiver');
-        return;
-    }
-
-    console.log('sending per participant audio');
-
-    startTappedNodePCM({
-        tapEntry,
-        receiver,
-    });
-});
 
 const handleVideoTrackForRealTimePerParticipantVideo = async ({ track, streams }) => {
     try {
