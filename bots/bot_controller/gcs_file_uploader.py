@@ -73,11 +73,39 @@ class GCSFileUploader:
             if not file_path.exists():
                 raise FileNotFoundError(f"File not found: {file_path}")
 
+            file_size = file_path.stat().st_size
+            logger.info(f"Starting GCS upload: {file_path} ({file_size} bytes) -> gs://{self.bucket_name}/{self.filename}")
+
+            if file_size == 0:
+                logger.warning(f"Warning: File {file_path} is empty (0 bytes)")
+
+            # Determine content type based on file extension
+            content_type = None
+            suffix = file_path.suffix.lower()
+            if suffix == ".mp4":
+                content_type = "video/mp4"
+            elif suffix == ".webm":
+                content_type = "video/webm"
+            elif suffix == ".mp3":
+                content_type = "audio/mpeg"
+            elif suffix == ".wav":
+                content_type = "audio/wav"
+            elif suffix == ".png":
+                content_type = "image/png"
+            elif suffix == ".jpg" or suffix == ".jpeg":
+                content_type = "image/jpeg"
+
             # Upload the file
             blob = self.bucket.blob(self.filename)
-            blob.upload_from_filename(str(file_path))
+            blob.upload_from_filename(str(file_path), content_type=content_type)
 
-            logger.info(f"Successfully uploaded {file_path} to gs://{self.bucket_name}/{self.filename}")
+            # Verify upload by checking blob size
+            blob.reload()
+            uploaded_size = blob.size
+            logger.info(f"Successfully uploaded {file_path} to gs://{self.bucket_name}/{self.filename} (uploaded size: {uploaded_size} bytes)")
+
+            if uploaded_size != file_size:
+                logger.warning(f"Size mismatch! Local: {file_size} bytes, Uploaded: {uploaded_size} bytes")
 
             if callback:
                 callback(True)
