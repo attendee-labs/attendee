@@ -56,7 +56,122 @@ const rawTrackIdToRawReceiverMap = new Map();
     install(window.webkitAudioContext?.prototype);
   })();
 
-  window.addEventListener('audio-tap-created', ({ detail }) => {
+  function startTappedNodePCM({ tapEntry, receiver }) {
+    if (tapEntry.__pcmTapStarted) {
+        return;
+    }
+    tapEntry.__pcmTapStarted = true;
+
+    const ctx = tapEntry.context;
+    const sourceNode = tapEntry.realSource;
+
+    // Minimal fix: tap PCM directly from the Web Audio graph.
+    // Deprecated, but much smaller than wiring up an AudioWorklet module.
+    const processor = ctx.createScriptProcessor(2048);
+    const silentGain = ctx.createGain();
+    silentGain.gain.value = 0.5;
+
+    tapEntry.tapProcessor = processor;
+    tapEntry.tapSilentGain = silentGain;
+
+    sourceNode.connect(processor);
+    processor.connect(silentGain);
+    silentGain.connect(ctx.destination);
+
+    let lastAudioFormat = null;
+
+    const cleanup = () => {
+        processor.onaudioprocess = null;
+        try { sourceNode.disconnect(processor); } catch {}
+        try { processor.disconnect(); } catch {}
+        try { silentGain.disconnect(); } catch {}
+        tapEntry.__pcmTapStarted = false;
+    };
+
+    //tapEntry.sourceTrack?.addEventListener('ended', cleanup, { once: true });
+    //tapEntry.tappedTrack?.addEventListener('ended', cleanup, { once: true });
+
+    processor.onaudioprocess = (event) => {
+        try {
+            const input = event.inputBuffer;
+            if (!input) {
+                return;
+            }
+
+            const numChannels = input.numberOfChannels;
+            const numSamples = input.length;
+            const audioData = new Float32Array(numSamples);
+
+            for (let channel = 0; channel < numChannels; channel++) {
+                const channelData = input.getChannelData(channel);
+                for (let i = 0; i < numSamples; i++) {
+                    audioData[i] += channelData[i];
+                }
+            }
+
+            console.log('audioData', audioData);
+
+            if (numChannels > 1) {
+                for (let i = 0; i < numSamples; i++) {
+                    audioData[i] /= numChannels;
+                }
+            }
+
+            const currentFormat = {
+                numberOfChannels: 1,
+                originalNumberOfChannels: numChannels,
+                numberOfFrames: numSamples,
+                sampleRate: input.sampleRate,
+                format: 'f32',
+                duration: numSamples / input.sampleRate,
+            };
+
+            if (
+                !lastAudioFormat ||
+                JSON.stringify(currentFormat) !== JSON.stringify(lastAudioFormat)
+            ) {
+                lastAudioFormat = currentFormat;
+                ws.sendJson({
+                    type: 'AudioFormatUpdate',
+                    fromTappedTrack: true,
+                    format: currentFormat,
+                });
+            }
+
+            let hasNonZero = false;
+            for (let i = 0; i < audioData.length; i++) {
+                if (audioData[i] !== 0) {
+                    hasNonZero = true;
+                    break;
+                }
+            }
+            if (!hasNonZero) {
+                return;
+            }
+
+            const contributingSources = receiverManager.getContributingSources(receiver);
+
+            const usersForContributingSourcesWithAudioLevel = contributingSources
+                .map(source => ({
+                    audioLevel: source?.audioLevel || 0,
+                    user: userManager.getUserByStreamId(source.source.toString()),
+                }))
+                .filter(x => x.user)
+                .sort((a, b) => b.audioLevel - a.audioLevel);
+
+            const firstUserId =
+                usersForContributingSourcesWithAudioLevel[0]?.user?.deviceId;
+
+            if (firstUserId) {
+                ws.sendPerParticipantAudio(firstUserId, audioData);
+            }
+        } catch (error) {
+            console.error('Error processing tapped node audio:', error);
+        }
+    };
+}
+
+window.addEventListener('audio-tap-created', ({ detail }) => {
     const { rawTrackId } = detail;
 
     const tapEntry = window.__audioTapsByRawTrackId.get(rawTrackId);
@@ -70,8 +185,8 @@ const rawTrackIdToRawReceiverMap = new Map();
         console.log('not sending per participant audio');
         return;
     }
-    if (!tapEntry?.tappedTrack) {
-        console.log('no tapped track');
+    if (!tapEntry?.realSource) {
+        console.log('no realSource');
         return;
     }
     if (!receiver) {
@@ -81,8 +196,8 @@ const rawTrackIdToRawReceiverMap = new Map();
 
     console.log('sending per participant audio');
 
-    handleAudioTrack({
-        track: tapEntry.tappedTrack,
+    startTappedNodePCM({
+        tapEntry,
         receiver,
     });
 });
