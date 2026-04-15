@@ -1,3 +1,5 @@
+const rawTrackIdToRawReceiverMap = new Map();
+
 (() => {
     window.__audioTapsByRawTrackId = new Map();
   
@@ -33,17 +35,18 @@
           tappedTrack: tapDest.stream.getAudioTracks()[0] || null,
         };
   
-        if (rawTrackId) {
-          window.__audioTapsByRawTrackId.set(rawTrackId, entry);
-        }
+        if (rawTrackId && rawTrackIdToRawReceiverMap.has(rawTrackId)) {
+            window.__audioTapsByRawTrackId.set(rawTrackId, entry);
+        
   
-        window.dispatchEvent(new CustomEvent('audio-tap-created', {
-          detail: {
-            rawTrackId,
-            tappedTrackId: entry.tappedTrack?.id || null,
-            sourceStreamId: stream.id || null,
-          }
-        }));
+            window.dispatchEvent(new CustomEvent('audio-tap-created', {
+            detail: {
+                rawTrackId,
+                tappedTrackId: entry.tappedTrack?.id || null,
+                sourceStreamId: stream.id || null,
+            }
+            }));
+        }
   
         return proxy;
       };
@@ -54,21 +57,9 @@
   })();
 
   window.addEventListener('audio-tap-created', ({ detail }) => {
-    const { rawTrackId } = detail;
-    if (!rawTrackId) return;
   
-    const tap = window.__audioTapsByRawTrackId.get(rawTrackId);
-    const raw = window.__rawAudioTracks.get(rawTrackId);
-  
-    if (!tap || !raw) return;
-  
-    console.log('matched raw track to tapped stream', {
-      rawTrackId,
-      rawTrack: raw.track,
-      receiver: raw.receiver,
-      tappedTrack: tap.tappedTrack,
-      tappedStream: tap.tappedStream,
-    });
+    console.log('matched raw track to tapped stream', detail);
+    
   
     // raw.track / raw.receiver = identity + participant correlation
     // tap.tappedTrack           = PCM source you can process
@@ -2033,21 +2024,17 @@ const handleVideoTrack = async (event) => {
   }
 };
 
-const handleAudioTrack = async (event) => {
+const handleAudioTrack = async ({track, receiver}) => {
   let lastAudioFormat = null;  // Track last seen format
   
   try {
     // Create processor to get raw frames
-    const processor = new MediaStreamTrackProcessor({ track: event.track });
+    const processor = new MediaStreamTrackProcessor({ track: track });
     const generator = new MediaStreamTrackGenerator({ kind: 'audio' });
     
     // Get readable stream of audio frames
     const readable = processor.readable;
     const writable = generator.writable;
-
-    const firstStreamId = event.streams[0]?.id;
-
-    const receiver = event.receiver;
 
     // Transform stream to intercept frames
     const transformStream = new TransformStream({
@@ -2202,9 +2189,10 @@ new RTCInterceptor({
             // We need to capture every audio track in the meeting,
             // but we don't need to do anything with the video tracks
             if (event.track.kind === 'audio') {
+                rawTrackIdToRawReceiverMap.set(event.track.id, event.receiver);
                 window.styleManager.addAudioTrack(event.track);
                 if (window.initialData.sendPerParticipantAudio) {
-                    handleAudioTrack(event);
+                    handleAudioTrack({track: event.track, receiver: event.receiver});
                 }
             }
             if (event.track.kind === 'video') {
