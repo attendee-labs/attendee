@@ -76,10 +76,13 @@ This document lists all supported environment variables for the Attendee applica
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `GCS_PROJECT_ID` | String | (None) | Google Cloud project ID. Optional if using Application Default Credentials or Workload Identity. |
-| `GCS_CREDENTIALS_FILE` | String | (None) | Path to service account JSON credentials file. If not provided, uses Application Default Credentials (ADC) or Workload Identity. |
+| `GCS_CREDENTIALS_FILE` | String | (None) | Path to service account JSON credentials file. **Required for signed URLs.** Workload Identity cannot sign URLs without a key file. |
 | `GCS_RECORDING_STORAGE_BUCKET_NAME` | String | **Required** (if using GCS) | GCS bucket name for storing meeting recordings. |
 | `GCS_AUDIO_CHUNK_STORAGE_BUCKET_NAME` | String | (Uses recording bucket) | GCS bucket name for storing audio chunks. Falls back to `GCS_RECORDING_STORAGE_BUCKET_NAME` if not set. |
 | `GCS_STORAGE_LINK_EXPIRATION_SECONDS` | Integer | `1800` | Expiration time (in seconds) for GCS signed URLs. |
+| `GCS_USE_SIGNED_URLS` | Boolean | `true` | Use signed URLs for private file access. Set to `false` if using public buckets or IAM-based access. **Note:** Signed URLs require `GCS_CREDENTIALS_FILE` with a service account key. |
+
+> **Note on Signed URLs:** GCS signed URLs require a private key to sign. Workload Identity and Compute Engine default credentials only provide tokens, not private keys. To use signed URLs, you must provide a service account JSON key file via `GCS_CREDENTIALS_FILE`. Alternatively, set `GCS_USE_SIGNED_URLS=false` and configure your bucket for public access or use IAM-based authentication.
 
 ### Audio Chunk Storage
 

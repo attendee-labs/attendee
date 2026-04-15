@@ -283,16 +283,24 @@ if STORAGE_PROTOCOL == "azure":
 elif STORAGE_PROTOCOL == "gcs":
     # Google Cloud Storage backend
     # Supports: service account JSON file, Workload Identity, or Application Default Credentials
+    #
+    # IMPORTANT: For signed URLs (private files), you MUST provide a service account JSON key file
+    # via GCS_CREDENTIALS_FILE. Workload Identity and Compute Engine credentials cannot sign URLs
+    # locally - they only have tokens, not private keys.
+    #
+    # If you want to use Workload Identity without a key file, set GCS_USE_SIGNED_URLS=false
+    # but note that files will need to be publicly accessible or accessed via IAM.
     _gcs_credentials_file = os.getenv("GCS_CREDENTIALS_FILE")
     _gcs_project_id = os.getenv("GCS_PROJECT_ID")
     _gcs_expiration = int(os.getenv("GCS_STORAGE_LINK_EXPIRATION_SECONDS", 1800))
+    _gcs_use_signed_urls = os.getenv("GCS_USE_SIGNED_URLS", "true").lower() == "true"
 
     DEFAULT_STORAGE_BACKEND = {
         "BACKEND": "storages.backends.gcloud.GoogleCloudStorage",
         "OPTIONS": {
             "project_id": _gcs_project_id,
-            "querystring_auth": True,
-            "expiration": _gcs_expiration,
+            "querystring_auth": _gcs_use_signed_urls,
+            "expiration": _gcs_expiration if _gcs_use_signed_urls else None,
         },
     }
     # Add credentials file path if provided (otherwise uses Application Default Credentials)
