@@ -76,13 +76,18 @@ This document lists all supported environment variables for the Attendee applica
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `GCS_PROJECT_ID` | String | (None) | Google Cloud project ID. Optional if using Application Default Credentials or Workload Identity. |
-| `GCS_CREDENTIALS_FILE` | String | (None) | Path to service account JSON credentials file. **Required for signed URLs.** Workload Identity cannot sign URLs without a key file. |
+| `GCS_CREDENTIALS_FILE` | String | (None) | Path to service account JSON credentials file. Required for signed URLs unless using IAM signing. |
 | `GCS_RECORDING_STORAGE_BUCKET_NAME` | String | **Required** (if using GCS) | GCS bucket name for storing meeting recordings. |
 | `GCS_AUDIO_CHUNK_STORAGE_BUCKET_NAME` | String | (Uses recording bucket) | GCS bucket name for storing audio chunks. Falls back to `GCS_RECORDING_STORAGE_BUCKET_NAME` if not set. |
 | `GCS_STORAGE_LINK_EXPIRATION_SECONDS` | Integer | `1800` | Expiration time (in seconds) for GCS signed URLs. |
-| `GCS_USE_SIGNED_URLS` | Boolean | `true` | Use signed URLs for private file access. Set to `false` if using public buckets or IAM-based access. **Note:** Signed URLs require `GCS_CREDENTIALS_FILE` with a service account key. |
+| `GCS_USE_SIGNED_URLS` | Boolean | `true` | Use signed URLs for private file access. Set to `false` if using public buckets. |
+| `GCS_USE_IAM_SIGNING` | Boolean | `false` | Use IAM API for signing URLs instead of a local private key. Requires `GCS_SERVICE_ACCOUNT_EMAIL`. |
+| `GCS_SERVICE_ACCOUNT_EMAIL` | String | (None) | Service account email for IAM-based signing (e.g., `123456-compute@developer.gserviceaccount.com`). |
 
-> **Note on Signed URLs:** GCS signed URLs require a private key to sign. Workload Identity and Compute Engine default credentials only provide tokens, not private keys. To use signed URLs, you must provide a service account JSON key file via `GCS_CREDENTIALS_FILE`. Alternatively, set `GCS_USE_SIGNED_URLS=false` and configure your bucket for public access or use IAM-based authentication.
+> **Signed URLs with Workload Identity:** To use signed URLs without a JSON key file, enable IAM-based signing:
+> 1. Grant your service account `roles/iam.serviceAccountTokenCreator` on itself
+> 2. Set `GCS_USE_IAM_SIGNING=true`
+> 3. Set `GCS_SERVICE_ACCOUNT_EMAIL` to your service account email
 
 ### Audio Chunk Storage
 

@@ -284,28 +284,43 @@ elif STORAGE_PROTOCOL == "gcs":
     # Google Cloud Storage backend
     # Supports: service account JSON file, Workload Identity, or Application Default Credentials
     #
-    # IMPORTANT: For signed URLs (private files), you MUST provide a service account JSON key file
-    # via GCS_CREDENTIALS_FILE. Workload Identity and Compute Engine credentials cannot sign URLs
-    # locally - they only have tokens, not private keys.
-    #
-    # If you want to use Workload Identity without a key file, set GCS_USE_SIGNED_URLS=false
-    # but note that files will need to be publicly accessible or accessed via IAM.
+    # For signed URLs, you have two options:
+    # 1. Provide a service account JSON key file via GCS_CREDENTIALS_FILE
+    # 2. Use IAM-based signing by setting GCS_USE_IAM_SIGNING=true and GCS_SERVICE_ACCOUNT_EMAIL
+    #    (requires roles/iam.serviceAccountTokenCreator on the service account)
     _gcs_credentials_file = os.getenv("GCS_CREDENTIALS_FILE")
     _gcs_project_id = os.getenv("GCS_PROJECT_ID")
     _gcs_expiration = int(os.getenv("GCS_STORAGE_LINK_EXPIRATION_SECONDS", 1800))
     _gcs_use_signed_urls = os.getenv("GCS_USE_SIGNED_URLS", "true").lower() == "true"
+    _gcs_use_iam_signing = os.getenv("GCS_USE_IAM_SIGNING", "false").lower() == "true"
+    _gcs_service_account_email = os.getenv("GCS_SERVICE_ACCOUNT_EMAIL")
+
+    # Use custom backend for IAM-based signing, otherwise use standard backend
+    if _gcs_use_iam_signing and _gcs_service_account_email:
+        _gcs_backend = "bots.gcs_storage.IAMSigningGoogleCloudStorage"
+    else:
+        _gcs_backend = "storages.backends.gcloud.GoogleCloudStorage"
 
     DEFAULT_STORAGE_BACKEND = {
-        "BACKEND": "storages.backends.gcloud.GoogleCloudStorage",
+        "BACKEND": _gcs_backend,
         "OPTIONS": {
             "project_id": _gcs_project_id,
             "querystring_auth": _gcs_use_signed_urls,
             "expiration": _gcs_expiration if _gcs_use_signed_urls else None,
         },
     }
+
+    # Add service account email for IAM signing
+    if _gcs_use_iam_signing and _gcs_service_account_email:
+        DEFAULT_STORAGE_BACKEND["OPTIONS"]["service_account_email"] = _gcs_service_account_email
+
     # Add credentials file path if provided (otherwise uses Application Default Credentials)
     if _gcs_credentials_file:
         DEFAULT_STORAGE_BACKEND["OPTIONS"]["credentials"] = _gcs_credentials_file
+
+    # Store expiration in settings for the custom backend to access
+    GCS_STORAGE_LINK_EXPIRATION_SECONDS = _gcs_expiration
+    GCS_SERVICE_ACCOUNT_EMAIL = _gcs_service_account_email
 
     RECORDING_STORAGE_BACKEND = copy.deepcopy(DEFAULT_STORAGE_BACKEND)
     RECORDING_STORAGE_BACKEND["OPTIONS"]["bucket_name"] = GCS_RECORDING_STORAGE_BUCKET_NAME
