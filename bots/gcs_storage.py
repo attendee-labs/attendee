@@ -33,10 +33,11 @@ class IAMSigningGoogleCloudStorage(GoogleCloudStorage):
     """
 
     def __init__(self, **settings_kwargs):
-        super().__init__(**settings_kwargs)
-        self._service_account_email = getattr(
+        # Extract service_account_email before passing to parent (not a valid parent option)
+        self._service_account_email = settings_kwargs.pop("service_account_email", None) or getattr(
             settings, "GCS_SERVICE_ACCOUNT_EMAIL", None
-        ) or settings_kwargs.get("service_account_email")
+        )
+        super().__init__(**settings_kwargs)
 
     def url(self, name):
         """
