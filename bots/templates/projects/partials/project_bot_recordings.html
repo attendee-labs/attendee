@@ -28,11 +28,17 @@
                     {% if recording.recording_type != RecordingTypes.NO_RECORDING %}
                         <div class="video-column">
                             {% if recording.state == RecordingStates.COMPLETE %}
+                                {% if recording.url %}
                                 <video preload="auto" width="100%" controls id="recording-video">
                                     <source src="{{ recording.url }}">
                                     Your browser does not support the video tag.
                                 </video>
                                 {% include 'projects/partials/project_bot_recording_speaker_timeline.html' with speaker_timeline=recording.speaker_timeline %}
+                                {% else %}
+                                <div class="alert alert-warning">
+                                    Recording file is unavailable. The URL could not be generated.
+                                </div>
+                                {% endif %}
                             {% else %}
                                 <div class="d-flex align-items-center justify-content-center bg-light border rounded" style="height: 300px;">
                                     <div class="text-center">
