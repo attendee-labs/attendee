@@ -1,4 +1,5 @@
 import logging
+import mimetypes
 import threading
 from pathlib import Path
 
@@ -14,6 +15,19 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+
+# Explicit MIME type mapping for common recording formats
+MIME_TYPE_MAP = {
+    ".mp4": "video/mp4",
+    ".webm": "video/webm",
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".mhtml": "application/x-mimearchive",
+    ".html": "text/html",
+}
 
 
 class GCSFileUploader:
@@ -92,20 +106,19 @@ class GCSFileUploader:
                 )
 
             # Determine content type based on file extension
-            content_type = None
             suffix = file_path.suffix.lower()
-            if suffix == ".mp4":
-                content_type = "video/mp4"
-            elif suffix == ".webm":
-                content_type = "video/webm"
-            elif suffix == ".mp3":
-                content_type = "audio/mpeg"
-            elif suffix == ".wav":
-                content_type = "audio/wav"
-            elif suffix == ".png":
-                content_type = "image/png"
-            elif suffix == ".jpg" or suffix == ".jpeg":
-                content_type = "image/jpeg"
+            content_type = MIME_TYPE_MAP.get(suffix)
+
+            # Fallback to mimetypes library
+            if not content_type:
+                content_type, _ = mimetypes.guess_type(str(file_path))
+
+            # Final fallback to binary stream (prevents wrong auto-detection)
+            if not content_type:
+                content_type = "application/octet-stream"
+                logger.warning(f"Unknown file extension '{suffix}', using {content_type}")
+
+            logger.info(f"Uploading with content_type={content_type} for file with suffix={suffix}")
 
             # Upload the file
             blob = self.bucket.blob(self.filename)
@@ -127,6 +140,8 @@ class GCSFileUploader:
                         "blob_name": self.filename,
                         "local_size": file_size,
                         "uploaded_size": uploaded_size,
+                        "content_type": content_type,
+                        "suffix": suffix,
                         "context": "gcs_file_uploader",
                     },
                 )
