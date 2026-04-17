@@ -78,7 +78,7 @@ steps:
           --region ${_REGION} \
           --vpc-connector ${_VPC_CONNECTOR} \
           --set-env-vars "DJANGO_SETTINGS_MODULE=attendee.settings.production-gke" \
-          --set-secrets "DATABASE_URL=ATTENDEE_DATABASE_URL:latest,DJANGO_SECRET_KEY=DJANGO_SECRET_KEY:latest,CREDENTIALS_ENCRYPTION_KEY=CREDENTIALS_ENCRYPTION_KEY:latest,REDIS_URL=REDIS_URL:latest" \
+          --set-secrets "DATABASE_URL=ATTENDEE_DATABASE_URL:latest,DJANGO_SECRET_KEY=DJANGO_SECRET_KEY:latest,CREDENTIALS_ENCRYPTION_KEY=CREDENTIALS_ENCRYPTION_KEY:latest,REDIS_URL=REDIS_URL:latest,ROLLBAR_ACCESS_TOKEN=ROLLBAR_ACCESS_TOKEN:latest,POSTMARK_API_TOKEN=POSTMARK_API_TOKEN:latest" \
           --command "python" \
           --args "manage.py,migrate,--noinput" \
           --max-retries 0 \
@@ -102,7 +102,7 @@ steps:
           --region ${_REGION} \
           --vpc-connector ${_VPC_CONNECTOR} \
           --set-env-vars "DJANGO_SETTINGS_MODULE=attendee.settings.production-gke" \
-          --set-secrets "DATABASE_URL=ATTENDEE_DATABASE_URL:latest,DJANGO_SECRET_KEY=DJANGO_SECRET_KEY:latest,CREDENTIALS_ENCRYPTION_KEY=CREDENTIALS_ENCRYPTION_KEY:latest,REDIS_URL=REDIS_URL:latest" \
+          --set-secrets "DATABASE_URL=ATTENDEE_DATABASE_URL:latest,DJANGO_SECRET_KEY=DJANGO_SECRET_KEY:latest,CREDENTIALS_ENCRYPTION_KEY=CREDENTIALS_ENCRYPTION_KEY:latest,REDIS_URL=REDIS_URL:latest,ROLLBAR_ACCESS_TOKEN=ROLLBAR_ACCESS_TOKEN:latest,POSTMARK_API_TOKEN=POSTMARK_API_TOKEN:latest" \
           --command "python" \
           --args "manage.py,collectstatic,--noinput" \
           --max-retries 0 \
@@ -132,7 +132,7 @@ steps:
           --max-instances 10 \
           --vpc-connector ${_VPC_CONNECTOR} \
           --set-env-vars "DJANGO_SETTINGS_MODULE=attendee.settings.production-gke,DISABLE_SIGNUP=true,STORAGE_PROTOCOL=gcs,GCS_RECORDING_STORAGE_BUCKET_NAME=${_GCS_BUCKET_NAME},GCS_USE_IAM_SIGNING=true,GCS_SERVICE_ACCOUNT_EMAIL=${_GCS_SERVICE_ACCOUNT_EMAIL},SITE_DOMAIN=attendee-web-883356951770.us-west2.run.app,ROLLBAR_ENVIRONMENT=production,DEFAULT_FROM_EMAIL=billing@oppy.pro" \
-          --set-secrets "DATABASE_URL=ATTENDEE_DATABASE_URL:latest,DJANGO_SECRET_KEY=DJANGO_SECRET_KEY:latest,CREDENTIALS_ENCRYPTION_KEY=CREDENTIALS_ENCRYPTION_KEY:latest,REDIS_URL=REDIS_URL:latest" \
+          --set-secrets "DATABASE_URL=ATTENDEE_DATABASE_URL:latest,DJANGO_SECRET_KEY=DJANGO_SECRET_KEY:latest,CREDENTIALS_ENCRYPTION_KEY=CREDENTIALS_ENCRYPTION_KEY:latest,REDIS_URL=REDIS_URL:latest,ROLLBAR_ACCESS_TOKEN=ROLLBAR_ACCESS_TOKEN:latest,POSTMARK_API_TOKEN=POSTMARK_API_TOKEN:latest" \
           --args="gunicorn,attendee.wsgi:application,--bind,0.0.0.0:8000,--workers,4,--threads,2"
     waitFor: ['collectstatic']
 
@@ -154,7 +154,7 @@ steps:
           --cpu 2 \
           --memory 4Gi \
           --set-env-vars "DJANGO_SETTINGS_MODULE=attendee.settings.production-gke,RUN_SCHEDULER=true,STORAGE_PROTOCOL=gcs,GCS_RECORDING_STORAGE_BUCKET_NAME=${_GCS_BUCKET_NAME},GCS_USE_IAM_SIGNING=true,GCS_SERVICE_ACCOUNT_EMAIL=${_GCS_SERVICE_ACCOUNT_EMAIL},SITE_DOMAIN=attendee-web-883356951770.us-west2.run.app,ROLLBAR_ENVIRONMENT=production,DEFAULT_FROM_EMAIL=billing@oppy.pro" \
-          --set-secrets "DATABASE_URL=ATTENDEE_DATABASE_URL:latest,DJANGO_SECRET_KEY=DJANGO_SECRET_KEY:latest,CREDENTIALS_ENCRYPTION_KEY=CREDENTIALS_ENCRYPTION_KEY:latest,REDIS_URL=REDIS_URL:latest" \
+          --set-secrets "DATABASE_URL=ATTENDEE_DATABASE_URL:latest,DJANGO_SECRET_KEY=DJANGO_SECRET_KEY:latest,CREDENTIALS_ENCRYPTION_KEY=CREDENTIALS_ENCRYPTION_KEY:latest,REDIS_URL=REDIS_URL:latest,ROLLBAR_ACCESS_TOKEN=ROLLBAR_ACCESS_TOKEN:latest,POSTMARK_API_TOKEN=POSTMARK_API_TOKEN:latest" \
           --command "python" \
           --args "worker_entrypoint.py"
     waitFor: ['collectstatic']
