@@ -28,7 +28,7 @@ substitutions:
   _REGION: us-west2
   _SERVICE_NAME: attendee
   _VPC_CONNECTOR: attendee-vpc-connector
-  _GCS_BUCKET_NAME: ""  # Set via --substitutions=_GCS_BUCKET_NAME=your-bucket
+  _GCS_BUCKET_NAME: "attendee-bucket"
   _GCS_SERVICE_ACCOUNT_EMAIL: "883356951770-compute@developer.gserviceaccount.com"
 
 options:
