@@ -137,7 +137,7 @@ class BotVideoOutputStream {
      * @param {boolean} loop - Whether to loop the video.
      * @returns {Promise<void>}
      */
-    async playVideo(videoUrl, loop) {
+    async playVideo(videoUrl, loop, muteVideo) {
         if (!videoUrl) {
             throw new Error("playVideo: videoUrl is required.");
         }
@@ -150,7 +150,7 @@ class BotVideoOutputStream {
             this.videoElement.playsInline = true;
         }
 
-        this.videoElement.muted = false;
+        this.videoElement.muted = muteVideo;
         this.videoElement.src = videoUrl;
         this.videoElement.loop = loop;
         this.videoElement.autoplay = true;
@@ -199,7 +199,7 @@ class BotVideoOutputStream {
      * @param {boolean} loop - Whether to loop the video.
      * @returns {Promise<void>}
      */
-    async playVideoWithBlobUrl(videoUrl, loop) {
+    async playVideoWithBlobUrl(videoUrl, loop, muteVideo) {
         if (!videoUrl) {
             throw new Error("playVideoWithBlobUrl: videoUrl is required.");
         }
@@ -243,7 +243,7 @@ class BotVideoOutputStream {
 
         this.videoBlobUrl = videoBlobUrl;
 
-        this.videoElement.muted = false;
+        this.videoElement.muted = muteVideo;
         this.videoElement.src = videoBlobUrl;
         this.videoElement.loop = loop;
         this.videoElement.autoplay = true;
@@ -667,12 +667,12 @@ class BotOutputManager {
         return this.webcamVideoOutputStream.isVideoPlaying();
     }
 
-    async playVideo(videoUrl, loop) {
-        return this.webcamVideoOutputStream.playVideo(videoUrl, loop);
+    async playVideo(videoUrl, loop, muteVideo) {
+        return this.webcamVideoOutputStream.playVideo(videoUrl, loop, muteVideo);
     }
 
-    async playVideoWithBlobUrl(videoUrl, loop) {
-        return this.webcamVideoOutputStream.playVideoWithBlobUrl(videoUrl, loop);
+    async playVideoWithBlobUrl(videoUrl, loop, muteVideo) {
+        return this.webcamVideoOutputStream.playVideoWithBlobUrl(videoUrl, loop, muteVideo);
     }
 
     /**
