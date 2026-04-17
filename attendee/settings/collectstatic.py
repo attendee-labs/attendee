@@ -90,3 +90,32 @@ MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
 ]
+
+# Storage backends (needed because bots/models.py references these when loading)
+# Using FileSystemStorage as dummy backends since we only need collectstatic to run
+STORAGES = {
+    "default": {
+        "BACKEND": "django.core.files.storage.FileSystemStorage",
+    },
+    "staticfiles": {
+        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+    },
+    "recordings": {
+        "BACKEND": "django.core.files.storage.FileSystemStorage",
+        "OPTIONS": {
+            "location": "/tmp/recordings",
+        },
+    },
+    "bot_debug_screenshots": {
+        "BACKEND": "django.core.files.storage.FileSystemStorage",
+        "OPTIONS": {
+            "location": "/tmp/bot_debug_screenshots",
+        },
+    },
+    "audio_chunks": {
+        "BACKEND": "django.core.files.storage.FileSystemStorage",
+        "OPTIONS": {
+            "location": "/tmp/audio_chunks",
+        },
+    },
+}
