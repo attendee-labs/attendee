@@ -315,7 +315,7 @@ class TeamsUIMethods:
                 try:
                     self.disable_incoming_video_in_ui()
                 except Exception as e:
-                    logger.warning(f"Error disabling incoming video: {e}. Proceeeding with attempt to join meeting anyway.")
+                    logger.warning(f"Error disabling incoming video: {e}. Proceeding with attempt to join meeting anyway.")
             else:
                 self.disable_incoming_video_in_ui()
 
