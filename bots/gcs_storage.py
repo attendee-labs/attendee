@@ -14,6 +14,8 @@ import logging
 from datetime import timedelta
 
 from django.conf import settings
+from google.auth import default as google_auth_default
+from google.auth.transport.requests import Request
 from storages.backends.gcloud import GoogleCloudStorage
 
 logger = logging.getLogger(__name__)
@@ -38,6 +40,24 @@ class IAMSigningGoogleCloudStorage(GoogleCloudStorage):
             settings, "GCS_SERVICE_ACCOUNT_EMAIL", None
         )
         super().__init__(**settings_kwargs)
+        # Initialize credentials for IAM signing
+        self._signing_credentials = None
+
+    def _get_access_token(self):
+        """
+        Get a valid access token for IAM-based signing.
+        Uses Application Default Credentials and refreshes if needed.
+        """
+        if self._signing_credentials is None:
+            self._signing_credentials, _ = google_auth_default()
+
+        # Refresh credentials if token is missing or expired
+        if not self._signing_credentials.token or (
+            self._signing_credentials.expired and self._signing_credentials.expiry
+        ):
+            self._signing_credentials.refresh(Request())
+
+        return self._signing_credentials.token
 
     def url(self, name):
         """
@@ -64,12 +84,13 @@ class IAMSigningGoogleCloudStorage(GoogleCloudStorage):
             expiration = timedelta(seconds=expiration)
 
         try:
+            access_token = self._get_access_token()
             url = blob.generate_signed_url(
                 version="v4",
                 expiration=expiration,
                 method="GET",
                 service_account_email=self._service_account_email,
-                access_token=self.credentials.token,
+                access_token=access_token,
             )
             return url
         except Exception as e:
