@@ -2135,16 +2135,32 @@ class Recording(models.Model):
         if not self.file.name:
             return None
 
-        if settings.STORAGE_PROTOCOL in ("azure", "gcs"):
-            # Azure and GCS backends handle signed URLs via .url property
-            return self.file.url
+        try:
+            if settings.STORAGE_PROTOCOL in ("azure", "gcs"):
+                # Azure and GCS backends handle signed URLs via .url property
+                return self.file.url
 
-        # S3: Generate a temporary signed URL that expires in 30 minutes (1800 seconds)
-        return self.file.storage.bucket.meta.client.generate_presigned_url(
-            "get_object",
-            Params={"Bucket": self.file.storage.bucket_name, "Key": self.file.name},
-            ExpiresIn=1800,
-        )
+            # S3: Generate a temporary signed URL that expires in 30 minutes (1800 seconds)
+            return self.file.storage.bucket.meta.client.generate_presigned_url(
+                "get_object",
+                Params={"Bucket": self.file.storage.bucket_name, "Key": self.file.name},
+                ExpiresIn=1800,
+            )
+        except Exception as e:
+            import logging
+            import rollbar
+
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to generate URL for Recording {self.object_id}: {e}")
+            rollbar.report_exc_info(
+                extra_data={
+                    "object_id": self.object_id,
+                    "file_name": self.file.name,
+                    "storage_protocol": settings.STORAGE_PROTOCOL,
+                    "context": "recording_url",
+                }
+            )
+            return None
 
     OBJECT_ID_PREFIX = "rec_"
     object_id = models.CharField(max_length=32, unique=True, editable=False)
@@ -2865,16 +2881,32 @@ class BotDebugScreenshot(models.Model):
         if not self.file.name:
             return None
 
-        if settings.STORAGE_PROTOCOL in ("azure", "gcs"):
-            # Azure and GCS backends handle signed URLs via .url property
-            return self.file.url
+        try:
+            if settings.STORAGE_PROTOCOL in ("azure", "gcs"):
+                # Azure and GCS backends handle signed URLs via .url property
+                return self.file.url
 
-        # S3: Generate a temporary signed URL that expires in 30 minutes (1800 seconds)
-        return self.file.storage.bucket.meta.client.generate_presigned_url(
-            "get_object",
-            Params={"Bucket": self.file.storage.bucket_name, "Key": self.file.name},
-            ExpiresIn=1800,
-        )
+            # S3: Generate a temporary signed URL that expires in 30 minutes (1800 seconds)
+            return self.file.storage.bucket.meta.client.generate_presigned_url(
+                "get_object",
+                Params={"Bucket": self.file.storage.bucket_name, "Key": self.file.name},
+                ExpiresIn=1800,
+            )
+        except Exception as e:
+            import logging
+            import rollbar
+
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to generate URL for BotDebugScreenshot {self.object_id}: {e}")
+            rollbar.report_exc_info(
+                extra_data={
+                    "object_id": self.object_id,
+                    "file_name": self.file.name,
+                    "storage_protocol": settings.STORAGE_PROTOCOL,
+                    "context": "bot_debug_screenshot_url",
+                }
+            )
+            return None
 
     def __str__(self):
         return f"Debug Screenshot {self.object_id} for event {self.bot_event}"
