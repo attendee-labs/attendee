@@ -239,25 +239,60 @@ class StyleManager {
 
         // Stream used which combines the audio tracks from the meeting. Does NOT include the bot's audio
         this.meetingAudioStream = null;
+
+        // Track if silence detection has been initialized
+        this.silenceDetectionInitialized = false;
+
+        // Debounce timer for reinitialization
+        this.reinitializeDebounceTimer = null;
     }
 
     addAudioTrack(audioTrack) {
         this.audioTracks.push(audioTrack);
+        console.log(`[StyleManager] Added audio track, total tracks: ${this.audioTracks.length}`);
+
+        // If silence detection was already initialized but with no tracks (or fewer tracks),
+        // we need to reinitialize it to include the new track
+        if (this.silenceDetectionInitialized) {
+            // Debounce reinitialization to handle multiple tracks being added in quick succession
+            if (this.reinitializeDebounceTimer) {
+                clearTimeout(this.reinitializeDebounceTimer);
+            }
+            this.reinitializeDebounceTimer = setTimeout(() => {
+                console.log(`[StyleManager] Reinitializing silence detection with ${this.audioTracks.length} audio tracks`);
+                this.reinitializeSilenceDetection();
+            }, 500); // Wait 500ms before reinitializing
+        }
+    }
+
+    reinitializeSilenceDetection() {
+        // Close existing audio context to clean up resources
+        if (this.audioContext && this.audioContext.state !== 'closed') {
+            this.audioContext.close().catch(err => console.error('Error closing audio context:', err));
+        }
+
+        // Reinitialize with current audio tracks
+        this.initializeSilenceDetection();
     }
 
     checkAudioActivity() {
+        // Skip if analyser isn't ready (can happen if called before audio tracks are added)
+        if (!this.analyser || !this.audioDataArray) {
+            return;
+        }
+
         // Get audio data
         this.analyser.getByteTimeDomainData(this.audioDataArray);
-        
+
         // Calculate deviation from the center value (128)
         let sumDeviation = 0;
         for (let i = 0; i < this.audioDataArray.length; i++) {
             // Calculate how much each sample deviates from the center (128)
             sumDeviation += Math.abs(this.audioDataArray[i] - 128);
         }
-        
+
         const averageDeviation = sumDeviation / this.audioDataArray.length;
-        
+
         // If average deviation is above threshold, we have audio activity
         if (averageDeviation > this.silenceThreshold) {
             window.ws.sendJson({
@@ -320,37 +355,49 @@ class StyleManager {
     }
 
     startSilenceDetection() {
-         // Set up audio context and processing as before
+        // Mark as initialized so new audio tracks trigger reinitialization
+        this.silenceDetectionInitialized = true;
+        console.log(`[StyleManager] Starting silence detection with ${this.audioTracks.length} audio tracks`);
+        this.initializeSilenceDetection();
+    }
+
+    initializeSilenceDetection() {
+         // Set up audio context and processing
          this.audioContext = new AudioContext();
+
+         console.log(`[StyleManager] Initializing silence detection with ${this.audioTracks.length} audio tracks`);
 
          this.audioSources = this.audioTracks.map(track => {
              const mediaStream = new MediaStream([track]);
              return this.audioContext.createMediaStreamSource(mediaStream);
          });
- 
+
          // Create a destination node
          const destination = this.audioContext.createMediaStreamDestination();
- 
+
          // Connect all sources to the destination
          this.audioSources.forEach(source => {
              source.connect(destination);
          });
- 
+
          // Create analyzer and connect it to the destination
          this.analyser = this.audioContext.createAnalyser();
          this.analyser.fftSize = 8192;
          const bufferLength = this.analyser.frequencyBinCount;
          this.audioDataArray = new Uint8Array(bufferLength);
- 
+
          // Create a source from the destination's stream and connect it to the analyzer
          const mixedSource = this.audioContext.createMediaStreamSource(destination.stream);
          mixedSource.connect(this.analyser);
- 
+
          this.mixedAudioTrack = destination.stream.getAudioTracks()[0];
 
         // Process and send mixed audio if enabled
         if (window.initialData.sendMixedAudio && this.mixedAudioTrack) {
+            console.log('[StyleManager] Starting mixed audio processing');
             this.processMixedAudioTrack();
+        } else if (window.initialData.sendMixedAudio) {
+            console.log('[StyleManager] sendMixedAudio is enabled but no mixed audio track available yet');
         }
 
         // Clear any existing interval
@@ -365,7 +412,7 @@ class StyleManager {
         if (this.neededInteractionsInterval) {
             clearInterval(this.neededInteractionsInterval);
         }
-                
+
         // Check for audio activity every second
         this.silenceCheckInterval = setInterval(() => {
             this.checkAudioActivity();
