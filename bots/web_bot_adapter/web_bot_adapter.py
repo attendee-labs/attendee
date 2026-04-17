@@ -118,6 +118,7 @@ class WebBotAdapter(BotAdapter):
         self.silence_detection_activated = False
         self.joined_at = None
         self.recording_permission_granted_at = None
+        self.screen_recording_started = False
 
         self.ready_to_send_chat_messages = False
 
@@ -821,6 +822,8 @@ class WebBotAdapter(BotAdapter):
         self.joined_at = time.time()
         self.update_only_one_participant_in_meeting_at()
         self.stop_debug_screen_recording()
+        # Check if recording permission was already granted before join completed
+        self._maybe_start_screen_recording()
 
     def after_bot_recording_permission_denied(self):
         self.send_message_callback({"message": self.Messages.BOT_RECORDING_PERMISSION_DENIED, "denied_reason": BotAdapter.BOT_RECORDING_PERMISSION_DENIED_REASON.HOST_DENIED_PERMISSION})
@@ -834,12 +837,36 @@ class WebBotAdapter(BotAdapter):
         self.send_frames = True
         self.driver.execute_script("window.ws?.enableMediaSending();")
         self.first_buffer_timestamp_ms_offset = self.driver.execute_script("return performance.timeOrigin;")
-
-        if self.start_recording_screen_callback:
-            sleep(2)
-            self.start_recording_screen_callback(self.display_var_for_debug_recording)
-
         self.media_sending_enable_timestamp_ms = time.time() * 1000
+
+        # Only start recording if the bot has already joined
+        self._maybe_start_screen_recording()
+
+    def _maybe_start_screen_recording(self):
+        """
+        Start screen recording only when both conditions are met:
+        1. Bot has joined the meeting (joined_at is set)
+        2. Recording permission has been granted (recording_permission_granted_at is set)
+
+        This prevents recording pre-meeting content when permission is granted
+        before the bot finishes joining.
+        """
+        if not self.start_recording_screen_callback:
+            return
+        if self.screen_recording_started:
+            return
+        if self.joined_at is None:
+            logger.info("Recording permission granted but bot has not joined yet, deferring screen recording start")
+            return
+        if self.recording_permission_granted_at is None:
+            logger.info("Bot joined but recording permission not yet granted, deferring screen recording start")
+            return
+
+        # Both conditions met - start the recording
+        self.screen_recording_started = True
+        logger.info("Both join and recording permission conditions met, starting screen recording")
+        sleep(2)
+        self.start_recording_screen_callback(self.display_var_for_debug_recording)
 
     def stop_debug_screen_recording(self):
         if self.debug_screen_recorder:

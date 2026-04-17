@@ -89,31 +89,8 @@ steps:
           --wait
     waitFor: ['push']
 
-  # Step 4: Collect static files
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-    id: 'collectstatic'
-    entrypoint: 'bash'
-    args:
-      - '-c'
-      - |
-        # Deploy (create/update) the job first, then execute it
-        gcloud run jobs deploy ${_SERVICE_NAME}-collectstatic \
-          --image gcr.io/$PROJECT_ID/${_SERVICE_NAME}:$COMMIT_SHA \
-          --region ${_REGION} \
-          --vpc-connector ${_VPC_CONNECTOR} \
-          --set-env-vars "DJANGO_SETTINGS_MODULE=attendee.settings.production-gke" \
-          --set-secrets "DATABASE_URL=ATTENDEE_DATABASE_URL:latest,DJANGO_SECRET_KEY=DJANGO_SECRET_KEY:latest,CREDENTIALS_ENCRYPTION_KEY=CREDENTIALS_ENCRYPTION_KEY:latest,REDIS_URL=REDIS_URL:latest,ROLLBAR_ACCESS_TOKEN=ROLLBAR_ACCESS_TOKEN:latest,POSTMARK_API_TOKEN=POSTMARK_API_TOKEN:latest" \
-          --command "python" \
-          --args "manage.py,collectstatic,--noinput" \
-          --max-retries 0 \
-          --task-timeout 300 \
-          --quiet && \
-        gcloud run jobs execute ${_SERVICE_NAME}-collectstatic \
-          --region ${_REGION} \
-          --wait
-    waitFor: ['migrate']
-
-  # Step 5: Deploy to Cloud Run (Web Service)
+  # Step 4: Deploy to Cloud Run (Web Service)
+  # Note: collectstatic is now run at Docker build time (see Dockerfile)
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     id: 'deploy-web'
     entrypoint: 'bash'
@@ -134,9 +111,9 @@ steps:
           --set-env-vars "DJANGO_SETTINGS_MODULE=attendee.settings.production-gke,DISABLE_SIGNUP=true,STORAGE_PROTOCOL=gcs,GCS_RECORDING_STORAGE_BUCKET_NAME=${_GCS_BUCKET_NAME},GCS_USE_IAM_SIGNING=true,GCS_SERVICE_ACCOUNT_EMAIL=${_GCS_SERVICE_ACCOUNT_EMAIL},SITE_DOMAIN=attendee-web-883356951770.us-west2.run.app,ROLLBAR_ENVIRONMENT=production,DEFAULT_FROM_EMAIL=billing@oppy.pro" \
           --set-secrets "DATABASE_URL=ATTENDEE_DATABASE_URL:latest,DJANGO_SECRET_KEY=DJANGO_SECRET_KEY:latest,CREDENTIALS_ENCRYPTION_KEY=CREDENTIALS_ENCRYPTION_KEY:latest,REDIS_URL=REDIS_URL:latest,ROLLBAR_ACCESS_TOKEN=ROLLBAR_ACCESS_TOKEN:latest,POSTMARK_API_TOKEN=POSTMARK_API_TOKEN:latest" \
           --args="gunicorn,attendee.wsgi:application,--bind,0.0.0.0:8000,--workers,4,--threads,2"
-    waitFor: ['collectstatic']
+    waitFor: ['migrate']
 
-  # Step 6: Deploy Celery Worker + Scheduler to Cloud Run Worker Pool
+  # Step 5: Deploy Celery Worker + Scheduler to Cloud Run Worker Pool
   # Worker Pools are designed for continuous background work (no HTTP endpoint needed)
   # Uses Direct VPC instead of VPC Connector for network access
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
@@ -157,7 +134,7 @@ steps:
           --set-secrets "DATABASE_URL=ATTENDEE_DATABASE_URL:latest,DJANGO_SECRET_KEY=DJANGO_SECRET_KEY:latest,CREDENTIALS_ENCRYPTION_KEY=CREDENTIALS_ENCRYPTION_KEY:latest,REDIS_URL=REDIS_URL:latest,ROLLBAR_ACCESS_TOKEN=ROLLBAR_ACCESS_TOKEN:latest,POSTMARK_API_TOKEN=POSTMARK_API_TOKEN:latest" \
           --command "python" \
           --args "worker_entrypoint.py"
-    waitFor: ['collectstatic']
+    waitFor: ['migrate']
 
 images:
   - 'gcr.io/$PROJECT_ID/${_SERVICE_NAME}:$COMMIT_SHA'

@@ -126,8 +126,11 @@ COPY --chown=app:app entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod 0755 /usr/local/bin/entrypoint.sh
 COPY --chown=app:app . .
 
-# Make STATIC_ROOT writeable for the non-root user so collectstatic can run at startup
-RUN mkdir -p "$cwd/staticfiles" && chown -R app:app "$cwd/staticfiles"
+# Collect static files at build time (bakes admin CSS/JS/images into the image)
+# Uses minimal settings that don't require database or secrets
+RUN mkdir -p "$cwd/staticfiles" \
+    && python manage.py collectstatic --noinput --settings=attendee.settings.collectstatic \
+    && chown -R app:app "$cwd/staticfiles"
 
 # We want the app to be able to dynamically set the chrome policies file.
 # However, chrome will load the file from a hardcoded path in a directory that the app cannot write to.

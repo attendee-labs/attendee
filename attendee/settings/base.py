@@ -345,13 +345,15 @@ else:
     AUDIO_CHUNK_STORAGE_BACKEND["OPTIONS"]["bucket_name"] = AWS_AUDIO_CHUNK_STORAGE_BUCKET_NAME
 
 
+# Static files storage configuration
+# Uses WhiteNoise to serve static files from the container (collected at build time)
 STORAGES = {
     "default": DEFAULT_STORAGE_BACKEND,
     "recordings": RECORDING_STORAGE_BACKEND,
     "bot_debug_screenshots": RECORDING_STORAGE_BACKEND,
     "audio_chunks": AUDIO_CHUNK_STORAGE_BACKEND,
     "staticfiles": {
-        "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
     },
 }
 AWS_S3_SIGNATURE_VERSION = "s3v4"
