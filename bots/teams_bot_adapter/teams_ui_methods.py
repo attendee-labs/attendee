@@ -323,7 +323,7 @@ class TeamsUIMethods:
 
     def disable_incoming_video_in_ui(self):
         logger.info("Waiting for the view button...")
-        view_button = self.locate_element(step="view_button", condition=EC.presence_of_element_located((By.CSS_SELECTOR, "#view-mode-button, #custom-view-button")), wait_time_seconds=60)
+        view_button = self.locate_element(step="view_button", condition=EC.element_to_be_clickable((By.CSS_SELECTOR, "#view-mode-button, #custom-view-button")), wait_time_seconds=60)
         logger.info("Clicking the view button...")
         self.click_element(view_button, "disable_incoming_video:view_button")
 
