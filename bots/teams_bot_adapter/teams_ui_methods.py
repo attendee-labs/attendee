@@ -1,5 +1,4 @@
 import logging
-import os
 import random
 import time
 
@@ -311,13 +310,7 @@ class TeamsUIMethods:
         self.set_layout(self.get_layout_to_select())
 
         if self.disable_incoming_video:
-            if os.getenv("ONLY_EMIT_WARNING_ON_TEAMS_DISABLE_INCOMING_VIDEO_FAILURE", "false") == "true":
-                try:
-                    self.disable_incoming_video_in_ui()
-                except Exception as e:
-                    logger.warning(f"Error disabling incoming video: {e}. Proceeding with attempt to join meeting anyway.")
-            else:
-                self.disable_incoming_video_in_ui()
+            self.disable_incoming_video_in_ui()
 
         self.ready_to_show_bot_image()
 
