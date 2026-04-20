@@ -204,6 +204,60 @@ class TestGoogleMeetBot2(TransactionTestCase):
         fatal_error_event = self.bot.bot_events.filter(event_type=BotEventTypes.FATAL_ERROR, event_sub_type=BotEventSubTypes.FATAL_ERROR_HEARTBEAT_TIMEOUT).first()
         self.assertIsNone(fatal_error_event)
 
+    @patch("kubernetes.client.CoreV1Api")
+    @patch("kubernetes.config.load_incluster_config")
+    @patch("kubernetes.config.load_kube_config")
+    def test_terminate_bots_with_global_runtime_timeout(self, mock_load_kube_config, mock_load_incluster_config, MockCoreV1Api):
+        mock_k8s_api = MagicMock()
+        MockCoreV1Api.return_value = mock_k8s_api
+
+        mock_load_incluster_config.side_effect = kubernetes.config.config_exception.ConfigException("Mock ConfigException")
+
+        current_time = int(timezone.now().timestamp())
+        # Bot started over 30 hours ago (108001 seconds)
+        self.bot.first_heartbeat_timestamp = current_time - 200000
+        self.bot.last_heartbeat_timestamp = current_time
+        self.bot.state = BotStates.JOINED_RECORDING
+        self.bot.save()
+
+        with patch.dict(os.environ, {"LAUNCH_BOT_METHOD": "kubernetes"}):
+            from bots.management.commands.clean_up_bots_with_heartbeat_timeout_or_that_never_launched import Command
+
+            command = Command()
+            command.handle()
+
+        self.bot.refresh_from_db()
+
+        self.assertEqual(self.bot.state, BotStates.FATAL_ERROR)
+
+        fatal_error_event = self.bot.bot_events.filter(event_type=BotEventTypes.FATAL_ERROR, event_sub_type=BotEventSubTypes.FATAL_ERROR_GLOBAL_RUNTIME_TIMEOUT).first()
+        self.assertIsNotNone(fatal_error_event)
+        self.assertEqual(fatal_error_event.old_state, BotStates.JOINED_RECORDING)
+        self.assertEqual(fatal_error_event.new_state, BotStates.FATAL_ERROR)
+
+        pod_name = self.bot.k8s_pod_name()
+        mock_k8s_api.delete_namespaced_pod.assert_called_once_with(name=pod_name, namespace="attendee", grace_period_seconds=0)
+
+    def test_bots_within_global_runtime_timeout_not_terminated(self):
+        current_time = int(timezone.now().timestamp())
+        # Bot has been running for 1 hour (3600 seconds), well under the 108000 second default
+        self.bot.first_heartbeat_timestamp = current_time - 3600
+        self.bot.last_heartbeat_timestamp = current_time
+        self.bot.state = BotStates.JOINED_RECORDING
+        self.bot.save()
+
+        from bots.management.commands.clean_up_bots_with_heartbeat_timeout_or_that_never_launched import Command
+
+        command = Command()
+        command.handle()
+
+        self.bot.refresh_from_db()
+
+        self.assertEqual(self.bot.state, BotStates.JOINED_RECORDING)
+
+        fatal_error_event = self.bot.bot_events.filter(event_type=BotEventTypes.FATAL_ERROR, event_sub_type=BotEventSubTypes.FATAL_ERROR_GLOBAL_RUNTIME_TIMEOUT).first()
+        self.assertIsNone(fatal_error_event)
+
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
     @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
     @patch("bots.bot_controller.bot_controller.AzureFileUploader")
