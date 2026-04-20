@@ -258,6 +258,26 @@ class TestGoogleMeetBot2(TransactionTestCase):
         fatal_error_event = self.bot.bot_events.filter(event_type=BotEventTypes.FATAL_ERROR, event_sub_type=BotEventSubTypes.FATAL_ERROR_GLOBAL_RUNTIME_TIMEOUT).first()
         self.assertIsNone(fatal_error_event)
 
+    def test_bots_exceeding_global_runtime_timeout_in_post_meeting_state_not_terminated(self):
+        current_time = int(timezone.now().timestamp())
+        # Bot has been running for longer than the 108000 second default
+        self.bot.first_heartbeat_timestamp = current_time - 200000
+        self.bot.last_heartbeat_timestamp = current_time
+        self.bot.state = BotStates.ENDED
+        self.bot.save()
+
+        from bots.management.commands.clean_up_bots_with_heartbeat_timeout_or_that_never_launched import Command
+
+        command = Command()
+        command.handle()
+
+        self.bot.refresh_from_db()
+
+        self.assertEqual(self.bot.state, BotStates.ENDED)
+
+        fatal_error_event = self.bot.bot_events.filter(event_type=BotEventTypes.FATAL_ERROR, event_sub_type=BotEventSubTypes.FATAL_ERROR_GLOBAL_RUNTIME_TIMEOUT).first()
+        self.assertIsNone(fatal_error_event)
+
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
     @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
     @patch("bots.bot_controller.bot_controller.AzureFileUploader")
