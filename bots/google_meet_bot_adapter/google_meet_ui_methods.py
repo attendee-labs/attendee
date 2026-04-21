@@ -1,7 +1,7 @@
 import logging
 import os
 import time
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import requests
 from django.conf import settings
@@ -12,6 +12,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
 from bots.bot_sso_utils import get_google_meet_set_cookie_url
+from bots.google_meet_bot_adapter.okta_authenticator import OktaAuthenticator, OktaSessionError
 from bots.models import RecordingViews
 from bots.web_bot_adapter.ui_methods import UiCouldNotClickElementException, UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableExpectedException
 
@@ -619,7 +620,76 @@ class GoogleMeetUIMethods:
         logger.info(f"Navigating to gmail domain url: {gmail_domain_url}")
         self.driver.get(gmail_domain_url)
 
+    def login_to_google_meet_account_with_okta(self):
+        okta_authenticator = OktaAuthenticator(
+            okta_domain=os.getenv("OKTA_BOT_LOGIN_DOMAIN"),
+            username=os.getenv("OKTA_BOT_LOGIN_USERNAME"),
+            password=os.getenv("OKTA_BOT_LOGIN_PASSWORD"),
+            totp_secret=os.getenv("OKTA_BOT_LOGIN_TOTP_SECRET"),
+        )
+        session_token = okta_authenticator.authenticate()
+        self.establish_okta_session(okta_domain=os.getenv("OKTA_BOT_LOGIN_DOMAIN"), session_token=session_token)
+
+        google_login_url = f"https://www.google.com/a/{os.getenv('OKTA_BOT_LOGIN_GOOGLE_DOMAIN')}/ServiceLogin?service=mail"
+        logger.info(f"Navigating to domain-specific Google ServiceLogin: {google_login_url}")
+        self.driver.get(google_login_url)
+
+        # Wait for cookies indicating that we have logged in successfully
+        start_waiting_at = time.time()
+        saml_continue_clicked = False
+        while not self.has_google_cookies_that_indicate_logged_in(self.driver):
+            time.sleep(1)
+            logger.info(f"Waiting for Google auth cookies. Current URL: {self.driver.current_url}")
+
+            # Google shows a SAML "confirm account" speedbump that requires clicking "Continue"
+            if "speedbump/samlconfirmaccount" in self.driver.current_url and not saml_continue_clicked:
+                try:
+                    continue_button = WebDriverWait(self.driver, 10).until(EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Continue')] | //input[@type='submit'] | //div[@role='button'][contains(., 'Continue')]")))
+                    continue_button.click()
+                    saml_continue_clicked = True
+                    logger.info("Clicked SAML confirm account Continue button")
+                except Exception as e:
+                    logger.warning(f"Could not click SAML Continue button: {e}")
+
+            if time.time() - start_waiting_at > 60:
+                logger.warning(f"Login timed out after 60s. Current URL: {self.driver.current_url}")
+                raise UiLoginAttemptFailedException("No Google auth cookies were present", "login_to_google_meet_account_with_okta")
+
+        logger.info(f"Google login complete. URL: {self.driver.current_url}")
+
+        # Set login session so we skip name input downstream
+        self.google_meet_bot_login_session = {"login_type": "okta"}
+
+    def establish_okta_session(self, okta_domain: str, session_token: str):
+        """Navigate to sessionCookieRedirect to set the Okta sid cookie."""
+        redirect_url = quote(f"https://{okta_domain}", safe="")
+        url = f"https://{okta_domain}/login/sessionCookieRedirect?token={session_token}&redirectUrl={redirect_url}"
+
+        logger.info("Navigating to Okta sessionCookieRedirect")
+        self.driver.get(url)
+
+        # Wait for the sid cookie to appear
+        start = time.time()
+        timeout = 30
+        while True:
+            cookies = self.driver.get_cookies()
+            cookie_names = {c.get("name") for c in cookies if c.get("name")}
+            if "sid" in cookie_names:
+                logger.info("Okta session cookie (sid) established")
+                return
+            if time.time() - start > timeout:
+                logger.error(f"Okta session cookie not found after {timeout}s. Cookies present: {cookie_names}")
+                raise OktaSessionError(f"Failed to establish Okta browser session. No 'sid' cookie after {timeout}s. Ensure {okta_domain} is a trusted origin in Okta Admin.")
+            time.sleep(1)
+
     def login_to_google_meet_account(self):
+        if os.getenv("USE_OKTA_LOGIN_FOR_SIGNED_IN_GOOGLE_MEET_BOTS", "false") == "true":
+            try:
+                self.login_to_google_meet_account_with_okta()
+                return
+            except Exception:
+                logger.exception("Error logging in to Google Meet account with Okta. Continuing with regular login flow.")
+
         self.google_meet_bot_login_session = self.create_google_meet_bot_login_session_callback()
         logger.info("Logging in to Google Meet account")
         session_id = self.google_meet_bot_login_session.get("session_id")
