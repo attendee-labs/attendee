@@ -1650,6 +1650,12 @@ class BotController:
             self.websocket_audio_error_ticker += 1
 
     def save_debug_artifacts(self, message, new_bot_event):
+        try:
+            self.save_debug_artifacts_with_no_error_handling(message, new_bot_event)
+        except Exception:
+            logger.exception("Error saving debug artifacts")
+
+    def save_debug_artifacts_with_no_error_handling(self, message, new_bot_event):
         screenshot_available = message.get("screenshot_path") is not None
         mhtml_file_available = message.get("mhtml_file_path") is not None
 
