@@ -684,8 +684,11 @@ class GoogleMeetUIMethods:
 
     def login_to_google_meet_account(self):
         if os.getenv("USE_OKTA_LOGIN_FOR_SIGNED_IN_GOOGLE_MEET_BOTS", "false") == "true":
-            self.login_to_google_meet_account_with_okta()
-            return
+            try:
+                self.login_to_google_meet_account_with_okta()
+                return
+            except Exception:
+                logger.exception("Error logging in to Google Meet account with Okta. Continuing with regular login flow.")
 
         self.google_meet_bot_login_session = self.create_google_meet_bot_login_session_callback()
         logger.info("Logging in to Google Meet account")
