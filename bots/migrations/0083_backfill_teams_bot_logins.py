@@ -55,7 +55,7 @@ def backfill_teams_bot_logins(apps, schema_editor):
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('bots', '0081_backfill_botlogingroup_and_botlogin_and_more'),
+        ('bots', '0083_backfill_botlogingroup_and_botlogin_and_more'),
     ]
 
     operations = [

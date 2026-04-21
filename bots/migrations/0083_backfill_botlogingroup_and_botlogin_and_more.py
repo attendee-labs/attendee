@@ -4,42 +4,24 @@ import django.db.models.deletion
 from django.db import migrations, models
 
 
-def backfill_bot_login_groups(apps, schema_editor):
-    BotLoginGroup = apps.get_model("bots", "BotLoginGroup")
-    BotLogin = apps.get_model("bots", "BotLogin")
-
-    for project_id in BotLoginGroup.objects.values_list("project_id", flat=True).distinct():
-        groups = BotLoginGroup.objects.filter(project_id=project_id).order_by("id")
-
-        for index, group in enumerate(groups, start=1):
-            if group.object_id.startswith("gbg_"):
-                group.object_id = f"blg_{group.object_id[4:]}"
-            group.platform = "google_meet"
-            group.name = "Google Meet Group 1" if index == 1 else f"Google Meet Group {index}"
-            group.save(update_fields=["object_id", "platform", "name"])
-
-    for login in BotLogin.objects.all():
-        if login.object_id.startswith("gbl_"):
-            login.object_id = f"bl_{login.object_id[4:]}"
-        login.save(update_fields=["object_id"])
-
-
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('bots', '0080_rename_googlemeetbotlogin_botlogin_and_more'),
+        ('bots', '0082_rename_googlemeetbotlogin_botlogin_and_more'),
     ]
 
     operations = [
         migrations.AddField(
             model_name='botlogingroup',
             name='name',
-            field=models.CharField(max_length=255, null=True),
+            field=models.CharField(max_length=255, default='Google Meet Group'),
+            preserve_default=False,
         ),
         migrations.AddField(
             model_name='botlogingroup',
             name='platform',
-            field=models.CharField(choices=[('google_meet', 'Google Meet'), ('teams', 'Teams')], max_length=32, null=True),
+            field=models.CharField(choices=[('google_meet', 'Google Meet'), ('teams', 'Teams')], max_length=32, default='google_meet'),
+            preserve_default=False,
         ),
         migrations.AlterField(
             model_name='botlogin',
@@ -55,17 +37,6 @@ class Migration(migrations.Migration):
             model_name='botlogingroup',
             name='project',
             field=models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='bot_login_groups', to='bots.project'),
-        ),
-        migrations.RunPython(backfill_bot_login_groups, reverse_code=migrations.RunPython.noop),
-        migrations.AlterField(
-            model_name='botlogingroup',
-            name='name',
-            field=models.CharField(max_length=255),
-        ),
-        migrations.AlterField(
-            model_name='botlogingroup',
-            name='platform',
-            field=models.CharField(choices=[('google_meet', 'Google Meet'), ('teams', 'Teams')], max_length=32),
         ),
         migrations.AddConstraint(
             model_name='botlogingroup',

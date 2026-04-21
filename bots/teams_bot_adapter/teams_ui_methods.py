@@ -210,7 +210,7 @@ class TeamsUIMethods:
         if captcha_element:
             # The captcha may be being shown because we need to login.
             # If a login is available, but we aren't using it, we should login and retry and see if the captcha goes away.
-            if self.teams_bot_login_credentials and not self.teams_bot_login_should_be_used:
+            if self.teams_bot_login_is_available and not self.teams_bot_login_should_be_used:
                 logger.info("Captcha detected. Teams bot login is available and not being used, so we will retry by logging in")
                 raise UiLoginRequiredException("Sign in required", step)
 
