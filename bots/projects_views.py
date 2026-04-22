@@ -103,16 +103,16 @@ def get_calendar_event_for_user(user, calendar_event_object_id):
     return calendar_event
 
 
-def get_bot_login_group_for_user(user, bot_login_group_object_id):
-    bot_login_group = get_object_or_404(BotLoginGroup, object_id=bot_login_group_object_id, project__organization=user.organization)
+def get_bot_login_group_for_user(project, user, bot_login_group_object_id):
+    bot_login_group = get_object_or_404(BotLoginGroup, object_id=bot_login_group_object_id, project__organization=project)
     # If you're an admin you can access any bot login group in the organization
     if user.role != UserRole.ADMIN and not ProjectAccess.objects.filter(project=bot_login_group.project, user=user).exists():
         raise PermissionDenied
     return bot_login_group
 
 
-def get_bot_login_for_user(user, bot_login_object_id):
-    bot_login = get_object_or_404(BotLogin, object_id=bot_login_object_id, group__project__organization=user.organization)
+def get_bot_login_for_user(project, user, bot_login_object_id):
+    bot_login = get_object_or_404(BotLogin, object_id=bot_login_object_id, group__project__organization=project)
     # If you're an admin you can access any bot login in the organization
     if user.role != UserRole.ADMIN and not ProjectAccess.objects.filter(project=bot_login.group.project, user=user).exists():
         raise PermissionDenied
@@ -186,7 +186,6 @@ def get_partial_for_credential_type(credential_type, request, context):
     elif credential_type == Credentials.CredentialTypes.EXTERNAL_MEDIA_STORAGE:
         return render(request, "projects/partials/external_media_storage_credentials.html", context)
     else:
-        # Credential type TEAMS_BOT_LOGIN is no longer supported in CreateCredentialsView
         return HttpResponse("Cannot render the partial for this credential type", status=400)
 
 
@@ -327,7 +326,7 @@ class CreateCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 
         try:
             credential_type = int(request.POST.get("credential_type"))
-            if credential_type not in [choice[0] for choice in Credentials.CredentialTypes.choices] or credential_type == Credentials.CredentialTypes.TEAMS_BOT_LOGIN:
+            if credential_type not in [choice[0] for choice in Credentials.CredentialTypes.choices]:
                 return HttpResponse("Invalid credential type", status=400)
 
             # Get or create the credential instance
@@ -418,7 +417,7 @@ class DeleteCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 
         try:
             credential_type = int(request.POST.get("credential_type"))
-            if credential_type not in [choice[0] for choice in Credentials.CredentialTypes.choices] or credential_type == Credentials.CredentialTypes.TEAMS_BOT_LOGIN:
+            if credential_type not in [choice[0] for choice in Credentials.CredentialTypes.choices]:
                 return HttpResponse("Invalid credential type", status=400)
 
             # Find and delete the credential
@@ -1481,9 +1480,7 @@ class CreateBotLoginGroupView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 class EditBotLoginGroupView(LoginRequiredMixin, ProjectUrlContextMixin, View):
     def post(self, request, object_id, bot_login_group_object_id):
         project = get_project_for_user(user=request.user, project_object_id=object_id)
-        bot_login_group = get_bot_login_group_for_user(user=request.user, bot_login_group_object_id=bot_login_group_object_id)
-        if bot_login_group.project_id != project.id:
-            return HttpResponse("Bot login group does not belong to this project", status=404)
+        bot_login_group = get_bot_login_group_for_user(project=project, user=request.user, bot_login_group_object_id=bot_login_group_object_id)
 
         try:
             name = request.POST.get("name")
@@ -1516,9 +1513,7 @@ class EditBotLoginGroupView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 class DeleteBotLoginGroupView(LoginRequiredMixin, ProjectUrlContextMixin, View):
     def post(self, request, object_id, bot_login_group_object_id):
         project = get_project_for_user(user=request.user, project_object_id=object_id)
-        bot_login_group = get_bot_login_group_for_user(user=request.user, bot_login_group_object_id=bot_login_group_object_id)
-        if bot_login_group.project_id != project.id:
-            return HttpResponse("Bot login group does not belong to this project", status=404)
+        bot_login_group = get_bot_login_group_for_user(project=project, user=request.user, bot_login_group_object_id=bot_login_group_object_id)
         platform = bot_login_group.platform
         bot_login_group.delete()
         context = self.get_project_context(object_id, project)
@@ -1530,10 +1525,10 @@ class CreateGoogleMeetBotLoginView(LoginRequiredMixin, ProjectUrlContextMixin, V
     def post(self, request, object_id):
         project = get_project_for_user(user=request.user, project_object_id=object_id)
         bot_login_group_object_id = request.POST.get("bot_login_group_object_id")
-        google_meet_bot_login_group = get_bot_login_group_for_user(user=request.user, bot_login_group_object_id=bot_login_group_object_id)
+        google_meet_bot_login_group = get_bot_login_group_for_user(project=project, user=request.user, bot_login_group_object_id=bot_login_group_object_id)
 
         try:
-            if google_meet_bot_login_group.project_id != project.id or google_meet_bot_login_group.platform != BotLoginPlatform.GOOGLE_MEET:
+            if google_meet_bot_login_group.platform != BotLoginPlatform.GOOGLE_MEET:
                 return HttpResponse("Invalid Google Meet bot login group", status=400)
 
             # Extract fields from request
@@ -1574,9 +1569,9 @@ class CreateTeamsBotLoginView(LoginRequiredMixin, ProjectUrlContextMixin, View):
     def post(self, request, object_id):
         project = get_project_for_user(user=request.user, project_object_id=object_id)
         bot_login_group_object_id = request.POST.get("bot_login_group_object_id")
-        teams_bot_login_group = get_bot_login_group_for_user(user=request.user, bot_login_group_object_id=bot_login_group_object_id)
+        teams_bot_login_group = get_bot_login_group_for_user(project=project, user=request.user, bot_login_group_object_id=bot_login_group_object_id)
         try:
-            if teams_bot_login_group.project_id != project.id or teams_bot_login_group.platform != BotLoginPlatform.TEAMS:
+            if teams_bot_login_group.platform != BotLoginPlatform.TEAMS:
                 return HttpResponse("Invalid Teams bot login group", status=400)
 
             # Extract fields from request

@@ -723,7 +723,7 @@ GOOGLE_MEET_SETTINGS_SCHEMA = {
         },
         "login_group_name": {
             "type": ["string", "null"],
-            "description": "Optional bot login group name to use for Google Meet signed-in bot selection.",
+            "description": "Optional bot login group name to use for Google Meet signed-in bot selection. If no group is specified, the oldest Google Meet group will be selected.",
             "default": None,
         },
     },
@@ -753,7 +753,7 @@ TEAMS_SETTINGS_SCHEMA = {
         },
         "login_group_name": {
             "type": ["string", "null"],
-            "description": "Optional bot login group name to use for Teams signed-in bot selection.",
+            "description": "Optional bot login group name to use for Teams signed-in bot selection. If no group is specified, the oldest Teams group will be selected.",
             "default": None,
         },
     },

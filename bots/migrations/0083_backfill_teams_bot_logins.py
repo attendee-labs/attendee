@@ -9,8 +9,8 @@ from django.db import migrations, models
 
 
 TEAMS_BOT_LOGIN_CREDENTIAL_TYPE = 8
-BOT_LOGIN_GROUP_OBJECT_ID_PREFIX = "blg_"
-BOT_LOGIN_OBJECT_ID_PREFIX = "bl_"
+BOT_LOGIN_GROUP_OBJECT_ID_PREFIX = "gbg_"
+BOT_LOGIN_OBJECT_ID_PREFIX = "gbl_"
 
 def generate_object_id(prefix, model_class):
     while True:
@@ -40,7 +40,7 @@ def backfill_teams_bot_logins(apps, schema_editor):
         bot_login_group, created = BotLoginGroup.objects.get_or_create(
             project=credential.project,
             platform="teams",
-            name="Teams Group 1",
+            name="Teams Group",
             defaults={"object_id": generate_object_id(BOT_LOGIN_GROUP_OBJECT_ID_PREFIX, BotLoginGroup)},
         )
 

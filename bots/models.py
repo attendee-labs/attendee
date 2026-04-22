@@ -65,7 +65,7 @@ class BotLoginPlatform(models.TextChoices):
 
 
 class BotLoginGroup(models.Model):
-    OBJECT_ID_PREFIX = "blg_"
+    OBJECT_ID_PREFIX = "gbg_"
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="bot_login_groups")
     object_id = models.CharField(max_length=32, unique=True, editable=False)
 
@@ -109,6 +109,7 @@ class BotLoginGroup(models.Model):
         return None
 
     class Meta:
+        # Table name kept from the original Google Meet-only model. The model has been generalized to support multiple platforms but the underlying table has not been renamed.
         db_table = "bots_googlemeetbotlogingroup"
         constraints = [
             models.UniqueConstraint(fields=["project", "platform", "name"], name="unique_bot_login_group_project_platform_name"),
@@ -116,7 +117,7 @@ class BotLoginGroup(models.Model):
 
 
 class BotLogin(models.Model):
-    OBJECT_ID_PREFIX = "bl_"
+    OBJECT_ID_PREFIX = "gbl_"
     group = models.ForeignKey(BotLoginGroup, on_delete=models.CASCADE, related_name="bot_logins")
     object_id = models.CharField(max_length=32, unique=True, editable=False)
 
@@ -2590,7 +2591,6 @@ class Credentials(models.Model):
         OPENAI = 5, "OpenAI"
         ASSEMBLY_AI = 6, "Assembly AI"
         SARVAM = 7, "Sarvam"
-        TEAMS_BOT_LOGIN = 8, "Teams Bot Login"
         EXTERNAL_MEDIA_STORAGE = 9, "External Media Storage"
         ELEVENLABS = 10, "ElevenLabs"
         KYUTAI = 11, "Kyutai"
