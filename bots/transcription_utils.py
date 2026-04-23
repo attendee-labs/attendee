@@ -290,7 +290,7 @@ def _split_transcription_by_speaker_events_build_intervals(events: list, recordi
                 continue
             start, participant = active.pop(pid)
             start_adjusted = start
-            end_adjusted = t
+            end_adjusted = t - 0.35
             if end_adjusted > start_adjusted:
                 intervals.append(_Interval(participant, start_adjusted, end_adjusted, len(intervals)))
 
@@ -572,7 +572,7 @@ def get_transcription_via_assemblyai_using_speaker_events_and_ml_diarization(spe
         agreement["num_words"],
     )
 
-    if agreement["duration_weighted_accuracy"] >= 0.8:
+    if agreement["duration_weighted_accuracy"] >= 0.85:
         logger.info(f"Diarization agreement for recording {recording.id} is {agreement['duration_weighted_accuracy']}. Using ML diarization results.")
         return ml_diarization_results, None
 
