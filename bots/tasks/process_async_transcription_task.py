@@ -8,7 +8,7 @@ from django.utils import timezone
 from bots.models import AsyncTranscription, AsyncTranscriptionManager, AsyncTranscriptionStates, AsyncTranscriptionStrategies, ParticipantEvent, ParticipantEventTypes, TranscriptionFailureReasons, Utterance
 from bots.tasks.process_utterance_group_for_async_transcription_task import process_utterance_group_for_async_transcription
 from bots.tasks.process_utterance_task import process_utterance
-from bots.transcription_utils import get_transcription_via_assemblyai_for_speaker_events
+from bots.transcription_utils import get_transcription_via_assemblyai_using_speaker_events_and_ml_diarization
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,7 @@ def create_utterances_for_transcription_with_speaker_events(async_transcription)
         ).select_related("participant")
     )
 
-    utterance_results, error = get_transcription_via_assemblyai_for_speaker_events(
+    utterance_results, error = get_transcription_via_assemblyai_using_speaker_events_and_ml_diarization(
         speaker_events=speaker_events,
         recording=recording,
         transcription_settings=async_transcription.transcription_settings,

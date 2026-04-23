@@ -1,3 +1,4 @@
+import copy
 import io
 import logging
 import os
@@ -221,14 +222,22 @@ def split_transcription_by_speaker_events(
         for rank, (ri, iv, dist_key) in enumerate(ranked):
             logger.info(
                 "  Nearest #%d: idx=%d participant=%s [%.3f–%.3f] distance_key=%s",
-                rank + 1, ri, iv.participant, iv.start, iv.end, dist_key,
+                rank + 1,
+                ri,
+                iv.participant,
+                iv.start,
+                iv.end,
+                dist_key,
             )
 
         idx = _split_transcription_by_speaker_events_nearest_interval(midpoint, intervals)
         chosen = intervals[idx]
         logger.info(
             "  Chosen interval: idx=%d participant=%s [%.3f–%.3f]",
-            idx, chosen.participant, chosen.start, chosen.end,
+            idx,
+            chosen.participant,
+            chosen.start,
+            chosen.end,
         )
 
         if idx == prev_idx:
@@ -330,10 +339,7 @@ def _split_transcription_by_speaker_events_rank_intervals(t: float, intervals: l
 
 def _split_transcription_by_speaker_events_make_utterance(interval: _Interval, words: list[dict], language: str | None) -> dict:
     utterance_start = words[0]["start"]
-    adjusted_words = [
-        {**w, "start": w["start"] - utterance_start, "end": w["end"] - utterance_start}
-        for w in words
-    ]
+    adjusted_words = [{**w, "start": w["start"] - utterance_start, "end": w["end"] - utterance_start} for w in words]
     return {
         "participant": interval.participant,
         "transcription": {
@@ -346,7 +352,7 @@ def _split_transcription_by_speaker_events_make_utterance(interval: _Interval, w
     }
 
 
-def split_transcription_by_ai_diarization(
+def split_transcription_by_ml_diarization(
     transcription_result: dict,
     speaker_events: Sequence[ParticipantEvent],
 ) -> list[dict]:
@@ -408,10 +414,7 @@ def split_transcription_by_ai_diarization(
 
 def _make_diarized_utterance(participant, words: list[dict], language: str | None) -> dict:
     utterance_start = words[0]["start"]
-    adjusted_words = [
-        {**w, "start": w["start"] - utterance_start, "end": w["end"] - utterance_start}
-        for w in words
-    ]
+    adjusted_words = [{**w, "start": w["start"] - utterance_start, "end": w["end"] - utterance_start} for w in words]
     return {
         "participant": participant,
         "transcription": {
@@ -507,11 +510,7 @@ def get_transcription_via_assemblyai_for_utterance_group(utterances):
     return split_transcription_by_utterance(transcription, utterances), None
 
 
-def get_transcription_via_assemblyai_for_speaker_events(speaker_events, recording, transcription_settings):
-    transcription_settings_with_speaker_labels = TranscriptionSettings(transcription_settings._settings)
-    transcription_settings_with_speaker_labels._settings["assembly_ai"]["speaker_labels"] = True
-    transcription_settings_with_speaker_labels._settings["assembly_ai"]["speakers_expected"] = len({e.participant_id for e in speaker_events})
-
+def get_transcription_via_assemblyai_using_speaker_events(speaker_events, recording, transcription_settings):
     transcription, error = get_transcription_via_assemblyai_from_mp3(
         retrieve_mp3_data_url_callback=lambda: recording.url,
         duration_ms=(recording.completed_at - recording.started_at).total_seconds() * 1000,
@@ -522,8 +521,143 @@ def get_transcription_via_assemblyai_for_speaker_events(speaker_events, recordin
     if error:
         return None, error
 
-    return split_transcription_by_ai_diarization(transcription, speaker_events), None
-    #return split_transcription_by_speaker_events(transcription, speaker_events, recording.first_buffer_timestamp_ms), None
+    return split_transcription_by_speaker_events(transcription, speaker_events, recording.first_buffer_timestamp_ms), None
+
+
+def get_transcription_via_assemblyai_using_speaker_events_and_ml_diarization(speaker_events, recording, transcription_settings):
+    # First get transcription using speaker events
+    # then get transcription using ml diarization plus speaker events
+
+    # If the results agree then use the ml-diarization result
+
+    speaker_events_results, error = get_transcription_via_assemblyai_using_speaker_events(
+        speaker_events=speaker_events,
+        recording=recording,
+        transcription_settings=transcription_settings,
+    )
+
+    if error:
+        return None, error
+
+    # Count the number of participants who had any speech according to the speaker events results
+    num_participants_with_speech = len({utterance["participant"].id for utterance in speaker_events_results})
+
+    # Make a new transcription settings object with the speaker labels and speakers expected set to the number of participants with speech
+    transcription_settings_with_speaker_labels = TranscriptionSettings(copy.deepcopy(transcription_settings._settings))
+    transcription_settings_with_speaker_labels._settings["assembly_ai"]["speaker_labels"] = True
+    transcription_settings_with_speaker_labels._settings["assembly_ai"]["speakers_expected"] = num_participants_with_speech
+
+    # Diarize the transcription using the speaker labels and speakers expected
+    transcription_using_speaker_labels, error = get_transcription_via_assemblyai_from_mp3(
+        retrieve_mp3_data_url_callback=lambda: recording.url,
+        duration_ms=(recording.completed_at - recording.started_at).total_seconds() * 1000,
+        identifier=f"recording {recording.id}",
+        transcription_settings=transcription_settings_with_speaker_labels,
+        recording=recording,
+    )
+    if error:
+        logger.error(f"Error diarizing transcription using speaker labels and speakers expected: {error}. Using speaker events results instead.")
+        return speaker_events_results, None
+
+    ai_diarization_results = split_transcription_by_ml_diarization(transcription_using_speaker_labels, speaker_events)
+    speaker_events_results_two = split_transcription_by_speaker_events(transcription_using_speaker_labels, speaker_events, recording.first_buffer_timestamp_ms)
+
+    # If the ai diarization results agree with the speaker events results, then use the ai diarization results
+    agreement = diarization_agreement(ai_diarization_results, speaker_events_results_two)
+    logger.info(
+        "Diarization agreement for recording %s: word_accuracy=%.3f duration_weighted=%.3f (%d words)",
+        recording.id,
+        agreement["word_accuracy"],
+        agreement["duration_weighted_accuracy"],
+        agreement["num_words"],
+    )
+
+    if agreement["duration_weighted_accuracy"] >= 0.9:
+        return ai_diarization_results, None
+
+    return speaker_events_results, None
+
+
+def diarization_agreement(results_a: list[dict], results_b: list[dict]) -> dict:
+    """
+    Compare two per-word speaker-classification results on the same set of words.
+
+    Both inputs are the list-of-utterance-dicts format produced by
+    split_transcription_by_speaker_events / split_transcription_by_ml_diarization.
+    Each word in the underlying transcription is assigned to exactly one
+    participant per result set. Because both functions sort words by
+    (start, end) and then group contiguous runs by speaker, flattening the
+    utterances back out yields the words in the same order in both inputs.
+
+    Returns a dict with:
+        num_words: total words compared
+        num_agreements: words where both assigned the same participant
+        word_accuracy: num_agreements / num_words (simple per-word agreement)
+        duration_weighted_accuracy: agreement weighted by word duration
+            (this is the complement of word-level Diarization Error Rate
+            when the speaker identities already match, which they do here
+            since both results use the same Participant objects)
+        total_duration: sum of word durations considered
+        agreement_duration: sum of durations where speakers agreed
+
+    Raises ValueError if the two results do not cover the same set of words.
+    """
+
+    def flatten(results):
+        out = []
+        for utt in results:
+            participant = utt["participant"]
+            for w in utt["transcription"]["words"]:
+                out.append((w, participant))
+        return out
+
+    flat_a = flatten(results_a)
+    flat_b = flatten(results_b)
+
+    if len(flat_a) != len(flat_b):
+        raise ValueError(f"Word count mismatch: {len(flat_a)} vs {len(flat_b)}")
+
+    num_words = len(flat_a)
+    if num_words == 0:
+        return {
+            "num_words": 0,
+            "num_agreements": 0,
+            "word_accuracy": 1.0,
+            "duration_weighted_accuracy": 1.0,
+            "total_duration": 0.0,
+            "agreement_duration": 0.0,
+        }
+
+    num_agreements = 0
+    total_duration = 0.0
+    agreement_duration = 0.0
+
+    for (word_a, participant_a), (word_b, participant_b) in zip(flat_a, flat_b):
+        # Sanity-check that flattened orderings line up. Word start/end in
+        # each utterance are relative to that utterance, so compare by text.
+        if word_a.get("word") != word_b.get("word"):
+            raise ValueError(f"Word alignment mismatch: {word_a.get('word')!r} vs {word_b.get('word')!r}")
+
+        duration = max(0.0, float(word_a["end"]) - float(word_a["start"]))
+        total_duration += duration
+
+        a_id = getattr(participant_a, "id", participant_a)
+        b_id = getattr(participant_b, "id", participant_b)
+        if a_id == b_id:
+            num_agreements += 1
+            agreement_duration += duration
+
+    word_accuracy = num_agreements / num_words
+    duration_weighted_accuracy = (agreement_duration / total_duration) if total_duration > 0 else word_accuracy
+
+    return {
+        "num_words": num_words,
+        "num_agreements": num_agreements,
+        "word_accuracy": word_accuracy,
+        "duration_weighted_accuracy": duration_weighted_accuracy,
+        "total_duration": total_duration,
+        "agreement_duration": agreement_duration,
+    }
 
 
 def get_transcription_via_assemblyai_from_mp3(
