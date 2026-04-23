@@ -40,6 +40,8 @@ class AttendeeClient:
         if enable_transcription:
             payload["transcription_settings"] = {"assembly_ai": {}}
             payload["recording_settings"] = {"format": "mp3", "record_participant_speech_start_stop_events": True}
+        else:
+            payload["recording_settings"] = {"format": "none"}
         if extra:
             payload.update(extra)
         r = self.session.post(self._url("/api/v1/bots"), data=json.dumps(payload), timeout=self.timeout)

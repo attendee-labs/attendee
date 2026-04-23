@@ -559,11 +559,11 @@ def get_transcription_via_assemblyai_using_speaker_events_and_ml_diarization(spe
         logger.error(f"Error diarizing transcription using speaker labels and speakers expected: {error}. Using speaker events results instead.")
         return speaker_events_results, None
 
-    ai_diarization_results = split_transcription_by_ml_diarization(transcription_using_speaker_labels, speaker_events)
+    ml_diarization_results = split_transcription_by_ml_diarization(transcription_using_speaker_labels, speaker_events)
     speaker_events_results_two = split_transcription_by_speaker_events(transcription_using_speaker_labels, speaker_events, recording.first_buffer_timestamp_ms)
 
-    # If the ai diarization results agree with the speaker events results, then use the ai diarization results
-    agreement = diarization_agreement(ai_diarization_results, speaker_events_results_two)
+    # If the ml diarization results agree with the speaker events results, then use the ml diarization results
+    agreement = diarization_agreement(ml_diarization_results, speaker_events_results_two)
     logger.info(
         "Diarization agreement for recording %s: word_accuracy=%.3f duration_weighted=%.3f (%d words)",
         recording.id,
@@ -572,9 +572,11 @@ def get_transcription_via_assemblyai_using_speaker_events_and_ml_diarization(spe
         agreement["num_words"],
     )
 
-    if agreement["duration_weighted_accuracy"] >= 0.9:
-        return ai_diarization_results, None
+    if agreement["duration_weighted_accuracy"] >= 0.8:
+        logger.info(f"Diarization agreement for recording {recording.id} is {agreement['duration_weighted_accuracy']}. Using ML diarization results.")
+        return ml_diarization_results, None
 
+    logger.info(f"Diarization agreement for recording {recording.id} is {agreement['duration_weighted_accuracy']}. Using speaker events results.")
     return speaker_events_results, None
 
 
