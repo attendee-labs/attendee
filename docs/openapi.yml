@@ -2860,6 +2860,10 @@ components:
           type: boolean
           default: false
           description: Whether to loop the video. Defaults to false.
+        mute_video:
+          type: boolean
+          default: false
+          description: Whether to mute the video's audio track. Defaults to false.
       required:
       - url
     PaginatedBotList:

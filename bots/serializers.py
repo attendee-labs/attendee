@@ -956,8 +956,8 @@ class BotChatMessageRequestSerializer(serializers.Serializer):
     examples=[
         OpenApiExample(
             "Video output request",
-            value={"url": "https://example.com/video.mp4", "loop": True},
-            description="Example of a looping mp4 video output request. Set loop to false or omit for a non-looping request.",
+            value={"url": "https://example.com/video.mp4", "loop": True, "mute_video": False},
+            description="Example of a looping mp4 video output request. Set loop to false or omit for a non-looping request. Set mute_video to true to suppress the video's audio track.",
         ),
     ]
 )
@@ -969,6 +969,11 @@ class OutputVideoRequestSerializer(serializers.Serializer):
         required=False,
         default=False,
         help_text="Whether to loop the video. Defaults to false.",
+    )
+    mute_video = serializers.BooleanField(
+        required=False,
+        default=False,
+        help_text="Whether to mute the video's audio track. Defaults to false.",
     )
 
     def validate_url(self, value: str) -> str:
