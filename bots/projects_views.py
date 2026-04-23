@@ -55,6 +55,7 @@ from .models import (
 )
 from .stripe_utils import credit_amount_for_purchase_amount_dollars, process_checkout_session_completed
 from .tasks.deliver_webhook_task import deliver_webhook
+from .usage_utils import get_usage_data
 from .utils import generate_recordings_json_for_bot_detail_view
 from .zoom_oauth_apps_api_utils import create_or_update_zoom_oauth_app
 
@@ -1141,6 +1142,18 @@ class ResendWebhookDeliveryAttemptView(LoginRequiredMixin, View):
             '<span class="badge bg-warning">Pending</span>',
             content_type="text/html",
         )
+
+
+class ProjectUsageView(AdminRequiredMixin, ProjectUrlContextMixin, View):
+    def get(self, request, object_id):
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
+        interval = request.GET.get("interval", "months")
+        measure = request.GET.get("measure", "count")
+        platform = request.GET.get("platform", "")
+
+        context = self.get_project_context(object_id, project)
+        context.update(get_usage_data(project, interval, measure, platform))
+        return render(request, "projects/project_usage.html", context)
 
 
 class ProjectBillingView(AdminRequiredMixin, ProjectUrlContextMixin, ListView):

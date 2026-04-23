@@ -269,7 +269,7 @@ paths:
                     type: image/png
                     data: iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==
                 summary: Update name and image
-                description: Example of updating the bot name and/or image
+                description: Example of updating the bot name and/or image (supports PNG and JPEG)
       security:
       - {}
       responses:
@@ -589,7 +589,7 @@ paths:
                 value:
                   type: image/png
                   data: iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==
-                summary: Valid image
+                summary: Valid PNG image
                 description: An image of a red pixel encoded in base64 in PNG format
         required: true
       security:
@@ -792,8 +792,7 @@ paths:
   /api/v1/bots/{object_id}/pause_recording:
     post:
       operationId: Pause Recording
-      description: Pauses the recording for the specified bot. This functionality
-        is in beta and only supported for Google Meet and MS Teams bots.
+      description: Pauses the recording for the specified bot.
       summary: Pause the bot's recording
       parameters:
       - in: header
@@ -1853,14 +1852,14 @@ components:
           allOf:
           - $ref: '#/components/schemas/TypeEnum'
           description: |-
-            Image content type. Currently only PNG is supported.
+            Image content type. Supported formats: PNG and JPEG.
 
-            * `image/png` - image/png
+            * `image/png` - PNG Image
+            * `image/jpeg` - JPEG Image
         data:
           type: string
           minLength: 1
-          description: 'Base64 encoded image data. Simple example of a red pixel encoded
-            in PNG format: iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+          description: Base64 encoded image data.
       required:
       - data
       - type
@@ -3266,8 +3265,11 @@ components:
     TypeEnum:
       enum:
       - image/png
+      - image/jpeg
       type: string
-      description: '* `image/png` - image/png'
+      description: '* `image/png` - PNG Image
+
+        * `image/jpeg` - JPEG Image'
     ZoomOAuthConnection:
       type: object
       properties:

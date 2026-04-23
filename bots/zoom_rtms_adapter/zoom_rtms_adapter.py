@@ -924,7 +924,7 @@ class ZoomRTMSAdapter(BotAdapter):
 
     # ------------------------------------------------------------- control API
 
-    def send_raw_image(self, png_image_bytes):
+    def send_raw_image(self, image_bytes):
         # Not currently supported for Zoom RTMS receive-only mode
         return
 
