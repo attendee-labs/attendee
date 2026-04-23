@@ -34,7 +34,7 @@ from bots.models import (
     WebhookTriggerTypes,
 )
 from bots.tasks.process_async_transcription_task import (
-    create_utterances_for_transcription_using_groups,
+    create_utterances_for_transcription_with_per_speaker_audio_using_groups,
     process_async_transcription,
 )
 from bots.tasks.process_utterance_group_for_async_transcription_task import process_utterance_group_for_async_transcription
@@ -185,7 +185,7 @@ class TestUtteranceGrouping(AsyncTranscriptionTestCase):
         with mock.patch("bots.tasks.process_async_transcription_task.process_utterance_group_for_async_transcription") as mock_group_task:
             mock_group_task.apply_async = mock.MagicMock()
 
-            create_utterances_for_transcription_using_groups(async_transcription)
+            create_utterances_for_transcription_with_per_speaker_audio_using_groups(async_transcription)
 
             # Should have created utterances
             utterances = Utterance.objects.filter(async_transcription=async_transcription)
@@ -228,7 +228,7 @@ class TestUtteranceGrouping(AsyncTranscriptionTestCase):
         with mock.patch("bots.tasks.process_async_transcription_task.process_utterance_group_for_async_transcription") as mock_group_task:
             mock_group_task.apply_async = mock.MagicMock()
 
-            create_utterances_for_transcription_using_groups(async_transcription)
+            create_utterances_for_transcription_with_per_speaker_audio_using_groups(async_transcription)
 
             # Should create only 1 group for < 30 minutes
             self.assertEqual(mock_group_task.apply_async.call_count, 1)
