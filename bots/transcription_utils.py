@@ -290,7 +290,7 @@ def _split_transcription_by_speaker_events_build_intervals(events: list, recordi
                 continue
             start, participant = active.pop(pid)
             start_adjusted = start
-            end_adjusted = t - 0.10
+            end_adjusted = t - 0.35
             if end_adjusted > start_adjusted:
                 intervals.append(_Interval(participant, start_adjusted, end_adjusted, len(intervals)))
 
