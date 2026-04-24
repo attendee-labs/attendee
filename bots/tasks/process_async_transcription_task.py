@@ -5,21 +5,84 @@ import os
 from celery import shared_task
 from django.utils import timezone
 
-from bots.models import AsyncTranscription, AsyncTranscriptionManager, AsyncTranscriptionStates, TranscriptionFailureReasons, Utterance
+from bots.models import AsyncTranscription, AsyncTranscriptionManager, AsyncTranscriptionStates, AsyncTranscriptionStrategies, ParticipantEvent, ParticipantEventTypes, TranscriptionFailureReasons, Utterance
 from bots.tasks.process_utterance_group_for_async_transcription_task import process_utterance_group_for_async_transcription
 from bots.tasks.process_utterance_task import process_utterance
+from bots.transcription_utils import get_transcription_via_assemblyai_using_speaker_events_and_ml_diarization
 
 logger = logging.getLogger(__name__)
 
 
 def create_utterances_for_transcription(async_transcription):
+    if async_transcription.transcription_settings.strategy() == AsyncTranscriptionStrategies.SPEAKER_EVENTS:
+        return create_utterances_for_transcription_with_speaker_events(async_transcription)
+
+    return create_utterances_for_transcription_with_per_speaker_audio(async_transcription)
+
+
+def create_utterances_for_transcription_with_speaker_events(async_transcription):
+    AsyncTranscriptionManager.set_async_transcription_in_progress(async_transcription)
+
+    recording = async_transcription.recording
+
+    speaker_events = list(
+        ParticipantEvent.objects.filter(
+            participant__bot=recording.bot,
+            event_type__in=[ParticipantEventTypes.SPEECH_START, ParticipantEventTypes.SPEECH_STOP],
+        ).select_related("participant")
+    )
+
+    utterance_results, error = get_transcription_via_assemblyai_using_speaker_events_and_ml_diarization(
+        speaker_events=speaker_events,
+        recording=recording,
+        transcription_settings=async_transcription.transcription_settings,
+    )
+
+    if error:
+        first_participant = recording.bot.participants.first()
+        if first_participant:
+            Utterance.objects.create(
+                source=Utterance.Sources.MIXED_AUDIO,
+                recording=recording,
+                async_transcription=async_transcription,
+                participant=first_participant,
+                timestamp_ms=0,
+                duration_ms=0,
+                failure_data=error,
+            )
+        AsyncTranscriptionManager.set_async_transcription_failed(async_transcription, failure_data={})
+    else:
+        for result in utterance_results:
+            participant = result["participant"]
+            transcription = result["transcription"]
+            start_time = result["start_time"]
+            duration = result["duration"]
+            words = transcription.get("words", [])
+
+            if not words:
+                continue
+
+            Utterance.objects.create(
+                source=Utterance.Sources.MIXED_AUDIO,
+                recording=recording,
+                async_transcription=async_transcription,
+                participant=participant,
+                timestamp_ms=start_time * 1000 + recording.first_buffer_timestamp_ms,
+                duration_ms=duration * 1000,
+                transcription=transcription,
+            )
+
+        AsyncTranscriptionManager.set_async_transcription_complete(async_transcription)
+
+
+def create_utterances_for_transcription_with_per_speaker_audio(async_transcription):
     if async_transcription.use_grouped_utterances:
-        return create_utterances_for_transcription_using_groups(async_transcription)
+        return create_utterances_for_transcription_with_per_speaker_audio_using_groups(async_transcription)
 
-    return create_utterances_for_transcription_without_using_groups(async_transcription)
+    return create_utterances_for_transcription_with_per_speaker_audio_without_using_groups(async_transcription)
 
 
-def create_utterances_for_transcription_without_using_groups(async_transcription):
+def create_utterances_for_transcription_with_per_speaker_audio_without_using_groups(async_transcription):
     recording = async_transcription.recording
 
     # Get all the audio chunks for the recording
@@ -45,7 +108,7 @@ def create_utterances_for_transcription_without_using_groups(async_transcription
     AsyncTranscriptionManager.set_async_transcription_in_progress(async_transcription)
 
 
-def create_utterances_for_transcription_using_groups(async_transcription):
+def create_utterances_for_transcription_with_per_speaker_audio_using_groups(async_transcription):
     recording = async_transcription.recording
 
     # Get all the audio chunks for the recording, sorted by start time

@@ -593,6 +593,9 @@ class TranscriptionSettings:
     def assemblyai_speaker_labels(self):
         return self._settings.get("assembly_ai", {}).get("speaker_labels", False)
 
+    def assemblyai_speakers_expected(self):
+        return self._settings.get("assembly_ai", {}).get("speakers_expected", None)
+
     def assemblyai_base_url(self):
         if os.getenv("ASSEMBLYAI_BASE_URL"):
             return os.getenv("ASSEMBLYAI_BASE_URL")
@@ -686,6 +689,14 @@ class TranscriptionSettings:
 
     def meeting_closed_captions_merge_consecutive_captions(self):
         return self._settings.get("meeting_closed_captions", {}).get("merge_consecutive_captions", False)
+
+
+class AsyncTranscriptionSettings(TranscriptionSettings):
+    def __init__(self, settings: dict):
+        super().__init__(settings)
+
+    def strategy(self):
+        return self._settings.get("strategy", AsyncTranscriptionStrategies.PER_SPEAKER_AUDIO)
 
 
 class Bot(models.Model):
@@ -2331,6 +2342,11 @@ class AsyncTranscriptionStates(models.IntegerChoices):
         return mapping.get(value)
 
 
+class AsyncTranscriptionStrategies(models.TextChoices):
+    PER_SPEAKER_AUDIO = "per_speaker_audio", "Per Speaker Audio"
+    SPEAKER_EVENTS = "speaker_events", "Speaker Events"
+
+
 class AsyncTranscription(models.Model):
     OBJECT_ID_PREFIX = "tran_"
     object_id = models.CharField(max_length=32, unique=True, editable=False)
@@ -2357,7 +2373,7 @@ class AsyncTranscription(models.Model):
 
     @property
     def transcription_settings(self):
-        return TranscriptionSettings(self.settings.get("transcription_settings"))
+        return AsyncTranscriptionSettings(self.settings.get("transcription_settings"))
 
     @property
     def transcription_provider(self):
@@ -2488,6 +2504,7 @@ class Utterance(models.Model):
     class Sources(models.IntegerChoices):
         PER_PARTICIPANT_AUDIO = 1, "Per Participant Audio"
         CLOSED_CAPTION_FROM_PLATFORM = 2, "Closed Caption From Platform"
+        MIXED_AUDIO = 3, "Mixed Audio"
 
     class AudioFormat(models.IntegerChoices):
         PCM = 1, "PCM"

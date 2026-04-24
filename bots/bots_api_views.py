@@ -23,7 +23,9 @@ from .launch_bot_utils import launch_bot
 from .meeting_url_utils import meeting_type_from_url
 from .models import (
     AsyncTranscription,
+    AsyncTranscriptionSettings,
     AsyncTranscriptionStates,
+    AsyncTranscriptionStrategies,
     Bot,
     BotEventManager,
     BotEventSubTypes,
@@ -39,6 +41,7 @@ from .models import (
     Participant,
     ParticipantEvent,
     Recording,
+    RecordingFormats,
     RecordingViews,
     Utterance,
 )
@@ -842,9 +845,6 @@ class TranscriptView(APIView):
             if not bot.project.organization.is_async_transcription_enabled:
                 return Response({"error": "Async transcription is not enabled for your account."}, status=status.HTTP_400_BAD_REQUEST)
 
-            if not bot.record_async_transcription_audio_chunks():
-                return Response({"error": "Cannot generate async transcription because you did not enable recording_settings.record_async_transcription_audio_chunks when you created the bot."}, status=status.HTTP_400_BAD_REQUEST)
-
             if bot.state != BotStates.ENDED:
                 return Response({"error": "Cannot create async transcription because bot is not in state ended. It is in state " + BotStates.state_to_api_code(bot.state)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -854,9 +854,6 @@ class TranscriptView(APIView):
                     {"error": "No recording found for bot"},
                     status=status.HTTP_404_NOT_FOUND,
                 )
-
-            if not recording.audio_chunks.exclude(audio_blob=b"").exists() and not recording.audio_chunks.exclude(audio_blob_remote_file=None).exists():
-                return Response({"error": "Cannot create async transcription because the per-speaker audio data has been deleted or was never created."}, status=status.HTTP_400_BAD_REQUEST)
 
             existing_async_transcription_count = AsyncTranscription.objects.filter(
                 recording=recording,
@@ -869,6 +866,20 @@ class TranscriptView(APIView):
             serializer = CreateAsyncTranscriptionSerializer(data={"transcription_settings": request.data.get("transcription_settings")})
             if not serializer.is_valid():
                 return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+            transcription_settings = AsyncTranscriptionSettings(serializer.validated_data["transcription_settings"])
+            strategy = transcription_settings.strategy()
+
+            if strategy == AsyncTranscriptionStrategies.PER_SPEAKER_AUDIO:
+                if not bot.record_async_transcription_audio_chunks():
+                    return Response({"error": "Cannot create async transcription using per_speaker_audio strategy because you did not enable recording_settings.record_async_transcription_audio_chunks when you created the bot."}, status=status.HTTP_400_BAD_REQUEST)
+                if not recording.audio_chunks.exclude(audio_blob=b"").exists() and not recording.audio_chunks.exclude(audio_blob_remote_file=None).exists():
+                    return Response({"error": "Cannot create async transcription because the per-speaker audio data has been deleted or was never created."}, status=status.HTTP_400_BAD_REQUEST)
+            elif strategy == AsyncTranscriptionStrategies.SPEAKER_EVENTS:
+                if bot.recording_format() not in (RecordingFormats.MP3, RecordingFormats.MP4):
+                    return Response({"error": "Cannot create async transcription using speaker_events strategy because the bot's recording format must be mp3 or mp4."}, status=status.HTTP_400_BAD_REQUEST)
+                if not bot.record_participant_speech_start_stop_events():
+                    return Response({"error": "Cannot create async transcription using speaker_events strategy because you did not enable recording_settings.record_participant_speech_start_stop_events when you created the bot."}, status=status.HTTP_400_BAD_REQUEST)
 
             async_transcription = AsyncTranscription.objects.create(recording=recording, settings=serializer.validated_data)
 
