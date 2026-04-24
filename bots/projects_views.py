@@ -1151,9 +1151,10 @@ class ProjectUsageView(AdminRequiredMixin, ProjectUrlContextMixin, View):
         project = get_project_for_user(user=request.user, project_object_id=object_id)
         interval = request.GET.get("interval", "months")
         measure = request.GET.get("measure", "count")
+        platform = request.GET.get("platform", "")
 
         context = self.get_project_context(object_id, project)
-        context.update(get_usage_data(project, interval, measure))
+        context.update(get_usage_data(project, interval, measure, platform))
         return render(request, "projects/project_usage.html", context)
 
 

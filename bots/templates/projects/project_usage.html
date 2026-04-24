@@ -7,16 +7,24 @@
         <div class="d-flex gap-3 align-items-center">
             <span class="text-muted small fw-semibold">Interval</span>
             <div class="btn-group btn-group-sm">
-                <a href="?interval=months&measure={{ measure }}" class="btn {% if interval == 'months' %}btn-primary{% else %}btn-outline-primary{% endif %}">Months</a>
-                <a href="?interval=weeks&measure={{ measure }}" class="btn {% if interval == 'weeks' %}btn-primary{% else %}btn-outline-primary{% endif %}">Weeks</a>
-                <a href="?interval=days&measure={{ measure }}" class="btn {% if interval == 'days' %}btn-primary{% else %}btn-outline-primary{% endif %}">Days</a>
+                <a href="?interval=months&measure={{ measure }}{% if platform %}&platform={{ platform }}{% endif %}" class="btn {% if interval == 'months' %}btn-primary{% else %}btn-outline-primary{% endif %}">Months</a>
+                <a href="?interval=weeks&measure={{ measure }}{% if platform %}&platform={{ platform }}{% endif %}" class="btn {% if interval == 'weeks' %}btn-primary{% else %}btn-outline-primary{% endif %}">Weeks</a>
+                <a href="?interval=days&measure={{ measure }}{% if platform %}&platform={{ platform }}{% endif %}" class="btn {% if interval == 'days' %}btn-primary{% else %}btn-outline-primary{% endif %}">Days</a>
             </div>
             <span class="border-start ms-1" style="height: 1.5rem;"></span>
             <span class="text-muted small fw-semibold">Measure</span>
             <div class="btn-group btn-group-sm">
-                <a href="?interval={{ interval }}&measure=count" class="btn {% if measure == 'count' %}btn-secondary{% else %}btn-outline-secondary{% endif %}">Count</a>
-                <a href="?interval={{ interval }}&measure=time" class="btn {% if measure == 'time' %}btn-secondary{% else %}btn-outline-secondary{% endif %}">Time</a>
-                <a href="?interval={{ interval }}&measure=percent" class="btn {% if measure == 'percent' %}btn-secondary{% else %}btn-outline-secondary{% endif %}">Percent</a>
+                <a href="?interval={{ interval }}&measure=count{% if platform %}&platform={{ platform }}{% endif %}" class="btn {% if measure == 'count' %}btn-secondary{% else %}btn-outline-secondary{% endif %}">Count</a>
+                <a href="?interval={{ interval }}&measure=time{% if platform %}&platform={{ platform }}{% endif %}" class="btn {% if measure == 'time' %}btn-secondary{% else %}btn-outline-secondary{% endif %}">Time</a>
+                <a href="?interval={{ interval }}&measure=percent{% if platform %}&platform={{ platform }}{% endif %}" class="btn {% if measure == 'percent' %}btn-secondary{% else %}btn-outline-secondary{% endif %}">Percent</a>
+            </div>
+            <span class="border-start ms-1" style="height: 1.5rem;"></span>
+            <span class="text-muted small fw-semibold">Platform</span>
+            <div class="btn-group btn-group-sm">
+                <a href="?interval={{ interval }}&measure={{ measure }}" class="btn {% if not platform %}btn-secondary{% else %}btn-outline-secondary{% endif %}">All</a>
+                <a href="?interval={{ interval }}&measure={{ measure }}&platform=zoom" class="btn {% if platform == 'zoom' %}btn-secondary{% else %}btn-outline-secondary{% endif %}">Zoom</a>
+                <a href="?interval={{ interval }}&measure={{ measure }}&platform=meet" class="btn {% if platform == 'meet' %}btn-secondary{% else %}btn-outline-secondary{% endif %}">Google Meet</a>
+                <a href="?interval={{ interval }}&measure={{ measure }}&platform=teams" class="btn {% if platform == 'teams' %}btn-secondary{% else %}btn-outline-secondary{% endif %}">Teams</a>
             </div>
         </div>
     </div>

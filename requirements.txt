@@ -105,3 +105,4 @@ sentry-sdk[celery,django]>=2.0.0
 rollbar>=1.0.0
 django-anymail[postmark]>=10.0
 django-csp==4.0
+pyotp==2.9.0
