@@ -862,7 +862,7 @@ class TestTeamsBot(TransactionTestCase):
 
             # Close the database connection since we're in a thread
             connection.close()
-    
+
     def test_get_teams_signed_in_bot_uses_named_login_group(self):
         first_group = BotLoginGroup.objects.create(project=self.project, platform=BotLoginPlatform.TEAMS, name="Primary Group")
         first_group_login = BotLogin.objects.create(group=first_group, email="primary@example.com")
