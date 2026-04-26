@@ -274,10 +274,6 @@ class TeamsUIMethods:
 
     # Returns nothing if succeeded, raises an exception if failed
     def attempt_to_join_meeting(self):
-        # REVIEW: This is following the same pattern as the Google Meet bot adapter, but it appears incorrect.
-        # If the bot login is required with should_be_used, then shouldn't
-        # it NOT allow the bot to join the meeting if no bot login is available?
-        # Feels like this should lead to an exception being raised, and do the same for the Google Meet bot adapter.
         if self.teams_bot_login_is_available and self.teams_bot_login_should_be_used:
             self.login_to_microsoft_account()
 
@@ -381,7 +377,7 @@ class TeamsUIMethods:
         time.sleep(1)
 
     def login_to_microsoft_account(self):
-        credentials = self.create_teams_bot_login_credentials_callback()
+        credentials = self.fetch_teams_bot_login_credentials_callback()
 
         if not credentials:
             raise UiLoginAttemptFailedException("Teams bot login credentials are not available", "login_to_microsoft_account")

@@ -891,7 +891,7 @@ class TestTeamsBot(TransactionTestCase):
         self.assertTrue(adapter.teams_bot_login_is_available)
         self.assertTrue(adapter.teams_bot_login_should_be_used)
         self.assertEqual(
-            adapter.create_teams_bot_login_credentials_callback(),
+            adapter.fetch_teams_bot_login_credentials_callback(),
             {"username": "named@example.com", "password": "named-group-password"},
         )
 

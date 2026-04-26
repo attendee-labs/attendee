@@ -256,7 +256,7 @@ class BotController:
             video_frame_size=self.bot_in_db.recording_dimensions(),
             teams_bot_login_is_available=self.teams_bot_login_is_available(),
             teams_bot_login_should_be_used=self.bot_in_db.teams_login_mode_is_always(),
-            create_teams_bot_login_credentials_callback=self.create_teams_bot_login_credentials,
+            fetch_teams_bot_login_credentials_callback=self.create_teams_bot_login_credentials,
             record_chat_messages_when_paused=self.bot_in_db.record_chat_messages_when_paused(),
             record_participant_speech_start_stop_events=self.bot_in_db.record_participant_speech_start_stop_events(),
             disable_incoming_video=self.disable_incoming_video_for_web_bots(),

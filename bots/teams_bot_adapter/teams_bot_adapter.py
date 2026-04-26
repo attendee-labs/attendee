@@ -52,15 +52,15 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
         teams_closed_captions_language: str | None,
         teams_bot_login_is_available: bool,
         teams_bot_login_should_be_used: bool,
-        create_teams_bot_login_credentials_callback: Callable[[], dict],
+        fetch_teams_bot_login_credentials_callback: Callable[[], dict],
         modify_dom_for_video_recording: bool,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
         self.teams_closed_captions_language = teams_closed_captions_language
         self.teams_bot_login_is_available = teams_bot_login_is_available
-        self.teams_bot_login_should_be_used = teams_bot_login_should_be_used
-        self.create_teams_bot_login_credentials_callback = create_teams_bot_login_credentials_callback
+        self.teams_bot_login_should_be_used = teams_bot_login_should_be_used and teams_bot_login_is_available
+        self.fetch_teams_bot_login_credentials_callback = fetch_teams_bot_login_credentials_callback
         self.modify_dom_for_video_recording = modify_dom_for_video_recording
 
     def should_retry_joining_meeting_that_requires_login_by_logging_in(self):
