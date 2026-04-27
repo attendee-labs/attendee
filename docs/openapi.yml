@@ -1034,8 +1034,17 @@ paths:
                     google:
                       voice_language_code: en-US
                       voice_name: en-US-Casual-K
-                summary: Valid speech request
-                description: Example of a valid speech request
+                summary: Valid Google speech request
+                description: Example of a valid Google text-to-speech request
+              ValidElevenLabsSpeechRequest:
+                value:
+                  text: Hello, this is a bot speaking text.
+                  text_to_speech_settings:
+                    elevenlabs:
+                      voice_language_code: en
+                      voice_id: some-id
+                summary: Valid ElevenLabs speech request
+                description: Example of a valid ElevenLabs text-to-speech request
         required: true
       security:
       - {}
@@ -3203,20 +3212,45 @@ components:
           type: string
           minLength: 1
         text_to_speech_settings:
-          type: object
-          properties:
-            google:
-              type: object
-              properties:
-                voice_language_code:
-                  type: string
-                  description: The voice language code (e.g. 'en-US'). See https://cloud.google.com/text-to-speech/docs/voices
-                    for a list of available language codes and voices.
-                voice_name:
-                  type: string
-                  description: The name of the voice to use (e.g. 'en-US-Casual-K')
-          required:
-          - google
+          oneOf:
+          - type: object
+            properties:
+              google:
+                type: object
+                properties:
+                  voice_language_code:
+                    type: string
+                    description: The voice language code (e.g. 'en-US'). See https://cloud.google.com/text-to-speech/docs/voices
+                      for a list of available language codes and voices.
+                  voice_name:
+                    type: string
+                    description: The name of the voice to use (e.g. 'en-US-Casual-K')
+                required:
+                - voice_language_code
+                - voice_name
+                additionalProperties: false
+            required:
+            - google
+            additionalProperties: false
+          - type: object
+            properties:
+              elevenlabs:
+                type: object
+                properties:
+                  voice_language_code:
+                    type: string
+                    description: The voice language code (e.g. 'en'). See https://elevenlabs.io/docs/api-reference/text-to-speech/convert
+                      for supported ISO 639-1 language codes.
+                  voice_id:
+                    type: string
+                    description: The ElevenLabs voice ID to use.
+                required:
+                - voice_language_code
+                - voice_id
+                additionalProperties: false
+            required:
+            - elevenlabs
+            additionalProperties: false
       required:
       - text
       - text_to_speech_settings
