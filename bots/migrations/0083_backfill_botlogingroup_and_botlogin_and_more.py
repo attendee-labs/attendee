@@ -42,12 +42,4 @@ class Migration(migrations.Migration):
             model_name='botlogingroup',
             constraint=models.UniqueConstraint(fields=('project', 'platform', 'name'), name='unique_bot_login_group_project_platform_name'),
         ),
-        migrations.RemoveConstraint(
-            model_name='botlogin',
-            name='unique_google_meet_bot_login_email',
-        ),
-        migrations.AddConstraint(
-            model_name='botlogin',
-            constraint=models.UniqueConstraint(fields=('group', 'email'), name='unique_bot_login_email_per_group'),
-        ),
     ]

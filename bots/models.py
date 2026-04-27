@@ -107,7 +107,7 @@ class BotLoginGroup(models.Model):
         return None
 
     class Meta:
-        # Table name kept from the original Google Meet-only model. The model has been generalized to support multiple platforms but the underlying table has not been renamed.
+        # Table name kept from the original Google Meet-only bot login group. The model has been generalized to support multiple platforms but the underlying table has not been renamed.
         db_table = "bots_googlemeetbotlogingroup"
         constraints = [
             models.UniqueConstraint(fields=["project", "platform", "name"], name="unique_bot_login_group_project_platform_name"),
@@ -158,10 +158,11 @@ class BotLogin(models.Model):
         return f"{self.email} - {self.object_id}"
 
     class Meta:
+        # Table name kept from the original Google Meet-only bot login. The model has been generalized to support multiple platforms but the underlying table has not been renamed.
         db_table = "bots_googlemeetbotlogin"
-        # Within a BotLoginGroup, we don't want to allow BotLogins with the same email
+        # Uniqueness constraint name also kept the same from original Google Meet bot login table, with the constraint itself not having changed.
         constraints = [
-            models.UniqueConstraint(fields=["group", "email"], name="unique_bot_login_email_per_group"),
+            models.UniqueConstraint(fields=["group", "email"], name="unique_google_meet_bot_login_email"),
         ]
 
 
