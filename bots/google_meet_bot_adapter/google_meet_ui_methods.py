@@ -732,14 +732,15 @@ class GoogleMeetUIMethods:
             if "sid" in cookie_names:
                 logger.info("Okta session cookie (sid) established")
                 sid_cookie = next((c for c in cookies if c.get("name") == "sid"), None)
-                if sid_cookie:
-                    try:
-                        redis_client = redis.from_url(settings.REDIS_URL_WITH_PARAMS)
-                        # Cache for 30 minutes; well below typical Okta session lifetime so we never serve a stale cookie.
-                        redis_client.setex(self._okta_session_redis_key(), 60 * 30, json.dumps(sid_cookie))
-                        logger.info("Okta session cookie cached in redis")
-                    except Exception as e:
-                        logger.warning(f"Failed to cache Okta session cookie in redis: {e}")
+                if not sid_cookie:
+                    raise OktaSessionError("Okta 'sid' cookie was reported present but could not be retrieved from the driver.")
+                try:
+                    redis_client = redis.from_url(settings.REDIS_URL_WITH_PARAMS)
+                    # Cache for 30 minutes; well below typical Okta session lifetime so we never serve a stale cookie.
+                    redis_client.setex(self._okta_session_redis_key(), 60 * 30, json.dumps(sid_cookie))
+                    logger.info("Okta session cookie cached in redis")
+                except Exception as e:
+                    raise OktaSessionError(f"Failed to cache Okta session cookie in redis: {e}") from e
                 return
             if time.time() - start > timeout:
                 logger.error(f"Okta session cookie not found after {timeout}s. Cookies present: {cookie_names}")
