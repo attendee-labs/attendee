@@ -649,6 +649,9 @@ class GoogleMeetUIMethods:
 
             if time.time() - start_waiting_at > 60:
                 logger.warning(f"Login timed out after 60s. Current URL: {self.driver.current_url}")
+                # The cached Okta session may be invalid (e.g. revoked server-side). Evict it
+                # so the next attempt regenerates instead of reusing a likely-bad cookie.
+                self._clear_cached_okta_session()
                 raise UiLoginAttemptFailedException("No Google auth cookies were present", "login_to_google_meet_account_with_okta")
 
         logger.info(f"Google login complete. URL: {self.driver.current_url}")
@@ -663,10 +666,24 @@ class GoogleMeetUIMethods:
         fingerprint = hashlib.sha256(f"{domain}|{username}|{totp_secret}".encode()).hexdigest()
         return f"okta_session_cookie:{fingerprint}"
 
+    def _clear_cached_okta_session(self, redis_client=None):
+        """Remove the cached Okta session cookie and its usage counter from redis."""
+        try:
+            if redis_client is None:
+                redis_client = redis.from_url(settings.REDIS_URL_WITH_PARAMS)
+            cookie_key = self._okta_session_redis_key()
+            redis_client.delete(cookie_key, f"{cookie_key}:uses")
+        except Exception as e:
+            logger.warning(f"Failed to clear cached Okta session from redis: {e}")
+
     def establish_okta_session(self):
-        """Sets the Okta sid cookie. First looks in redis to see if one has already been set or is being set. If not, creates one."""
+        """Sets the Okta sid cookie. First looks in redis to see if one has already been set or is being set. If not, creates one.
+
+        Cached cookies are also expired after being used MAX_OKTA_SESSION_USES times to limit the blast radius if Okta invalidates the session early.
+        """
         redis_client = redis.from_url(settings.REDIS_URL_WITH_PARAMS)
         cookie_key = self._okta_session_redis_key()
+        usage_key = f"{cookie_key}:uses"
         lock_key = f"{cookie_key}:lock"
 
         okta_domain = os.getenv("OKTA_BOT_LOGIN_DOMAIN")
@@ -675,15 +692,23 @@ class GoogleMeetUIMethods:
         # Total time to wait for another bot to finish before giving up.
         max_wait_seconds = 180
         poll_interval_seconds = 3
+        max_okta_session_uses = int(os.getenv("OKTA_BOT_LOGIN_MAX_SESSION_USES", "20"))
         deadline = time.time() + max_wait_seconds
 
         while True:
             cookie_data_raw = redis_client.get(cookie_key)
             # If cookie is in redis, inject it into the driver
             if cookie_data_raw:
+                # Atomically increment the usage counter so concurrent bots agree on use count.
+                use_count = redis_client.incr(usage_key)
+                if use_count > max_okta_session_uses:
+                    logger.info(f"Cached Okta session cookie has been used {use_count - 1} times (limit {max_okta_session_uses}). Discarding and regenerating.")
+                    self._clear_cached_okta_session(redis_client)
+                    continue
+
                 try:
                     cookie_data = json.loads(cookie_data_raw)
-                    logger.info("Found Okta session cookie in redis. Injecting into driver.")
+                    logger.info(f"Found Okta session cookie in redis (use {use_count}/{max_okta_session_uses}). Injecting into driver.")
                     self.driver.get(f"https://{okta_domain}/")
                     self.driver.add_cookie(
                         {
@@ -697,7 +722,7 @@ class GoogleMeetUIMethods:
                     return
                 except Exception as e:
                     logger.warning(f"Failed to use cached Okta cookie from redis ({e}). Will regenerate.")
-                    redis_client.delete(cookie_key)
+                    self._clear_cached_okta_session(redis_client)
 
             # If no cookie in redis, acquire a lock to generate one.
             lock_acquired = redis_client.set(lock_key, "1", nx=True, ex=lock_ttl_seconds)
@@ -744,8 +769,11 @@ class GoogleMeetUIMethods:
                     raise OktaSessionError("Okta 'sid' cookie was reported present but could not be retrieved from the driver.")
                 try:
                     redis_client = redis.from_url(settings.REDIS_URL_WITH_PARAMS)
+                    cookie_key = self._okta_session_redis_key()
                     # Cache for 30 minutes; well below typical Okta session lifetime so we never serve a stale cookie.
-                    redis_client.setex(self._okta_session_redis_key(), 60 * 30, json.dumps(sid_cookie))
+                    redis_client.setex(cookie_key, 60 * 30, json.dumps(sid_cookie))
+                    # Reset the usage counter so it tracks uses of this freshly minted cookie only.
+                    redis_client.delete(f"{cookie_key}:uses")
                     logger.info("Okta session cookie cached in redis")
                 except Exception as e:
                     raise OktaSessionError(f"Failed to cache Okta session cookie in redis: {e}") from e
