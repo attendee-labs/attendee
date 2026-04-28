@@ -1,8 +1,11 @@
+import hashlib
+import json
 import logging
 import os
 import time
 from urllib.parse import quote, urlparse
 
+import redis
 import requests
 from django.conf import settings
 from selenium.common.exceptions import ElementNotInteractableException, NoSuchElementException, StaleElementReferenceException, TimeoutException
@@ -621,14 +624,7 @@ class GoogleMeetUIMethods:
         self.driver.get(gmail_domain_url)
 
     def login_to_google_meet_account_with_okta(self):
-        okta_authenticator = OktaAuthenticator(
-            okta_domain=os.getenv("OKTA_BOT_LOGIN_DOMAIN"),
-            username=os.getenv("OKTA_BOT_LOGIN_USERNAME"),
-            password=os.getenv("OKTA_BOT_LOGIN_PASSWORD"),
-            totp_secret=os.getenv("OKTA_BOT_LOGIN_TOTP_SECRET"),
-        )
-        session_token = okta_authenticator.authenticate()
-        self.establish_okta_session(okta_domain=os.getenv("OKTA_BOT_LOGIN_DOMAIN"), session_token=session_token)
+        self.establish_okta_session()
 
         google_login_url = f"https://www.google.com/a/{os.getenv('OKTA_BOT_LOGIN_GOOGLE_DOMAIN')}/ServiceLogin?service=mail"
         logger.info(f"Navigating to domain-specific Google ServiceLogin: {google_login_url}")
@@ -660,8 +656,67 @@ class GoogleMeetUIMethods:
         # Set login session so we skip name input downstream
         self.google_meet_bot_login_session = {"login_type": "okta"}
 
-    def establish_okta_session(self, okta_domain: str, session_token: str):
-        """Navigate to sessionCookieRedirect to set the Okta sid cookie."""
+    def _okta_session_redis_key(self):
+        domain = os.getenv("OKTA_BOT_LOGIN_DOMAIN", "")
+        username = os.getenv("OKTA_BOT_LOGIN_USERNAME", "")
+        totp_secret = os.getenv("OKTA_BOT_LOGIN_TOTP_SECRET", "")
+        fingerprint = hashlib.sha256(f"{domain}|{username}|{totp_secret}".encode()).hexdigest()
+        return f"okta_session_cookie:{fingerprint}"
+
+    def establish_okta_session(self):
+        """Sets the Okta sid cookie. First looks in redis to see if one has already been set or is being set. If not, creates one."""
+        redis_client = redis.from_url(settings.REDIS_URL_WITH_PARAMS)
+        cookie_key = self._okta_session_redis_key()
+        lock_key = f"{cookie_key}:lock"
+
+        okta_domain = os.getenv("OKTA_BOT_LOGIN_DOMAIN")
+        # Lock TTL must comfortably exceed the worst-case TOTP+navigation flow.
+        lock_ttl_seconds = 120
+        # Total time to wait for another bot to finish before giving up.
+        max_wait_seconds = 180
+        poll_interval_seconds = 3
+        deadline = time.time() + max_wait_seconds
+
+        while True:
+            cookie_data_raw = redis_client.get(cookie_key)
+            if cookie_data_raw:
+                try:
+                    cookie_data = json.loads(cookie_data_raw)
+                    logger.info("Found Okta session cookie in redis. Injecting into driver.")
+                    self.driver.get(f"https://{okta_domain}/")
+                    # Drop expiry so Selenium doesn't reject a cookie whose absolute expiry has passed.
+                    cookie_data.pop("expiry", None)
+                    self.driver.add_cookie(cookie_data)
+                    return
+                except Exception as e:
+                    logger.warning(f"Failed to use cached Okta cookie from redis ({e}). Will regenerate.")
+                    redis_client.delete(cookie_key)
+
+            lock_acquired = redis_client.set(lock_key, "1", nx=True, ex=lock_ttl_seconds)
+            if lock_acquired:
+                try:
+                    logger.info("Acquired lock to generate Okta session. Running TOTP flow.")
+                    self.save_valid_okta_session_token_in_redis()
+                    return
+                finally:
+                    redis_client.delete(lock_key)
+
+            if time.time() >= deadline:
+                raise OktaSessionError(f"Timed out after {max_wait_seconds}s waiting for another bot to generate the Okta session.")
+
+            logger.info(f"Another bot is generating the Okta session. Waiting {poll_interval_seconds}s before retrying.")
+            time.sleep(poll_interval_seconds)
+
+    def save_valid_okta_session_token_in_redis(self):
+        okta_domain = os.getenv("OKTA_BOT_LOGIN_DOMAIN")
+        okta_authenticator = OktaAuthenticator(
+            okta_domain=okta_domain,
+            username=os.getenv("OKTA_BOT_LOGIN_USERNAME"),
+            password=os.getenv("OKTA_BOT_LOGIN_PASSWORD"),
+            totp_secret=os.getenv("OKTA_BOT_LOGIN_TOTP_SECRET"),
+        )
+        session_token = okta_authenticator.authenticate()
+
         redirect_url = quote(f"https://{okta_domain}", safe="")
         url = f"https://{okta_domain}/login/sessionCookieRedirect?token={session_token}&redirectUrl={redirect_url}"
 
@@ -676,6 +731,15 @@ class GoogleMeetUIMethods:
             cookie_names = {c.get("name") for c in cookies if c.get("name")}
             if "sid" in cookie_names:
                 logger.info("Okta session cookie (sid) established")
+                sid_cookie = next((c for c in cookies if c.get("name") == "sid"), None)
+                if sid_cookie:
+                    try:
+                        redis_client = redis.from_url(settings.REDIS_URL_WITH_PARAMS)
+                        # Cache for 30 minutes; well below typical Okta session lifetime so we never serve a stale cookie.
+                        redis_client.setex(self._okta_session_redis_key(), 60 * 30, json.dumps(sid_cookie))
+                        logger.info("Okta session cookie cached in redis")
+                    except Exception as e:
+                        logger.warning(f"Failed to cache Okta session cookie in redis: {e}")
                 return
             if time.time() - start > timeout:
                 logger.error(f"Okta session cookie not found after {timeout}s. Cookies present: {cookie_names}")
