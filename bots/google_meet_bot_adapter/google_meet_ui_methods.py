@@ -679,6 +679,7 @@ class GoogleMeetUIMethods:
 
         while True:
             cookie_data_raw = redis_client.get(cookie_key)
+            # If cookie is in redis, inject it into the driver
             if cookie_data_raw:
                 try:
                     cookie_data = json.loads(cookie_data_raw)
@@ -692,6 +693,7 @@ class GoogleMeetUIMethods:
                     logger.warning(f"Failed to use cached Okta cookie from redis ({e}). Will regenerate.")
                     redis_client.delete(cookie_key)
 
+            # If no cookie in redis, acquire a lock to generate one.
             lock_acquired = redis_client.set(lock_key, "1", nx=True, ex=lock_ttl_seconds)
             if lock_acquired:
                 try:
