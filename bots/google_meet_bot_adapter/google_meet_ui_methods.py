@@ -685,9 +685,15 @@ class GoogleMeetUIMethods:
                     cookie_data = json.loads(cookie_data_raw)
                     logger.info("Found Okta session cookie in redis. Injecting into driver.")
                     self.driver.get(f"https://{okta_domain}/")
-                    # Drop expiry so Selenium doesn't reject a cookie whose absolute expiry has passed.
-                    cookie_data.pop("expiry", None)
-                    self.driver.add_cookie(cookie_data)
+                    self.driver.add_cookie(
+                        {
+                            "name": "sid",
+                            "value": cookie_data["value"],
+                            "domain": okta_domain,
+                            "path": "/",
+                            "secure": True,
+                        },
+                    )
                     return
                 except Exception as e:
                     logger.warning(f"Failed to use cached Okta cookie from redis ({e}). Will regenerate.")
