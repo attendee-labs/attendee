@@ -25,6 +25,21 @@
     .bot-login-scroll .table {
         margin-bottom: 0;
     }
+    .bot-login-table {
+        table-layout: fixed;
+        width: 100%;
+    }
+    .bot-login-table th,
+    .bot-login-table td {
+        vertical-align: middle;
+    }
+    .bot-login-table .bot-login-cell {
+        word-break: break-word;
+        overflow-wrap: anywhere;
+    }
+    .bot-login-actions-col {
+        width: 140px;
+    }
     .resend-btn {
         --bs-btn-padding-y: .2rem;
         --bs-btn-padding-x: .55rem;
@@ -51,50 +66,58 @@
 </style>
 
 <div class="container mt-4">
-    <div class="d-flex justify-content-between align-items-center gap-3 mb-4 flex-wrap">
+    <div class="mb-4">
         <h2 class="mb-0">Bot Logins</h2>
+    </div>
+
+    <alert class="alert alert-info d-block" role="alert">
+        <i class="bi bi-info-circle me-2"></i>
+        Bot logins are organized into groups of signed-in accounts by platform. Create separate groups when you want to isolate logins by team, region, customer, or workspace.<br><br>
+        Each platform can contain multiple groups, and each group can contain multiple logins. When a meeting requires authentication, the bot uses a login from the group selected on the bot. If no login group is selected, the bot falls back to that platform's default group.
+    </alert>
+
+    <div class="d-flex justify-content-between align-items-end gap-3 mb-3 flex-wrap">
+        <ul class="nav nav-tabs bot-login-tabs mb-0" id="bot-login-platform-tabs" role="tablist">
+            <li class="nav-item" role="presentation">
+                <button class="nav-link active"
+                        id="google-meet-login-groups-tab"
+                        data-bs-toggle="tab"
+                        data-bs-target="#google-meet-login-groups-pane"
+                        data-platform="google_meet"
+                        type="button"
+                        role="tab"
+                        aria-controls="google-meet-login-groups-pane"
+                        aria-selected="true">
+                    Google Meet
+                </button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link"
+                        id="teams-login-groups-tab"
+                        data-bs-toggle="tab"
+                        data-bs-target="#teams-login-groups-pane"
+                        data-platform="teams"
+                        type="button"
+                        role="tab"
+                        aria-controls="teams-login-groups-pane"
+                        aria-selected="false">
+                    Teams
+                </button>
+            </li>
+        </ul>
         <button class="btn btn-primary" type="button" data-bs-toggle="modal" data-bs-target="#createBotLoginGroupModal">
             <i class="bi bi-plus-circle"></i> Create Group
         </button>
     </div>
 
-    <ul class="nav nav-tabs mb-3 bot-login-tabs" id="bot-login-platform-tabs" role="tablist">
-        <li class="nav-item" role="presentation">
-            <button class="nav-link active"
-                    id="teams-login-groups-tab"
-                    data-bs-toggle="tab"
-                    data-bs-target="#teams-login-groups-pane"
-                    data-platform="teams"
-                    type="button"
-                    role="tab"
-                    aria-controls="teams-login-groups-pane"
-                    aria-selected="true">
-                Teams
-            </button>
-        </li>
-        <li class="nav-item" role="presentation">
-            <button class="nav-link"
-                    id="google-meet-login-groups-tab"
-                    data-bs-toggle="tab"
-                    data-bs-target="#google-meet-login-groups-pane"
-                    data-platform="google_meet"
-                    type="button"
-                    role="tab"
-                    aria-controls="google-meet-login-groups-pane"
-                    aria-selected="false">
-                Google Meet
-            </button>
-        </li>
-    </ul>
-
     <div class="card">
         <div class="card-body">
             <div class="tab-content">
-                <div class="tab-pane fade show active" id="teams-login-groups-pane" role="tabpanel" aria-labelledby="teams-login-groups-tab">
-                    {% include 'projects/partials/teams_bot_logins.html' %}
-                </div>
-                <div class="tab-pane fade" id="google-meet-login-groups-pane" role="tabpanel" aria-labelledby="google-meet-login-groups-tab">
+                <div class="tab-pane fade show active" id="google-meet-login-groups-pane" role="tabpanel" aria-labelledby="google-meet-login-groups-tab">
                     {% include 'projects/partials/google_meet_bot_logins.html' %}
+                </div>
+                <div class="tab-pane fade" id="teams-login-groups-pane" role="tabpanel" aria-labelledby="teams-login-groups-tab">
+                    {% include 'projects/partials/teams_bot_logins.html' %}
                 </div>
             </div>
         </div>
@@ -511,7 +534,7 @@
                     targetId: form.dataset.targetId,
                     resetAfterSuccess: true,
                     onSuccess: function() {
-                        platformSelect.value = window.activeBotLoginPlatform || "teams";
+                        platformSelect.value = window.activeBotLoginPlatform || "google_meet";
                         configureCreateGroupForm();
                     },
                 });
@@ -523,7 +546,7 @@
         if (modalElement.dataset.showHandlerAttached !== "true") {
             modalElement.addEventListener("show.bs.modal", function() {
                 setModalError(form, "");
-                platformSelect.value = window.activeBotLoginPlatform || "teams";
+                platformSelect.value = window.activeBotLoginPlatform || "google_meet";
                 configureCreateGroupForm();
             });
             modalElement.dataset.showHandlerAttached = "true";
@@ -533,7 +556,7 @@
             modalElement.addEventListener("hidden.bs.modal", function() {
                 resetModalForm("createBotLoginGroupModal");
                 setModalError(form, "");
-                platformSelect.value = window.activeBotLoginPlatform || "teams";
+                platformSelect.value = window.activeBotLoginPlatform || "google_meet";
                 configureCreateGroupForm();
             });
             modalElement.dataset.clearHandlerAttached = "true";
@@ -557,7 +580,7 @@
     }
 
     function restoreActivePlatform() {
-        const targetPlatform = window.activeBotLoginPlatform || "teams";
+        const targetPlatform = window.activeBotLoginPlatform || "google_meet";
         const targetTab = document.querySelector(`#bot-login-platform-tabs .nav-link[data-platform="${targetPlatform}"]`);
         if (!targetTab || targetTab.classList.contains("active")) {
             return;

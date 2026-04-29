@@ -41,10 +41,15 @@
                 {% if group.bot_logins.exists %}
                     <div class="{% if group.login_count > 5 %}bot-login-scroll{% endif %} mt-3">
                         <div class="table-responsive">
-                            <table class="table table-hover mb-0">
+                            <table class="table table-hover mb-0 bot-login-table">
+                                <colgroup>
+                                    <col style="width: 52%;">
+                                    <col style="width: 24%;">
+                                    <col class="bot-login-actions-col">
+                                </colgroup>
                                 <thead>
                                     <tr>
-                                        <th>Username</th>
+                                        <th>Email</th>
                                         <th>Last Used</th>
                                         <th>Actions</th>
                                     </tr>
@@ -52,7 +57,7 @@
                                 <tbody>
                         {% for login in group.bot_logins.all %}
                                     <tr>
-                                        <td class="text-break">{{ login.email }}</td>
+                                        <td class="bot-login-cell">{{ login.email }}</td>
                                         <td>
                                             {% if login.last_used_at %}
                                                 {{ login.last_used_at|date:"M d, Y H:i" }}
@@ -117,13 +122,13 @@
                         <div class="alert alert-danger js-modal-error d-none" role="alert"></div>
 
                         <div class="mb-3">
-                            <label for="teams-email-{{ group.object_id }}" class="form-label">Username</label>
+                            <label for="teams-email-{{ group.object_id }}" class="form-label">Email</label>
                             <input type="text"
                                 class="form-control"
                                 id="teams-email-{{ group.object_id }}"
                                 name="email"
                                 required
-                                placeholder="Enter the username for the Teams bot">
+                                placeholder="Enter the email for the Teams bot">
                         </div>
 
                         <div class="mb-3">

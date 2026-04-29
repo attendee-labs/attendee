@@ -41,7 +41,13 @@
                 {% if group.bot_logins.exists %}
                     <div class="{% if group.login_count > 5 %}bot-login-scroll{% endif %} mt-3">
                         <div class="table-responsive">
-                            <table class="table table-hover mb-0">
+                            <table class="table table-hover mb-0 bot-login-table">
+                                <colgroup>
+                                    <col style="width: 34%;">
+                                    <col style="width: 28%;">
+                                    <col style="width: 22%;">
+                                    <col class="bot-login-actions-col">
+                                </colgroup>
                                 <thead>
                                     <tr>
                                         <th>Email</th>
@@ -53,8 +59,8 @@
                                 <tbody>
                         {% for login in group.bot_logins.all %}
                                     <tr>
-                                        <td class="text-break">{{ login.email }}</td>
-                                        <td class="text-break">{{ login.workspace_domain|default:"-" }}</td>
+                                        <td class="bot-login-cell">{{ login.email }}</td>
+                                        <td class="bot-login-cell">{{ login.workspace_domain|default:"-" }}</td>
                                         <td>
                                             {% if login.last_used_at %}
                                                 {{ login.last_used_at|date:"M d, Y H:i" }}
