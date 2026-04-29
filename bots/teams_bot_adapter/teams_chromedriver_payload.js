@@ -1765,6 +1765,7 @@ function handleConversationEnd(eventDataObject) {
         headers: eventDataObject?.headers
     });
 
+    // Verify that this message is for our call
     const callId = window.callManager?.getCallId();
     const callIdFromEventDataObject = extractCallIdFromEventDataObject(eventDataObject);
     if (callId && callIdFromEventDataObject && callId !== callIdFromEventDataObject)
