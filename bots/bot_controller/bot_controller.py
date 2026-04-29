@@ -1693,6 +1693,11 @@ class BotController:
                 )
 
     def take_action_based_on_message_from_adapter(self, message):
+        if message.get("message") == BotAdapter.Messages.SAVE_SCREENSHOT_AND_MHTML_FILE:
+            logger.info("Received message to save screenshot and mhtml file")
+            self.save_debug_artifacts(message, self.bot_in_db.last_bot_event())
+            return
+
         if message.get("message") == BotAdapter.Messages.JOINING_BREAKOUT_ROOM:
             logger.info("Received message that bot is joining breakout room")
             BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.BOT_BEGAN_JOINING_BREAKOUT_ROOM)

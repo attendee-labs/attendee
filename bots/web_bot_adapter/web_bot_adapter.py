@@ -511,6 +511,16 @@ class WebBotAdapter(BotAdapter):
             }
         )
 
+    def send_screenshot_and_mhtml_file_message(self):
+        screenshot_path, mhtml_file_path, _ = self.capture_screenshot_and_mhtml_file()
+        self.send_message_callback(
+            {
+                "message": self.Messages.SAVE_SCREENSHOT_AND_MHTML_FILE,
+                "screenshot_path": screenshot_path,
+                "mhtml_file_path": mhtml_file_path,
+            }
+        )
+
     def send_incorrect_password_message(self):
         self.send_message_callback({"message": self.Messages.COULD_NOT_CONNECT_TO_MEETING})
 
