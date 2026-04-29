@@ -652,15 +652,8 @@ class GoogleMeetUIMethods:
                 # The cached Okta session may be invalid (e.g. revoked server-side). Evict it
                 # so the next attempt regenerates instead of reusing a likely-bad cookie.
                 self._clear_cached_okta_session()
-                # Take a screenshot and mhtml file
-                screenshot_path, mhtml_file_path, _ = self.capture_screenshot_and_mhtml_file()
-                self.send_message_callback(
-                    {
-                        "message": self.Messages.SAVE_SCREENSHOT_AND_MHTML_FILE,
-                        "screenshot_path": screenshot_path,
-                        "mhtml_file_path": mhtml_file_path,
-                    }
-                )
+                # Save a screenshot so we can see why the login failed
+                self.send_screenshot_and_mhtml_file_message()
                 raise UiLoginAttemptFailedException("No Google auth cookies were present", "login_to_google_meet_account_with_okta")
 
         logger.info(f"Google login complete. URL: {self.driver.current_url}")
