@@ -1759,10 +1759,26 @@ function handleConversationEnd(eventDataObject) {
     }
 
     realConsole?.log('handleConversationEnd, eventDataObjectBody', eventDataObjectBody);
+
+    const callId = window.callManager?.getCallId();
+    const callIdFromEventDataObject = extractCallIdFromEventDataObject(eventDataObject);
+
     window.ws?.sendJson({
         type: 'ConversationEndPayload',
-        body: eventDataObjectBody
+        body: eventDataObjectBody,
+        headers: eventDataObject?.headers,
+        callId: callId
     });
+
+    if (callId && callIdFromEventDataObject && callId !== callIdFromEventDataObject)
+    {
+        window.ws?.sendJson({
+            type: 'ConversationEndCallIdMismatch',
+            callId: callId,
+            callIdFromEventDataObject: callIdFromEventDataObject
+        });
+        return;
+    }
 
     const subCode = eventDataObjectBody?.subCode;
     const subCodeValueForDeniedRequestToJoin = 5854;
