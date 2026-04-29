@@ -1765,18 +1765,7 @@ function handleConversationEnd(eventDataObject) {
         headers: eventDataObject?.headers
     });
 
-    // Verify that this message is for our call
-    const callId = window.callManager?.getCallId();
-    const callIdFromEventDataObject = extractCallIdFromEventDataObject(eventDataObject);
-    if (callId && callIdFromEventDataObject && callId !== callIdFromEventDataObject)
-    {
-        window.ws?.sendJson({
-            type: 'ConversationEndCallIdMismatch',
-            callId: callId,
-            callIdFromEventDataObject: callIdFromEventDataObject
-        });
-        return;
-    }
+    const meetingId = extractCallIdFromEventDataObject(eventDataObject);
 
     const subCode = eventDataObjectBody?.subCode;
     const subCodeValueForDeniedRequestToJoin = 5854;
@@ -1787,7 +1776,8 @@ function handleConversationEnd(eventDataObject) {
         // For now this won't do anything, but good to have it in our logs. In the future, this should probably be the source of truth for these things, instead of the UI inspection.
         window.ws?.sendJson({
             type: 'MeetingStatusChange',
-            change: 'request_to_join_denied'
+            change: 'request_to_join_denied',
+            meetingId: meetingId
         });
         return;
     }
@@ -1797,7 +1787,8 @@ function handleConversationEnd(eventDataObject) {
         // For now this won't do anything, but good to have it in our logs. In the future, this should probably be the source of truth for these things, instead of the UI inspection.
         window.ws?.sendJson({
             type: 'MeetingStatusChange',
-            change: 'anonymous_join_disabled_for_tenant_by_policy'
+            change: 'anonymous_join_disabled_for_tenant_by_policy',
+            meetingId: meetingId
         });
         return;
     }
@@ -1805,7 +1796,8 @@ function handleConversationEnd(eventDataObject) {
     realConsole?.log('handleConversationEnd, sending meeting ended message');
     window.ws?.sendJson({
         type: 'MeetingStatusChange',
-        change: 'meeting_ended'
+        change: 'meeting_ended',
+        meetingId: meetingId
     });
 }
 
