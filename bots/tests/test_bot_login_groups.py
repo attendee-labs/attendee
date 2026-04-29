@@ -22,23 +22,23 @@ class TestBotLoginGroups(TestCase):
         selected_login = BotLoginGroup.first_available_login(project=self.project, platform=BotLoginPlatform.TEAMS, group_name="Group B")
         self.assertEqual(selected_login, expected_login)
 
-    def test_first_available_login_returns_none_when_named_group_has_no_active_logins(self):
+    def test_first_available_login_returns_login_from_named_group_even_if_inactive(self):
         group_without_active_logins = BotLoginGroup.objects.create(project=self.project, platform=BotLoginPlatform.TEAMS, name="Named Group")
-        BotLogin.objects.create(group=group_without_active_logins, email="inactive@example.com", is_active=False)
+        expected_login = BotLogin.objects.create(group=group_without_active_logins, email="inactive@example.com", is_active=False)
 
         other_group = BotLoginGroup.objects.create(project=self.project, platform=BotLoginPlatform.TEAMS, name="Other Group")
         BotLogin.objects.create(group=other_group, email="other@example.com")
 
         selected_login = BotLoginGroup.first_available_login(project=self.project, platform=BotLoginPlatform.TEAMS, group_name="Named Group")
 
-        self.assertIsNone(selected_login)
+        self.assertEqual(selected_login, expected_login)
 
-    def test_first_available_login_falls_back_to_next_group_when_name_not_provided(self):
+    def test_first_available_login_uses_oldest_group_when_name_not_provided(self):
         first_group = BotLoginGroup.objects.create(project=self.project, platform=BotLoginPlatform.GOOGLE_MEET, name="First Group")
-        BotLogin.objects.create(group=first_group, email="inactive@example.com", is_active=False)
+        expected_login = BotLogin.objects.create(group=first_group, email="inactive@example.com", is_active=False)
 
         second_group = BotLoginGroup.objects.create(project=self.project, platform=BotLoginPlatform.GOOGLE_MEET, name="Second Group")
-        expected_login = BotLogin.objects.create(group=second_group, email="active@example.com")
+        BotLogin.objects.create(group=second_group, email="active@example.com")
 
         selected_login = BotLoginGroup.first_available_login(project=self.project, platform=BotLoginPlatform.GOOGLE_MEET)
 
