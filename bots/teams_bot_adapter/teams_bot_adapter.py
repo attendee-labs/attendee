@@ -2,6 +2,7 @@ import json
 import logging
 import re
 import subprocess
+from typing import Callable
 
 from django.conf import settings
 from selenium.webdriver.common.keys import Keys
@@ -49,20 +50,22 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
         self,
         *args,
         teams_closed_captions_language: str | None,
-        teams_bot_login_credentials: dict | None,
+        teams_bot_login_is_available: bool,
         teams_bot_login_should_be_used: bool,
+        fetch_teams_bot_login_credentials_callback: Callable[[], dict],
         modify_dom_for_video_recording: bool,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
         self.teams_closed_captions_language = teams_closed_captions_language
-        self.teams_bot_login_credentials = teams_bot_login_credentials
-        self.teams_bot_login_should_be_used = teams_bot_login_should_be_used and teams_bot_login_credentials
+        self.teams_bot_login_is_available = teams_bot_login_is_available
+        self.teams_bot_login_should_be_used = teams_bot_login_should_be_used and teams_bot_login_is_available
+        self.fetch_teams_bot_login_credentials_callback = fetch_teams_bot_login_credentials_callback
         self.modify_dom_for_video_recording = modify_dom_for_video_recording
 
     def should_retry_joining_meeting_that_requires_login_by_logging_in(self):
         # If we don't have the ability to login, we can't retry
-        if not self.teams_bot_login_credentials:
+        if not self.teams_bot_login_is_available:
             logger.info("Meeting requires login, but Teams bot login credentials are not available, so we can't retry")
             return False
 

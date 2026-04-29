@@ -13,7 +13,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.files.storage import Storage, storages
 from django.db import models, transaction
-from django.db.models import Q
+from django.db.models import F, Q
 from django.db.utils import IntegrityError
 from django.utils import timezone
 from django.utils.crypto import get_random_string
@@ -59,10 +59,18 @@ class Project(models.Model):
         return self.name
 
 
-class GoogleMeetBotLoginGroup(models.Model):
+class BotLoginPlatform(models.TextChoices):
+    GOOGLE_MEET = "google_meet", "Google Meet"
+    TEAMS = "teams", "Teams"
+
+
+class BotLoginGroup(models.Model):
     OBJECT_ID_PREFIX = "gbg_"
-    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="google_meet_bot_login_groups")
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="bot_login_groups")
     object_id = models.CharField(max_length=32, unique=True, editable=False)
+
+    platform = models.CharField(max_length=32, choices=BotLoginPlatform.choices)
+    name = models.CharField(max_length=255)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -77,10 +85,38 @@ class GoogleMeetBotLoginGroup(models.Model):
     def __str__(self):
         return f"{self.project.name} - {self.object_id}"
 
+    @classmethod
+    def first_available_login(cls, project, platform, group_name=None):
+        """
+        Returns the least recently used BotLogin for the specified project and platform.
 
-class GoogleMeetBotLogin(models.Model):
+        - If a group_name is provided, only considers logins in that named group.
+        - If no group_name is given, selects the oldest group for that platform, and returns the first available login in it.
+
+        If no valid login is found, returns None.
+        """
+        groups = cls.objects.filter(project=project, platform=platform)
+        if group_name is not None:
+            groups = groups.filter(name=group_name)
+        group = groups.order_by("created_at", "id").first()
+
+        available_login = group.bot_logins.order_by(F("last_used_at").asc(nulls_first=True), "id").first()
+        if available_login:
+            return available_login
+
+        return None
+
+    class Meta:
+        # Table name kept from the original Google Meet-only bot login group. The model has been generalized to support multiple platforms but the underlying table has not been renamed.
+        db_table = "bots_googlemeetbotlogingroup"
+        constraints = [
+            models.UniqueConstraint(fields=["project", "platform", "name"], name="unique_bot_login_group_project_platform_name"),
+        ]
+
+
+class BotLogin(models.Model):
     OBJECT_ID_PREFIX = "gbl_"
-    group = models.ForeignKey(GoogleMeetBotLoginGroup, on_delete=models.CASCADE, related_name="google_meet_bot_logins")
+    group = models.ForeignKey(BotLoginGroup, on_delete=models.CASCADE, related_name="bot_logins")
     object_id = models.CharField(max_length=32, unique=True, editable=False)
 
     _encrypted_data = models.BinaryField(
@@ -88,21 +124,13 @@ class GoogleMeetBotLogin(models.Model):
         editable=False,  # Prevents editing through admin/forms
     )
 
-    workspace_domain = models.CharField(max_length=255)
+    workspace_domain = models.CharField(max_length=255, null=True, blank=True)
     email = models.CharField(max_length=255)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     is_active = models.BooleanField(default=True)
     last_used_at = models.DateTimeField(null=True, blank=True)
-
-    @property
-    def cert(self):
-        return self.get_credentials().get("cert")
-
-    @property
-    def private_key(self):
-        return self.get_credentials().get("private_key")
 
     def set_credentials(self, credentials_dict):
         """Encrypt and save credentials"""
@@ -130,7 +158,9 @@ class GoogleMeetBotLogin(models.Model):
         return f"{self.email} - {self.object_id}"
 
     class Meta:
-        # Within a Google Meet Bot Login Group, we don't want to allow Google Meet Bot Logins with the same email
+        # Table name kept from the original Google Meet-only bot login. The model has been generalized to support multiple platforms but the underlying table has not been renamed.
+        db_table = "bots_googlemeetbotlogin"
+        # Uniqueness constraint name also kept the same from original Google Meet bot login table, with the constraint itself not having changed.
         constraints = [
             models.UniqueConstraint(fields=["group", "email"], name="unique_google_meet_bot_login_email"),
         ]
@@ -843,11 +873,17 @@ class Bot(models.Model):
     def google_meet_login_mode_is_always(self):
         return self.settings.get("google_meet_settings", {}).get("login_mode", "always") == "always"
 
+    def google_meet_login_group_name(self):
+        return self.settings.get("google_meet_settings", {}).get("login_group_name")
+
     def teams_use_bot_login(self):
         return self.settings.get("teams_settings", {}).get("use_login", False)
 
     def teams_login_mode_is_always(self):
         return self.settings.get("teams_settings", {}).get("login_mode", "always") == "always"
+
+    def teams_login_group_name(self):
+        return self.settings.get("teams_settings", {}).get("login_group_name")
 
     def use_zoom_web_adapter(self):
         return self.settings.get("zoom_settings", {}).get("sdk", "native") == "web"
@@ -2554,7 +2590,6 @@ class Credentials(models.Model):
         OPENAI = 5, "OpenAI"
         ASSEMBLY_AI = 6, "Assembly AI"
         SARVAM = 7, "Sarvam"
-        TEAMS_BOT_LOGIN = 8, "Teams Bot Login"
         EXTERNAL_MEDIA_STORAGE = 9, "External Media Storage"
         ELEVENLABS = 10, "ElevenLabs"
         KYUTAI = 11, "Kyutai"

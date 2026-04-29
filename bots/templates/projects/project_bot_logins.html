@@ -1,0 +1,675 @@
+{% extends 'projects/sidebar.html' %}
+
+{% block content %}
+<style>
+    .bot-login-tabs .nav-link {
+        color: #6c757d !important;
+        border-right: 1px solid #dee2e6 !important;
+        border-radius: 0 !important;
+    }
+    .bot-login-tabs .nav-link.active {
+        color: #2e2f31 !important;
+        border-right: 1px solid #dee2e6 !important;
+    }
+    .bot-login-tabs .nav-item:last-child .nav-link {
+        border-right: none !important;
+    }
+    .bot-login-group-card {
+        border: 1px solid #dee2e6;
+        border-radius: 0.5rem;
+        background: #fff;
+    }
+    .bot-login-group-card + .bot-login-group-card {
+        margin-top: 1rem;
+    }
+    .bot-login-scroll .table {
+        margin-bottom: 0;
+    }
+    .bot-login-table {
+        table-layout: fixed;
+        width: 100%;
+    }
+    .bot-login-table th,
+    .bot-login-table td {
+        vertical-align: middle;
+    }
+    .bot-login-table .bot-login-cell {
+        word-break: break-word;
+        overflow-wrap: anywhere;
+    }
+    .bot-login-actions-col {
+        width: 140px;
+    }
+    .resend-btn {
+        --bs-btn-padding-y: .2rem;
+        --bs-btn-padding-x: .55rem;
+        --bs-btn-font-size: .825rem;
+        --bs-btn-border-radius: .25rem;
+        line-height: 1.2;
+    }
+    .bot-login-scroll {
+        max-height: 320px;
+        overflow-y: auto;
+    }
+    .bot-login-kicker {
+        font-size: 0.875rem;
+        color: #6c757d;
+    }
+    .bot-login-empty {
+        border: 1px dashed #ced4da;
+        border-radius: 0.5rem;
+        background: #fff;
+        color: #6c757d;
+        padding: 2rem 1.25rem;
+        text-align: center;
+    }
+</style>
+
+<div class="container mt-4">
+    <div class="mb-4">
+        <h2 class="mb-0">Bot Logins</h2>
+    </div>
+
+    <alert class="alert alert-info d-block" role="alert">
+        <i class="bi bi-info-circle me-2"></i>
+        Bot logins are organized into groups of signed-in accounts by platform. Create separate groups when you want to isolate logins by team, region, customer, or workspace.<br><br>
+        Each platform can contain multiple groups, and each group can contain multiple logins. When a meeting requires authentication, the bot uses a login from the group selected on the bot. If no login group is selected, the bot falls back to that platform's default group.
+    </alert>
+
+    <div class="d-flex justify-content-between align-items-end gap-3 mb-3 flex-wrap">
+        <ul class="nav nav-tabs bot-login-tabs mb-0" id="bot-login-platform-tabs" role="tablist">
+            <li class="nav-item" role="presentation">
+                <button class="nav-link active"
+                        id="google-meet-login-groups-tab"
+                        data-bs-toggle="tab"
+                        data-bs-target="#google-meet-login-groups-pane"
+                        data-platform="google_meet"
+                        type="button"
+                        role="tab"
+                        aria-controls="google-meet-login-groups-pane"
+                        aria-selected="true">
+                    Google Meet
+                </button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link"
+                        id="teams-login-groups-tab"
+                        data-bs-toggle="tab"
+                        data-bs-target="#teams-login-groups-pane"
+                        data-platform="teams"
+                        type="button"
+                        role="tab"
+                        aria-controls="teams-login-groups-pane"
+                        aria-selected="false">
+                    Teams
+                </button>
+            </li>
+        </ul>
+        <button class="btn btn-primary" type="button" data-bs-toggle="modal" data-bs-target="#createBotLoginGroupModal">
+            <i class="bi bi-plus-circle"></i> Create Group
+        </button>
+    </div>
+
+    <div class="card">
+        <div class="card-body">
+            <div class="tab-content">
+                <div class="tab-pane fade show active" id="google-meet-login-groups-pane" role="tabpanel" aria-labelledby="google-meet-login-groups-tab">
+                    {% include 'projects/partials/google_meet_bot_logins.html' %}
+                </div>
+                <div class="tab-pane fade" id="teams-login-groups-pane" role="tabpanel" aria-labelledby="teams-login-groups-tab">
+                    {% include 'projects/partials/teams_bot_logins.html' %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="createBotLoginGroupModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Create Bot Login Group</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form
+                    id="create-bot-login-group-form"
+                    action="{% url 'projects:create-bot-login-group' project.object_id %}"
+                    method="post">
+                    {% csrf_token %}
+                    <div class="alert alert-danger js-modal-error d-none" role="alert"></div>
+                    <div class="mb-3">
+                        <label for="create-bot-login-group-platform" class="form-label">Platform</label>
+                        <select class="form-select" id="create-bot-login-group-platform" name="platform" required>
+                            <option value="teams">Teams</option>
+                            <option value="google_meet">Google Meet</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label for="create-bot-login-group-name" class="form-label">Group Name</label>
+                        <input type="text"
+                               class="form-control"
+                               id="create-bot-login-group-name"
+                               name="name"
+                               required
+                               placeholder="e.g. Teams East-US, Google Meet US">
+                    </div>
+                    <div class="mt-3">
+                        <button type="submit" class="btn btn-primary">Create Group</button>
+                        <button type="button" class="btn btn-secondary ms-2" data-bs-dismiss="modal">
+                            Cancel
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="editBotLoginGroupModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="edit-bot-login-group-modal-title">Edit Bot Login Group</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="edit-bot-login-group-form" method="post">
+                    {% csrf_token %}
+                    <div class="alert alert-danger js-modal-error d-none" role="alert"></div>
+                    <div class="mb-3">
+                        <label for="edit-bot-login-group-name" class="form-label">Group Name</label>
+                        <input type="text" class="form-control" id="edit-bot-login-group-name" name="name" required>
+                    </div>
+                    <div class="mt-3">
+                        <button type="submit" class="btn btn-primary">Save</button>
+                        <button type="button" class="btn btn-secondary ms-2" data-bs-dismiss="modal">Cancel</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="deleteBotLoginEntityModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Confirm Deletion</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <p id="delete-bot-login-entity-message" class="mb-0"></p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <form id="delete-bot-login-entity-form" method="post">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn-danger" id="delete-bot-login-entity-submit">Delete</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    function hideModalById(modalId) {
+        const modalElement = document.getElementById(modalId);
+        if (!modalElement) {
+            return;
+        }
+
+        const modalInstance = bootstrap.Modal.getOrCreateInstance(modalElement);
+        if (modalInstance) {
+            modalInstance.hide();
+        }
+    }
+
+    function cleanupModalArtifacts() {
+        document.querySelectorAll(".modal-backdrop").forEach((backdrop) => backdrop.remove());
+        document.body.classList.remove("modal-open");
+        document.body.style.removeProperty("padding-right");
+        document.body.style.removeProperty("overflow");
+    }
+
+    function closeModalAndCleanup(modalId) {
+        hideModalById(modalId);
+        window.setTimeout(cleanupModalArtifacts, 150);
+    }
+
+    function resetModalForm(modalId) {
+        const modalElement = document.getElementById(modalId);
+        if (!modalElement) {
+            return;
+        }
+
+        const form = modalElement.querySelector("form");
+        if (form) {
+            form.reset();
+        }
+    }
+
+    function clearGoogleMeetCredentialFields(groupObjectId) {
+        const privateKeyPreview = document.getElementById(`private_key_preview_${groupObjectId}`);
+        const certPreview = document.getElementById(`cert_preview_${groupObjectId}`);
+        const privateKey = document.getElementById(`private_key_${groupObjectId}`);
+        const cert = document.getElementById(`cert_${groupObjectId}`);
+
+        if (privateKeyPreview) privateKeyPreview.style.display = "none";
+        if (certPreview) certPreview.style.display = "none";
+        if (privateKey) privateKey.value = "";
+        if (cert) cert.value = "";
+    }
+
+    function attachModalHiddenReset(modalPrefix, onHidden, root = document) {
+        root.querySelectorAll(`[id^="${modalPrefix}"]`).forEach((modalElement) => {
+            if (modalElement.dataset.clearHandlerAttached === "true") {
+                return;
+            }
+            modalElement.addEventListener("hidden.bs.modal", function() {
+                const suffix = modalElement.id.replace(modalPrefix, "");
+                onHidden(suffix);
+            });
+            modalElement.dataset.clearHandlerAttached = "true";
+        });
+    }
+
+    function attachFilePreviewHandlers(inputPrefix, hiddenFieldPrefix, previewPrefix, previewContentPrefix, root = document) {
+        root.querySelectorAll(`input[id^="${inputPrefix}"]`).forEach((fileInput) => {
+            if (fileInput.dataset.previewHandlerAttached === "true") {
+                return;
+            }
+            fileInput.addEventListener("change", function(event) {
+                const file = event.target.files[0];
+                const suffix = fileInput.id.replace(inputPrefix, "");
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onload = function(e) {
+                        const content = e.target.result;
+                        document.getElementById(`${hiddenFieldPrefix}${suffix}`).value = content;
+                        const preview = getFirstNLines(content, 2);
+                        document.getElementById(`${previewContentPrefix}${suffix}`).textContent = preview;
+                        document.getElementById(`${previewPrefix}${suffix}`).style.display = "block";
+                    };
+                    reader.readAsText(file);
+                }
+            });
+            fileInput.dataset.previewHandlerAttached = "true";
+        });
+    }
+
+    function validateGoogleMeetBotLoginForm() {
+        const activeModal = document.querySelector(".modal.show");
+        if (!activeModal) {
+            return true;
+        }
+
+        const privateKey = activeModal.querySelector('textarea[name="private_key"]')?.value;
+        const cert = activeModal.querySelector('textarea[name="cert"]')?.value;
+
+        if (!privateKey || privateKey.trim() === "") {
+            alert("Please upload a private key file.");
+            activeModal.querySelector('input[type="file"][id^="private_key_file"]')?.focus();
+            return false;
+        }
+
+        if (!cert || cert.trim() === "") {
+            alert("Please upload a certificate file.");
+            activeModal.querySelector('input[type="file"][id^="cert_file"]')?.focus();
+            return false;
+        }
+
+        return true;
+    }
+
+    function getFirstNLines(text, n) {
+        const lines = text.split("\n");
+        const firstLines = lines.slice(0, n);
+        return firstLines.join("\n");
+    }
+
+    function setModalError(form, message) {
+        const errorElement = form.querySelector(".js-modal-error");
+        if (!errorElement) {
+            return;
+        }
+
+        if (message) {
+            errorElement.textContent = message;
+            errorElement.classList.remove("d-none");
+            return;
+        }
+
+        errorElement.textContent = "";
+        errorElement.classList.add("d-none");
+    }
+
+    function swapPlatformSectionFromHtml(html, targetId) {
+        const template = document.createElement("template");
+        template.innerHTML = html.trim();
+        const nextSection = template.content.querySelector(`[id="${targetId}"]`);
+        const currentSection = document.getElementById(targetId);
+
+        if (nextSection && currentSection) {
+            currentSection.outerHTML = nextSection.outerHTML;
+        }
+    }
+
+    async function submitSectionForm({ form, modalId, targetId, validate, resetAfterSuccess = false, onSuccess }) {
+        setModalError(form, "");
+
+        if (validate && !validate()) {
+            return;
+        }
+
+        const formData = new FormData(form);
+
+        try {
+            const response = await fetch(form.action, {
+                method: "POST",
+                body: formData,
+                headers: {
+                    "X-CSRFToken": formData.get("csrfmiddlewaretoken"),
+                    "X-Requested-With": "XMLHttpRequest",
+                },
+            });
+
+            if (!response.ok) {
+                const message = await response.text();
+                setModalError(form, message || "An unexpected error occurred. Please try again.");
+                return;
+            }
+
+            const html = await response.text();
+            closeModalAndCleanup(modalId);
+            if (resetAfterSuccess) {
+                resetModalForm(modalId);
+            }
+            swapPlatformSectionFromHtml(html, targetId);
+            const nextSection = document.getElementById(targetId);
+            if (nextSection) {
+                initializeDynamicBotLoginContent(nextSection);
+            }
+            if (onSuccess) {
+                onSuccess();
+            }
+        } catch (error) {
+            console.error(error);
+            setModalError(form, "An unexpected error occurred. Please try again.");
+        }
+    }
+
+    async function submitSectionPost({ form, modalId, targetId }) {
+        const formData = new FormData(form);
+
+        try {
+            const response = await fetch(form.action, {
+                method: "POST",
+                body: formData,
+                headers: {
+                    "X-CSRFToken": formData.get("csrfmiddlewaretoken"),
+                    "X-Requested-With": "XMLHttpRequest",
+                },
+            });
+
+            if (!response.ok) {
+                return;
+            }
+
+            const html = await response.text();
+            closeModalAndCleanup(modalId);
+            swapPlatformSectionFromHtml(html, targetId);
+            const nextSection = document.getElementById(targetId);
+            if (nextSection) {
+                initializeDynamicBotLoginContent(nextSection);
+            }
+        } catch (error) {
+            console.error(error);
+        }
+    }
+
+    function initializeCreateBotLoginForms(root = document) {
+        root.querySelectorAll(".js-create-bot-login-form").forEach((form) => {
+            if (form.dataset.submitHandlerAttached === "true") {
+                return;
+            }
+
+            form.addEventListener("submit", async function(event) {
+                event.preventDefault();
+                await submitSectionForm({
+                    form,
+                    modalId: form.dataset.modalId,
+                    targetId: form.dataset.targetId,
+                    validate: form.dataset.requiresGoogleMeetValidation === "true" ? validateGoogleMeetBotLoginForm : null,
+                });
+            });
+
+            form.dataset.submitHandlerAttached = "true";
+        });
+    }
+
+    function initializeSharedEditGroupModal() {
+        const form = document.getElementById("edit-bot-login-group-form");
+        const input = document.getElementById("edit-bot-login-group-name");
+        const title = document.getElementById("edit-bot-login-group-modal-title");
+        if (!form || !input || !title) {
+            return;
+        }
+
+        if (form.dataset.submitHandlerAttached !== "true") {
+            form.addEventListener("submit", async function(event) {
+                event.preventDefault();
+                await submitSectionForm({
+                    form,
+                    modalId: "editBotLoginGroupModal",
+                    targetId: form.dataset.targetId,
+                });
+            });
+
+            form.dataset.submitHandlerAttached = "true";
+        }
+
+        if (form.dataset.resetHandlerAttached !== "true") {
+            document.getElementById("editBotLoginGroupModal").addEventListener("hidden.bs.modal", function() {
+                resetModalForm("editBotLoginGroupModal");
+                setModalError(form, "");
+            });
+            form.dataset.resetHandlerAttached = "true";
+        }
+    }
+
+    function initializeSharedDeleteEntityModal() {
+        const form = document.getElementById("delete-bot-login-entity-form");
+        if (!form) {
+            return;
+        }
+
+        if (form.dataset.submitHandlerAttached !== "true") {
+            form.addEventListener("submit", async function(event) {
+                event.preventDefault();
+                await submitSectionPost({
+                    form,
+                    modalId: "deleteBotLoginEntityModal",
+                    targetId: form.dataset.targetId,
+                });
+            });
+
+            form.dataset.submitHandlerAttached = "true";
+        }
+    }
+
+    function storeActivePlatform(platform) {
+        window.activeBotLoginPlatform = platform;
+    }
+
+    function configureCreateGroupForm() {
+        const form = document.getElementById("create-bot-login-group-form");
+        const platformSelect = document.getElementById("create-bot-login-group-platform");
+        if (!form || !platformSelect) {
+            return;
+        }
+
+        form.dataset.targetId = platformSelect.value === "google_meet" ? "google-meet-bot-login-section" : "teams-bot-login-section";
+    }
+
+    function initializeCreateGroupModal() {
+        const modalElement = document.getElementById("createBotLoginGroupModal");
+        const platformSelect = document.getElementById("create-bot-login-group-platform");
+        const form = document.getElementById("create-bot-login-group-form");
+        if (!modalElement || !platformSelect || !form) {
+            return;
+        }
+
+        if (platformSelect.dataset.changeHandlerAttached !== "true") {
+            platformSelect.addEventListener("change", configureCreateGroupForm);
+            platformSelect.dataset.changeHandlerAttached = "true";
+        }
+
+        if (form.dataset.submitHandlerAttached !== "true") {
+            form.addEventListener("submit", async function(event) {
+                event.preventDefault();
+                await submitSectionForm({
+                    form,
+                    modalId: "createBotLoginGroupModal",
+                    targetId: form.dataset.targetId,
+                    resetAfterSuccess: true,
+                    onSuccess: function() {
+                        platformSelect.value = window.activeBotLoginPlatform || "google_meet";
+                        configureCreateGroupForm();
+                    },
+                });
+            });
+
+            form.dataset.submitHandlerAttached = "true";
+        }
+
+        if (modalElement.dataset.showHandlerAttached !== "true") {
+            modalElement.addEventListener("show.bs.modal", function() {
+                setModalError(form, "");
+                platformSelect.value = window.activeBotLoginPlatform || "google_meet";
+                configureCreateGroupForm();
+            });
+            modalElement.dataset.showHandlerAttached = "true";
+        }
+
+        if (modalElement.dataset.clearHandlerAttached !== "true") {
+            modalElement.addEventListener("hidden.bs.modal", function() {
+                resetModalForm("createBotLoginGroupModal");
+                setModalError(form, "");
+                platformSelect.value = window.activeBotLoginPlatform || "google_meet";
+                configureCreateGroupForm();
+            });
+            modalElement.dataset.clearHandlerAttached = "true";
+        }
+
+        configureCreateGroupForm();
+    }
+
+    function initializePlatformTabs() {
+        document.querySelectorAll("#bot-login-platform-tabs [data-bs-toggle=\"tab\"]").forEach((tab) => {
+            if (tab.dataset.platformHandlerAttached === "true") {
+                return;
+            }
+
+            tab.addEventListener("shown.bs.tab", function(event) {
+                storeActivePlatform(event.target.dataset.platform);
+            });
+
+            tab.dataset.platformHandlerAttached = "true";
+        });
+    }
+
+    function restoreActivePlatform() {
+        const targetPlatform = window.activeBotLoginPlatform || "google_meet";
+        const targetTab = document.querySelector(`#bot-login-platform-tabs .nav-link[data-platform="${targetPlatform}"]`);
+        if (!targetTab || targetTab.classList.contains("active")) {
+            return;
+        }
+
+        bootstrap.Tab.getOrCreateInstance(targetTab).show();
+    }
+
+    function initializeSharedActionButtons() {
+        if (document.body.dataset.botLoginActionHandlersAttached === "true") {
+            return;
+        }
+
+        document.body.addEventListener("click", function(event) {
+            const editButton = event.target.closest(".js-open-edit-group-modal");
+            if (editButton) {
+                const form = document.getElementById("edit-bot-login-group-form");
+                const input = document.getElementById("edit-bot-login-group-name");
+                const title = document.getElementById("edit-bot-login-group-modal-title");
+                if (form && input && title) {
+                    form.action = editButton.dataset.action;
+                    form.dataset.targetId = editButton.dataset.targetId;
+                    input.value = editButton.dataset.groupName || "";
+                    title.textContent = `Edit ${editButton.dataset.platformLabel} Login Group`;
+                    setModalError(form, "");
+                }
+                return;
+            }
+
+            const deleteButton = event.target.closest(".js-open-delete-entity-modal");
+            if (deleteButton) {
+                const form = document.getElementById("delete-bot-login-entity-form");
+                const message = document.getElementById("delete-bot-login-entity-message");
+                const submit = document.getElementById("delete-bot-login-entity-submit");
+                if (form && message && submit) {
+                    form.action = deleteButton.dataset.action;
+                    form.dataset.targetId = deleteButton.dataset.targetId;
+                    message.textContent = `Are you sure you want to delete ${deleteButton.dataset.label}? This action cannot be undone.`;
+                    submit.textContent = deleteButton.dataset.confirmButtonLabel || "Delete";
+                }
+            }
+        });
+
+        document.body.dataset.botLoginActionHandlersAttached = "true";
+    }
+
+    function initializeDynamicBotLoginContent(root = document) {
+        attachFilePreviewHandlers("private_key_file_", "private_key_", "private_key_preview_", "private_key_preview_content_", root);
+        attachFilePreviewHandlers("cert_file_", "cert_", "cert_preview_", "cert_preview_content_", root);
+        initializeCreateBotLoginForms(root);
+
+        attachModalHiddenReset("teamsBotLoginCredentialsModal-", function(suffix) {
+            resetModalForm(`teamsBotLoginCredentialsModal-${suffix}`);
+            const form = document.querySelector(`#teamsBotLoginCredentialsModal-${suffix} form`);
+            if (form) {
+                setModalError(form, "");
+            }
+        }, root);
+
+        attachModalHiddenReset("googleMeetBotLoginModal-", function(suffix) {
+            resetModalForm(`googleMeetBotLoginModal-${suffix}`);
+            clearGoogleMeetCredentialFields(suffix);
+            const form = document.querySelector(`#googleMeetBotLoginModal-${suffix} form`);
+            if (form) {
+                setModalError(form, "");
+            }
+        }, root);
+    }
+
+    function initializeBotLoginGroupsPage() {
+        initializeSharedEditGroupModal();
+        initializeSharedDeleteEntityModal();
+        initializeSharedActionButtons();
+        initializeCreateGroupModal();
+        initializePlatformTabs();
+        restoreActivePlatform();
+        initializeDynamicBotLoginContent(document);
+    }
+
+    if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", initializeBotLoginGroupsPage);
+    } else {
+        initializeBotLoginGroupsPage();
+    }
+
+    document.body.addEventListener("htmx:afterSwap", function(event) {
+        if (event.detail.target.id === "google-meet-bot-login-section" || event.detail.target.id === "teams-bot-login-section") {
+            initializeDynamicBotLoginContent(event.detail.target);
+        }
+    });
+</script>
+{% endblock %}

@@ -71,11 +71,12 @@ class GoogleMeetSignInView(View):
 
         # Create and sign the SAMLResponse
         try:
+            credentials = google_meet_bot_login.get_credentials() or {}
             saml_response_b64, acs_url = _build_sign_in_saml_response(
                 saml_request_b64=saml_request_b64,
                 email_to_sign_in=google_meet_bot_login.email,
-                cert=google_meet_bot_login.cert,
-                private_key=google_meet_bot_login.private_key,
+                cert=credentials.get("cert"),
+                private_key=credentials.get("private_key"),
             )
         except Exception as e:
             logger.exception(f"Failed to create SAMLResponse: {e}")
