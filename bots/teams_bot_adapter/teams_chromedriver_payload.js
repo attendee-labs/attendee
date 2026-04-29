@@ -1759,17 +1759,14 @@ function handleConversationEnd(eventDataObject) {
     }
 
     realConsole?.log('handleConversationEnd, eventDataObjectBody', eventDataObjectBody);
-
-    const callId = window.callManager?.getCallId();
-    const callIdFromEventDataObject = extractCallIdFromEventDataObject(eventDataObject);
-
     window.ws?.sendJson({
         type: 'ConversationEndPayload',
         body: eventDataObjectBody,
-        headers: eventDataObject?.headers,
-        callId: callId
+        headers: eventDataObject?.headers
     });
 
+    const callId = window.callManager?.getCallId();
+    const callIdFromEventDataObject = extractCallIdFromEventDataObject(eventDataObject);
     if (callId && callIdFromEventDataObject && callId !== callIdFromEventDataObject)
     {
         window.ws?.sendJson({
