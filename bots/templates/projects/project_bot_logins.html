@@ -268,7 +268,7 @@
             }
             modalElement.addEventListener("hidden.bs.modal", function() {
                 const suffix = modalElement.id.replace(modalPrefix, "");
-                onHidden(suffix, modalElement);
+                onHidden(suffix);
             });
             modalElement.dataset.clearHandlerAttached = "true";
         });
