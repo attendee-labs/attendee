@@ -91,13 +91,13 @@
                                 <i class="bi bi-lock"></i> Credentials
                             </a>
                             <a class="nav-link ps-4"
-                               hx-get="{% url 'projects:project-bot-login-groups' project.object_id %}"
+                               hx-get="{% url 'projects:project-bot-logins' project.object_id %}"
                                hx-select="#content"
                                hx-target="#content"
                                hx-swap="outerHTML"
                                hx-push-url="true"
                                onclick="setActiveLink(this)">
-                                <i class="bi bi-person-badge"></i> Bot Login Groups
+                                <i class="bi bi-person-badge"></i> Bot Logins
                             </a>
                             {% if project.organization.is_webhooks_enabled %}
                             <a class="nav-link ps-4"

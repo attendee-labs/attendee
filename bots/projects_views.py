@@ -104,7 +104,7 @@ def get_calendar_event_for_user(user, calendar_event_object_id):
 
 
 def get_bot_login_group_for_user(project, user, bot_login_group_object_id):
-    bot_login_group = get_object_or_404(BotLoginGroup, object_id=bot_login_group_object_id, project__organization=project)
+    bot_login_group = get_object_or_404(BotLoginGroup, object_id=bot_login_group_object_id, project__organization=project.organization)
     # If you're an admin you can access any bot login group in the organization
     if user.role != UserRole.ADMIN and not ProjectAccess.objects.filter(project=bot_login_group.project, user=user).exists():
         raise PermissionDenied
@@ -112,7 +112,7 @@ def get_bot_login_group_for_user(project, user, bot_login_group_object_id):
 
 
 def get_bot_login_for_user(project, user, bot_login_object_id):
-    bot_login = get_object_or_404(BotLogin, object_id=bot_login_object_id, group__project__organization=project)
+    bot_login = get_object_or_404(BotLogin, object_id=bot_login_object_id, group__project__organization=project.organization)
     # If you're an admin you can access any bot login in the organization
     if user.role != UserRole.ADMIN and not ProjectAccess.objects.filter(project=bot_login.group.project, user=user).exists():
         raise PermissionDenied
@@ -158,9 +158,9 @@ def get_bot_login_group_context(project):
 
 def render_bot_login_groups_partial(request, platform, context):
     if platform == BotLoginPlatform.GOOGLE_MEET:
-        return render(request, "projects/partials/google_meet_bot_login_groups.html", context)
+        return render(request, "projects/partials/google_meet_bot_logins.html", context)
     if platform == BotLoginPlatform.TEAMS:
-        return render(request, "projects/partials/teams_bot_login_groups.html", context)
+        return render(request, "projects/partials/teams_bot_logins.html", context)
     return HttpResponse("Invalid bot login platform", status=400)
 
 
@@ -1449,7 +1449,7 @@ class ProjectBotLoginGroupsView(LoginRequiredMixin, ProjectUrlContextMixin, View
         project = get_project_for_user(user=request.user, project_object_id=object_id)
         context = self.get_project_context(object_id, project)
         context.update(get_bot_login_group_context(project))
-        return render(request, "projects/project_bot_login_groups.html", context)
+        return render(request, "projects/project_bot_logins.html", context)
 
 
 class CreateBotLoginGroupView(LoginRequiredMixin, ProjectUrlContextMixin, View):
@@ -1605,8 +1605,8 @@ class CreateTeamsBotLoginView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 
 class DeleteBotLoginView(LoginRequiredMixin, ProjectUrlContextMixin, View):
     def post(self, request, object_id, bot_login_object_id):
-        bot_login = get_bot_login_for_user(user=request.user, bot_login_object_id=bot_login_object_id)
         project = get_project_for_user(user=request.user, project_object_id=object_id)
+        bot_login = get_bot_login_for_user(project=project, user=request.user, bot_login_object_id=bot_login_object_id)
         if bot_login.group.project_id != project.id:
             return HttpResponse("Bot login does not belong to this project", status=404)
         platform = bot_login.group.platform
