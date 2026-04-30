@@ -184,13 +184,21 @@ class StyleManager {
     checkNeededInteractions() {
         // Check if bot has been removed from the meeting
         const removedFromMeetingElement = document.getElementById('calling-retry-screen-title');
-        if (removedFromMeetingElement && 
-            removedFromMeetingElement.textContent.includes("You've been removed from this meeting")) {
-            window.ws.sendJson({
-                type: 'MeetingStatusChange',
-                change: 'removed_from_meeting'
-            });
-            console.log('Bot was removed from meeting, sent notification');
+        const removedFromMeetingTexts = [
+            "You've been removed from this meeting",
+            "Removed from the meeting"
+        ];
+        if (removedFromMeetingElement) {
+            for (const text of removedFromMeetingTexts) {
+                if (removedFromMeetingElement.textContent.includes(text)) {
+                    window.ws.sendJson({
+                        type: 'MeetingStatusChange',
+                        change: 'removed_from_meeting'
+                    });
+                    console.log('Bot was removed from meeting, sent notification');
+                    break;
+                }
+            }
         }
 
         // We need to open the chat window to be able to track messages
