@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import re
 import subprocess
 
@@ -152,9 +153,11 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
         self.after_bot_can_record_meeting()
 
     def subclass_specific_initial_data_code(self):
+        enforce_teams_closed_captions_language_timeout_seconds = int(os.getenv("ENFORCE_TEAMS_CLOSED_CAPTIONS_LANGUAGE_TIMEOUT_SECONDS", "0"))
         return f"""
             window.teamsInitialData = {{
                 modifyDomForVideoRecording: {"true" if self.modify_dom_for_video_recording else "false"},
+                enforceTeamsClosedCaptionsLanguageTimeoutSeconds: {enforce_teams_closed_captions_language_timeout_seconds}
             }}
         """
 

@@ -3120,17 +3120,32 @@ class CallManager {
                     // Only do it if the interval is not already set
                     if (this.closedCaptionLanguageInterval)
                         return;
+                    // Check every 15 seconds whether the closed caption language is still the desired language
+                    // If it is not and we are within the enforcement window, then set the closed caption language to the desired language
+                    this.closedCaptionLanguageIntervalStartTime = Date.now();
                     this.closedCaptionLanguageInterval = setInterval(() => {
                         if (this.activeCall && this.activeCall.getClosedCaptionsLanguage) {
-                            if (this.activeCall.getClosedCaptionsLanguage() !== this.closedCaptionLanguage) {
+                            const currentLanguage = this.activeCall.getClosedCaptionsLanguage();
+                            if (currentLanguage !== this.closedCaptionLanguage) {
+                                const enforcementTimeoutSeconds = window.teamsInitialData?.enforceTeamsClosedCaptionsLanguageTimeoutSeconds || 0;
+                                const elapsedSeconds = (Date.now() - this.closedCaptionLanguageIntervalStartTime) / 1000;
+                                const withinEnforcementWindow = elapsedSeconds < enforcementTimeoutSeconds;
+
                                 window.ws?.sendJson({
                                     type: "closedCaptionsLanguageMismatch",
                                     desiredLanguage: this.closedCaptionLanguage,
-                                    currentLanguage: this.activeCall.getClosedCaptionsLanguage()
+                                    currentLanguage: currentLanguage,
+                                    elapsedSeconds: elapsedSeconds,
+                                    enforcementTimeoutSeconds: enforcementTimeoutSeconds,
+                                    willEnforce: withinEnforcementWindow
                                 });
+
+                                if (withinEnforcementWindow) {
+                                    this.activeCall.setClosedCaptionsLanguage(this.closedCaptionLanguage);
+                                }
                             }
                         }
-                    }, 60000);
+                    }, 15000);
                 }
             }, 10000);
             return true;
