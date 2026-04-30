@@ -184,13 +184,21 @@ class StyleManager {
     checkNeededInteractions() {
         // Check if bot has been removed from the meeting
         const removedFromMeetingElement = document.getElementById('calling-retry-screen-title');
-        if (removedFromMeetingElement && 
-            removedFromMeetingElement.textContent.includes("You've been removed from this meeting")) {
-            window.ws.sendJson({
-                type: 'MeetingStatusChange',
-                change: 'removed_from_meeting'
-            });
-            console.log('Bot was removed from meeting, sent notification');
+        const removedFromMeetingTexts = [
+            "You've been removed from this meeting",
+            "Removed from the meeting"
+        ];
+        if (removedFromMeetingElement) {
+            for (const text of removedFromMeetingTexts) {
+                if (removedFromMeetingElement.textContent.includes(text)) {
+                    window.ws.sendJson({
+                        type: 'MeetingStatusChange',
+                        change: 'removed_from_meeting'
+                    });
+                    console.log('Bot was removed from meeting, sent notification');
+                    break;
+                }
+            }
         }
 
         // We need to open the chat window to be able to track messages
@@ -1761,8 +1769,12 @@ function handleConversationEnd(eventDataObject) {
     realConsole?.log('handleConversationEnd, eventDataObjectBody', eventDataObjectBody);
     window.ws?.sendJson({
         type: 'ConversationEndPayload',
-        body: eventDataObjectBody
+        body: eventDataObjectBody,
+        headers: eventDataObject?.headers,
+        currentCallId: window.callManager?.getCallId()
     });
+
+    const meetingId = extractCallIdFromEventDataObject(eventDataObject);
 
     const subCode = eventDataObjectBody?.subCode;
     const subCodeValueForDeniedRequestToJoin = 5854;
@@ -1773,7 +1785,8 @@ function handleConversationEnd(eventDataObject) {
         // For now this won't do anything, but good to have it in our logs. In the future, this should probably be the source of truth for these things, instead of the UI inspection.
         window.ws?.sendJson({
             type: 'MeetingStatusChange',
-            change: 'request_to_join_denied'
+            change: 'request_to_join_denied',
+            meetingId: meetingId
         });
         return;
     }
@@ -1783,7 +1796,8 @@ function handleConversationEnd(eventDataObject) {
         // For now this won't do anything, but good to have it in our logs. In the future, this should probably be the source of truth for these things, instead of the UI inspection.
         window.ws?.sendJson({
             type: 'MeetingStatusChange',
-            change: 'anonymous_join_disabled_for_tenant_by_policy'
+            change: 'anonymous_join_disabled_for_tenant_by_policy',
+            meetingId: meetingId
         });
         return;
     }
@@ -1791,7 +1805,8 @@ function handleConversationEnd(eventDataObject) {
     realConsole?.log('handleConversationEnd, sending meeting ended message');
     window.ws?.sendJson({
         type: 'MeetingStatusChange',
-        change: 'meeting_ended'
+        change: 'meeting_ended',
+        meetingId: meetingId
     });
 }
 

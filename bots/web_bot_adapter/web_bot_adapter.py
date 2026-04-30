@@ -312,7 +312,13 @@ class WebBotAdapter(BotAdapter):
         self.left_meeting = True
         self.send_message_callback({"message": self.Messages.MEETING_ENDED})
 
-    def handle_meeting_ended(self):
+    def handle_meeting_ended(self, meeting_id):
+        # If a meeting id was passed in the meeting ended message and we have one on the backend, then
+        # only accept if they are equal
+        if meeting_id and self.meeting_uuid and meeting_id != self.meeting_uuid:
+            logger.info(f"meeting id mismatch in handle_meeting_ended. meeting_id from message: {meeting_id} self.meeting_uuid: {self.meeting_uuid}")
+            return
+
         self.left_meeting = True
         self.send_message_callback({"message": self.Messages.MEETING_ENDED})
 
@@ -409,7 +415,7 @@ class WebBotAdapter(BotAdapter):
                             if json_data.get("change") == "removed_from_meeting":
                                 self.handle_removed_from_meeting()
                             if json_data.get("change") == "meeting_ended":
-                                self.handle_meeting_ended()
+                                self.handle_meeting_ended(json_data.get("meetingId"))
                             if json_data.get("change") == "failed_to_join":
                                 self.handle_failed_to_join(json_data.get("reason"))
 
