@@ -3127,7 +3127,7 @@ class CallManager {
                         if (this.activeCall && this.activeCall.getClosedCaptionsLanguage) {
                             const currentLanguage = this.activeCall.getClosedCaptionsLanguage();
                             if (currentLanguage !== this.closedCaptionLanguage) {
-                                const enforcementTimeoutSeconds = window.teamsInitialData?.enforceTeamsClosedCaptionsLanguageTimeoutSeconds || 0;
+                                const enforcementTimeoutSeconds = window.teamsInitialData.enforceTeamsClosedCaptionsLanguageTimeoutSeconds || 0;
                                 const elapsedSeconds = (Date.now() - this.closedCaptionLanguageIntervalStartTime) / 1000;
                                 const withinEnforcementWindow = elapsedSeconds < enforcementTimeoutSeconds;
 
