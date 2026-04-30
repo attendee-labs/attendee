@@ -1,5 +1,6 @@
 import logging
 
+from django.db import transaction
 from drf_spectacular.openapi import OpenApiResponse
 from drf_spectacular.utils import OpenApiExample, OpenApiParameter, extend_schema
 from rest_framework import status
@@ -8,11 +9,12 @@ from rest_framework.pagination import CursorPagination
 from rest_framework.response import Response
 
 from .authentication import ApiKeyAuthentication
-from .models import ZoomOAuthConnection
-from .serializers import CreateZoomOAuthConnectionSerializer, ZoomOAuthConnectionSerializer
+from .models import ZoomOAuthConnection, ZoomOAuthConnectionStates
+from .serializers import CreateZoomOAuthConnectionSerializer, CreateZoomOAuthConnectionZakTokenSerializer, ZoomOAuthConnectionSerializer
 from .tasks.sync_zoom_oauth_connection_task import enqueue_sync_zoom_oauth_connection_task
 from .throttling import ProjectPostThrottle
 from .zoom_oauth_connections_api_utils import create_zoom_oauth_connection
+from .zoom_oauth_connections_utils import ZoomAPIAuthenticationError, ZoomAPIError, _handle_zoom_api_authentication_error, get_zak_token_via_zoom_oauth_connection
 
 logger = logging.getLogger(__name__)
 
@@ -185,3 +187,65 @@ class ZoomOAuthConnectionDetailPatchDeleteView(GenericAPIView):
             return Response(ZoomOAuthConnectionSerializer(zoom_oauth_connection).data, status=status.HTTP_200_OK)
         except ZoomOAuthConnection.DoesNotExist:
             return Response({"error": "Zoom OAuth Connection not found"}, status=status.HTTP_404_NOT_FOUND)
+
+
+class ZoomOAuthConnectionZakTokenView(GenericAPIView):
+    authentication_classes = [ApiKeyAuthentication]
+    throttle_classes = [ProjectPostThrottle]
+    serializer_class = CreateZoomOAuthConnectionZakTokenSerializer
+
+    @extend_schema(
+        operation_id="Create Zoom OAuth Connection ZAK Token",
+        summary="Create a Zoom ZAK token",
+        description="Generates a short-lived Zoom Meeting SDK ZAK token for a connected Zoom OAuth connection in the authenticated project.",
+        request=CreateZoomOAuthConnectionZakTokenSerializer,
+        responses={
+            200: OpenApiResponse(description="Zoom ZAK token generated successfully"),
+            400: OpenApiResponse(description="Invalid input or Zoom OAuth connection state"),
+            404: OpenApiResponse(description="Zoom OAuth Connection not found"),
+            502: OpenApiResponse(description="Zoom token generation failed"),
+        },
+        parameters=[
+            *TokenHeaderParameter,
+            OpenApiParameter(
+                name="object_id",
+                type=str,
+                location=OpenApiParameter.PATH,
+                description="Zoom OAuth Connection ID",
+                examples=[OpenApiExample("Zoom OAuth Connection ID Example", value="zoc_abcdef1234567890")],
+            ),
+        ],
+        tags=["Zoom OAuth Connections"],
+    )
+    def post(self, request, object_id):
+        serializer = self.get_serializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        zoom_oauth_connection = None
+        try:
+            with transaction.atomic():
+                zoom_oauth_connection = ZoomOAuthConnection.objects.select_for_update().get(object_id=object_id, zoom_oauth_app__project=request.auth.project)
+
+                if zoom_oauth_connection.state != ZoomOAuthConnectionStates.CONNECTED:
+                    return Response({"error": "Zoom OAuth Connection is not connected"}, status=status.HTTP_400_BAD_REQUEST)
+
+                zak_token = get_zak_token_via_zoom_oauth_connection(zoom_oauth_connection)
+
+            if not zak_token:
+                return Response({"error": "Zoom did not return a ZAK token"}, status=status.HTTP_502_BAD_GATEWAY)
+
+            return Response({"zak_token": zak_token}, status=status.HTTP_200_OK)
+
+        except ZoomOAuthConnection.DoesNotExist:
+            return Response({"error": "Zoom OAuth Connection not found"}, status=status.HTTP_404_NOT_FOUND)
+        except ZoomAPIAuthenticationError as e:
+            if zoom_oauth_connection:
+                _handle_zoom_api_authentication_error(zoom_oauth_connection, e)
+            return Response({"error": "Zoom OAuth Connection authentication failed"}, status=status.HTTP_400_BAD_REQUEST)
+        except ZoomAPIError:
+            logger.exception("Failed to generate Zoom ZAK token for zoom oauth connection %s", object_id)
+            return Response({"error": "Failed to generate Zoom ZAK token"}, status=status.HTTP_502_BAD_GATEWAY)
+        except Exception:
+            logger.exception("Unexpected error generating Zoom ZAK token for zoom oauth connection %s", object_id)
+            return Response({"error": "Failed to generate Zoom ZAK token"}, status=status.HTTP_502_BAD_GATEWAY)

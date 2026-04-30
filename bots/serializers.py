@@ -2301,3 +2301,15 @@ class ZoomOAuthConnectionSerializer(serializers.ModelSerializer):
             "last_attempted_sync_at",
         ]
         read_only_fields = fields
+
+
+class CreateZoomOAuthConnectionZakTokenSerializer(serializers.Serializer):
+    def validate(self, data):
+        expected_fields = set(self.fields.keys())
+        provided_fields = set(self.initial_data.keys())
+        unexpected_fields = provided_fields - expected_fields
+
+        if unexpected_fields:
+            raise serializers.ValidationError(f"Unexpected field(s): {', '.join(sorted(unexpected_fields))}. Allowed fields are: {', '.join(sorted(expected_fields))}")
+
+        return data

@@ -167,6 +167,12 @@ def _get_onbehalf_token(meeting_id: str, access_token: str) -> str:
     return response_data.get("token")
 
 
+def _get_zak_token(access_token: str) -> str | None:
+    base_url = "https://api.zoom.us/v2/users/me/token?type=zak"
+    response_data = _make_zoom_api_request(base_url, access_token, {})
+    return response_data.get("token")
+
+
 def _get_zoom_meetings(access_token: str) -> list[dict]:
     base_url = "https://api.zoom.us/v2/users/me/meetings"
     base_params = {
@@ -322,6 +328,11 @@ def get_onbehalf_token_via_zoom_oauth_app(bot: Bot) -> str | None:
     except Exception as e:
         logger.exception(f"Failed to get onbehalf token via zoom oauth app with user id {user_id_for_onbehalf_token}: {e}")
         return None
+
+
+def get_zak_token_via_zoom_oauth_connection(zoom_oauth_connection: ZoomOAuthConnection) -> str | None:
+    access_token = _get_access_token(zoom_oauth_connection)
+    return _get_zak_token(access_token)
 
 
 def get_zoom_tokens_via_zoom_oauth_app(bot: Bot) -> dict | None:
