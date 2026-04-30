@@ -1770,7 +1770,8 @@ function handleConversationEnd(eventDataObject) {
     window.ws?.sendJson({
         type: 'ConversationEndPayload',
         body: eventDataObjectBody,
-        headers: eventDataObject?.headers
+        headers: eventDataObject?.headers,
+        currentCallId: window.callManager?.getCallId()
     });
 
     const meetingId = extractCallIdFromEventDataObject(eventDataObject);
