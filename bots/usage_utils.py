@@ -1,12 +1,36 @@
 import calendar as cal_module
 from datetime import date, timedelta
 
-from django.db.models import Count, IntegerField, Sum
+from django.db.models import Count, IntegerField, OuterRef, Subquery, Sum
 from django.db.models.fields.json import KeyTextTransform
 from django.db.models.functions import Cast, ExtractMonth, ExtractYear, TruncDate
 from django.utils import timezone
 
-from .models import Bot, BotEvent, BotEventTypes
+from .models import Bot, BotEvent, BotEventTypes, BotStates
+
+
+# Bots don't have an ended_at column. We synthesize it from the BotEvent that
+# transitioned the bot to ENDED or FATAL_ERROR. This is the timestamp we use
+# for time-based partitioning so that scheduled bots are bucketed by when they
+# actually finished (and in-progress bots, which have no such event, are
+# excluded).
+_BOT_ENDED_AT_SUBQUERY = Subquery(
+    BotEvent.objects.filter(
+        bot=OuterRef("pk"),
+        new_state__in=[BotStates.ENDED, BotStates.FATAL_ERROR],
+    )
+    .order_by("created_at")
+    .values("created_at")[:1]
+)
+
+_BOT_EVENT_ENDED_AT_SUBQUERY = Subquery(
+    BotEvent.objects.filter(
+        bot=OuterRef("bot"),
+        new_state__in=[BotStates.ENDED, BotStates.FATAL_ERROR],
+    )
+    .order_by("created_at")
+    .values("created_at")[:1]
+)
 
 
 def _build_month_buckets(now):
@@ -42,8 +66,8 @@ def _build_month_buckets(now):
         result = {}
         for row in (
             qs.annotate(
-                y=ExtractYear("created_at"),
-                m=ExtractMonth("created_at"),
+                y=ExtractYear("ended_at"),
+                m=ExtractMonth("ended_at"),
             )
             .values("y", "m")
             .annotate(count=Count("id", distinct=True))
@@ -77,7 +101,7 @@ def _build_week_buckets(now):
 
     def counts_by_bucket(qs):
         result = {}
-        for row in qs.annotate(d=TruncDate("created_at")).values("d").annotate(count=Count("id", distinct=True)):
+        for row in qs.annotate(d=TruncDate("ended_at")).values("d").annotate(count=Count("id", distinct=True)):
             monday = row["d"] - timedelta(days=row["d"].weekday())
             result[monday] = result.get(monday, 0) + row["count"]
         return result
@@ -104,7 +128,7 @@ def _build_day_buckets(now):
 
     def counts_by_bucket(qs):
         result = {}
-        for row in qs.annotate(d=TruncDate("created_at")).values("d").annotate(count=Count("id", distinct=True)):
+        for row in qs.annotate(d=TruncDate("ended_at")).values("d").annotate(count=Count("id", distinct=True)):
             result[row["d"]] = row["count"]
         return result
 
@@ -139,7 +163,7 @@ def _build_duration_aggregator(interval):
 
         def durations_by_bucket(event_qs):
             result = {}
-            for row in event_qs.annotate(y=ExtractYear("created_at"), m=ExtractMonth("created_at")).values("y", "m").annotate(total=_DURATION_SUM):
+            for row in event_qs.annotate(y=ExtractYear("ended_at"), m=ExtractMonth("ended_at")).values("y", "m").annotate(total=_DURATION_SUM):
                 result[(row["y"], row["m"])] = row["total"] or 0
             return result
 
@@ -149,7 +173,7 @@ def _build_duration_aggregator(interval):
 
         def durations_by_bucket(event_qs):
             result = {}
-            for row in event_qs.annotate(d=TruncDate("created_at")).values("d").annotate(total=_DURATION_SUM):
+            for row in event_qs.annotate(d=TruncDate("ended_at")).values("d").annotate(total=_DURATION_SUM):
                 monday = row["d"] - timedelta(days=row["d"].weekday())
                 result[monday] = result.get(monday, 0) + (row["total"] or 0)
             return result
@@ -158,7 +182,7 @@ def _build_duration_aggregator(interval):
 
     def durations_by_bucket(event_qs):
         result = {}
-        for row in event_qs.annotate(d=TruncDate("created_at")).values("d").annotate(total=_DURATION_SUM):
+        for row in event_qs.annotate(d=TruncDate("ended_at")).values("d").annotate(total=_DURATION_SUM):
             result[row["d"]] = row["total"] or 0
         return result
 
@@ -220,9 +244,9 @@ def get_usage_data(project, interval, measure="count", platform=""):
 
     if measure == "time":
         durations_by_bucket = _build_duration_aggregator(interval)
-        event_qs = BotEvent.objects.filter(
+        event_qs = BotEvent.objects.annotate(ended_at=_BOT_EVENT_ENDED_AT_SUBQUERY).filter(
             bot__project=project,
-            bot__created_at__gte=start_date,
+            ended_at__gte=start_date,
             event_type=BotEventTypes.POST_PROCESSING_COMPLETED,
         )
         if platform_url_substring:
@@ -231,7 +255,7 @@ def get_usage_data(project, interval, measure="count", platform=""):
         total_values = [total_durations.get(key, 0) for key in bucket_keys]
         rows = [_build_heatmap_row("Total", total_values, "13, 110, 253", date_ranges, CATEGORY_FILTERS["Total"], formatter=_format_duration, search_term=platform_url_substring)]
     else:
-        base_qs = Bot.objects.filter(project=project, created_at__gte=start_date)
+        base_qs = Bot.objects.annotate(ended_at=_BOT_ENDED_AT_SUBQUERY).filter(project=project, ended_at__gte=start_date)
         if platform_url_substring:
             base_qs = base_qs.filter(meeting_url__icontains=platform_url_substring)
         fatal_error = counts_by_bucket(base_qs.filter(bot_events__event_type=BotEventTypes.FATAL_ERROR))
