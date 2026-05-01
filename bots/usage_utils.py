@@ -195,7 +195,7 @@ def _build_heatmap_row(label, values, color, date_ranges, category_params, forma
     for val, (start_str, end_str) in zip(values, date_ranges):
         intensity = val / max_val if max_val > 0 else 0
         bg = f"rgba({color}, {0.1 + intensity * 0.6})" if val > 0 else ""
-        qs = f"?start_date={start_str}&end_date={end_str}"
+        qs = f"?ended_at_start={start_str}&ended_at_end={end_str}"
         if category_params:
             qs += f"&{category_params}"
         if search_term:
