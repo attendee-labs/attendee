@@ -11,7 +11,6 @@ from time import sleep
 from urllib.parse import unquote, urlparse
 
 import numpy as np
-import requests
 from django.conf import settings
 from pyvirtualdisplay import Display
 from selenium import webdriver
@@ -638,20 +637,20 @@ class WebBotAdapter(BotAdapter):
 
         initial_data_code = f"window.initialData = {{websocketPort: {self.websocket_port}, videoFrameWidth: {self.video_frame_size[0]}, videoFrameHeight: {self.video_frame_size[1]}, botName: {json.dumps(self.display_name)}, addClickRipple: {'true' if self.should_create_debug_recording else 'false'}, recordingView: '{self.recording_view}', sendMixedAudio: {'true' if self.add_mixed_audio_chunk_callback else 'false'}, sendPerParticipantAudio: {'true' if self.add_audio_chunk_callback else 'false'}, perParticipantRealtimeVideoConfiguration: {json.dumps(self.per_participant_realtime_video_configuration.to_dict())}, sendPerParticipantVideo: {'true' if self.add_per_participant_video_frame_callback else 'false'}, collectCaptions: {'true' if self.upsert_caption_callback else 'false'}, recordParticipantSpeechStartStopEvents: {'true' if self.record_participant_speech_start_stop_events else 'false'}}}"
 
-        # Define the CDN libraries needed
-        CDN_LIBRARIES = ["https://cdnjs.cloudflare.com/ajax/libs/protobufjs/7.4.0/protobuf.min.js", "https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"]
-
-        # Download all library code
-        libraries_code = ""
-        for url in CDN_LIBRARIES:
-            response = requests.get(url)
-            if response.status_code == 200:
-                libraries_code += response.text + "\n"
-            else:
-                raise Exception(f"Failed to download library from {url}")
-
         # Get directory of current file
         current_dir = os.path.dirname(os.path.abspath(__file__))
+
+        # Load JS libraries bundled in the repo (avoid runtime CDN fetches)
+        JS_LIBRARIES = [
+            os.path.join(current_dir, "js_libs", "protobufjs", "7.4.0", "protobuf.min.js"),
+            os.path.join(current_dir, "js_libs", "pako", "2.1.0", "pako.min.js"),
+        ]
+
+        libraries_code = ""
+        for library_path in JS_LIBRARIES:
+            with open(library_path, "r") as library_file:
+                libraries_code += library_file.read() + "\n"
+
         # Read your payload using path relative to current file
         with open(os.path.join(current_dir, "..", self.get_chromedriver_payload_file_name()), "r") as file:
             payload_code = file.read()
