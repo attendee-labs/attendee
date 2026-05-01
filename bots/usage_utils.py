@@ -8,7 +8,6 @@ from django.utils import timezone
 
 from .models import Bot, BotEvent, BotEventTypes, BotStates
 
-
 # Bots don't have an ended_at column. We synthesize it from the BotEvent that
 # transitioned the bot to ENDED or FATAL_ERROR. This is the timestamp we use
 # for time-based partitioning so that scheduled bots are bucketed by when they
