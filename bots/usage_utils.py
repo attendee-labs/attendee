@@ -22,13 +22,19 @@ _BOT_ENDED_AT_SUBQUERY = Subquery(
     .values("created_at")[:1]
 )
 
-_BOT_EVENT_ENDED_AT_SUBQUERY = Subquery(
+# Per-bot duration pulled from the metadata of the terminal BotEvent (the one
+# that transitioned the bot to ENDED or FATAL_ERROR). Mirrors the event used
+# by _BOT_ENDED_AT_SUBQUERY so duration and ended_at always come from the
+# same row.
+_BOT_DURATION_SUBQUERY = Subquery(
     BotEvent.objects.filter(
-        bot=OuterRef("bot"),
+        bot=OuterRef("pk"),
         new_state__in=[BotStates.ENDED, BotStates.FATAL_ERROR],
     )
+    .annotate(_dur=Cast(KeyTextTransform("bot_duration_seconds", "metadata"), output_field=IntegerField()))
     .order_by("created_at")
-    .values("created_at")[:1]
+    .values("_dur")[:1],
+    output_field=IntegerField(),
 )
 
 
@@ -154,15 +160,12 @@ def _format_percent(value):
     return f"{value:.1f}%"
 
 
-_DURATION_SUM = Sum(Cast(KeyTextTransform("bot_duration_seconds", "metadata"), output_field=IntegerField()))
-
-
 def _build_duration_aggregator(interval):
     if interval == "months":
 
-        def durations_by_bucket(event_qs):
+        def durations_by_bucket(qs):
             result = {}
-            for row in event_qs.annotate(y=ExtractYear("ended_at"), m=ExtractMonth("ended_at")).values("y", "m").annotate(total=_DURATION_SUM):
+            for row in qs.annotate(y=ExtractYear("ended_at"), m=ExtractMonth("ended_at")).values("y", "m").annotate(total=Sum("bot_duration")):
                 result[(row["y"], row["m"])] = row["total"] or 0
             return result
 
@@ -170,18 +173,18 @@ def _build_duration_aggregator(interval):
 
     if interval == "weeks":
 
-        def durations_by_bucket(event_qs):
+        def durations_by_bucket(qs):
             result = {}
-            for row in event_qs.annotate(d=TruncDate("ended_at")).values("d").annotate(total=_DURATION_SUM):
+            for row in qs.annotate(d=TruncDate("ended_at")).values("d").annotate(total=Sum("bot_duration")):
                 monday = row["d"] - timedelta(days=row["d"].weekday())
                 result[monday] = result.get(monday, 0) + (row["total"] or 0)
             return result
 
         return durations_by_bucket
 
-    def durations_by_bucket(event_qs):
+    def durations_by_bucket(qs):
         result = {}
-        for row in event_qs.annotate(d=TruncDate("ended_at")).values("d").annotate(total=_DURATION_SUM):
+        for row in qs.annotate(d=TruncDate("ended_at")).values("d").annotate(total=Sum("bot_duration")):
             result[row["d"]] = row["total"] or 0
         return result
 
@@ -243,21 +246,12 @@ def get_usage_data(project, interval, measure="count", platform=""):
 
     if measure == "time":
         durations_by_bucket = _build_duration_aggregator(interval)
-        base_event_qs = BotEvent.objects.annotate(ended_at=_BOT_EVENT_ENDED_AT_SUBQUERY).filter(
-            bot__project=project,
-            ended_at__gte=start_date,
-            event_type__in=[
-                BotEventTypes.POST_PROCESSING_COMPLETED,
-                BotEventTypes.COULD_NOT_JOIN,
-                BotEventTypes.FATAL_ERROR,
-            ],
-        )
+        base_qs = Bot.objects.annotate(ended_at=_BOT_ENDED_AT_SUBQUERY, bot_duration=_BOT_DURATION_SUBQUERY).filter(project=project, ended_at__gte=start_date)
         if platform_url_substring:
-            base_event_qs = base_event_qs.filter(bot__meeting_url__icontains=platform_url_substring)
-
-        successful_durations = durations_by_bucket(base_event_qs.filter(event_type=BotEventTypes.POST_PROCESSING_COMPLETED))
-        could_not_join_durations = durations_by_bucket(base_event_qs.filter(event_type=BotEventTypes.COULD_NOT_JOIN))
-        fatal_error_durations = durations_by_bucket(base_event_qs.filter(event_type=BotEventTypes.FATAL_ERROR))
+            base_qs = base_qs.filter(meeting_url__icontains=platform_url_substring)
+        fatal_error_durations = durations_by_bucket(base_qs.filter(bot_events__event_type=BotEventTypes.FATAL_ERROR))
+        successful_durations = durations_by_bucket(base_qs.filter(bot_events__event_type=BotEventTypes.BOT_JOINED_MEETING).exclude(bot_events__event_type=BotEventTypes.FATAL_ERROR))
+        could_not_join_durations = durations_by_bucket(base_qs.exclude(bot_events__event_type=BotEventTypes.BOT_JOINED_MEETING).exclude(bot_events__event_type=BotEventTypes.FATAL_ERROR))
 
         categories = [
             ("Successful", successful_durations, "40, 167, 69"),
