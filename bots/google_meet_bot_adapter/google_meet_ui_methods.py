@@ -11,6 +11,7 @@ from django.conf import settings
 from selenium.common.exceptions import ElementNotInteractableException, NoSuchElementException, StaleElementReferenceException, TimeoutException
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
@@ -589,6 +590,24 @@ class GoogleMeetUIMethods:
                 logger.warning(f"Error logging in to Google Meet account. Clearing cookies and retrying... Attempts remaining: {num_attempts - attempt_index - 1}")
                 self.driver.delete_all_cookies()
 
+    def sign_in_to_gsuite_with_specific_email(self):
+        logger.info("Signing in to GSuite with specific email")
+        logger.info("Navigating to http://accounts.google.com/")
+        self.driver.get("http://accounts.google.com/")
+
+        # Then you need to fill in the email input
+        logger.info("Filling in the email input...")
+        # Look for input type = email and fill it in
+        session_email = self.google_meet_bot_login_session.get("login_email")
+        email_input = self.locate_element(step="email_input_for_google_account_sign_in", condition=EC.element_to_be_clickable((By.CSS_SELECTOR, 'input[type="email"]')), wait_time_seconds=10)
+        email_input.send_keys(session_email)
+
+        # Press the enter key to submit the email input
+        email_input.send_keys(Keys.ENTER)
+
+        logger.info("Login attempted, waiting for redirect...")
+        logger.info(f"Current URL: {self.driver.current_url}")
+
     # This is safer because it prevents the browser from navigating to an untrusted url.
     # It is a bit less robust though and requires SITE_DOMAIN to be set correctly.
     # So not making it the default, as self-hosters don't need it.
@@ -800,7 +819,13 @@ class GoogleMeetUIMethods:
         logger.info(f"Navigating to Google Meet set cookie URL: {google_meet_set_cookie_url}")
         self.driver.get(google_meet_set_cookie_url)
 
-        self.navigate_to_gmail_domain_url()
+        # There's two ways you can login to Google. You can type in a specific email or you can go to this
+        # special url for the whole domain
+        # The two ways have different tradeoffs, for now we'll decide which one to use based on an env var
+        if os.getenv("USE_SPECIFIC_EMAIL_FOR_SIGNED_IN_GOOGLE_MEET_BOTS", "false") == "true":
+            self.sign_in_to_gsuite_with_specific_email()
+        else:
+            self.navigate_to_gmail_domain_url()
 
         # Wait for cookies indicating that we have logged in successfully
         start_waiting_at = time.time()
