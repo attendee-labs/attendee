@@ -243,16 +243,36 @@ def get_usage_data(project, interval, measure="count", platform=""):
 
     if measure == "time":
         durations_by_bucket = _build_duration_aggregator(interval)
-        event_qs = BotEvent.objects.annotate(ended_at=_BOT_EVENT_ENDED_AT_SUBQUERY).filter(
+        base_event_qs = BotEvent.objects.annotate(ended_at=_BOT_EVENT_ENDED_AT_SUBQUERY).filter(
             bot__project=project,
             ended_at__gte=start_date,
-            event_type=BotEventTypes.POST_PROCESSING_COMPLETED,
+            event_type__in=[
+                BotEventTypes.POST_PROCESSING_COMPLETED,
+                BotEventTypes.COULD_NOT_JOIN,
+                BotEventTypes.FATAL_ERROR,
+            ],
         )
         if platform_url_substring:
-            event_qs = event_qs.filter(bot__meeting_url__icontains=platform_url_substring)
-        total_durations = durations_by_bucket(event_qs)
-        total_values = [total_durations.get(key, 0) for key in bucket_keys]
-        rows = [_build_heatmap_row("Total", total_values, "13, 110, 253", date_ranges, CATEGORY_FILTERS["Total"], formatter=_format_duration, search_term=platform_url_substring)]
+            base_event_qs = base_event_qs.filter(bot__meeting_url__icontains=platform_url_substring)
+
+        successful_durations = durations_by_bucket(base_event_qs.filter(event_type=BotEventTypes.POST_PROCESSING_COMPLETED))
+        could_not_join_durations = durations_by_bucket(base_event_qs.filter(event_type=BotEventTypes.COULD_NOT_JOIN))
+        fatal_error_durations = durations_by_bucket(base_event_qs.filter(event_type=BotEventTypes.FATAL_ERROR))
+
+        categories = [
+            ("Successful", successful_durations, "40, 167, 69"),
+            ("Could Not Join", could_not_join_durations, "255, 193, 7"),
+            ("Unexpected Error", fatal_error_durations, "220, 53, 69"),
+        ]
+
+        rows = []
+        total_values = [0] * len(bucket_keys)
+        for label_text, data, color in categories:
+            values = [data.get(key, 0) for key in bucket_keys]
+            for i, v in enumerate(values):
+                total_values[i] += v
+            rows.append(_build_heatmap_row(label_text, values, color, date_ranges, CATEGORY_FILTERS[label_text], formatter=_format_duration, search_term=platform_url_substring))
+        rows.append(_build_heatmap_row("Total", total_values, "13, 110, 253", date_ranges, CATEGORY_FILTERS["Total"], formatter=_format_duration, search_term=platform_url_substring))
     else:
         base_qs = Bot.objects.annotate(ended_at=_BOT_ENDED_AT_SUBQUERY).filter(project=project, ended_at__gte=start_date)
         if platform_url_substring:
