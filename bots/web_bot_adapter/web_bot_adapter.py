@@ -650,7 +650,7 @@ class WebBotAdapter(BotAdapter):
         for library_path in JS_LIBRARIES:
             with open(library_path, "r") as library_file:
                 libraries_code += library_file.read() + "\n"
-            logger.info(f"Loaded library from {library_path}")
+            logger.info(f"Loaded library from {os.path.relpath(library_path, current_dir)}")
 
         # Read your payload using path relative to current file
         with open(os.path.join(current_dir, "..", self.get_chromedriver_payload_file_name()), "r") as file:
