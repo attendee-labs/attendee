@@ -186,6 +186,8 @@ class BotController:
     def get_google_meet_bot_adapter(self):
         from bots.google_meet_bot_adapter import GoogleMeetBotAdapter
 
+        browser_audio_environment = self.screen_and_audio_recorder.browser_audio_environment() if self.screen_and_audio_recorder else {}
+
         return GoogleMeetBotAdapter(
             display_name=self.bot_in_db.name,
             send_message_callback=self.on_message_from_adapter,
@@ -214,12 +216,14 @@ class BotController:
             google_meet_bot_login_is_available=self.google_meet_bot_login_is_available(),
             google_meet_bot_login_should_be_used=self.bot_in_db.google_meet_login_mode_is_always(),
             create_google_meet_bot_login_session_callback=self.create_google_meet_bot_login_session,
+            browser_audio_environment=browser_audio_environment,
         )
 
     def get_teams_bot_adapter(self):
         from bots.teams_bot_adapter import TeamsBotAdapter
 
         teams_bot_login_credentials = self.bot_in_db.project.credentials.filter(credential_type=Credentials.CredentialTypes.TEAMS_BOT_LOGIN).first()
+        browser_audio_environment = self.screen_and_audio_recorder.browser_audio_environment() if self.screen_and_audio_recorder else {}
 
         return TeamsBotAdapter(
             display_name=self.bot_in_db.name,
@@ -248,6 +252,7 @@ class BotController:
             record_participant_speech_start_stop_events=self.bot_in_db.record_participant_speech_start_stop_events(),
             disable_incoming_video=self.disable_incoming_video_for_web_bots(),
             modify_dom_for_video_recording=self.should_modify_dom_for_video_recording_for_web_bots(),
+            browser_audio_environment=browser_audio_environment,
         )
 
     def get_zoom_oauth_credentials_via_credentials_record(self):
@@ -292,6 +297,7 @@ class BotController:
         from bots.zoom_web_bot_adapter import ZoomWebBotAdapter
 
         zoom_tokens = self.get_zoom_tokens()
+        browser_audio_environment = self.screen_and_audio_recorder.browser_audio_environment() if self.screen_and_audio_recorder else {}
 
         return ZoomWebBotAdapter(
             display_name=self.bot_in_db.name,
@@ -321,6 +327,7 @@ class BotController:
             modify_dom_for_video_recording=self.should_modify_dom_for_video_recording_for_web_bots(),
             record_participant_speech_start_stop_events=self.bot_in_db.record_participant_speech_start_stop_events(),
             zoom_tokens=zoom_tokens,
+            browser_audio_environment=browser_audio_environment,
         )
 
     def get_zoom_bot_adapter(self):
