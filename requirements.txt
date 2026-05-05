@@ -102,3 +102,4 @@ jsonpointer==3.0.0
 sentry-sdk[celery,django]>=2.0.0
 python-xlib==0.33
 django-csp==4.0
+pyotp==2.9.0

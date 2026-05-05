@@ -1,12 +1,41 @@
 import calendar as cal_module
 from datetime import date, timedelta
 
-from django.db.models import Count, IntegerField, Sum
+from django.db.models import Count, IntegerField, OuterRef, Subquery, Sum
 from django.db.models.fields.json import KeyTextTransform
 from django.db.models.functions import Cast, ExtractMonth, ExtractYear, TruncDate
 from django.utils import timezone
 
-from .models import Bot, BotEvent, BotEventTypes
+from .models import Bot, BotEvent, BotEventTypes, BotStates
+
+# Bots don't have an ended_at column. We synthesize it from the BotEvent that
+# transitioned the bot to ENDED or FATAL_ERROR. This is the timestamp we use
+# for time-based partitioning so that scheduled bots are bucketed by when they
+# actually finished (and in-progress bots, which have no such event, are
+# excluded).
+_BOT_ENDED_AT_SUBQUERY = Subquery(
+    BotEvent.objects.filter(
+        bot=OuterRef("pk"),
+        new_state__in=[BotStates.ENDED, BotStates.FATAL_ERROR],
+    )
+    .order_by("created_at")
+    .values("created_at")[:1]
+)
+
+# Per-bot duration pulled from the metadata of the terminal BotEvent (the one
+# that transitioned the bot to ENDED or FATAL_ERROR). Mirrors the event used
+# by _BOT_ENDED_AT_SUBQUERY so duration and ended_at always come from the
+# same row.
+_BOT_DURATION_SUBQUERY = Subquery(
+    BotEvent.objects.filter(
+        bot=OuterRef("pk"),
+        new_state__in=[BotStates.ENDED, BotStates.FATAL_ERROR],
+    )
+    .annotate(_dur=Cast(KeyTextTransform("bot_duration_seconds", "metadata"), output_field=IntegerField()))
+    .order_by("created_at")
+    .values("_dur")[:1],
+    output_field=IntegerField(),
+)
 
 
 def _build_month_buckets(now):
@@ -42,8 +71,8 @@ def _build_month_buckets(now):
         result = {}
         for row in (
             qs.annotate(
-                y=ExtractYear("created_at"),
-                m=ExtractMonth("created_at"),
+                y=ExtractYear("ended_at"),
+                m=ExtractMonth("ended_at"),
             )
             .values("y", "m")
             .annotate(count=Count("id", distinct=True))
@@ -77,7 +106,7 @@ def _build_week_buckets(now):
 
     def counts_by_bucket(qs):
         result = {}
-        for row in qs.annotate(d=TruncDate("created_at")).values("d").annotate(count=Count("id", distinct=True)):
+        for row in qs.annotate(d=TruncDate("ended_at")).values("d").annotate(count=Count("id", distinct=True)):
             monday = row["d"] - timedelta(days=row["d"].weekday())
             result[monday] = result.get(monday, 0) + row["count"]
         return result
@@ -104,7 +133,7 @@ def _build_day_buckets(now):
 
     def counts_by_bucket(qs):
         result = {}
-        for row in qs.annotate(d=TruncDate("created_at")).values("d").annotate(count=Count("id", distinct=True)):
+        for row in qs.annotate(d=TruncDate("ended_at")).values("d").annotate(count=Count("id", distinct=True)):
             result[row["d"]] = row["count"]
         return result
 
@@ -131,15 +160,12 @@ def _format_percent(value):
     return f"{value:.1f}%"
 
 
-_DURATION_SUM = Sum(Cast(KeyTextTransform("bot_duration_seconds", "metadata"), output_field=IntegerField()))
-
-
 def _build_duration_aggregator(interval):
     if interval == "months":
 
-        def durations_by_bucket(event_qs):
+        def durations_by_bucket(qs):
             result = {}
-            for row in event_qs.annotate(y=ExtractYear("created_at"), m=ExtractMonth("created_at")).values("y", "m").annotate(total=_DURATION_SUM):
+            for row in qs.annotate(y=ExtractYear("ended_at"), m=ExtractMonth("ended_at")).values("y", "m").annotate(total=Sum("bot_duration")):
                 result[(row["y"], row["m"])] = row["total"] or 0
             return result
 
@@ -147,33 +173,35 @@ def _build_duration_aggregator(interval):
 
     if interval == "weeks":
 
-        def durations_by_bucket(event_qs):
+        def durations_by_bucket(qs):
             result = {}
-            for row in event_qs.annotate(d=TruncDate("created_at")).values("d").annotate(total=_DURATION_SUM):
+            for row in qs.annotate(d=TruncDate("ended_at")).values("d").annotate(total=Sum("bot_duration")):
                 monday = row["d"] - timedelta(days=row["d"].weekday())
                 result[monday] = result.get(monday, 0) + (row["total"] or 0)
             return result
 
         return durations_by_bucket
 
-    def durations_by_bucket(event_qs):
+    def durations_by_bucket(qs):
         result = {}
-        for row in event_qs.annotate(d=TruncDate("created_at")).values("d").annotate(total=_DURATION_SUM):
+        for row in qs.annotate(d=TruncDate("ended_at")).values("d").annotate(total=Sum("bot_duration")):
             result[row["d"]] = row["total"] or 0
         return result
 
     return durations_by_bucket
 
 
-def _build_heatmap_row(label, values, color, date_ranges, category_params, formatter=None):
+def _build_heatmap_row(label, values, color, date_ranges, category_params, formatter=None, search_term=""):
     max_val = max(values) if values else 0
     cells = []
     for val, (start_str, end_str) in zip(values, date_ranges):
         intensity = val / max_val if max_val > 0 else 0
         bg = f"rgba({color}, {0.1 + intensity * 0.6})" if val > 0 else ""
-        qs = f"?start_date={start_str}&end_date={end_str}"
+        qs = f"?ended_at_start={start_str}&ended_at_end={end_str}"
         if category_params:
             qs += f"&{category_params}"
+        if search_term:
+            qs += f"&search={search_term}"
         display = formatter(val) if formatter else val
         cells.append({"value": val, "display": display, "bg": bg, "link": qs})
     return {"label": label, "cells": cells}
@@ -186,17 +214,27 @@ CATEGORY_FILTERS = {
     "Total": "",
 }
 
+PLATFORM_FILTERS = {
+    "zoom": "zoom.us",
+    "meet": "meet.google.com",
+    "teams": "teams.",
+}
 
-def get_usage_data(project, interval, measure="count"):
+
+def get_usage_data(project, interval, measure="count", platform=""):
     """
     Return the template context needed to render the usage heat map.
 
-    Returns a dict with keys: column_labels, usage_rows, interval, measure, subtitle.
+    Returns a dict with keys: column_labels, usage_rows, interval, measure, subtitle, platform.
     """
     if interval not in ("months", "weeks", "days"):
         interval = "months"
     if measure not in ("count", "time", "percent"):
         measure = "count"
+    if platform not in PLATFORM_FILTERS:
+        platform = ""
+
+    platform_url_substring = PLATFORM_FILTERS.get(platform, "")
 
     now = timezone.now()
     builders = {
@@ -208,16 +246,31 @@ def get_usage_data(project, interval, measure="count"):
 
     if measure == "time":
         durations_by_bucket = _build_duration_aggregator(interval)
-        event_qs = BotEvent.objects.filter(
-            bot__project=project,
-            bot__created_at__gte=start_date,
-            event_type=BotEventTypes.POST_PROCESSING_COMPLETED,
-        )
-        total_durations = durations_by_bucket(event_qs)
-        total_values = [total_durations.get(key, 0) for key in bucket_keys]
-        rows = [_build_heatmap_row("Total", total_values, "13, 110, 253", date_ranges, CATEGORY_FILTERS["Total"], formatter=_format_duration)]
+        base_qs = Bot.objects.annotate(ended_at=_BOT_ENDED_AT_SUBQUERY, bot_duration=_BOT_DURATION_SUBQUERY).filter(project=project, ended_at__gte=start_date)
+        if platform_url_substring:
+            base_qs = base_qs.filter(meeting_url__icontains=platform_url_substring)
+        fatal_error_durations = durations_by_bucket(base_qs.filter(bot_events__event_type=BotEventTypes.FATAL_ERROR))
+        successful_durations = durations_by_bucket(base_qs.filter(bot_events__event_type=BotEventTypes.BOT_JOINED_MEETING).exclude(bot_events__event_type=BotEventTypes.FATAL_ERROR))
+        could_not_join_durations = durations_by_bucket(base_qs.exclude(bot_events__event_type=BotEventTypes.BOT_JOINED_MEETING).exclude(bot_events__event_type=BotEventTypes.FATAL_ERROR))
+
+        categories = [
+            ("Successful", successful_durations, "40, 167, 69"),
+            ("Could Not Join", could_not_join_durations, "255, 193, 7"),
+            ("Unexpected Error", fatal_error_durations, "220, 53, 69"),
+        ]
+
+        rows = []
+        total_values = [0] * len(bucket_keys)
+        for label_text, data, color in categories:
+            values = [data.get(key, 0) for key in bucket_keys]
+            for i, v in enumerate(values):
+                total_values[i] += v
+            rows.append(_build_heatmap_row(label_text, values, color, date_ranges, CATEGORY_FILTERS[label_text], formatter=_format_duration, search_term=platform_url_substring))
+        rows.append(_build_heatmap_row("Total", total_values, "13, 110, 253", date_ranges, CATEGORY_FILTERS["Total"], formatter=_format_duration, search_term=platform_url_substring))
     else:
-        base_qs = Bot.objects.filter(project=project, created_at__gte=start_date)
+        base_qs = Bot.objects.annotate(ended_at=_BOT_ENDED_AT_SUBQUERY).filter(project=project, ended_at__gte=start_date)
+        if platform_url_substring:
+            base_qs = base_qs.filter(meeting_url__icontains=platform_url_substring)
         fatal_error = counts_by_bucket(base_qs.filter(bot_events__event_type=BotEventTypes.FATAL_ERROR))
         successful = counts_by_bucket(base_qs.filter(bot_events__event_type=BotEventTypes.BOT_JOINED_MEETING).exclude(bot_events__event_type=BotEventTypes.FATAL_ERROR))
         could_not_join = counts_by_bucket(base_qs.exclude(bot_events__event_type=BotEventTypes.BOT_JOINED_MEETING).exclude(bot_events__event_type=BotEventTypes.FATAL_ERROR))
@@ -240,12 +293,12 @@ def get_usage_data(project, interval, measure="count"):
         if measure == "percent":
             for label_text, values, color in category_values:
                 pct_values = [round(v / total_values[i] * 100, 1) if total_values[i] > 0 else 0 for i, v in enumerate(values)]
-                rows.append(_build_heatmap_row(label_text, pct_values, color, date_ranges, CATEGORY_FILTERS[label_text], formatter=_format_percent))
-            rows.append(_build_heatmap_row("Total", [100.0 if t > 0 else 0 for t in total_values], "13, 110, 253", date_ranges, CATEGORY_FILTERS["Total"], formatter=_format_percent))
+                rows.append(_build_heatmap_row(label_text, pct_values, color, date_ranges, CATEGORY_FILTERS[label_text], formatter=_format_percent, search_term=platform_url_substring))
+            rows.append(_build_heatmap_row("Total", [100.0 if t > 0 else 0 for t in total_values], "13, 110, 253", date_ranges, CATEGORY_FILTERS["Total"], formatter=_format_percent, search_term=platform_url_substring))
         else:
             for label_text, values, color in category_values:
-                rows.append(_build_heatmap_row(label_text, values, color, date_ranges, CATEGORY_FILTERS[label_text]))
-            rows.append(_build_heatmap_row("Total", total_values, "13, 110, 253", date_ranges, CATEGORY_FILTERS["Total"]))
+                rows.append(_build_heatmap_row(label_text, values, color, date_ranges, CATEGORY_FILTERS[label_text], search_term=platform_url_substring))
+            rows.append(_build_heatmap_row("Total", total_values, "13, 110, 253", date_ranges, CATEGORY_FILTERS["Total"], search_term=platform_url_substring))
 
     clipboard_dates = [dr[0] for dr in date_ranges]
 
@@ -256,4 +309,5 @@ def get_usage_data(project, interval, measure="count"):
         "measure": measure,
         "subtitle": subtitle,
         "clipboard_dates": clipboard_dates,
+        "platform": platform,
     }

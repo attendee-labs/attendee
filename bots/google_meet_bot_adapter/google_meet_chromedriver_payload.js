@@ -524,7 +524,7 @@ class StyleManager {
             let botMinimizeButton = null;
             for (let i = 0; i < numAttempts; i++) {
                 await new Promise(resolve => setTimeout(resolve, 100));
-                botMinimizeButton = document.querySelector('li[aria-label="Minimize"]');
+                botMinimizeButton = document.querySelector('li[aria-label="Minimize"], li[aria-label="Minimise"]');
                 if (botMinimizeButton) {
                     break;
                 }

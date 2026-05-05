@@ -11,7 +11,6 @@ from time import sleep
 from urllib.parse import unquote, urlparse
 
 import numpy as np
-import requests
 from django.conf import settings
 from pyvirtualdisplay import Display
 from selenium import webdriver
@@ -312,7 +311,13 @@ class WebBotAdapter(BotAdapter):
         self.left_meeting = True
         self.send_message_callback({"message": self.Messages.MEETING_ENDED})
 
-    def handle_meeting_ended(self):
+    def handle_meeting_ended(self, meeting_id):
+        # If a meeting id was passed in the meeting ended message and we have one on the backend, then
+        # only accept if they are equal
+        if meeting_id and self.meeting_uuid and meeting_id != self.meeting_uuid:
+            logger.info(f"meeting id mismatch in handle_meeting_ended. meeting_id from message: {meeting_id} self.meeting_uuid: {self.meeting_uuid}")
+            return
+
         self.left_meeting = True
         self.send_message_callback({"message": self.Messages.MEETING_ENDED})
 
@@ -409,7 +414,7 @@ class WebBotAdapter(BotAdapter):
                             if json_data.get("change") == "removed_from_meeting":
                                 self.handle_removed_from_meeting()
                             if json_data.get("change") == "meeting_ended":
-                                self.handle_meeting_ended()
+                                self.handle_meeting_ended(json_data.get("meetingId"))
                             if json_data.get("change") == "failed_to_join":
                                 self.handle_failed_to_join(json_data.get("reason"))
 
@@ -508,6 +513,16 @@ class WebBotAdapter(BotAdapter):
                 "message": self.Messages.LOGIN_ATTEMPT_FAILED,
                 "mhtml_file_path": mhtml_file_path,
                 "screenshot_path": screenshot_path,
+            }
+        )
+
+    def send_screenshot_and_mhtml_file_message(self):
+        screenshot_path, mhtml_file_path, _ = self.capture_screenshot_and_mhtml_file()
+        self.send_message_callback(
+            {
+                "message": self.Messages.SAVE_SCREENSHOT_AND_MHTML_FILE,
+                "screenshot_path": screenshot_path,
+                "mhtml_file_path": mhtml_file_path,
             }
         )
 
@@ -622,20 +637,21 @@ class WebBotAdapter(BotAdapter):
 
         initial_data_code = f"window.initialData = {{websocketPort: {self.websocket_port}, videoFrameWidth: {self.video_frame_size[0]}, videoFrameHeight: {self.video_frame_size[1]}, botName: {json.dumps(self.display_name)}, addClickRipple: {'true' if self.should_create_debug_recording else 'false'}, recordingView: '{self.recording_view}', sendMixedAudio: {'true' if self.add_mixed_audio_chunk_callback else 'false'}, sendPerParticipantAudio: {'true' if self.add_audio_chunk_callback else 'false'}, perParticipantRealtimeVideoConfiguration: {json.dumps(self.per_participant_realtime_video_configuration.to_dict())}, sendPerParticipantVideo: {'true' if self.add_per_participant_video_frame_callback else 'false'}, collectCaptions: {'true' if self.upsert_caption_callback else 'false'}, recordParticipantSpeechStartStopEvents: {'true' if self.record_participant_speech_start_stop_events else 'false'}}}"
 
-        # Define the CDN libraries needed
-        CDN_LIBRARIES = ["https://cdnjs.cloudflare.com/ajax/libs/protobufjs/7.4.0/protobuf.min.js", "https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"]
-
-        # Download all library code
-        libraries_code = ""
-        for url in CDN_LIBRARIES:
-            response = requests.get(url)
-            if response.status_code == 200:
-                libraries_code += response.text + "\n"
-            else:
-                raise Exception(f"Failed to download library from {url}")
-
         # Get directory of current file
         current_dir = os.path.dirname(os.path.abspath(__file__))
+
+        # Load JS libraries bundled in the repo (avoid runtime CDN fetches)
+        JS_LIBRARIES = [
+            os.path.join(current_dir, "js_libs", "protobufjs", "7.4.0", "protobuf.min.js"),
+            os.path.join(current_dir, "js_libs", "pako", "2.1.0", "pako.min.js"),
+        ]
+
+        libraries_code = ""
+        for library_path in JS_LIBRARIES:
+            with open(library_path, "r") as library_file:
+                libraries_code += library_file.read() + "\n"
+            logger.info(f"Loaded library from {os.path.relpath(library_path, current_dir)}")
+
         # Read your payload using path relative to current file
         with open(os.path.join(current_dir, "..", self.get_chromedriver_payload_file_name()), "r") as file:
             payload_code = file.read()

@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 import math
 import os
 import secrets
@@ -13,7 +14,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.files.storage import Storage, storages
 from django.db import models, transaction
-from django.db.models import Q
+from django.db.models import F, Q
 from django.db.utils import IntegrityError
 from django.utils import timezone
 from django.utils.crypto import get_random_string
@@ -22,6 +23,8 @@ from accounts.models import Organization, User, UserRole
 from bots.bot_pod_creator.bot_pod_spec import BotPodSpecType
 from bots.storage import StorageAlias, download_blob_from_remote_storage, remote_storage_url
 from bots.webhook_utils import trigger_webhook
+
+logger = logging.getLogger(__name__)
 
 
 class Project(models.Model):
@@ -59,6 +62,7 @@ class Project(models.Model):
         return self.name
 
 
+# This model is deprecated in favor of BotLoginGroup. Kept here to maintain backwards compatibility.
 class GoogleMeetBotLoginGroup(models.Model):
     OBJECT_ID_PREFIX = "gbg_"
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="google_meet_bot_login_groups")
@@ -78,6 +82,7 @@ class GoogleMeetBotLoginGroup(models.Model):
         return f"{self.project.name} - {self.object_id}"
 
 
+# This model is deprecated in favor of BotLogin. Kept here to maintain backwards compatibility.
 class GoogleMeetBotLogin(models.Model):
     OBJECT_ID_PREFIX = "gbl_"
     group = models.ForeignKey(GoogleMeetBotLoginGroup, on_delete=models.CASCADE, related_name="google_meet_bot_logins")
@@ -133,6 +138,127 @@ class GoogleMeetBotLogin(models.Model):
         # Within a Google Meet Bot Login Group, we don't want to allow Google Meet Bot Logins with the same email
         constraints = [
             models.UniqueConstraint(fields=["group", "email"], name="unique_google_meet_bot_login_email"),
+        ]
+
+
+class BotLoginPlatform(models.TextChoices):
+    GOOGLE_MEET = "google_meet", "Google Meet"
+    TEAMS = "teams", "Teams"
+
+
+# This model replaces the deprecated GoogleMeetBotLoginGroup.
+class BotLoginGroup(models.Model):
+    OBJECT_ID_PREFIX = "blg_"
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="bot_login_groups")
+    object_id = models.CharField(max_length=32, unique=True, editable=False)
+
+    platform = models.CharField(max_length=32, choices=BotLoginPlatform.choices)
+    name = models.CharField(max_length=255)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def save(self, *args, **kwargs):
+        if not self.object_id:
+            # Generate a random 16-character string
+            random_string = "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(16))
+            self.object_id = f"{self.OBJECT_ID_PREFIX}{random_string}"
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.project.name} - {self.object_id}"
+
+    @classmethod
+    def is_valid_name(cls, name):
+        """
+        Validates that a bot login group name only contains alphanumeric characters,
+        spaces, or underscores. Returns True if valid, False otherwise.
+        """
+        if not name:
+            return False
+        if not all(c.isalnum() or c in (" ", "_") for c in name):
+            return False
+        # Disallow names that are entirely spaces and/or underscores (must contain at least one alphanumeric character)
+        if not any(c.isalnum() for c in name):
+            return False
+        return True
+
+    @classmethod
+    def first_available_login(cls, project, platform, group_name=None):
+        """
+        Returns the least recently used BotLogin for the specified project and platform.
+
+        - If a group_name is provided, only considers logins in that named group.
+        - If no group_name is given, selects the oldest group for that platform, and returns the first available login in it.
+
+        If no valid login is found, returns None.
+        """
+        groups = cls.objects.filter(project=project, platform=platform)
+        if group_name is not None:
+            groups = groups.filter(name=group_name)
+        group = groups.order_by("created_at", "id").first()
+        if group is None:
+            return None
+
+        available_login = group.bot_logins.order_by(F("last_used_at").asc(nulls_first=True), "id").first()
+        if available_login:
+            return available_login
+
+        return None
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["project", "platform", "name"], name="unique_bot_login_group_project_platform_name"),
+        ]
+
+
+# This model replaces the deprecated GoogleMeetBotLogin.
+class BotLogin(models.Model):
+    OBJECT_ID_PREFIX = "bl_"
+    group = models.ForeignKey(BotLoginGroup, on_delete=models.CASCADE, related_name="bot_logins")
+    object_id = models.CharField(max_length=32, unique=True, editable=False)
+
+    _encrypted_data = models.BinaryField(
+        null=True,
+        editable=False,  # Prevents editing through admin/forms
+    )
+
+    workspace_domain = models.CharField(max_length=255, null=True, blank=True)
+    email = models.CharField(max_length=255)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    is_active = models.BooleanField(default=True)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+
+    def set_credentials(self, credentials_dict):
+        """Encrypt and save credentials"""
+        f = Fernet(settings.CREDENTIALS_ENCRYPTION_KEY)
+        json_data = json.dumps(credentials_dict)
+        self._encrypted_data = f.encrypt(json_data.encode())
+        self.save()
+
+    def get_credentials(self):
+        """Decrypt and return credentials"""
+        if not self._encrypted_data:
+            return None
+        f = Fernet(settings.CREDENTIALS_ENCRYPTION_KEY)
+        decrypted_data = f.decrypt(bytes(self._encrypted_data))
+        return json.loads(decrypted_data.decode())
+
+    def save(self, *args, **kwargs):
+        if not self.object_id:
+            # Generate a random 16-character string
+            random_string = "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(16))
+            self.object_id = f"{self.OBJECT_ID_PREFIX}{random_string}"
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.email} - {self.object_id}"
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["group", "email"], name="unique_bot_login_email"),
         ]
 
 
@@ -846,11 +972,17 @@ class Bot(models.Model):
     def google_meet_ui_interaction_mode(self):
         return self.settings.get("google_meet_settings", {}).get("ui_interaction_mode", "humanized")
 
+    def google_meet_login_group_name(self):
+        return self.settings.get("google_meet_settings", {}).get("login_group_name")
+
     def teams_use_bot_login(self):
         return self.settings.get("teams_settings", {}).get("use_login", False)
 
     def teams_login_mode_is_always(self):
         return self.settings.get("teams_settings", {}).get("login_mode", "always") == "always"
+
+    def teams_login_group_name(self):
+        return self.settings.get("teams_settings", {}).get("login_group_name")
 
     def use_zoom_web_adapter(self):
         return self.settings.get("zoom_settings", {}).get("sdk", "native") == "web"
@@ -1285,6 +1417,7 @@ class BotEventSubTypes(models.IntegerChoices):
     COULD_NOT_JOIN_MEETING_BLOCKED_BY_CAPTCHA = 28, "Bot could not join meeting - Blocked by captcha (Verification challenge)."
     BOT_RECORDING_PERMISSION_DENIED_WEBINAR_ATTENDEE_NEEDS_PANELIST_PROMOTION = 29, "Bot recording permission denied - Bot joined webinar as attendee and needs to be promoted to panelist to record"
     COULD_NOT_JOIN_MEETING_ZOOM_APP_CANNOT_JOIN_ANONYMOUSLY = 30, "Bot could not join Zoom meeting - Zoom app cannot join anonymously. To fix pass OBF or ZAK token. See https://docs.attendee.dev/guides/zoom/zoomoauth"
+    FATAL_ERROR_GLOBAL_RUNTIME_TIMEOUT = 31, "Fatal error - Global runtime timeout"
 
     @classmethod
     def sub_type_to_api_code(cls, value):
@@ -1320,6 +1453,7 @@ class BotEventSubTypes(models.IntegerChoices):
             cls.COULD_NOT_JOIN_MEETING_BLOCKED_BY_CAPTCHA: "blocked_by_captcha",
             cls.BOT_RECORDING_PERMISSION_DENIED_WEBINAR_ATTENDEE_NEEDS_PANELIST_PROMOTION: "webinar_attendee_needs_panelist_promotion",
             cls.COULD_NOT_JOIN_MEETING_ZOOM_APP_CANNOT_JOIN_ANONYMOUSLY: "zoom_app_cannot_join_anonymously",
+            cls.FATAL_ERROR_GLOBAL_RUNTIME_TIMEOUT: "global_runtime_timeout",
         }
         return mapping.get(value)
 
@@ -1360,7 +1494,7 @@ class BotEvent(models.Model):
             models.CheckConstraint(
                 check=(
                     # For FATAL_ERROR event type, must have one of the valid event subtypes
-                    (Q(event_type=BotEventTypes.FATAL_ERROR) & (Q(event_sub_type=BotEventSubTypes.FATAL_ERROR_PROCESS_TERMINATED) | Q(event_sub_type=BotEventSubTypes.FATAL_ERROR_ATTENDEE_INTERNAL_ERROR) | Q(event_sub_type=BotEventSubTypes.FATAL_ERROR_OUT_OF_CREDITS) | Q(event_sub_type=BotEventSubTypes.FATAL_ERROR_RTMP_CONNECTION_FAILED) | Q(event_sub_type=BotEventSubTypes.FATAL_ERROR_UI_ELEMENT_NOT_FOUND) | Q(event_sub_type=BotEventSubTypes.FATAL_ERROR_HEARTBEAT_TIMEOUT) | Q(event_sub_type=BotEventSubTypes.FATAL_ERROR_BOT_NOT_LAUNCHED)))
+                    (Q(event_type=BotEventTypes.FATAL_ERROR) & (Q(event_sub_type=BotEventSubTypes.FATAL_ERROR_PROCESS_TERMINATED) | Q(event_sub_type=BotEventSubTypes.FATAL_ERROR_ATTENDEE_INTERNAL_ERROR) | Q(event_sub_type=BotEventSubTypes.FATAL_ERROR_OUT_OF_CREDITS) | Q(event_sub_type=BotEventSubTypes.FATAL_ERROR_RTMP_CONNECTION_FAILED) | Q(event_sub_type=BotEventSubTypes.FATAL_ERROR_UI_ELEMENT_NOT_FOUND) | Q(event_sub_type=BotEventSubTypes.FATAL_ERROR_HEARTBEAT_TIMEOUT) | Q(event_sub_type=BotEventSubTypes.FATAL_ERROR_GLOBAL_RUNTIME_TIMEOUT) | Q(event_sub_type=BotEventSubTypes.FATAL_ERROR_BOT_NOT_LAUNCHED)))
                     |
                     # For COULD_NOT_JOIN event type, must have one of the valid event subtypes
                     (
@@ -1861,6 +1995,22 @@ class BotEventManager:
                             "created_at": event.created_at.isoformat(),
                         },
                     )
+
+                    # If we are configured to log bot state changes, log it
+                    if settings.LOG_BOT_STATE_CHANGES:
+                        logger.info(
+                            "Bot state change",
+                            extra={
+                                "bot_id": bot.object_id,
+                                "bot_metadata": bot.metadata,
+                                "event_type": BotEventTypes.type_to_api_code(event_type),
+                                "event_sub_type": BotEventSubTypes.sub_type_to_api_code(event_sub_type),
+                                "event_metadata": event_metadata,
+                                "old_state": BotStates.state_to_api_code(old_state),
+                                "new_state": BotStates.state_to_api_code(bot.state),
+                                "created_at": event.created_at.isoformat(),
+                            },
+                        )
 
                     return event
 
@@ -2555,7 +2705,7 @@ class Credentials(models.Model):
         OPENAI = 5, "OpenAI"
         ASSEMBLY_AI = 6, "Assembly AI"
         SARVAM = 7, "Sarvam"
-        TEAMS_BOT_LOGIN = 8, "Teams Bot Login"
+        TEAMS_BOT_LOGIN = 8, "Teams Bot Login"  # Deprecrated in favor of BotLogin
         EXTERNAL_MEDIA_STORAGE = 9, "External Media Storage"
         ELEVENLABS = 10, "ElevenLabs"
         KYUTAI = 11, "Kyutai"

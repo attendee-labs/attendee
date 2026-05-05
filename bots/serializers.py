@@ -727,6 +727,11 @@ GOOGLE_MEET_SETTINGS_SCHEMA = {
             "description": "The UI interaction mode for the Google Meet bot. 'humanized' performs more human-like interactions to evade bot detection, but the bot will take about 10 seconds longer to join the meeting.",
             "default": "humanized",
         },
+        "login_group_name": {
+            "type": ["string", "null"],
+            "description": "Optional bot login group name to use for Google Meet signed-in bot selection. If no group is specified, the oldest Google Meet group will be selected.",
+            "default": None,
+        },
     },
     "required": [],
     "additionalProperties": False,
@@ -751,6 +756,11 @@ TEAMS_SETTINGS_SCHEMA = {
             "enum": ["always", "only_if_required"],
             "description": "The mode to use for the Teams bot login. 'always' means the bot will always login, 'only_if_required' means the bot will only login if the meeting requires authentication.",
             "default": "always",
+        },
+        "login_group_name": {
+            "type": ["string", "null"],
+            "description": "Optional bot login group name to use for Teams signed-in bot selection. If no group is specified, the oldest Teams group will be selected.",
+            "default": None,
         },
     },
     "required": [],
@@ -1444,7 +1454,7 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
     google_meet_settings = GoogleMeetSettingsJSONField(
         help_text="The Google Meet-specific settings for the bot.",
         required=False,
-        default={"use_login": False, "login_mode": "always", "ui_interaction_mode": "humanized"},
+        default={"use_login": False, "login_mode": "always", "ui_interaction_mode": "humanized", "login_group_name": None},
     )
 
     def validate_google_meet_settings(self, value):
@@ -1452,7 +1462,7 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
             return value
 
         # Define defaults
-        defaults = {"use_login": False, "login_mode": "always", "ui_interaction_mode": "humanized"}
+        defaults = {"use_login": False, "login_mode": "always", "ui_interaction_mode": "humanized", "login_group_name": None}
 
         try:
             jsonschema.validate(instance=value, schema=GOOGLE_MEET_SETTINGS_SCHEMA)
@@ -1470,7 +1480,7 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
     teams_settings = TeamsSettingsJSONField(
         help_text="The Microsoft Teams-specific settings for the bot.",
         required=False,
-        default={"use_login": False, "login_mode": "always"},
+        default={"use_login": False, "login_mode": "always", "login_group_name": None},
     )
 
     def validate_teams_settings(self, value):
@@ -1478,7 +1488,7 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
             return value
 
         # Define defaults
-        defaults = {"use_login": False, "login_mode": "always"}
+        defaults = {"use_login": False, "login_mode": "always", "login_group_name": None}
 
         try:
             jsonschema.validate(instance=value, schema=TEAMS_SETTINGS_SCHEMA)

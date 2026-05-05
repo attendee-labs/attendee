@@ -2679,11 +2679,20 @@ components:
                 performs more human-like interactions to evade bot detection, but
                 the bot will take about 10 seconds longer to join the meeting.
               default: humanized
+            login_group_name:
+              type:
+              - string
+              - 'null'
+              description: Optional bot login group name to use for Google Meet signed-in
+                bot selection. If no group is specified, the oldest Google Meet group
+                will be selected.
+              default: null
           required: []
           additionalProperties: false
           default:
             use_login: false
             login_mode: always
+            login_group_name: null
           description: The Google Meet-specific settings for the bot.
         teams_settings:
           type: object
@@ -2703,11 +2712,20 @@ components:
                 the bot will always login, 'only_if_required' means the bot will only
                 login if the meeting requires authentication.
               default: always
+            login_group_name:
+              type:
+              - string
+              - 'null'
+              description: Optional bot login group name to use for Teams signed-in
+                bot selection. If no group is specified, the oldest Teams group will
+                be selected.
+              default: null
           required: []
           additionalProperties: false
           default:
             use_login: false
             login_mode: always
+            login_group_name: null
           description: The Microsoft Teams-specific settings for the bot.
         zoom_settings:
           type: object
