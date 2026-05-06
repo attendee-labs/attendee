@@ -602,7 +602,9 @@ def diarization_agreement(results_a: list[dict], results_b: list[dict]) -> dict:
         total_duration: sum of word durations considered
         agreement_duration: sum of durations where speakers agreed
 
-    Raises ValueError if the two results do not cover the same set of words.
+    If the two results do not cover the same set of words (or words don't
+    align), logs a warning and returns a zero-agreement result so the caller
+    falls back to the non-ML-diarization path.
     """
 
     def flatten(results):
@@ -616,8 +618,18 @@ def diarization_agreement(results_a: list[dict], results_b: list[dict]) -> dict:
     flat_a = flatten(results_a)
     flat_b = flatten(results_b)
 
+    zero_agreement = {
+        "num_words": 0,
+        "num_agreements": 0,
+        "word_accuracy": 0.0,
+        "duration_weighted_accuracy": 0.0,
+        "total_duration": 0.0,
+        "agreement_duration": 0.0,
+    }
+
     if len(flat_a) != len(flat_b):
-        raise ValueError(f"Word count mismatch: {len(flat_a)} vs {len(flat_b)}")
+        logger.warning(f"Diarization agreement word count mismatch: {len(flat_a)} vs {len(flat_b)}. Treating as zero agreement so caller falls back.")
+        return zero_agreement
 
     num_words = len(flat_a)
     if num_words == 0:
@@ -638,7 +650,8 @@ def diarization_agreement(results_a: list[dict], results_b: list[dict]) -> dict:
         # Sanity-check that flattened orderings line up. Word start/end in
         # each utterance are relative to that utterance, so compare by text.
         if word_a.get("word") != word_b.get("word"):
-            raise ValueError(f"Word alignment mismatch: {word_a.get('word')!r} vs {word_b.get('word')!r}")
+            logger.warning(f"Diarization agreement word alignment mismatch: '{word_a.get('word')}' vs '{word_b.get('word')}'. Treating as zero agreement so caller falls back.")
+            return zero_agreement
 
         duration = max(0.0, float(word_a["end"]) - float(word_a["start"]))
         total_duration += duration
