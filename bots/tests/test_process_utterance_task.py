@@ -2277,13 +2277,10 @@ class CustomAsyncV2ProviderTest(TransactionTestCase):
 
     @mock.patch("bots.tasks.process_utterance_task.requests.post")
     @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3-audio-data")
-    def test_unexpected_exception(self, mock_pcm, mock_post):
-        """Unexpected exception → INTERNAL_ERROR."""
+    def test_unexpected_exception_propagates(self, mock_pcm, mock_post):
+        """Unexpected exceptions propagate to the caller (get_transcription) which maps them to INTERNAL_ERROR."""
         with self._patch_env():
             mock_post.side_effect = RuntimeError("boom")
 
-            transcript, failure = get_transcription_via_custom_async_v2(self.utterance)
-
-            self.assertIsNone(transcript)
-            self.assertEqual(failure["reason"], TranscriptionFailureReasons.INTERNAL_ERROR)
-            self.assertIn("boom", failure["error"])
+            with self.assertRaisesRegex(RuntimeError, "boom"):
+                get_transcription_via_custom_async_v2(self.utterance)
