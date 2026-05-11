@@ -2515,6 +2515,27 @@ components:
                 supported if self-hosting Attendee.
               required: []
               additionalProperties: true
+            custom_async_v2:
+              type: object
+              properties:
+                headers:
+                  type: object
+                  additionalProperties:
+                    type: string
+                  description: Optional headers to include in the request to the custom
+                    transcription service.
+                form_data:
+                  type: object
+                  additionalProperties:
+                    type: string
+                  description: Optional form data to include in the request to the custom transcription
+                    service.
+              description: Custom self-hosted transcription service with async processing.
+                Use `headers` for HTTP request headers (e.g. auth tokens) and `form_data`
+                for multipart form fields sent alongside the audio file. Only supported
+                if self-hosting Attendee.
+              required: []
+              additionalProperties: true
           required: []
           description: 'The transcription settings for the bot, e.g. {''deepgram'':
             {''language'': ''en''}}'

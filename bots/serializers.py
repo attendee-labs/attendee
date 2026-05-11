@@ -423,6 +423,22 @@ TRANSCRIPTION_SETTINGS_SCHEMA = {
             "required": [],
             "additionalProperties": True,
         },
+        "custom_async_v2": {
+            "type": "object",
+            "properties": {
+                "headers": {
+                    "type": "object",
+                    "description": "Key-value pairs to be sent as headers in the request to the custom transcription service.",
+                },
+                "form_data": {
+                    "type": "object",
+                    "description": "Key-value pairs to be sent as form data in the request to the custom transcription service.",
+                }
+            },
+            "description": "Custom self-hosted transcription service with async processing. Use `headers` for HTTP request headers (e.g. auth tokens) and `form_data` for multipart form fields sent alongside the audio file. Only supported if self-hosting Attendee.",
+            "required": [],
+            "additionalProperties": True,
+        },
     },
     "required": [],
     "additionalProperties": False,
@@ -1148,7 +1164,7 @@ class CreateAsyncTranscriptionSerializer(serializers.Serializer):
         if value.get("deepgram", {}).get("callback"):
             raise serializers.ValidationError({"transcription_settings": "Deepgram callback is not available for async transcription."})
 
-        if "custom_async" in value and not os.getenv("CUSTOM_ASYNC_TRANSCRIPTION_URL"):
+        if ("custom_async" in value or "custom_async_v2" in value) and not os.getenv("CUSTOM_ASYNC_TRANSCRIPTION_URL"):
             raise serializers.ValidationError({"transcription_settings": "CUSTOM_ASYNC_TRANSCRIPTION_URL environment variable is not set. Please set the CUSTOM_ASYNC_TRANSCRIPTION_URL environment variable to the URL of your custom async transcription service."})
 
         if not value:
@@ -1377,7 +1393,7 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
         if value.get("deepgram", {}).get("callback") and value.get("deepgram", {}).get("detect_language"):
             raise serializers.ValidationError({"transcription_settings": "Language detection is not supported for streaming transcription. Please pass language='multi' instead of detect_language=true."})
 
-        if "custom_async" in value and not os.getenv("CUSTOM_ASYNC_TRANSCRIPTION_URL"):
+        if ("custom_async" in value or "custom_async_v2" in value) and not os.getenv("CUSTOM_ASYNC_TRANSCRIPTION_URL"):
             raise serializers.ValidationError({"transcription_settings": "CUSTOM_ASYNC_TRANSCRIPTION_URL environment variable is not set. Please set the CUSTOM_ASYNC_TRANSCRIPTION_URL environment variable to the URL of your custom async transcription service."})
 
         return value

@@ -754,6 +754,9 @@ class TranscriptionSettings:
     def custom_async_additional_props(self):
         return self._settings.get("custom_async", {})
 
+    def custom_async_v2_additional_props(self):
+        return self._settings.get("custom_async_v2", {})
+
     def deepgram_language(self):
         return self._settings.get("deepgram", {}).get("language", None)
 
@@ -2235,6 +2238,7 @@ class TranscriptionProviders(models.IntegerChoices):
     ELEVENLABS = 7, "ElevenLabs"
     KYUTAI = 8, "Kyutai"
     CUSTOM_ASYNC = 9, "Custom Async"
+    CUSTOM_ASYNC_V2 = 10, "Custom Async v2"
 
 
 class RecordingStorage(Storage):
