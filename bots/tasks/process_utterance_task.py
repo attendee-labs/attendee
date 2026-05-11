@@ -607,6 +607,7 @@ def get_transcription_via_custom_async(utterance):
         logger.error(f"Custom async transcription unexpected error: {str(e)}")
         return None, {"reason": TranscriptionFailureReasons.INTERNAL_ERROR, "error": str(e)}
 
+
 def get_transcription_via_custom_async_v2(utterance):
     transcription_settings = utterance.transcription_settings
 

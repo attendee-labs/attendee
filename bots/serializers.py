@@ -433,7 +433,7 @@ TRANSCRIPTION_SETTINGS_SCHEMA = {
                 "form_data": {
                     "type": "object",
                     "description": "Key-value pairs to be sent as form data in the request to the custom transcription service.",
-                }
+                },
             },
             "description": "Custom self-hosted transcription service with async processing. Use `headers` for HTTP request headers (e.g. auth tokens) and `form_data` for multipart form fields sent alongside the audio file. Only supported if self-hosting Attendee.",
             "required": [],
