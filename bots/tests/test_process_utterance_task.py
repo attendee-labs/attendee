@@ -1553,6 +1553,48 @@ class SarvamProviderTest(TransactionTestCase):
             self.assertEqual(failure["reason"], TranscriptionFailureReasons.RATE_LIMIT_EXCEEDED)
             self.assertEqual(failure["status_code"], 429)
 
+    def test_mode_forwarded_when_model_is_saaras_v3(self):
+        """`mode` is sent to Sarvam when model is saaras:v3."""
+        self.bot.settings = {"transcription_settings": {"sarvam": {"model": "saaras:v3", "mode": "translate"}}}
+        self.bot.save()
+
+        with (
+            self._patch_creds(),
+            mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3"),
+            mock.patch("bots.tasks.process_utterance_task.requests.post") as m_post,
+        ):
+            success_response = mock.Mock(status_code=200)
+            success_response.json.return_value = {"transcript": "hola"}
+            m_post.return_value = success_response
+
+            transcript, failure = get_transcription_via_sarvam(self.utterance)
+
+            self.assertIsNone(failure)
+            self.assertEqual(transcript["transcript"], "hola")
+            sent_data = m_post.call_args.kwargs["data"]
+            self.assertEqual(sent_data.get("model"), "saaras:v3")
+            self.assertEqual(sent_data.get("mode"), "translate")
+
+    def test_mode_not_forwarded_for_saarika_model(self):
+        """`mode` is dropped when model is a Saarika variant, even if set."""
+        self.bot.settings = {"transcription_settings": {"sarvam": {"model": "saarika:v2.5", "mode": "translate"}}}
+        self.bot.save()
+
+        with (
+            self._patch_creds(),
+            mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3"),
+            mock.patch("bots.tasks.process_utterance_task.requests.post") as m_post,
+        ):
+            success_response = mock.Mock(status_code=200)
+            success_response.json.return_value = {"transcript": "namaste"}
+            m_post.return_value = success_response
+
+            get_transcription_via_sarvam(self.utterance)
+
+            sent_data = m_post.call_args.kwargs["data"]
+            self.assertEqual(sent_data.get("model"), "saarika:v2.5")
+            self.assertNotIn("mode", sent_data)
+
 
 class ElevenLabsProviderTest(TransactionTestCase):
     """Unit‑tests for bots.tasks.process_utterance_task.get_transcription_via_elevenlabs"""
