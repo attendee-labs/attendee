@@ -742,6 +742,9 @@ class TranscriptionSettings:
     def sarvam_model(self):
         return self._settings.get("sarvam", {}).get("model", None)
 
+    def sarvam_mode(self):
+        return self._settings.get("sarvam", {}).get("mode", None)
+
     def elevenlabs_model_id(self):
         return self._settings.get("elevenlabs", {}).get("model_id", "scribe_v1")
 
