@@ -100,6 +100,7 @@ class TeamsUIMethods:
                 return
             except TimeoutException as e:
                 self.look_for_microsoft_login_form_element("name_input")
+                self.look_for_invalid_url_element("name_input")
 
                 if self.teams_bot_login_is_available and self.teams_bot_login_should_be_used and self.join_now_button_is_present():
                     logger.info("Join now button is present. Assuming name input is not present because we don't need to fill it out, so returning.")
@@ -216,6 +217,12 @@ class TeamsUIMethods:
 
             logger.info("Captcha detected. Raising UiBlockedByCaptchaException")
             raise UiBlockedByCaptchaException("Captcha detected", step)
+
+    def look_for_invalid_url_element(self, step):
+        invalid_url_element = self.find_element_by_selector(By.XPATH, '//*[contains(text(), "Looks like the meeting URL is incorrect. Please check the URL and try again.")]')
+        if invalid_url_element:
+            logger.info("Invalid URL detected. Raising UiMeetingNotFoundException")
+            raise UiMeetingNotFoundException("Invalid URL detected", step)
 
     def look_for_microsoft_login_form_element(self, step):
         # Check for Microsoft login form (email input)
@@ -407,7 +414,7 @@ class TeamsUIMethods:
             password_input = self.locate_element(step="password_input", condition=EC.element_to_be_clickable((By.CSS_SELECTOR, 'input[name="passwd"]')), wait_time_seconds=10)
             logger.info(f"Filling in the password (attempt {password_attempt_index + 1}/{num_password_attempts})...")
             password_input.send_keys(credentials["password"])
-
+            time.sleep(1)
             filled_value = password_input.get_attribute("value") or ""
             if filled_value == credentials["password"]:
                 logger.info("Password input filled in successfully")
