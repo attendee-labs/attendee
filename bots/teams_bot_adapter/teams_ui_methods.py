@@ -400,9 +400,31 @@ class TeamsUIMethods:
         time.sleep(1)
 
         logger.info("Waiting for the password input...")
-        password_input = self.locate_element(step="password_input", condition=EC.presence_of_element_located((By.CSS_SELECTOR, 'input[name="passwd"]')), wait_time_seconds=10)
-        logger.info("Filling in the password...")
-        password_input.send_keys(credentials["password"])
+        # Verify that the password input is filled in. If it is not, try again several times
+        num_password_attempts = 5
+        password_filled_in = False
+        for password_attempt_index in range(num_password_attempts):
+            password_input = self.locate_element(step="password_input", condition=EC.element_to_be_clickable((By.CSS_SELECTOR, 'input[name="passwd"]')), wait_time_seconds=10)
+            logger.info(f"Filling in the password (attempt {password_attempt_index + 1}/{num_password_attempts})...")
+            password_input.send_keys(credentials["password"])
+
+            filled_value_length = len(password_input.get_attribute("value") or "")
+            expected_length = len(credentials["password"])
+            if filled_value_length == expected_length:
+                logger.info("Password input filled in successfully")
+                password_filled_in = True
+                break
+
+            logger.warning(f"Password input was not filled in correctly (got {filled_value_length} characters, expected {expected_length}). Retrying...")
+            try:
+                password_input.clear()
+            except Exception as e:
+                logger.warning(f"Error clearing password input: {e}")
+            time.sleep(1)
+
+        if not password_filled_in:
+            logger.error("Failed to fill in the password input after multiple attempts. Raising UiLoginAttemptFailedException")
+            raise UiLoginAttemptFailedException("Failed to fill in the password input after multiple attempts", "password_input")
 
         time.sleep(1)
 
