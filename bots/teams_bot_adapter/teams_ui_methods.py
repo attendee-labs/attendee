@@ -422,8 +422,7 @@ class TeamsUIMethods:
             time.sleep(1)
 
         if not password_filled_in:
-            logger.error("Failed to fill in the password input after multiple attempts. Raising UiLoginAttemptFailedException")
-            raise UiLoginAttemptFailedException("Failed to fill in the password input after multiple attempts", "password_input")
+            logger.warning("Failed to fill in the password input after multiple attempts.")
 
         time.sleep(1)
 
