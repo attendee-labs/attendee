@@ -408,14 +408,13 @@ class TeamsUIMethods:
             logger.info(f"Filling in the password (attempt {password_attempt_index + 1}/{num_password_attempts})...")
             password_input.send_keys(credentials["password"])
 
-            filled_value_length = len(password_input.get_attribute("value") or "")
-            expected_length = len(credentials["password"])
-            if filled_value_length == expected_length:
+            filled_value = password_input.get_attribute("value") or ""
+            if filled_value == credentials["password"]:
                 logger.info("Password input filled in successfully")
                 password_filled_in = True
                 break
 
-            logger.warning(f"Password input was not filled in correctly (got {filled_value_length} characters, expected {expected_length}). Retrying...")
+            logger.warning(f"Password input was not filled in correctly (got {len(filled_value)} characters, expected {len(credentials['password'])}). Retrying...")
             try:
                 password_input.clear()
             except Exception as e:
