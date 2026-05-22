@@ -10,14 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 class Command(BaseCommand):
-    help = (
-        "Deletes Utterance rows (transcript segments) for Bots whose meetings ended "
-        "more than N days ago. Bot age is determined by the timestamp of the "
-        "BotEvent transitioning the bot to ENDED, not Bot.created_at, since "
-        "scheduled bots can be created long before they run. "
-        "Mirrors what the public Delete-Bot-Transcript endpoint does, but in bulk over many bots. "
-        "Other tables (Bot, Recording, AudioChunk, Participant, etc.) are left intact."
-    )
+    help = "Deletes Utterance rows (transcript segments) for Bots whose meetings ended more than N days ago. Bot age is determined by the timestamp of the BotEvent transitioning the bot to ENDED, not Bot.created_at, since scheduled bots can be created long before they run. Mirrors what the public Delete-Bot-Transcript endpoint does, but in bulk over many bots. Other tables (Bot, Recording, AudioChunk, Participant, etc.) are left intact."
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -35,10 +28,7 @@ class Command(BaseCommand):
             "--batch-size",
             type=int,
             default=500,
-            help=(
-                "Number of bots whose utterances are deleted per transaction (default: 500). "
-                "Smaller batches keep transactions short and reduce lock duration."
-            ),
+            help=("Number of bots whose utterances are deleted per transaction (default: 500). Smaller batches keep transactions short and reduce lock duration."),
         )
 
     def handle(self, *args, **options):
@@ -47,10 +37,7 @@ class Command(BaseCommand):
         batch_size = options["batch_size"]
 
         cutoff = timezone.now() - timedelta(days=days)
-        logger.info(
-            f"Looking for bots whose ENDED event was logged before "
-            f"{cutoff.isoformat()} ({days} days ago)..."
-        )
+        logger.info(f"Looking for bots whose ENDED event was logged before {cutoff.isoformat()} ({days} days ago)...")
 
         old_bot_ids = list(
             BotEvent.objects.filter(
@@ -68,28 +55,17 @@ class Command(BaseCommand):
             return
 
         if dry_run:
-            total_utterances = Utterance.objects.filter(
-                recording__bot_id__in=old_bot_ids
-            ).count()
-            logger.info(
-                f"[DRY RUN] Would delete {total_utterances} utterances across {total_bots} bots."
-            )
+            total_utterances = Utterance.objects.filter(recording__bot_id__in=old_bot_ids).count()
+            logger.info(f"[DRY RUN] Would delete {total_utterances} utterances across {total_bots} bots.")
             return
 
         total_deleted = 0
         bots_processed = 0
         for i in range(0, total_bots, batch_size):
             chunk = old_bot_ids[i : i + batch_size]
-            deleted_count, _ = Utterance.objects.filter(
-                recording__bot_id__in=chunk
-            ).delete()
+            deleted_count, _ = Utterance.objects.filter(recording__bot_id__in=chunk).delete()
             total_deleted += deleted_count
             bots_processed += len(chunk)
-            logger.info(
-                f"Processed {bots_processed}/{total_bots} bots; "
-                f"deleted {total_deleted} utterances so far."
-            )
+            logger.info(f"Processed {bots_processed}/{total_bots} bots; deleted {total_deleted} utterances so far.")
 
-        logger.info(
-            f"Done. Deleted {total_deleted} utterances across {total_bots} bots."
-        )
+        logger.info(f"Done. Deleted {total_deleted} utterances across {total_bots} bots.")
