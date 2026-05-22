@@ -1173,6 +1173,10 @@ class CreateAsyncTranscriptionSerializer(serializers.Serializer):
         if ("custom_async" in value or "custom_async_v2" in value) and not os.getenv("CUSTOM_ASYNC_TRANSCRIPTION_URL"):
             raise serializers.ValidationError({"transcription_settings": "CUSTOM_ASYNC_TRANSCRIPTION_URL environment variable is not set. Please set the CUSTOM_ASYNC_TRANSCRIPTION_URL environment variable to the URL of your custom async transcription service."})
 
+        sarvam_settings = value.get("sarvam", {})
+        if sarvam_settings.get("mode") and sarvam_settings.get("model") != "saaras:v3":
+            raise serializers.ValidationError({"transcription_settings": "The 'mode' option is only supported when using the 'saaras:v3' model for Sarvam transcription."})
+
         if not value:
             raise serializers.ValidationError({"transcription_settings": "Please specify a transcription provider."})
 
@@ -1398,6 +1402,10 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
 
         if value.get("deepgram", {}).get("callback") and value.get("deepgram", {}).get("detect_language"):
             raise serializers.ValidationError({"transcription_settings": "Language detection is not supported for streaming transcription. Please pass language='multi' instead of detect_language=true."})
+
+        sarvam_settings = value.get("sarvam", {})
+        if sarvam_settings.get("mode") and sarvam_settings.get("model") != "saaras:v3":
+            raise serializers.ValidationError({"transcription_settings": "The 'mode' option is only supported when using the 'saaras:v3' model for Sarvam transcription."})
 
         if ("custom_async" in value or "custom_async_v2" in value) and not os.getenv("CUSTOM_ASYNC_TRANSCRIPTION_URL"):
             raise serializers.ValidationError({"transcription_settings": "CUSTOM_ASYNC_TRANSCRIPTION_URL environment variable is not set. Please set the CUSTOM_ASYNC_TRANSCRIPTION_URL environment variable to the URL of your custom async transcription service."})
