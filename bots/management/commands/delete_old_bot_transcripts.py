@@ -27,8 +27,8 @@ class Command(BaseCommand):
         parser.add_argument(
             "--batch-size",
             type=int,
-            default=500,
-            help=("Number of bots whose utterances are deleted per transaction (default: 500). Smaller batches keep transactions short and reduce lock duration."),
+            default=100,
+            help=("Number of bots whose utterances are deleted per transaction (default: 100). Smaller batches keep transactions short and reduce lock duration."),
         )
 
     def handle(self, *args, **options):
