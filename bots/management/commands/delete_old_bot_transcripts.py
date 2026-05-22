@@ -4,14 +4,17 @@ from datetime import timedelta
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
-from bots.models import Bot, Utterance
+from bots.models import BotEvent, BotStates, Utterance
 
 logger = logging.getLogger(__name__)
 
 
 class Command(BaseCommand):
     help = (
-        "Deletes Utterance rows (transcript segments) for Bots created more than N days ago. "
+        "Deletes Utterance rows (transcript segments) for Bots whose meetings ended "
+        "more than N days ago. Bot age is determined by the timestamp of the "
+        "BotEvent transitioning the bot to ENDED, not Bot.created_at, since "
+        "scheduled bots can be created long before they run. "
         "Mirrors what the public Delete-Bot-Transcript endpoint does, but in bulk over many bots. "
         "Other tables (Bot, Recording, AudioChunk, Participant, etc.) are left intact."
     )
@@ -21,7 +24,7 @@ class Command(BaseCommand):
             "--days",
             type=int,
             default=14,
-            help="Delete utterances for bots created more than this many days ago (default: 14).",
+            help="Delete utterances for bots that ended more than this many days ago (default: 14).",
         )
         parser.add_argument(
             "--dry-run",
@@ -45,14 +48,20 @@ class Command(BaseCommand):
 
         cutoff = timezone.now() - timedelta(days=days)
         logger.info(
-            f"Looking for bots created before {cutoff.isoformat()} ({days} days ago)..."
+            f"Looking for bots whose ENDED event was logged before "
+            f"{cutoff.isoformat()} ({days} days ago)..."
         )
 
         old_bot_ids = list(
-            Bot.objects.filter(created_at__lt=cutoff).values_list("id", flat=True)
+            BotEvent.objects.filter(
+                new_state=BotStates.ENDED,
+                created_at__lt=cutoff,
+            )
+            .values_list("bot_id", flat=True)
+            .distinct()
         )
         total_bots = len(old_bot_ids)
-        logger.info(f"Found {total_bots} bots older than {days} days.")
+        logger.info(f"Found {total_bots} bots that ended more than {days} days ago.")
 
         if total_bots == 0:
             logger.info("Nothing to do.")
