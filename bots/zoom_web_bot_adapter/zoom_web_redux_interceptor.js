@@ -257,7 +257,15 @@ window.liveTranscriptListWatcher = liveTranscriptListWatcher;
 function onReduxStoreFound() {
     const store = window.__reduxStore;
     if (!store) return;
-  
+
+    try {
+      window.ws?.sendJson({
+        type: 'ReduxStoreFound',
+      });
+    } catch (e) {
+      console.log('Failed to send ReduxStoreFound event', e);
+    }
+
     store.subscribe(() => {
       const next = store.getState();
       window.liveTranscriptListWatcher.processLiveTranscriptChange(next.newLiveTranscription?.newLTMessage || {});
