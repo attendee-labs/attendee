@@ -80,8 +80,8 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
         logger.info("Meeting requires login and Teams bot login credentials are available, so we will retry by logging in")
         return True
 
-    def get_chromedriver_payload_file_name(self):
-        return "teams_bot_adapter/teams_chromedriver_payload.js"
+    def get_chromedriver_payload_file_names(self):
+        return ["teams_bot_adapter/teams_chromedriver_payload.js"]
 
     def get_websocket_port(self):
         return 8097
