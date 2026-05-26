@@ -5,7 +5,12 @@ from django.test import TestCase
 from django.utils import timezone
 from kubernetes import client
 
-from bots.bot_pod_creator.bot_pod_creator import BotPodCreator, apply_json6902_patch, fetch_bot_pod_spec
+from bots.bot_pod_creator.bot_pod_creator import (
+    BotPodCreator,
+    apply_json6902_patch,
+    fetch_bot_pod_spec,
+    is_transient_k8s_admission_error,
+)
 from bots.bot_pod_creator.bot_pod_spec import BotPodSpecType
 from bots.models import Bot, Organization, Project
 
@@ -54,6 +59,26 @@ class TestApplyJson6902Patch(TestCase):
         patch = '[{"op": "add", "path": "/invalid/nested/path/that/does/not/exist", "value": "val"}]'
         result = apply_json6902_patch(original, patch)
         self.assertEqual(result, original)
+
+
+class TestIsTransientK8sAdmissionError(TestCase):
+    def test_detects_aks_webhook_timeout(self):
+        exc = client.ApiException(status=500)
+        exc.body = (
+            '{"message":"Internal error occurred: failed calling webhook '
+            '\\"aks-webhook-admission-controller.azmk8s.io\\": context deadline exceeded"}'
+        )
+        self.assertTrue(is_transient_k8s_admission_error(exc))
+
+    def test_non_500_is_not_transient(self):
+        exc = client.ApiException(status=403)
+        exc.body = "failed calling webhook"
+        self.assertFalse(is_transient_k8s_admission_error(exc))
+
+    def test_500_without_webhook_markers_is_not_transient(self):
+        exc = client.ApiException(status=500)
+        exc.body = "some other internal error"
+        self.assertFalse(is_transient_k8s_admission_error(exc))
 
 
 class TestBotPodCreator(TestCase):
@@ -192,6 +217,46 @@ class TestBotPodCreator(TestCase):
         self.assertEqual(mock_v1.create_namespaced_pod.call_count, 2)
         # Should create service for streamer
         mock_v1.create_namespaced_service.assert_called_once()
+
+    @patch("bots.bot_pod_creator.bot_pod_creator.time.sleep")
+    @patch("bots.bot_pod_creator.bot_pod_creator.config")
+    @patch("bots.bot_pod_creator.bot_pod_creator.client")
+    @patch("bots.bot_pod_creator.bot_pod_creator.os.getenv")
+    @patch("bots.bot_pod_creator.bot_pod_creator.settings")
+    def test_create_bot_pod_retries_transient_admission_error(
+        self, mock_settings, mock_getenv, mock_client, mock_config, mock_sleep
+    ):
+        """Test retry on transient AKS admission webhook timeout"""
+        env = self.env_vars.copy()
+        env["BOT_POD_CREATE_MAX_RETRIES"] = "2"
+        mock_getenv.side_effect = lambda key, default=None: env.get(key, default)
+        mock_settings.BOT_POD_NAMESPACE = "bot-namespace"
+        mock_settings.WEBPAGE_STREAMER_POD_NAMESPACE = "streamer-namespace"
+
+        transient_error = client.ApiException(status=500)
+        transient_error.body = (
+            '{"message":"failed calling webhook \\"aks-webhook-admission-controller.azmk8s.io\\": '
+            'context deadline exceeded"}'
+        )
+        mock_api_response = MagicMock()
+        mock_api_response.metadata.name = "bot-123-abc"
+        mock_api_response.status.phase = "Pending"
+
+        mock_v1 = MagicMock()
+        mock_v1.create_namespaced_pod.side_effect = [transient_error, mock_api_response]
+        mock_client.CoreV1Api.return_value = mock_v1
+        mock_client.ApiException = client.ApiException
+
+        mock_api_client = MagicMock()
+        mock_api_client.sanitize_for_serialization.return_value = {"kind": "Pod"}
+        mock_client.ApiClient.return_value = mock_api_client
+
+        creator = BotPodCreator()
+        result = creator.create_bot_pod(bot_id=123, bot_name="bot-123-abc")
+
+        self.assertTrue(result["created"])
+        self.assertEqual(mock_v1.create_namespaced_pod.call_count, 2)
+        mock_sleep.assert_called_once()
 
     @patch("bots.bot_pod_creator.bot_pod_creator.config")
     @patch("bots.bot_pod_creator.bot_pod_creator.client")
