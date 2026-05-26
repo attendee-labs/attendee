@@ -156,6 +156,9 @@ class TeamsUIMethods:
                 logger.info("Waiting room timeout exceeded, but there is more than one participant in the meeting. Not aborting join attempt.")
                 return
 
+            # Take a screenshot to confirm that we are in the waiting room
+            self.send_screenshot_and_mhtml_file_message()
+
             try:
                 self.click_cancel_join_button()
             except Exception:
