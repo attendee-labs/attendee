@@ -507,7 +507,7 @@ function askForMediaCapturePermission() {
                 console.log('mediaCapturePermission error', error);
             }});
         }});
-    }, 1000);
+    }, 10000);
 }
 
 function requestPermissionToRecordIfUserIsHost(data) {
