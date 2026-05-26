@@ -228,7 +228,19 @@ function startMeeting(signature) {
         }
     });
 
+    /* Disabled because we are using the redux interceptor instead
     ZoomMtg.inMeetingServiceListener('onReceiveTranscriptionMsg', function (item) {
+        console.log('onReceiveTranscriptionMsg', item);
+
+        if (item === 'Save caption is not allowed!' && !sentSaveCaptionNotAllowed) {
+            window.ws.sendJson({
+                type: 'ClosedCaptionStatusChange',
+                change: 'save_caption_not_allowed'
+            });
+            sentSaveCaptionNotAllowed = true;
+            return;
+        }
+        
         if (!item.msgId) {            
             window.ws.sendJson({
                 type: 'TranscriptMessageError',
@@ -243,6 +255,7 @@ function startMeeting(signature) {
 
         transcriptMessageFinalizationManager.addMessage(item);
     });
+    */
 
     ZoomMtg.inMeetingServiceListener('onReceiveChatMsg', function (chatMessage) {
         console.log('onReceiveChatMsg', chatMessage);
