@@ -229,17 +229,6 @@ function startMeeting(signature) {
     });
 
     ZoomMtg.inMeetingServiceListener('onReceiveTranscriptionMsg', function (item) {
-        console.log('onReceiveTranscriptionMsg', item);
-
-        if (item === 'Save caption is not allowed!' && !sentSaveCaptionNotAllowed) {
-            window.ws.sendJson({
-                type: 'ClosedCaptionStatusChange',
-                change: 'save_caption_not_allowed'
-            });
-            sentSaveCaptionNotAllowed = true;
-            return;
-        }
-        
         if (!item.msgId) {            
             window.ws.sendJson({
                 type: 'TranscriptMessageError',
