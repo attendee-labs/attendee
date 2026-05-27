@@ -409,18 +409,20 @@ class TeamsUIMethods:
 
         time.sleep(1)
 
-        # If we see the incorrect username error, then we should raise an exception
-        incorrect_username_element = self.find_element_by_selector(By.XPATH, '//*[contains(text(), "This username may be incorrect")]')
-        if incorrect_username_element:
-            logger.info("Incorrect username. Raising UiLoginAttemptFailedException")
-            raise UiLoginAttemptFailedException("Incorrect username", "login_to_microsoft_account")
-
         logger.info("Waiting for the password input...")
         # Verify that the password input is filled in. If it is not, try again several times
         num_password_attempts = 5
         password_filled_in = False
         for password_attempt_index in range(num_password_attempts):
-            password_input = self.locate_element(step="password_input", condition=EC.element_to_be_clickable((By.CSS_SELECTOR, 'input[name="passwd"]')), wait_time_seconds=10)
+            try:
+                password_input = self.locate_element(step="password_input", condition=EC.element_to_be_clickable((By.CSS_SELECTOR, 'input[name="passwd"]')), wait_time_seconds=10)
+            except UiCouldNotLocateElementException as e:
+                # If we see the incorrect username error, then we should raise a more specific exception
+                if self.find_element_by_selector(By.ID, "usernameError"):
+                    logger.info("Incorrect username element found. Raising UiLoginAttemptFailedException")
+                    raise UiLoginAttemptFailedException("Incorrect username", "login_to_microsoft_account")
+                raise e
+
             logger.info(f"Filling in the password (attempt {password_attempt_index + 1}/{num_password_attempts})...")
             password_input.send_keys(credentials["password"])
             time.sleep(1)
