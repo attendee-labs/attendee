@@ -19,7 +19,7 @@ from django.views.generic import ListView
 from accounts.models import User, UserRole
 
 from .bots_api_utils import BotCreationSource, create_bot, create_webhook_subscription
-from .launch_bot_utils import launch_bot
+from .launch_bot_utils import launch_adhoc_bot_from_view
 from .models import (
     ApiKey,
     Bot,
@@ -1293,7 +1293,7 @@ class CreateBotView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 
             # If this is a scheduled bot, we don't want to launch it yet.
             if bot.state == BotStates.JOINING:
-                launch_bot(bot)
+                launch_adhoc_bot_from_view(bot)
 
             return HttpResponse("ok", status=200)
         except Exception as e:
