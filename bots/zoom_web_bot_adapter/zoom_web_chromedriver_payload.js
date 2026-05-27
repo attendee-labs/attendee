@@ -1,3 +1,33 @@
+// Get the frontend tracking id for debugging
+(() => {
+    function interceptJsonpCallback(name) {
+      Object.defineProperty(window, name, {
+        configurable: true,
+  
+        set(originalCallback) {
+          Object.defineProperty(window, name, {
+            configurable: true,
+            writable: true,
+            value: function interceptedZoomJsonpResponse(payload) {
+              window.ws?.sendJson({
+                type: 'ZoomFrontendTrackingId',
+                trackingId: payload?.result?.tid ?? 'No tracking id found'
+              });
+  
+              return originalCallback.call(this, payload);
+            },
+          });
+        },
+  
+        get() {
+          return undefined;
+        },
+      });
+    }
+  
+    interceptJsonpCallback("localJsonpCallback1");
+  })();
+
 // Captures per-participant webcam/screenshare video by periodically scanning
 // Zoom <video-player> elements and reconciling that scan with active captures.
 class PerParticipantVideoCaptureManager {
