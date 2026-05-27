@@ -9,11 +9,15 @@
             configurable: true,
             writable: true,
             value: function interceptedZoomJsonpResponse(payload) {
-              window.ws?.sendJson({
-                type: 'ZoomFrontendTrackingId',
-                trackingId: payload?.result?.tid ?? 'No tracking id found'
-              });
-  
+              try {
+                window.ws?.sendJson({
+                  type: 'ZoomFrontendTrackingId',
+                  trackingId: payload?.result?.tid ?? 'No tracking id found'
+                });
+              } catch (e) {
+                console.warn('ZoomFrontendTrackingId send failed', e);
+              }
+
               return originalCallback.call(this, payload);
             },
           });
