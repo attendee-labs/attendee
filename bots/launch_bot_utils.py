@@ -2,6 +2,8 @@ import json
 import logging
 import os
 
+from django.conf import settings
+
 from bots.models import BotEventManager, BotEventSubTypes, BotEventTypes
 
 logger = logging.getLogger(__name__)
@@ -49,3 +51,18 @@ def launch_bot(bot):
         from .tasks.run_bot_task import run_bot
 
         run_bot.delay(bot.id)
+
+
+def launch_adhoc_bot_from_view(bot):
+    """Launch an adhoc (non-scheduled) bot from a webserver view.
+
+    When ``settings.LAUNCH_ADHOC_BOTS_ASYNC`` is enabled, the actual launch is
+    handed off to a Celery worker so the request thread returns immediately.
+    Otherwise the bot is launched inline in the current (webserver) process.
+    """
+    if settings.LAUNCH_ADHOC_BOTS_ASYNC:
+        from .tasks.launch_adhoc_bot_task import launch_adhoc_bot
+
+        launch_adhoc_bot.delay(bot.id)
+    else:
+        launch_bot(bot)
