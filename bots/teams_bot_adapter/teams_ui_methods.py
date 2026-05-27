@@ -409,6 +409,12 @@ class TeamsUIMethods:
 
         time.sleep(1)
 
+        # If we see the incorrect username error, then we should raise an exception
+        incorrect_username_element = self.find_element_by_selector(By.XPATH, '//*[contains(text(), "This username may be incorrect")]')
+        if incorrect_username_element:
+            logger.info("Incorrect username. Raising UiLoginAttemptFailedException")
+            raise UiLoginAttemptFailedException("Incorrect username", "login_to_microsoft_account")
+
         logger.info("Waiting for the password input...")
         # Verify that the password input is filled in. If it is not, try again several times
         num_password_attempts = 5
