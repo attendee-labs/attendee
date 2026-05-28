@@ -507,7 +507,7 @@ class CalendarEvent(models.Model):
 
     platform_uuid = models.CharField(max_length=1024)
 
-    meeting_url = models.CharField(max_length=511, null=True, blank=True)
+    meeting_url = models.CharField(max_length=2048, null=True, blank=True)
 
     start_time = models.DateTimeField(db_index=True)
     end_time = models.DateTimeField(db_index=True)
@@ -828,7 +828,7 @@ class Bot(models.Model):
     project = models.ForeignKey(Project, on_delete=models.PROTECT, related_name="bots")
 
     name = models.CharField(max_length=255, default="My bot")
-    meeting_url = models.CharField(max_length=511)
+    meeting_url = models.CharField(max_length=2048)
     meeting_uuid = models.CharField(max_length=511, null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
@@ -3123,7 +3123,7 @@ class WebhookSubscription(models.Model):
             self.object_id = f"{self.OBJECT_ID_PREFIX}{random_string}"
         super().save(*args, **kwargs)
 
-    url = models.URLField()
+    url = models.URLField(max_length=2048)
     triggers = models.JSONField(default=default_triggers)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
