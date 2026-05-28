@@ -1,3 +1,25 @@
+(() => {
+    const fullUrl = window.location.href;
+    console.log("Full URL:", fullUrl);
+  
+    if (!fullUrl.startsWith("http://127.0.0.1")) {
+        // This means we shunted to a zoom.com url which means the meeting has ended.
+        // Currently SDK does not give us any feedback on this.
+        // window.ws may not be ready yet, so retry until the send succeeds.
+        const trySendMeetingEnded = () => {
+            try {
+                window.ws.sendJson({
+                    type: 'MeetingStatusChange',
+                    change: 'meeting_ended',
+                });
+            } catch (e) {
+                setTimeout(trySendMeetingEnded, 200);
+            }
+        };
+        setTimeout(trySendMeetingEnded, 200);
+    }
+  })();
+
 // Get the frontend tracking id for debugging
 (() => {
     function interceptJsonpCallback(name) {
