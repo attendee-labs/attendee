@@ -1,4 +1,8 @@
 (() => {
+    if (window.self !== window.top) {
+        console.log("Running inside an iframe, aborting payload.");
+        return;
+    }
     const fullUrl = window.location.href;
     console.log("Full URL:", fullUrl);
   
