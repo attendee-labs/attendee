@@ -64,6 +64,36 @@ class TestMeetingUrlUtils(unittest.TestCase):
         self.assertIsNone(meeting_type_from_url(None))
         self.assertEqual(meeting_type_from_url("https://teams.microsoft.com/l/meetup-join/19%3ameeting_OTA0nTDmYgItYTlTti00MmRkLTgxODItZGFmNWVmNTJmOGQ4%40thread.v2"), None)
 
+    def test_zoom_com_urls(self):
+        # zoom.com should be recognized as a Zoom meeting
+        self.assertEqual(meeting_type_from_url("https://zoom.com/j/123456789"), MeetingTypes.ZOOM)
+        self.assertEqual(meeting_type_from_url("https://us02web.zoom.com/j/123456789"), MeetingTypes.ZOOM)
+        self.assertEqual(meeting_type_from_url("https://zoom.com/w/987654321"), MeetingTypes.ZOOM)
+
+        # zoom.com should still require an integer meeting ID
+        self.assertIsNone(meeting_type_from_url("https://zoom.com/j/test"))
+
+        # The bare zoom.com netloc should be normalized to zoom.us
+        self.assertEqual(normalize_meeting_url("https://zoom.com/j/123456789")[1], "https://zoom.us/j/123456789")
+        self.assertEqual(normalize_meeting_url("zoom.com/j/123456789")[1], "https://zoom.us/j/123456789")
+
+        # Subdomains of zoom.com should have their suffix swapped to zoom.us
+        self.assertEqual(normalize_meeting_url("https://us02web.zoom.com/j/123456789")[1], "https://us02web.zoom.us/j/123456789")
+        self.assertEqual(normalize_meeting_url("https://us05web.zoom.com/w/987654321")[1], "https://us05web.zoom.us/w/987654321")
+
+        # The pwd and tk query parameters should be preserved when normalizing zoom.com to zoom.us
+        self.assertEqual(
+            normalize_meeting_url("https://zoom.com/w/123456789?pwd=AbC9xYpQ2LmN7RkT5sVuH4ZbJe1DfG.1&tk=ZkPqN8f2LrS4XyT6wVaE9mHuCdJg5QbA1sDoRtUvWxY.DQkAAAAATESTTOKEN1234567890AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")[1],
+            "https://zoom.us/w/123456789?pwd=AbC9xYpQ2LmN7RkT5sVuH4ZbJe1DfG.1&tk=ZkPqN8f2LrS4XyT6wVaE9mHuCdJg5QbA1sDoRtUvWxY.DQkAAAAATESTTOKEN1234567890AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        )
+
+        # parse_zoom_join_url and parse_zoom_registrant_token should still work on zoom.com URLs
+        meeting_id, password = parse_zoom_join_url("https://zoom.com/w/111222333?pwd=AbC9xYpQ2LmN7RkT5sVuH4ZbJe1DfG.1&tk=ZkPqN8f2LrS4XyT6wVaE9mHuCdJg5QbA1sDoRtUvWxY.TESTTOKEN")
+        registrant_token = parse_zoom_registrant_token("https://zoom.com/w/111222333?pwd=AbC9xYpQ2LmN7RkT5sVuH4ZbJe1DfG.1&tk=ZkPqN8f2LrS4XyT6wVaE9mHuCdJg5QbA1sDoRtUvWxY.TESTTOKEN")
+        self.assertEqual(meeting_id, "111222333")
+        self.assertEqual(password, "AbC9xYpQ2LmN7RkT5sVuH4ZbJe1DfG.1")
+        self.assertEqual(registrant_token, "ZkPqN8f2LrS4XyT6wVaE9mHuCdJg5QbA1sDoRtUvWxY.TESTTOKEN")
+
     def test_parse_zoom_webinar_url(self):
         meeting_id, password = parse_zoom_join_url("https://zoom.us/w/111222333?pwd=AbC9xYpQ2LmN7RkT5sVuH4ZbJe1DfG.1&tk=ZkPqN8f2LrS4XyT6wVaE9mHuCdJg5QbA1sDoRtUvWxY.DQkAAAAATESTTOKEN1234567890AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
         registrant_token = parse_zoom_registrant_token("https://zoom.us/w/111222333?pwd=AbC9xYpQ2LmN7RkT5sVuH4ZbJe1DfG.1&tk=ZkPqN8f2LrS4XyT6wVaE9mHuCdJg5QbA1sDoRtUvWxY.DQkAAAAATESTTOKEN1234567890AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")

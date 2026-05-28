@@ -228,6 +228,7 @@ function startMeeting(signature) {
         }
     });
 
+    /* Disabled because we are using the redux interceptor instead
     ZoomMtg.inMeetingServiceListener('onReceiveTranscriptionMsg', function (item) {
         console.log('onReceiveTranscriptionMsg', item);
 
@@ -254,6 +255,7 @@ function startMeeting(signature) {
 
         transcriptMessageFinalizationManager.addMessage(item);
     });
+    */
 
     ZoomMtg.inMeetingServiceListener('onReceiveChatMsg', function (chatMessage) {
         console.log('onReceiveChatMsg', chatMessage);

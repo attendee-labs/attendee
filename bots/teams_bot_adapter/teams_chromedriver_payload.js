@@ -1,3 +1,108 @@
+const handleVideoTrackForRealTimePerParticipantVideo = async ({ track, streams }) => {
+    try {
+        const firstStreamId = streams?.[0]?.id;
+
+        if (!firstStreamId)
+            return;
+
+        const mappingManager = virtualStreamToPhysicalStreamMappingManager;
+        const videoConfig = window.initialData.perParticipantRealtimeVideoConfiguration;
+
+        function createCanvasForSource(sourceConfig) {
+            const canvas = document.createElement("canvas");
+            canvas.width = sourceConfig.width;
+            canvas.height = sourceConfig.height;
+            const ctx = canvas.getContext("2d");
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = "high";
+            return { canvas, ctx };
+        }
+
+        const webcamCanvasContext = videoConfig.webcam_configuration.enabled ? createCanvasForSource(videoConfig.webcam_configuration) : null;
+        const screenshareCanvasContext = videoConfig.screenshare_configuration.enabled ? createCanvasForSource(videoConfig.screenshare_configuration) : null;
+
+        const maxFramerate = Math.max(videoConfig.webcam_configuration.framerate, videoConfig.screenshare_configuration.framerate);
+        if (maxFramerate <= 0)
+            return;
+        const minFrameIntervalMs = 1000 / maxFramerate;
+
+        const processor = new MediaStreamTrackProcessor({ track });
+        const reader = processor.readable.getReader();
+
+        let lastSentAt = 0;
+
+        while (true) {
+            const { value: frame, done } = await reader.read();
+            if (done) break;
+            if (!frame) continue;
+
+            try {
+                const now = performance.now();
+                if (now - lastSentAt < minFrameIntervalMs) continue;
+
+                const physicalStream = mappingManager.physicalStreamsByServerStreamId.get(firstStreamId);
+                const clientStreamId = physicalStream?.clientStreamId;
+                if (!clientStreamId) continue;        
+                
+                const virtualStreamId = mappingManager.physicalClientStreamIdToVirtualStreamIdMapping[clientStreamId.toString()];
+                if (!virtualStreamId) continue;
+        
+                const virtualStream = mappingManager.virtualStreams.get(virtualStreamId.toString());
+                if (!virtualStream?.participant?.id) continue;
+        
+                const participantId = virtualStream.participant.id;
+                const isScreenShare = !!virtualStream.isScreenShare;
+
+                const sourceConfig = isScreenShare ? videoConfig.screenshare_configuration : videoConfig.webcam_configuration;
+                if (!sourceConfig.enabled) continue;
+
+                if (now - lastSentAt < 1000 / sourceConfig.framerate) continue;
+
+                const { canvas, ctx } = isScreenShare ? screenshareCanvasContext : webcamCanvasContext;
+
+                const targetWidth = sourceConfig.width;
+                const targetHeight = sourceConfig.height;
+                const jpegQuality = sourceConfig.jpeg_quality / 100;
+
+                const srcW = frame.displayWidth;
+                const srcH = frame.displayHeight;
+                if (!srcW || !srcH) continue;
+
+                const srcAspect = srcW / srcH;
+                const targetAspect = targetWidth / targetHeight;
+
+                let drawW, drawH;
+                if (srcAspect > targetAspect) {
+                    drawW = targetWidth;
+                    drawH = Math.round(targetWidth / srcAspect);
+                } else {
+                    drawH = targetHeight;
+                    drawW = Math.round(targetHeight * srcAspect);
+                }
+
+                const offsetX = Math.round((targetWidth - drawW) / 2);
+                const offsetY = Math.round((targetHeight - drawH) / 2);
+
+                ctx.fillStyle = "black";
+                ctx.fillRect(0, 0, targetWidth, targetHeight);
+                ctx.drawImage(frame, 0, 0, srcW, srcH, offsetX, offsetY, drawW, drawH);
+
+                const base64 = canvas.toDataURL("image/jpeg", jpegQuality).split(",", 2)[1];
+                window.ws?.sendPerParticipantVideo(participantId, isScreenShare, base64);
+
+                lastSentAt = now;
+            } catch (err) {
+                console.error("Error processing frame:", err);
+            } finally {
+                frame.close();
+            }
+        }
+    } catch (err) {
+        console.error("Error setting up video interceptor:", err);
+    }
+};
+
+
 (() => {
     if (globalThis.__realConsole) return;
   
@@ -79,13 +184,21 @@ class StyleManager {
     checkNeededInteractions() {
         // Check if bot has been removed from the meeting
         const removedFromMeetingElement = document.getElementById('calling-retry-screen-title');
-        if (removedFromMeetingElement && 
-            removedFromMeetingElement.textContent.includes("You've been removed from this meeting")) {
-            window.ws.sendJson({
-                type: 'MeetingStatusChange',
-                change: 'removed_from_meeting'
-            });
-            console.log('Bot was removed from meeting, sent notification');
+        const removedFromMeetingTexts = [
+            "You've been removed from this meeting",
+            "Removed from the meeting"
+        ];
+        if (removedFromMeetingElement) {
+            for (const text of removedFromMeetingTexts) {
+                if (removedFromMeetingElement.textContent.includes(text)) {
+                    window.ws.sendJson({
+                        type: 'MeetingStatusChange',
+                        change: 'removed_from_meeting'
+                    });
+                    console.log('Bot was removed from meeting, sent notification');
+                    break;
+                }
+            }
         }
 
         // We need to open the chat window to be able to track messages
@@ -1164,7 +1277,8 @@ class WebSocketClient {
         VIDEO: 2,  // Reserved for future use
         AUDIO: 3,   // Reserved for future use
         ENCODED_MP4_CHUNK: 4,
-        PER_PARTICIPANT_AUDIO: 5
+        PER_PARTICIPANT_AUDIO: 5,
+        PER_PARTICIPANT_VIDEO: 6,
     };
   
     constructor() {
@@ -1307,6 +1421,50 @@ class WebSocketClient {
             type: 'CaptionUpdate',
             caption: item
         });
+    }
+
+    sendPerParticipantVideo(participantId, isScreenShare, videoData) {
+        if (this.ws.readyState !== originalWebSocket.OPEN) {
+            realConsole?.error('WebSocket is not connected for per participant video send', this.ws.readyState);
+            return;
+        }
+
+        if (!this.mediaSendingEnabled) {
+            return;
+        }
+
+        try {
+            // Convert participantId to UTF-8 bytes
+            const participantIdBytes = new TextEncoder().encode(participantId);
+            
+            // Convert videoData string to UTF-8 bytes
+            const videoDataBytes = new TextEncoder().encode(videoData);
+            
+            // Create final message: type (4 bytes) + participantId length (1 byte) + 
+            // participantId bytes + isScreenShare (1 byte) + video data
+            const message = new Uint8Array(4 + 1 + participantIdBytes.length + 1 + videoDataBytes.length);
+            const dataView = new DataView(message.buffer);
+            
+            // Set message type (6 for PER_PARTICIPANT_VIDEO)
+            dataView.setInt32(0, WebSocketClient.MESSAGE_TYPES.PER_PARTICIPANT_VIDEO, true);
+            
+            // Set participantId length as uint8 (1 byte)
+            dataView.setUint8(4, participantIdBytes.length);
+            
+            // Copy participantId bytes
+            message.set(participantIdBytes, 5);
+            
+            // Set isScreenShare byte (0 = webcam, 1 = screenshare)
+            dataView.setUint8(5 + participantIdBytes.length, isScreenShare ? 1 : 0);
+            
+            // Copy video data after type, length, participantId, and isScreenShare
+            message.set(videoDataBytes, 5 + participantIdBytes.length + 1);
+            
+            // Send the binary message
+            this.ws.send(message.buffer);
+        } catch (error) {
+            console.error('Error sending WebSocket video message:', error);
+        }
     }
 
     sendMixedAudio(timestamp, audioData) {
@@ -1611,8 +1769,12 @@ function handleConversationEnd(eventDataObject) {
     realConsole?.log('handleConversationEnd, eventDataObjectBody', eventDataObjectBody);
     window.ws?.sendJson({
         type: 'ConversationEndPayload',
-        body: eventDataObjectBody
+        body: eventDataObjectBody,
+        headers: eventDataObject?.headers,
+        currentCallId: window.callManager?.getCallId()
     });
+
+    const meetingId = extractCallIdFromEventDataObject(eventDataObject);
 
     const subCode = eventDataObjectBody?.subCode;
     const subCodeValueForDeniedRequestToJoin = 5854;
@@ -1623,7 +1785,8 @@ function handleConversationEnd(eventDataObject) {
         // For now this won't do anything, but good to have it in our logs. In the future, this should probably be the source of truth for these things, instead of the UI inspection.
         window.ws?.sendJson({
             type: 'MeetingStatusChange',
-            change: 'request_to_join_denied'
+            change: 'request_to_join_denied',
+            meetingId: meetingId
         });
         return;
     }
@@ -1633,7 +1796,8 @@ function handleConversationEnd(eventDataObject) {
         // For now this won't do anything, but good to have it in our logs. In the future, this should probably be the source of truth for these things, instead of the UI inspection.
         window.ws?.sendJson({
             type: 'MeetingStatusChange',
-            change: 'anonymous_join_disabled_for_tenant_by_policy'
+            change: 'anonymous_join_disabled_for_tenant_by_policy',
+            meetingId: meetingId
         });
         return;
     }
@@ -1641,7 +1805,8 @@ function handleConversationEnd(eventDataObject) {
     realConsole?.log('handleConversationEnd, sending meeting ended message');
     window.ws?.sendJson({
         type: 'MeetingStatusChange',
-        change: 'meeting_ended'
+        change: 'meeting_ended',
+        meetingId: meetingId
     });
 }
 
@@ -1745,6 +1910,9 @@ class ReceiverManager {
     }
 
     pollReceivers() {
+        const speakingParticipantIds = new Set();
+        const currentTime = Date.now();
+
         for (const [receiver, isActive] of this.receiverMap) {
             const contributingSources = receiver.getContributingSources();
 
@@ -1760,24 +1928,23 @@ class ReceiverManager {
             if (!isActive)
                 continue;
 
-            const currentTime = Date.now();
-            const recentContributingSources = contributingSources.filter(contributingSource => currentTime - contributingSource.timestamp <= 50);
-            const speakingParticipantIds = window.callManager?.getSpeakingParticipantIds(recentContributingSources) || [];
-
-            for (const speakingParticipantId of speakingParticipantIds) {
-                if (!this.participantSpeakingStateMachineMap.has(speakingParticipantId)) {
-                    this.participantSpeakingStateMachineMap.set(speakingParticipantId, new ParticipantSpeakingStateMachine(speakingParticipantId));
-                }
-            }
-
-            // Now iterate through the participantSpeakingStateMachineMap and update the isSpeaking state for each participant
-            for (const [participantId, participantSpeakingStateMachine] of this.participantSpeakingStateMachineMap) {
-                participantSpeakingStateMachine.addSample({
-                    isSpeaking: speakingParticipantIds.has(participantId),
-                    timestamp: currentTime
+            if (receiver.track?.readyState === 'ended') {
+                this.receiverMap.set(receiver, false);
+                window.ws?.sendJson({
+                    type: 'ReceiverManagerUpdate',
+                    update: "setReceiverInactive",
+                    receiverTrackId: receiver.track?.id
                 });
+                continue;
             }
-            
+
+            const recentContributingSources = contributingSources.filter(contributingSource => currentTime - contributingSource.timestamp <= 50);
+            const receiverSpeakingParticipantIds = window.callManager?.getSpeakingParticipantIds(recentContributingSources) || [];
+
+            for (const speakingParticipantId of receiverSpeakingParticipantIds) {
+                speakingParticipantIds.add(speakingParticipantId);
+            }
+
             /*
             {
     "rtpTimestamp": 506968569,
@@ -1785,6 +1952,20 @@ class ReceiverManager {
     "timestamp": 1759288487277
 }
             */
+        }
+
+        for (const speakingParticipantId of speakingParticipantIds) {
+            if (!this.participantSpeakingStateMachineMap.has(speakingParticipantId)) {
+                this.participantSpeakingStateMachineMap.set(speakingParticipantId, new ParticipantSpeakingStateMachine(speakingParticipantId));
+            }
+        }
+
+        // Now iterate through the participantSpeakingStateMachineMap and update the isSpeaking state for each participant
+        for (const [participantId, participantSpeakingStateMachine] of this.participantSpeakingStateMachineMap) {
+            participantSpeakingStateMachine.addSample({
+                isSpeaking: speakingParticipantIds.has(participantId),
+                timestamp: currentTime
+            });
         }
     }
 
@@ -2419,6 +2600,9 @@ new RTCInterceptor({
             }
             if (event.track?.kind === 'video') {
                 window.styleManager.addVideoTrack(event);
+                if (window.initialData.sendPerParticipantVideo) {
+                    handleVideoTrackForRealTimePerParticipantVideo(event);
+                }
             }
         });
 
@@ -2952,17 +3136,32 @@ class CallManager {
                     // Only do it if the interval is not already set
                     if (this.closedCaptionLanguageInterval)
                         return;
+                    // Check every 15 seconds whether the closed caption language is still the desired language
+                    // If it is not and we are within the enforcement window, then set the closed caption language to the desired language
+                    this.closedCaptionLanguageIntervalStartTime = Date.now();
                     this.closedCaptionLanguageInterval = setInterval(() => {
                         if (this.activeCall && this.activeCall.getClosedCaptionsLanguage) {
-                            if (this.activeCall.getClosedCaptionsLanguage() !== this.closedCaptionLanguage) {
+                            const currentLanguage = this.activeCall.getClosedCaptionsLanguage();
+                            if (currentLanguage !== this.closedCaptionLanguage) {
+                                const enforcementTimeoutSeconds = window.teamsInitialData.enforceTeamsClosedCaptionsLanguageTimeoutSeconds || 0;
+                                const elapsedSeconds = (Date.now() - this.closedCaptionLanguageIntervalStartTime) / 1000;
+                                const withinEnforcementWindow = elapsedSeconds < enforcementTimeoutSeconds;
+
                                 window.ws?.sendJson({
                                     type: "closedCaptionsLanguageMismatch",
                                     desiredLanguage: this.closedCaptionLanguage,
-                                    currentLanguage: this.activeCall.getClosedCaptionsLanguage()
+                                    currentLanguage: currentLanguage,
+                                    elapsedSeconds: elapsedSeconds,
+                                    enforcementTimeoutSeconds: enforcementTimeoutSeconds,
+                                    willEnforce: withinEnforcementWindow
                                 });
+
+                                if (withinEnforcementWindow) {
+                                    this.activeCall.setClosedCaptionsLanguage(this.closedCaptionLanguage);
+                                }
                             }
                         }
-                    }, 60000);
+                    }, 15000);
                 }
             }, 10000);
             return true;

@@ -1,3 +1,523 @@
+// Get the frontend tracking id for debugging
+(() => {
+    function interceptJsonpCallback(name) {
+      Object.defineProperty(window, name, {
+        configurable: true,
+  
+        set(originalCallback) {
+          Object.defineProperty(window, name, {
+            configurable: true,
+            writable: true,
+            value: function interceptedZoomJsonpResponse(payload) {
+              try {
+                window.ws?.sendJson({
+                  type: 'ZoomFrontendTrackingId',
+                  trackingId: payload?.result?.tid ?? 'No tracking id found'
+                });
+              } catch (e) {
+                console.warn('ZoomFrontendTrackingId send failed', e);
+              }
+
+              return originalCallback.call(this, payload);
+            },
+          });
+        },
+  
+        get() {
+          return undefined;
+        },
+      });
+    }
+  
+    interceptJsonpCallback("localJsonpCallback1");
+  })();
+
+// Captures per-participant webcam/screenshare video by periodically scanning
+// Zoom <video-player> elements and reconciling that scan with active captures.
+class PerParticipantVideoCaptureManager {
+    constructor() {
+        this.scanIntervalMs = 250;
+        this.scanIntervalId = null;
+
+        // captureKey ("<participantId>:webcam" | "<participantId>:screenshare") ->
+        //   { participantId, isScreenShare, videoPlayer, targetCanvas, ctx,
+        //     captureIntervalId, inFlight }
+        this.activeCaptures = new Map();
+
+        // Throttle state for throttledLogAndSend so that flapping/errored states
+        // can't flood the JS console or the Python websocket every 250ms.
+        // key -> { lastEmittedAt, suppressedCount }
+        this.throttleIntervalMs = 5000;
+        this.throttleState = new Map();
+
+        // Once the current user has been observed in window.userManager.currentUsersMap,
+        // we latch this to true so we don't re-scan the map on every tick.
+        this.currentUserObserved = false;
+
+        this.screenshotChain = Promise.resolve();
+    }
+
+    async runScreenshotExclusive(fn) {
+        const previous = this.screenshotChain;
+    
+        let release;
+        this.screenshotChain = new Promise(resolve => {
+            release = resolve;
+        });
+    
+        await previous;
+    
+        try {
+            return await fn();
+        } finally {
+            release();
+        }
+    }
+
+    hasCurrentUserJoined() {
+        if (this.currentUserObserved) {
+            return true;
+        }
+
+        const currentUsersMap = window.userManager?.currentUsersMap;
+        if (!currentUsersMap) {
+            return false;
+        }
+
+        for (const user of currentUsersMap.values()) {
+            if (user?.isCurrentUser) {
+                this.currentUserObserved = true;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    makeThrottleKey(payload) {
+        return [
+            payload.type,
+            payload.participantId ?? '',
+            payload.isScreenShare ?? '',
+        ].join('|');
+    }
+
+    throttledLogAndSend(payload) {
+        const key = this.makeThrottleKey(payload);
+        const now = Date.now();
+        const state = this.throttleState.get(key) ?? { lastEmittedAt: 0, suppressedCount: 0 };
+
+        if (now - state.lastEmittedAt < this.throttleIntervalMs) {
+            state.suppressedCount += 1;
+            this.throttleState.set(key, state);
+            return;
+        }
+
+        const enriched = state.suppressedCount > 0
+            ? { ...payload, suppressedSinceLastEmit: state.suppressedCount }
+            : payload;
+
+        console.log('[PerParticipantVideoCaptureManager]', enriched);
+        window.ws?.sendJson?.(enriched);
+
+        this.throttleState.set(key, { lastEmittedAt: now, suppressedCount: 0 });
+    }
+
+    start() {
+        if (this.scanIntervalId) return;
+
+        this.scan();
+        this.scanIntervalId = setInterval(() => this.scan(), this.scanIntervalMs);
+    }
+
+    stop() {
+        if (this.scanIntervalId) {
+            clearInterval(this.scanIntervalId);
+            this.scanIntervalId = null;
+        }
+
+        for (const captureKey of Array.from(this.activeCaptures.keys())) {
+            this.stopCapture(captureKey);
+        }
+    }
+
+    makeCaptureKey(participantId, isScreenShare) {
+        return `${participantId}:${isScreenShare ? 'screenshare' : 'webcam'}`;
+    }
+
+    getParticipantInfo(videoPlayer) {
+        const rawNodeId = videoPlayer.getAttribute('node-id');
+        if (!rawNodeId) return null;
+
+        const nodeId = Number.parseInt(rawNodeId, 10);
+
+        const participantIdInteger = nodeId >> 10 << 10;
+        const participantId = participantIdInteger.toString();
+        const isScreenShare = nodeId !== participantIdInteger;
+
+        return {
+            nodeId,
+            participantId,
+            isScreenShare,
+            captureKey: this.makeCaptureKey(participantId, isScreenShare),
+        };
+    }
+
+    getSourceElements(videoPlayer) {
+        const shadowRoot = videoPlayer.container?.shadowRoot;
+
+        const sourceCanvas = shadowRoot?.querySelector('canvas');
+
+        if (sourceCanvas) {
+            return { sourceCanvas, sourceVideo: null };
+        }
+
+        const sourceVideo = videoPlayer.querySelector?.('video');
+        if (sourceVideo) {
+            return { sourceCanvas: null, sourceVideo };
+        }
+
+        return { sourceCanvas: null, sourceVideo: null };
+    }
+
+    getEligibleCaptureCandidates() {
+        const candidatesByCaptureKey = new Map();
+
+        if (!this.hasCurrentUserJoined()) {
+            return candidatesByCaptureKey;
+        }
+
+        document.querySelectorAll('video-player').forEach(videoPlayer => {
+            const participantInfo = this.getParticipantInfo(videoPlayer);
+            if (!participantInfo) return;
+
+            const { participantId, isScreenShare, captureKey } = participantInfo;
+
+            const participantUser = window.userManager?.currentUsersMap?.get?.(participantId);
+            if (!participantUser) {
+                return;
+            }
+
+            if (participantUser.isCurrentUser) {
+                return;
+            }
+
+            const { sourceCanvas, sourceVideo } = this.getSourceElements(videoPlayer);
+            if (!sourceCanvas && !sourceVideo) {
+                return;
+            }
+
+            const rect = videoPlayer.getBoundingClientRect();
+            const area = rect.width * rect.height;
+
+            const existingCandidate = candidatesByCaptureKey.get(captureKey);
+            if (!existingCandidate || area > existingCandidate.area) {
+                candidatesByCaptureKey.set(captureKey, {
+                    captureKey,
+                    participantId,
+                    isScreenShare,
+                    videoPlayer,
+                    sourceType: sourceCanvas ? 'canvas' : 'video',
+                    area,
+                });
+            }
+        });
+
+        return candidatesByCaptureKey;
+    }
+
+    scan() {
+        try {
+            const candidatesByCaptureKey = this.getEligibleCaptureCandidates();
+
+            // Remove captures that no longer appear in the latest scan.
+            for (const captureKey of Array.from(this.activeCaptures.keys())) {
+                if (!candidatesByCaptureKey.has(captureKey)) {
+                    this.stopCapture(captureKey);
+                }
+            }
+
+            // Add new captures, or replace captures whose selected <video-player>
+            // changed due to deduping / layout changes.
+            for (const candidate of candidatesByCaptureKey.values()) {
+                const existingCapture = this.activeCaptures.get(candidate.captureKey);
+
+                if (!existingCapture) {
+                    this.startCapture(candidate);
+                    continue;
+                }
+
+                if (existingCapture.videoPlayer !== candidate.videoPlayer) {
+                    this.stopCapture(candidate.captureKey);
+                    this.startCapture(candidate);
+                }
+            }
+        } catch (err) {
+            this.throttledLogAndSend({
+                type: 'ErrorCapturingPerParticipantVideo',
+                error: err.message,
+            });
+        }
+    }
+
+    getSourceConfig(isScreenShare) {
+        const videoConfig = window.initialData?.perParticipantRealtimeVideoConfiguration;
+        if (!videoConfig) return null;
+
+        return isScreenShare
+            ? videoConfig.screenshare_configuration
+            : videoConfig.webcam_configuration;
+    }
+
+    drawImageSourceLetterboxed({
+        source,
+        sourceWidth,
+        sourceHeight,
+        ctx,
+        targetWidth,
+        targetHeight,
+    }) {
+        if (!sourceWidth || !sourceHeight) {
+            return false;
+        }
+
+        const srcAspect = sourceWidth / sourceHeight;
+        const targetAspect = targetWidth / targetHeight;
+
+        let drawW;
+        let drawH;
+
+        if (srcAspect > targetAspect) {
+            drawW = targetWidth;
+            drawH = Math.round(targetWidth / srcAspect);
+        } else {
+            drawH = targetHeight;
+            drawW = Math.round(targetHeight * srcAspect);
+        }
+
+        const offsetX = Math.round((targetWidth - drawW) / 2);
+        const offsetY = Math.round((targetHeight - drawH) / 2);
+
+        ctx.fillStyle = 'black';
+        ctx.fillRect(0, 0, targetWidth, targetHeight);
+
+        ctx.drawImage(source, offsetX, offsetY, drawW, drawH);
+
+        return true;
+    }
+
+    async drawSdkScreenshotLetterboxed({
+        videoPlayer,
+        isScreenShare,
+        ctx,
+        targetWidth,
+        targetHeight,
+    }) {
+        const sdk = videoPlayer.render?.getSDK?.();
+        if (!sdk || typeof sdk.ScreenShot !== 'function') {
+            return false;
+        }
+
+        const nodeId = videoPlayer.getAttribute('node-id');
+        if (!nodeId) {
+            return false;
+        }
+
+        const blob = await this.runScreenshotExclusive(() =>
+            sdk.ScreenShot(nodeId, isScreenShare ? 'sharing' : 'video')
+        );
+        if (!blob) {
+            return false;
+        }
+
+        let bitmap = null;
+
+        try {
+            bitmap = await createImageBitmap(blob);
+
+            return this.drawImageSourceLetterboxed({
+                source: bitmap,
+                sourceWidth: bitmap.width,
+                sourceHeight: bitmap.height,
+                ctx,
+                targetWidth,
+                targetHeight,
+            });
+        } finally {
+            bitmap?.close?.();
+        }
+    }
+
+    drawVideoElementLetterboxed({
+        sourceVideo,
+        ctx,
+        targetWidth,
+        targetHeight,
+    }) {
+        if (
+            !sourceVideo.videoWidth ||
+            !sourceVideo.videoHeight ||
+            sourceVideo.readyState < 2
+        ) {
+            return false;
+        }
+
+        return this.drawImageSourceLetterboxed({
+            source: sourceVideo,
+            sourceWidth: sourceVideo.videoWidth,
+            sourceHeight: sourceVideo.videoHeight,
+            ctx,
+            targetWidth,
+            targetHeight,
+        });
+    }
+
+    startCapture({ captureKey, participantId, isScreenShare, videoPlayer, sourceType }) {
+        const sourceConfig = this.getSourceConfig(isScreenShare);
+
+        if (!sourceConfig?.enabled) {
+            return;
+        }
+
+        const desiredFPS = sourceConfig.framerate || 1;
+        const captureIntervalMs = Math.max(1, Math.round(1000 / desiredFPS));
+
+        const targetWidth = sourceConfig.width;
+        const targetHeight = sourceConfig.height;
+        const jpegQuality = (sourceConfig.jpeg_quality ?? 80) / 100;
+
+        if (!targetWidth || !targetHeight) {
+            this.throttledLogAndSend({
+                type: 'PerParticipantVideoCaptureManagerMissingTargetDimensions',
+                participantId,
+                isScreenShare,
+                sourceConfig,
+            });
+            return;
+        }
+
+        const targetCanvas = document.createElement('canvas');
+        targetCanvas.width = targetWidth;
+        targetCanvas.height = targetHeight;
+
+        const ctx = targetCanvas.getContext('2d', { alpha: false });
+        if (!ctx) {
+            this.throttledLogAndSend({
+                type: 'PerParticipantVideoCaptureManagerNoCanvasContext',
+                participantId,
+                isScreenShare,
+            });
+            return;
+        }
+
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+
+        const capture = {
+            participantId,
+            isScreenShare,
+            videoPlayer,
+            targetCanvas,
+            ctx,
+            captureIntervalId: null,
+            inFlight: false,
+        };
+
+        const captureFrame = async () => {
+            if (capture.inFlight) return;
+
+            try {
+                if (!window.ws?.mediaSendingEnabled) return;
+
+                // Do not remove the capture from here. The next scan owns cleanup.
+                if (!capture.videoPlayer?.isConnected) return;
+                if (this.activeCaptures.get(captureKey) !== capture) return;
+
+                const { sourceCanvas, sourceVideo } = this.getSourceElements(capture.videoPlayer);
+                if (!sourceCanvas && !sourceVideo) return;
+
+                capture.inFlight = true;
+
+                let didDraw = false;
+
+                if (sourceCanvas?.isConnected) {
+                    didDraw = await this.drawSdkScreenshotLetterboxed({
+                        videoPlayer: capture.videoPlayer,
+                        isScreenShare: capture.isScreenShare,
+                        ctx,
+                        targetWidth,
+                        targetHeight,
+                    });
+                } else if (sourceVideo?.isConnected) {
+                    didDraw = this.drawVideoElementLetterboxed({
+                        sourceVideo,
+                        ctx,
+                        targetWidth,
+                        targetHeight,
+                    });
+                }
+
+                if (!didDraw) return;
+
+                const base64 = targetCanvas.toDataURL('image/jpeg', jpegQuality).split(',', 2)[1];
+                if (!base64) return;
+
+                window.ws?.sendPerParticipantVideo?.(
+                    capture.participantId,
+                    capture.isScreenShare,
+                    base64
+                );
+            } catch (err) {
+                this.throttledLogAndSend({
+                    type: 'PerParticipantVideoCaptureManagerCaptureFrameError',
+                    participantId: capture.participantId,
+                    isScreenShare: capture.isScreenShare,
+                    error: err.message,
+                });
+            } finally {
+                capture.inFlight = false;
+            }
+        };
+
+        capture.captureIntervalId = setInterval(captureFrame, captureIntervalMs);
+        this.activeCaptures.set(captureKey, capture);
+
+        this.throttledLogAndSend({
+            type: sourceType === 'canvas'
+                ? 'PerParticipantVideoCaptureManagerStartCanvasElementCapture'
+                : 'PerParticipantVideoCaptureManagerStartVideoElementCapture',
+            captureKey,
+            participantId,
+            isScreenShare,
+            sourceType,
+            targetWidth,
+            targetHeight,
+            desiredFPS,
+        });
+
+        captureFrame();
+    }
+
+    stopCapture(captureKey) {
+        const capture = this.activeCaptures.get(captureKey);
+        if (!capture) return;
+
+        if (capture.captureIntervalId) {
+            clearInterval(capture.captureIntervalId);
+            capture.captureIntervalId = null;
+        }
+
+        this.activeCaptures.delete(captureKey);
+
+        this.throttledLogAndSend({
+            type: 'PerParticipantVideoCaptureManagerStopCapture',
+            captureKey,
+            participantId: capture.participantId,
+            isScreenShare: capture.isScreenShare,
+        });
+    }
+}
+
 class ParticipantSpeechStartStopManager {
     constructor() {
         // Only one active speaker at a time
@@ -369,6 +889,10 @@ class StyleManager {
         if (window.zoomInitialData.modifyDomForVideoRecording) {
             this.onlyShowSubsetofZoomUI();
         }
+
+        if (initialData.sendPerParticipantVideo) {
+            window.perParticipantVideoCaptureManager.start();
+        }
     }
     
     getMeetingAudioStream() {
@@ -453,7 +977,8 @@ class WebSocketClient {
         VIDEO: 2,
         AUDIO: 3,
         ENCODED_MP4_CHUNK: 4,
-        PER_PARTICIPANT_AUDIO: 5
+        PER_PARTICIPANT_AUDIO: 5,
+        PER_PARTICIPANT_VIDEO: 6,
     };
 
     constructor() {
@@ -584,6 +1109,51 @@ class WebSocketClient {
             console.error('Error sending WebSocket audio message:', error);
         }
     }
+
+    sendPerParticipantVideo(participantId, isScreenShare, videoData) {
+        if (this.ws.readyState !== WebSocket.OPEN) {
+          console.error('WebSocket is not connected for per participant video send', this.ws.readyState);
+          return;
+        }
+    
+        if (!this.mediaSendingEnabled) {
+          return;
+        }
+    
+        try {
+            // Convert participantId to UTF-8 bytes
+            const participantIdBytes = new TextEncoder().encode(participantId);
+            
+            // Convert videoData string to UTF-8 bytes
+            const videoDataBytes = new TextEncoder().encode(videoData);
+            
+            // Create final message: type (4 bytes) + participantId length (1 byte) + 
+            // participantId bytes + isScreenShare (1 byte) + video data
+            const message = new Uint8Array(4 + 1 + participantIdBytes.length + 1 + videoDataBytes.length);
+            const dataView = new DataView(message.buffer);
+            
+            // Set message type (6 for PER_PARTICIPANT_VIDEO)
+            dataView.setInt32(0, WebSocketClient.MESSAGE_TYPES.PER_PARTICIPANT_VIDEO, true);
+            
+            // Set participantId length as uint8 (1 byte)
+            dataView.setUint8(4, participantIdBytes.length);
+            
+            // Copy participantId bytes
+            message.set(participantIdBytes, 5);
+            
+            // Set isScreenShare byte (0 = webcam, 1 = screenshare)
+            dataView.setUint8(5 + participantIdBytes.length, isScreenShare ? 1 : 0);
+            
+            // Copy video data after type, length, participantId, and isScreenShare
+            message.set(videoDataBytes, 5 + participantIdBytes.length + 1);
+            
+            // Send the binary message
+            this.ws.send(message.buffer);
+        } catch (error) {
+            console.error('Error sending WebSocket video message:', error);
+        }
+      }
+  
 
     sendMixedAudio(timestamp, audioData) {
         if (this.ws.readyState !== WebSocket.OPEN) {
@@ -795,6 +1365,8 @@ const participantSpeechStartStopManager = new ParticipantSpeechStartStopManager(
 window.participantSpeechStartStopManager = participantSpeechStartStopManager;
 const mixedAudioStreamManager = new MixedAudioStreamManager();
 window.mixedAudioStreamManager = mixedAudioStreamManager;
+const perParticipantVideoCaptureManager = new PerParticipantVideoCaptureManager();
+window.perParticipantVideoCaptureManager = perParticipantVideoCaptureManager;
 
 const turnOnCameraArialLabel = "start my video"
 const turnOffCameraArialLabel = "stop my video"

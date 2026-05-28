@@ -46,8 +46,8 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
         logger.info("Meeting requires login and Google meet bot login is available, so we will retry by logging in")
         return True
 
-    def get_chromedriver_payload_file_name(self):
-        return "google_meet_bot_adapter/google_meet_chromedriver_payload.js"
+    def get_chromedriver_payload_file_names(self):
+        return ["google_meet_bot_adapter/google_meet_chromedriver_payload.js"]
 
     def get_websocket_port(self):
         return 8765
@@ -57,9 +57,9 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
         logger.info(f"is_sent_video_still_playing result = {result}")
         return result
 
-    def send_video(self, video_url, loop=False):
-        logger.info(f"send_video called with video_url = {video_url}, loop = {loop}")
-        self.driver.execute_script(f"window.botOutputManager.playVideo({json.dumps(video_url)}, {json.dumps(loop)})")
+    def send_video(self, video_url, loop=False, mute_video=False):
+        logger.info(f"send_video called with video_url = {video_url}, loop = {loop}, mute_video = {mute_video}")
+        self.driver.execute_script(f"window.botOutputManager.playVideo({json.dumps(video_url)}, {json.dumps(loop)}, {json.dumps(mute_video)})")
 
     def send_chat_message(self, text, to_user_uuid):
         self.driver.execute_script("window?.sendChatMessage(arguments[0]);", text)

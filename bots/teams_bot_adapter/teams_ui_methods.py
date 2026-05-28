@@ -100,8 +100,9 @@ class TeamsUIMethods:
                 return
             except TimeoutException as e:
                 self.look_for_microsoft_login_form_element("name_input")
+                self.look_for_invalid_url_element("name_input")
 
-                if self.teams_bot_login_credentials and self.teams_bot_login_should_be_used and self.join_now_button_is_present():
+                if self.teams_bot_login_is_available and self.teams_bot_login_should_be_used and self.join_now_button_is_present():
                     logger.info("Join now button is present. Assuming name input is not present because we don't need to fill it out, so returning.")
                     return
 
@@ -154,6 +155,9 @@ class TeamsUIMethods:
 
                 logger.info("Waiting room timeout exceeded, but there is more than one participant in the meeting. Not aborting join attempt.")
                 return
+
+            # Take a screenshot to confirm that we are in the waiting room
+            self.send_screenshot_and_mhtml_file_message()
 
             try:
                 self.click_cancel_join_button()
@@ -208,8 +212,20 @@ class TeamsUIMethods:
     def check_if_blocked_by_captcha(self, step):
         captcha_element = self.find_element_by_selector(By.XPATH, '//*[contains(text(), "Verify you\'re a real person")]')
         if captcha_element:
+            # The captcha may be being shown because we need to login.
+            # If a login is available, but we aren't using it, we should login and retry and see if the captcha goes away.
+            if self.teams_bot_login_is_available and not self.teams_bot_login_should_be_used:
+                logger.info("Captcha detected. Teams bot login is available and not being used, so we will retry by logging in")
+                raise UiLoginRequiredException("Sign in required", step)
+
             logger.info("Captcha detected. Raising UiBlockedByCaptchaException")
             raise UiBlockedByCaptchaException("Captcha detected", step)
+
+    def look_for_invalid_url_element(self, step):
+        invalid_url_element = self.find_element_by_selector(By.XPATH, '//*[contains(text(), "Looks like the meeting URL is incorrect. Please check the URL and try again.")]')
+        if invalid_url_element:
+            logger.info("Invalid URL detected. Raising UiMeetingNotFoundException")
+            raise UiMeetingNotFoundException("Invalid URL detected", step)
 
     def look_for_microsoft_login_form_element(self, step):
         # Check for Microsoft login form (email input)
@@ -268,7 +284,7 @@ class TeamsUIMethods:
 
     # Returns nothing if succeeded, raises an exception if failed
     def attempt_to_join_meeting(self):
-        if self.teams_bot_login_credentials and self.teams_bot_login_should_be_used:
+        if self.teams_bot_login_is_available and self.teams_bot_login_should_be_used:
             self.login_to_microsoft_account()
 
         self.driver.get(self.meeting_url)
@@ -310,7 +326,7 @@ class TeamsUIMethods:
 
     def disable_incoming_video_in_ui(self):
         logger.info("Waiting for the view button...")
-        view_button = self.locate_element(step="view_button", condition=EC.presence_of_element_located((By.CSS_SELECTOR, "#view-mode-button, #custom-view-button")), wait_time_seconds=60)
+        view_button = self.locate_element(step="view_button", condition=EC.element_to_be_clickable((By.CSS_SELECTOR, "#view-mode-button, #custom-view-button")), wait_time_seconds=60)
         logger.info("Clicking the view button...")
         self.click_element(view_button, "disable_incoming_video:view_button")
 
@@ -320,7 +336,7 @@ class TeamsUIMethods:
         logger.info("Waiting for the turn off incoming video button...")
         for attempt_index in range(num_attempts):
             try:
-                turn_off_incoming_video_button = WebDriverWait(self.driver, 1).until(EC.element_to_be_clickable((By.CSS_SELECTOR, "[aria-label='Turn off incoming video'], #incoming-video-button")))
+                turn_off_incoming_video_button = WebDriverWait(self.driver, 1).until(EC.element_to_be_clickable((By.CSS_SELECTOR, "[aria-label='Turn off incoming video'], [aria-label='Turn off all videos'], #incoming-video-button, #toggle-incoming-video-button")))
                 logger.info("Turn off incoming video button found")
                 turn_off_incoming_video_button.click()
                 return
@@ -371,13 +387,18 @@ class TeamsUIMethods:
         time.sleep(1)
 
     def login_to_microsoft_account(self):
+        credentials = self.fetch_teams_bot_login_credentials_callback()
+
+        if not credentials:
+            raise UiLoginAttemptFailedException("Teams bot login credentials are not available", "login_to_microsoft_account")
+
         logger.info("Navigate to login screen")
         self.driver.get("https://www.office.com/login")
 
         logger.info("Waiting for the username input...")
         username_input = self.locate_element(step="username_input", condition=EC.presence_of_element_located((By.CSS_SELECTOR, 'input[name="loginfmt"]')), wait_time_seconds=10)
         logger.info("Filling in the username...")
-        username_input.send_keys(self.teams_bot_login_credentials["username"])
+        username_input.send_keys(credentials["username"])
 
         time.sleep(1)
 
@@ -389,9 +410,37 @@ class TeamsUIMethods:
         time.sleep(1)
 
         logger.info("Waiting for the password input...")
-        password_input = self.locate_element(step="password_input", condition=EC.presence_of_element_located((By.CSS_SELECTOR, 'input[name="passwd"]')), wait_time_seconds=10)
-        logger.info("Filling in the password...")
-        password_input.send_keys(self.teams_bot_login_credentials["password"])
+        # Verify that the password input is filled in. If it is not, try again several times
+        num_password_attempts = 5
+        password_filled_in = False
+        for password_attempt_index in range(num_password_attempts):
+            try:
+                password_input = self.locate_element(step="password_input", condition=EC.element_to_be_clickable((By.CSS_SELECTOR, 'input[name="passwd"]')), wait_time_seconds=10)
+            except UiCouldNotLocateElementException as e:
+                # If we see the incorrect username error, then we should raise a more specific exception
+                if self.find_element_by_selector(By.ID, "usernameError"):
+                    logger.info("Incorrect username element found. Raising UiLoginAttemptFailedException")
+                    raise UiLoginAttemptFailedException("Incorrect username", "login_to_microsoft_account")
+                raise e
+
+            logger.info(f"Filling in the password (attempt {password_attempt_index + 1}/{num_password_attempts})...")
+            password_input.send_keys(credentials["password"])
+            time.sleep(1)
+            filled_value = password_input.get_attribute("value") or ""
+            if filled_value == credentials["password"]:
+                logger.info("Password input filled in successfully")
+                password_filled_in = True
+                break
+
+            logger.warning(f"Password input was not filled in correctly (got {len(filled_value)} characters, expected {len(credentials['password'])}). Retrying...")
+            try:
+                password_input.clear()
+            except Exception as e:
+                logger.warning(f"Error clearing password input: {e}")
+            time.sleep(1)
+
+        if not password_filled_in:
+            logger.warning("Failed to fill in the password input after multiple attempts.")
 
         time.sleep(1)
 

@@ -1,0 +1,104 @@
+{% extends 'projects/sidebar.html' %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="d-flex justify-content-between align-items-center mb-1">
+        <h2 class="mb-0">Usage</h2>
+        <div class="d-flex gap-3 align-items-center">
+            <span class="text-muted small fw-semibold">Interval</span>
+            <div class="btn-group btn-group-sm">
+                <a href="?interval=months&measure={{ measure }}{% if platform %}&platform={{ platform }}{% endif %}" class="btn {% if interval == 'months' %}btn-primary{% else %}btn-outline-primary{% endif %}">Months</a>
+                <a href="?interval=weeks&measure={{ measure }}{% if platform %}&platform={{ platform }}{% endif %}" class="btn {% if interval == 'weeks' %}btn-primary{% else %}btn-outline-primary{% endif %}">Weeks</a>
+                <a href="?interval=days&measure={{ measure }}{% if platform %}&platform={{ platform }}{% endif %}" class="btn {% if interval == 'days' %}btn-primary{% else %}btn-outline-primary{% endif %}">Days</a>
+            </div>
+            <span class="border-start ms-1" style="height: 1.5rem;"></span>
+            <span class="text-muted small fw-semibold">Measure</span>
+            <div class="btn-group btn-group-sm">
+                <a href="?interval={{ interval }}&measure=count{% if platform %}&platform={{ platform }}{% endif %}" class="btn {% if measure == 'count' %}btn-secondary{% else %}btn-outline-secondary{% endif %}">Count</a>
+                <a href="?interval={{ interval }}&measure=time{% if platform %}&platform={{ platform }}{% endif %}" class="btn {% if measure == 'time' %}btn-secondary{% else %}btn-outline-secondary{% endif %}">Time</a>
+                <a href="?interval={{ interval }}&measure=percent{% if platform %}&platform={{ platform }}{% endif %}" class="btn {% if measure == 'percent' %}btn-secondary{% else %}btn-outline-secondary{% endif %}">Percent</a>
+            </div>
+            <span class="border-start ms-1" style="height: 1.5rem;"></span>
+            <span class="text-muted small fw-semibold">Platform</span>
+            <div class="btn-group btn-group-sm">
+                <a href="?interval={{ interval }}&measure={{ measure }}" class="btn {% if not platform %}btn-secondary{% else %}btn-outline-secondary{% endif %}">All</a>
+                <a href="?interval={{ interval }}&measure={{ measure }}&platform=zoom" class="btn {% if platform == 'zoom' %}btn-secondary{% else %}btn-outline-secondary{% endif %}">Zoom</a>
+                <a href="?interval={{ interval }}&measure={{ measure }}&platform=meet" class="btn {% if platform == 'meet' %}btn-secondary{% else %}btn-outline-secondary{% endif %}">Google Meet</a>
+                <a href="?interval={{ interval }}&measure={{ measure }}&platform=teams" class="btn {% if platform == 'teams' %}btn-secondary{% else %}btn-outline-secondary{% endif %}">Teams</a>
+            </div>
+        </div>
+    </div>
+    <p class="text-muted">{{ subtitle }}</p>
+
+    <div class="card">
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-bordered mb-0" style="table-layout: fixed; min-width: 900px;">
+                    <thead>
+                        <tr>
+                            <th style="width: 160px; position: sticky; left: 0; z-index: 1; background: #f8f9fa;"></th>
+                            {% for label in column_labels %}
+                            <th class="text-center small text-muted" style="background: #f8f9fa; font-weight: 600;">{{ label }}</th>
+                            {% endfor %}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in usage_rows %}
+                        <tr{% if row.label == "Total" %} style="border-top: 2px solid #dee2e6;"{% endif %}>
+                            <td class="fw-semibold small" style="position: sticky; left: 0; z-index: 1; background: #f8f9fa; vertical-align: middle;">{{ row.label }}</td>
+                            {% for cell in row.cells %}
+                            <td class="text-center p-0" style="vertical-align: middle;{% if cell.bg %} background: {{ cell.bg }};{% endif %}">
+                                <a href="{% url 'projects:project-bots' project.object_id %}{{ cell.link }}"
+                                   target="_blank"
+                                   data-value="{{ cell.value }}"
+                                   class="d-block text-decoration-none fw-semibold{% if cell.value == 0 %} text-muted{% else %} text-dark{% endif %}"
+                                   style="font-size: 0.9rem; padding: .5rem;">{{ cell.display }}</a>
+                            </td>
+                            {% endfor %}
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    <div class="mt-2 text-end">
+        <button id="copy-clipboard-btn" class="btn btn-sm btn-outline-secondary" onclick="copyTableTSV()" title="Copy to clipboard">
+            <i id="clipboard-icon" class="bi bi-clipboard me-1"></i>
+            <i id="clipboard-check-icon" class="bi bi-clipboard-check me-1" style="display:none;"></i>
+            Export
+        </button>
+    </div>
+</div>
+{{ clipboard_dates|json_script:"clipboard-dates" }}
+<script>
+function copyTableTSV() {
+    var dates = JSON.parse(document.getElementById('clipboard-dates').textContent);
+    var tableRows = document.querySelectorAll('table tbody tr');
+    var headers = ['Date'];
+    var seriesData = [];
+    tableRows.forEach(function(row) {
+        var label = row.querySelector('td').textContent.trim();
+        headers.push(label);
+        var values = [];
+        row.querySelectorAll('td:not(:first-child) a').forEach(function(a) {
+            values.push(a.getAttribute('data-value'));
+        });
+        seriesData.push(values);
+    });
+    var lines = [headers.join('\t')];
+    dates.forEach(function(d, i) {
+        var row = [d];
+        seriesData.forEach(function(series) { row.push(series[i]); });
+        lines.push(row.join('\t'));
+    });
+    navigator.clipboard.writeText(lines.join('\n')).then(function() {
+        var icon = document.getElementById('clipboard-icon');
+        var check = document.getElementById('clipboard-check-icon');
+        icon.style.display = 'none';
+        check.style.display = 'inline';
+        setTimeout(function() { icon.style.display = 'inline'; check.style.display = 'none'; }, 2000);
+    });
+}
+</script>
+{% endblock %}
