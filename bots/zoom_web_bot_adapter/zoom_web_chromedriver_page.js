@@ -217,6 +217,15 @@ function startMeeting(signature) {
     ZoomMtg.inMeetingServiceListener('onMeetingStatus', function (data) {
         console.log('onMeetingStatus', data);
 
+
+        if (data.errorCode == 4017)
+        // The 4017 code indicates that we are not able to enter the meeting because the OBF token user is not present
+        {
+            userEncounteredOnBehalfTokenUserNotInMeetingError = true;
+            console.log('handleJoinFailureFromConsoleIntercept: user encountered onbehalf token user not in meeting error');
+            return;
+        }
+
         // 3 means disconnected
         if (data.meetingStatus === 3) {
             // Only send the message if we've got into the meeting
