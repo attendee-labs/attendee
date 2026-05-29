@@ -44,6 +44,38 @@ class TestBuildSiteUrl(TestCase):
         result = build_site_url("/callback")
         self.assertEqual(result, "http://localhost:9000/callback")
 
+    @patch("bots.bots_api_utils.settings")
+    @patch.dict("os.environ", {"BOT_CALLBACK_SITE_DOMAIN": "http://attendee-app.ai.svc.cluster.local:8000"}, clear=True)
+    def test_build_site_url_internal_uses_bot_callback_domain_with_protocol_prefix(self, mock_settings):
+        """Test that internal callbacks use BOT_CALLBACK_SITE_DOMAIN and honor its protocol prefix."""
+        mock_settings.SITE_DOMAIN = "production.example.com"
+        result = build_site_url("/cookie", internal=True)
+        self.assertEqual(result, "http://attendee-app.ai.svc.cluster.local:8000/cookie")
+
+    @patch("bots.bots_api_utils.settings")
+    @patch.dict("os.environ", {"BOT_CALLBACK_SITE_DOMAIN": "attendee-app.ai.svc.cluster.local"}, clear=True)
+    def test_build_site_url_internal_bot_callback_domain_defaults_to_https(self, mock_settings):
+        """Test that BOT_CALLBACK_SITE_DOMAIN without a protocol prefix defaults to https."""
+        mock_settings.SITE_DOMAIN = "production.example.com"
+        result = build_site_url("/cookie", internal=True)
+        self.assertEqual(result, "https://attendee-app.ai.svc.cluster.local/cookie")
+
+    @patch("bots.bots_api_utils.settings")
+    @patch.dict("os.environ", {"BOT_CALLBACK_SITE_DOMAIN": "http://attendee-app.ai.svc.cluster.local:8000", "EXTERNAL_WEBHOOK_SITE_DOMAIN": "external.example.com"}, clear=True)
+    def test_build_site_url_external_ignores_bot_callback_domain(self, mock_settings):
+        """Test that external (default) URLs are unaffected by BOT_CALLBACK_SITE_DOMAIN."""
+        mock_settings.SITE_DOMAIN = "production.example.com"
+        result = build_site_url("/webhook")
+        self.assertEqual(result, "https://external.example.com/webhook")
+
+    @patch("bots.bots_api_utils.settings")
+    @patch.dict("os.environ", {"EXTERNAL_WEBHOOK_SITE_DOMAIN": "external.example.com"}, clear=True)
+    def test_build_site_url_internal_falls_back_to_external_domain_when_unset(self, mock_settings):
+        """Test that internal callbacks fall back to the external domain when BOT_CALLBACK_SITE_DOMAIN is unset."""
+        mock_settings.SITE_DOMAIN = "production.example.com"
+        result = build_site_url("/cookie", internal=True)
+        self.assertEqual(result, "https://external.example.com/cookie")
+
 
 class TestValidateMeetingUrlAndCredentials(TestCase):
     def setUp(self):

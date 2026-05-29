@@ -26,7 +26,9 @@ logger = logging.getLogger(__name__)
 
 
 def get_google_meet_set_cookie_url(session_id):
-    base_url = build_site_url(reverse("bot_sso:google_meet_set_cookie"))
+    # The bot's browser navigates to this URL from inside the cluster, so resolve it against
+    # the internal bot-callback domain when one is configured.
+    base_url = build_site_url(reverse("bot_sso:google_meet_set_cookie"), internal=True)
     query_params = urlencode({"session_id": session_id})
     google_meet_set_cookie_url = f"{base_url}?{query_params}"
     return google_meet_set_cookie_url

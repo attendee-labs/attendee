@@ -45,13 +45,35 @@ from .utils import transcription_provider_from_bot_creation_data
 logger = logging.getLogger(__name__)
 
 
-def build_site_url(path=""):
+def build_site_url(path="", internal=False):
     """
-    Build a full URL using SITE_DOMAIN setting.
+    Build a full URL to this Attendee deployment.
     Automatically uses http:// for localhost, https:// for everything else.
-    If EXTERNAL_WEBHOOK_SITE_DOMAIN is set, it takes priority (useful for webhooks that need
-    to be accessible from external services like Microsoft/Google).
+
+    The URL is built for one of two audiences:
+
+      - External (default): URLs that must be reachable from outside the cluster, such as
+        webhook addresses registered with external services (Microsoft/Google) or links
+        shown to users in the dashboard. If EXTERNAL_WEBHOOK_SITE_DOMAIN is set, it takes
+        priority over SITE_DOMAIN.
+
+      - Internal (internal=True): callbacks made by bot pods back to the app from inside the
+        cluster, such as the Google Meet set-cookie URL the bot's browser navigates to. When
+        BOT_CALLBACK_SITE_DOMAIN is set, these callbacks use it instead of the external
+        domain. It may include an explicit protocol prefix (e.g.
+        http://attendee-app.ai.svc.cluster.local:8000) so the operator can target an
+        in-cluster service and bypass the public ingress, which is useful when bot pods are
+        subject to a restrictive NetworkPolicy. When unset, internal callbacks fall back to
+        the external domain, preserving the previous behaviour.
     """
+    if internal:
+        bot_callback_domain = os.getenv("BOT_CALLBACK_SITE_DOMAIN")
+        if bot_callback_domain:
+            # Allow an optional protocol prefix so the operator can pick http for in-cluster services
+            if bot_callback_domain.startswith(("http://", "https://")):
+                return f"{bot_callback_domain}{path}"
+            return f"https://{bot_callback_domain}{path}"
+
     # Use EXTERNAL_WEBHOOK_SITE_DOMAIN if set (for external webhooks), otherwise use SITE_DOMAIN
     site_domain = os.getenv("EXTERNAL_WEBHOOK_SITE_DOMAIN") or settings.SITE_DOMAIN
     protocol = "http" if site_domain.startswith("localhost") else "https"
