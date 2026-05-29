@@ -20,7 +20,7 @@ from saml2.saml import NAMEID_FORMAT_EMAILADDRESS, NameID
 from saml2.server import Server
 
 from bots.bots_api_utils import build_site_url
-from bots.models import Bot, GoogleMeetBotLogin
+from bots.models import Bot, BotLogin, BotLoginPlatform
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,7 @@ def get_google_meet_set_cookie_url(session_id):
     return google_meet_set_cookie_url
 
 
-def create_google_meet_sign_in_session(bot: Bot, google_meet_bot_login: GoogleMeetBotLogin):
+def create_google_meet_sign_in_session(bot: Bot, google_meet_bot_login: BotLogin):
     session_id = str(uuid.uuid4())
     redis_key = f"google_meet_sign_in_session:{session_id}"
     redis_client = redis.from_url(settings.REDIS_URL_WITH_PARAMS)
@@ -63,7 +63,7 @@ def get_bot_login_for_google_meet_sign_in_session(session_id):
     google_meet_bot_login_object_id = session_data.get("google_meet_bot_login_object_id")
 
     bot = Bot.objects.filter(object_id=bot_object_id).first()
-    google_meet_bot_login = GoogleMeetBotLogin.objects.filter(object_id=google_meet_bot_login_object_id, group__project=bot.project).first()
+    google_meet_bot_login = BotLogin.objects.filter(object_id=google_meet_bot_login_object_id, group__project=bot.project, group__platform=BotLoginPlatform.GOOGLE_MEET).first()
     if not google_meet_bot_login:
         logger.info(f"No google_meet_bot_login found for google_meet_sign_in_session: {session_id}. Data: {session_data}")
         return None

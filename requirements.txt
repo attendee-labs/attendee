@@ -62,7 +62,7 @@ trio-websocket==0.11.1
 typing_extensions==4.13.0
 tzdata==2024.2
 uritemplate==4.1.1
-urllib3==2.6.3
+urllib3==2.7.0
 vine==5.1.0
 watchdog==6.0.0
 wcwidth==0.2.13
@@ -102,3 +102,7 @@ jsonpointer==3.0.0
 sentry-sdk[celery,django]>=2.0.0
 django-csp==4.0
 pyotp==2.9.0
+Cython==3.2.4
+PyJWT==2.9.0
+gdown==6.0.0
+python-dotenv==1.0.1

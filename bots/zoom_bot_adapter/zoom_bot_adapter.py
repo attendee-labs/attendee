@@ -1218,8 +1218,8 @@ class ZoomBotAdapter(BotAdapter):
             return False
         return self.mp4_demuxer.is_playing()
 
-    def send_video(self, video_url, loop=False):
-        logger.info(f"send_video called with video_url = {video_url}, loop = {loop}")
+    def send_video(self, video_url, loop=False, mute_video=False):
+        logger.info(f"send_video called with video_url = {video_url}, loop = {loop}, mute_video = {mute_video}")
         if not self.unmute_webcam():
             return
 
@@ -1237,7 +1237,7 @@ class ZoomBotAdapter(BotAdapter):
             url=video_url,
             output_video_dimensions=(self.suggested_video_cap.width, self.suggested_video_cap.height),
             on_video_sample=self.mp4_demuxer_on_video_sample,
-            on_audio_sample=self.mp4_demuxer_on_audio_sample,
+            on_audio_sample=self.ignore_mp4_demuxer_audio_sample if mute_video else self.mp4_demuxer_on_audio_sample,
             loop=loop,
         )
         self.mp4_demuxer.start()
@@ -1258,6 +1258,10 @@ class ZoomBotAdapter(BotAdapter):
             return
 
         self.send_raw_audio(bytes_from_gstreamer, 8000)
+
+    # No-op callback for muted audio stream, does not forward audio samples to Zoom.
+    def ignore_mp4_demuxer_audio_sample(self, pts, bytes_from_gstreamer):
+        pass
 
     def get_staged_bot_join_delay_seconds(self):
         return 0

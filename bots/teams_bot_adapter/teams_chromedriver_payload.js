@@ -119,44 +119,130 @@ const handleVideoTrackForRealTimePerParticipantVideo = async ({ track, streams }
     };
   })();
 
-class StyleManager {
+  class MixedAudioStreamManager {
     constructor() {
-        this.audioContext = null;
         this.audioTracks = [];
-        this.silenceThreshold = 0.0;
-        this.silenceCheckInterval = null;
-        this.frameStyleElement = null;
-        this.frameAdjustInterval = null;
-        this.neededInteractionsInterval = null;
-        this.fakeUserActivityInterval = null;
-
-        // Stream used which combines the audio tracks from the meeting. Does NOT include the bot's audio
         this.meetingAudioStream = null;
+        this.audioTracksToBeAdded = [];
+        this.audioContext = null;
+        this.destination = null;
+        this.seenTrackIds = new Set();
+        this.sourceNodes = [];
+
+        // Silence detection state
+        this.silenceThreshold = 0.0;
+        this.analyser = null;
+        this.audioDataArray = null;
+        this.mixedAudioTrack = null;
     }
 
-    addAudioTrack(audioTrack) {
-        this.audioTracks.push(audioTrack);
-        if (this.audioTracks.length > 1) {
-            window.ws?.sendJson({
-                type: 'MultipleAudioTracksDetected',
-                numberOfTracks: this.audioTracks.length,
-            });
+
+    addAudioStream(audioStream) {
+        const track = audioStream.getAudioTracks()[0];
+        if (track) {
+            this.addAudioTrack(track);
         }
     }
 
+    addAudioTrackFromTrackEvent(trackEvent) {
+        if (!trackEvent.track)
+            return;
+        const firstStreamId = trackEvent.streams[0]?.id;
+        // streamId must contain mainAudio in it, which means it's from Teams, not from a voice agent.
+        if (!firstStreamId?.includes('mainAudio')) {
+            window.ws?.sendJson({
+                type: 'AudioTrackNotAddedToMeetingAudioStream',
+                trackId: trackEvent.track.id,
+                streams: trackEvent.streams?.map(stream => stream?.id),
+            });
+            return;
+        }
+        window.ws?.sendJson({
+            type: 'AudioTrackAddedToMeetingAudioStream',
+            trackId: trackEvent.track.id,
+            streams: trackEvent.streams?.map(stream => stream?.id),
+        });
+        this.addAudioTrack(trackEvent.track);
+    }
+
+    addAudioTrack(track) {
+        if (!track || this.seenTrackIds.has(track.id)) {
+            return;
+        }
+
+        // If start() already ran, patch the new track into the existing mix.
+        if (this.audioContext && this.destination) {
+            const mediaStream = new MediaStream([track]);
+            const source = this.audioContext.createMediaStreamSource(mediaStream);
+            source.connect(this.destination);
+            this.sourceNodes.push(source);
+            this.seenTrackIds.add(track.id);
+            if (this.seenTrackIds.size > 1) {
+                window.ws?.sendJson({
+                    type: 'MultipleAudioTracksDetected',
+                    numberOfTracks: this.seenTrackIds.size,
+                });
+            }
+        }
+        else {
+            this.audioTracksToBeAdded.push(track);
+        }
+    }
+
+    createStream() {
+        if (this.meetingAudioStream)
+            return;
+        this.audioContext = new AudioContext({ sampleRate: 48000 });
+        this.destination = this.audioContext.createMediaStreamDestination();
+
+        this.audioTracksToBeAdded.forEach(track => this.addAudioTrack(track));
+
+        this.meetingAudioStream = this.destination.stream;
+
+        // Create a source from the destination's stream so that it actually plays
+        const mixedSource = this.audioContext.createMediaStreamSource(this.destination.stream);
+
+        // Set up an analyser on the mixed stream so we can detect silence
+        this.analyser = this.audioContext.createAnalyser();
+        this.analyser.fftSize = 256;
+        this.audioDataArray = new Uint8Array(this.analyser.frequencyBinCount);
+        mixedSource.connect(this.analyser);
+
+        this.mixedAudioTrack = this.destination.stream.getAudioTracks()[0];
+
+        // Process and send mixed audio if enabled
+        if (window.initialData.sendMixedAudio && this.mixedAudioTrack) {
+            this.processMixedAudioTrack();
+        }
+
+        window.ws?.sendJson({
+            type: 'MeetingAudioStreamCreated',
+            message: 'Meeting audio stream created',
+        });
+    }
+
+    getMeetingAudioStream() {
+        this.createStream();
+        return this.meetingAudioStream;
+    }
+
     checkAudioActivity() {
+        if (!this.analyser || !this.audioDataArray) {
+            return;
+        }
+
         // Get audio data
         this.analyser.getByteTimeDomainData(this.audioDataArray);
-        
+
         // Calculate deviation from the center value (128)
         let sumDeviation = 0;
         for (let i = 0; i < this.audioDataArray.length; i++) {
             // Calculate how much each sample deviates from the center (128)
             sumDeviation += Math.abs(this.audioDataArray[i] - 128);
         }
-        
+
         const averageDeviation = sumDeviation / this.audioDataArray.length;
-        
+
         // If average deviation is above threshold, we have audio activity
         if (averageDeviation > this.silenceThreshold) {
             window.ws.sendJson({
@@ -166,139 +252,12 @@ class StyleManager {
         }
     }
 
-    // Prevents Teams from going into mode where it stops receiving chat messages
-    fakeUserActivity() {
-        const clientX = Math.random() * 500;
-        const clientY = Math.random() * 500;
-        document.body.dispatchEvent(new MouseEvent("mousemove", {
-            bubbles: true,
-            clientX: clientX,
-            clientY: clientY,
-          }));
-        window.ws?.sendJson({
-            type: 'FakeUserActivity',
-            activity: `mousemove: ${clientX}, ${clientY}`
-        });
-    }
-
-    checkNeededInteractions() {
-        // Check if bot has been removed from the meeting
-        const removedFromMeetingElement = document.getElementById('calling-retry-screen-title');
-        if (removedFromMeetingElement && 
-            removedFromMeetingElement.textContent.includes("You've been removed from this meeting")) {
-            window.ws.sendJson({
-                type: 'MeetingStatusChange',
-                change: 'removed_from_meeting'
-            });
-            console.log('Bot was removed from meeting, sent notification');
-        }
-
-        // We need to open the chat window to be able to track messages
-        const chatButton = document.querySelector('button#chat-button');
-        if (chatButton && !this.chatButtonClicked) {
-            chatButton.click();
-            this.chatButtonClicked = true;
-            
-            // Wait until the chat input element appears in the DOM
-            this.waitForChatInputAndSendReadyMessage();
-        }
-    }
-
-    waitForChatInputAndSendReadyMessage() {
-        const checkForChatInput = () => {
-            const chatInput = document.querySelector('[aria-label="Type a message"], [placeholder="Type a message"]');
-            if (chatInput) {
-                // Chat input is now available, send the ready message
-                window.ws.sendJson({
-                    type: 'ChatStatusChange',
-                    change: 'ready_to_send'
-                });
-                console.log('Chat input element found, ready to send messages');
-            } else {
-                // Chat input not found yet, check again in 500ms
-                setTimeout(checkForChatInput, 500);
-            }
-        };
-        
-        // Start checking for the chat input element
-        checkForChatInput();
-    }
-
-    startSilenceDetection() {
-         // Set up audio context and processing as before
-         this.audioContext = new AudioContext();
-
-         this.audioSources = this.audioTracks.map(track => {
-             const mediaStream = new MediaStream([track]);
-             return this.audioContext.createMediaStreamSource(mediaStream);
-         });
- 
-         // Create a destination node
-         const destination = this.audioContext.createMediaStreamDestination();
- 
-         // Connect all sources to the destination
-         this.audioSources.forEach(source => {
-             source.connect(destination);
-         });
- 
-         // Create analyzer and connect it to the destination
-         this.analyser = this.audioContext.createAnalyser();
-         this.analyser.fftSize = 256;
-         const bufferLength = this.analyser.frequencyBinCount;
-         this.audioDataArray = new Uint8Array(bufferLength);
- 
-         // Create a source from the destination's stream and connect it to the analyzer
-         const mixedSource = this.audioContext.createMediaStreamSource(destination.stream);
-         mixedSource.connect(this.analyser);
- 
-         this.mixedAudioTrack = destination.stream.getAudioTracks()[0];
-
-        // Process and send mixed audio if enabled
-        if (window.initialData.sendMixedAudio && this.mixedAudioTrack) {
-            this.processMixedAudioTrack();
-        }
-
-        // Clear any existing interval
-        if (this.silenceCheckInterval) {
-            clearInterval(this.silenceCheckInterval);
-        }
-                
-        if (this.neededInteractionsInterval) {
-            clearInterval(this.neededInteractionsInterval);
-        }
-                
-        if (this.fakeUserActivityInterval) {
-            clearInterval(this.fakeUserActivityInterval);
-        }
-
-        // Check for audio activity every second
-        this.silenceCheckInterval = setInterval(() => {
-            this.checkAudioActivity();
-        }, 1000);
-
-        // Check for needed interactions every 5 seconds
-        this.neededInteractionsInterval = setInterval(() => {
-            this.checkNeededInteractions();
-        }, 5000);
-
-        // Perform fake user activity every 4 minutes
-        this.fakeUserActivityInterval = setInterval(() => {
-            this.fakeUserActivity();
-        }, 240000);
-
-        this.meetingAudioStream = destination.stream;
-    }
-    
-    getMeetingAudioStream() {
-        return this.meetingAudioStream;
-    }
-
     async processMixedAudioTrack() {
         try {
             // Create processor to get raw audio frames from the mixed audio track
             const processor = new MediaStreamTrackProcessor({ track: this.mixedAudioTrack });
             const generator = new MediaStreamTrackGenerator({ kind: 'audio' });
-            
+
             // Get readable stream of audio frames
             const readable = processor.readable;
             const writable = generator.writable;
@@ -321,13 +280,13 @@ class StyleManager {
                         const numChannels = frame.numberOfChannels;
                         const numSamples = frame.numberOfFrames;
                         const audioData = new Float32Array(numSamples);
-                        
+
                         // Copy data from each channel
                         // If multi-channel, average all channels together to create mono output
                         if (numChannels > 1) {
                             // Temporary buffer to hold each channel's data
                             const channelData = new Float32Array(numSamples);
-                            
+
                             // Sum all channels
                             for (let channel = 0; channel < numChannels; channel++) {
                                 frame.copyTo(channelData, { planeIndex: channel });
@@ -335,7 +294,7 @@ class StyleManager {
                                     audioData[i] += channelData[i];
                                 }
                             }
-                            
+
                             // Average by dividing by number of channels
                             for (let i = 0; i < numSamples; i++) {
                                 audioData[i] /= numChannels;
@@ -348,7 +307,7 @@ class StyleManager {
                         // Send mixed audio data via websocket
                         const timestamp = performance.now();
                         window.ws.sendMixedAudio(timestamp, audioData);
-                        
+
                         // Pass through the original frame
                         controller.enqueue(frame);
                     } catch (error) {
@@ -384,6 +343,130 @@ class StyleManager {
         } catch (error) {
             console.error('Error setting up mixed audio processor:', error);
         }
+    }
+}
+
+class StyleManager {
+    constructor() {
+        this.silenceCheckInterval = null;
+        this.frameStyleElement = null;
+        this.frameAdjustInterval = null;
+        this.neededInteractionsInterval = null;
+        this.fakeUserActivityInterval = null;
+
+        this.started = false;
+    }
+
+    checkAudioActivity() {
+        // Silence detection lives in MixedAudioStreamManager, which owns the mixed
+        // meeting audio stream and its analyser.
+        window.mixedAudioStreamManager?.checkAudioActivity();
+    }
+
+    // Prevents Teams from going into mode where it stops receiving chat messages
+    fakeUserActivity() {
+        const clientX = Math.random() * 500;
+        const clientY = Math.random() * 500;
+        document.body.dispatchEvent(new MouseEvent("mousemove", {
+            bubbles: true,
+            clientX: clientX,
+            clientY: clientY,
+          }));
+        window.ws?.sendJson({
+            type: 'FakeUserActivity',
+            activity: `mousemove: ${clientX}, ${clientY}`
+        });
+    }
+
+    checkNeededInteractions() {
+        // Check if bot has been removed from the meeting
+        const removedFromMeetingElement = document.getElementById('calling-retry-screen-title');
+        const removedFromMeetingTexts = [
+            "You've been removed from this meeting",
+            "Removed from the meeting"
+        ];
+        if (removedFromMeetingElement) {
+            for (const text of removedFromMeetingTexts) {
+                if (removedFromMeetingElement.textContent.includes(text)) {
+                    window.ws.sendJson({
+                        type: 'MeetingStatusChange',
+                        change: 'removed_from_meeting'
+                    });
+                    console.log('Bot was removed from meeting, sent notification');
+                    break;
+                }
+            }
+        }
+
+        // We need to open the chat window to be able to track messages
+        const chatButton = document.querySelector('button#chat-button');
+        if (chatButton && !this.chatButtonClicked) {
+            chatButton.click();
+            this.chatButtonClicked = true;
+            
+            // Wait until the chat input element appears in the DOM
+            this.waitForChatInputAndSendReadyMessage();
+        }
+    }
+
+    waitForChatInputAndSendReadyMessage() {
+        const checkForChatInput = () => {
+            const chatInput = document.querySelector('[aria-label="Type a message"], [placeholder="Type a message"]');
+            if (chatInput) {
+                // Chat input is now available, send the ready message
+                window.ws.sendJson({
+                    type: 'ChatStatusChange',
+                    change: 'ready_to_send'
+                });
+                console.log('Chat input element found, ready to send messages');
+            } else {
+                // Chat input not found yet, check again in 500ms
+                setTimeout(checkForChatInput, 500);
+            }
+        };
+        
+        // Start checking for the chat input element
+        checkForChatInput();
+    }
+
+    startSilenceDetection() {
+        // Ensure the mixed meeting audio stream (and its analyser) is set up. The
+        // audio graph and silence/mixed-audio analysis now live in MixedAudioStreamManager.
+        window.mixedAudioStreamManager?.getMeetingAudioStream();
+
+        // Clear any existing interval
+        if (this.silenceCheckInterval) {
+            clearInterval(this.silenceCheckInterval);
+        }
+                
+        if (this.neededInteractionsInterval) {
+            clearInterval(this.neededInteractionsInterval);
+        }
+                
+        if (this.fakeUserActivityInterval) {
+            clearInterval(this.fakeUserActivityInterval);
+        }
+
+        // Check for audio activity every second
+        this.silenceCheckInterval = setInterval(() => {
+            this.checkAudioActivity();
+        }, 1000);
+
+        // Check for needed interactions every 5 seconds
+        this.neededInteractionsInterval = setInterval(() => {
+            this.checkNeededInteractions();
+        }, 5000);
+
+        // Perform fake user activity every 4 minutes
+        this.fakeUserActivityInterval = setInterval(() => {
+            this.fakeUserActivity();
+        }, 240000);
+    }
+    
+    getMeetingAudioStream() {
+        if (!this.started)
+            return null;
+        return window.mixedAudioStreamManager?.getMeetingAudioStream();
     }
  
     makeMainVideoFillFrame = function() {
@@ -507,6 +590,7 @@ class StyleManager {
     }
 
     start() {
+        this.started = true;
         this.startSilenceDetection();
 
         if (window.teamsInitialData.modifyDomForVideoRecording) {
@@ -1761,8 +1845,12 @@ function handleConversationEnd(eventDataObject) {
     realConsole?.log('handleConversationEnd, eventDataObjectBody', eventDataObjectBody);
     window.ws?.sendJson({
         type: 'ConversationEndPayload',
-        body: eventDataObjectBody
+        body: eventDataObjectBody,
+        headers: eventDataObject?.headers,
+        currentCallId: window.callManager?.getCallId()
     });
+
+    const meetingId = extractCallIdFromEventDataObject(eventDataObject);
 
     const subCode = eventDataObjectBody?.subCode;
     const subCodeValueForDeniedRequestToJoin = 5854;
@@ -1773,7 +1861,8 @@ function handleConversationEnd(eventDataObject) {
         // For now this won't do anything, but good to have it in our logs. In the future, this should probably be the source of truth for these things, instead of the UI inspection.
         window.ws?.sendJson({
             type: 'MeetingStatusChange',
-            change: 'request_to_join_denied'
+            change: 'request_to_join_denied',
+            meetingId: meetingId
         });
         return;
     }
@@ -1783,7 +1872,8 @@ function handleConversationEnd(eventDataObject) {
         // For now this won't do anything, but good to have it in our logs. In the future, this should probably be the source of truth for these things, instead of the UI inspection.
         window.ws?.sendJson({
             type: 'MeetingStatusChange',
-            change: 'anonymous_join_disabled_for_tenant_by_policy'
+            change: 'anonymous_join_disabled_for_tenant_by_policy',
+            meetingId: meetingId
         });
         return;
     }
@@ -1791,7 +1881,8 @@ function handleConversationEnd(eventDataObject) {
     realConsole?.log('handleConversationEnd, sending meeting ended message');
     window.ws?.sendJson({
         type: 'MeetingStatusChange',
-        change: 'meeting_ended'
+        change: 'meeting_ended',
+        meetingId: meetingId
     });
 }
 
@@ -1895,6 +1986,9 @@ class ReceiverManager {
     }
 
     pollReceivers() {
+        const speakingParticipantIds = new Set();
+        const currentTime = Date.now();
+
         for (const [receiver, isActive] of this.receiverMap) {
             const contributingSources = receiver.getContributingSources();
 
@@ -1910,24 +2004,23 @@ class ReceiverManager {
             if (!isActive)
                 continue;
 
-            const currentTime = Date.now();
-            const recentContributingSources = contributingSources.filter(contributingSource => currentTime - contributingSource.timestamp <= 50);
-            const speakingParticipantIds = window.callManager?.getSpeakingParticipantIds(recentContributingSources) || [];
-
-            for (const speakingParticipantId of speakingParticipantIds) {
-                if (!this.participantSpeakingStateMachineMap.has(speakingParticipantId)) {
-                    this.participantSpeakingStateMachineMap.set(speakingParticipantId, new ParticipantSpeakingStateMachine(speakingParticipantId));
-                }
-            }
-
-            // Now iterate through the participantSpeakingStateMachineMap and update the isSpeaking state for each participant
-            for (const [participantId, participantSpeakingStateMachine] of this.participantSpeakingStateMachineMap) {
-                participantSpeakingStateMachine.addSample({
-                    isSpeaking: speakingParticipantIds.has(participantId),
-                    timestamp: currentTime
+            if (receiver.track?.readyState === 'ended') {
+                this.receiverMap.set(receiver, false);
+                window.ws?.sendJson({
+                    type: 'ReceiverManagerUpdate',
+                    update: "setReceiverInactive",
+                    receiverTrackId: receiver.track?.id
                 });
+                continue;
             }
-            
+
+            const recentContributingSources = contributingSources.filter(contributingSource => currentTime - contributingSource.timestamp <= 50);
+            const receiverSpeakingParticipantIds = window.callManager?.getSpeakingParticipantIds(recentContributingSources) || [];
+
+            for (const speakingParticipantId of receiverSpeakingParticipantIds) {
+                speakingParticipantIds.add(speakingParticipantId);
+            }
+
             /*
             {
     "rtpTimestamp": 506968569,
@@ -1935,6 +2028,20 @@ class ReceiverManager {
     "timestamp": 1759288487277
 }
             */
+        }
+
+        for (const speakingParticipantId of speakingParticipantIds) {
+            if (!this.participantSpeakingStateMachineMap.has(speakingParticipantId)) {
+                this.participantSpeakingStateMachineMap.set(speakingParticipantId, new ParticipantSpeakingStateMachine(speakingParticipantId));
+            }
+        }
+
+        // Now iterate through the participantSpeakingStateMachineMap and update the isSpeaking state for each participant
+        for (const [participantId, participantSpeakingStateMachine] of this.participantSpeakingStateMachineMap) {
+            participantSpeakingStateMachine.addSample({
+                isSpeaking: speakingParticipantIds.has(participantId),
+                timestamp: currentTime
+            });
         }
     }
 
@@ -1964,6 +2071,9 @@ const dominantSpeakerManager = new DominantSpeakerManager();
 
 const styleManager = new StyleManager();
 window.styleManager = styleManager;
+
+const mixedAudioStreamManager = new MixedAudioStreamManager();
+window.mixedAudioStreamManager = mixedAudioStreamManager;
 
 const receiverManager = new ReceiverManager();
 window.receiverManager = receiverManager;
@@ -2558,7 +2668,7 @@ new RTCInterceptor({
             // We need to capture every audio track in the meeting,
             // but we don't need to do anything with the video tracks
             if (event.track?.kind === 'audio') {
-                window.styleManager.addAudioTrack(event.track);
+                window.mixedAudioStreamManager?.addAudioTrackFromTrackEvent(event);
                 if (window.initialData.sendPerParticipantAudio) {
                     handleAudioTrack(event);
                 }
@@ -3105,17 +3215,32 @@ class CallManager {
                     // Only do it if the interval is not already set
                     if (this.closedCaptionLanguageInterval)
                         return;
+                    // Check every 15 seconds whether the closed caption language is still the desired language
+                    // If it is not and we are within the enforcement window, then set the closed caption language to the desired language
+                    this.closedCaptionLanguageIntervalStartTime = Date.now();
                     this.closedCaptionLanguageInterval = setInterval(() => {
                         if (this.activeCall && this.activeCall.getClosedCaptionsLanguage) {
-                            if (this.activeCall.getClosedCaptionsLanguage() !== this.closedCaptionLanguage) {
+                            const currentLanguage = this.activeCall.getClosedCaptionsLanguage();
+                            if (currentLanguage !== this.closedCaptionLanguage) {
+                                const enforcementTimeoutSeconds = window.teamsInitialData.enforceTeamsClosedCaptionsLanguageTimeoutSeconds || 0;
+                                const elapsedSeconds = (Date.now() - this.closedCaptionLanguageIntervalStartTime) / 1000;
+                                const withinEnforcementWindow = elapsedSeconds < enforcementTimeoutSeconds;
+
                                 window.ws?.sendJson({
                                     type: "closedCaptionsLanguageMismatch",
                                     desiredLanguage: this.closedCaptionLanguage,
-                                    currentLanguage: this.activeCall.getClosedCaptionsLanguage()
+                                    currentLanguage: currentLanguage,
+                                    elapsedSeconds: elapsedSeconds,
+                                    enforcementTimeoutSeconds: enforcementTimeoutSeconds,
+                                    willEnforce: withinEnforcementWindow
                                 });
+
+                                if (withinEnforcementWindow) {
+                                    this.activeCall.setClosedCaptionsLanguage(this.closedCaptionLanguage);
+                                }
                             }
                         }
-                    }, 60000);
+                    }, 15000);
                 }
             }, 10000);
             return true;

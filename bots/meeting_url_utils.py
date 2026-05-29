@@ -90,12 +90,20 @@ def normalize_meeting_url_raw(url):
     root_domain = root_domain_from_url(url)
     domain_and_subdomain = domain_and_subdomain_from_url(url)
 
-    if root_domain == "zoom.us":
+    if root_domain == "zoom.us" or root_domain == "zoom.com":
         # Parse the URL and keep only the 'pwd' query parameter
         parsed_url = urlparse(url)
         if not parsed_url.scheme:
             parsed_url = urlparse(f"https://{url}")
         query_params = parse_qs(parsed_url.query)
+
+        # Normalize the domain to zoom.us even if the original URL used zoom.com
+        normalized_netloc = parsed_url.netloc.lower()
+
+        if normalized_netloc == "zoom.com":
+            normalized_netloc = "zoom.us"
+        elif normalized_netloc.endswith(".zoom.com"):
+            normalized_netloc = normalized_netloc.removesuffix(".zoom.com") + ".zoom.us"
 
         # Sanitize the path - extract valid path up to first invalid character
         sanitized_path = parsed_url.path
@@ -127,7 +135,7 @@ def normalize_meeting_url_raw(url):
 
         # Reconstruct the URL with sanitized path and only the pwd/tk parameters
         new_query = "&".join([f"{key}={value[0]}" for key, value in filtered_params.items()])
-        normalized_url = urlunparse(("https", parsed_url.netloc, sanitized_path, "", new_query, ""))
+        normalized_url = urlunparse(("https", normalized_netloc, sanitized_path, "", new_query, ""))
 
         # There must be an integer meeting ID in the path
         meeting_id_match = re.search(r"(\d+)", sanitized_path)

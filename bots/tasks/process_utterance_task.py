@@ -63,6 +63,8 @@ def get_transcription(utterance):
             transcription, failure_data = get_transcription_via_elevenlabs(utterance)
         elif utterance.transcription_provider == TranscriptionProviders.CUSTOM_ASYNC:
             transcription, failure_data = get_transcription_via_custom_async(utterance)
+        elif utterance.transcription_provider == TranscriptionProviders.CUSTOM_ASYNC_V2:
+            transcription, failure_data = get_transcription_via_custom_async_v2(utterance)
         else:
             raise Exception(f"Unknown or streaming-only transcription provider: {utterance.transcription_provider}")
 
@@ -523,36 +525,19 @@ def get_transcription_via_elevenlabs(utterance):
         return None, {"reason": TranscriptionFailureReasons.INTERNAL_ERROR, "error": str(e)}
 
 
-def get_transcription_via_custom_async(utterance):
-    transcription_settings = utterance.transcription_settings
-
-    # Get the base URL from environment variable
+def _request_custom_async_transcription(utterance, headers, data):
     base_url = os.getenv("CUSTOM_ASYNC_TRANSCRIPTION_URL")
     if not base_url:
         return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND, "error": "CUSTOM_ASYNC_TRANSCRIPTION_URL environment variable not set"}
 
-    # Get additional properties from settings
-    additional_props = transcription_settings.custom_async_additional_props()
-
     payload_mp3 = pcm_to_mp3(utterance.get_audio_blob().tobytes(), sample_rate=utterance.get_sample_rate())
-
     files = {"audio": ("audio.mp3", payload_mp3, "audio/mpeg")}
 
-    # Add additional properties as form data
-    data = {}
-    for key, value in additional_props.items():
-        if isinstance(value, (dict, list)):
-            data[key] = json.dumps(value)
-        else:
-            data[key] = value
-
-    # Get timeout from environment or use default (120 retries like Gladia and AssemblyAI)
-    timeout = int(os.getenv("CUSTOM_ASYNC_TRANSCRIPTION_TIMEOUT", "120"))  # 120 seconds default timeout
+    timeout = int(os.getenv("CUSTOM_ASYNC_TRANSCRIPTION_TIMEOUT", "120"))
 
     try:
-        # Make the POST request to the custom transcription service
         logger.info(f"Sending audio to custom async service at {base_url}")
-        response = requests.post(base_url, files=files, data=data if data else None, timeout=timeout)
+        response = requests.post(base_url, files=files, data=data or None, headers=headers or None, timeout=timeout)
 
         if response.status_code == 401:
             return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_INVALID}
@@ -601,6 +586,19 @@ def get_transcription_via_custom_async(utterance):
     except (json.JSONDecodeError, ValueError) as e:
         logger.error(f"Custom async transcription response parsing failed: {str(e)}")
         return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "error": f"Invalid JSON response: {str(e)}"}
-    except Exception as e:
-        logger.error(f"Custom async transcription unexpected error: {str(e)}")
-        return None, {"reason": TranscriptionFailureReasons.INTERNAL_ERROR, "error": str(e)}
+
+
+def _serialize_form_data(form_data):
+    return {key: json.dumps(value) if isinstance(value, (dict, list)) else value for key, value in form_data.items()}
+
+
+def get_transcription_via_custom_async(utterance):
+    additional_props = utterance.transcription_settings.custom_async_additional_props()
+    data = _serialize_form_data(additional_props)
+    return _request_custom_async_transcription(utterance, headers={}, data=data)
+
+
+def get_transcription_via_custom_async_v2(utterance):
+    headers = utterance.transcription_settings.custom_async_v2_headers()
+    data = _serialize_form_data(utterance.transcription_settings.custom_async_v2_form_data())
+    return _request_custom_async_transcription(utterance, headers=headers, data=data)

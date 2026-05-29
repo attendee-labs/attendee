@@ -2408,13 +2408,6 @@ components:
                     docs for details.
                 speech_model:
                   type: string
-                  enum:
-                  - best
-                  - nano
-                  - slam-1
-                  - universal
-                  - universal-2
-                  - universal-3-pro
                   description: The speech model to use for transcription. See AssemblyAI
                     docs for details. This parameter is deprecated, use the speech_models
                     param instead.
@@ -2422,9 +2415,6 @@ components:
                   type: array
                   items:
                     type: string
-                    enum:
-                    - universal-2
-                    - universal-3-pro
                   uniqueItems: true
                   description: The speech models to use for transcription in order
                     of preference. Defaults to ['universal-3-pro', 'universal-2'].
@@ -2513,6 +2503,27 @@ components:
               description: Custom self-hosted transcription service with async processing.
                 Additional properties will be sent as form data in the request. Only
                 supported if self-hosting Attendee.
+              required: []
+              additionalProperties: true
+            custom_async_v2:
+              type: object
+              properties:
+                headers:
+                  type: object
+                  additionalProperties:
+                    type: string
+                  description: Optional headers to include in the request to the custom
+                    transcription service.
+                form_data:
+                  type: object
+                  additionalProperties:
+                    type: string
+                  description: Optional form data to include in the request to the custom transcription
+                    service.
+              description: Custom self-hosted transcription service with async processing.
+                Use `headers` for HTTP request headers (e.g. auth tokens) and `form_data`
+                for multipart form fields sent alongside the audio file. Only supported
+                if self-hosting Attendee.
               required: []
               additionalProperties: true
           required: []
@@ -2670,11 +2681,20 @@ components:
                 means the bot will always login, 'only_if_required' means the bot
                 will only login if the meeting requires authentication.
               default: always
+            login_group_name:
+              type:
+              - string
+              - 'null'
+              description: Optional bot login group name to use for Google Meet signed-in
+                bot selection. If no group is specified, the oldest Google Meet group
+                will be selected.
+              default: null
           required: []
           additionalProperties: false
           default:
             use_login: false
             login_mode: always
+            login_group_name: null
           description: The Google Meet-specific settings for the bot.
         teams_settings:
           type: object
@@ -2694,11 +2714,20 @@ components:
                 the bot will always login, 'only_if_required' means the bot will only
                 login if the meeting requires authentication.
               default: always
+            login_group_name:
+              type:
+              - string
+              - 'null'
+              description: Optional bot login group name to use for Teams signed-in
+                bot selection. If no group is specified, the oldest Teams group will
+                be selected.
+              default: null
           required: []
           additionalProperties: false
           default:
             use_login: false
             login_mode: always
+            login_group_name: null
           description: The Microsoft Teams-specific settings for the bot.
         zoom_settings:
           type: object
@@ -2860,6 +2889,12 @@ components:
           type: boolean
           default: false
           description: Whether to loop the video. Defaults to false.
+        mute_video:
+          type: boolean
+          default: false
+          description: Whether to mute the video's audio track. Main purpose is to
+            play a video as the bot's webcam while keeping the bot's microphone muted.
+            Defaults to false.
       required:
       - url
     PaginatedBotList:

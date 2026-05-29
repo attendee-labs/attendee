@@ -16,7 +16,7 @@ from bots.models import (
     TranscriptionFailureReasons,
     Utterance,
 )
-from bots.tasks.process_utterance_task import get_transcription_via_assemblyai, get_transcription_via_custom_async, get_transcription_via_deepgram, get_transcription_via_elevenlabs, get_transcription_via_gladia, get_transcription_via_openai, get_transcription_via_sarvam, process_utterance
+from bots.tasks.process_utterance_task import get_transcription_via_assemblyai, get_transcription_via_custom_async, get_transcription_via_custom_async_v2, get_transcription_via_deepgram, get_transcription_via_elevenlabs, get_transcription_via_gladia, get_transcription_via_openai, get_transcription_via_sarvam, process_utterance
 
 
 class ProcessUtteranceTaskTest(TransactionTestCase):
@@ -1944,3 +1944,343 @@ class CustomAsyncProviderTest(TransactionTestCase):
             self.assertIsNone(transcript)
             self.assertEqual(failure["reason"], TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED)
             self.assertIn("Invalid JSON", failure["error"])
+
+
+class CustomAsyncV2ProviderTest(TransactionTestCase):
+    """Unit-tests for bots.tasks.process_utterance_task.get_transcription_via_custom_async_v2"""
+
+    def setUp(self):
+        # Minimal DB fixtures ---------------------------------------------------------------
+        self.org = Organization.objects.create(name="Org")
+        self.project = Project.objects.create(name="Proj", organization=self.org)
+        self.bot = Bot.objects.create(project=self.project, meeting_url="https://zoom.us/j/999")
+
+        self.recording = Recording.objects.create(
+            bot=self.bot,
+            recording_type=1,
+            transcription_type=1,
+            state=RecordingStates.COMPLETE,
+            transcription_provider=10,  # CUSTOM_ASYNC_V2
+        )
+
+        self.participant = Participant.objects.create(bot=self.bot, uuid="p1")
+        self.audio_chunk = AudioChunk.objects.create(recording=self.recording, participant=self.participant, audio_blob=b"pcm-bytes", timestamp_ms=0, duration_ms=600, sample_rate=16000)
+        self.utterance = Utterance.objects.create(
+            recording=self.recording,
+            participant=self.participant,
+            audio_chunk=self.audio_chunk,
+            timestamp_ms=0,
+            duration_ms=600,
+        )
+        self.utterance.refresh_from_db()
+
+    # ------------------------------------------------------------------ helpers
+
+    def _patch_env(self, url="http://test-service.com/transcribe", timeout="120"):
+        """Mock environment variables."""
+        return mock.patch.dict("os.environ", {"CUSTOM_ASYNC_TRANSCRIPTION_URL": url, "CUSTOM_ASYNC_TRANSCRIPTION_TIMEOUT": timeout})
+
+    def _success_response(self):
+        mock_response = mock.Mock(status_code=200)
+        mock_response.json.return_value = {
+            "status": "done",
+            "result": {
+                "transcription": {
+                    "full_transcript": "hello world",
+                    "utterances": [
+                        {
+                            "words": [
+                                {"word": "hello", "start": 0.0, "end": 0.5},
+                                {"word": "world", "start": 0.6, "end": 1.0},
+                            ]
+                        }
+                    ],
+                }
+            },
+        }
+        return mock_response
+
+    # ------------------------------------------------------------------ SUCCESS PATH
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3-audio-data")
+    def test_success_path(self, mock_pcm, mock_post):
+        """Custom async v2 transcription succeeds and returns formatted transcript with words."""
+        with self._patch_env():
+            mock_post.return_value = self._success_response()
+
+            transcript, failure = get_transcription_via_custom_async_v2(self.utterance)
+
+            self.assertIsNone(failure)
+            self.assertEqual(transcript["transcript"], "hello world")
+            self.assertEqual(len(transcript["words"]), 2)
+            self.assertEqual(transcript["words"][0]["word"], "hello")
+            self.assertEqual(transcript["words"][0]["start"], 0.0)
+            self.assertEqual(transcript["words"][0]["end"], 0.5)
+            self.assertEqual(transcript["words"][1]["word"], "world")
+            self.assertNotIn("full_transcript", transcript)
+            self.assertNotIn("utterances", transcript)
+
+            mock_post.assert_called_once()
+            call_args = mock_post.call_args
+            self.assertEqual(call_args[0][0], "http://test-service.com/transcribe")
+            self.assertEqual(call_args[1]["files"]["audio"][0], "audio.mp3")
+            self.assertEqual(call_args[1]["files"]["audio"][1], b"mp3-audio-data")
+            self.assertEqual(call_args[1]["files"]["audio"][2], "audio/mpeg")
+            # No additional settings → data and headers should be None
+            self.assertIsNone(call_args[1]["data"])
+            self.assertIsNone(call_args[1]["headers"])
+            mock_pcm.assert_called_once()
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3-audio-data")
+    def test_success_path_with_headers_only(self, mock_pcm, mock_post):
+        """Custom async v2 with only `headers` configured forwards each header as an HTTP header."""
+        self.bot.settings = {
+            "transcription_settings": {
+                "custom_async_v2": {
+                    "headers": {
+                        "X-Custom-Header": "value",
+                        "Authorization": "Bearer token-123",
+                    }
+                }
+            }
+        }
+        self.bot.save()
+
+        with self._patch_env():
+            mock_post.return_value = self._success_response()
+
+            transcript, failure = get_transcription_via_custom_async_v2(self.utterance)
+
+            self.assertIsNone(failure)
+            self.assertEqual(transcript["transcript"], "hello world")
+
+            call_args = mock_post.call_args
+            headers = call_args[1]["headers"]
+            self.assertIsNotNone(headers)
+            self.assertEqual(headers["X-Custom-Header"], "value")
+            self.assertEqual(headers["Authorization"], "Bearer token-123")
+            # Headers must not leak into the form-data payload
+            self.assertIsNone(call_args[1]["data"])
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3-audio-data")
+    def test_success_path_with_form_data_only(self, mock_pcm, mock_post):
+        """Custom async v2 with only `form_data` forwards scalars and JSON-encodes nested values."""
+        self.bot.settings = {
+            "transcription_settings": {
+                "custom_async_v2": {
+                    "form_data": {
+                        "language": "fr-FR",
+                        "model": "whisper-large-v3",
+                        "custom_param": "test_value",
+                        "nested_param": {"key": "value", "list": [1, 2, 3]},
+                        "list_param": ["a", "b"],
+                    }
+                }
+            }
+        }
+        self.bot.save()
+
+        with self._patch_env():
+            mock_post.return_value = self._success_response()
+
+            transcript, failure = get_transcription_via_custom_async_v2(self.utterance)
+
+            self.assertIsNone(failure)
+
+            call_args = mock_post.call_args
+            data = call_args[1]["data"]
+            self.assertEqual(data["language"], "fr-FR")
+            self.assertEqual(data["model"], "whisper-large-v3")
+            self.assertEqual(data["custom_param"], "test_value")
+
+            import json
+
+            self.assertEqual(data["nested_param"], json.dumps({"key": "value", "list": [1, 2, 3]}))
+            self.assertEqual(data["list_param"], json.dumps(["a", "b"]))
+            # No headers configured → headers kwarg should be None
+            self.assertIsNone(call_args[1]["headers"])
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3-audio-data")
+    def test_success_path_with_headers_and_form_data(self, mock_pcm, mock_post):
+        """Custom async v2 forwards both `headers` and `form_data` entries together."""
+        self.bot.settings = {
+            "transcription_settings": {
+                "custom_async_v2": {
+                    "headers": {
+                        "X-Api-Key": "secret",
+                        "X-Tenant": "acme",
+                    },
+                    "form_data": {
+                        "language": "en-US",
+                        "options": {"diarize": True},
+                    },
+                }
+            }
+        }
+        self.bot.save()
+
+        with self._patch_env():
+            mock_post.return_value = self._success_response()
+
+            transcript, failure = get_transcription_via_custom_async_v2(self.utterance)
+
+            self.assertIsNone(failure)
+
+            call_args = mock_post.call_args
+            headers = call_args[1]["headers"]
+            data = call_args[1]["data"]
+            # `headers` entries become HTTP headers
+            self.assertEqual(headers["X-Api-Key"], "secret")
+            self.assertEqual(headers["X-Tenant"], "acme")
+            # `form_data` entries (with JSON encoding for nested values) become form data
+            self.assertEqual(data["language"], "en-US")
+            # Header values must not leak into the form data
+            self.assertNotIn("X-Api-Key", data)
+            self.assertNotIn("X-Tenant", data)
+
+            import json
+
+            self.assertEqual(data["options"], json.dumps({"diarize": True}))
+
+    # ------------------------------------------------------------------ FAILURE PATHS
+
+    def test_missing_env_url(self):
+        """No CUSTOM_ASYNC_TRANSCRIPTION_URL env var → CREDENTIALS_NOT_FOUND."""
+        with mock.patch.dict("os.environ", {}, clear=True):
+            transcript, failure = get_transcription_via_custom_async_v2(self.utterance)
+
+            self.assertIsNone(transcript)
+            self.assertEqual(failure["reason"], TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND)
+            self.assertIn("CUSTOM_ASYNC_TRANSCRIPTION_URL", failure["error"])
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3-audio-data")
+    def test_invalid_credentials_401(self, mock_pcm, mock_post):
+        """Custom async v2 returns 401 → CREDENTIALS_INVALID."""
+        with self._patch_env():
+            mock_post.return_value = mock.Mock(status_code=401)
+
+            transcript, failure = get_transcription_via_custom_async_v2(self.utterance)
+
+            self.assertIsNone(transcript)
+            self.assertEqual(failure["reason"], TranscriptionFailureReasons.CREDENTIALS_INVALID)
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3-audio-data")
+    def test_rate_limit_429(self, mock_pcm, mock_post):
+        """Custom async v2 returns 429 → RATE_LIMIT_EXCEEDED."""
+        with self._patch_env():
+            mock_post.return_value = mock.Mock(status_code=429)
+
+            transcript, failure = get_transcription_via_custom_async_v2(self.utterance)
+
+            self.assertIsNone(transcript)
+            self.assertEqual(failure["reason"], TranscriptionFailureReasons.RATE_LIMIT_EXCEEDED)
+            self.assertEqual(failure["status_code"], 429)
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3-audio-data")
+    def test_request_failure_500(self, mock_pcm, mock_post):
+        """Custom async v2 returns 500 → TRANSCRIPTION_REQUEST_FAILED."""
+        with self._patch_env():
+            mock_response = mock.Mock(status_code=500)
+            mock_response.text = "Internal Server Error"
+            mock_post.return_value = mock_response
+
+            transcript, failure = get_transcription_via_custom_async_v2(self.utterance)
+
+            self.assertIsNone(transcript)
+            self.assertEqual(failure["reason"], TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED)
+            self.assertEqual(failure["status_code"], 500)
+            self.assertEqual(failure["response_text"], "Internal Server Error")
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3-audio-data")
+    def test_error_status_in_response(self, mock_pcm, mock_post):
+        """Custom async v2 returns status='error' → TRANSCRIPTION_REQUEST_FAILED."""
+        with self._patch_env():
+            mock_response = mock.Mock(status_code=200)
+            mock_response.json.return_value = {"status": "error", "error_code": "TRANSCRIPTION_FAILED"}
+            mock_post.return_value = mock_response
+
+            transcript, failure = get_transcription_via_custom_async_v2(self.utterance)
+
+            self.assertIsNone(transcript)
+            self.assertEqual(failure["reason"], TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED)
+            self.assertEqual(failure["error_code"], "TRANSCRIPTION_FAILED")
+            self.assertEqual(failure["step"], "transcribe_result_poll")
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3-audio-data")
+    def test_unknown_status_in_response(self, mock_pcm, mock_post):
+        """Custom async v2 returns an unrecognized status → TRANSCRIPTION_REQUEST_FAILED."""
+        with self._patch_env():
+            mock_response = mock.Mock(status_code=200)
+            mock_response.json.return_value = {"status": "queued"}
+            mock_post.return_value = mock_response
+
+            transcript, failure = get_transcription_via_custom_async_v2(self.utterance)
+
+            self.assertIsNone(transcript)
+            self.assertEqual(failure["reason"], TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED)
+            self.assertEqual(failure["status"], "queued")
+            self.assertEqual(failure["step"], "transcribe_result_poll")
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3-audio-data")
+    def test_timeout_exception(self, mock_pcm, mock_post):
+        """Request timeout → TIMED_OUT."""
+        with self._patch_env(timeout="42"):
+            from requests.exceptions import Timeout
+
+            mock_post.side_effect = Timeout("Request timed out")
+
+            transcript, failure = get_transcription_via_custom_async_v2(self.utterance)
+
+            self.assertIsNone(transcript)
+            self.assertEqual(failure["reason"], TranscriptionFailureReasons.TIMED_OUT)
+            self.assertEqual(failure["timeout"], 42)
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3-audio-data")
+    def test_request_exception(self, mock_pcm, mock_post):
+        """Network request exception → TRANSCRIPTION_REQUEST_FAILED."""
+        with self._patch_env():
+            from requests.exceptions import RequestException
+
+            mock_post.side_effect = RequestException("Network error")
+
+            transcript, failure = get_transcription_via_custom_async_v2(self.utterance)
+
+            self.assertIsNone(transcript)
+            self.assertEqual(failure["reason"], TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED)
+            self.assertIn("Network error", failure["error"])
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3-audio-data")
+    def test_invalid_json_response(self, mock_pcm, mock_post):
+        """Invalid JSON response → TRANSCRIPTION_REQUEST_FAILED."""
+        with self._patch_env():
+            mock_response = mock.Mock(status_code=200)
+            mock_response.json.side_effect = ValueError("Invalid JSON")
+            mock_post.return_value = mock_response
+
+            transcript, failure = get_transcription_via_custom_async_v2(self.utterance)
+
+            self.assertIsNone(transcript)
+            self.assertEqual(failure["reason"], TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED)
+            self.assertIn("Invalid JSON", failure["error"])
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3-audio-data")
+    def test_unexpected_exception_propagates(self, mock_pcm, mock_post):
+        """Unexpected exceptions propagate to the caller (get_transcription) which maps them to INTERNAL_ERROR."""
+        with self._patch_env():
+            mock_post.side_effect = RuntimeError("boom")
+
+            with self.assertRaisesRegex(RuntimeError, "boom"):
+                get_transcription_via_custom_async_v2(self.utterance)
