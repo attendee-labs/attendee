@@ -119,6 +119,93 @@ const handleVideoTrackForRealTimePerParticipantVideo = async ({ track, streams }
     };
   })();
 
+  class MixedAudioStreamManager {
+    constructor() {
+        this.audioTracks = [];
+        this.meetingAudioStream = null;
+        this.audioTracksToBeAdded = [];
+        this.audioContext = null;
+        this.destination = null;
+        this.seenTrackIds = new Set();
+    }
+
+
+    addAudioStream(audioStream) {
+        const track = audioStream.getAudioTracks()[0];
+        if (track) {
+            this.addAudioTrack(track);
+        }
+    }
+
+    addAudioTrackFromTrackEvent(trackEvent) {
+        if (!trackEvent.track)
+            return;
+        const firstStreamId = trackEvent.streams[0]?.id;
+        // streamId must contain mainAudio in it, which means it's from Teams, not from a voice agent.
+        if (!firstStreamId?.includes('mainAudio')) {
+            window.ws?.sendJson({
+                type: 'AudioTrackNotAddedToMeetingAudioStream',
+                trackId: trackEvent.track.id,
+                streams: trackEvent.streams?.map(stream => stream?.id),
+            });
+            return;
+        }
+        window.ws?.sendJson({
+            type: 'AudioTrackAddedToMeetingAudioStream',
+            trackId: trackEvent.track.id,
+            streams: trackEvent.streams?.map(stream => stream?.id),
+        });
+        this.addAudioTrack(trackEvent.track);
+    }
+
+    addAudioTrack(track) {
+        if (!track || this.seenTrackIds.has(track.id)) {
+            return;
+        }
+
+        // If start() already ran, patch the new track into the existing mix.
+        if (this.audioContext && this.destination) {
+            const mediaStream = new MediaStream([track]);
+            const source = this.audioContext.createMediaStreamSource(mediaStream);
+            source.connect(this.destination);
+            this.seenTrackIds.add(track.id);
+            if (this.seenTrackIds.size > 1) {
+                window.ws?.sendJson({
+                    type: 'MultipleAudioTracksDetected',
+                    numberOfTracks: this.seenTrackIds.size,
+                });
+            }
+        }
+        else {
+            this.audioTracksToBeAdded.push(track);
+        }
+    }
+
+    createStream() {
+        if (this.meetingAudioStream)
+            return;
+        this.audioContext = new AudioContext({ sampleRate: 48000 });
+        this.destination = this.audioContext.createMediaStreamDestination();
+
+        this.audioTracksToBeAdded.forEach(track => this.addAudioTrack(track));
+
+        this.meetingAudioStream = this.destination.stream;
+
+        // Create a source from the destination's stream so that it actually plays
+        this.audioContext.createMediaStreamSource(this.destination.stream);
+
+        window.ws?.sendJson({
+            type: 'MeetingAudioStreamCreated',
+            message: 'Meeting audio stream created',
+        });
+    }
+
+    getMeetingAudioStream() {
+        this.createStream();
+        return this.meetingAudioStream;
+    }
+}
+
 class StyleManager {
     constructor() {
         this.audioContext = null;
@@ -132,16 +219,8 @@ class StyleManager {
 
         // Stream used which combines the audio tracks from the meeting. Does NOT include the bot's audio
         this.meetingAudioStream = null;
-    }
 
-    addAudioTrack(audioTrack) {
-        this.audioTracks.push(audioTrack);
-        if (this.audioTracks.length > 1) {
-            window.ws?.sendJson({
-                type: 'MultipleAudioTracksDetected',
-                numberOfTracks: this.audioTracks.length,
-            });
-        }
+        this.started = false;
     }
 
     checkAudioActivity() {
@@ -298,7 +377,9 @@ class StyleManager {
     }
     
     getMeetingAudioStream() {
-        return this.meetingAudioStream;
+        if (!this.started)
+            return null;
+        return window.mixedAudioStreamManager?.getMeetingAudioStream();
     }
 
     async processMixedAudioTrack() {
@@ -515,6 +596,7 @@ class StyleManager {
     }
 
     start() {
+        this.started = true;
         this.startSilenceDetection();
 
         if (window.teamsInitialData.modifyDomForVideoRecording) {
@@ -1996,6 +2078,9 @@ const dominantSpeakerManager = new DominantSpeakerManager();
 const styleManager = new StyleManager();
 window.styleManager = styleManager;
 
+const mixedAudioStreamManager = new MixedAudioStreamManager();
+window.mixedAudioStreamManager = mixedAudioStreamManager;
+
 const receiverManager = new ReceiverManager();
 window.receiverManager = receiverManager;
 
@@ -2589,7 +2674,7 @@ new RTCInterceptor({
             // We need to capture every audio track in the meeting,
             // but we don't need to do anything with the video tracks
             if (event.track?.kind === 'audio') {
-                window.styleManager.addAudioTrack(event.track);
+                window.mixedAudioStreamManager?.addAudioTrackFromTrackEvent(event);
                 if (window.initialData.sendPerParticipantAudio) {
                     handleAudioTrack(event);
                 }
