@@ -127,6 +127,12 @@ const handleVideoTrackForRealTimePerParticipantVideo = async ({ track, streams }
         this.audioContext = null;
         this.destination = null;
         this.seenTrackIds = new Set();
+
+        // Silence detection state
+        this.silenceThreshold = 0.0;
+        this.analyser = null;
+        this.audioDataArray = null;
+        this.mixedAudioTrack = null;
     }
 
 
@@ -192,7 +198,20 @@ const handleVideoTrackForRealTimePerParticipantVideo = async ({ track, streams }
         this.meetingAudioStream = this.destination.stream;
 
         // Create a source from the destination's stream so that it actually plays
-        this.audioContext.createMediaStreamSource(this.destination.stream);
+        const mixedSource = this.audioContext.createMediaStreamSource(this.destination.stream);
+
+        // Set up an analyser on the mixed stream so we can detect silence
+        this.analyser = this.audioContext.createAnalyser();
+        this.analyser.fftSize = 256;
+        this.audioDataArray = new Uint8Array(this.analyser.frequencyBinCount);
+        mixedSource.connect(this.analyser);
+
+        this.mixedAudioTrack = this.destination.stream.getAudioTracks()[0];
+
+        // Process and send mixed audio if enabled
+        if (window.initialData.sendMixedAudio && this.mixedAudioTrack) {
+            this.processMixedAudioTrack();
+        }
 
         window.ws?.sendJson({
             type: 'MeetingAudioStreamCreated',
@@ -204,38 +223,24 @@ const handleVideoTrackForRealTimePerParticipantVideo = async ({ track, streams }
         this.createStream();
         return this.meetingAudioStream;
     }
-}
-
-class StyleManager {
-    constructor() {
-        this.audioContext = null;
-        this.audioTracks = [];
-        this.silenceThreshold = 0.0;
-        this.silenceCheckInterval = null;
-        this.frameStyleElement = null;
-        this.frameAdjustInterval = null;
-        this.neededInteractionsInterval = null;
-        this.fakeUserActivityInterval = null;
-
-        // Stream used which combines the audio tracks from the meeting. Does NOT include the bot's audio
-        this.meetingAudioStream = null;
-
-        this.started = false;
-    }
 
     checkAudioActivity() {
+        if (!this.analyser || !this.audioDataArray) {
+            return;
+        }
+
         // Get audio data
         this.analyser.getByteTimeDomainData(this.audioDataArray);
-        
+
         // Calculate deviation from the center value (128)
         let sumDeviation = 0;
         for (let i = 0; i < this.audioDataArray.length; i++) {
             // Calculate how much each sample deviates from the center (128)
             sumDeviation += Math.abs(this.audioDataArray[i] - 128);
         }
-        
+
         const averageDeviation = sumDeviation / this.audioDataArray.length;
-        
+
         // If average deviation is above threshold, we have audio activity
         if (averageDeviation > this.silenceThreshold) {
             window.ws.sendJson({
@@ -243,6 +248,117 @@ class StyleManager {
                 isSilent: false
             });
         }
+    }
+
+    async processMixedAudioTrack() {
+        try {
+            // Create processor to get raw audio frames from the mixed audio track
+            const processor = new MediaStreamTrackProcessor({ track: this.mixedAudioTrack });
+            const generator = new MediaStreamTrackGenerator({ kind: 'audio' });
+
+            // Get readable stream of audio frames
+            const readable = processor.readable;
+            const writable = generator.writable;
+
+            // Transform stream to intercept and send audio frames
+            const transformStream = new TransformStream({
+                async transform(frame, controller) {
+                    if (!frame) {
+                        return;
+                    }
+
+                    try {
+                        // Check if controller is still active
+                        if (controller.desiredSize === null) {
+                            frame.close();
+                            return;
+                        }
+
+                        // Copy the audio data
+                        const numChannels = frame.numberOfChannels;
+                        const numSamples = frame.numberOfFrames;
+                        const audioData = new Float32Array(numSamples);
+
+                        // Copy data from each channel
+                        // If multi-channel, average all channels together to create mono output
+                        if (numChannels > 1) {
+                            // Temporary buffer to hold each channel's data
+                            const channelData = new Float32Array(numSamples);
+
+                            // Sum all channels
+                            for (let channel = 0; channel < numChannels; channel++) {
+                                frame.copyTo(channelData, { planeIndex: channel });
+                                for (let i = 0; i < numSamples; i++) {
+                                    audioData[i] += channelData[i];
+                                }
+                            }
+
+                            // Average by dividing by number of channels
+                            for (let i = 0; i < numSamples; i++) {
+                                audioData[i] /= numChannels;
+                            }
+                        } else {
+                            // If already mono, just copy the data
+                            frame.copyTo(audioData, { planeIndex: 0 });
+                        }
+
+                        // Send mixed audio data via websocket
+                        const timestamp = performance.now();
+                        window.ws.sendMixedAudio(timestamp, audioData);
+
+                        // Pass through the original frame
+                        controller.enqueue(frame);
+                    } catch (error) {
+                        console.error('Error processing mixed audio frame:', error);
+                        frame.close();
+                    }
+                },
+                flush() {
+                    console.log('Mixed audio transform stream flush called');
+                }
+            });
+
+            // Create an abort controller for cleanup
+            const abortController = new AbortController();
+
+            try {
+                // Connect the streams
+                await readable
+                    .pipeThrough(transformStream)
+                    .pipeTo(writable, {
+                        signal: abortController.signal
+                    })
+                    .catch(error => {
+                        if (error.name !== 'AbortError') {
+                            console.error('Mixed audio pipeline error:', error);
+                        }
+                    });
+            } catch (error) {
+                console.error('Mixed audio stream pipeline error:', error);
+                abortController.abort();
+            }
+
+        } catch (error) {
+            console.error('Error setting up mixed audio processor:', error);
+        }
+    }
+}
+
+class StyleManager {
+    constructor() {
+        this.silenceCheckInterval = null;
+        this.frameStyleElement = null;
+        this.frameAdjustInterval = null;
+        this.neededInteractionsInterval = null;
+        this.fakeUserActivityInterval = null;
+
+        this.started = false;
+    }
+
+    checkAudioActivity() {
+        // Silence detection lives in MixedAudioStreamManager, which owns the mixed
+        // meeting audio stream and its analyser.
+        window.mixedAudioStreamManager?.checkAudioActivity();
     }
 
     // Prevents Teams from going into mode where it stops receiving chat messages
@@ -312,38 +428,9 @@ class StyleManager {
     }
 
     startSilenceDetection() {
-         // Set up audio context and processing as before
-         this.audioContext = new AudioContext();
-
-         this.audioSources = this.audioTracks.map(track => {
-             const mediaStream = new MediaStream([track]);
-             return this.audioContext.createMediaStreamSource(mediaStream);
-         });
- 
-         // Create a destination node
-         const destination = this.audioContext.createMediaStreamDestination();
- 
-         // Connect all sources to the destination
-         this.audioSources.forEach(source => {
-             source.connect(destination);
-         });
- 
-         // Create analyzer and connect it to the destination
-         this.analyser = this.audioContext.createAnalyser();
-         this.analyser.fftSize = 256;
-         const bufferLength = this.analyser.frequencyBinCount;
-         this.audioDataArray = new Uint8Array(bufferLength);
- 
-         // Create a source from the destination's stream and connect it to the analyzer
-         const mixedSource = this.audioContext.createMediaStreamSource(destination.stream);
-         mixedSource.connect(this.analyser);
- 
-         this.mixedAudioTrack = destination.stream.getAudioTracks()[0];
-
-        // Process and send mixed audio if enabled
-        if (window.initialData.sendMixedAudio && this.mixedAudioTrack) {
-            this.processMixedAudioTrack();
-        }
+        // Ensure the mixed meeting audio stream (and its analyser) is set up. The
+        // audio graph and silence/mixed-audio analysis now live in MixedAudioStreamManager.
+        window.mixedAudioStreamManager?.getMeetingAudioStream();
 
         // Clear any existing interval
         if (this.silenceCheckInterval) {
@@ -372,107 +459,12 @@ class StyleManager {
         this.fakeUserActivityInterval = setInterval(() => {
             this.fakeUserActivity();
         }, 240000);
-
-        this.meetingAudioStream = destination.stream;
     }
     
     getMeetingAudioStream() {
         if (!this.started)
             return null;
         return window.mixedAudioStreamManager?.getMeetingAudioStream();
-    }
-
-    async processMixedAudioTrack() {
-        try {
-            // Create processor to get raw audio frames from the mixed audio track
-            const processor = new MediaStreamTrackProcessor({ track: this.mixedAudioTrack });
-            const generator = new MediaStreamTrackGenerator({ kind: 'audio' });
-            
-            // Get readable stream of audio frames
-            const readable = processor.readable;
-            const writable = generator.writable;
-
-            // Transform stream to intercept and send audio frames
-            const transformStream = new TransformStream({
-                async transform(frame, controller) {
-                    if (!frame) {
-                        return;
-                    }
-
-                    try {
-                        // Check if controller is still active
-                        if (controller.desiredSize === null) {
-                            frame.close();
-                            return;
-                        }
-
-                        // Copy the audio data
-                        const numChannels = frame.numberOfChannels;
-                        const numSamples = frame.numberOfFrames;
-                        const audioData = new Float32Array(numSamples);
-                        
-                        // Copy data from each channel
-                        // If multi-channel, average all channels together to create mono output
-                        if (numChannels > 1) {
-                            // Temporary buffer to hold each channel's data
-                            const channelData = new Float32Array(numSamples);
-                            
-                            // Sum all channels
-                            for (let channel = 0; channel < numChannels; channel++) {
-                                frame.copyTo(channelData, { planeIndex: channel });
-                                for (let i = 0; i < numSamples; i++) {
-                                    audioData[i] += channelData[i];
-                                }
-                            }
-                            
-                            // Average by dividing by number of channels
-                            for (let i = 0; i < numSamples; i++) {
-                                audioData[i] /= numChannels;
-                            }
-                        } else {
-                            // If already mono, just copy the data
-                            frame.copyTo(audioData, { planeIndex: 0 });
-                        }
-
-                        // Send mixed audio data via websocket
-                        const timestamp = performance.now();
-                        window.ws.sendMixedAudio(timestamp, audioData);
-                        
-                        // Pass through the original frame
-                        controller.enqueue(frame);
-                    } catch (error) {
-                        console.error('Error processing mixed audio frame:', error);
-                        frame.close();
-                    }
-                },
-                flush() {
-                    console.log('Mixed audio transform stream flush called');
-                }
-            });
-
-            // Create an abort controller for cleanup
-            const abortController = new AbortController();
-
-            try {
-                // Connect the streams
-                await readable
-                    .pipeThrough(transformStream)
-                    .pipeTo(writable, {
-                        signal: abortController.signal
-                    })
-                    .catch(error => {
-                        if (error.name !== 'AbortError') {
-                            console.error('Mixed audio pipeline error:', error);
-                        }
-                    });
-            } catch (error) {
-                console.error('Mixed audio stream pipeline error:', error);
-                abortController.abort();
-            }
-
-        } catch (error) {
-            console.error('Error setting up mixed audio processor:', error);
-        }
     }
  
     makeMainVideoFillFrame = function() {
