@@ -59,20 +59,16 @@ def build_site_url(path="", internal=False):
 
       - Internal (internal=True): callbacks made by bot pods back to the app from inside the
         cluster, such as the Google Meet set-cookie URL the bot's browser navigates to. When
-        BOT_CALLBACK_SITE_DOMAIN is set, these callbacks use it instead of the external
-        domain. It may include an explicit protocol prefix (e.g.
-        http://attendee-app.ai.svc.cluster.local:8000) so the operator can target an
-        in-cluster service and bypass the public ingress, which is useful when bot pods are
-        subject to a restrictive NetworkPolicy. When unset, internal callbacks fall back to
-        the external domain, preserving the previous behaviour.
+        BOT_CALLBACK_SITE_DOMAIN is set (e.g. attendee-app.ai.svc.cluster.local:8000), these
+        callbacks target it over http, bypassing the public ingress. This is useful when bot
+        pods are subject to a restrictive NetworkPolicy. Always http: the bypass points at an
+        in-cluster service, where TLS terminates at the ingress we're skipping. When unset,
+        internal callbacks fall back to the external domain, preserving the previous behaviour.
     """
     if internal:
         bot_callback_domain = os.getenv("BOT_CALLBACK_SITE_DOMAIN")
         if bot_callback_domain:
-            # Allow an optional protocol prefix so the operator can pick http for in-cluster services
-            if bot_callback_domain.startswith(("http://", "https://")):
-                return f"{bot_callback_domain}{path}"
-            return f"https://{bot_callback_domain}{path}"
+            return f"http://{bot_callback_domain}{path}"
 
     # Use EXTERNAL_WEBHOOK_SITE_DOMAIN if set (for external webhooks), otherwise use SITE_DOMAIN
     site_domain = os.getenv("EXTERNAL_WEBHOOK_SITE_DOMAIN") or settings.SITE_DOMAIN
