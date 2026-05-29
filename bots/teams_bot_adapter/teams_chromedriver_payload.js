@@ -127,6 +127,7 @@ const handleVideoTrackForRealTimePerParticipantVideo = async ({ track, streams }
         this.audioContext = null;
         this.destination = null;
         this.seenTrackIds = new Set();
+        this.sourceNodes = [];
 
         // Silence detection state
         this.silenceThreshold = 0.0;
@@ -174,6 +175,7 @@ const handleVideoTrackForRealTimePerParticipantVideo = async ({ track, streams }
             const mediaStream = new MediaStream([track]);
             const source = this.audioContext.createMediaStreamSource(mediaStream);
             source.connect(this.destination);
+            this.sourceNodes.push(source);
             this.seenTrackIds.add(track.id);
             if (this.seenTrackIds.size > 1) {
                 window.ws?.sendJson({
