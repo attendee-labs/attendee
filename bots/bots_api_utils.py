@@ -45,35 +45,35 @@ from .utils import transcription_provider_from_bot_creation_data
 logger = logging.getLogger(__name__)
 
 
-def build_site_url(path="", internal=False):
+def build_site_url(path=""):
     """
-    Build a full URL to this Attendee deployment.
+    Build a full URL using SITE_DOMAIN setting.
     Automatically uses http:// for localhost, https:// for everything else.
-
-    The URL is built for one of two audiences:
-
-      - External (default): URLs that must be reachable from outside the cluster, such as
-        webhook addresses registered with external services (Microsoft/Google) or links
-        shown to users in the dashboard. If EXTERNAL_WEBHOOK_SITE_DOMAIN is set, it takes
-        priority over SITE_DOMAIN.
-
-      - Internal (internal=True): callbacks made by bot pods back to the app from inside the
-        cluster, such as the Google Meet set-cookie URL the bot's browser navigates to. When
-        BOT_CALLBACK_SITE_DOMAIN is set (e.g. attendee-app.ai.svc.cluster.local:8000), these
-        callbacks target it over http, bypassing the public ingress. This is useful when bot
-        pods are subject to a restrictive NetworkPolicy. Always http: the bypass points at an
-        in-cluster service, where TLS terminates at the ingress we're skipping. When unset,
-        internal callbacks fall back to the external domain, preserving the previous behaviour.
+    If EXTERNAL_WEBHOOK_SITE_DOMAIN is set, it takes priority (useful for webhooks that need
+    to be accessible from external services like Microsoft/Google).
     """
-    if internal:
-        bot_callback_domain = os.getenv("BOT_CALLBACK_SITE_DOMAIN")
-        if bot_callback_domain:
-            return f"http://{bot_callback_domain}{path}"
-
     # Use EXTERNAL_WEBHOOK_SITE_DOMAIN if set (for external webhooks), otherwise use SITE_DOMAIN
     site_domain = os.getenv("EXTERNAL_WEBHOOK_SITE_DOMAIN") or settings.SITE_DOMAIN
     protocol = "http" if site_domain.startswith("localhost") else "https"
     return f"{protocol}://{site_domain}{path}"
+
+
+def build_internal_site_url(path=""):
+    """
+    Build a URL for callers running inside the same cluster.
+
+    If INTERNAL_SITE_DOMAIN is set, use it over http. This is intended for
+    in-cluster callers, such as bot pods, that should reach the app through the
+    Kubernetes service DNS instead of the public ingress.
+
+    When unset, fall back to the public site URL, preserving behavior for
+    deployments that do not configure an internal route.
+    """
+    internal_site_domain = os.getenv("INTERNAL_SITE_DOMAIN")
+    if internal_site_domain:
+        return f"http://{internal_site_domain}{path}"
+
+    return build_site_url(path)
 
 
 def send_sync_command(bot, command="sync"):
