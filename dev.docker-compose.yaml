@@ -1,8 +1,9 @@
 services:
   attendee-worker-local:
     build: ./
+    env_file: .env
     volumes:
-     - .:/attendee
+      - .:/attendee
     networks:
       - attendee_network
     environment:
@@ -14,8 +15,9 @@ services:
 
   attendee-scheduler-local:
     build: ./
+    env_file: .env
     volumes:
-     - .:/attendee
+      - .:/attendee
     networks:
       - attendee_network
     environment:
@@ -27,8 +29,9 @@ services:
 
   attendee-app-local:
     build: ./
+    env_file: .env
     volumes:
-     - .:/attendee
+      - .:/attendee
     networks:
       - attendee_network
     ports:
@@ -42,8 +45,9 @@ services:
 
   attendee-webpage-streamer-local:
     build: ./
+    env_file: .env
     volumes:
-     - .:/attendee
+      - .:/attendee
     networks:
       - attendee_network
     ports:
@@ -57,7 +61,6 @@ services:
     profiles:
       - webpage-streamer
 
-
   postgres:
     image: postgres:15.3-alpine
     environment:
@@ -66,11 +69,10 @@ services:
       POSTGRES_PASSWORD: attendee_development_user
       PGDATA: /data/postgres
     volumes:
-       - postgres:/data/postgres
+      - postgres:/data/postgres
     networks:
       - attendee_network
     restart: unless-stopped
-
 
   redis:
     image: redis:7-alpine
