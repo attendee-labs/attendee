@@ -594,9 +594,74 @@ class MocapManager:
             candidate.tier_index,
         )
 
-    def _choose_best_materialized_fallback(
+    def _transform_sequence_to_exact_delta(
         self,
-        candidates: list[_TransformCandidate],
+        seq: PrimitiveMocapSequence,
+        target_dx: int,
+        target_dy: int,
+    ) -> PrimitiveMocapSequence | None:
+        seq_len = math.hypot(seq.total_dx, seq.total_dy)
+        target_len = math.hypot(target_dx, target_dy)
+
+        if seq_len < 1e-9:
+            # A zero endpoint vector cannot be rotated/scaled into a non-zero target.
+            if target_dx == 0 and target_dy == 0:
+                return self._transform_sequence(seq, scale=1.0, rotation_degrees=0.0)
+            return None
+
+        if target_len < 1e-9:
+            scale = 0.0
+            rotation_degrees = 0.0
+        else:
+            scale = target_len / seq_len
+            source_angle = math.degrees(math.atan2(seq.total_dy, seq.total_dx))
+            target_angle = math.degrees(math.atan2(target_dy, target_dx))
+            rotation_degrees = self._normalize_angle_degrees(target_angle - source_angle)
+
+        transformed = self._transform_sequence(
+            seq=seq,
+            scale=scale,
+            rotation_degrees=rotation_degrees,
+        )
+
+        # _transform_sequence rounds every movement independently, so even if the
+        # continuous transform maps the endpoint exactly to target_dx/target_dy, the
+        # summed rounded deltas may be off by a few pixels. Apply the residual to the
+        # last movement so the actual executed movement lands exactly on target.
+        residual_dx = target_dx - transformed.total_dx
+        residual_dy = target_dy - transformed.total_dy
+
+        if residual_dx == 0 and residual_dy == 0:
+            return transformed
+
+        if not transformed.movements:
+            return None
+
+        last_movement_index = None
+        for i in range(len(transformed.movements) - 1, -1, -1):
+            if transformed.movements[i].get("type") == "mouse_move":
+                last_movement_index = i
+                break
+
+        if last_movement_index is None:
+            return None
+
+        adjusted_movements = list(transformed.movements)
+        adjusted_last_movement = dict(adjusted_movements[last_movement_index])
+        adjusted_last_movement["dx"] = adjusted_last_movement.get("dx", 0) + residual_dx
+        adjusted_last_movement["dy"] = adjusted_last_movement.get("dy", 0) + residual_dy
+        adjusted_movements[last_movement_index] = adjusted_last_movement
+
+        return PrimitiveMocapSequence(
+            movements=adjusted_movements,
+            total_dx=target_dx,
+            total_dy=target_dy,
+            click_down_dt=transformed.click_down_dt,
+            click_up_dt=transformed.click_up_dt,
+        )
+
+    def _center_landing_fallback(
+        self,
         current_x: int,
         current_y: int,
         rect_left: int,
@@ -604,52 +669,68 @@ class MocapManager:
         rect_right: int,
         rect_bottom: int,
     ) -> PrimitiveMocapSequence | None:
+        target_x = round((rect_left + rect_right) / 2.0)
+        target_y = round((rect_top + rect_bottom) / 2.0)
+
+        target_dx = target_x - current_x
+        target_dy = target_y - current_y
+        target_len = math.hypot(target_dx, target_dy)
+
+        candidates: list[tuple[float, float, PrimitiveMocapSequence]] = []
+
+        for seq in self.sequences:
+            seq_len = math.hypot(seq.total_dx, seq.total_dy)
+
+            if seq_len < 1e-9:
+                if target_dx == 0 and target_dy == 0:
+                    candidates.append((0.0, 0.0, seq))
+                continue
+
+            if target_len < 1e-9:
+                scale = 0.0
+                rotation_degrees = 0.0
+            else:
+                scale = target_len / seq_len
+                source_angle = math.degrees(math.atan2(seq.total_dy, seq.total_dx))
+                target_angle = math.degrees(math.atan2(target_dy, target_dx))
+                rotation_degrees = self._normalize_angle_degrees(target_angle - source_angle)
+
+            # Prefer the least-distorted source sequence.
+            scale_score = abs(math.log(scale)) if scale > 0.0 else float("inf")
+            rotation_score = abs(rotation_degrees)
+
+            candidates.append((scale_score, rotation_score, seq))
+
         if not candidates:
+            logger.info("Could not construct center-landing fallback because no usable sequence was available")
             return None
 
-        # Materialize only the strongest endpoint candidates. This keeps the
-        # fallback cheap while still accounting for per-movement rounding before
-        # returning the final sequence.
-        candidates = sorted(candidates, key=self._candidate_sort_key)[:25]
+        candidates.sort(key=lambda item: (item[0], item[1]))
 
-        best_seq: PrimitiveMocapSequence | None = None
-        best_score: tuple[float, float, float, int] | None = None
+        # Pick randomly among the best few so this path does not become completely
+        # deterministic while still staying plausible.
+        top_candidates = candidates[: min(10, len(candidates))]
+        _, _, seq = random.choice(top_candidates)
 
-        for candidate in candidates:
-            transformed = self._transform_sequence(
-                seq=candidate.seq,
-                scale=candidate.scale,
-                rotation_degrees=candidate.rotation_degrees,
-            )
-            actual_distance = self._sequence_distance_to_rect(
-                transformed,
-                current_x,
-                current_y,
-                rect_left,
-                rect_top,
-                rect_right,
-                rect_bottom,
-            )
-            score = (
-                actual_distance,
-                candidate.scale_deviation,
-                candidate.rotation_deviation,
-                candidate.tier_index,
-            )
-            if best_score is None or score < best_score:
-                best_score = score
-                best_seq = transformed
+        transformed = self._transform_sequence_to_exact_delta(
+            seq=seq,
+            target_dx=target_dx,
+            target_dy=target_dy,
+        )
 
-        if best_score is not None:
-            logger.info(
-                "No transformed sequence landed inside rect; returning closest fallback with distance %.2fpx, scale deviation %.2f%%, rotation %.2f degrees, tier %s",
-                best_score[0],
-                best_score[1] * 100,
-                best_score[2],
-                best_score[3],
-            )
+        if transformed is None:
+            logger.info("Failed to materialize center-landing fallback")
+            return None
 
-        return best_seq
+        logger.info(
+            "Returning center-landing fallback targeting (%s, %s) with delta (%s, %s)",
+            target_x,
+            target_y,
+            target_dx,
+            target_dy,
+        )
+
+        return transformed
 
     # Fallback for when we absolutely need to find a motion sequence that lands in
     # the rect, even if it means stretching or rotating it. If no allowed
@@ -667,10 +748,6 @@ class MocapManager:
         tiers = [
             (0.02, 2),
             (0.04, 4),
-            (0.06, 6),
-            (0.08, 8),
-            (0.10, 10),
-            (0.15, 15),
         ]
 
         if not self.sequences:
@@ -805,8 +882,7 @@ class MocapManager:
             )
             return random.choice(best_available_exact_matches)
 
-        return self._choose_best_materialized_fallback(
-            candidates=best_effort_candidates,
+        return self._center_landing_fallback(
             current_x=current_x,
             current_y=current_y,
             rect_left=rect_left,
