@@ -189,6 +189,153 @@ class MocapManager:
             click_up_dt=seq.click_up_dt,
         )
 
+    @staticmethod
+    def _normalize_angle_degrees(angle: float) -> float:
+        # Return an equivalent angle in [-180, 180).
+        return (angle + 180.0) % 360.0 - 180.0
+
+    @staticmethod
+    def _ray_rect_radius_interval(
+        angle_degrees: float,
+        rect_left: float,
+        rect_top: float,
+        rect_right: float,
+        rect_bottom: float,
+    ) -> tuple[float, float] | None:
+        """
+        For the ray from (0, 0) at angle_degrees, return the inclusive interval of
+        distances along the ray where the point is inside the axis-aligned rect.
+
+        Rect coordinates are relative to the current mouse position, not absolute
+        screen coordinates.
+        """
+        rad = math.radians(angle_degrees)
+        dx = math.cos(rad)
+        dy = math.sin(rad)
+
+        t_min = 0.0
+        t_max = math.inf
+        eps = 1e-9
+
+        for lower, upper, direction in (
+            (rect_left, rect_right, dx),
+            (rect_top, rect_bottom, dy),
+        ):
+            if abs(direction) < eps:
+                # Ray is parallel to these slab boundaries. It either always
+                # satisfies this axis or never can.
+                if lower <= 0.0 <= upper:
+                    continue
+                return None
+
+            a = lower / direction
+            b = upper / direction
+            if a > b:
+                a, b = b, a
+
+            t_min = max(t_min, a)
+            t_max = min(t_max, b)
+
+            if t_min > t_max:
+                return None
+
+        if t_max < 0.0:
+            return None
+
+        return max(t_min, 0.0), t_max
+
+    def _candidate_transform_params_for_rect(
+        self,
+        seq: PrimitiveMocapSequence,
+        rect_left: float,
+        rect_top: float,
+        rect_right: float,
+        rect_bottom: float,
+        scale_pct: float,
+        max_rot_deg: float,
+    ) -> list[tuple[float, float]]:
+        """
+        Compute viable (scale, rotation_degrees) pairs by reasoning about only the
+        sequence endpoint vector.
+
+        A transformed endpoint must be scale * R(theta) * (seq.total_dx,
+        seq.total_dy). The reachable endpoints for a tier form an annular sector.
+        This method intersects candidate rays in that sector with the target rect,
+        then returns only params whose continuous endpoint can land inside it.
+        """
+        seq_len = math.hypot(seq.total_dx, seq.total_dy)
+        if seq_len < 1e-9:
+            return []
+
+        base_angle = math.degrees(math.atan2(seq.total_dy, seq.total_dx))
+        min_radius = seq_len * (1.0 - scale_pct)
+        max_radius = seq_len * (1.0 + scale_pct)
+
+        center_x = (rect_left + rect_right) / 2.0
+        center_y = (rect_top + rect_bottom) / 2.0
+
+        # These points are just used to propose angles. Ray/rect intersection below
+        # verifies whether each proposed angle actually has a usable radius.
+        probe_points = [
+            (center_x, center_y),
+            (rect_left, rect_top),
+            (rect_left, rect_bottom),
+            (rect_right, rect_top),
+            (rect_right, rect_bottom),
+            (center_x, rect_top),
+            (center_x, rect_bottom),
+            (rect_left, center_y),
+            (rect_right, center_y),
+        ]
+
+        candidate_rotations = {-max_rot_deg, 0.0, max_rot_deg}
+        for x, y in probe_points:
+            if abs(x) < 1e-9 and abs(y) < 1e-9:
+                continue
+            target_angle = math.degrees(math.atan2(y, x))
+            rotation = self._normalize_angle_degrees(target_angle - base_angle)
+            rotation = min(max(rotation, -max_rot_deg), max_rot_deg)
+            candidate_rotations.add(rotation)
+
+        # Avoid bias from set iteration while preserving the randomized nature of
+        # the previous implementation.
+        candidate_rotations = list(candidate_rotations)
+        random.shuffle(candidate_rotations)
+
+        params: list[tuple[float, float]] = []
+        seen: set[tuple[float, float]] = set()
+
+        for rotation in candidate_rotations:
+            endpoint_angle = base_angle + rotation
+            ray_interval = self._ray_rect_radius_interval(
+                endpoint_angle,
+                rect_left,
+                rect_top,
+                rect_right,
+                rect_bottom,
+            )
+            if ray_interval is None:
+                continue
+
+            ray_min, ray_max = ray_interval
+            overlap_min = max(ray_min, min_radius)
+            overlap_max = min(ray_max, max_radius)
+            if overlap_min > overlap_max:
+                continue
+
+            # Aim for the middle of the overlap so integer rounding inside
+            # _transform_sequence is less likely to push the endpoint out of rect.
+            radius = (overlap_min + overlap_max) / 2.0
+            scale = radius / seq_len
+
+            key = (round(scale, 6), round(rotation, 6))
+            if key in seen:
+                continue
+            seen.add(key)
+            params.append((scale, rotation))
+
+        return params
+
     # Fallback for when we absolutely need to find a motion sequence that lands in the rect, even if it means stretching or rotating it
     def find_random_sequence_landing_in_rect_with_stretch_and_rotation_allowed(
         self,
@@ -208,54 +355,74 @@ class MocapManager:
             (0.15, 15),
         ]
 
+        # Work in a coordinate system where the current mouse position is the
+        # origin. The target rect then describes the allowed final delta vector.
+        target_left = rect_left - current_x
+        target_top = rect_top - current_y
+        target_right = rect_right - current_x
+        target_bottom = rect_bottom - current_y
+
         best_available: list[PrimitiveMocapSequence] = []
 
         for scale_pct, max_rot_deg in tiers:
             matching: list[PrimitiveMocapSequence] = []
+            transformed_attempts = 0
+            analytic_candidates = 0
 
-            # Symmetric scale samples within the allowed stretch/shrink window.
-            scale_factors = [
-                1.0 - scale_pct,
-                1.0 - scale_pct / 2,
-                1.0,
-                1.0 + scale_pct / 2,
-                1.0 + scale_pct,
-            ]
+            sequences = list(self.sequences)
+            random.shuffle(sequences)
 
-            # Integer degree samples across the allowed rotation window.
-            angles = list(range(-max_rot_deg, max_rot_deg + 1))
+            for seq in sequences:
+                params = self._candidate_transform_params_for_rect(
+                    seq=seq,
+                    rect_left=target_left,
+                    rect_top=target_top,
+                    rect_right=target_right,
+                    rect_bottom=target_bottom,
+                    scale_pct=scale_pct,
+                    max_rot_deg=max_rot_deg,
+                )
+                analytic_candidates += len(params)
 
-            for seq in self.sequences:
-                for scale in scale_factors:
-                    for angle in angles:
-                        transformed = self._transform_sequence(
-                            seq=seq,
-                            scale=scale,
-                            rotation_degrees=angle,
-                        )
-                        if self._sequence_lands_in_rect(
-                            transformed,
-                            current_x,
-                            current_y,
-                            rect_left,
-                            rect_top,
-                            rect_right,
-                            rect_bottom,
-                        ):
-                            matching.append(transformed)
+                for scale, angle in params:
+                    transformed_attempts += 1
+                    transformed = self._transform_sequence(
+                        seq=seq,
+                        scale=scale,
+                        rotation_degrees=angle,
+                    )
+                    if self._sequence_lands_in_rect(
+                        transformed,
+                        current_x,
+                        current_y,
+                        rect_left,
+                        rect_top,
+                        rect_right,
+                        rect_bottom,
+                    ):
+                        matching.append(transformed)
+                        if len(matching) >= 10:
+                            logger.info(
+                                "Found at least %s transformed sequences matching rect with up to %.1f%% scaling and %s degrees rotation after %s full transforms (%s endpoint candidates)",
+                                len(matching),
+                                scale_pct * 100,
+                                max_rot_deg,
+                                transformed_attempts,
+                                analytic_candidates,
+                            )
+                            return random.choice(matching)
 
             logger.info(
-                "Found %s transformed sequences matching rect with up to %.1f%% scaling and %s degrees rotation",
+                "Found %s transformed sequences matching rect with up to %.1f%% scaling and %s degrees rotation after %s full transforms (%s endpoint candidates)",
                 len(matching),
                 scale_pct * 100,
                 max_rot_deg,
+                transformed_attempts,
+                analytic_candidates,
             )
 
             if matching:
                 best_available = matching
-
-            if len(matching) >= 10:
-                return random.choice(matching)
 
         if best_available:
             logger.info(
