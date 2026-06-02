@@ -2,6 +2,7 @@ import logging
 from datetime import timedelta
 
 from django.core.management.base import BaseCommand
+from django.db.models import Exists, OuterRef
 from django.utils import timezone
 
 from bots.models import BotEvent, BotStates, Utterance
@@ -39,11 +40,17 @@ class Command(BaseCommand):
         cutoff = timezone.now() - timedelta(days=days)
         logger.info(f"Looking for bots whose ENDED event was logged before {cutoff.isoformat()} ({days} days ago)...")
 
+        # Restrict the candidate set to bots that still have at least one
+        # utterance. Without this, a daily cron re-scans every bot ever
+        # ended >N days ago (most already cleared by prior runs), which
+        # grows unboundedly with the bot population.
+        has_utterances = Utterance.objects.filter(recording__bot_id=OuterRef("bot_id"))
         old_bot_ids = list(
             BotEvent.objects.filter(
                 new_state=BotStates.ENDED,
                 created_at__lt=cutoff,
             )
+            .filter(Exists(has_utterances))
             .values_list("bot_id", flat=True)
             .distinct()
         )
