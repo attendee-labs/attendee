@@ -7,14 +7,14 @@ from bots.cleanup import cleanup_old_utterances
 
 
 class Command(BaseCommand):
-    help = "Deletes Utterance rows (transcript segments) for Bots whose meetings ended more than N days ago. Bot age is determined by the timestamp of the BotEvent transitioning the bot to ENDED, not Bot.created_at, since scheduled bots can be created long before they run. Mirrors what the public Delete-Bot-Transcript endpoint does, but in bulk over many bots. Other tables (Bot, Recording, AudioChunk, Participant, etc.) are left intact."
+    help = "Deletes Utterance rows (transcript segments) whose own created_at is more than N days ago. Other tables (Bot, Recording, AudioChunk, Participant, etc.) are left intact. Note: the boundary may fall mid-meeting, in which case a recording's later utterances will be deleted by the next cron run."
 
     def add_arguments(self, parser):
         parser.add_argument(
             "--days",
             type=int,
             default=14,
-            help="Delete utterances for bots that ended more than this many days ago (default: 14).",
+            help="Delete utterances created more than this many days ago (default: 14).",
         )
         parser.add_argument(
             "--dry-run",
