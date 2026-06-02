@@ -738,6 +738,12 @@ GOOGLE_MEET_SETTINGS_SCHEMA = {
             "description": "The mode to use for the Google Meet bot login. 'always' means the bot will always login, 'only_if_required' means the bot will only login if the meeting requires authentication.",
             "default": "always",
         },
+        "ui_interaction_mode": {
+            "type": "string",
+            "enum": ["robotic", "humanized"],
+            "description": "The UI interaction mode for the Google Meet bot. 'humanized' performs more human-like interactions to evade bot detection, but the bot will take about 10 seconds longer to join the meeting.",
+            "default": "humanized",
+        },
         "login_group_name": {
             "type": ["string", "null"],
             "description": "Optional bot login group name to use for Google Meet signed-in bot selection. If no group is specified, the oldest Google Meet group will be selected.",
@@ -1470,7 +1476,7 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
     google_meet_settings = GoogleMeetSettingsJSONField(
         help_text="The Google Meet-specific settings for the bot.",
         required=False,
-        default={"use_login": False, "login_mode": "always", "login_group_name": None},
+        default={"use_login": False, "login_mode": "always", "ui_interaction_mode": "humanized", "login_group_name": None},
     )
 
     def validate_google_meet_settings(self, value):
@@ -1478,7 +1484,12 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
             return value
 
         # Define defaults
-        defaults = {"use_login": False, "login_mode": "always", "login_group_name": None}
+        defaults = {"use_login": False, "login_mode": "always", "ui_interaction_mode": "humanized", "login_group_name": None}
+
+        # If use_login is set to true, then ui_interaction_mode should default to "robotic" (when not
+        # explicitly provided), because in this case humanized motion is not needed.
+        if value.get("use_login"):
+            defaults["ui_interaction_mode"] = "robotic"
 
         try:
             jsonschema.validate(instance=value, schema=GOOGLE_MEET_SETTINGS_SCHEMA)
