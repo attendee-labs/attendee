@@ -1130,9 +1130,9 @@ class GoogleMeetUIMethods:
 
         self.fill_out_name_input()
 
-        self.verify_expected_audio_configuration()
-
         self.turn_off_media_inputs()
+
+        self.verify_expected_audio_configuration()
 
         logger.info("Waiting for the 'Ask to join' or 'Join now' button...")
         join_button = self.locate_element(
