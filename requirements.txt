@@ -15,7 +15,7 @@ click-repl==0.3.0
 cryptography==43.0.3
 dj-database-url==2.3.0
 Django==5.1.14
-django-allauth==65.1.0
+django-allauth==65.13.0
 django-concurrency==2.6.0
 django-extensions==3.2.3
 django-storages==1.14.4
