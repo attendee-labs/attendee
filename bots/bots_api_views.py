@@ -19,7 +19,7 @@ from rest_framework.views import APIView
 
 from .authentication import ApiKeyAuthentication
 from .bots_api_utils import BotCreationSource, create_bot, create_bot_chat_message_request, create_bot_media_request_for_image, delete_bot, patch_bot, patch_bot_transcription_settings, patch_bot_voice_agent_settings, send_sync_command
-from .launch_bot_utils import launch_bot
+from .launch_bot_utils import launch_adhoc_bot_from_view
 from .meeting_url_utils import meeting_type_from_url
 from .models import (
     AsyncTranscription,
@@ -301,7 +301,7 @@ class BotListCreateView(GenericAPIView):
 
         # If this is a scheduled bot, we don't want to launch it yet.
         if bot.state == BotStates.JOINING:
-            launch_bot(bot)
+            launch_adhoc_bot_from_view(bot)
 
         return Response(BotSerializer(bot).data, status=status.HTTP_201_CREATED)
 
@@ -432,6 +432,7 @@ class OutputVideoView(APIView):
             media_type=BotMediaRequestMediaTypes.VIDEO,
             media_url=serializer.validated_data["url"],
             loop=serializer.validated_data["loop"],
+            mute_video=serializer.validated_data["mute_video"],
         )
 
         # Send sync command to notify bot of new media request

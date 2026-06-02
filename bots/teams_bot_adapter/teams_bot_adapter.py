@@ -80,8 +80,8 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
         logger.info("Meeting requires login and Teams bot login credentials are available, so we will retry by logging in")
         return True
 
-    def get_chromedriver_payload_file_name(self):
-        return "teams_bot_adapter/teams_chromedriver_payload.js"
+    def get_chromedriver_payload_file_names(self):
+        return ["teams_bot_adapter/teams_chromedriver_payload.js"]
 
     def get_websocket_port(self):
         return 8097
@@ -91,9 +91,9 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
         logger.info(f"is_sent_video_still_playing result = {result}")
         return result
 
-    def send_video(self, video_url, loop=False):
-        logger.info(f"send_video called with video_url = {video_url}, loop = {loop}")
-        self.driver.execute_script(f"window.botOutputManager.playVideoWithBlobUrl({json.dumps(video_url)}, {json.dumps(loop)})")
+    def send_video(self, video_url, loop=False, mute_video=False):
+        logger.info(f"send_video called with video_url = {video_url}, loop = {loop}, mute_video = {mute_video}")
+        self.driver.execute_script(f"window.botOutputManager.playVideoWithBlobUrl({json.dumps(video_url)}, {json.dumps(loop)}, {json.dumps(mute_video)})")
 
     def send_chat_message(self, text, to_user_uuid):
         chatInput = self.driver.execute_script('return document.querySelector(\'[aria-label="Type a message"], [placeholder="Type a message"]\')')

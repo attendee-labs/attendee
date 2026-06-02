@@ -1625,6 +1625,12 @@ class BotController:
             self.audio_chunk_uploader.wait_for_uploads()
 
     def save_debug_recording(self):
+        try:
+            self.save_debug_recording_with_no_error_handling()
+        except Exception:
+            logger.exception("Error saving debug recording")
+
+    def save_debug_recording_with_no_error_handling(self):
         # Only save if the file exists
         if not os.path.exists(BotAdapter.DEBUG_RECORDING_FILE_PATH):
             logger.info(f"Debug recording file at {BotAdapter.DEBUG_RECORDING_FILE_PATH} does not exist, not saving")

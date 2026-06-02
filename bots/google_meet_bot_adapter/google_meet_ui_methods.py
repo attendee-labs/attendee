@@ -226,7 +226,7 @@ class GoogleMeetUIMethods:
                 logger.warning("Camera button did not seem to be turned off. Retrying...")
 
     def join_now_button_selector(self):
-        return '//button[.//span[text()="Ask to join" or text()="Join now" or text()="Join the call now"]]'
+        return '//button[.//span[text()="Ask to join" or text()="Join now" or text()="Join the call now" or text()="Join anyway"]]'
 
     def check_for_failed_logged_in_bot_attempt(self):
         if not self.google_meet_bot_login_session:

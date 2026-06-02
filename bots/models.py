@@ -507,7 +507,7 @@ class CalendarEvent(models.Model):
 
     platform_uuid = models.CharField(max_length=1024)
 
-    meeting_url = models.CharField(max_length=511, null=True, blank=True)
+    meeting_url = models.CharField(max_length=2048, null=True, blank=True)
 
     start_time = models.DateTimeField(db_index=True)
     end_time = models.DateTimeField(db_index=True)
@@ -754,6 +754,12 @@ class TranscriptionSettings:
     def custom_async_additional_props(self):
         return self._settings.get("custom_async", {})
 
+    def custom_async_v2_form_data(self):
+        return self._settings.get("custom_async_v2", {}).get("form_data", {})
+
+    def custom_async_v2_headers(self):
+        return self._settings.get("custom_async_v2", {}).get("headers", {})
+
     def deepgram_language(self):
         return self._settings.get("deepgram", {}).get("language", None)
 
@@ -822,7 +828,7 @@ class Bot(models.Model):
     project = models.ForeignKey(Project, on_delete=models.PROTECT, related_name="bots")
 
     name = models.CharField(max_length=255, default="My bot")
-    meeting_url = models.CharField(max_length=511)
+    meeting_url = models.CharField(max_length=2048)
     meeting_uuid = models.CharField(max_length=511, null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
@@ -2238,6 +2244,7 @@ class TranscriptionProviders(models.IntegerChoices):
     ELEVENLABS = 7, "ElevenLabs"
     KYUTAI = 8, "Kyutai"
     CUSTOM_ASYNC = 9, "Custom Async"
+    CUSTOM_ASYNC_V2 = 10, "Custom Async v2"
 
 
 class RecordingStorage(Storage):
@@ -2853,6 +2860,7 @@ class BotMediaRequest(models.Model):
     media_url = models.URLField(null=True, blank=True)
 
     loop = models.BooleanField(default=False, db_default=False)
+    mute_video = models.BooleanField(default=False, db_default=False)
 
     media_blob = models.ForeignKey(
         MediaBlob,
@@ -3118,7 +3126,7 @@ class WebhookSubscription(models.Model):
             self.object_id = f"{self.OBJECT_ID_PREFIX}{random_string}"
         super().save(*args, **kwargs)
 
-    url = models.URLField()
+    url = models.URLField(max_length=2048)
     triggers = models.JSONField(default=default_triggers)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)

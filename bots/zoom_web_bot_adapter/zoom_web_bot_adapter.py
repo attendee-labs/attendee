@@ -8,6 +8,7 @@ from typing import Callable
 import jwt
 
 from bots.meeting_url_utils import parse_zoom_join_url
+from bots.models import RecordingViews
 from bots.web_bot_adapter import WebBotAdapter
 from bots.zoom_web_bot_adapter.zoom_web_ui_methods import UiZoomWebGenericJoinErrorException, ZoomWebUIMethods
 
@@ -89,8 +90,11 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
 
         self.generic_join_error_retries = 0
 
-    def get_chromedriver_payload_file_name(self):
-        return "zoom_web_bot_adapter/zoom_web_chromedriver_payload.js"
+    def get_chromedriver_payload_file_names(self):
+        return [
+            "zoom_web_bot_adapter/zoom_web_chromedriver_payload.js",
+            "zoom_web_bot_adapter/zoom_web_redux_interceptor.js",
+        ]
 
     def get_websocket_port(self):
         return 8765
@@ -100,9 +104,9 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
         logger.info(f"is_sent_video_still_playing result = {result}")
         return result
 
-    def send_video(self, video_url, loop=False):
-        logger.info(f"send_video called with video_url = {video_url}, loop = {loop}")
-        self.driver.execute_script(f"window.botOutputManager.playVideo({json.dumps(video_url)}, {json.dumps(loop)})")
+    def send_video(self, video_url, loop=False, mute_video=False):
+        logger.info(f"send_video called with video_url = {video_url}, loop = {loop}, mute_video = {mute_video}")
+        self.driver.execute_script(f"window.botOutputManager.playVideo({json.dumps(video_url)}, {json.dumps(loop)}, {json.dumps(mute_video)})")
 
     def change_gallery_view_page(self, next_page: bool):
         self.driver.execute_script(f"window?.changeGalleryViewPage({json.dumps(next_page)})")
@@ -198,3 +202,10 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
                 "errorMessage": "Fail to join the meeting.",
             }
         )
+
+    # Currently, it will not show the Gallery view when GPU is disabled
+    def subclass_specific_use_disable_gpu_chrome_option(self):
+        if self.recording_view == RecordingViews.GALLERY_VIEW:
+            return False
+
+        return super().subclass_specific_use_disable_gpu_chrome_option()
