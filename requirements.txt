@@ -6,13 +6,12 @@ boto3==1.35.64
 botocore==1.35.64
 celery==5.4.0
 certifi==2024.8.30
-cffi==1.17.1
 charset-normalizer==3.4.0
 click==8.1.7
 click-didyoumean==0.3.1
 click-plugins==1.1.1
 click-repl==0.3.0
-cryptography==43.0.3
+cryptography==46.0.5
 dj-database-url==2.3.0
 Django==5.1.14
 django-allauth==65.1.0
