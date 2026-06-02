@@ -6,7 +6,7 @@ from django.test import TestCase
 from django.utils import timezone
 
 from accounts.models import Organization
-from bots.bots_api_utils import BotCreationSource, build_site_url, create_bot, create_webhook_subscription, patch_bot, validate_bot_concurrency_limit, validate_meeting_url_and_credentials
+from bots.bots_api_utils import BotCreationSource, build_internal_site_url, build_site_url, create_bot, create_webhook_subscription, patch_bot, validate_bot_concurrency_limit, validate_meeting_url_and_credentials
 from bots.calendars_api_utils import create_calendar
 from bots.models import Bot, BotEventManager, BotEventTypes, BotLoginGroup, BotLoginPlatform, BotStates, CalendarEvent, CalendarPlatform, Project, TranscriptionProviders, WebhookSubscription, WebhookTriggerTypes, ZoomOAuthApp
 
@@ -43,6 +43,30 @@ class TestBuildSiteUrl(TestCase):
         mock_settings.SITE_DOMAIN = "production.example.com"
         result = build_site_url("/callback")
         self.assertEqual(result, "http://localhost:9000/callback")
+
+    @patch("bots.bots_api_utils.settings")
+    @patch.dict("os.environ", {"INTERNAL_SITE_DOMAIN": "attendee-app.ai.svc.cluster.local:8000"}, clear=True)
+    def test_build_internal_site_url_uses_internal_domain_over_http(self, mock_settings):
+        """Test that internal callbacks target INTERNAL_SITE_DOMAIN over http."""
+        mock_settings.SITE_DOMAIN = "production.example.com"
+        result = build_internal_site_url("/cookie")
+        self.assertEqual(result, "http://attendee-app.ai.svc.cluster.local:8000/cookie")
+
+    @patch("bots.bots_api_utils.settings")
+    @patch.dict("os.environ", {"INTERNAL_SITE_DOMAIN": "attendee-app.ai.svc.cluster.local:8000", "EXTERNAL_WEBHOOK_SITE_DOMAIN": "external.example.com"}, clear=True)
+    def test_build_site_url_external_ignores_internal_domain(self, mock_settings):
+        """Test that external (default) URLs are unaffected by INTERNAL_SITE_DOMAIN."""
+        mock_settings.SITE_DOMAIN = "production.example.com"
+        result = build_site_url("/webhook")
+        self.assertEqual(result, "https://external.example.com/webhook")
+
+    @patch("bots.bots_api_utils.settings")
+    @patch.dict("os.environ", {"EXTERNAL_WEBHOOK_SITE_DOMAIN": "external.example.com"}, clear=True)
+    def test_build_internal_site_url_falls_back_to_external_domain_when_unset(self, mock_settings):
+        """Test that internal callbacks fall back to the external domain when INTERNAL_SITE_DOMAIN is unset."""
+        mock_settings.SITE_DOMAIN = "production.example.com"
+        result = build_internal_site_url("/cookie")
+        self.assertEqual(result, "https://external.example.com/cookie")
 
 
 class TestValidateMeetingUrlAndCredentials(TestCase):

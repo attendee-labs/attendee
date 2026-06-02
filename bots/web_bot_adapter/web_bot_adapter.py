@@ -657,9 +657,13 @@ class WebBotAdapter(BotAdapter):
                 libraries_code += library_file.read() + "\n"
             logger.info(f"Loaded library from {os.path.relpath(library_path, current_dir)}")
 
-        # Read your payload using path relative to current file
-        with open(os.path.join(current_dir, "..", self.get_chromedriver_payload_file_name()), "r") as file:
-            payload_code = file.read()
+        # Read the subclass payload files using paths relative to current file.
+        # Files are concatenated in order, so later files can depend on earlier ones.
+        payload_code = ""
+        for payload_file_name in self.get_chromedriver_payload_file_names():
+            with open(os.path.join(current_dir, "..", payload_file_name), "r") as file:
+                payload_code += file.read() + "\n"
+            logger.info(f"Loaded chromedriver payload from {payload_file_name}")
 
         # Read shared_chromedriver_payload.js
         with open(os.path.join(current_dir, "shared_chromedriver_payload.js"), "r") as file:

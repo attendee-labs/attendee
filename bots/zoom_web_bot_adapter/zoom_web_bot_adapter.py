@@ -90,8 +90,11 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
 
         self.generic_join_error_retries = 0
 
-    def get_chromedriver_payload_file_name(self):
-        return "zoom_web_bot_adapter/zoom_web_chromedriver_payload.js"
+    def get_chromedriver_payload_file_names(self):
+        return [
+            "zoom_web_bot_adapter/zoom_web_chromedriver_payload.js",
+            "zoom_web_bot_adapter/zoom_web_redux_interceptor.js",
+        ]
 
     def get_websocket_port(self):
         return 8765

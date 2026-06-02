@@ -1,6 +1,8 @@
 import json
 import logging
 import os
+import random
+import time
 import uuid
 from typing import Dict, Optional
 
@@ -12,7 +14,21 @@ from .bot_pod_spec import BotPodSpecType
 
 logger = logging.getLogger(__name__)
 
+TRANSIENT_K8S_ADMISSION_ERROR_MARKERS = (
+    "failed calling webhook",
+    "context deadline exceeded",
+    "Internal error occurred",
+)
+
 # fmt: off
+
+
+def is_transient_k8s_admission_error(exc: client.ApiException) -> bool:
+    """Return True for retryable AKS admission webhook timeouts (HTTP 500)."""
+    if exc.status != 500:
+        return False
+    error_text = str(exc.body or exc.reason or exc)
+    return any(marker in error_text for marker in TRANSIENT_K8S_ADMISSION_ERROR_MARKERS)
 
 def apply_json6902_patch(json_to_patch: dict, patch_str: str) -> dict:
     """
@@ -290,6 +306,33 @@ class BotPodCreator:
         bot_pod_data = self.api_client.sanitize_for_serialization(bot_pod)
         return apply_json6902_patch(bot_pod_data, self.bot_pod_spec)
 
+    def _create_namespaced_pod_with_retry(
+        self,
+        namespace: str,
+        body: dict,
+        pod_description: str,
+    ):
+        max_retries = int(os.getenv("BOT_POD_CREATE_MAX_RETRIES", "3"))
+        base_delay_seconds = float(os.getenv("BOT_POD_CREATE_RETRY_DELAY_SECONDS", "2"))
+
+        for attempt in range(max_retries + 1):
+            try:
+                return self.v1.create_namespaced_pod(namespace=namespace, body=body)
+            except client.ApiException as exc:
+                if attempt >= max_retries or not is_transient_k8s_admission_error(exc):
+                    raise
+                delay = base_delay_seconds * (2**attempt) + random.uniform(0, 1)
+                logger.warning(
+                    "Transient K8s admission error creating %s (attempt %s/%s), "
+                    "retrying in %.1fs: %s",
+                    pod_description,
+                    attempt + 1,
+                    max_retries + 1,
+                    delay,
+                    exc,
+                )
+                time.sleep(delay)
+
     def create_bot_pod(
         self,
         bot_id: int,
@@ -392,15 +435,17 @@ class BotPodCreator:
             )
 
         try:
-            bot_pod_api_response = self.v1.create_namespaced_pod(
+            bot_pod_api_response = self._create_namespaced_pod_with_retry(
                 namespace=self.namespace,
                 body=bot_pod_after_spec_applied,
+                pod_description=f"bot pod {bot_name}",
             )
 
             if add_webpage_streamer:
-                webpage_streamer_pod_api_response = self.v1.create_namespaced_pod(
+                webpage_streamer_pod_api_response = self._create_namespaced_pod_with_retry(
                     namespace=self.webpage_streamer_namespace,
-                    body=webpage_streamer_pod
+                    body=webpage_streamer_pod,
+                    pod_description=f"webpage streamer pod for {bot_name}",
                 )
                 logger.info(f"Webpage streamer pod created: {webpage_streamer_pod_api_response}")
             

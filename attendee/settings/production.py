@@ -15,6 +15,8 @@ DATABASES = {
         conn_max_age=600,
         conn_health_checks=True,
         ssl_require=os.getenv("POSTGRES_SSL_REQUIRE", "true") == "true",
+        # Set to "true" behind a transaction-pooling pooler (PgBouncer, etc.).
+        disable_server_side_cursors=os.getenv("DISABLE_SERVER_SIDE_CURSORS", "false") == "true",
     ),
 }
 

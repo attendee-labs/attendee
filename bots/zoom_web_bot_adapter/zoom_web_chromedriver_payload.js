@@ -1,3 +1,63 @@
+(() => {
+    if (window.self !== window.top) {
+        console.log("Running inside an iframe, aborting payload.");
+        return;
+    }
+    const fullUrl = window.location.href;
+    console.log("Full URL:", fullUrl);
+  
+    if (!fullUrl.startsWith("http://127.0.0.1")) {
+        // This means we shunted to a zoom.com url which means the meeting has ended.
+        // Currently SDK does not give us any feedback on this.
+        // window.ws may not be ready yet, so retry until the send succeeds.
+        const trySendMeetingEnded = () => {
+            try {
+                window.ws.sendJson({
+                    type: 'MeetingStatusChange',
+                    change: 'meeting_ended',
+                });
+            } catch (e) {
+                setTimeout(trySendMeetingEnded, 200);
+            }
+        };
+        setTimeout(trySendMeetingEnded, 200);
+    }
+  })();
+
+// Get the frontend tracking id for debugging
+(() => {
+    function interceptJsonpCallback(name) {
+      Object.defineProperty(window, name, {
+        configurable: true,
+  
+        set(originalCallback) {
+          Object.defineProperty(window, name, {
+            configurable: true,
+            writable: true,
+            value: function interceptedZoomJsonpResponse(payload) {
+              try {
+                window.ws?.sendJson({
+                  type: 'ZoomFrontendTrackingId',
+                  trackingId: payload?.result?.tid ?? 'No tracking id found'
+                });
+              } catch (e) {
+                console.warn('ZoomFrontendTrackingId send failed', e);
+              }
+
+              return originalCallback.call(this, payload);
+            },
+          });
+        },
+  
+        get() {
+          return undefined;
+        },
+      });
+    }
+  
+    interceptJsonpCallback("localJsonpCallback1");
+  })();
+
 // Captures per-participant webcam/screenshare video by periodically scanning
 // Zoom <video-player> elements and reconciling that scan with active captures.
 class PerParticipantVideoCaptureManager {
