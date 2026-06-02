@@ -7,7 +7,7 @@ from django.test import TestCase
 from django.utils import timezone
 
 from accounts.models import Organization
-from bots.cleanup import cleanup_old_audio_chunks, cleanup_old_bot_resource_snapshots, cleanup_old_utterances
+from bots.cleanup_utils import cleanup_old_audio_chunks, cleanup_old_bot_resource_snapshots, cleanup_old_utterances
 from bots.models import AudioChunk, Bot, BotResourceSnapshot, BotStates, Participant, Project, Recording, RecordingStates, Utterance
 
 
@@ -48,7 +48,7 @@ class CleanupFixturesMixin:
 
 
 # -------------------------------------------------------------------------
-# bots.cleanup helpers
+# bots.cleanup_utils helpers
 # -------------------------------------------------------------------------
 
 

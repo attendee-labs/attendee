@@ -3,7 +3,7 @@ from datetime import timedelta
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
-from bots.cleanup import cleanup_old_utterances
+from bots.cleanup_utils import cleanup_old_utterances
 
 
 class Command(BaseCommand):

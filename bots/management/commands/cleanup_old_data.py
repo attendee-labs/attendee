@@ -4,22 +4,22 @@ from datetime import timedelta
 from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 
-from bots import cleanup
+from bots import cleanup_utils
 
 logger = logging.getLogger(__name__)
 
 
-# Each table key maps to the shared cleanup function in bots/cleanup.py.
+# Each table key maps to the shared cleanup function in bots/cleanup_utils.py.
 # Adding a new table = adding a function there + a new entry here.
 TABLE_TO_CLEANUP = {
-    "utterances": cleanup.cleanup_old_utterances,
-    "audio_chunks": cleanup.cleanup_old_audio_chunks,
-    "snapshots": cleanup.cleanup_old_bot_resource_snapshots,
+    "utterances": cleanup_utils.cleanup_old_utterances,
+    "audio_chunks": cleanup_utils.cleanup_old_audio_chunks,
+    "snapshots": cleanup_utils.cleanup_old_bot_resource_snapshots,
 }
 
 
 class Command(BaseCommand):
-    help = "Deletes historical records older than --days for any subset of {utterances, audio_chunks, snapshots}. Dispatches to the shared functions in bots/cleanup.py so this command and the per-table delete_* commands stay in lockstep. A failure in one table does not stop the others; the cron will retry the failed one on the next tick."
+    help = "Deletes historical records older than --days for any subset of {utterances, audio_chunks, snapshots}. Dispatches to the shared functions in bots/cleanup_utils.py so this command and the per-table delete_* commands stay in lockstep. A failure in one table does not stop the others; the cron will retry the failed one on the next tick."
 
     def add_arguments(self, parser):
         parser.add_argument(
