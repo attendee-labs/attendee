@@ -1486,6 +1486,11 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
         # Define defaults
         defaults = {"use_login": False, "login_mode": "always", "ui_interaction_mode": "humanized", "login_group_name": None}
 
+        # If we have use_login set to true, then ui_interaction_mode should default to "robotic", because
+        # in this case humanized motion is not needed.
+        if value.get("use_login"):
+            value["ui_interaction_mode"] = "robotic"
+
         try:
             jsonschema.validate(instance=value, schema=GOOGLE_MEET_SETTINGS_SCHEMA)
         except jsonschema.exceptions.ValidationError as e:
