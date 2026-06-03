@@ -1111,6 +1111,16 @@ class GoogleMeetUIMethods:
         if self.ui_interaction_mode == "humanized":
             self.position_mouse_for_humanized_interaction()
 
+        time.sleep(3)
+
+        self.driver.get("https://checkip.amazonaws.com")
+
+        try:
+            observed_ip = self.driver.find_element(By.TAG_NAME, "body").text.strip()
+            logger.info(f"Observed egress IP from checkip.amazonaws.com: {observed_ip}")
+        except Exception as e:
+            logger.warning(f"Could not read egress IP from checkip.amazonaws.com: {e}")
+
         self.driver.get(self.meeting_url)
 
         self.driver.execute_cdp_cmd(
