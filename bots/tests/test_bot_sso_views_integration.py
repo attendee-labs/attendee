@@ -153,12 +153,13 @@ class BotSsoViewsIntegrationTest(TransactionTestCase):
         if keys:
             redis_client.delete(*keys)
 
-    def test_set_cookie_view_with_valid_session(self):
-        """Test GoogleMeetSetCookieView with a valid session"""
+    def test_set_cookie_view_with_valid_session_over_http(self):
+        """Over plain HTTP (in-cluster INTERNAL_SITE_DOMAIN path) the cookie must NOT be
+        Secure, otherwise the browser silently drops it and the sign-in flow never starts."""
         # Create a session in Redis
         session_id = create_google_meet_sign_in_session(self.bot, self.google_meet_bot_login)
 
-        # Make a GET request to the set cookie endpoint
+        # Make a GET request to the set cookie endpoint (test client defaults to HTTP)
         url = reverse("bot_sso:google_meet_set_cookie")
         response = self.client.get(url, {"session_id": session_id})
 
@@ -166,7 +167,28 @@ class BotSsoViewsIntegrationTest(TransactionTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.content.decode(), "Google Meet Set Cookie")
 
-        # Assert the cookie is set
+        # Assert the cookie is set without the Secure flag
+        self.assertIn("google_meet_sign_in_session_id", response.cookies)
+        cookie = response.cookies["google_meet_sign_in_session_id"]
+        self.assertEqual(cookie.value, session_id)
+        self.assertFalse(cookie["secure"])
+        self.assertTrue(cookie["httponly"])
+        self.assertEqual(cookie["samesite"], "Lax")
+
+    def test_set_cookie_view_with_valid_session_over_https(self):
+        """Over HTTPS (public path) the cookie must keep the Secure flag."""
+        # Create a session in Redis
+        session_id = create_google_meet_sign_in_session(self.bot, self.google_meet_bot_login)
+
+        # Make a GET request over HTTPS so request.is_secure() is True
+        url = reverse("bot_sso:google_meet_set_cookie")
+        response = self.client.get(url, {"session_id": session_id}, secure=True)
+
+        # Assert the response is successful
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content.decode(), "Google Meet Set Cookie")
+
+        # Assert the cookie is set with the Secure flag
         self.assertIn("google_meet_sign_in_session_id", response.cookies)
         cookie = response.cookies["google_meet_sign_in_session_id"]
         self.assertEqual(cookie.value, session_id)
