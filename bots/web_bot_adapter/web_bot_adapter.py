@@ -6,7 +6,6 @@ import json
 import logging
 import os
 import secrets
-import shutil
 import tempfile
 import threading
 import time

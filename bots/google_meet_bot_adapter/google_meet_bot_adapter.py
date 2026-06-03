@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 from typing import Callable
 
 from bots.google_meet_bot_adapter.google_meet_ui_methods import (
@@ -130,11 +131,9 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
             "scheme": "http",
             "username": username,
             "password": password,
-
             # Start with the proxy on.
             # Later you can call self.disable_chrome_proxy().
             "initially_enabled": True,
-
             # Keep local websocket / localhost traffic out of the proxy.
             "bypass_list": ["localhost", "127.0.0.1", "[::1]"],
         }
