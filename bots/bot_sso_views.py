@@ -1,4 +1,5 @@
 import logging
+import os
 
 from django.http import HttpResponse, HttpResponseBadRequest
 from django.utils.decorators import method_decorator
@@ -34,7 +35,7 @@ class GoogleMeetSetCookieView(View):
         response.set_cookie(
             "google_meet_sign_in_session_id",
             session_id,
-            secure=True,
+            secure=os.getenv("USE_SECURE_COOKIE_FOR_SIGNED_IN_GOOGLE_MEET_BOTS", "true") == "true",
             httponly=True,
             samesite="Lax",
         )
