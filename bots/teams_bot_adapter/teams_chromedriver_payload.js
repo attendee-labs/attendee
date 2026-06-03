@@ -510,8 +510,23 @@ class StyleManager {
         `;
         document.head.appendChild(style);
         this.frameStyleElement = style;
+
+        /* ── 3.  Break stacking contexts on ancestors ─────────────────── */
+        const centralElement = document.querySelector('[data-test-segment-type="central"]');
+        if (centralElement) {
+            let ancestor = centralElement.parentElement;
+            while (ancestor && ancestor !== document.body) {
+                ancestor.style.setProperty('transform', 'none', 'important');
+                ancestor.style.setProperty('will-change', 'auto', 'important');
+                ancestor.style.setProperty('filter', 'none', 'important');
+                ancestor.style.setProperty('contain', 'none', 'important');
+                ancestor.style.setProperty('isolation', 'auto', 'important');
+                ancestor.style.setProperty('perspective', 'none', 'important');
+                ancestor = ancestor.parentElement;
+            }
+        }
     
-        /* ── 3.  Keep the central element the right size ───────────────── */
+        /* ── 4.  Keep the central element the right size ───────────────── */
         const adjust = () => {
             this.adjustCentralElement?.();
             this.frameAdjustInterval = requestAnimationFrame(adjust);  // ← RAF loop
