@@ -110,3 +110,17 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
                 self.driver.get("https://www.google.com/accounts/logout")
             except Exception as e:
                 logger.warning(f"Error navigating to the logout page to sign out of the Google account: {e}")
+
+    def subclass_specific_use_chrome_proxy_extension(self):
+        return True
+
+    def subclass_specific_chrome_proxy_extension_config(self):
+        return {
+            "host": "pr.oxylabs.io",
+            "port": 7777,
+            "username": "customer-...",
+            "password": "...",
+            "scheme": "http",
+            "initially_enabled": True,
+            "bypass_list": ["localhost", "127.0.0.1", "[::1]"],
+        }
