@@ -115,12 +115,26 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
         return True
 
     def subclass_specific_chrome_proxy_extension_config(self):
+        username = os.getenv("OXYLABS_USERNAME")
+        password = os.getenv("OXYLABS_PASSWORD")
+
+        if not username:
+            raise ValueError("OXYLABS_USERNAME is required when Oxylabs Chrome proxy extension is enabled")
+
+        if not password:
+            raise ValueError("OXYLABS_PASSWORD is required when Oxylabs Chrome proxy extension is enabled")
+
         return {
-            "host": "pr.oxylabs.io",
-            "port": 7777,
-            "username": "customer-...",
-            "password": "...",
+            "host": "isp.oxylabs.io",
+            "port": 8001,
             "scheme": "http",
+            "username": username,
+            "password": password,
+
+            # Start with the proxy on.
+            # Later you can call self.disable_chrome_proxy().
             "initially_enabled": True,
+
+            # Keep local websocket / localhost traffic out of the proxy.
             "bypass_list": ["localhost", "127.0.0.1", "[::1]"],
         }
