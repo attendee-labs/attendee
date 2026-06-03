@@ -153,13 +153,14 @@ class BotSsoViewsIntegrationTest(TransactionTestCase):
         if keys:
             redis_client.delete(*keys)
 
-    def test_set_cookie_view_with_valid_session_over_http(self):
-        """Over plain HTTP (in-cluster INTERNAL_SITE_DOMAIN path) the cookie must NOT be
-        Secure, otherwise the browser silently drops it and the sign-in flow never starts."""
+    @patch.dict(os.environ, {"USE_SECURE_COOKIE_FOR_SIGNED_IN_GOOGLE_MEET_BOTS": "false"})
+    def test_set_cookie_view_with_valid_session_when_secure_cookie_env_var_disabled(self):
+        """When USE_SECURE_COOKIE_FOR_SIGNED_IN_GOOGLE_MEET_BOTS=false, the cookie must
+        not be Secure so the in-cluster HTTP sign-in flow can use it."""
         # Create a session in Redis
         session_id = create_google_meet_sign_in_session(self.bot, self.google_meet_bot_login)
 
-        # Make a GET request to the set cookie endpoint (test client defaults to HTTP)
+        # Make a GET request to the set cookie endpoint
         url = reverse("bot_sso:google_meet_set_cookie")
         response = self.client.get(url, {"session_id": session_id})
 
@@ -175,14 +176,16 @@ class BotSsoViewsIntegrationTest(TransactionTestCase):
         self.assertTrue(cookie["httponly"])
         self.assertEqual(cookie["samesite"], "Lax")
 
-    def test_set_cookie_view_with_valid_session_over_https(self):
-        """Over HTTPS (public path) the cookie must keep the Secure flag."""
+    @patch.dict(os.environ, {"USE_SECURE_COOKIE_FOR_SIGNED_IN_GOOGLE_MEET_BOTS": "true"})
+    def test_set_cookie_view_with_valid_session_when_secure_cookie_env_var_enabled(self):
+        """When USE_SECURE_COOKIE_FOR_SIGNED_IN_GOOGLE_MEET_BOTS=true, the cookie keeps
+        the Secure flag."""
         # Create a session in Redis
         session_id = create_google_meet_sign_in_session(self.bot, self.google_meet_bot_login)
 
-        # Make a GET request over HTTPS so request.is_secure() is True
+        # Make a GET request to the set cookie endpoint
         url = reverse("bot_sso:google_meet_set_cookie")
-        response = self.client.get(url, {"session_id": session_id}, secure=True)
+        response = self.client.get(url, {"session_id": session_id})
 
         # Assert the response is successful
         self.assertEqual(response.status_code, 200)

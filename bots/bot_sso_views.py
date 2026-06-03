@@ -1,4 +1,5 @@
 import logging
+import os
 
 from django.http import HttpResponse, HttpResponseBadRequest
 from django.utils.decorators import method_decorator
@@ -31,15 +32,10 @@ class GoogleMeetSetCookieView(View):
 
         # Set a cookie with the session_id
         response = HttpResponse("Google Meet Set Cookie")
-        # secure must follow the request scheme: in-cluster callers reach this view over
-        # plain HTTP (INTERNAL_SITE_DOMAIN), and browsers silently drop a Secure cookie set
-        # over HTTP, which would break the sign-in flow. On the public HTTPS path
-        # request.is_secure() is True (SECURE_PROXY_SSL_HEADER is configured), so the cookie
-        # stays Secure there.
         response.set_cookie(
             "google_meet_sign_in_session_id",
             session_id,
-            secure=request.is_secure(),
+            secure=os.getenv("USE_SECURE_COOKIE_FOR_SIGNED_IN_GOOGLE_MEET_BOTS", "true") == "true",
             httponly=True,
             samesite="Lax",
         )
