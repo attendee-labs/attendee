@@ -5,6 +5,9 @@ import hashlib
 import json
 import logging
 import os
+import secrets
+import shutil
+import tempfile
 import threading
 import time
 from time import sleep
@@ -82,6 +85,8 @@ class WebBotAdapter(BotAdapter):
         self.video_frame_size = video_frame_size
 
         self.driver = None
+        self.chrome_proxy_extension_dir = None
+        self.chrome_proxy_extension_control_token = None
 
         self.send_frames = True
 
@@ -583,6 +588,371 @@ class WebBotAdapter(BotAdapter):
             json.dump(policy, f, indent=2)
         logger.info("Chrome policy file written to /tmp/attendee-chrome-policies.json: %s", policy)
 
+    def subclass_specific_use_chrome_proxy_extension(self):
+        """
+        Subclasses can override this to opt in to the Chrome proxy extension.
+
+        When False, the browser keeps the previous behavior and Chrome extensions are disabled.
+        When True, init_driver will generate and load a small extension that can toggle a
+        single global proxy on/off at runtime.
+        """
+        return False
+
+    def subclass_specific_chrome_proxy_extension_config(self):
+        """
+        Subclasses can override this when subclass_specific_use_chrome_proxy_extension returns True.
+
+        Expected shape:
+            {
+                "host": "pr.oxylabs.io",
+                "port": 7777,
+                "username": "customer-...",
+                "password": "...",
+                "scheme": "http",
+                "initially_enabled": True,
+                "bypass_list": ["localhost", "127.0.0.1", "[::1]"],
+            }
+
+        username/password are optional only when the proxy does not require authentication.
+        """
+        return None
+
+    def _get_validated_chrome_proxy_extension_config(self):
+        config = self.subclass_specific_chrome_proxy_extension_config()
+        if not config:
+            raise ValueError("Chrome proxy extension is enabled but subclass_specific_chrome_proxy_extension_config returned no config")
+
+        host = config.get("host")
+        if not host:
+            raise ValueError("Chrome proxy extension config must include host")
+
+        try:
+            port = int(config.get("port"))
+        except (TypeError, ValueError):
+            raise ValueError("Chrome proxy extension config must include an integer port")
+
+        scheme = config.get("scheme", "http")
+        if scheme not in {"http", "https", "socks4", "socks5"}:
+            raise ValueError(f"Unsupported Chrome proxy scheme: {scheme}")
+
+        username = config.get("username")
+        password = config.get("password")
+        if (username is None) != (password is None):
+            raise ValueError("Chrome proxy extension config must include both username and password, or neither")
+
+        bypass_list = config.get("bypass_list", ["localhost", "127.0.0.1", "[::1]"])
+        if bypass_list is None:
+            bypass_list = []
+        if not isinstance(bypass_list, list):
+            raise ValueError("Chrome proxy extension config bypass_list must be a list")
+
+        return {
+            "host": host,
+            "port": port,
+            "scheme": scheme,
+            "username": username,
+            "password": password,
+            "initially_enabled": bool(config.get("initially_enabled", True)),
+            "bypass_list": bypass_list,
+        }
+
+    def create_chrome_proxy_extension_dir(self):
+        config = self._get_validated_chrome_proxy_extension_config()
+
+        extension_dir = tempfile.mkdtemp(prefix="attendee_chrome_proxy_extension_")
+        self.chrome_proxy_extension_dir = extension_dir
+        self.chrome_proxy_extension_control_token = secrets.token_urlsafe(32)
+
+        manifest = {
+            "manifest_version": 3,
+            "name": "Attendee Proxy Toggle",
+            "version": "1.0",
+            "permissions": [
+                "proxy",
+                "webRequest",
+                "webRequestAuthProvider",
+            ],
+            "host_permissions": ["<all_urls>"],
+            "background": {
+                "service_worker": "background.js",
+            },
+            "content_scripts": [
+                {
+                    "matches": ["<all_urls>"],
+                    "js": ["content.js"],
+                    "run_at": "document_start",
+                }
+            ],
+        }
+
+        background_js = f"""
+const PROXY_CONFIG = {{
+  mode: "fixed_servers",
+  rules: {{
+    singleProxy: {{
+      scheme: {json.dumps(config["scheme"])},
+      host: {json.dumps(config["host"])},
+      port: {int(config["port"])}
+    }},
+    bypassList: {json.dumps(config["bypass_list"])}
+  }}
+}};
+
+const USERNAME = {json.dumps(config["username"])};
+const PASSWORD = {json.dumps(config["password"])};
+const CONTROL_TOKEN = {json.dumps(self.chrome_proxy_extension_control_token)};
+
+let proxyEnabled = {str(config["initially_enabled"]).lower()};
+
+function setProxyEnabled(enabled, sendResponse) {{
+  const value = enabled ? PROXY_CONFIG : {{ mode: "direct" }};
+
+  chrome.proxy.settings.set(
+    {{
+      value,
+      scope: "regular"
+    }},
+    () => {{
+      if (chrome.runtime.lastError) {{
+        sendResponse({{
+          ok: false,
+          enabled,
+          error: chrome.runtime.lastError.message
+        }});
+        return;
+      }}
+
+      proxyEnabled = enabled;
+      sendResponse({{
+        ok: true,
+        enabled: proxyEnabled
+      }});
+    }}
+  );
+}}
+
+setProxyEnabled(proxyEnabled, () => {{}});
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {{
+  if (!message || message.token !== CONTROL_TOKEN) {{
+    return false;
+  }}
+
+  if (message.action === "proxy") {{
+    setProxyEnabled(true, sendResponse);
+    return true;
+  }}
+
+  if (message.action === "direct") {{
+    setProxyEnabled(false, sendResponse);
+    return true;
+  }}
+
+  if (message.action === "status") {{
+    sendResponse({{
+      ok: true,
+      enabled: proxyEnabled
+    }});
+    return false;
+  }}
+
+  sendResponse({{
+    ok: false,
+    error: `Unknown proxy action: ${{message.action}}`
+  }});
+  return false;
+}});
+
+if (USERNAME !== null && PASSWORD !== null) {{
+  chrome.webRequest.onAuthRequired.addListener(
+    function(details, callback) {{
+      if (!details.isProxy) {{
+        callback({{}});
+        return;
+      }}
+
+      callback({{
+        authCredentials: {{
+          username: USERNAME,
+          password: PASSWORD
+        }}
+      }});
+    }},
+    {{ urls: ["<all_urls>"] }},
+    ["asyncBlocking"]
+  );
+}}
+"""
+
+        content_js = f"""
+const CONTROL_SOURCE = "attendee-chrome-proxy-control";
+const RESPONSE_SOURCE = "attendee-chrome-proxy-control-response";
+const CONTROL_TOKEN = {json.dumps(self.chrome_proxy_extension_control_token)};
+
+window.addEventListener("message", (event) => {{
+  if (event.source !== window) {{
+    return;
+  }}
+
+  const message = event.data;
+  if (!message || message.source !== CONTROL_SOURCE || message.token !== CONTROL_TOKEN) {{
+    return;
+  }}
+
+  chrome.runtime.sendMessage(
+    {{
+      action: message.action,
+      token: CONTROL_TOKEN
+    }},
+    (response) => {{
+      if (chrome.runtime.lastError) {{
+        window.postMessage(
+          {{
+            source: RESPONSE_SOURCE,
+            requestId: message.requestId,
+            ok: false,
+            error: chrome.runtime.lastError.message
+          }},
+          "*"
+        );
+        return;
+      }}
+
+      window.postMessage(
+        {{
+          source: RESPONSE_SOURCE,
+          requestId: message.requestId,
+          ...(response || {{ ok: false, error: "No response from proxy extension" }})
+        }},
+        "*"
+      );
+    }}
+  );
+}});
+"""
+
+        with open(os.path.join(extension_dir, "manifest.json"), "w") as f:
+            json.dump(manifest, f, indent=2)
+
+        with open(os.path.join(extension_dir, "background.js"), "w") as f:
+            f.write(background_js)
+
+        with open(os.path.join(extension_dir, "content.js"), "w") as f:
+            f.write(content_js)
+
+        logger.info(
+            "Created Chrome proxy extension dir %s for %s://%s:%s, initially_enabled=%s",
+            extension_dir,
+            config["scheme"],
+            config["host"],
+            config["port"],
+            config["initially_enabled"],
+        )
+
+        return extension_dir
+
+    def set_chrome_proxy_enabled(self, enabled: bool, timeout_seconds: float = 5.0):
+        """
+        Toggle the Chrome proxy extension at runtime.
+
+        This changes Chrome's global proxy mode for new browser requests:
+          - enabled=True  -> fixed_servers using subclass_specific_chrome_proxy_extension_config
+          - enabled=False -> direct/no proxy
+
+        Existing in-flight requests and already-open network connections may keep their
+        current route. Call this before the navigation/fetch/WebSocket connection that needs
+        the new proxy state.
+        """
+        if not self.subclass_specific_use_chrome_proxy_extension():
+            raise RuntimeError("Chrome proxy extension is not enabled for this adapter")
+
+        if not self.driver:
+            raise RuntimeError("Cannot toggle Chrome proxy before driver is initialized")
+
+        if not self.chrome_proxy_extension_control_token:
+            raise RuntimeError("Chrome proxy extension control token is not initialized")
+
+        action = "proxy" if enabled else "direct"
+
+        try:
+            self.driver.set_script_timeout(timeout_seconds + 1)
+        except Exception as e:
+            logger.warning(f"Error setting async script timeout for Chrome proxy toggle: {e}")
+
+        result = self.driver.execute_async_script(
+            """
+            const action = arguments[0];
+            const token = arguments[1];
+            const timeoutMs = arguments[2];
+            const done = arguments[arguments.length - 1];
+
+            const requestId = `${Date.now()}-${Math.random()}`;
+            const controlSource = "attendee-chrome-proxy-control";
+            const responseSource = "attendee-chrome-proxy-control-response";
+
+            let finished = false;
+            let timer = null;
+
+            function finish(result) {
+              if (finished) {
+                return;
+              }
+
+              finished = true;
+              if (timer !== null) {
+                clearTimeout(timer);
+              }
+              window.removeEventListener("message", handleMessage);
+              done(result);
+            }
+
+            function handleMessage(event) {
+              if (event.source !== window) {
+                return;
+              }
+
+              const message = event.data;
+              if (!message || message.source !== responseSource || message.requestId !== requestId) {
+                return;
+              }
+
+              finish(message);
+            }
+
+            window.addEventListener("message", handleMessage);
+
+            timer = setTimeout(() => {
+              finish({
+                ok: false,
+                action,
+                error: "Timed out waiting for Chrome proxy extension response"
+              });
+            }, timeoutMs);
+
+            window.postMessage({
+              source: controlSource,
+              requestId,
+              action,
+              token
+            }, "*");
+            """,
+            action,
+            self.chrome_proxy_extension_control_token,
+            int(timeout_seconds * 1000),
+        )
+
+        if not result or not result.get("ok"):
+            raise RuntimeError(f"Chrome proxy toggle failed: {result}")
+
+        logger.info("Chrome proxy extension set enabled=%s", enabled)
+        return result
+
+    def enable_chrome_proxy(self, timeout_seconds: float = 5.0):
+        return self.set_chrome_proxy_enabled(True, timeout_seconds=timeout_seconds)
+
+    def disable_chrome_proxy(self, timeout_seconds: float = 5.0):
+        return self.set_chrome_proxy_enabled(False, timeout_seconds=timeout_seconds)
+
     def add_subclass_specific_chrome_options(self, options):
         pass
 
@@ -603,7 +973,8 @@ class WebBotAdapter(BotAdapter):
         # options.add_argument('--headless=new')
         if self.subclass_specific_use_disable_gpu_chrome_option():
             options.add_argument("--disable-gpu")
-        options.add_argument("--disable-extensions")
+        if not self.subclass_specific_use_chrome_proxy_extension():
+            options.add_argument("--disable-extensions")
         options.add_argument("--disable-application-cache")
         options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--disable-blink-features=AutomationControlled")
@@ -636,6 +1007,11 @@ class WebBotAdapter(BotAdapter):
             except Exception as e:
                 logger.warning(f"Error closing existing driver: {e}")
             self.driver = None
+
+        if self.subclass_specific_use_chrome_proxy_extension():
+            chrome_proxy_extension_dir = self.create_chrome_proxy_extension_dir()
+            options.add_argument(f"--disable-extensions-except={chrome_proxy_extension_dir}")
+            options.add_argument(f"--load-extension={chrome_proxy_extension_dir}")
 
         self.driver = webdriver.Chrome(options=options, service=Service(executable_path="/usr/local/bin/chromedriver"))
         logger.info(f"web driver server initialized at port {self.driver.service.port}")
