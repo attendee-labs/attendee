@@ -1142,7 +1142,7 @@ class GoogleMeetUIMethods:
 
         self.turn_off_media_inputs()
 
-        self.verify_expected_audio_configuration()
+        #self.verify_expected_audio_configuration()
 
         logger.info("Waiting for the 'Ask to join' or 'Join now' button...")
         join_button = self.locate_element(
@@ -1157,6 +1157,7 @@ class GoogleMeetUIMethods:
             self.click_element(join_button, "join_button")
 
         # Right after you click it, turn off the proxy
+        time.sleep(2)
         self.disable_chrome_proxy()
 
         self.click_captions_button()
