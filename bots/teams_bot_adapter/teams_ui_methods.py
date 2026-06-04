@@ -148,23 +148,30 @@ class TeamsUIMethods:
         if os.getenv("CHECK_IF_TEAMS_WAITING_ROOM_CONNECTION_FAILED", "false") == "false":
             return
 
-        # If it has been less than 30 seconds since the waiting room timeout started, then we should not assume that the connection failed
-        if time.time() - waiting_room_timeout_started_at < 30:
-            return
+        try:
+            # If it has been less than 30 seconds since the waiting room timeout started, then we should not assume that the connection failed
+            if time.time() - waiting_room_timeout_started_at < 30:
+                return
 
-        # If the join button is present but it is NOT disabled, then we should assume the connection failed and things were reset.
-        join_button = self.find_element_by_selector(By.CSS_SELECTOR, '[data-tid="prejoin-join-button"]')
-        issue_detected = join_button and join_button.is_enabled()
-        should_raise_exception = os.getenv("RAISE_IF_TEAMS_WAITING_ROOM_CONNECTION_FAILED", "false") == "true"
+            # If the join button is present but it is NOT disabled, then we should assume the connection failed and things were reset.
+            join_button = self.find_element_by_selector(By.CSS_SELECTOR, '[data-tid="prejoin-join-button"]')
+            issue_detected = join_button and join_button.is_enabled()
+            should_raise_exception = os.getenv("RAISE_IF_TEAMS_WAITING_ROOM_CONNECTION_FAILED", "false") == "true"
 
-        if issue_detected and should_raise_exception:
-            logger.info("Join button is present but it is NOT disabled after entering waiting room. Assuming waiting room connection failed. Raising UiTeamsBlockingUsException")
-            raise UiTeamsBlockingUsException("Waiting room connection failed.", step)
+            if issue_detected and should_raise_exception:
+                logger.info("Join button is present but it is NOT disabled after entering waiting room. Assuming waiting room connection failed. Raising UiTeamsBlockingUsException")
+                raise UiTeamsBlockingUsException("Waiting room connection failed.", step)
 
-        if issue_detected and not should_raise_exception:
-            if not getattr(self, "_waiting_room_connection_failed_logged", False):
-                logger.info("Join button is present but it is NOT disabled after entering waiting room. Assuming waiting room connection failed. Not raising exception.")
-                self._waiting_room_connection_failed_logged = True
+            if issue_detected and not should_raise_exception:
+                if not getattr(self, "_waiting_room_connection_failed_logged", False):
+                    logger.info("Join button is present but it is NOT disabled after entering waiting room. Assuming waiting room connection failed. Not raising exception.")
+                    self._waiting_room_connection_failed_logged = True
+                return
+
+        except UiTeamsBlockingUsException:
+            raise
+        except Exception as e:
+            logger.info(f"Unknown error occurred in check_if_waiting_room_connection_failed. Exception type = {type(e)}")
             return
 
     def check_if_waiting_room_timeout_exceeded(self, waiting_room_timeout_started_at, step):
