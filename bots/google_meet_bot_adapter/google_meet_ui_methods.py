@@ -1156,6 +1156,9 @@ class GoogleMeetUIMethods:
         else:
             self.click_element(join_button, "join_button")
 
+        # Right after you click it, turn off the proxy
+        self.disable_chrome_proxy()
+
         self.click_captions_button()
 
         self.wait_for_host_if_needed()
