@@ -1,6 +1,8 @@
 import json
 import logging
 import os
+import random
+import string
 from typing import Callable
 
 from bots.google_meet_bot_adapter.google_meet_ui_methods import (
@@ -127,6 +129,11 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
 
         if not username:
             raise ValueError("PROXY_USERNAME is required when Chrome proxy extension is enabled")
+
+        if "{SESSION_ID}" in username:
+            session_id = "".join(random.choices(string.digits, k=8))
+            username = username.replace("{SESSION_ID}", session_id)
+            logger.info(f"Generated session ID {session_id} for username {username}")
 
         if not password:
             raise ValueError("PROXY_PASSWORD is required when Chrome proxy extension is enabled")
