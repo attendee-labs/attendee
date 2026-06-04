@@ -600,19 +600,6 @@ class WebBotAdapter(BotAdapter):
     def subclass_specific_chrome_proxy_extension_config(self):
         """
         Subclasses can override this when subclass_specific_use_chrome_proxy_extension returns True.
-
-        Expected shape:
-            {
-                "host": "pr.oxylabs.io",
-                "port": 7777,
-                "username": "customer-...",
-                "password": "...",
-                "scheme": "http",
-                "initially_enabled": True,
-                "bypass_list": ["localhost", "127.0.0.1", "[::1]"],
-            }
-
-        username/password are optional only when the proxy does not require authentication.
         """
         return None
 
