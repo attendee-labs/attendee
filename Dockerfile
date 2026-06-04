@@ -49,17 +49,26 @@ RUN apt-get update  \
 # Install Chrome dependencies
 RUN apt-get install -y xvfb xauth x11-xkb-utils xfonts-100dpi xfonts-75dpi xfonts-scalable xfonts-cyrillic x11-apps libvulkan1 fonts-liberation xdg-utils wget
 # Install a specific version of Chrome.
-RUN wget -q https://mirror.cs.uchicago.edu/google-chrome/pool/main/g/google-chrome-stable/google-chrome-stable_134.0.6998.88-1_amd64.deb
-# Verify that the package is correct, since this is a mirror.
-RUN echo "df557edb3d24d8dcaff9557d80733b42afb6626685200d3f34a3b6f528065cad  google-chrome-stable_134.0.6998.88-1_amd64.deb" | sha256sum -c -
-RUN apt-get install -y ./google-chrome-stable_134.0.6998.88-1_amd64.deb
+ARG CHROMIUM_VERSION=148.0.7778.215-1
+ARG CHROMEDRIVER_VERSION=148.0.7778.215
 
-# Install a specific version of ChromeDriver.
-RUN wget -q https://storage.googleapis.com/chrome-for-testing-public/134.0.6998.88/linux64/chromedriver-linux64.zip \
-    && unzip chromedriver-linux64.zip \
-    && mv chromedriver-linux64/chromedriver /usr/local/bin/chromedriver \
-    && chmod +x /usr/local/bin/chromedriver \
-    && rm -rf chromedriver-linux64 chromedriver-linux64.zip
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends xz-utils \
+  && wget -q -O /tmp/chromium.tar.xz \
+    "https://github.com/ungoogled-software/ungoogled-chromium-portablelinux/releases/download/${CHROMIUM_VERSION}/ungoogled-chromium-${CHROMIUM_VERSION}-x86_64_linux.tar.xz" \
+  && mkdir -p /opt/chromium \
+  && tar -xJf /tmp/chromium.tar.xz -C /opt/chromium --strip-components=1 \
+  && ln -sf /opt/chromium/chrome /usr/local/bin/chromium \
+  && ln -sf /opt/chromium/chrome /usr/local/bin/chrome \
+  && ln -sf /opt/chromium/chrome /usr/local/bin/google-chrome \
+  && rm -rf /var/lib/apt/lists/* /tmp/chromium.tar.xz
+
+# Install matching ChromeDriver.
+RUN wget -q -O /tmp/chromedriver-linux64.zip \
+    "https://storage.googleapis.com/chrome-for-testing-public/${CHROMEDRIVER_VERSION}/linux64/chromedriver-linux64.zip" \
+  && unzip /tmp/chromedriver-linux64.zip -d /opt/chrome-for-testing \
+  && ln -sf /opt/chrome-for-testing/chromedriver-linux64/chromedriver /usr/local/bin/chromedriver \
+  && rm -f /tmp/chromedriver-linux64.zip
 
 # Install ALSA
 RUN apt-get update && apt-get install -y libasound2 libasound2-plugins alsa alsa-utils alsa-oss
@@ -129,8 +138,8 @@ RUN mkdir -p "$cwd/staticfiles" && chown -R app:app "$cwd/staticfiles"
 # We want the app to be able to dynamically set the chrome policies file.
 # However, chrome will load the file from a hardcoded path in a directory that the app cannot write to.
 # Therefore, we create a symlink at that path that points to a file in /tmp which the app can write to.
-RUN mkdir -p /etc/opt/chrome/policies/managed \
-  && ln -s /tmp/attendee-chrome-policies.json /etc/opt/chrome/policies/managed/attendee-chrome-policies.json
+RUN mkdir -p /etc/chromium/policies/managed \
+  && ln -s /tmp/attendee-chrome-policies.json /etc/chromium/policies/managed/attendee-chrome-policies.json
 
 # Switch to non-root AFTER copies to avoid permission flakiness
 USER app

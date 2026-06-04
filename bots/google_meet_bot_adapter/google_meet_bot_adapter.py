@@ -112,6 +112,12 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
             except Exception as e:
                 logger.warning(f"Error navigating to the logout page to sign out of the Google account: {e}")
 
+    def subclass_specific_chrome_policies(self):
+        return {
+            "LocalNetworkAccessRestrictionsTemporaryOptOut": True,
+            "LocalNetworkAccessAllowedForUrls": ["*"],
+        }
+
     def subclass_specific_use_chrome_proxy_extension(self):
         return True
 
@@ -127,7 +133,7 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
 
         return {
             "host": "isp.oxylabs.io",
-            "port": 8001,
+            "port": 8008,
             "scheme": "http",
             "username": username,
             "password": password,
