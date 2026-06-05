@@ -158,6 +158,9 @@ class TeamsUIMethods:
             issue_detected = join_button and join_button.is_enabled()
             should_raise_exception = os.getenv("RAISE_IF_TEAMS_WAITING_ROOM_CONNECTION_FAILED", "false") == "true"
 
+            if issue_detected:
+                self.driver.execute_script("window.startInterceptingFetchAndXhrRequests({ maxResponseChars: 500 });")
+
             if issue_detected and should_raise_exception:
                 logger.info("Join button is present but it is NOT disabled after entering waiting room. Assuming waiting room connection failed. Raising UiTeamsBlockingUsException")
                 raise UiTeamsBlockingUsException("Waiting room connection failed.", step)
