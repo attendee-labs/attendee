@@ -561,10 +561,14 @@ class ProjectBotsView(LoginRequiredMixin, ProjectUrlContextMixin, ListView):
                 # Handle invalid state values
                 pass
 
-        # Apply search filter if provided
+        # Apply search filter if provided. Matches the bot ID, meeting URL, name,
+        # or anywhere in the metadata JSON (cast to text).
         search_query = self.request.GET.get("search", "").strip()
         if search_query:
-            queryset = queryset.filter(models.Q(object_id__icontains=search_query) | models.Q(meeting_url__icontains=search_query) | models.Q(name__icontains=search_query))
+            from django.db.models.functions import Cast
+
+            queryset = queryset.annotate(metadata_text=Cast("metadata", output_field=models.TextField()))
+            queryset = queryset.filter(models.Q(object_id__icontains=search_query) | models.Q(meeting_url__icontains=search_query) | models.Q(name__icontains=search_query) | models.Q(metadata_text__icontains=search_query))
 
         # Apply ended_at date filters if provided
         ended_at_start = self.request.GET.get("ended_at_start")
