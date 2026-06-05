@@ -1,50 +1,33 @@
-import logging
 from datetime import timedelta
 
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
-from bots.models import AudioChunk, Recording
-
-logger = logging.getLogger(__name__)
+from bots.cleanup_utils import cleanup_old_audio_chunks
 
 
 class Command(BaseCommand):
-    help = "Deletes old audio chunks to prevent them from filling up the database"
+    help = "Deletes AudioChunk rows whose own created_at is more than N days ago. Keyset-paginates AudioChunk by id and deletes in fixed-size batches; both memory footprint and per-transaction size stay constant regardless of the candidate population. Note: the boundary may fall mid-recording, in which case the recording's later chunks will be deleted by the next cron run."
 
     def add_arguments(self, parser):
         parser.add_argument(
             "--days",
             type=int,
             default=30,
-            help="Delete audio chunks for recordings older than this many days (default: 30)",
+            help="Delete audio chunks created more than this many days ago (default: 30).",
         )
         parser.add_argument(
             "--dry-run",
             action="store_true",
-            help="Only show how many audio chunks would be deleted without actually deleting them",
+            help="Report what would be deleted without making any changes.",
+        )
+        parser.add_argument(
+            "--batch-size",
+            type=int,
+            default=100,
+            help="Rows deleted per transaction (default: 100). Smaller batches keep transactions short and reduce lock duration / WAL bursts.",
         )
 
     def handle(self, *args, **options):
-        days = options["days"]
-        dry_run = options["dry_run"]
-
-        cutoff_date = timezone.now() - timedelta(days=days)
-
-        logger.info(f"Finding recordings older than {days} days (before {cutoff_date.isoformat()})...")
-
-        old_recordings = Recording.objects.filter(created_at__lt=cutoff_date, audio_chunks__isnull=False).distinct()
-
-        if dry_run:
-            total_chunks = AudioChunk.objects.filter(recording__created_at__lt=cutoff_date).count()
-            logger.info(f"[DRY RUN] Would delete {total_chunks} audio chunks from {old_recordings.count()} recordings.")
-            return
-
-        total_deleted = 0
-        for recording in old_recordings:
-            deleted_count, _ = recording.audio_chunks.all().delete()
-            if deleted_count > 0:
-                total_deleted += deleted_count
-                logger.info(f"Deleted {deleted_count} audio chunks from recording {recording.id}")
-
-        logger.info(f"Audio chunk cleanup completed. Deleted {total_deleted} audio chunks.")
+        cutoff = timezone.now() - timedelta(days=options["days"])
+        cleanup_old_audio_chunks(cutoff=cutoff, batch_size=options["batch_size"], dry_run=options["dry_run"])

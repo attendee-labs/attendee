@@ -19,20 +19,21 @@ from saml2.config import IdPConfig
 from saml2.saml import NAMEID_FORMAT_EMAILADDRESS, NameID
 from saml2.server import Server
 
-from bots.bots_api_utils import build_site_url
-from bots.models import Bot, GoogleMeetBotLogin
+from bots.bots_api_utils import build_internal_site_url
+from bots.models import Bot, BotLogin, BotLoginPlatform
 
 logger = logging.getLogger(__name__)
 
 
 def get_google_meet_set_cookie_url(session_id):
-    base_url = build_site_url(reverse("bot_sso:google_meet_set_cookie"))
+    # Use build_internal_site_url so that if we have an internal site domain set, we use it.
+    base_url = build_internal_site_url(reverse("bot_sso:google_meet_set_cookie"))
     query_params = urlencode({"session_id": session_id})
     google_meet_set_cookie_url = f"{base_url}?{query_params}"
     return google_meet_set_cookie_url
 
 
-def create_google_meet_sign_in_session(bot: Bot, google_meet_bot_login: GoogleMeetBotLogin):
+def create_google_meet_sign_in_session(bot: Bot, google_meet_bot_login: BotLogin):
     session_id = str(uuid.uuid4())
     redis_key = f"google_meet_sign_in_session:{session_id}"
     redis_client = redis.from_url(settings.REDIS_URL_WITH_PARAMS)
@@ -63,7 +64,7 @@ def get_bot_login_for_google_meet_sign_in_session(session_id):
     google_meet_bot_login_object_id = session_data.get("google_meet_bot_login_object_id")
 
     bot = Bot.objects.filter(object_id=bot_object_id).first()
-    google_meet_bot_login = GoogleMeetBotLogin.objects.filter(object_id=google_meet_bot_login_object_id, group__project=bot.project).first()
+    google_meet_bot_login = BotLogin.objects.filter(object_id=google_meet_bot_login_object_id, group__project=bot.project, group__platform=BotLoginPlatform.GOOGLE_MEET).first()
     if not google_meet_bot_login:
         logger.info(f"No google_meet_bot_login found for google_meet_sign_in_session: {session_id}. Data: {session_data}")
         return None

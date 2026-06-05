@@ -5,11 +5,12 @@ import time
 from unittest.mock import MagicMock, mock_open, patch
 
 from django.db import connection
-from django.test import TransactionTestCase
+from django.test import TransactionTestCase, tag
+from selenium.common.exceptions import TimeoutException
 
 from bots.bot_controller.bot_controller import BotController
 from bots.bots_api_views import send_sync_command
-from bots.models import Bot, BotChatMessageRequest, BotChatMessageRequestStates, BotChatMessageToOptions, BotEventManager, BotEventSubTypes, BotEventTypes, BotMediaRequest, BotMediaRequestMediaTypes, BotMediaRequestStates, BotStates, Credentials, MediaBlob, Organization, Project, Recording, RecordingStates, RecordingTypes, TranscriptionProviders, TranscriptionTypes
+from bots.models import Bot, BotChatMessageRequest, BotChatMessageRequestStates, BotChatMessageToOptions, BotEventManager, BotEventSubTypes, BotEventTypes, BotLogin, BotLoginGroup, BotLoginPlatform, BotMediaRequest, BotMediaRequestMediaTypes, BotMediaRequestStates, BotStates, MediaBlob, Organization, Project, Recording, RecordingStates, RecordingTypes, TranscriptionProviders, TranscriptionTypes
 from bots.teams_bot_adapter.teams_ui_methods import TeamsUIMethods, UiTeamsBlockingUsException
 from bots.web_bot_adapter.ui_methods import UiLoginRequiredException
 
@@ -30,6 +31,7 @@ def create_mock_teams_driver():
     return mock_driver
 
 
+@tag("teams_tests")
 class TestTeamsBot(TransactionTestCase):
     def setUp(self):
         # Recreate organization and project for each test
@@ -535,13 +537,17 @@ class TestTeamsBot(TransactionTestCase):
             exception_to_raise: The exception instance to raise on first join attempt
         """
         # Set up Teams bot login credentials
-        teams_credentials = Credentials.objects.create(
+        teams_bot_login_group, _ = BotLoginGroup.objects.get_or_create(
             project=self.project,
-            credential_type=Credentials.CredentialTypes.TEAMS_BOT_LOGIN,
+            platform=BotLoginPlatform.TEAMS,
+            defaults={"name": "Teams Bot Login Group"},
         )
-        teams_credentials.set_credentials(
+        teams_bot_login, _ = BotLogin.objects.get_or_create(
+            group=teams_bot_login_group,
+            email="testbot@example.com",
+        )
+        teams_bot_login.set_credentials(
             {
-                "username": "testbot@example.com",
                 "password": "testpassword123",
             }
         )
@@ -574,7 +580,7 @@ class TestTeamsBot(TransactionTestCase):
         def mock_fill_out_name_input(*args, **kwargs):
             """Mock that raises an exception only on first join attempt.
 
-            When teams_bot_login_credentials are available and teams_bot_login_should_be_used is False,
+            When teams_bot_login_is_available is True and teams_bot_login_should_be_used is False,
             attempt_to_join_meeting() wraps this and converts ANY exception to UiLoginRequiredException.
             """
             fill_out_name_input_call_count[0] += 1
@@ -649,9 +655,6 @@ class TestTeamsBot(TransactionTestCase):
             # Verify that teams_bot_login_should_be_used was set to True after the first failed attempt
             self.assertTrue(controller.adapter.teams_bot_login_should_be_used, "Expected teams_bot_login_should_be_used to be True after retry")
 
-            # Verify that teams_bot_login_credentials was available
-            self.assertIsNotNone(controller.adapter.teams_bot_login_credentials, "Expected teams_bot_login_credentials to be set")
-
             # Verify that the recording was finished
             self.recording.refresh_from_db()
             self.assertEqual(self.recording.state, RecordingStates.COMPLETE)
@@ -694,6 +697,202 @@ class TestTeamsBot(TransactionTestCase):
             MockChromeDriver=MockChromeDriver,
             MockDisplay=MockDisplay,
             MockSaveDebugRecording=MockSaveDebugRecording,
+        )
+
+    @patch("bots.bot_controller.bot_controller.BotController.save_debug_recording", return_value=None)
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
+    def test_captcha_triggers_login_retry_in_only_if_required_mode(
+        self,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+        MockSaveDebugRecording,
+    ):
+        """Test that a bot with login_mode='only_if_required' retries with login
+        when a captcha is detected during the show-more-button / waiting room phase.
+
+        This exercises the real check_if_blocked_by_captcha() logic that raises
+        UiLoginRequiredException instead of UiBlockedByCaptchaException when
+        login credentials are available but not yet being used. The real
+        click_show_more_button loop, look_for_sign_in_required_element, and
+        check_if_blocked_by_captcha methods all run unmocked — only
+        find_element_by_selector and WebDriverWait are controlled.
+
+        Flow:
+        1. First join attempt: WebDriverWait times out in click_show_more_button
+        2. look_for_sign_in_required_element runs — find_element_by_selector returns None
+        3. check_if_blocked_by_captcha runs — find_element_by_selector returns a captcha element
+        4. Credentials available + login not active → raises UiLoginRequiredException
+        5. Exception caught in repeatedly_attempt_to_join_meeting
+        6. should_retry_joining_meeting_that_requires_login_by_logging_in() returns True
+        7. teams_bot_login_should_be_used flag is set to True
+        8. Second join attempt: login_to_microsoft_account is called,
+           WebDriverWait finds the show-more button, join succeeds
+        """
+        # Set up Teams bot login credentials
+        teams_bot_login_group, _ = BotLoginGroup.objects.get_or_create(
+            project=self.project,
+            platform=BotLoginPlatform.TEAMS,
+            defaults={"name": "Teams Bot Login Group"},
+        )
+        teams_bot_login, _ = BotLogin.objects.get_or_create(
+            group=teams_bot_login_group,
+            email="testbot@example.com",
+        )
+        teams_bot_login.set_credentials(
+            {
+                "password": "testpassword123",
+            }
+        )
+
+        # Configure bot to use login with only_if_required mode
+        self.bot.settings = {
+            "teams_settings": {
+                "use_login": True,
+                "login_mode": "only_if_required",
+            },
+            "recording_settings": {"format": "none"},
+        }
+        self.bot.save()
+
+        # Configure the mock uploader
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        # Mock the Chrome driver
+        mock_driver = create_mock_teams_driver()
+        MockChromeDriver.return_value = mock_driver
+
+        # Mock virtual display
+        mock_display = MagicMock()
+        MockDisplay.return_value = mock_display
+
+        # Control WebDriverWait.until: first call (first join attempt) times out so the
+        # captcha check path runs; second call (retry after login) finds the button.
+        webdriverwait_until_call_count = [0]
+
+        def create_mock_webdriverwait(*args, **kwargs):
+            mock_wait = MagicMock()
+
+            def mock_until(*args, **kwargs):
+                webdriverwait_until_call_count[0] += 1
+                if webdriverwait_until_call_count[0] <= 1:
+                    raise TimeoutException("Mocked timeout")
+                return MagicMock()
+
+            mock_wait.until = mock_until
+            return mock_wait
+
+        def mock_find_element_by_selector(by, selector):
+            """Return a truthy element only for the captcha XPath so that
+            check_if_blocked_by_captcha's real logic fires while
+            look_for_sign_in_required_element sees nothing.
+            """
+            if "Verify you're a real person" in selector:
+                return MagicMock()
+            return None
+
+        with (
+            patch.object(TeamsUIMethods, "fill_out_name_input", return_value=None),
+            patch.object(TeamsUIMethods, "turn_off_media_inputs", return_value=None),
+            patch.object(TeamsUIMethods, "locate_element", return_value=MagicMock()),
+            patch.object(TeamsUIMethods, "click_element", return_value=None),
+            patch("bots.teams_bot_adapter.teams_ui_methods.WebDriverWait", side_effect=create_mock_webdriverwait),
+            patch.object(TeamsUIMethods, "find_element_by_selector", side_effect=mock_find_element_by_selector),
+            patch.object(TeamsUIMethods, "click_captions_button", return_value=None),
+            patch.object(TeamsUIMethods, "set_layout", return_value=None),
+            patch.object(TeamsUIMethods, "disable_incoming_video_in_ui", return_value=None),
+            patch("bots.web_bot_adapter.web_bot_adapter.WebBotAdapter.ready_to_show_bot_image", return_value=None),
+            patch.object(TeamsUIMethods, "login_to_microsoft_account", return_value=None) as mock_login,
+        ):
+            # Create bot controller
+            controller = BotController(self.bot.id)
+
+            # Run the bot in a separate thread since it has an event loop
+            bot_thread = threading.Thread(target=controller.run)
+            bot_thread.daemon = True
+            bot_thread.start()
+
+            def simulate_join_flow():
+                # Sleep to allow initialization and join attempts
+                time.sleep(1)
+
+                # Add participants to keep the bot in the meeting
+                controller.adapter.participants_info["user1"] = {"deviceId": "user1", "fullName": "Test User", "active": True, "isCurrentUser": False}
+
+                # Let the bot run for a bit to "record"
+                time.sleep(1)
+
+                # Trigger auto-leave
+                controller.adapter.only_one_participant_in_meeting_at = time.time() - 10000000000
+                time.sleep(1)
+
+                # Clean up connections in thread
+                connection.close()
+
+            # Run join flow simulation after a short delay
+            threading.Timer(2, simulate_join_flow).start()
+
+            # Give the bot some time to process
+            bot_thread.join(timeout=20)
+
+            time.sleep(1.25)
+
+            # Refresh the bot from the database
+            self.bot.refresh_from_db()
+
+            # Assert that the bot is in the ENDED state
+            self.assertEqual(self.bot.state, BotStates.ENDED)
+
+            # Verify that login was attempted (should be called once on the retry)
+            self.assertEqual(mock_login.call_count, 1, "Expected login_to_microsoft_account to be called once during retry")
+
+            # Verify that teams_bot_login_should_be_used was set to True after the first failed attempt
+            self.assertTrue(controller.adapter.teams_bot_login_should_be_used, "Expected teams_bot_login_should_be_used to be True after retry")
+
+            # Verify that the recording was finished
+            self.recording.refresh_from_db()
+            self.assertEqual(self.recording.state, RecordingStates.COMPLETE)
+
+            # Cleanup
+            controller.cleanup()
+            bot_thread.join(timeout=5)
+
+            # Close the database connection since we're in a thread
+            connection.close()
+
+    def test_get_teams_signed_in_bot_uses_named_login_group(self):
+        first_group = BotLoginGroup.objects.create(project=self.project, platform=BotLoginPlatform.TEAMS, name="Primary Group")
+        first_group_login = BotLogin.objects.create(group=first_group, email="primary@example.com")
+        first_group_login.set_credentials({"password": "primary-password"})
+
+        named_group = BotLoginGroup.objects.create(project=self.project, platform=BotLoginPlatform.TEAMS, name="Named Group")
+        named_group_login = BotLogin.objects.create(group=named_group, email="named@example.com")
+        named_group_login.set_credentials({"password": "named-group-password"})
+
+        self.bot.settings = {
+            "teams_settings": {
+                "use_login": True,
+                "login_mode": "always",
+                "login_group_name": "Named Group",
+            },
+            "recording_settings": {"format": "none"},
+        }
+        self.bot.save()
+
+        controller = BotController(self.bot.id)
+        controller.per_participant_non_streaming_audio_input_manager = MagicMock()
+        controller.closed_caption_manager = MagicMock()
+        controller.screen_and_audio_recorder = None
+        adapter = controller.get_teams_bot_adapter()
+
+        self.assertTrue(adapter.teams_bot_login_is_available)
+        self.assertTrue(adapter.teams_bot_login_should_be_used)
+        self.assertEqual(
+            adapter.fetch_teams_bot_login_credentials_callback(),
+            {"username": "named@example.com", "password": "named-group-password"},
         )
 
     @patch.dict("os.environ", {"ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME": "true"})

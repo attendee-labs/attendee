@@ -11,7 +11,6 @@ from time import sleep
 from urllib.parse import unquote, urlparse
 
 import numpy as np
-import requests
 from django.conf import settings
 from pyvirtualdisplay import Display
 from selenium import webdriver
@@ -22,6 +21,7 @@ from bots.automatic_leave_configuration import AutomaticLeaveConfiguration
 from bots.automatic_leave_utils import participant_is_another_bot
 from bots.bot_adapter import BotAdapter
 from bots.models import ParticipantEventTypes, RecordingViews
+from bots.per_participant_realtime_video_configuration import PerParticipantRealtimeVideoConfiguration
 from bots.utils import half_ceil, scale_i420
 
 from .debug_screen_recorder import DebugScreenRecorder
@@ -41,11 +41,13 @@ class WebBotAdapter(BotAdapter):
         wants_any_video_frames_callback,
         add_audio_chunk_callback,
         add_mixed_audio_chunk_callback,
+        add_per_participant_video_frame_callback,
         add_encoded_mp4_chunk_callback,
         upsert_caption_callback,
         upsert_chat_message_callback,
         add_participant_event_callback,
         automatic_leave_configuration: AutomaticLeaveConfiguration,
+        per_participant_realtime_video_configuration: PerParticipantRealtimeVideoConfiguration,
         recording_view: RecordingViews,
         should_create_debug_recording: bool,
         start_recording_screen_callback,
@@ -61,6 +63,7 @@ class WebBotAdapter(BotAdapter):
         self.add_mixed_audio_chunk_callback = add_mixed_audio_chunk_callback
         self.add_video_frame_callback = add_video_frame_callback
         self.wants_any_video_frames_callback = wants_any_video_frames_callback
+        self.add_per_participant_video_frame_callback = add_per_participant_video_frame_callback
         self.add_encoded_mp4_chunk_callback = add_encoded_mp4_chunk_callback
         self.upsert_caption_callback = upsert_caption_callback
         self.upsert_chat_message_callback = upsert_chat_message_callback
@@ -101,6 +104,7 @@ class WebBotAdapter(BotAdapter):
         self.video_frame_ticker = 0
 
         self.automatic_leave_configuration = automatic_leave_configuration
+        self.per_participant_realtime_video_configuration = per_participant_realtime_video_configuration
 
         self.should_create_debug_recording = should_create_debug_recording
         self.debug_screen_recorder = None
@@ -256,6 +260,25 @@ class WebBotAdapter(BotAdapter):
 
             self.add_audio_chunk_callback(participant_id, datetime.datetime.utcnow(), audio_data.tobytes())
 
+    def process_per_participant_video_frame(self, message):
+        if self.recording_paused:
+            return
+
+        self.last_media_message_processed_time = time.time()
+        if len(message) > 12:
+            # Byte 5 contains the participant ID length
+            participant_id_length = int.from_bytes(message[4:5], byteorder="little")
+            participant_id = message[5 : 5 + participant_id_length].decode("utf-8")
+
+            # After the participant ID, the source is the next byte
+            source_raw = message[5 + participant_id_length]
+            source = "webcam" if source_raw == 0 else "screenshare"
+
+            # Get the video frame
+            video_frame = message[5 + participant_id_length + 1 :]
+
+            self.add_per_participant_video_frame_callback(video_frame, participant_id, source)
+
     def number_of_participants_ever_in_meeting_excluding_other_bots(self):
         return len([participant for participant in self.participants_info.values() if not participant_is_another_bot(participant["fullName"], participant["isCurrentUser"], self.automatic_leave_configuration)])
 
@@ -288,7 +311,13 @@ class WebBotAdapter(BotAdapter):
         self.left_meeting = True
         self.send_message_callback({"message": self.Messages.MEETING_ENDED})
 
-    def handle_meeting_ended(self):
+    def handle_meeting_ended(self, meeting_id):
+        # If a meeting id was passed in the meeting ended message and we have one on the backend, then
+        # only accept if they are equal
+        if meeting_id and self.meeting_uuid and meeting_id != self.meeting_uuid:
+            logger.info(f"meeting id mismatch in handle_meeting_ended. meeting_id from message: {meeting_id} self.meeting_uuid: {self.meeting_uuid}")
+            return
+
         self.left_meeting = True
         self.send_message_callback({"message": self.Messages.MEETING_ENDED})
 
@@ -385,7 +414,7 @@ class WebBotAdapter(BotAdapter):
                             if json_data.get("change") == "removed_from_meeting":
                                 self.handle_removed_from_meeting()
                             if json_data.get("change") == "meeting_ended":
-                                self.handle_meeting_ended()
+                                self.handle_meeting_ended(json_data.get("meetingId"))
                             if json_data.get("change") == "failed_to_join":
                                 self.handle_failed_to_join(json_data.get("reason"))
 
@@ -407,6 +436,8 @@ class WebBotAdapter(BotAdapter):
                     self.process_encoded_mp4_chunk(message)
                 elif message_type == 5:  # PER_PARTICIPANT_AUDIO
                     self.process_per_participant_audio_frame(message)
+                elif message_type == 6:  # PER_PARTICIPANT_VIDEO
+                    self.process_per_participant_video_frame(message)
 
                 self.last_websocket_message_processed_time = time.time()
         except Exception as e:
@@ -485,6 +516,16 @@ class WebBotAdapter(BotAdapter):
             }
         )
 
+    def send_screenshot_and_mhtml_file_message(self):
+        screenshot_path, mhtml_file_path, _ = self.capture_screenshot_and_mhtml_file()
+        self.send_message_callback(
+            {
+                "message": self.Messages.SAVE_SCREENSHOT_AND_MHTML_FILE,
+                "screenshot_path": screenshot_path,
+                "mhtml_file_path": mhtml_file_path,
+            }
+        )
+
     def send_incorrect_password_message(self):
         self.send_message_callback({"message": self.Messages.COULD_NOT_CONNECT_TO_MEETING})
 
@@ -545,6 +586,10 @@ class WebBotAdapter(BotAdapter):
     def add_subclass_specific_chrome_options(self, options):
         pass
 
+    # By default, we want to disable GPU
+    def subclass_specific_use_disable_gpu_chrome_option(self):
+        return True
+
     def init_driver(self):
         self.write_chrome_policies_file()
 
@@ -556,7 +601,8 @@ class WebBotAdapter(BotAdapter):
         options.add_argument(f"--window-size={self.video_frame_size[0]},{self.video_frame_size[1]}")
         options.add_argument("--start-fullscreen")
         # options.add_argument('--headless=new')
-        options.add_argument("--disable-gpu")
+        if self.subclass_specific_use_disable_gpu_chrome_option():
+            options.add_argument("--disable-gpu")
         options.add_argument("--disable-extensions")
         options.add_argument("--disable-application-cache")
         options.add_argument("--disable-dev-shm-usage")
@@ -594,25 +640,30 @@ class WebBotAdapter(BotAdapter):
         self.driver = webdriver.Chrome(options=options, service=Service(executable_path="/usr/local/bin/chromedriver"))
         logger.info(f"web driver server initialized at port {self.driver.service.port}")
 
-        initial_data_code = f"window.initialData = {{websocketPort: {self.websocket_port}, videoFrameWidth: {self.video_frame_size[0]}, videoFrameHeight: {self.video_frame_size[1]}, botName: {json.dumps(self.display_name)}, addClickRipple: {'true' if self.should_create_debug_recording else 'false'}, recordingView: '{self.recording_view}', sendMixedAudio: {'true' if self.add_mixed_audio_chunk_callback else 'false'}, sendPerParticipantAudio: {'true' if self.add_audio_chunk_callback else 'false'}, collectCaptions: {'true' if self.upsert_caption_callback else 'false'}, recordParticipantSpeechStartStopEvents: {'true' if self.record_participant_speech_start_stop_events else 'false'}}}"
-
-        # Define the CDN libraries needed
-        CDN_LIBRARIES = ["https://cdnjs.cloudflare.com/ajax/libs/protobufjs/7.4.0/protobuf.min.js", "https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"]
-
-        # Download all library code
-        libraries_code = ""
-        for url in CDN_LIBRARIES:
-            response = requests.get(url)
-            if response.status_code == 200:
-                libraries_code += response.text + "\n"
-            else:
-                raise Exception(f"Failed to download library from {url}")
+        initial_data_code = f"window.initialData = {{websocketPort: {self.websocket_port}, videoFrameWidth: {self.video_frame_size[0]}, videoFrameHeight: {self.video_frame_size[1]}, botName: {json.dumps(self.display_name)}, addClickRipple: {'true' if self.should_create_debug_recording else 'false'}, recordingView: '{self.recording_view}', sendMixedAudio: {'true' if self.add_mixed_audio_chunk_callback else 'false'}, sendPerParticipantAudio: {'true' if self.add_audio_chunk_callback else 'false'}, perParticipantRealtimeVideoConfiguration: {json.dumps(self.per_participant_realtime_video_configuration.to_dict())}, sendPerParticipantVideo: {'true' if self.add_per_participant_video_frame_callback else 'false'}, collectCaptions: {'true' if self.upsert_caption_callback else 'false'}, recordParticipantSpeechStartStopEvents: {'true' if self.record_participant_speech_start_stop_events else 'false'}}}"
 
         # Get directory of current file
         current_dir = os.path.dirname(os.path.abspath(__file__))
-        # Read your payload using path relative to current file
-        with open(os.path.join(current_dir, "..", self.get_chromedriver_payload_file_name()), "r") as file:
-            payload_code = file.read()
+
+        # Load JS libraries bundled in the repo (avoid runtime CDN fetches)
+        JS_LIBRARIES = [
+            os.path.join(current_dir, "js_libs", "protobufjs", "7.4.0", "protobuf.min.js"),
+            os.path.join(current_dir, "js_libs", "pako", "2.1.0", "pako.min.js"),
+        ]
+
+        libraries_code = ""
+        for library_path in JS_LIBRARIES:
+            with open(library_path, "r") as library_file:
+                libraries_code += library_file.read() + "\n"
+            logger.info(f"Loaded library from {os.path.relpath(library_path, current_dir)}")
+
+        # Read the subclass payload files using paths relative to current file.
+        # Files are concatenated in order, so later files can depend on earlier ones.
+        payload_code = ""
+        for payload_file_name in self.get_chromedriver_payload_file_names():
+            with open(os.path.join(current_dir, "..", payload_file_name), "r") as file:
+                payload_code += file.read() + "\n"
+            logger.info(f"Loaded chromedriver payload from {payload_file_name}")
 
         # Read shared_chromedriver_payload.js
         with open(os.path.join(current_dir, "shared_chromedriver_payload.js"), "r") as file:
@@ -634,7 +685,7 @@ class WebBotAdapter(BotAdapter):
         self.display_var_for_debug_recording = os.environ.get("DISPLAY")
         if os.environ.get("DISPLAY") is None:
             # Create virtual display only if no real display is available
-            self.display = Display(visible=0, size=(1930, 1090))
+            self.display = Display(visible=0, size=(1930, 1090), use_xauth=True)
             self.display.start()
             self.display_var_for_debug_recording = self.display.new_display_var
 

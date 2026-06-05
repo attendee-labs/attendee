@@ -8,6 +8,7 @@ from typing import Callable
 import jwt
 
 from bots.meeting_url_utils import parse_zoom_join_url
+from bots.models import RecordingViews
 from bots.web_bot_adapter import WebBotAdapter
 from bots.zoom_web_bot_adapter.zoom_web_ui_methods import UiZoomWebGenericJoinErrorException, ZoomWebUIMethods
 
@@ -69,9 +70,11 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
         zoom_closed_captions_language: str | None,
         should_ask_for_recording_permission: bool,
         zoom_tokens: dict,
+        modify_dom_for_video_recording: bool,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
+        self.modify_dom_for_video_recording = modify_dom_for_video_recording
         self.meeting_id, self.meeting_password = parse_zoom_join_url(self.meeting_url)
         self.zoom_oauth_credentials_callback = zoom_oauth_credentials_callback
 
@@ -87,8 +90,11 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
 
         self.generic_join_error_retries = 0
 
-    def get_chromedriver_payload_file_name(self):
-        return "zoom_web_bot_adapter/zoom_web_chromedriver_payload.js"
+    def get_chromedriver_payload_file_names(self):
+        return [
+            "zoom_web_bot_adapter/zoom_web_chromedriver_payload.js",
+            "zoom_web_bot_adapter/zoom_web_redux_interceptor.js",
+        ]
 
     def get_websocket_port(self):
         return 8765
@@ -98,9 +104,9 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
         logger.info(f"is_sent_video_still_playing result = {result}")
         return result
 
-    def send_video(self, video_url, loop=False):
-        logger.info(f"send_video called with video_url = {video_url}, loop = {loop}")
-        self.driver.execute_script(f"window.botOutputManager.playVideo({json.dumps(video_url)}, {json.dumps(loop)})")
+    def send_video(self, video_url, loop=False, mute_video=False):
+        logger.info(f"send_video called with video_url = {video_url}, loop = {loop}, mute_video = {mute_video}")
+        self.driver.execute_script(f"window.botOutputManager.playVideo({json.dumps(video_url)}, {json.dumps(loop)}, {json.dumps(mute_video)})")
 
     def change_gallery_view_page(self, next_page: bool):
         self.driver.execute_script(f"window?.changeGalleryViewPage({json.dumps(next_page)})")
@@ -122,6 +128,7 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
                 joinToken: {json.dumps(self.zoom_tokens.get("join_token", ""))},
                 appPrivilegeToken: {json.dumps(self.zoom_tokens.get("app_privilege_token", ""))},
                 onBehalfToken: {json.dumps(self.zoom_tokens.get("onbehalf_token", ""))},
+                modifyDomForVideoRecording: {"true" if self.modify_dom_for_video_recording else "false"},
             }}
         """
 
@@ -145,6 +152,16 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
             self.send_message_callback(
                 {
                     "message": self.Messages.ZOOM_MEETING_STATUS_FAILED_UNABLE_TO_JOIN_EXTERNAL_MEETING,
+                    "zoom_result_code": str(reason.get("errorCode")) + ": " + str(reason.get("errorMessage")),
+                }
+            )
+            return
+
+        # Special case for app can not anonymous join meeting
+        if reason.get("errorCode") == 4012:
+            self.send_message_callback(
+                {
+                    "message": self.Messages.ZOOM_MEETING_STATUS_FAILED_APP_CAN_NOT_ANONYMOUS_JOIN_MEETING,
                     "zoom_result_code": str(reason.get("errorCode")) + ": " + str(reason.get("errorMessage")),
                 }
             )
@@ -185,3 +202,10 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
                 "errorMessage": "Fail to join the meeting.",
             }
         )
+
+    # Currently, it will not show the Gallery view when GPU is disabled
+    def subclass_specific_use_disable_gpu_chrome_option(self):
+        if self.recording_view == RecordingViews.GALLERY_VIEW:
+            return False
+
+        return super().subclass_specific_use_disable_gpu_chrome_option()

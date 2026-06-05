@@ -11,11 +11,22 @@ permissions:
 
 jobs:
   test:
-    name: Run test suite
+    name: "Tests: ${{ matrix.test_suite }}"
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - test_suite: zoom
+            test_args: "--tag zoom_tests"
+          - test_suite: google_meet
+            test_args: "--tag google_meet_tests"
+          - test_suite: teams_and_zoom_web
+            test_args: "--tag teams_tests --tag zoom_web_tests"
+          - test_suite: others
+            test_args: "--exclude-tag zoom_tests --exclude-tag google_meet_tests --exclude-tag teams_tests --exclude-tag zoom_web_tests"
 
-    # Add service containers
     services:
       postgres:
         image: postgres:15.3-alpine
@@ -42,43 +53,58 @@ jobs:
           --health-retries 5
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-      with:
-        driver-opts: |
-          image=moby/buildkit:master
-          network=host
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
 
-    - name: Build and cache Docker image
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        push: false
-        load: true
-        tags: attendee-test:latest
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
+      - name: Restore Docker layer cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ hashFiles('Dockerfile', '.dockerignore', 'requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-
 
-    - name: Run build script in Docker container
-      env:
-        POSTGRES_HOST: localhost
-        REDIS_URL: redis://localhost:6379/5
-        DJANGO_SETTINGS_MODULE: attendee.settings.test
-      run: |
-        docker run --rm \
-          --network host \
-          -e POSTGRES_HOST \
-          -e REDIS_URL \
-          -e DJANGO_SETTINGS_MODULE \
-          attendee-test:latest bash -lc '
-            set -e
-            python init_env.py > /tmp/.env
-            python -m dotenv -f /tmp/.env run -- python manage.py test --keepdb --parallel 4 --tag zoom_tests
-            python -m dotenv -f /tmp/.env run -- python manage.py test --keepdb --parallel 4 --exclude-tag zoom_tests
-          '
+      - name: Build and cache Docker image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: false
+          load: true
+          tags: attendee-test:latest
+          cache-from: type=local,src=${{ runner.temp }}/.buildx-cache
+          cache-to: type=local,dest=${{ runner.temp }}/.buildx-cache-new,mode=min
+
+      - name: Rotate Docker layer cache
+        run: |
+          rm -rf ${{ runner.temp }}/.buildx-cache
+          mv ${{ runner.temp }}/.buildx-cache-new ${{ runner.temp }}/.buildx-cache
+
+      - name: Save Docker layer cache
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ hashFiles('Dockerfile', '.dockerignore', 'requirements.txt') }}
+
+      - name: "Run ${{ matrix.test_suite }} tests"
+        env:
+          POSTGRES_HOST: localhost
+          REDIS_URL: redis://localhost:6379/5
+          DJANGO_SETTINGS_MODULE: attendee.settings.test
+        run: |
+          docker run --rm \
+            --network host \
+            -e POSTGRES_HOST \
+            -e REDIS_URL \
+            -e DJANGO_SETTINGS_MODULE \
+            attendee-test:latest bash -lc '
+              set -e
+              python init_env.py > /tmp/.env
+              python -m dotenv -f /tmp/.env run -- python manage.py test --keepdb ${{ matrix.test_args }} --verbosity 2
+            '
+
   lint:
     name: Run linting
     runs-on: ubuntu-latest

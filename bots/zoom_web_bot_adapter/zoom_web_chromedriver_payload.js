@@ -1,3 +1,549 @@
+(() => {
+    if (window.self !== window.top) {
+        console.log("Running inside an iframe, aborting payload.");
+        return;
+    }
+    const fullUrl = window.location.href;
+    console.log("Full URL:", fullUrl);
+  
+    if (!fullUrl.startsWith("http://127.0.0.1")) {
+        // This means we shunted to a zoom.com url which means the meeting has ended.
+        // Currently SDK does not give us any feedback on this.
+        // window.ws may not be ready yet, so retry until the send succeeds.
+        const trySendMeetingEnded = () => {
+            try {
+                window.ws.sendJson({
+                    type: 'MeetingStatusChange',
+                    change: 'meeting_ended',
+                });
+            } catch (e) {
+                setTimeout(trySendMeetingEnded, 200);
+            }
+        };
+        setTimeout(trySendMeetingEnded, 200);
+    }
+  })();
+
+// Get the frontend tracking id for debugging
+(() => {
+    function interceptJsonpCallback(name) {
+      Object.defineProperty(window, name, {
+        configurable: true,
+  
+        set(originalCallback) {
+          Object.defineProperty(window, name, {
+            configurable: true,
+            writable: true,
+            value: function interceptedZoomJsonpResponse(payload) {
+              try {
+                window.ws?.sendJson({
+                  type: 'ZoomFrontendTrackingId',
+                  trackingId: payload?.result?.tid ?? 'No tracking id found'
+                });
+              } catch (e) {
+                console.warn('ZoomFrontendTrackingId send failed', e);
+              }
+
+              return originalCallback.call(this, payload);
+            },
+          });
+        },
+  
+        get() {
+          return undefined;
+        },
+      });
+    }
+  
+    interceptJsonpCallback("localJsonpCallback1");
+  })();
+
+// Captures per-participant webcam/screenshare video by periodically scanning
+// Zoom <video-player> elements and reconciling that scan with active captures.
+class PerParticipantVideoCaptureManager {
+    constructor() {
+        this.scanIntervalMs = 250;
+        this.scanIntervalId = null;
+
+        // captureKey ("<participantId>:webcam" | "<participantId>:screenshare") ->
+        //   { participantId, isScreenShare, videoPlayer, targetCanvas, ctx,
+        //     captureIntervalId, inFlight }
+        this.activeCaptures = new Map();
+
+        // Throttle state for throttledLogAndSend so that flapping/errored states
+        // can't flood the JS console or the Python websocket every 250ms.
+        // key -> { lastEmittedAt, suppressedCount }
+        this.throttleIntervalMs = 5000;
+        this.throttleState = new Map();
+
+        // Once the current user has been observed in window.userManager.currentUsersMap,
+        // we latch this to true so we don't re-scan the map on every tick.
+        this.currentUserObserved = false;
+
+        this.screenshotChain = Promise.resolve();
+    }
+
+    async runScreenshotExclusive(fn) {
+        const previous = this.screenshotChain;
+    
+        let release;
+        this.screenshotChain = new Promise(resolve => {
+            release = resolve;
+        });
+    
+        await previous;
+    
+        try {
+            return await fn();
+        } finally {
+            release();
+        }
+    }
+
+    hasCurrentUserJoined() {
+        if (this.currentUserObserved) {
+            return true;
+        }
+
+        const currentUsersMap = window.userManager?.currentUsersMap;
+        if (!currentUsersMap) {
+            return false;
+        }
+
+        for (const user of currentUsersMap.values()) {
+            if (user?.isCurrentUser) {
+                this.currentUserObserved = true;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    makeThrottleKey(payload) {
+        return [
+            payload.type,
+            payload.participantId ?? '',
+            payload.isScreenShare ?? '',
+        ].join('|');
+    }
+
+    throttledLogAndSend(payload) {
+        const key = this.makeThrottleKey(payload);
+        const now = Date.now();
+        const state = this.throttleState.get(key) ?? { lastEmittedAt: 0, suppressedCount: 0 };
+
+        if (now - state.lastEmittedAt < this.throttleIntervalMs) {
+            state.suppressedCount += 1;
+            this.throttleState.set(key, state);
+            return;
+        }
+
+        const enriched = state.suppressedCount > 0
+            ? { ...payload, suppressedSinceLastEmit: state.suppressedCount }
+            : payload;
+
+        console.log('[PerParticipantVideoCaptureManager]', enriched);
+        window.ws?.sendJson?.(enriched);
+
+        this.throttleState.set(key, { lastEmittedAt: now, suppressedCount: 0 });
+    }
+
+    start() {
+        if (this.scanIntervalId) return;
+
+        this.scan();
+        this.scanIntervalId = setInterval(() => this.scan(), this.scanIntervalMs);
+    }
+
+    stop() {
+        if (this.scanIntervalId) {
+            clearInterval(this.scanIntervalId);
+            this.scanIntervalId = null;
+        }
+
+        for (const captureKey of Array.from(this.activeCaptures.keys())) {
+            this.stopCapture(captureKey);
+        }
+    }
+
+    makeCaptureKey(participantId, isScreenShare) {
+        return `${participantId}:${isScreenShare ? 'screenshare' : 'webcam'}`;
+    }
+
+    getParticipantInfo(videoPlayer) {
+        const rawNodeId = videoPlayer.getAttribute('node-id');
+        if (!rawNodeId) return null;
+
+        const nodeId = Number.parseInt(rawNodeId, 10);
+
+        const participantIdInteger = nodeId >> 10 << 10;
+        const participantId = participantIdInteger.toString();
+        const isScreenShare = nodeId !== participantIdInteger;
+
+        return {
+            nodeId,
+            participantId,
+            isScreenShare,
+            captureKey: this.makeCaptureKey(participantId, isScreenShare),
+        };
+    }
+
+    getSourceElements(videoPlayer) {
+        const shadowRoot = videoPlayer.container?.shadowRoot;
+
+        const sourceCanvas = shadowRoot?.querySelector('canvas');
+
+        if (sourceCanvas) {
+            return { sourceCanvas, sourceVideo: null };
+        }
+
+        const sourceVideo = videoPlayer.querySelector?.('video');
+        if (sourceVideo) {
+            return { sourceCanvas: null, sourceVideo };
+        }
+
+        return { sourceCanvas: null, sourceVideo: null };
+    }
+
+    getEligibleCaptureCandidates() {
+        const candidatesByCaptureKey = new Map();
+
+        if (!this.hasCurrentUserJoined()) {
+            return candidatesByCaptureKey;
+        }
+
+        document.querySelectorAll('video-player').forEach(videoPlayer => {
+            const participantInfo = this.getParticipantInfo(videoPlayer);
+            if (!participantInfo) return;
+
+            const { participantId, isScreenShare, captureKey } = participantInfo;
+
+            const participantUser = window.userManager?.currentUsersMap?.get?.(participantId);
+            if (!participantUser) {
+                return;
+            }
+
+            if (participantUser.isCurrentUser) {
+                return;
+            }
+
+            const { sourceCanvas, sourceVideo } = this.getSourceElements(videoPlayer);
+            if (!sourceCanvas && !sourceVideo) {
+                return;
+            }
+
+            const rect = videoPlayer.getBoundingClientRect();
+            const area = rect.width * rect.height;
+
+            const existingCandidate = candidatesByCaptureKey.get(captureKey);
+            if (!existingCandidate || area > existingCandidate.area) {
+                candidatesByCaptureKey.set(captureKey, {
+                    captureKey,
+                    participantId,
+                    isScreenShare,
+                    videoPlayer,
+                    sourceType: sourceCanvas ? 'canvas' : 'video',
+                    area,
+                });
+            }
+        });
+
+        return candidatesByCaptureKey;
+    }
+
+    scan() {
+        try {
+            const candidatesByCaptureKey = this.getEligibleCaptureCandidates();
+
+            // Remove captures that no longer appear in the latest scan.
+            for (const captureKey of Array.from(this.activeCaptures.keys())) {
+                if (!candidatesByCaptureKey.has(captureKey)) {
+                    this.stopCapture(captureKey);
+                }
+            }
+
+            // Add new captures, or replace captures whose selected <video-player>
+            // changed due to deduping / layout changes.
+            for (const candidate of candidatesByCaptureKey.values()) {
+                const existingCapture = this.activeCaptures.get(candidate.captureKey);
+
+                if (!existingCapture) {
+                    this.startCapture(candidate);
+                    continue;
+                }
+
+                if (existingCapture.videoPlayer !== candidate.videoPlayer) {
+                    this.stopCapture(candidate.captureKey);
+                    this.startCapture(candidate);
+                }
+            }
+        } catch (err) {
+            this.throttledLogAndSend({
+                type: 'ErrorCapturingPerParticipantVideo',
+                error: err.message,
+            });
+        }
+    }
+
+    getSourceConfig(isScreenShare) {
+        const videoConfig = window.initialData?.perParticipantRealtimeVideoConfiguration;
+        if (!videoConfig) return null;
+
+        return isScreenShare
+            ? videoConfig.screenshare_configuration
+            : videoConfig.webcam_configuration;
+    }
+
+    drawImageSourceLetterboxed({
+        source,
+        sourceWidth,
+        sourceHeight,
+        ctx,
+        targetWidth,
+        targetHeight,
+    }) {
+        if (!sourceWidth || !sourceHeight) {
+            return false;
+        }
+
+        const srcAspect = sourceWidth / sourceHeight;
+        const targetAspect = targetWidth / targetHeight;
+
+        let drawW;
+        let drawH;
+
+        if (srcAspect > targetAspect) {
+            drawW = targetWidth;
+            drawH = Math.round(targetWidth / srcAspect);
+        } else {
+            drawH = targetHeight;
+            drawW = Math.round(targetHeight * srcAspect);
+        }
+
+        const offsetX = Math.round((targetWidth - drawW) / 2);
+        const offsetY = Math.round((targetHeight - drawH) / 2);
+
+        ctx.fillStyle = 'black';
+        ctx.fillRect(0, 0, targetWidth, targetHeight);
+
+        ctx.drawImage(source, offsetX, offsetY, drawW, drawH);
+
+        return true;
+    }
+
+    async drawSdkScreenshotLetterboxed({
+        videoPlayer,
+        isScreenShare,
+        ctx,
+        targetWidth,
+        targetHeight,
+    }) {
+        const sdk = videoPlayer.render?.getSDK?.();
+        if (!sdk || typeof sdk.ScreenShot !== 'function') {
+            return false;
+        }
+
+        const nodeId = videoPlayer.getAttribute('node-id');
+        if (!nodeId) {
+            return false;
+        }
+
+        const blob = await this.runScreenshotExclusive(() =>
+            sdk.ScreenShot(nodeId, isScreenShare ? 'sharing' : 'video')
+        );
+        if (!blob) {
+            return false;
+        }
+
+        let bitmap = null;
+
+        try {
+            bitmap = await createImageBitmap(blob);
+
+            return this.drawImageSourceLetterboxed({
+                source: bitmap,
+                sourceWidth: bitmap.width,
+                sourceHeight: bitmap.height,
+                ctx,
+                targetWidth,
+                targetHeight,
+            });
+        } finally {
+            bitmap?.close?.();
+        }
+    }
+
+    drawVideoElementLetterboxed({
+        sourceVideo,
+        ctx,
+        targetWidth,
+        targetHeight,
+    }) {
+        if (
+            !sourceVideo.videoWidth ||
+            !sourceVideo.videoHeight ||
+            sourceVideo.readyState < 2
+        ) {
+            return false;
+        }
+
+        return this.drawImageSourceLetterboxed({
+            source: sourceVideo,
+            sourceWidth: sourceVideo.videoWidth,
+            sourceHeight: sourceVideo.videoHeight,
+            ctx,
+            targetWidth,
+            targetHeight,
+        });
+    }
+
+    startCapture({ captureKey, participantId, isScreenShare, videoPlayer, sourceType }) {
+        const sourceConfig = this.getSourceConfig(isScreenShare);
+
+        if (!sourceConfig?.enabled) {
+            return;
+        }
+
+        const desiredFPS = sourceConfig.framerate || 1;
+        const captureIntervalMs = Math.max(1, Math.round(1000 / desiredFPS));
+
+        const targetWidth = sourceConfig.width;
+        const targetHeight = sourceConfig.height;
+        const jpegQuality = (sourceConfig.jpeg_quality ?? 80) / 100;
+
+        if (!targetWidth || !targetHeight) {
+            this.throttledLogAndSend({
+                type: 'PerParticipantVideoCaptureManagerMissingTargetDimensions',
+                participantId,
+                isScreenShare,
+                sourceConfig,
+            });
+            return;
+        }
+
+        const targetCanvas = document.createElement('canvas');
+        targetCanvas.width = targetWidth;
+        targetCanvas.height = targetHeight;
+
+        const ctx = targetCanvas.getContext('2d', { alpha: false });
+        if (!ctx) {
+            this.throttledLogAndSend({
+                type: 'PerParticipantVideoCaptureManagerNoCanvasContext',
+                participantId,
+                isScreenShare,
+            });
+            return;
+        }
+
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+
+        const capture = {
+            participantId,
+            isScreenShare,
+            videoPlayer,
+            targetCanvas,
+            ctx,
+            captureIntervalId: null,
+            inFlight: false,
+        };
+
+        const captureFrame = async () => {
+            if (capture.inFlight) return;
+
+            try {
+                if (!window.ws?.mediaSendingEnabled) return;
+
+                // Do not remove the capture from here. The next scan owns cleanup.
+                if (!capture.videoPlayer?.isConnected) return;
+                if (this.activeCaptures.get(captureKey) !== capture) return;
+
+                const { sourceCanvas, sourceVideo } = this.getSourceElements(capture.videoPlayer);
+                if (!sourceCanvas && !sourceVideo) return;
+
+                capture.inFlight = true;
+
+                let didDraw = false;
+
+                if (sourceCanvas?.isConnected) {
+                    didDraw = await this.drawSdkScreenshotLetterboxed({
+                        videoPlayer: capture.videoPlayer,
+                        isScreenShare: capture.isScreenShare,
+                        ctx,
+                        targetWidth,
+                        targetHeight,
+                    });
+                } else if (sourceVideo?.isConnected) {
+                    didDraw = this.drawVideoElementLetterboxed({
+                        sourceVideo,
+                        ctx,
+                        targetWidth,
+                        targetHeight,
+                    });
+                }
+
+                if (!didDraw) return;
+
+                const base64 = targetCanvas.toDataURL('image/jpeg', jpegQuality).split(',', 2)[1];
+                if (!base64) return;
+
+                window.ws?.sendPerParticipantVideo?.(
+                    capture.participantId,
+                    capture.isScreenShare,
+                    base64
+                );
+            } catch (err) {
+                this.throttledLogAndSend({
+                    type: 'PerParticipantVideoCaptureManagerCaptureFrameError',
+                    participantId: capture.participantId,
+                    isScreenShare: capture.isScreenShare,
+                    error: err.message,
+                });
+            } finally {
+                capture.inFlight = false;
+            }
+        };
+
+        capture.captureIntervalId = setInterval(captureFrame, captureIntervalMs);
+        this.activeCaptures.set(captureKey, capture);
+
+        this.throttledLogAndSend({
+            type: sourceType === 'canvas'
+                ? 'PerParticipantVideoCaptureManagerStartCanvasElementCapture'
+                : 'PerParticipantVideoCaptureManagerStartVideoElementCapture',
+            captureKey,
+            participantId,
+            isScreenShare,
+            sourceType,
+            targetWidth,
+            targetHeight,
+            desiredFPS,
+        });
+
+        captureFrame();
+    }
+
+    stopCapture(captureKey) {
+        const capture = this.activeCaptures.get(captureKey);
+        if (!capture) return;
+
+        if (capture.captureIntervalId) {
+            clearInterval(capture.captureIntervalId);
+            capture.captureIntervalId = null;
+        }
+
+        this.activeCaptures.delete(captureKey);
+
+        this.throttledLogAndSend({
+            type: 'PerParticipantVideoCaptureManagerStopCapture',
+            captureKey,
+            participantId: capture.participantId,
+            isScreenShare: capture.isScreenShare,
+        });
+    }
+}
+
 class ParticipantSpeechStartStopManager {
     constructor() {
         // Only one active speaker at a time
@@ -59,38 +605,6 @@ class DominantSpeakerManager {
 
 const handleAudioTrack = async (event) => {
     let lastAudioFormat = null;  // Track last seen format
-    const audioDataQueue = [];
-    const ACTIVE_SPEAKER_LATENCY_MS = 2000;
-    
-    // Start continuous background processing of the audio queue
-    const processAudioQueue = () => {
-        while (audioDataQueue.length > 0 && 
-            Date.now() - audioDataQueue[0].audioArrivalTime >= ACTIVE_SPEAKER_LATENCY_MS) {
-            const { audioData, audioArrivalTime } = audioDataQueue.shift();
-
-            // Get the dominant speaker and assume that's who the participant speaking is
-            const dominantSpeakerId = dominantSpeakerManager.getLastSpeakerIdForTimestampMs(audioArrivalTime);
-
-            // Send audio data through websocket
-            if (dominantSpeakerId) {
-                ws.sendPerParticipantAudio(dominantSpeakerId, audioData);
-            }
-        }
-    };
-
-    // Set up background processing every 100ms
-    const queueProcessingInterval = setInterval(processAudioQueue, 100);
-    
-    // Clean up interval when track ends
-    event.track.addEventListener('ended', () => {
-        clearInterval(queueProcessingInterval);
-        console.log('Audio track ended, cleared queue processing interval');
-    });
-
-    window.ws.sendJson({
-        type: 'AudioTrackStarted',
-        trackId: event.track.id
-    });
     
     try {
       // Create processor to get raw frames
@@ -101,6 +615,18 @@ const handleAudioTrack = async (event) => {
       const readable = processor.readable;
       const writable = generator.writable;
   
+      const firstStreamId = event.streams[0]?.id;
+      if (!firstStreamId) {
+        window.ws?.sendJson({
+            type: 'AudioTrackError',
+            message: 'No stream ID found for audio track'
+        });
+        return;
+      }
+      var userIdForStreamId = null;
+      var numAttemptsToMapToUserId = 0;
+      
+        
       // Transform stream to intercept frames
       const transformStream = new TransformStream({
           async transform(frame, controller) {
@@ -166,18 +692,33 @@ const handleAudioTrack = async (event) => {
                       });
                   }
   
-                  // If the audioData buffer is all zeros, we still want to send it. It's only one mixed audio stream.
-                  // It seems to help with the transcription.
-                  //if (audioData.every(value => value === 0)) {
-                  //    return;
-                  //}
-
-                  // Add to queue with timestamp - the background thread will process it
-                  audioDataQueue.push({
-                    audioArrivalTime: Date.now(),
-                    audioData: audioData
-                  });
-
+                  // If the audioData buffer is all zeros, then we don't want to send it
+                  if (audioData.every(value => value === 0)) {
+                      return;
+                  }
+  
+                  if (!userIdForStreamId) {
+                    userIdForStreamId = window.userManager?.getUserIdFromStreamId(firstStreamId);
+                    if (userIdForStreamId) {
+                        window.ws?.sendJson({
+                                type: 'AudioTrackMappedToUserId',
+                                trackId: event.track.id,
+                                streamId: firstStreamId,
+                                userId: userIdForStreamId
+                        });
+                    }
+                    numAttemptsToMapToUserId++;
+                    if (numAttemptsToMapToUserId === 1000 && !userIdForStreamId) {
+                        window.ws?.sendJson({
+                            type: 'AudioTrackMappedToUserIdTimedOut',
+                            trackId: event.track.id,
+                            streamId: firstStreamId,
+                        });
+                    }
+                  }
+                  if (userIdForStreamId)
+                    ws.sendPerParticipantAudio(userIdForStreamId, audioData);
+                      
                   // Pass through the original frame
                   controller.enqueue(frame);
               } catch (error) {
@@ -187,8 +728,6 @@ const handleAudioTrack = async (event) => {
           },
           flush() {
               console.log('Transform stream flush called');
-              // Clear the interval when the stream ends
-              clearInterval(queueProcessingInterval);
           }
       });
   
@@ -206,84 +745,253 @@ const handleAudioTrack = async (event) => {
                   if (error.name !== 'AbortError') {
                       console.error('Pipeline error:', error);
                   }
-                  // Clear the interval on error
-                  clearInterval(queueProcessingInterval);
               });
       } catch (error) {
           console.error('Stream pipeline error:', error);
           abortController.abort();
-          // Clear the interval on error
-          clearInterval(queueProcessingInterval);
       }
   
     } catch (error) {
         console.error('Error setting up audio interceptor:', error);
-        // Clear the interval on error
-        clearInterval(queueProcessingInterval);
     }
   };
+  
+
+class RTCInterceptor {
+    constructor(callbacks) {
+        // Store the original RTCPeerConnection
+        const originalRTCPeerConnection = window.RTCPeerConnection;
+        
+        // Store callbacks
+        const onPeerConnectionCreate = callbacks.onPeerConnectionCreate || (() => {});
+        const onDataChannelCreate = callbacks.onDataChannelCreate || (() => {});
+        
+        // Override the RTCPeerConnection constructor
+        window.RTCPeerConnection = function(...args) {
+            // Create instance using the original constructor
+            const peerConnection = Reflect.construct(
+                originalRTCPeerConnection, 
+                args
+            );
+            
+            // Notify about the creation
+            onPeerConnectionCreate(peerConnection);
+            
+            // Override createDataChannel
+            const originalCreateDataChannel = peerConnection.createDataChannel.bind(peerConnection);
+            peerConnection.createDataChannel = (label, options) => {
+                const dataChannel = originalCreateDataChannel(label, options);
+                onDataChannelCreate(dataChannel, peerConnection);
+                return dataChannel;
+            };
+            
+            return peerConnection;
+        };
+    }
+}
+
+new RTCInterceptor({
+    onPeerConnectionCreate: (peerConnection) => {
+        console.log('New RTCPeerConnection created:', peerConnection);
+
+        peerConnection.addEventListener('track', (event) => {
+            console.log('New track:', {
+                trackId: event.track.id,
+                trackKind: event.track.kind,
+                streams: event.streams,
+            });
+
+            window.ws?.sendJson({
+                type: 'WebRTCTrackStarted',
+                trackId: event.track.id,
+                trackKind: event.track.kind,
+                streams: event.streams?.map(stream => stream?.id),
+            });
+
+            // We need to capture every audio track in the meeting,
+            // but we don't need to do anything with the video tracks
+            if (event.track.kind === 'audio') {
+                window.mixedAudioStreamManager?.addAudioTrackFromTrackEvent(event);
+                if (window.initialData.sendPerParticipantAudio) {
+                    handleAudioTrack(event);
+                }
+            }
+        });
+    },
+});
+
+class MixedAudioStreamManager {
+    constructor() {
+        this.audioTracks = [];
+        this.meetingAudioStream = null;
+        this.audioTracksToBeAdded = [];
+        this.audioContext = null;
+        this.destination = null;
+        this.seenTrackIds = new Set();
+    }
+
+
+    addAudioStream(audioStream) {
+        const track = audioStream.getAudioTracks()[0];
+        if (track) {
+            this.addAudioTrack(track);
+        }
+    }
+
+    addAudioTrackFromTrackEvent(trackEvent) {
+        if (!trackEvent.track)
+            return;
+        const firstStreamId = trackEvent.streams[0]?.id;
+        // streamId must contain +CS+ in it, which means it's from Zoom, not from a voice agent.
+        if (!firstStreamId?.includes('+CS+')) {
+            window.ws?.sendJson({
+                type: 'AudioTrackNotAddedToMeetingAudioStream',
+                trackId: trackEvent.track.id,
+                streams: trackEvent.streams?.map(stream => stream?.id),
+            });
+            return;
+        }
+        window.ws?.sendJson({
+            type: 'AudioTrackAddedToMeetingAudioStream',
+            trackId: trackEvent.track.id,
+            streams: trackEvent.streams?.map(stream => stream?.id),
+        });
+        this.addAudioTrack(trackEvent.track);
+    }
+
+    addAudioTrack(track) {
+        if (!track || this.seenTrackIds.has(track.id)) {
+            return;
+        }
+
+        // If start() already ran, patch the new track into the existing mix.
+        if (this.audioContext && this.destination) {
+            const mediaStream = new MediaStream([track]);
+            const source = this.audioContext.createMediaStreamSource(mediaStream);
+            source.connect(this.destination);
+            this.seenTrackIds.add(track.id);
+        }
+        else {
+            this.audioTracksToBeAdded.push(track);
+        }
+    }
+
+    createStream() {
+        if (this.meetingAudioStream)
+            return;
+        this.audioContext = new AudioContext({ sampleRate: 48000 });
+        this.destination = this.audioContext.createMediaStreamDestination();
+
+        this.audioTracksToBeAdded.forEach(track => this.addAudioTrack(track));
+
+        this.meetingAudioStream = this.destination.stream;
+
+        // Create a source from the destination's stream so that it actually plays
+        this.audioContext.createMediaStreamSource(this.destination.stream);
+
+        window.ws?.sendJson({
+            type: 'MeetingAudioStreamCreated',
+            message: 'Meeting audio stream created',
+        });
+    }
+
+    getMeetingAudioStream() {
+        this.createStream();
+        return this.meetingAudioStream;
+    }
+}
 
 // Style manager
 class StyleManager {
     constructor() {
-        this.meetingAudioStream = null;
-        this.audioStreams = []
-    }
-
-    addAudioStream(audioStream) {
-        this.audioStreams.push(audioStream);
+        this.started = false;
     }
 
     async start() {
         console.log('StyleManager start');
 
-        // This code is just grabbing a unified audio stream
+        this.started = true;
 
-        // Retrieve all <audio> elements on the page
-        const audioElements = document.querySelectorAll('audio');
-
-        this.audioContext = new AudioContext({ sampleRate: 48000 });
-
-        // Combine the audioStreams we've accumulated with anything from audioElements in the DOM.
-        const audioStreamTracks = this.audioStreams.map(stream => {
-            return stream.getAudioTracks()[0];
-        })
-        const audioElementTracks = Array.from(audioElements).map(audioElement => {
-            return audioElement.srcObject.getAudioTracks()[0];
-        });
-        this.audioTracks = audioStreamTracks.concat(audioElementTracks);
-
-        this.audioSources = this.audioTracks.map(track => {
-            const mediaStream = new MediaStream([track]);
-            return this.audioContext.createMediaStreamSource(mediaStream);
-        });
-
-        // Create a destination node
-        const destination = this.audioContext.createMediaStreamDestination();
-
-        // Connect all sources to the destination
-        this.audioSources.forEach(source => {
-            source.connect(destination);
-        });
-
-        this.meetingAudioStream = destination.stream;
-
-        if (this.meetingAudioStream.getAudioTracks().length == 0)
-        {
-            console.log("this.meetingAudioStream.getAudioTracks() had length 0")
-            return;
+        if (window.zoomInitialData.modifyDomForVideoRecording) {
+            this.onlyShowSubsetofZoomUI();
         }
 
-        if (initialData.sendPerParticipantAudio)
-            handleAudioTrack({track: this.meetingAudioStream.getAudioTracks()[0]});  
+        if (initialData.sendPerParticipantVideo) {
+            window.perParticipantVideoCaptureManager.start();
+        }
     }
     
     getMeetingAudioStream() {
-        return this.meetingAudioStream;
+        if (!this.started)
+            return null;
+        return window.mixedAudioStreamManager?.getMeetingAudioStream();
     }
 
     async stop() {
         console.log('StyleManager stop');
+        if (window.zoomInitialData.modifyDomForVideoRecording) {
+            this.showAllOfZoomUI();
+        }
+    }
+
+    onlyShowSubsetofZoomUI() {
+        try {
+            // Find the main element that contains all the video elements
+            this.mainElement = document.querySelector('#video-pip-container');
+            if (!this.mainElement) {
+                console.error('No #video-pip-container element found in the DOM');
+                window.ws.sendJson({
+                    type: 'Error',
+                    message: 'No #video-pip-container element found in the DOM'
+                });
+                return;
+            }
+
+            const ancestors = [];
+            let parent = this.mainElement.parentElement;
+            while (parent) {
+                ancestors.push(parent);
+                parent = parent.parentElement;
+            }
+            
+            // Hide all elements except main, its ancestors, and its descendants
+            document.querySelectorAll('body *').forEach(element => {
+                if (element !== this.mainElement && 
+                    !ancestors.includes(element) && 
+                    !this.mainElement.contains(element)) {
+                    element.style.display = 'none';
+                }
+            });
+        } catch (error) {
+            console.error('Error in onlyShowSubsetofZoomUI:', error);
+            window.ws.sendJson({
+                type: 'Error',
+                message: 'Error in onlyShowSubsetofZoomUI: ' + error.message
+            });
+        }
+    }
+
+
+    showAllOfZoomUI() {
+        // Restore all elements that were hidden by onlyShowSubsetofZoomUI
+        document.querySelectorAll('body *').forEach(element => {
+            if (element.style.display === 'none') {
+                // Only reset display property if we set it to 'none'
+                // We can check if the element is a direct child of body or not in main/ancestors
+                const isInMainTree = this.mainElement && 
+                    (this.mainElement === element || 
+                     this.mainElement.contains(element) || 
+                     element.contains(this.mainElement));
+                
+                if (!isInMainTree) {
+                    // Reset the display property to its default or empty string
+                    // This will restore the element's original display value
+                    element.style.display = '';
+                }
+            }
+        });
+        
+        console.log('Restored all hidden elements to their original display values');
     }
 }
 
@@ -295,7 +1003,8 @@ class WebSocketClient {
         VIDEO: 2,
         AUDIO: 3,
         ENCODED_MP4_CHUNK: 4,
-        PER_PARTICIPANT_AUDIO: 5
+        PER_PARTICIPANT_AUDIO: 5,
+        PER_PARTICIPANT_VIDEO: 6,
     };
 
     constructor() {
@@ -427,6 +1136,51 @@ class WebSocketClient {
         }
     }
 
+    sendPerParticipantVideo(participantId, isScreenShare, videoData) {
+        if (this.ws.readyState !== WebSocket.OPEN) {
+          console.error('WebSocket is not connected for per participant video send', this.ws.readyState);
+          return;
+        }
+    
+        if (!this.mediaSendingEnabled) {
+          return;
+        }
+    
+        try {
+            // Convert participantId to UTF-8 bytes
+            const participantIdBytes = new TextEncoder().encode(participantId);
+            
+            // Convert videoData string to UTF-8 bytes
+            const videoDataBytes = new TextEncoder().encode(videoData);
+            
+            // Create final message: type (4 bytes) + participantId length (1 byte) + 
+            // participantId bytes + isScreenShare (1 byte) + video data
+            const message = new Uint8Array(4 + 1 + participantIdBytes.length + 1 + videoDataBytes.length);
+            const dataView = new DataView(message.buffer);
+            
+            // Set message type (6 for PER_PARTICIPANT_VIDEO)
+            dataView.setInt32(0, WebSocketClient.MESSAGE_TYPES.PER_PARTICIPANT_VIDEO, true);
+            
+            // Set participantId length as uint8 (1 byte)
+            dataView.setUint8(4, participantIdBytes.length);
+            
+            // Copy participantId bytes
+            message.set(participantIdBytes, 5);
+            
+            // Set isScreenShare byte (0 = webcam, 1 = screenshare)
+            dataView.setUint8(5 + participantIdBytes.length, isScreenShare ? 1 : 0);
+            
+            // Copy video data after type, length, participantId, and isScreenShare
+            message.set(videoDataBytes, 5 + participantIdBytes.length + 1);
+            
+            // Send the binary message
+            this.ws.send(message.buffer);
+        } catch (error) {
+            console.error('Error sending WebSocket video message:', error);
+        }
+      }
+  
+
     sendMixedAudio(timestamp, audioData) {
         if (this.ws.readyState !== WebSocket.OPEN) {
             console.error('WebSocket is not connected for audio send', this.ws.readyState);
@@ -463,6 +1217,21 @@ class UserManager {
         this.deviceOutputMap = new Map();
 
         this.ws = ws;
+    }
+
+    getUserIdFromStreamId(streamId) {
+        const decoded = decodeURIComponent(streamId);
+        const match = decoded.match(/^(\d+)\+/);
+        if (match) {
+            const rawId = Number(match[1]);
+            const participantId = rawId >> 10 << 10;
+            // Check if this exists in the current users map
+            if (this.currentUsersMap.has(participantId.toString())) {
+                return participantId.toString();
+            }
+            return null;
+        }
+        return null;
     }
 
     getUserByDeviceId(deviceId) {
@@ -595,7 +1364,7 @@ class UserManager {
           ctx.__captureTee = { tee, tap };
           const capturedStream = tap.stream;
           if (capturedStream)
-            window.styleManager.addAudioStream(capturedStream);
+            window.mixedAudioStreamManager.addAudioStream(capturedStream);
         }
         catch (error) {
             console.error('Error in AudioNodeInterceptor:', error);
@@ -620,7 +1389,10 @@ const userManager = new UserManager(ws);
 window.userManager = userManager;
 const participantSpeechStartStopManager = new ParticipantSpeechStartStopManager();
 window.participantSpeechStartStopManager = participantSpeechStartStopManager;
-
+const mixedAudioStreamManager = new MixedAudioStreamManager();
+window.mixedAudioStreamManager = mixedAudioStreamManager;
+const perParticipantVideoCaptureManager = new PerParticipantVideoCaptureManager();
+window.perParticipantVideoCaptureManager = perParticipantVideoCaptureManager;
 
 const turnOnCameraArialLabel = "start my video"
 const turnOffCameraArialLabel = "stop my video"

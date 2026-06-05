@@ -31,7 +31,7 @@ def create_utterances_for_transcription_without_using_groups(async_transcription
             source=Utterance.Sources.PER_PARTICIPANT_AUDIO,
             recording=recording,
             async_transcription=async_transcription,
-            participant=audio_chunk.participant,
+            participant_id=audio_chunk.participant_id,
             audio_chunk=audio_chunk,
             timestamp_ms=audio_chunk.timestamp_ms,
             duration_ms=audio_chunk.duration_ms,
@@ -59,7 +59,7 @@ def create_utterances_for_transcription_using_groups(async_transcription):
             source=Utterance.Sources.PER_PARTICIPANT_AUDIO,
             recording=recording,
             async_transcription=async_transcription,
-            participant=audio_chunk.participant,
+            participant_id=audio_chunk.participant_id,
             audio_chunk=audio_chunk,
             timestamp_ms=audio_chunk.timestamp_ms,
             duration_ms=audio_chunk.duration_ms,
@@ -69,7 +69,7 @@ def create_utterances_for_transcription_using_groups(async_transcription):
     # Group utterances into evenly-sized groups based on total duration
     # Calculate number of groups needed, then divide duration evenly.
     # This avoids creating tiny groups.
-    max_group_duration_ms = 30 * 60 * 1000  # 30 minutes in milliseconds
+    max_group_duration_ms = int(os.getenv("ASYNC_TRANSCRIPTION_MAX_UTTERANCE_GROUP_DURATION_MS", 30 * 60 * 1000))  # 30 minutes in milliseconds
     total_duration_ms = sum(u.duration_ms for u in utterances)
     if total_duration_ms == 0:
         total_duration_ms = 1

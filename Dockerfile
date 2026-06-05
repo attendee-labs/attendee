@@ -47,7 +47,7 @@ RUN apt-get update  \
     libpq-dev
 
 # Install Chrome dependencies
-RUN apt-get install -y xvfb x11-xkb-utils xfonts-100dpi xfonts-75dpi xfonts-scalable xfonts-cyrillic x11-apps libvulkan1 fonts-liberation xdg-utils wget
+RUN apt-get install -y xvfb xauth x11-xkb-utils xfonts-100dpi xfonts-75dpi xfonts-scalable xfonts-cyrillic x11-apps libvulkan1 fonts-liberation xdg-utils wget
 # Install a specific version of Chrome.
 RUN wget -q http://dl.google.com/linux/chrome/deb/pool/main/g/google-chrome-stable/google-chrome-stable_139.0.7258.66-1_amd64.deb
 RUN apt-get install -y ./google-chrome-stable_139.0.7258.66-1_amd64.deb
@@ -85,9 +85,6 @@ RUN apt-get update && apt-get install -y xmlsec1
 
 # Install xclip
 RUN apt-get update && apt-get install -y xclip
-
-# Install python dependencies
-RUN pip install pyjwt cython gdown python-dotenv
 
 # Install libavdevice-dev. Needed so that webpage streaming using pyav will work.
 RUN apt-get update && apt-get install -y libavdevice-dev && pip uninstall -y av && pip install --no-binary av "av==12.0.0"

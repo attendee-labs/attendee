@@ -19,7 +19,7 @@ from rest_framework.views import APIView
 
 from .authentication import ApiKeyAuthentication
 from .bots_api_utils import BotCreationSource, create_bot, create_bot_chat_message_request, create_bot_media_request_for_image, delete_bot, patch_bot, patch_bot_transcription_settings, patch_bot_voice_agent_settings, send_sync_command
-from .launch_bot_utils import launch_bot
+from .launch_bot_utils import launch_adhoc_bot_from_view
 from .meeting_url_utils import meeting_type_from_url
 from .models import (
     AsyncTranscription,
@@ -301,7 +301,7 @@ class BotListCreateView(GenericAPIView):
 
         # If this is a scheduled bot, we don't want to launch it yet.
         if bot.state == BotStates.JOINING:
-            launch_bot(bot)
+            launch_adhoc_bot_from_view(bot)
 
         return Response(BotSerializer(bot).data, status=status.HTTP_201_CREATED)
 
@@ -432,6 +432,7 @@ class OutputVideoView(APIView):
             media_type=BotMediaRequestMediaTypes.VIDEO,
             media_url=serializer.validated_data["url"],
             loop=serializer.validated_data["loop"],
+            mute_video=serializer.validated_data["mute_video"],
         )
 
         # Send sync command to notify bot of new media request
@@ -635,7 +636,7 @@ class DeleteDataView(APIView):
         except Bot.DoesNotExist:
             return Response({"error": "Bot not found"}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
-            logging.error(f"Error deleting bot data: {str(e)} (bot_id={object_id})")
+            logging.exception(f"Error deleting bot data: {str(e)}", extra={"bot_id": object_id})
             return Response(
                 {"error": str(e)},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -1364,7 +1365,7 @@ class PauseRecordingView(APIView):
     @extend_schema(
         operation_id="Pause Recording",
         summary="Pause the bot's recording",
-        description="Pauses the recording for the specified bot. This functionality is in beta and only supported for Google Meet and MS Teamsbots.",
+        description="Pauses the recording for the specified bot.",
         responses={
             200: OpenApiResponse(
                 response=BotSerializer,
