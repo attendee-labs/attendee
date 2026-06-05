@@ -1155,27 +1155,28 @@ class SarvamSerializerValidationTest(TransactionTestCase):
         validated = serializer.validate_transcription_settings(valid_settings)
         self.assertEqual(validated["sarvam"]["model"], "saaras:v3")
 
-    def test_saarika_with_mode_fails_validation(self):
-        """mode with a Saarika model should be rejected."""
+    def test_saarika_with_mode_passes_validation(self):
+        """mode with a Saarika model should be accepted (validation removed)."""
         from bots.serializers import CreateBotSerializer
 
         data = {"meeting_url": "https://zoom.us/j/123456789", "bot_name": "Test Bot"}
         serializer = CreateBotSerializer(data=data)
 
-        invalid_settings = {"sarvam": {"model": "saarika:v2.5", "mode": "translate"}}
-        with self.assertRaises(serializers.ValidationError):
-            serializer.validate_transcription_settings(invalid_settings)
+        valid_settings = {"sarvam": {"model": "saarika:v2.5", "mode": "translate"}}
+        validated = serializer.validate_transcription_settings(valid_settings)
+        self.assertEqual(validated["sarvam"]["model"], "saarika:v2.5")
+        self.assertEqual(validated["sarvam"]["mode"], "translate")
 
-    def test_mode_without_model_fails_validation(self):
-        """mode without an explicit model should be rejected."""
+    def test_mode_without_model_passes_validation(self):
+        """mode without an explicit model should be accepted (validation removed)."""
         from bots.serializers import CreateBotSerializer
 
         data = {"meeting_url": "https://zoom.us/j/123456789", "bot_name": "Test Bot"}
         serializer = CreateBotSerializer(data=data)
 
-        invalid_settings = {"sarvam": {"mode": "translate"}}
-        with self.assertRaises(serializers.ValidationError):
-            serializer.validate_transcription_settings(invalid_settings)
+        valid_settings = {"sarvam": {"mode": "translate"}}
+        validated = serializer.validate_transcription_settings(valid_settings)
+        self.assertEqual(validated["sarvam"]["mode"], "translate")
 
     def test_all_valid_modes_accepted_with_saaras_v3(self):
         """All documented mode values should be accepted with saaras:v3."""
@@ -1190,14 +1191,15 @@ class SarvamSerializerValidationTest(TransactionTestCase):
                 validated = serializer.validate_transcription_settings(valid_settings)
                 self.assertEqual(validated["sarvam"]["mode"], mode)
 
-    def test_async_transcription_saarika_with_mode_fails_validation(self):
-        """CreateAsyncTranscriptionSerializer should also reject mode with Saarika."""
+    def test_async_transcription_saarika_with_mode_passes_validation(self):
+        """CreateAsyncTranscriptionSerializer should also accept mode with Saarika (validation removed)."""
         from bots.serializers import CreateAsyncTranscriptionSerializer
 
         serializer = CreateAsyncTranscriptionSerializer(data={})
-        invalid_settings = {"sarvam": {"model": "saarika:v2", "mode": "transcribe"}}
-        with self.assertRaises(serializers.ValidationError):
-            serializer.validate_transcription_settings(invalid_settings)
+        valid_settings = {"sarvam": {"model": "saarika:v2", "mode": "transcribe"}}
+        validated = serializer.validate_transcription_settings(valid_settings)
+        self.assertEqual(validated["sarvam"]["model"], "saarika:v2")
+        self.assertEqual(validated["sarvam"]["mode"], "transcribe")
 
 
 class AssemblyAIProviderTest(TransactionTestCase):
@@ -1650,8 +1652,8 @@ class SarvamProviderTest(TransactionTestCase):
             self.assertEqual(sent_data.get("model"), "saaras:v3")
             self.assertEqual(sent_data.get("mode"), "translate")
 
-    def test_mode_not_forwarded_for_saarika_model(self):
-        """`mode` is dropped when model is a Saarika variant, even if set."""
+    def test_mode_forwarded_for_saarika_model(self):
+        """`mode` is forwarded for Saarika models (no longer restricted to saaras:v3)."""
         self.bot.settings = {"transcription_settings": {"sarvam": {"model": "saarika:v2.5", "mode": "translate"}}}
         self.bot.save()
 
@@ -1668,10 +1670,10 @@ class SarvamProviderTest(TransactionTestCase):
 
             sent_data = m_post.call_args.kwargs["data"]
             self.assertEqual(sent_data.get("model"), "saarika:v2.5")
-            self.assertNotIn("mode", sent_data)
+            self.assertEqual(sent_data.get("mode"), "translate")
 
-    def test_mode_not_forwarded_when_model_not_set(self):
-        """`mode` is dropped when no model is configured."""
+    def test_mode_forwarded_when_model_not_set(self):
+        """`mode` is forwarded even when no model is configured."""
         self.bot.settings = {"transcription_settings": {"sarvam": {"mode": "translate"}}}
         self.bot.save()
 
@@ -1688,7 +1690,7 @@ class SarvamProviderTest(TransactionTestCase):
 
             sent_data = m_post.call_args.kwargs["data"]
             self.assertNotIn("model", sent_data)
-            self.assertNotIn("mode", sent_data)
+            self.assertEqual(sent_data.get("mode"), "translate")
 
     def test_saaras_v3_works_without_mode(self):
         """saaras:v3 without mode should still work and only send model."""

@@ -280,27 +280,25 @@ class TestCreateBot(TestCase):
         self.assertEqual(bot.transcription_settings.sarvam_model(), "saaras:v3")
         self.assertEqual(bot.transcription_settings.sarvam_mode(), "translate")
 
-    def test_create_bot_with_sarvam_saarika_and_mode_returns_error(self):
-        """Test that creating a bot with Sarvam Saarika model and mode returns validation error."""
+    def test_create_bot_with_sarvam_saarika_and_mode_succeeds(self):
+        """Test that creating a bot with Sarvam Saarika model and mode succeeds (validation removed)."""
         bot, error = create_bot(
             data={"meeting_url": "https://meet.google.com/sarvam-saarika-test", "bot_name": "Test Bot", "transcription_settings": {"sarvam": {"model": "saarika:v2.5", "mode": "translate"}}},
             source=BotCreationSource.API,
             project=self.project,
         )
-        self.assertIsNone(bot)
-        self.assertIsNotNone(error)
-        self.assertIn("transcription_settings", error)
+        self.assertIsNotNone(bot)
+        self.assertIsNone(error)
 
-    def test_create_bot_with_sarvam_mode_without_model_returns_error(self):
-        """Test that creating a bot with Sarvam mode but no model returns validation error."""
+    def test_create_bot_with_sarvam_mode_without_model_succeeds(self):
+        """Test that creating a bot with Sarvam mode but no model succeeds (validation removed)."""
         bot, error = create_bot(
             data={"meeting_url": "https://meet.google.com/sarvam-no-model-test", "bot_name": "Test Bot", "transcription_settings": {"sarvam": {"mode": "translate"}}},
             source=BotCreationSource.API,
             project=self.project,
         )
-        self.assertIsNone(bot)
-        self.assertIsNotNone(error)
-        self.assertIn("transcription_settings", error)
+        self.assertIsNotNone(bot)
+        self.assertIsNone(error)
 
     def test_create_bot_with_google_meet_url_with_http(self):
         bot, error = create_bot(data={"meeting_url": "http://meet.google.com/abc-defg-hij", "bot_name": "Test Bot"}, source=BotCreationSource.DASHBOARD, project=self.project)

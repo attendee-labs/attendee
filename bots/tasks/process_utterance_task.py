@@ -412,7 +412,7 @@ def get_transcription_via_sarvam(utterance):
         data["language_code"] = transcription_settings.sarvam_language_code()
     if transcription_settings.sarvam_model():
         data["model"] = transcription_settings.sarvam_model()
-    if transcription_settings.sarvam_mode() and transcription_settings.sarvam_model() == "saaras:v3":
+    if transcription_settings.sarvam_mode():
         data["mode"] = transcription_settings.sarvam_mode()
 
     try:
