@@ -1720,6 +1720,7 @@ class SarvamProviderTest(TransactionTestCase):
             with self.subTest(mode=mode):
                 self.bot.settings = {"transcription_settings": {"sarvam": {"model": "saaras:v3", "mode": mode}}}
                 self.bot.save()
+                self.utterance.recording.bot = self.bot
 
                 with (
                     self._patch_creds(),
