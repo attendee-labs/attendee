@@ -391,7 +391,7 @@ TRANSCRIPTION_SETTINGS_SCHEMA = {
                     "type": "string",
                     "enum": ["transcribe", "translate", "verbatim", "translit", "codemix"],
                     "description": "Mode of operation."
-                }
+                },
             },
             "required": [],
             "additionalProperties": False,
