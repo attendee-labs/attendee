@@ -380,7 +380,6 @@ TRANSCRIPTION_SETTINGS_SCHEMA = {
             "properties": {
                 "model": {
                     "type": "string",
-                    "enum": ["saarika:v2", "saarika:v2.5", "saaras:v3"],
                     "description": "The Sarvam model to use for transcription",
                 },
                 "language_code": {
@@ -391,7 +390,7 @@ TRANSCRIPTION_SETTINGS_SCHEMA = {
                 "mode": {
                     "type": "string",
                     "enum": ["transcribe", "translate", "verbatim", "translit", "codemix"],
-                    "description": "Mode of operation. Only applicable when using saaras:v3 model."
+                    "description": "Mode of operation."
                 }
             },
             "required": [],
