@@ -103,11 +103,17 @@ class GoogleMeetBotLogin(models.Model):
 
     @property
     def cert(self):
-        return self.safe_get_credentials().get("cert") else None
+        cert = self.safe_get_credentials().get("cert")
+        if cert is None:
+            return None
+        return cert
 
     @property
     def private_key(self):
-        return self.safe_get_credentials().get("private_key") else None
+        private_key = self.safe_get_credentials().get("private_key")
+        if private_key is None:
+            return None
+        return private_key
 
     def set_credentials(self, credentials_dict):
         """Encrypt and save credentials"""
