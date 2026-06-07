@@ -439,7 +439,7 @@ class DeleteCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
             logger.error(f"Error deleting credentials (error_id={error_id}): {e}")
             return HttpResponse(f"Error deleting credentials. Error ID: {error_id}", status=400)
 
-
+# Retry Safe Logic
 def get_safe_credentials(credential):
     if not credential:
         return None

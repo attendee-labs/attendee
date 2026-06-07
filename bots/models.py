@@ -303,6 +303,7 @@ class ZoomOAuthApp(models.Model):
         decrypted_data = f.decrypt(bytes(self._encrypted_data))
         return json.loads(decrypted_data.decode())
 
+    # Safe Logic
     def safe_get_credentials(self):
         """Safely get credentials, return None and delete if decryption fails."""
         if not self._encrypted_data:
