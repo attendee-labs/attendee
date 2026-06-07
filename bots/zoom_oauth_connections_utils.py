@@ -335,6 +335,10 @@ def get_zak_token_via_zoom_oauth_connection(zoom_oauth_connection: ZoomOAuthConn
     return _get_zak_token(access_token)
 
 
+def get_access_token_via_zoom_oauth_connection(zoom_oauth_connection: ZoomOAuthConnection) -> str | None:
+    return _get_access_token(zoom_oauth_connection)
+
+
 def get_zoom_tokens_via_zoom_oauth_app(bot: Bot) -> dict | None:
     onbehalf_token = get_onbehalf_token_via_zoom_oauth_app(bot)
     local_recording_token = get_local_recording_token_via_zoom_oauth_app(bot)

@@ -16,6 +16,8 @@ When a user authorizes your Zoom app through OAuth:
 3. When your bot joins a meeting hosted by that user, Attendee generates a local recording token using the stored credentials.
 4. When your app launches a bot on behalf of a user, you pass that user's zoom user id to Attendee in the bot creation request. Attendee will then generate an onbehalf token using the stored credentials.
 
+If your application also needs to create Zoom meetings or events for the authorized user, you can request a fresh Zoom OAuth access token from Attendee with `POST /api/v1/zoom_oauth_connections/{zoom_oauth_connection_id}/access_token`. Attendee returns `{"access_token": "<access_token>"}`, and your application can use that token to call Zoom's meeting creation APIs directly. Your Zoom OAuth app must include the required Zoom meeting creation scope, such as `meeting:write`, because Attendee does not validate or store granted scopes for this endpoint.
+
 ## Create a Zoom App
 
 You'll need to create a Zoom OAuth App that your users will authorize. We recommend creating separate apps for development and production. You will need to choose whether you want to use the local recording token or the onbehalf token or both. Since the onbehalf token will be required after March 2, 2026, we highly recommend you use it. The local recording token is only needed if your bots are recording meetings and you want to record meetings without asking permission from the host.
@@ -109,4 +111,3 @@ For more details on onbehalf token related behavior see [here](https://devforum.
 ### Are there any alternatives to implementing the onbehalf token?
 
 Yes, you can switch your application to use [Zoom RTMS](https://developers.zoom.us/docs/rtms/). RTMS is a different method for getting recordings and transcripts from meetings which involves an app running in the Zoom client instead of a bot. Attendee has beta support for RTMS, for more information see the example programs for building a [notetaker](https://github.com/attendee-labs/rtms-notetaker-example) and [sales coach](https://github.com/attendee-labs/rtms-sales-coach-example) with Attendee and RTMS.
-
