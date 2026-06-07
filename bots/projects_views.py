@@ -953,12 +953,18 @@ class ProjectWebhooksView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 
         # Get or create webhook secret for the project
         webhook_secret, created = WebhookSecret.objects.get_or_create(project=project)
+        secret_bytes = webhook_secret.get_secret()
+
+        if secret_bytes is None:
+            webhook_secret.delete()
+            webhook_secret = WebhookSecret.objects.create(project=project)
+            secret_bytes = webhook_secret.get_secret()
 
         context = self.get_project_context(object_id, project)
         # Only show project-level webhooks, not bot-level ones
         context["webhooks"] = project.webhook_subscriptions.filter(bot__isnull=True).order_by("-created_at")
         context["webhook_options"] = get_webhook_options_for_project(project)
-        context["webhook_secret"] = base64.b64encode(webhook_secret.get_secret()).decode("utf-8")
+        context["webhook_secret"] = base64.b64encode(secret_bytes).decode("utf-8")
         context["REQUIRE_HTTPS_WEBHOOKS"] = settings.REQUIRE_HTTPS_WEBHOOKS
         return render(request, "projects/project_webhooks.html", context)
 
