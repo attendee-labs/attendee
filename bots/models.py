@@ -103,11 +103,11 @@ class GoogleMeetBotLogin(models.Model):
 
     @property
     def cert(self):
-        return self.get_credentials().get("cert")
+        return self.safe_get_credentials().get("cert") else None
 
     @property
     def private_key(self):
-        return self.get_credentials().get("private_key")
+        return self.safe_get_credentials().get("private_key") else None
 
     def set_credentials(self, credentials_dict):
         """Encrypt and save credentials"""
@@ -124,6 +124,17 @@ class GoogleMeetBotLogin(models.Model):
         decrypted_data = f.decrypt(bytes(self._encrypted_data))
         return json.loads(decrypted_data.decode())
 
+    def safe_get_credentials(self):
+         """Safely get credentials, return None and delete if decryption fails."""
+         if not self._encrypted_data:
+             return None
+         try:
+             return self.get_credentials()
+         except InvalidToken:
+             logger.error(f"Deleting corrupted ZoomOAuthApp credentials for {self.id}")
+             self.delete()
+             return None
+    
     def save(self, *args, **kwargs):
         if not self.object_id:
             # Generate a random 16-character string
