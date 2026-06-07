@@ -440,6 +440,17 @@ class DeleteCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
             return HttpResponse(f"Error deleting credentials. Error ID: {error_id}", status=400)
 
 
+def get_safe_credentials(credential):
+    if not credential:
+        return None
+    try:
+        return credential.get_credentials()
+    except:
+        logger.error(f"Deleting Corrupted Credentials: {credential.credential_type}, ID: ({credential.id})")
+        credential.delete()
+        return None
+
+
 class ProjectCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
     def get(self, request, object_id):
         project = get_project_for_user(user=request.user, project_object_id=object_id)
@@ -472,25 +483,25 @@ class ProjectCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
         context.update(
             {
                 "zoom_oauth_app": zoom_oauth_app,
-                "zoom_credentials": zoom_credentials.get_credentials() if zoom_credentials else None,
+                "zoom_credentials": get_safe_credentials(zoom_credentials),
                 "zoom_credential_type": Credentials.CredentialTypes.ZOOM_OAUTH,
-                "deepgram_credentials": deepgram_credentials.get_credentials() if deepgram_credentials else None,
+                "deepgram_credentials": get_safe_credentials(deepgram_credentials),
                 "deepgram_credential_type": Credentials.CredentialTypes.DEEPGRAM,
-                "google_tts_credentials": google_tts_credentials.get_credentials() if google_tts_credentials else None,
+                "google_tts_credentials": get_safe_credentials(google_tts_credentials),
                 "google_tts_credential_type": Credentials.CredentialTypes.GOOGLE_TTS,
-                "gladia_credentials": gladia_credentials.get_credentials() if gladia_credentials else None,
+                "gladia_credentials": get_safe_credentials(gladia_credentials),
                 "gladia_credential_type": Credentials.CredentialTypes.GLADIA,
-                "openai_credentials": openai_credentials.get_credentials() if openai_credentials else None,
+                "openai_credentials": get_safe_credentials(openai_credentials),
                 "openai_credential_type": Credentials.CredentialTypes.OPENAI,
-                "assembly_ai_credentials": assembly_ai_credentials.get_credentials() if assembly_ai_credentials else None,
+                "assembly_ai_credentials": get_safe_credentials(assembly_ai_credentials),
                 "assembly_ai_credential_type": Credentials.CredentialTypes.ASSEMBLY_AI,
-                "sarvam_credentials": sarvam_credentials.get_credentials() if sarvam_credentials else None,
+                "sarvam_credentials": get_safe_credentials(sarvam_credentials),
                 "sarvam_credential_type": Credentials.CredentialTypes.SARVAM,
-                "elevenlabs_credentials": elevenlabs_credentials.get_credentials() if elevenlabs_credentials else None,
+                "elevenlabs_credentials": get_safe_credentials(elevenlabs_credentials),
                 "elevenlabs_credential_type": Credentials.CredentialTypes.ELEVENLABS,
-                "kyutai_credentials": kyutai_credentials.get_credentials() if kyutai_credentials else None,
+                "kyutai_credentials": get_safe_credentials(kyutai_credentials),
                 "kyutai_credential_type": Credentials.CredentialTypes.KYUTAI,
-                "external_media_storage_credentials": external_media_storage_credentials.get_credentials() if external_media_storage_credentials else None,
+                "external_media_storage_credentials": get_safe_credentials(external_media_storage_credentials),
                 "external_media_storage_credential_type": Credentials.CredentialTypes.EXTERNAL_MEDIA_STORAGE,
             }
         )
