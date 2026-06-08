@@ -282,7 +282,7 @@ def compute_network_deltas(prev: dict, curr: dict, elapsed_seconds: float) -> di
 
 
 def get_public_ip() -> str:
-    with urllib.request.urlopen("https://checkip.amazonaws.com", timeout=0.5) as resp:
+    with urllib.request.urlopen("https://checkip.amazonaws.com", timeout=3) as resp:
         return resp.read().decode().strip()
 
 
@@ -315,7 +315,7 @@ class BotResourceSnapshotTaker:
         try:
             self._public_ip = get_public_ip()
         except Exception as e:
-            logger.error(f"Error getting public IP for bot {self.bot.object_id}: {e}. Continuing...")
+            logger.warning(f"Could not get public IP for bot {self.bot.object_id}: {e}. Continuing...")
 
     def save_snapshot_if_needed(self):
         if not self.bot.save_resource_snapshots():
