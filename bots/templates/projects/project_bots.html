@@ -133,17 +133,16 @@
         <div class="filter-content" style="display: {% if filter_params.start_date or filter_params.end_date or filter_params.join_at_start or filter_params.join_at_end or filter_params.ended_at_start or filter_params.ended_at_end or filter_params.states or filter_params.search or filter_params.joined_meeting or filter_params.unexpected_error or filter_params.metadata_pairs %}block{% else %}none{% endif %};">
             <div class="filter-container">
                 <form method="get" class="row g-3">
-                    <!-- Search filter -->
-                    <div class="col-md-4 filter-item">
-                        <div style="display: inline-flex; white-space: nowrap; align-items: center;">
+                    <!-- Search and Metadata filters in a single row -->
+                    <div class="col-md-12 d-flex flex-wrap filter-item">
+                        <div class="me-4" style="display: inline-flex; white-space: nowrap; align-items: center;">
                             <label for="search" class="form-label me-2 mb-0" style="flex-shrink: 0;">Search</label>
                             <input type="text" class="form-control form-control-sm" id="search" name="search" value="{{ filter_params.search }}" placeholder="ID, Meeting URL, Name">
                         </div>
-                    </div>
 
-                    <!-- Metadata filter -->
-                    <div class="col-md-8 filter-item">
-                        <div style="display: flex; align-items: flex-start;">
+                        <div class="me-4" style="border-left: 1px solid #dee2e6; height: 24px; align-self: center;"></div>
+
+                        <div style="display: flex; align-items: flex-start; flex-grow: 1;">
                             <label class="form-label me-2 mb-0" style="flex-shrink: 0; padding-top: 5px;">Metadata</label>
                             <div style="flex-grow: 1; position: relative;">
                                 <div id="metadataChips" class="d-flex flex-wrap align-items-center" style="gap: 6px; min-height: 31px;">
@@ -155,8 +154,8 @@
                                         <input type="hidden" name="metadata_value" value="{{ pair.value }}">
                                     </span>
                                     {% endfor %}
-                                    <button type="button" class="btn btn-sm btn-outline-secondary d-inline-flex align-items-center justify-content-center p-0" id="addMetadataBtn" title="Add metadata" style="width: 31px; height: 31px; line-height: 1;">
-                                        <i class="bi bi-plus" style="font-size: 1.25rem;"></i>
+                                    <button type="button" class="btn btn-sm btn-outline-secondary d-inline-flex align-items-center justify-content-center p-0" id="addMetadataBtn" title="Add metadata filter" style="width: 24px; height: 24px; line-height: 1;">
+                                        <i class="bi bi-plus" style="font-size: 1rem;"></i>
                                     </button>
                                 </div>
                                 <!-- Add/edit metadata popover -->
