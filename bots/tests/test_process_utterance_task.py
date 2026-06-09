@@ -1125,6 +1125,83 @@ class OpenAIModelValidationTest(TransactionTestCase):
         self.assertEqual(validated["openai"]["model"], "custom-whisper-model")
 
 
+class SarvamSerializerValidationTest(TransactionTestCase):
+    """Tests for Sarvam mode/model validation in serializers"""
+
+    def setUp(self):
+        self.organization = Organization.objects.create(name="Test Organization")
+        self.project = Project.objects.create(name="Test Project", organization=self.organization)
+
+    def test_saaras_v3_with_mode_passes_validation(self):
+        """saaras:v3 with a valid mode should be accepted."""
+        from bots.serializers import CreateBotSerializer
+
+        data = {"meeting_url": "https://zoom.us/j/123456789", "bot_name": "Test Bot"}
+        serializer = CreateBotSerializer(data=data)
+
+        valid_settings = {"sarvam": {"model": "saaras:v3", "mode": "translate"}}
+        validated = serializer.validate_transcription_settings(valid_settings)
+        self.assertEqual(validated["sarvam"]["model"], "saaras:v3")
+        self.assertEqual(validated["sarvam"]["mode"], "translate")
+
+    def test_saaras_v3_without_mode_passes_validation(self):
+        """saaras:v3 without mode should be accepted."""
+        from bots.serializers import CreateBotSerializer
+
+        data = {"meeting_url": "https://zoom.us/j/123456789", "bot_name": "Test Bot"}
+        serializer = CreateBotSerializer(data=data)
+
+        valid_settings = {"sarvam": {"model": "saaras:v3"}}
+        validated = serializer.validate_transcription_settings(valid_settings)
+        self.assertEqual(validated["sarvam"]["model"], "saaras:v3")
+
+    def test_saarika_with_mode_passes_validation(self):
+        """mode with a Saarika model should be accepted (validation removed)."""
+        from bots.serializers import CreateBotSerializer
+
+        data = {"meeting_url": "https://zoom.us/j/123456789", "bot_name": "Test Bot"}
+        serializer = CreateBotSerializer(data=data)
+
+        valid_settings = {"sarvam": {"model": "saarika:v2.5", "mode": "translate"}}
+        validated = serializer.validate_transcription_settings(valid_settings)
+        self.assertEqual(validated["sarvam"]["model"], "saarika:v2.5")
+        self.assertEqual(validated["sarvam"]["mode"], "translate")
+
+    def test_mode_without_model_passes_validation(self):
+        """mode without an explicit model should be accepted (validation removed)."""
+        from bots.serializers import CreateBotSerializer
+
+        data = {"meeting_url": "https://zoom.us/j/123456789", "bot_name": "Test Bot"}
+        serializer = CreateBotSerializer(data=data)
+
+        valid_settings = {"sarvam": {"mode": "translate"}}
+        validated = serializer.validate_transcription_settings(valid_settings)
+        self.assertEqual(validated["sarvam"]["mode"], "translate")
+
+    def test_all_valid_modes_accepted_with_saaras_v3(self):
+        """All documented mode values should be accepted with saaras:v3."""
+        from bots.serializers import CreateBotSerializer
+
+        data = {"meeting_url": "https://zoom.us/j/123456789", "bot_name": "Test Bot"}
+        serializer = CreateBotSerializer(data=data)
+
+        for mode in ["transcribe", "translate", "verbatim", "translit", "codemix"]:
+            with self.subTest(mode=mode):
+                valid_settings = {"sarvam": {"model": "saaras:v3", "mode": mode}}
+                validated = serializer.validate_transcription_settings(valid_settings)
+                self.assertEqual(validated["sarvam"]["mode"], mode)
+
+    def test_async_transcription_saarika_with_mode_passes_validation(self):
+        """CreateAsyncTranscriptionSerializer should also accept mode with Saarika (validation removed)."""
+        from bots.serializers import CreateAsyncTranscriptionSerializer
+
+        serializer = CreateAsyncTranscriptionSerializer(data={})
+        valid_settings = {"sarvam": {"model": "saarika:v2", "mode": "transcribe"}}
+        validated = serializer.validate_transcription_settings(valid_settings)
+        self.assertEqual(validated["sarvam"]["model"], "saarika:v2")
+        self.assertEqual(validated["sarvam"]["mode"], "transcribe")
+
+
 class AssemblyAIProviderTest(TransactionTestCase):
     """Unit‑tests for bots.tasks.process_utterance_task.get_transcription_via_assemblyai"""
 
@@ -1552,6 +1629,113 @@ class SarvamProviderTest(TransactionTestCase):
             self.assertIsNone(transcript)
             self.assertEqual(failure["reason"], TranscriptionFailureReasons.RATE_LIMIT_EXCEEDED)
             self.assertEqual(failure["status_code"], 429)
+
+    def test_mode_forwarded_when_model_is_saaras_v3(self):
+        """`mode` is sent to Sarvam when model is saaras:v3."""
+        self.bot.settings = {"transcription_settings": {"sarvam": {"model": "saaras:v3", "mode": "translate"}}}
+        self.bot.save()
+
+        with (
+            self._patch_creds(),
+            mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3"),
+            mock.patch("bots.tasks.process_utterance_task.requests.post") as m_post,
+        ):
+            success_response = mock.Mock(status_code=200)
+            success_response.json.return_value = {"transcript": "hola"}
+            m_post.return_value = success_response
+
+            transcript, failure = get_transcription_via_sarvam(self.utterance)
+
+            self.assertIsNone(failure)
+            self.assertEqual(transcript["transcript"], "hola")
+            sent_data = m_post.call_args.kwargs["data"]
+            self.assertEqual(sent_data.get("model"), "saaras:v3")
+            self.assertEqual(sent_data.get("mode"), "translate")
+
+    def test_mode_forwarded_for_saarika_model(self):
+        """`mode` is forwarded for Saarika models (no longer restricted to saaras:v3)."""
+        self.bot.settings = {"transcription_settings": {"sarvam": {"model": "saarika:v2.5", "mode": "translate"}}}
+        self.bot.save()
+
+        with (
+            self._patch_creds(),
+            mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3"),
+            mock.patch("bots.tasks.process_utterance_task.requests.post") as m_post,
+        ):
+            success_response = mock.Mock(status_code=200)
+            success_response.json.return_value = {"transcript": "namaste"}
+            m_post.return_value = success_response
+
+            get_transcription_via_sarvam(self.utterance)
+
+            sent_data = m_post.call_args.kwargs["data"]
+            self.assertEqual(sent_data.get("model"), "saarika:v2.5")
+            self.assertEqual(sent_data.get("mode"), "translate")
+
+    def test_mode_forwarded_when_model_not_set(self):
+        """`mode` is forwarded even when no model is configured."""
+        self.bot.settings = {"transcription_settings": {"sarvam": {"mode": "translate"}}}
+        self.bot.save()
+
+        with (
+            self._patch_creds(),
+            mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3"),
+            mock.patch("bots.tasks.process_utterance_task.requests.post") as m_post,
+        ):
+            success_response = mock.Mock(status_code=200)
+            success_response.json.return_value = {"transcript": "hello"}
+            m_post.return_value = success_response
+
+            get_transcription_via_sarvam(self.utterance)
+
+            sent_data = m_post.call_args.kwargs["data"]
+            self.assertNotIn("model", sent_data)
+            self.assertEqual(sent_data.get("mode"), "translate")
+
+    def test_saaras_v3_works_without_mode(self):
+        """saaras:v3 without mode should still work and only send model."""
+        self.bot.settings = {"transcription_settings": {"sarvam": {"model": "saaras:v3"}}}
+        self.bot.save()
+
+        with (
+            self._patch_creds(),
+            mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3"),
+            mock.patch("bots.tasks.process_utterance_task.requests.post") as m_post,
+        ):
+            success_response = mock.Mock(status_code=200)
+            success_response.json.return_value = {"transcript": "hello"}
+            m_post.return_value = success_response
+
+            transcript, failure = get_transcription_via_sarvam(self.utterance)
+
+            self.assertIsNone(failure)
+            self.assertEqual(transcript["transcript"], "hello")
+            sent_data = m_post.call_args.kwargs["data"]
+            self.assertEqual(sent_data.get("model"), "saaras:v3")
+            self.assertNotIn("mode", sent_data)
+
+    def test_all_valid_modes_forwarded_for_saaras_v3(self):
+        """Every valid mode enum value should be forwarded when model is saaras:v3."""
+        for mode in ["transcribe", "translate", "verbatim", "translit", "codemix"]:
+            with self.subTest(mode=mode):
+                self.bot.settings = {"transcription_settings": {"sarvam": {"model": "saaras:v3", "mode": mode}}}
+                self.bot.save()
+                self.utterance.recording.bot = self.bot
+
+                with (
+                    self._patch_creds(),
+                    mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3"),
+                    mock.patch("bots.tasks.process_utterance_task.requests.post") as m_post,
+                ):
+                    success_response = mock.Mock(status_code=200)
+                    success_response.json.return_value = {"transcript": "hello"}
+                    m_post.return_value = success_response
+
+                    get_transcription_via_sarvam(self.utterance)
+
+                    sent_data = m_post.call_args.kwargs["data"]
+                    self.assertEqual(sent_data.get("model"), "saaras:v3")
+                    self.assertEqual(sent_data.get("mode"), mode)
 
 
 class ElevenLabsProviderTest(TransactionTestCase):
