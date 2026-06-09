@@ -565,10 +565,16 @@ class ProjectBotsView(LoginRequiredMixin, ProjectUrlContextMixin, ListView):
         # or anywhere in the metadata JSON (cast to text).
         search_query = self.request.GET.get("search", "").strip()
         if search_query:
-            from django.db.models.functions import Cast
+            queryset = queryset.filter(models.Q(object_id__icontains=search_query) | models.Q(meeting_url__icontains=search_query) | models.Q(name__icontains=search_query))
 
-            queryset = queryset.annotate(metadata_text=Cast("metadata", output_field=models.TextField()))
-            queryset = queryset.filter(models.Q(object_id__icontains=search_query) | models.Q(meeting_url__icontains=search_query) | models.Q(name__icontains=search_query) | models.Q(metadata_text__icontains=search_query))
+        # Apply metadata key/value filters if provided. Each non-empty key/value
+        # pair must match exactly in the bot's metadata JSON.
+        metadata_keys = self.request.GET.getlist("metadata_key")
+        metadata_values = self.request.GET.getlist("metadata_value")
+        for key, value in zip(metadata_keys, metadata_values):
+            key = key.strip()
+            if key:
+                queryset = queryset.filter(metadata__contains={key: value})
 
         # Apply ended_at date filters if provided
         ended_at_start = self.request.GET.get("ended_at_start")
@@ -625,8 +631,14 @@ class ProjectBotsView(LoginRequiredMixin, ProjectUrlContextMixin, ListView):
         # Add session type to context
         context["session_type"] = self.get_session_type()
 
+        # Build metadata key/value pairs from parallel GET lists, keeping only
+        # pairs with a non-empty key so they can be re-rendered in the form.
+        metadata_keys = self.request.GET.getlist("metadata_key")
+        metadata_values = self.request.GET.getlist("metadata_value")
+        metadata_pairs = [{"key": key, "value": value} for key, value in zip(metadata_keys, metadata_values) if key.strip()]
+
         # Add filter parameters to context for maintaining state
-        context["filter_params"] = {"start_date": self.request.GET.get("start_date", ""), "end_date": self.request.GET.get("end_date", ""), "join_at_start": self.request.GET.get("join_at_start", ""), "join_at_end": self.request.GET.get("join_at_end", ""), "ended_at_start": self.request.GET.get("ended_at_start", ""), "ended_at_end": self.request.GET.get("ended_at_end", ""), "states": self.request.GET.getlist("states"), "search": self.request.GET.get("search", ""), "joined_meeting": self.request.GET.get("joined_meeting", ""), "unexpected_error": self.request.GET.get("unexpected_error", "")}
+        context["filter_params"] = {"start_date": self.request.GET.get("start_date", ""), "end_date": self.request.GET.get("end_date", ""), "join_at_start": self.request.GET.get("join_at_start", ""), "join_at_end": self.request.GET.get("join_at_end", ""), "ended_at_start": self.request.GET.get("ended_at_start", ""), "ended_at_end": self.request.GET.get("ended_at_end", ""), "states": self.request.GET.getlist("states"), "search": self.request.GET.get("search", ""), "joined_meeting": self.request.GET.get("joined_meeting", ""), "unexpected_error": self.request.GET.get("unexpected_error", ""), "metadata_pairs": metadata_pairs}
 
         # Add flag to detect if create modal should be automatically opened
         context["open_create_modal"] = self.request.GET.get("open_create_modal") == "true"
