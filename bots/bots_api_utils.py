@@ -58,6 +58,24 @@ def build_site_url(path=""):
     return f"{protocol}://{site_domain}{path}"
 
 
+def build_internal_site_url(path=""):
+    """
+    Build a URL for callers running inside the same cluster.
+
+    If INTERNAL_SITE_DOMAIN is set, use it over http. This is intended for
+    in-cluster callers, such as bot pods, that should reach the app through the
+    Kubernetes service DNS instead of the public ingress.
+
+    When unset, fall back to the public site URL, preserving behavior for
+    deployments that do not configure an internal route.
+    """
+    internal_site_domain = os.getenv("INTERNAL_SITE_DOMAIN")
+    if internal_site_domain:
+        return f"http://{internal_site_domain}{path}"
+
+    return build_site_url(path)
+
+
 def send_sync_command(bot, command="sync"):
     redis_client = redis.from_url(settings.REDIS_URL_WITH_PARAMS)
     channel = f"bot_{bot.id}"

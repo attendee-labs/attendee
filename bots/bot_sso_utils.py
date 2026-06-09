@@ -19,14 +19,15 @@ from saml2.config import IdPConfig
 from saml2.saml import NAMEID_FORMAT_EMAILADDRESS, NameID
 from saml2.server import Server
 
-from bots.bots_api_utils import build_site_url
+from bots.bots_api_utils import build_internal_site_url
 from bots.models import Bot, BotLogin, BotLoginPlatform
 
 logger = logging.getLogger(__name__)
 
 
 def get_google_meet_set_cookie_url(session_id):
-    base_url = build_site_url(reverse("bot_sso:google_meet_set_cookie"))
+    # Use build_internal_site_url so that if we have an internal site domain set, we use it.
+    base_url = build_internal_site_url(reverse("bot_sso:google_meet_set_cookie"))
     query_params = urlencode({"session_id": session_id})
     google_meet_set_cookie_url = f"{base_url}?{query_params}"
     return google_meet_set_cookie_url

@@ -137,6 +137,7 @@ This document lists all supported environment variables for the Attendee applica
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
+| `EXTERNAL_WEBHOOK_SITE_DOMAIN` | String | (Uses `SITE_DOMAIN`) | Public domain used for externally-facing URLs that outside services must reach, such as webhook addresses registered with external providers (Microsoft/Google) and dashboard links shown to users. Overrides `SITE_DOMAIN` when set. Uses HTTPS (HTTP only for `localhost`). |
 | `REQUIRE_HTTPS_WEBHOOKS` | Boolean | `true` | Require webhook URLs to use HTTPS. Set to `false` for local development. |
 | `MAX_WEBHOOK_DELIVERY_ATTEMPTS` | Integer | `3` | Maximum number of attempts to deliver a webhook before giving up. |
 | `DELIVER_WEBHOOK_TASK_MAX_RETRIES` | Integer | (Uses MAX_WEBHOOK_DELIVERY_ATTEMPTS) | Maximum number of times the webhook delivery task can be retried. Can differ from `MAX_WEBHOOK_DELIVERY_ATTEMPTS` for rate limiting or other retry scenarios. |
@@ -151,6 +152,8 @@ This document lists all supported environment variables for the Attendee applica
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `BOT_POD_NAMESPACE` | String | `attendee` | Kubernetes namespace for bot pods. |
+| `INTERNAL_SITE_DOMAIN` | String | (None) | Internal host (and optional port) that bot pods use for callbacks to the app, e.g. `attendee-app.<namespace>.svc.cluster.local:8000`. When set, in-cluster bot callbacks target it over HTTP, bypassing the public ingress (useful when bot pods are restricted by a NetworkPolicy). When unset, callbacks fall back to `EXTERNAL_WEBHOOK_SITE_DOMAIN` / `SITE_DOMAIN`. |
+| `USE_SECURE_COOKIE_FOR_SIGNED_IN_GOOGLE_MEET_BOTS` | Boolean | `true` | Add the Secure flag to the Google Meet SSO sign-in session cookie. Set to `false` when the Google Meet sign-in flow navigates over an HTTP url. |
 | `WEBPAGE_STREAMER_POD_NAMESPACE` | String | `attendee-webpage-streamer` | Kubernetes namespace for webpage streamer pods. |
 | `CHARGE_CREDITS_FOR_BOTS` | Boolean | `false` | Enable credit charging for bot operations. |
 | `CUSTOM_BOT_POD_SPEC_TYPES` | String | (Empty) | Comma-separated list of custom bot pod specification types. |

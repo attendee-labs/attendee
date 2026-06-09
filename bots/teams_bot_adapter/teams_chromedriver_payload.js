@@ -507,6 +507,15 @@ class StyleManager {
             [data-test-segment-type="central"] * {
                 pointer-events: auto !important;
             }
+            /* break stacking contexts on every ancestor of the central pane */
+            :has([data-test-segment-type="central"]) {
+                transform: none !important;
+                will-change: auto !important;
+                filter: none !important;
+                contain: none !important;
+                isolation: auto !important;
+                perspective: none !important;
+            }
         `;
         document.head.appendChild(style);
         this.frameStyleElement = style;
