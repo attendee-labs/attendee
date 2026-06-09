@@ -1066,7 +1066,7 @@ class ZoomBotAdapter(BotAdapter):
 
         # We don't explicitly retry here because the retry will fail if we do it immediately
         # Instead, we set a flag to retry after the meeting ends
-        logger.info(f"Failed to join meeting and the onbehalf token user is not in the meeting but the timeout of {self.automatic_leave_configuration.authorized_user_not_in_meeting_timeout_seconds} seconds has not exceeded, so retrying")
+        logger.info(f"Failed to join meeting and the onbehalf token user is not in the meeting but the timeout of {self.automatic_leave_configuration.authorized_user_not_in_meeting_timeout_seconds} seconds has not exceeded ({time.time() - self.authorized_user_not_in_meeting_first_seen_at:.1f} seconds elapsed), so retrying")
         self.should_retry_after_meeting_ends = True
 
     def meeting_status_changed(self, status, iResult):
