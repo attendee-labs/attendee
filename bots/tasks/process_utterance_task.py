@@ -412,6 +412,8 @@ def get_transcription_via_sarvam(utterance):
         data["language_code"] = transcription_settings.sarvam_language_code()
     if transcription_settings.sarvam_model():
         data["model"] = transcription_settings.sarvam_model()
+    if transcription_settings.sarvam_mode():
+        data["mode"] = transcription_settings.sarvam_mode()
 
     try:
         response = requests.post(base_url, headers=headers, files=files, data=data if data else None)
