@@ -714,7 +714,7 @@ class WebBotAdapter(BotAdapter):
         num_expected_exceptions = 0
         num_retries = 0
         max_retries = 3
-        attempts_to_join_started_at = time.time()
+        authorized_user_not_in_meeting_first_seen_at = None
 
         while num_retries <= max_retries:
             try:
@@ -757,8 +757,11 @@ class WebBotAdapter(BotAdapter):
                 return
 
             except UiAuthorizedUserNotInMeetingTimeoutExceededException:
+                if authorized_user_not_in_meeting_first_seen_at is None:
+                    authorized_user_not_in_meeting_first_seen_at = time.time()
+
                 # If the timeout has exceeded, send the message. If not, we will retry again.
-                if time.time() - attempts_to_join_started_at > self.automatic_leave_configuration.authorized_user_not_in_meeting_timeout_seconds:
+                if time.time() - authorized_user_not_in_meeting_first_seen_at > self.automatic_leave_configuration.authorized_user_not_in_meeting_timeout_seconds:
                     self.send_message_callback({"message": self.Messages.AUTHORIZED_USER_NOT_IN_MEETING_TIMEOUT_EXCEEDED})
                     return
                 else:

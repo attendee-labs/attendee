@@ -215,7 +215,7 @@ class ZoomBotAdapter(BotAdapter):
         self.ready_to_send_chat_messages = False
 
         self.should_retry_after_meeting_ends = False
-        self.attempts_to_join_started_at = time.time()
+        self.authorized_user_not_in_meeting_first_seen_at = None
 
     def pause_recording(self):
         self.recording_is_paused = True
@@ -1057,7 +1057,10 @@ class ZoomBotAdapter(BotAdapter):
         logger.info(f"Set a timeout to abort if we're still in the connecting state after {self.stuck_in_connecting_state_timeout} seconds. timeout_id = {self.stuck_in_connecting_state_timeout_id}")
 
     def handle_failed_to_join_because_onbehalf_token_user_not_in_meeting(self):
-        if time.time() - self.attempts_to_join_started_at > self.automatic_leave_configuration.authorized_user_not_in_meeting_timeout_seconds:
+        if self.authorized_user_not_in_meeting_first_seen_at is None:
+            self.authorized_user_not_in_meeting_first_seen_at = time.time()
+
+        if time.time() - self.authorized_user_not_in_meeting_first_seen_at > self.automatic_leave_configuration.authorized_user_not_in_meeting_timeout_seconds:
             self.send_message_callback({"message": self.Messages.AUTHORIZED_USER_NOT_IN_MEETING_TIMEOUT_EXCEEDED})
             return
 
