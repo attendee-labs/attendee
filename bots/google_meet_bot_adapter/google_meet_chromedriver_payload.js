@@ -309,6 +309,43 @@ class StyleManager {
             }
         }
 
+        // Check for Gemini "Remember what was discussed" notes prompt.
+        // Google shows this panel to signed-in accounts, prompting them to start
+        // Gemini note-taking. It overlays the top-left of the recording. Unlike
+        // the recording/transcription notifications above (which we accept), we
+        // need to dismiss this without clicking "Start taking notes".
+        // The prompt may be a modal dialog or a floating panel depending on the
+        // Meet version, so we check both.
+        const geminiNotesPrompt = [...document.querySelectorAll('[role="dialog"], [role="complementary"]')]
+            .find(el => el.textContent && el.textContent.includes('Remember what was discussed'));
+
+        if (geminiNotesPrompt) {
+            // Look for a close/dismiss button — NOT the "Start taking notes" action button
+            const closeBtn = geminiNotesPrompt.querySelector('button[aria-label="Close"]')
+                || geminiNotesPrompt.querySelector('button[aria-label="Dismiss"]')
+                || geminiNotesPrompt.querySelector('button[data-mdc-dialog-action="close"]')
+                || geminiNotesPrompt.querySelector('button[data-mdc-dialog-action="cancel"]');
+
+            let dismissAction, dismissMessage;
+            if (closeBtn) {
+                dismissAction = () => closeBtn.click();
+                dismissMessage = 'Dismissed Gemini notes prompt via close button';
+            } else {
+                // No close button found — send Escape to dismiss the overlay
+                dismissAction = () => document.dispatchEvent(new KeyboardEvent('keydown', {
+                    key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true
+                }));
+                dismissMessage = 'Dismissed Gemini notes prompt via Escape key';
+            }
+
+            try {
+                dismissAction();
+                window.ws.sendJson({ type: 'UiInteraction', message: dismissMessage });
+            } catch (error) {
+                window.ws.sendJson({ type: 'Error', message: 'Error dismissing Gemini notes prompt' });
+            }
+        }
+
         // Check if bot has been removed from the meeting
         const removedFromMeetingElement = document.querySelector('.roSPhc');
         if (removedFromMeetingElement && (removedFromMeetingElement.textContent.includes('You\'ve been removed from the meeting') || removedFromMeetingElement.textContent.includes('Your host ended the meeting for everyone'))) {
