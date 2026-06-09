@@ -561,8 +561,7 @@ class ProjectBotsView(LoginRequiredMixin, ProjectUrlContextMixin, ListView):
                 # Handle invalid state values
                 pass
 
-        # Apply search filter if provided. Matches the bot ID, meeting URL, name,
-        # or anywhere in the metadata JSON (cast to text).
+        # Apply search filter if provided
         search_query = self.request.GET.get("search", "").strip()
         if search_query:
             queryset = queryset.filter(models.Q(object_id__icontains=search_query) | models.Q(meeting_url__icontains=search_query) | models.Q(name__icontains=search_query))
