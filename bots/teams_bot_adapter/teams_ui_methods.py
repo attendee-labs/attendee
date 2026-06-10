@@ -159,7 +159,8 @@ class TeamsUIMethods:
             should_raise_exception = os.getenv("RAISE_IF_TEAMS_WAITING_ROOM_CONNECTION_FAILED", "false") == "true"
 
             if issue_detected:
-                self.driver.execute_script("window.startInterceptingFetchAndXhrRequests({ maxResponseChars: 500 });")
+                # When bot retries joining the meeting, this will cause it to log network requests from the start
+                self.should_log_network_requests = True
 
             if issue_detected and should_raise_exception:
                 logger.info("Join button is present but it is NOT disabled after entering waiting room. Assuming waiting room connection failed. Raising UiTeamsBlockingUsException")

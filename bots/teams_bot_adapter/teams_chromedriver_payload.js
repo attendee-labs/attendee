@@ -3557,3 +3557,7 @@ window.callManager = callManager;
       };
     };
   })();
+
+  if (window.teamsInitialData?.shouldLogNetworkRequests) {
+    window.startInterceptingFetchAndXhrRequests({ maxResponseChars: 500 });
+  }
