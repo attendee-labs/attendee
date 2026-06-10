@@ -17,6 +17,18 @@ from .templatetags.bot_filters import participant_color as compute_participant_c
 logger = logging.getLogger(__name__)
 
 
+def select_from_comma_separated_list_with_wrapping_index(comma_separated_list: str, index: int) -> str | None:
+    """
+    Select a element from a comma separated list by index with wrapping.
+    """
+    if not comma_separated_list:
+        return None
+    elements = comma_separated_list.split(",")
+    if len(elements) == 0:
+        return None
+    return elements[index % len(elements)]
+
+
 def pcm_to_mp3(
     pcm_data: bytes,
     sample_rate: int = 32000,

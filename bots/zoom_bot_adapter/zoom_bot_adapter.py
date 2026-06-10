@@ -11,7 +11,7 @@ import zoom_meeting_sdk as zoom
 from bots.automatic_leave_utils import participant_is_another_bot
 from bots.bot_adapter import BotAdapter
 from bots.meeting_url_utils import parse_zoom_join_url
-from bots.utils import image_to_yuv420_frame, scale_i420
+from bots.utils import image_to_yuv420_frame, scale_i420, select_from_comma_separated_list_with_wrapping_index
 
 from .mp4_demuxer import MP4Demuxer
 from .realtime_per_participant_video_frame_generator import RealtimePerParticipantVideoFrameGenerator
@@ -216,6 +216,7 @@ class ZoomBotAdapter(BotAdapter):
 
         self.should_retry_after_meeting_ends = False
         self.authorized_user_not_in_meeting_first_seen_at = None
+        self.authorized_user_not_in_meeting_retries = 0
 
     def pause_recording(self):
         self.recording_is_paused = True
@@ -987,7 +988,11 @@ class ZoomBotAdapter(BotAdapter):
         if self.zoom_tokens.get("app_privilege_token"):
             param.app_privilege_token = self.zoom_tokens.get("app_privilege_token")
         if self.zoom_tokens.get("onbehalf_token"):
-            param.onBehalfToken = self.zoom_tokens.get("onbehalf_token")
+            # Switch which onbehalf token is used based on how many times we've retried on behalf of the authorized user not in the meeting
+            param.onBehalfToken = select_from_comma_separated_list_with_wrapping_index(
+                comma_separated_list=self.zoom_tokens.get("onbehalf_token"),
+                index=self.authorized_user_not_in_meeting_retries,
+            )
         # Set the webinarToken only if joining a webinar as an attendee (in webinars, all attendees are in Guest Mode).
         # If joining as a signed-in bot (for panelists and co-hosts), use the ZAK token instead, and leave the webinarToken as NULL.
         if self.zoom_tokens.get("registrant_token") and not self.zoom_tokens.get("zak_token"):
@@ -1057,6 +1062,7 @@ class ZoomBotAdapter(BotAdapter):
         logger.info(f"Set a timeout to abort if we're still in the connecting state after {self.stuck_in_connecting_state_timeout} seconds. timeout_id = {self.stuck_in_connecting_state_timeout_id}")
 
     def handle_failed_to_join_because_onbehalf_token_user_not_in_meeting(self):
+        self.authorized_user_not_in_meeting_retries += 1
         if self.authorized_user_not_in_meeting_first_seen_at is None:
             self.authorized_user_not_in_meeting_first_seen_at = time.time()
 
