@@ -135,7 +135,7 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
                 zakToken: {json.dumps(self.zoom_tokens.get("zak_token", ""))},
                 joinToken: {json.dumps(self.zoom_tokens.get("join_token", ""))},
                 appPrivilegeToken: {json.dumps(self.zoom_tokens.get("app_privilege_token", ""))},
-                onBehalfToken: {json.dumps(onbehalf_token or "")},
+                onBehalfToken: {json.dumps(onbehalf_token)},
                 modifyDomForVideoRecording: {"true" if self.modify_dom_for_video_recording else "false"},
             }}
         """
