@@ -3261,7 +3261,8 @@ class CallManager {
 const callManager = new CallManager();
 window.callManager = callManager;
 
-
+if (window.teamsInitialData?.shouldLogNetworkRequests) {
+    
 (function installFetchAndXhrNetworkInterceptor() {
     if (window.__attendeeNetworkInterceptorInstalled) {
       return;
@@ -3558,6 +3559,6 @@ window.callManager = callManager;
     };
   })();
 
-  if (window.teamsInitialData?.shouldLogNetworkRequests) {
+
     window.startInterceptingFetchAndXhrRequests({ maxResponseChars: 500 });
   }
