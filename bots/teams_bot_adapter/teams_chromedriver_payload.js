@@ -3267,12 +3267,7 @@ window.callManager = callManager;
       return;
     }
     window.__attendeeNetworkInterceptorInstalled = true;
-  
-    const originalFetch = window.fetch;
-    const originalXhrOpen = XMLHttpRequest.prototype.open;
-    const originalXhrSend = XMLHttpRequest.prototype.send;
-    const originalXhrSetRequestHeader = XMLHttpRequest.prototype.setRequestHeader;
-  
+    
     let enabled = false;
     let interceptorStarted = false;
     let nextRequestId = 1;
@@ -3383,6 +3378,11 @@ window.callManager = callManager;
       interceptorStarted = true;
       enabled = true;
   
+      const originalFetch = window.fetch;
+      const originalXhrOpen = XMLHttpRequest.prototype.open;
+      const originalXhrSend = XMLHttpRequest.prototype.send;
+      const originalXhrSetRequestHeader = XMLHttpRequest.prototype.setRequestHeader;
+
       const maxResponseChars = Number.isFinite(options.maxResponseChars)
         ? options.maxResponseChars
         : 500;
