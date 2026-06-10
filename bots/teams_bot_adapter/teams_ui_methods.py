@@ -153,6 +153,10 @@ class TeamsUIMethods:
             if time.time() - waiting_room_timeout_started_at < 30:
                 return
 
+            # If it has been more than 300 seconds, then we should also return
+            if time.time() - waiting_room_timeout_started_at > 300:
+                return
+
             # If the join button is present but it is NOT disabled, then we should assume the connection failed and things were reset.
             join_button = self.find_element_by_selector(By.CSS_SELECTOR, '[data-tid="prejoin-join-button"]')
             issue_detected = join_button and join_button.is_enabled()
