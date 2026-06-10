@@ -268,6 +268,38 @@ class TestCreateBot(TestCase):
         self.assertEqual(deepgram_settings["model"], "nova-2")
         self.assertEqual(deepgram_settings["keywords"], ["meeting", "agenda"])
 
+    def test_create_bot_with_sarvam_saaras_v3_and_mode(self):
+        """Test creating a bot with valid Sarvam saaras:v3 model and mode."""
+        bot, error = create_bot(
+            data={"meeting_url": "https://meet.google.com/sarvam-v3-test", "bot_name": "Test Bot", "transcription_settings": {"sarvam": {"model": "saaras:v3", "mode": "translate"}}},
+            source=BotCreationSource.API,
+            project=self.project,
+        )
+        self.assertIsNotNone(bot)
+        self.assertIsNone(error)
+        self.assertEqual(bot.transcription_settings.sarvam_model(), "saaras:v3")
+        self.assertEqual(bot.transcription_settings.sarvam_mode(), "translate")
+
+    def test_create_bot_with_sarvam_saarika_and_mode_succeeds(self):
+        """Test that creating a bot with Sarvam Saarika model and mode succeeds (validation removed)."""
+        bot, error = create_bot(
+            data={"meeting_url": "https://meet.google.com/sarvam-saarika-test", "bot_name": "Test Bot", "transcription_settings": {"sarvam": {"model": "saarika:v2.5", "mode": "translate"}}},
+            source=BotCreationSource.API,
+            project=self.project,
+        )
+        self.assertIsNotNone(bot)
+        self.assertIsNone(error)
+
+    def test_create_bot_with_sarvam_mode_without_model_succeeds(self):
+        """Test that creating a bot with Sarvam mode but no model succeeds (validation removed)."""
+        bot, error = create_bot(
+            data={"meeting_url": "https://meet.google.com/sarvam-no-model-test", "bot_name": "Test Bot", "transcription_settings": {"sarvam": {"mode": "translate"}}},
+            source=BotCreationSource.API,
+            project=self.project,
+        )
+        self.assertIsNotNone(bot)
+        self.assertIsNone(error)
+
     def test_create_bot_with_google_meet_url_with_http(self):
         bot, error = create_bot(data={"meeting_url": "http://meet.google.com/abc-defg-hij", "bot_name": "Test Bot"}, source=BotCreationSource.DASHBOARD, project=self.project)
         self.assertIsNotNone(bot)

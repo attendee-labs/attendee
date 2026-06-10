@@ -215,7 +215,7 @@ class ZoomBotAdapter(BotAdapter):
         self.ready_to_send_chat_messages = False
 
         self.should_retry_after_meeting_ends = False
-        self.attempts_to_join_started_at = time.time()
+        self.authorized_user_not_in_meeting_first_seen_at = None
 
     def pause_recording(self):
         self.recording_is_paused = True
@@ -1057,13 +1057,16 @@ class ZoomBotAdapter(BotAdapter):
         logger.info(f"Set a timeout to abort if we're still in the connecting state after {self.stuck_in_connecting_state_timeout} seconds. timeout_id = {self.stuck_in_connecting_state_timeout_id}")
 
     def handle_failed_to_join_because_onbehalf_token_user_not_in_meeting(self):
-        if time.time() - self.attempts_to_join_started_at > self.automatic_leave_configuration.authorized_user_not_in_meeting_timeout_seconds:
+        if self.authorized_user_not_in_meeting_first_seen_at is None:
+            self.authorized_user_not_in_meeting_first_seen_at = time.time()
+
+        if time.time() - self.authorized_user_not_in_meeting_first_seen_at > self.automatic_leave_configuration.authorized_user_not_in_meeting_timeout_seconds:
             self.send_message_callback({"message": self.Messages.AUTHORIZED_USER_NOT_IN_MEETING_TIMEOUT_EXCEEDED})
             return
 
         # We don't explicitly retry here because the retry will fail if we do it immediately
         # Instead, we set a flag to retry after the meeting ends
-        logger.info(f"Failed to join meeting and the onbehalf token user is not in the meeting but the timeout of {self.automatic_leave_configuration.authorized_user_not_in_meeting_timeout_seconds} seconds has not exceeded, so retrying")
+        logger.info(f"Failed to join meeting and the onbehalf token user is not in the meeting but the timeout of {self.automatic_leave_configuration.authorized_user_not_in_meeting_timeout_seconds} seconds has not exceeded ({time.time() - self.authorized_user_not_in_meeting_first_seen_at:.1f} seconds elapsed), so retrying")
         self.should_retry_after_meeting_ends = True
 
     def meeting_status_changed(self, status, iResult):

@@ -72,7 +72,7 @@
     </div>
     
     <!-- Filters Collapsible Panel -->
-    {% if filter_params.start_date or filter_params.end_date or filter_params.join_at_start or filter_params.join_at_end or filter_params.ended_at_start or filter_params.ended_at_end or filter_params.states or filter_params.search or filter_params.joined_meeting or filter_params.unexpected_error or bots %}
+    {% if filter_params.start_date or filter_params.end_date or filter_params.join_at_start or filter_params.join_at_end or filter_params.ended_at_start or filter_params.ended_at_end or filter_params.states or filter_params.search or filter_params.joined_meeting or filter_params.unexpected_error or filter_params.metadata_pairs or bots %}
     <div class="filter-panel mb-3">
         <div class="filter-header p-2 rounded d-flex align-items-center" 
              style="background-color: #f8f9fa; cursor: pointer;" 
@@ -81,20 +81,24 @@
             <span>Filters</span>
             <span style="margin-left: 5px;" class="filter-caret-container ms-auto">
                 <svg width="21" height="21" viewBox="0 0 14 14" fill="none" class="filter-caret" 
-                     style="transform: {% if filter_params.start_date or filter_params.end_date or filter_params.join_at_start or filter_params.join_at_end or filter_params.ended_at_start or filter_params.ended_at_end or filter_params.states or filter_params.search or filter_params.joined_meeting or filter_params.unexpected_error %}rotate(180deg){% else %}rotate(0deg){% endif %};">
+                     style="transform: {% if filter_params.start_date or filter_params.end_date or filter_params.join_at_start or filter_params.join_at_end or filter_params.ended_at_start or filter_params.ended_at_end or filter_params.states or filter_params.search or filter_params.joined_meeting or filter_params.unexpected_error or filter_params.metadata_pairs %}rotate(180deg){% else %}rotate(0deg){% endif %};">
                     <path d="M4.3225 5.0108L7 7.68247L9.6775 5.0108L10.5 5.8333L7 9.3333L3.5 5.8333L4.3225 5.0108Z" fill="currentcolor"></path>
                 </svg>
             </span>
         </div>
-        <div class="filter-content" style="display: {% if filter_params.start_date or filter_params.end_date or filter_params.join_at_start or filter_params.join_at_end or filter_params.ended_at_start or filter_params.ended_at_end or filter_params.states or filter_params.search or filter_params.joined_meeting or filter_params.unexpected_error %}block{% else %}none{% endif %};">
+        <div class="filter-content" style="display: {% if filter_params.start_date or filter_params.end_date or filter_params.join_at_start or filter_params.join_at_end or filter_params.ended_at_start or filter_params.ended_at_end or filter_params.states or filter_params.search or filter_params.joined_meeting or filter_params.unexpected_error or filter_params.metadata_pairs %}block{% else %}none{% endif %};">
             <div class="filter-container">
                 <form method="get" class="row g-3">
-                    <!-- Search filter -->
-                    <div class="col-md-10 filter-item">
-                        <div style="display: inline-flex; white-space: nowrap; align-items: center;">
+                    <!-- Search and Metadata filters in a single row -->
+                    <div class="col-md-12 d-flex flex-wrap filter-item">
+                        <div class="me-4" style="display: inline-flex; white-space: nowrap; align-items: center;">
                             <label for="search" class="form-label me-2 mb-0" style="flex-shrink: 0;">Search</label>
                             <input type="text" class="form-control form-control-sm" id="search" name="search" value="{{ filter_params.search }}" placeholder="ID, Meeting URL, Name">
                         </div>
+
+                        <div class="me-4" style="border-left: 1px solid #dee2e6; height: 24px; align-self: center;"></div>
+
+                        {% include 'projects/partials/bots_metadata_filter.html' %}
                     </div>
                     
                     <!-- Compact date filters in a single row -->
@@ -262,7 +266,7 @@
         {% else %}
             <div class="alert alert-info" role="alert">
                 <i class="bi bi-info-circle me-2"></i>
-                {% if filter_params.start_date or filter_params.end_date or filter_params.join_at_start or filter_params.join_at_end or filter_params.ended_at_start or filter_params.ended_at_end or filter_params.states or filter_params.search or filter_params.joined_meeting or filter_params.unexpected_error %}
+                {% if filter_params.start_date or filter_params.end_date or filter_params.join_at_start or filter_params.join_at_end or filter_params.ended_at_start or filter_params.ended_at_end or filter_params.states or filter_params.search or filter_params.joined_meeting or filter_params.unexpected_error or filter_params.metadata_pairs %}
                     {% if session_type == SessionTypes.APP_SESSION %}
                         No app sessions found matching the current filters.
                     {% endif %}
@@ -287,10 +291,10 @@
         <ul class="pagination justify-content-center">
             {% if page_obj.has_previous %}
             <li class="page-item">
-                <a class="page-link" href="?page=1{% for key, value in filter_params.items %}{% if key != 'page' %}{% if key == 'states' %}{% for state in value %}&states={{ state }}{% endfor %}{% elif value %}&{{ key }}={{ value }}{% endif %}{% endif %}{% endfor %}">&laquo; First</a>
+                <a class="page-link" href="?page=1{% for key, value in filter_params.items %}{% if key != 'page' %}{% if key == 'states' %}{% for state in value %}&states={{ state }}{% endfor %}{% elif key == 'metadata_pairs' %}{% for pair in value %}&metadata_key={{ pair.key|urlencode }}&metadata_value={{ pair.value|urlencode }}{% endfor %}{% elif value %}&{{ key }}={{ value }}{% endif %}{% endif %}{% endfor %}">&laquo; First</a>
             </li>
             <li class="page-item">
-                <a class="page-link" href="?page={{ page_obj.previous_page_number }}{% for key, value in filter_params.items %}{% if key != 'page' %}{% if key == 'states' %}{% for state in value %}&states={{ state }}{% endfor %}{% elif value %}&{{ key }}={{ value }}{% endif %}{% endif %}{% endfor %}">Previous</a>
+                <a class="page-link" href="?page={{ page_obj.previous_page_number }}{% for key, value in filter_params.items %}{% if key != 'page' %}{% if key == 'states' %}{% for state in value %}&states={{ state }}{% endfor %}{% elif key == 'metadata_pairs' %}{% for pair in value %}&metadata_key={{ pair.key|urlencode }}&metadata_value={{ pair.value|urlencode }}{% endfor %}{% elif value %}&{{ key }}={{ value }}{% endif %}{% endif %}{% endfor %}">Previous</a>
             </li>
             {% endif %}
 
@@ -301,17 +305,17 @@
                 </li>
                 {% elif i > page_obj.number|add:'-3' and i < page_obj.number|add:'3' %}
                 <li class="page-item">
-                    <a class="page-link" href="?page={{ i }}{% for key, value in filter_params.items %}{% if key != 'page' %}{% if key == 'states' %}{% for state in value %}&states={{ state }}{% endfor %}{% elif value %}&{{ key }}={{ value }}{% endif %}{% endif %}{% endfor %}">{{ i }}</a>
+                    <a class="page-link" href="?page={{ i }}{% for key, value in filter_params.items %}{% if key != 'page' %}{% if key == 'states' %}{% for state in value %}&states={{ state }}{% endfor %}{% elif key == 'metadata_pairs' %}{% for pair in value %}&metadata_key={{ pair.key|urlencode }}&metadata_value={{ pair.value|urlencode }}{% endfor %}{% elif value %}&{{ key }}={{ value }}{% endif %}{% endif %}{% endfor %}">{{ i }}</a>
                 </li>
                 {% endif %}
             {% endfor %}
 
             {% if page_obj.has_next %}
             <li class="page-item">
-                <a class="page-link" href="?page={{ page_obj.next_page_number }}{% for key, value in filter_params.items %}{% if key != 'page' %}{% if key == 'states' %}{% for state in value %}&states={{ state }}{% endfor %}{% elif value %}&{{ key }}={{ value }}{% endif %}{% endif %}{% endfor %}">Next</a>
+                <a class="page-link" href="?page={{ page_obj.next_page_number }}{% for key, value in filter_params.items %}{% if key != 'page' %}{% if key == 'states' %}{% for state in value %}&states={{ state }}{% endfor %}{% elif key == 'metadata_pairs' %}{% for pair in value %}&metadata_key={{ pair.key|urlencode }}&metadata_value={{ pair.value|urlencode }}{% endfor %}{% elif value %}&{{ key }}={{ value }}{% endif %}{% endif %}{% endfor %}">Next</a>
             </li>
             <li class="page-item">
-                <a class="page-link" href="?page={{ paginator.num_pages }}{% for key, value in filter_params.items %}{% if key != 'page' %}{% if key == 'states' %}{% for state in value %}&states={{ state }}{% endfor %}{% elif value %}&{{ key }}={{ value }}{% endif %}{% endif %}{% endfor %}">Last &raquo;</a>
+                <a class="page-link" href="?page={{ paginator.num_pages }}{% for key, value in filter_params.items %}{% if key != 'page' %}{% if key == 'states' %}{% for state in value %}&states={{ state }}{% endfor %}{% elif key == 'metadata_pairs' %}{% for pair in value %}&metadata_key={{ pair.key|urlencode }}&metadata_value={{ pair.value|urlencode }}{% endfor %}{% elif value %}&{{ key }}={{ value }}{% endif %}{% endif %}{% endfor %}">Last &raquo;</a>
             </li>
             {% endif %}
         </ul>
