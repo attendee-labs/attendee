@@ -9,6 +9,7 @@ import jwt
 
 from bots.meeting_url_utils import parse_zoom_join_url
 from bots.models import RecordingViews
+from bots.utils import select_from_comma_separated_list_with_wrapping_index
 from bots.web_bot_adapter import WebBotAdapter
 from bots.zoom_web_bot_adapter.zoom_web_ui_methods import UiZoomWebGenericJoinErrorException, ZoomWebUIMethods
 
@@ -89,6 +90,7 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
         self.zoom_tokens = zoom_tokens
 
         self.generic_join_error_retries = 0
+        self.authorized_user_not_in_meeting_retries = 0
 
     def get_chromedriver_payload_file_names(self):
         return [
@@ -118,6 +120,14 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
         return 5
 
     def subclass_specific_initial_data_code(self):
+        # Switch which onbehalf token is used based on how many times we've retried on behalf of the authorized user not in the meeting
+        onbehalf_token = select_from_comma_separated_list_with_wrapping_index(
+            comma_separated_list=self.zoom_tokens.get("onbehalf_token", ""),
+            index=self.authorized_user_not_in_meeting_retries,
+        )
+        if onbehalf_token:
+            logger.info(f"Using onbehalf token {(onbehalf_token or '')[:6]}...{(onbehalf_token or '')[-6:]} for retry {self.authorized_user_not_in_meeting_retries}")
+
         return f"""
             window.zoomInitialData = {{
                 signature: {json.dumps(self.sdk_signature["signature"])},
@@ -127,7 +137,7 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
                 zakToken: {json.dumps(self.zoom_tokens.get("zak_token", ""))},
                 joinToken: {json.dumps(self.zoom_tokens.get("join_token", ""))},
                 appPrivilegeToken: {json.dumps(self.zoom_tokens.get("app_privilege_token", ""))},
-                onBehalfToken: {json.dumps(self.zoom_tokens.get("onbehalf_token", ""))},
+                onBehalfToken: {json.dumps(onbehalf_token or "")},
                 modifyDomForVideoRecording: {"true" if self.modify_dom_for_video_recording else "false"},
             }}
         """

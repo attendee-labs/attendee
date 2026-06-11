@@ -638,6 +638,24 @@ class TestZoomWebBot(TransactionTestCase):
         could_not_join_event = could_not_join_events[0]
         self.assertEqual(could_not_join_event.event_sub_type, BotEventSubTypes.COULD_NOT_JOIN_MEETING_AUTHORIZED_USER_NOT_IN_MEETING_TIMEOUT_EXCEEDED)
 
+        # Verify the onbehalf token wrapping logic in subclass_specific_initial_data_code: each retry
+        # caused by the authorized user not being in the meeting should advance through the
+        # comma-separated onbehalf token list, wrapping back to the start once it runs off the end.
+        adapter = controller.adapter
+        self.assertIsNotNone(adapter, "Adapter should be available after the join attempt")
+        adapter.zoom_tokens = {"onbehalf_token": "fake_onbehalf_token_a,fake_onbehalf_token_b,fake_onbehalf_token_c"}
+        expected_tokens = [
+            "fake_onbehalf_token_a",  # retry 0 -> index 0
+            "fake_onbehalf_token_b",  # retry 1 -> index 1
+            "fake_onbehalf_token_c",  # retry 2 -> index 2
+            "fake_onbehalf_token_a",  # retry 3 -> index 0 (wraps)
+            "fake_onbehalf_token_b",  # retry 4 -> index 1 (wraps)
+        ]
+        for retries, expected_token in enumerate(expected_tokens):
+            adapter.authorized_user_not_in_meeting_retries = retries
+            initial_data_code = adapter.subclass_specific_initial_data_code()
+            self.assertIn(f"onBehalfToken: {json.dumps(expected_token)}", initial_data_code, f"Expected onbehalf token {expected_token} for retry {retries}")
+
         # Cleanup
         controller.cleanup()
         bot_thread.join(timeout=5)

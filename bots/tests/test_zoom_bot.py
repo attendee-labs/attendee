@@ -2909,7 +2909,8 @@ class TestZoomBot(TransactionTestCase):
             "zak_token": "fake_zak_token",
             "join_token": "fake_join_token",
             "app_privilege_token": "fake_app_privilege_token",
-            "onbehalf_token": "fake_onbehalf_token",
+            # Comma-separated list so we can exercise the wrapping index logic in join_meeting
+            "onbehalf_token": "fake_onbehalf_token_a,fake_onbehalf_token_b,fake_onbehalf_token_c",
         }
         mock_requests_post.return_value = mock_response
 
@@ -2929,6 +2930,11 @@ class TestZoomBot(TransactionTestCase):
             if not hasattr(controller, "adapter") or not controller.adapter:
                 connection.close()
                 return  # fail silently and let the main thread assertions fail
+
+            # Pretend we've already retried several times because the authorized user wasn't in the
+            # meeting. The retry count is larger than the number of onbehalf tokens, so join_meeting
+            # must wrap around the comma-separated list (index 4 % 3 == 1 -> "fake_onbehalf_token_b").
+            controller.adapter.authorized_user_not_in_meeting_retries = 4
 
             # Simulate successful auth, which will then trigger the Join call
             controller.adapter.auth_event.onAuthenticationReturnCallback(mock_zoom_sdk_adapter.AUTHRET_SUCCESS)
@@ -2958,7 +2964,9 @@ class TestZoomBot(TransactionTestCase):
         self.assertIsInstance(join_param.param.webinarToken, MagicMock)
         self.assertEqual(join_param.param.join_token, "fake_join_token")
         self.assertEqual(join_param.param.app_privilege_token, "fake_app_privilege_token")
-        self.assertEqual(join_param.param.onBehalfToken, "fake_onbehalf_token")
+        # The onbehalf token is chosen from the comma-separated list using the retry count with
+        # wrapping. With 4 retries and 3 tokens, index 4 % 3 == 1 selects the second token.
+        self.assertEqual(join_param.param.onBehalfToken, "fake_onbehalf_token_b")
 
         # Cleanup
         controller.cleanup()
