@@ -126,7 +126,7 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
             index=self.authorized_user_not_in_meeting_retries,
         )
         if onbehalf_token:
-            logger.info(f"Using onbehalf token {(onbehalf_token or '')[:12]}... for retry {self.authorized_user_not_in_meeting_retries}")
+            logger.info(f"Using onbehalf token {(onbehalf_token or '')[:6]}...{(onbehalf_token or '')[-6:]} for retry {self.authorized_user_not_in_meeting_retries}")
 
         return f"""
             window.zoomInitialData = {{
