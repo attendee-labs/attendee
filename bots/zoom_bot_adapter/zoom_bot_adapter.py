@@ -993,7 +993,7 @@ class ZoomBotAdapter(BotAdapter):
                 comma_separated_list=self.zoom_tokens.get("onbehalf_token"),
                 index=self.authorized_user_not_in_meeting_retries,
             )
-            logger.info(f"Using onbehalf token {(param.onBehalfToken or '')[:4]}... for retry {self.authorized_user_not_in_meeting_retries}")
+            logger.info(f"Using onbehalf token {(param.onBehalfToken or '')[:12]}... for retry {self.authorized_user_not_in_meeting_retries}")
         # Set the webinarToken only if joining a webinar as an attendee (in webinars, all attendees are in Guest Mode).
         # If joining as a signed-in bot (for panelists and co-hosts), use the ZAK token instead, and leave the webinarToken as NULL.
         if self.zoom_tokens.get("registrant_token") and not self.zoom_tokens.get("zak_token"):
