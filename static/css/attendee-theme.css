@@ -59,6 +59,7 @@
   --att-nav-icon:      #84848d;
   --att-nav-active-bg: #202024;
   --att-nav-active-fg: #ffffff;
+  --att-track-bg:      #202024;   /* empty timeline / progress tracks */
   --att-input-hover-border: #45454d;
   --att-scrollbar:     #2c2c32;
   --att-scrollbar-hover: #3c3c44;
@@ -133,6 +134,7 @@
   --att-nav-icon:      #8a8a93;
   --att-nav-active-bg: #ebecef;
   --att-nav-active-fg: #121217;
+  --att-track-bg:      #e4e5e9;
   --att-input-hover-border: #c0c1c8;
   --att-scrollbar:     #d2d3d8;
   --att-scrollbar-hover: #bcbdc4;
@@ -498,3 +500,198 @@ code { color: var(--att-accent); background: var(--att-accent-soft); padding: .1
 .text-accent { color: var(--att-accent) !important; }
 .divider { height: 1px; background: var(--att-border); border: 0; }
 .btn-icon { display: inline-flex; align-items: center; justify-content: center; gap: .5rem; }
+
+/* Optional page-header helper: <div class="page-header"> wrapping an <h2> + action button */
+.page-header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1.5rem; }
+
+/* ============================================================================
+   15. BOOTSTRAP UTILITY HARDENING
+   These let your existing markup (bg-light, badges, tables, tabs, lists,
+   accordions, filter toggles) theme correctly with NO template changes.
+   ============================================================================ */
+
+/* surface utilities that were baked for light mode */
+.bg-light       { background-color: var(--att-surface-2) !important; }
+.bg-white       { background-color: var(--att-surface)   !important; }
+.bg-info-subtle { background-color: var(--att-accent-soft) !important; }
+.border         { border-color: var(--att-border) !important; }
+.text-dark      { color: var(--att-heading) !important; }
+
+/* complete the soft-badge set (theme only restyled a few before) */
+.badge.bg-warning { background: var(--st-warning-bg) !important; color: var(--st-warning-fg) !important; border:1px solid var(--st-warning-line); }
+.badge.bg-info    { background: var(--st-info-bg)    !important; color: var(--st-info-fg)    !important; border:1px solid var(--st-info-line); }
+.badge.bg-primary { background: var(--att-accent-soft) !important; color: var(--att-accent) !important; border:1px solid var(--att-accent-line); }
+.badge.text-bg-secondary { background: var(--st-neutral-bg) !important; color: var(--st-neutral-fg) !important; }
+
+/* pre / code blocks — subtle surface, mono, no nested double-styling */
+pre {
+  background: var(--att-surface-2);
+  border: 1px solid var(--att-border);
+  border-radius: var(--att-radius);
+  padding: .8rem 1rem;
+  color: var(--att-text);
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: .82rem;
+}
+pre.bg-light { background: var(--att-surface-2) !important; }
+pre code { background: transparent; color: inherit; padding: 0; border-radius: 0; }
+
+/* striped tables */
+.table-striped > tbody > tr:nth-of-type(odd) > * {
+  --bs-table-bg-type: var(--att-surface-2);
+  color: var(--att-text);
+}
+
+/* list groups (dashboard quick-start steps, webhook responses) */
+.list-group {
+  --bs-list-group-bg: transparent;
+  --bs-list-group-color: var(--att-text);
+  --bs-list-group-border-color: var(--att-border);
+  --bs-list-group-action-hover-bg: var(--att-surface-2);
+  --bs-list-group-action-color: var(--att-text);
+}
+
+/* nav-tabs (bot detail) — replaces the per-file !important override */
+.nav-tabs {
+  --bs-nav-tabs-border-color: var(--att-border);
+  --bs-nav-tabs-link-hover-border-color: transparent transparent var(--att-border-strong);
+  --bs-nav-tabs-link-active-color: var(--att-heading);
+  --bs-nav-tabs-link-active-bg: transparent;
+  --bs-nav-tabs-link-active-border-color: transparent transparent var(--att-accent);
+  border-bottom-width: 1px;
+}
+.nav-tabs .nav-link {
+  color: var(--att-text-muted);
+  font-weight: 500;
+  border-width: 0 0 2px 0;
+  margin-bottom: -1px;
+}
+.nav-tabs .nav-link:hover { color: var(--att-heading); }
+.nav-tabs .nav-link.active { font-weight: 600; }
+
+/* accordions (webhook details) */
+.accordion {
+  --bs-accordion-bg: var(--att-surface);
+  --bs-accordion-color: var(--att-text);
+  --bs-accordion-border-color: var(--att-border);
+  --bs-accordion-btn-color: var(--att-heading);
+  --bs-accordion-btn-bg: var(--att-surface);
+  --bs-accordion-active-bg: var(--att-surface-2);
+  --bs-accordion-active-color: var(--att-heading);
+  --bs-accordion-btn-focus-box-shadow: 0 0 0 var(--bs-focus-ring-width) var(--bs-focus-ring-color);
+}
+[data-bs-theme="dark"] .accordion-button::after { filter: invert(1) grayscale(1) brightness(1.5); }
+
+/* filter toggles & state checkboxes: btn-check + outline-secondary, selected */
+.btn-check:checked + .btn-outline-secondary,
+.btn-check:active + .btn-outline-secondary {
+  background: var(--att-accent-soft);
+  border-color: var(--att-accent-line);
+  color: var(--att-accent);
+}
+
+/* ============================================================================
+   16. APP COMPONENT CLASSES (map onto Attendee's existing class names)
+   Define them here so the per-page <style> blocks can be deleted.
+   ============================================================================ */
+
+/* --- filter panel (project_bots) --- */
+.filter-header {
+  background: var(--att-surface-2) !important;
+  border: 1px solid var(--att-border);
+  border-radius: var(--att-radius);
+  cursor: pointer;
+}
+.filter-container {
+  background: var(--att-surface-2);
+  border: 1px solid var(--att-border);
+  border-top: 0;
+  border-radius: 0 0 var(--att-radius) var(--att-radius);
+  padding: 1rem;
+}
+.filter-caret { color: var(--att-text-muted); }
+.state-checkboxes { display: flex; flex-wrap: wrap; gap: 6px; }
+.state-checkbox { display: inline-flex; align-items: center; }
+
+/* vertical divider — replaces inline border-left:1px solid #dee2e6 */
+.divider-v { width: 1px; align-self: center; height: 24px; background: var(--att-border); }
+
+/* --- clickable table rows (project_bots) --- */
+.clickable-row { cursor: pointer; }
+.clickable-row:hover > td { background: var(--att-surface-2); }
+.meeting-url, .bot-name {
+  max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block;
+  font-family: 'IBM Plex Mono', monospace; font-size: .82rem;
+}
+.bot-name { max-width: 200px; font-family: inherit; font-size: inherit; }
+
+/* --- bot detail: cards, timeline, tabs --- */
+.detail-card { margin-bottom: 1.5rem; }
+.timeline-container { max-height: 700px; overflow-y: auto; }
+.timeline-item {
+  padding: 1rem; margin-left: 1rem; position: relative;
+  border-left: 2px solid var(--att-border);
+}
+.timeline-item::before {
+  content: ''; position: absolute; left: -.5rem; top: 1.5rem;
+  width: 1rem; height: 1rem; border-radius: 50%;
+  background: var(--att-surface); border: 2px solid var(--att-accent);
+}
+.resend-btn { --bs-btn-padding-y:.2rem; --bs-btn-padding-x:.55rem; --bs-btn-font-size:.825rem; --bs-btn-border-radius:.4rem; line-height:1.2; }
+
+/* --- recordings / transcript (project_bot_recordings) --- */
+.recording-container { display: flex; gap: 1rem; height: 600px; }
+.recording-item { border-radius: var(--att-radius); margin-bottom: 1rem; }
+.transcript-column {
+  flex: 1; overflow-y: auto; padding: 1rem;
+  border: 1px solid var(--att-border); border-radius: var(--att-radius); background: var(--att-surface);
+}
+.video-column { flex: 1; }
+.utterance-item { margin-bottom: 1rem; padding: .5rem; border-bottom: 1px solid var(--att-border); display: flex; }
+.utterance-content { flex: 1; }
+.utterance-timestamp { font-size: .8rem; color: var(--att-text-muted); }
+.utterance-text { margin-top: .25rem; }
+.speaker-bar { width: 4px; margin-right: 10px; border-radius: 2px; }
+.highlighted { background: var(--att-accent-soft); }
+.word { display: inline; }
+.bold { font-weight: 700; }
+
+/* --- speaker timeline --- */
+.speaker-timeline-wrapper {
+  margin-top: .75rem; padding: .75rem;
+  border: 1px solid var(--att-border); border-radius: var(--att-radius); background: var(--att-surface-2);
+}
+.speaker-timeline-labels { flex-shrink: 0; max-width: 60px; overflow: hidden; }
+.speaker-timeline-tracks { flex: 1; position: relative; min-width: 0; }
+.speaker-timeline-label {
+  height: 22px; line-height: 22px; font-size: .7rem; color: var(--att-text-muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 6px; margin-bottom: 2px;
+}
+.speaker-timeline-track {
+  height: 22px; position: relative; background: var(--att-track-bg);
+  border-radius: 3px; margin-bottom: 2px; cursor: pointer;
+}
+.speaker-timeline-bar { position: absolute; top: 2px; height: calc(100% - 4px); border-radius: 2px; opacity: .8; transition: opacity .15s; }
+.speaker-timeline-bar:hover { opacity: 1; }
+.speaker-timeline-playhead {
+  position: absolute; top: 0; bottom: 0; width: 2px; background: var(--att-danger-btn);
+  z-index: 10; pointer-events: none; transition: left .1s linear;
+}
+
+/* --- metadata filter chips (bots_metadata_filter) --- */
+.metadata-chip {
+  display: inline-flex; align-items: center;
+  background: var(--att-surface-2); border: 1px solid var(--att-border-strong);
+  border-radius: 999px; padding: 1px 4px 1px 10px; font-size: .8rem; line-height: 1.5;
+}
+.metadata-chip-text { cursor: pointer; white-space: nowrap; max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
+.metadata-chip-remove {
+  border: none; background: transparent; color: var(--att-text-muted);
+  font-size: 1.1rem; line-height: 1; padding: 0 2px 0 6px; cursor: pointer;
+}
+.metadata-chip-remove:hover { color: var(--att-danger-btn); }
+.metadata-popover {
+  position: absolute; z-index: 1050; top: 100%; left: 0; margin-top: 6px; width: 260px;
+  background: var(--att-surface); border: 1px solid var(--att-border);
+  border-radius: var(--att-radius); box-shadow: var(--att-shadow-pop); padding: 12px;
+}
