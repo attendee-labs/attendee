@@ -317,15 +317,11 @@ code { color: var(--att-accent); background: var(--att-accent-soft); padding: .1
   border-radius: 999px; border: 1px solid transparent;
   white-space: nowrap;
 }
-.badge-soft::before { content:""; width:.42em; height:.42em; border-radius:50%; background: currentColor; flex: none; }
 .badge-soft.is-neutral { color: var(--st-neutral-fg); background: var(--st-neutral-bg); border-color: var(--st-neutral-line); }
 .badge-soft.is-success { color: var(--st-success-fg); background: var(--st-success-bg); border-color: var(--st-success-line); }
 .badge-soft.is-danger  { color: var(--st-danger-fg);  background: var(--st-danger-bg);  border-color: var(--st-danger-line); }
 .badge-soft.is-warning { color: var(--st-warning-fg); background: var(--st-warning-bg); border-color: var(--st-warning-line); }
 .badge-soft.is-info    { color: var(--st-info-fg);    background: var(--st-info-bg);    border-color: var(--st-info-line); }
-.badge-soft.is-success::before,
-.badge-soft.is-warning::before,
-.badge-soft.is-danger::before { box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 18%, transparent); }
 
 /* keep stock .badge usages legible, in case you don't switch them */
 .badge.bg-secondary { background: var(--st-neutral-bg) !important; color: var(--st-neutral-fg) !important; border:1px solid var(--st-neutral-line); }
@@ -409,7 +405,12 @@ code { color: var(--att-accent); background: var(--att-accent-soft); padding: .1
 .project-dropdown-toggle:hover { background: var(--att-surface-2) !important; border-color: var(--att-border-strong) !important; }
 .project-dropdown-toggle .bi-chevron-down { color: var(--att-text-muted); margin-left: auto; transition: transform .15s ease; }
 
-.settings-caret, .account-caret { color: var(--att-text-dim); }
+/* Settings / Account disclosure carets — center + right-align in the flex row.
+   NOTE: if your template <style> still sets transform: translateY(5px) on these
+   containers, remove it — an inline <style> block overrides this file. */
+.settings-caret-container,
+.account-caret-container { display: inline-flex; align-items: center; margin-left: auto; }
+.settings-caret, .account-caret { color: var(--att-text-dim); width: 14px; height: 14px; }
 .sidebar form .nav-link { width: 100%; }
 
 /* ----------------------------------------------------------------------------

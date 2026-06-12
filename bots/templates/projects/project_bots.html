@@ -1,73 +1,16 @@
 {% extends 'projects/sidebar.html' %}
 
 {% block content %}
-<style>
-    .meeting-url {
-        max-width: 300px;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-        display: block;
-    }
-    .bot-name {
-        max-width: 200px;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-        display: block;
-    }
-    
-    /* Updated styles for clickable rows */
-    .clickable-row {
-        cursor: pointer;
-        transition: background-color 0.15s ease-in-out;
-    }
-    /* Apply hover effect to td elements */
-    table tbody tr.clickable-row:hover td {
-        background-color: #f8f9fa;  /* Using Bootstrap's light gray */
-    }
-    
-    /* Filter styles */
-    .filter-container {
-        background-color: #f8f9fa;
-        padding: 15px;
-        border-radius: 5px;
-        margin-bottom: 20px;
-    }
-    .filter-item {
-        margin-bottom: 10px;
-    }
-    .state-checkboxes {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 5px;
-    }
-    .state-checkbox {
-        display: inline-flex;
-        align-items: center;
-        margin-right: 5px;
-    }
-    
-    /* cURL Example styles */
-    #apiCodeExample {
-        font-family: monospace;
-        white-space: pre;
-        word-wrap: normal;
-        display: block;
-        line-height: 1.5;
-    }
-</style>
-
-<div class="container mt-4">
-    <div class="d-flex justify-content-between align-items-center mb-4">
+<div>
+    <div class="page-header">
         {% if session_type == SessionTypes.BOT %}
-            <h2>Bots</h2>
-            <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#createBotModal">
-                <i class="bi bi-plus-circle me-1"></i> Create Bot
+            <h1 class="page-title mb-0">Bots</h1>
+            <button type="button" class="btn btn-primary btn-icon" data-bs-toggle="modal" data-bs-target="#createBotModal">
+                <i class="bi bi-plus-lg"></i> Create Bot
             </button>
         {% endif %}
         {% if session_type == SessionTypes.APP_SESSION %}
-            <h2>App Sessions</h2>
+            <h1 class="page-title mb-0">App Sessions</h1>
         {% endif %}
     </div>
     
@@ -75,7 +18,6 @@
     {% if filter_params.start_date or filter_params.end_date or filter_params.join_at_start or filter_params.join_at_end or filter_params.ended_at_start or filter_params.ended_at_end or filter_params.states or filter_params.search or filter_params.joined_meeting or filter_params.unexpected_error or filter_params.metadata_pairs or bots %}
     <div class="filter-panel mb-3">
         <div class="filter-header p-2 rounded d-flex align-items-center" 
-             style="background-color: #f8f9fa; cursor: pointer;" 
              onclick="toggleFilterPanel(event)">
             <i class="bi bi-funnel me-2"></i>
             <span>Filters</span>
@@ -96,7 +38,7 @@
                             <input type="text" class="form-control form-control-sm" id="search" name="search" value="{{ filter_params.search }}" placeholder="ID, Meeting URL, Name">
                         </div>
 
-                        <div class="me-4" style="border-left: 1px solid #dee2e6; height: 24px; align-self: center;"></div>
+                        <div class="divider-v"></div>
 
                         {% include 'projects/partials/bots_metadata_filter.html' %}
                     </div>
@@ -113,7 +55,7 @@
                             <input type="date" class="form-control form-control-sm" id="end_date" name="end_date" value="{{ filter_params.end_date }}">
                         </div>
                         
-                        <div class="me-4" style="border-left: 1px solid #dee2e6; height: 24px; align-self: center;"></div>
+                        <div class="divider-v"></div>
                         
                         <div class="me-2" style="display: inline-flex; white-space: nowrap; align-items: center;">
                             <label for="ended_at_start" class="form-label me-2 mb-0" style="flex-shrink: 0;">Ended</label>
@@ -125,7 +67,7 @@
                             <input type="date" class="form-control form-control-sm" id="ended_at_end" name="ended_at_end" value="{{ filter_params.ended_at_end }}">
                         </div>
                         
-                        <div class="me-4" style="border-left: 1px solid #dee2e6; height: 24px; align-self: center;"></div>
+                        <div class="divider-v"></div>
                         
                         <div class="me-2" style="display: inline-flex; white-space: nowrap; align-items: center;">
                             <label for="join_at_start" class="form-label me-2 mb-0" style="flex-shrink: 0;">Join At</label>
@@ -151,7 +93,7 @@
                                     <label class="btn btn-outline-secondary" for="joined_meeting_no">No</label>
                                 </div>
                             </div>
-                            <div style="border-left: 1px solid #dee2e6; height: 24px; align-self: center;"></div>
+                            <div class="divider-v"></div>
                             <div style="display: inline-flex; align-items: center;">
                                 <span class="me-2" style="flex-shrink: 0;">Unexpected Error</span>
                                 <div class="btn-group btn-group-sm" role="group">
@@ -194,9 +136,9 @@
         </div>
     </div>
     {% endif %}
-    <div class="table-responsive" id="botsTable">
+    <div class="table-responsive {% if bots %}table-card{% endif %}" id="botsTable">
         {% if bots %}
-            <table class="table">
+            <table class="table table-hover align-middle">
                 <thead>
                     <tr>
                         <th>ID</th>
@@ -206,8 +148,8 @@
                         {% endif %}
                         <th>Status</th>
                         <th>Last Event</th>
-                        {% if has_scheduled_bots %}<th>Join At</th>{% endif %}
-                        <th>Created</th>
+                        {% if has_scheduled_bots %}<th class="text-end">Join At</th>{% endif %}
+                        <th class="text-end">Created</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -223,21 +165,20 @@
                         hx-target="#content"
                         hx-swap="outerHTML"
                         hx-push-url="true">
-                        <td><small>{{ bot.object_id }}</small></td>
+                        <td class="cell-id">{{ bot.object_id }}</td>
                         {% if session_type == SessionTypes.BOT %}
-                            <td><small class="bot-name">{{ bot.name }}</small></td>
-                            <td><span class="meeting-url" title="{{ bot.meeting_url }}">{{ bot.meeting_url }}</span></td>
+                            <td><span class="bot-name">{{ bot.name }}</span></td>
+                            <td><span class="meeting-url cell-url" title="{{ bot.meeting_url }}">{{ bot.meeting_url }}</span></td>
                         {% endif %}
                         <td>
-                            <span class="badge {% if bot.state == BotStates.READY %}bg-warning{% elif bot.state == BotStates.FATAL_ERROR %}bg-danger{% elif bot.state == BotStates.ENDED %}bg-secondary{% else %}bg-success{% endif %}">
+                            <span class="badge-soft {% if bot.state == BotStates.READY %}is-warning{% elif bot.state == BotStates.FATAL_ERROR %}is-danger{% elif bot.state == BotStates.ENDED %}is-neutral{% else %}is-success{% endif %}">
                                 {{ bot.get_state_display }}
                                 {% if bot.sub_state %}
                                     - {{ bot.get_sub_state_display }}
                                 {% endif %}
                             </span>
                         </td>
-                        <td>
-                            <small>
+                        <td class="text-muted">
                             {% if bot.last_event_sub_type %}
                                 {{ bot.last_event_sub_type_display|truncatechars:60 }}
                             {% elif bot.last_event_type %}
@@ -245,26 +186,23 @@
                             {% else %}
                                 -
                             {% endif %}
-                            </small>
                         </td>
                         {% if has_scheduled_bots %}
-                        <td>
-                            <small>
+                        <td class="text-end text-muted">
                             {% if bot.join_at %}
                                 {{ bot.join_at|date:"M d, Y H:i" }}
                             {% else %}
                                 -
                             {% endif %}
-                            </small>
                         </td>
                         {% endif %}
-                        <td><small>{{ bot.created_at|date:"M d, Y H:i" }}</small></td>
+                        <td class="text-end text-muted">{{ bot.created_at|date:"M d, Y H:i" }}</td>
                     </tr>
                     {% endfor %}
                 </tbody>
             </table>
         {% else %}
-            <div class="alert alert-info" role="alert">
+            <div class="alert alert-info mb-0" role="alert">
                 <i class="bi bi-info-circle me-2"></i>
                 {% if filter_params.start_date or filter_params.end_date or filter_params.join_at_start or filter_params.join_at_end or filter_params.ended_at_start or filter_params.ended_at_end or filter_params.states or filter_params.search or filter_params.joined_meeting or filter_params.unexpected_error or filter_params.metadata_pairs %}
                     {% if session_type == SessionTypes.APP_SESSION %}
@@ -287,8 +225,8 @@
 
     <!-- Pagination with filter parameters -->
     {% if is_paginated %}
-    <nav aria-label="Bot list pagination">
-        <ul class="pagination justify-content-center">
+    <nav aria-label="Bot list pagination" class="mt-3">
+        <ul class="pagination justify-content-end mb-0">
             {% if page_obj.has_previous %}
             <li class="page-item">
                 <a class="page-link" href="?page=1{% for key, value in filter_params.items %}{% if key != 'page' %}{% if key == 'states' %}{% for state in value %}&states={{ state }}{% endfor %}{% elif key == 'metadata_pairs' %}{% for pair in value %}&metadata_key={{ pair.key|urlencode }}&metadata_value={{ pair.value|urlencode }}{% endfor %}{% elif value %}&{{ key }}={{ value }}{% endif %}{% endif %}{% endfor %}">&laquo; First</a>

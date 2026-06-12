@@ -226,7 +226,7 @@
         <div class="col-md-3 col-lg-2"></div>
 
         <!-- Main Content -->
-        <div class="col-md-9 col-lg-10 py-3">
+        <div class="col-md-9 col-lg-10 py-4 px-4">
             {% if project.organization.credits < 0 %}
             <div class="alert alert-danger mb-3" role="alert">
                 <strong>Your account has a negative credit balance.</strong> Please <a href="{% url 'projects:project-billing' project.object_id %}" class="alert-link">top up your credits</a> to continue creating bots.
@@ -337,16 +337,6 @@
     .collapse, .collapsing {
         transition-duration: 0s !important;
     }
-
-    .sidebar .nav-link.active {
-        background-color: rgba(0, 0, 0, 0.09);
-        color: inherit;
-    }
-    
-    .sidebar {
-        top: 0;
-        z-index: 100;
-    }
     
     .settings-dropdown {
         position: relative;
@@ -358,16 +348,6 @@
     
     .settings-submenu .nav-link {
         font-size: 0.95em;
-    }
-    
-    .settings-caret {
-        transform: rotate(0deg);
-    }
-    
-    .settings-caret-container {
-        display: inline-flex;
-        align-items: center;
-        transform: translateY(5px);
     }
     
     .account-dropdown {
@@ -382,36 +362,12 @@
         font-size: 0.95em;
     }
     
-    .account-caret {
-        transform: rotate(0deg);
-    }
-    
-    .account-caret-container {
-        display: inline-flex;
-        align-items: center;
-        transform: translateY(5px);
-    }
-    
-    /* Project selector custom styling */
-    .project-dropdown-toggle {
-        background-color: transparent;
-        border: none;
-        padding: 0.5rem 0;
-        font-weight: 500;
-    }
+    /* Project selector custom styling (caret/toggle/menu/active styling lives in attendee-theme.css) */
     .project-dropdown-toggle:focus {
         box-shadow: none;
     }
-    .project-selector .dropdown-menu {
-        border-radius: 0.5rem;
-    }
     .project-selector .dropdown-item {
         cursor: pointer;
-    }
-    
-    /* Fix for active dropdown item text color */
-    .project-selector .dropdown-item.active {
-        color: #212529; /* Dark text color to ensure visibility */
     }
 </style>
 
