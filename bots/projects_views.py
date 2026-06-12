@@ -18,6 +18,7 @@ from django.views.generic import ListView
 
 from accounts.models import User, UserRole
 
+from .bot_login_groups_api_utils import create_bot_login_group
 from .bots_api_utils import BotCreationSource, create_bot, create_webhook_subscription
 from .launch_bot_utils import launch_adhoc_bot_from_view
 from .models import (
@@ -162,6 +163,18 @@ def render_bot_login_groups_partial(request, platform, context):
     if platform == BotLoginPlatform.TEAMS:
         return render(request, "projects/partials/teams_bot_logins.html", context)
     return HttpResponse("Invalid bot login platform", status=400)
+
+
+def flatten_api_error(error):
+    """Convert an API error dict (e.g. serializer errors) into a single human-readable string."""
+    if isinstance(error, dict):
+        messages = []
+        for value in error.values():
+            messages.append(flatten_api_error(value))
+        return " ".join(messages)
+    if isinstance(error, (list, tuple)):
+        return " ".join(flatten_api_error(item) for item in error)
+    return str(error)
 
 
 def get_partial_for_credential_type(credential_type, request, context):
@@ -1467,28 +1480,14 @@ class ProjectBotLoginGroupsView(LoginRequiredMixin, ProjectUrlContextMixin, View
 class CreateBotLoginGroupView(LoginRequiredMixin, ProjectUrlContextMixin, View):
     def post(self, request, object_id):
         project = get_project_for_user(user=request.user, project_object_id=object_id)
-        try:
-            platform = request.POST.get("platform")
-            name = request.POST.get("name")
-            if not platform or not name:
-                return HttpResponse("Missing required fields: platform and name are required", status=400)
-            if platform not in BotLoginPlatform.values:
-                return HttpResponse("Invalid platform", status=400)
-            if not BotLoginGroup.is_valid_name(name):
-                return HttpResponse("Name can only contain alphanumeric characters, spaces, or underscores", status=400)
-            if BotLoginGroup.objects.filter(project=project, platform=platform, name=name).exists():
-                return HttpResponse("A login group for this platform with this name already exists", status=400)
 
-            BotLoginGroup.objects.create(project=project, platform=platform, name=name)
+        bot_login_group, error = create_bot_login_group(data=request.POST, project=project)
+        if error:
+            return HttpResponse(flatten_api_error(error), status=400)
 
-            context = self.get_project_context(object_id, project)
-            context.update(get_bot_login_group_context(project))
-            return render_bot_login_groups_partial(request, platform, context)
-
-        except Exception as e:
-            error_id = str(uuid.uuid4())
-            logger.error(f"Error creating bot login group (error_id={error_id}): {e}")
-            return HttpResponse(f"Error creating bot login group. Error ID: {error_id}", status=400)
+        context = self.get_project_context(object_id, project)
+        context.update(get_bot_login_group_context(project))
+        return render_bot_login_groups_partial(request, bot_login_group.platform, context)
 
 
 class EditBotLoginGroupView(LoginRequiredMixin, ProjectUrlContextMixin, View):

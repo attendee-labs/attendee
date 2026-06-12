@@ -27,6 +27,8 @@ from .models import (
     BotChatMessageToOptions,
     BotEventSubTypes,
     BotEventTypes,
+    BotLoginGroup,
+    BotLoginPlatform,
     BotStates,
     Calendar,
     CalendarEvent,
@@ -2342,5 +2344,49 @@ class ZoomOAuthConnectionSerializer(serializers.ModelSerializer):
             "updated_at",
             "last_successful_sync_at",
             "last_attempted_sync_at",
+        ]
+        read_only_fields = fields
+
+
+class CreateBotLoginGroupSerializer(serializers.Serializer):
+    platform = serializers.ChoiceField(choices=BotLoginPlatform.choices, help_text="The meeting platform the login group is for")
+    name = serializers.CharField(help_text="The name of the login group. May only contain alphanumeric characters, spaces, or underscores.")
+
+    def validate_name(self, value):
+        if not BotLoginGroup.is_valid_name(value):
+            raise serializers.ValidationError("Name can only contain alphanumeric characters, spaces, or underscores")
+        return value
+
+    def validate(self, data):
+        """Validate that no unexpected fields are provided."""
+        expected_fields = set(self.fields.keys())
+        provided_fields = set(self.initial_data.keys())
+        unexpected_fields = provided_fields - expected_fields
+        if unexpected_fields:
+            raise serializers.ValidationError(f"Unexpected field(s): {', '.join(sorted(unexpected_fields))}. Allowed fields are: {', '.join(sorted(expected_fields))}")
+        return data
+
+
+class BotLoginGroupSerializer(serializers.ModelSerializer):
+    id = serializers.CharField(source="object_id")
+    platform = serializers.SerializerMethodField()
+
+    @extend_schema_field(
+        {
+            "type": "string",
+            "enum": [choice[0] for choice in BotLoginPlatform.choices],
+        }
+    )
+    def get_platform(self, obj):
+        return obj.platform
+
+    class Meta:
+        model = BotLoginGroup
+        fields = [
+            "id",
+            "platform",
+            "name",
+            "created_at",
+            "updated_at",
         ]
         read_only_fields = fields
