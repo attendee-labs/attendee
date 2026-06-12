@@ -1,0 +1,500 @@
+/* ============================================================================
+   ATTENDEE — Theme layer for Bootstrap 5.3  (dark, developer-grade)
+   ----------------------------------------------------------------------------
+   HOW TO USE
+   1. Keep your existing bootstrap.min.css link.
+   2. Add this file AFTER it:
+        <link rel="stylesheet" href="{% static 'css/attendee-theme.css' %}">
+   3. Choose your look on the <html> tag — the theme supports both:
+        <html lang="en" data-bs-theme="light">   (standard white look)
+        <html lang="en" data-bs-theme="dark">    (dark look)
+   4. (Optional but recommended) the small markup tweaks noted inline below —
+      .table-card wrapper, .badge-soft status pills, .font-mono on IDs/URLs.
+   No structural changes required; everything else themes automatically.
+   ============================================================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+/* ----------------------------------------------------------------------------
+   1. TOKENS
+   ------------------------------------------------------------------------- */
+:root,
+[data-bs-theme="dark"] {
+  /* Brand accent (Deepgram-style spring green) */
+  --att-accent:        #20e5a0;
+  --att-accent-hover:  #14cf8d;
+  --att-accent-active: #10b87d;
+  --att-accent-ink:    #052017;            /* text that sits ON the green */
+  --att-accent-soft:   rgba(32, 229, 160, .12);
+  --att-accent-line:   rgba(32, 229, 160, .26);
+  --att-accent-rgb:    32, 229, 160;
+
+  /* Secondary accent — inline links / info */
+  --att-link:          #8fb4ff;
+  --att-link-hover:    #abc7ff;
+
+  /* Neutral surfaces (near-black slate) */
+  --att-bg:            #0a0a0b;
+  --att-sidebar-bg:    #0c0c0e;
+  --att-surface:       #141417;
+  --att-surface-2:     #1b1b1f;            /* hover / elevated */
+  --att-border:        #26262b;
+  --att-border-strong: #36363d;
+
+  /* Text */
+  --att-heading:       #fbfbfc;
+  --att-text:          #e7e7ea;
+  --att-text-muted:    #9a9aa3;
+  --att-text-dim:      #6c6c75;
+
+  /* Status palette (soft, dark-tuned) */
+  --st-neutral-fg: #c2c2cb; --st-neutral-bg:#1e1e22; --st-neutral-line:#2e2e34;
+  --st-success-fg: #34e6a8; --st-success-bg:rgba(32,229,160,.11); --st-success-line:rgba(32,229,160,.26);
+  --st-danger-fg:  #ff7d7d; --st-danger-bg: rgba(255,86,86,.11);   --st-danger-line: rgba(255,86,86,.26);
+  --st-warning-fg: #ffc04b; --st-warning-bg:rgba(255,176,40,.11);  --st-warning-line:rgba(255,176,40,.26);
+  --st-info-fg:    #8fb4ff; --st-info-bg:   rgba(120,160,255,.11); --st-info-line:   rgba(120,160,255,.26);
+
+  /* Component-level tokens */
+  --att-nav-fg:        #b9b9c1;
+  --att-nav-icon:      #84848d;
+  --att-nav-active-bg: #202024;
+  --att-nav-active-fg: #ffffff;
+  --att-input-hover-border: #45454d;
+  --att-scrollbar:     #2c2c32;
+  --att-scrollbar-hover: #3c3c44;
+  --att-selection-fg:  #ffffff;
+  --att-close-filter:  invert(1) grayscale(1) brightness(1.6);
+  --att-danger-btn:    #e5484d;
+  --att-danger-btn-hover: #d83a40;
+
+  /* Radii / shadow */
+  --att-radius:   .7rem;
+  --att-radius-lg:.95rem;
+  --att-shadow:   0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.28);
+  --att-shadow-pop: 0 18px 50px rgba(0,0,0,.55), 0 2px 8px rgba(0,0,0,.4);
+
+  /* ---- map into Bootstrap ---- */
+  --bs-body-font-family: 'Instrument Sans', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --bs-body-bg:        var(--att-bg);
+  --bs-body-color:     var(--att-text);
+  --bs-emphasis-color: var(--att-heading);
+  --bs-secondary-color:var(--att-text-muted);
+  --bs-tertiary-color: var(--att-text-dim);
+  --bs-border-color:   var(--att-border);
+  --bs-border-radius:    var(--att-radius);
+  --bs-border-radius-sm: .55rem;
+  --bs-border-radius-lg: var(--att-radius-lg);
+  --bs-border-radius-xl: 1.2rem;
+  --bs-link-color:       var(--att-link);
+  --bs-link-hover-color: var(--att-link-hover);
+  --bs-primary:      var(--att-accent);
+  --bs-primary-rgb:  var(--att-accent-rgb);
+  --bs-focus-ring-color: rgba(var(--att-accent-rgb), .35);
+  --bs-focus-ring-width: .22rem;
+}
+
+/* ---- LIGHT MODE — standard white look ---------------------------------- */
+[data-bs-theme="light"] {
+  /* Accent: same green family, darkened a touch so it holds up on white */
+  --att-accent:        #11c184;
+  --att-accent-hover:  #0fae77;
+  --att-accent-active: #0d9c6b;
+  --att-accent-ink:    #04241a;
+  --att-accent-soft:   rgba(16, 184, 125, .12);
+  --att-accent-line:   rgba(16, 184, 125, .3);
+  --att-accent-rgb:    17, 193, 132;
+
+  --att-link:          #2f6bdf;
+  --att-link-hover:    #1d55c2;
+
+  /* Neutral surfaces */
+  --att-bg:            #f7f7f8;
+  --att-sidebar-bg:    #fcfcfd;
+  --att-surface:       #ffffff;
+  --att-surface-2:     #f1f2f4;
+  --att-border:        #e7e8eb;
+  --att-border-strong: #d6d7dc;
+
+  /* Text */
+  --att-heading:       #121217;
+  --att-text:          #31313a;
+  --att-text-muted:    #6e6e78;
+  --att-text-dim:      #9a9aa3;
+
+  /* Status palette (light-tuned) */
+  --st-neutral-fg: #5a5a64; --st-neutral-bg:#f1f2f4; --st-neutral-line:#e0e1e5;
+  --st-success-fg: #067a52; --st-success-bg:rgba(16,184,125,.1);  --st-success-line:rgba(16,184,125,.3);
+  --st-danger-fg:  #c92f35; --st-danger-bg: rgba(229,72,77,.08);   --st-danger-line: rgba(229,72,77,.28);
+  --st-warning-fg: #935b00; --st-warning-bg:rgba(255,176,40,.13);  --st-warning-line:rgba(206,144,40,.38);
+  --st-info-fg:    #2f6bdf; --st-info-bg:   rgba(47,107,223,.08);  --st-info-line:   rgba(47,107,223,.26);
+
+  /* Component-level tokens */
+  --att-nav-fg:        #4d4d57;
+  --att-nav-icon:      #8a8a93;
+  --att-nav-active-bg: #ebecef;
+  --att-nav-active-fg: #121217;
+  --att-input-hover-border: #c0c1c8;
+  --att-scrollbar:     #d2d3d8;
+  --att-scrollbar-hover: #bcbdc4;
+  --att-selection-fg:  #121217;
+  --att-close-filter:  none;
+  --att-danger-btn:    #d93840;
+  --att-danger-btn-hover: #c52d35;
+
+  /* Shadows: subtle, cool */
+  --att-shadow:   0 1px 2px rgba(18,18,23,.05), 0 4px 16px rgba(18,18,23,.04);
+  --att-shadow-pop: 0 18px 50px rgba(18,18,23,.16), 0 2px 8px rgba(18,18,23,.08);
+
+  --bs-focus-ring-color: rgba(var(--att-accent-rgb), .28);
+}
+
+/* ----------------------------------------------------------------------------
+   2. BASE
+   ------------------------------------------------------------------------- */
+body {
+  background: var(--att-bg);
+  color: var(--att-text);
+  font-size: .9rem; /* 14.4px UI base — denser, more professional than Bootstrap's 16px */
+  font-feature-settings: 'cv01','ss01';
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+h1,h2,h3,h4,h5,h6,.h1,.h2,.h3,.h4,.h5,.h6 {
+  font-family: 'Instrument Sans', system-ui, sans-serif;
+  color: var(--att-heading);
+  font-weight: 700;
+  letter-spacing: -.02em;
+}
+
+.text-muted { color: var(--att-text-muted) !important; }
+.text-dim   { color: var(--att-text-dim)  !important; }
+a { text-underline-offset: .15em; }
+hr { border-color: var(--att-border); opacity: 1; }
+::selection { background: var(--att-accent-soft); color: var(--att-selection-fg); }
+
+.font-mono, .text-mono, code, kbd, samp, pre {
+  font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-feature-settings: 'tnum';
+}
+code { color: var(--att-accent); background: var(--att-accent-soft); padding: .12em .4em; border-radius: .35rem; }
+
+/* slim scrollbars */
+* { scrollbar-width: thin; scrollbar-color: var(--att-scrollbar) transparent; }
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-thumb { background: var(--att-scrollbar); border-radius: 8px; border: 2px solid transparent; background-clip: content-box; }
+*::-webkit-scrollbar-thumb:hover { background: var(--att-scrollbar-hover); background-clip: content-box; }
+
+/* ----------------------------------------------------------------------------
+   3. BUTTONS
+   ------------------------------------------------------------------------- */
+.btn {
+  --bs-btn-font-weight: 600;
+  --bs-btn-padding-x: .95rem;
+  --bs-btn-padding-y: .5rem;
+  --bs-btn-border-radius: var(--att-radius);
+  letter-spacing: -.005em;
+  white-space: nowrap;
+  transition: background-color .15s ease, border-color .15s ease, box-shadow .15s ease, color .15s ease, transform .04s ease;
+}
+.btn:active { transform: translateY(.5px); }
+
+.btn-primary {
+  --bs-btn-color: var(--att-accent-ink);
+  --bs-btn-bg: var(--att-accent);
+  --bs-btn-border-color: var(--att-accent);
+  --bs-btn-hover-color: var(--att-accent-ink);
+  --bs-btn-hover-bg: var(--att-accent-hover);
+  --bs-btn-hover-border-color: var(--att-accent-hover);
+  --bs-btn-active-color: var(--att-accent-ink);
+  --bs-btn-active-bg: var(--att-accent-active);
+  --bs-btn-active-border-color: var(--att-accent-active);
+  --bs-btn-disabled-color: var(--att-accent-ink);
+  --bs-btn-disabled-bg: var(--att-accent);
+  --bs-btn-disabled-border-color: var(--att-accent);
+}
+.btn-primary:hover { box-shadow: 0 4px 18px rgba(var(--att-accent-rgb), .28); }
+
+/* secondary = quiet outline on dark (matches Deepgram's "View Billing") */
+.btn-secondary,
+.btn-outline-secondary {
+  --bs-btn-color: var(--att-text);
+  --bs-btn-bg: transparent;
+  --bs-btn-border-color: var(--att-border-strong);
+  --bs-btn-hover-color: var(--att-heading);
+  --bs-btn-hover-bg: var(--att-surface-2);
+  --bs-btn-hover-border-color: var(--att-border-strong);
+  --bs-btn-active-color: var(--att-heading);
+  --bs-btn-active-bg: var(--att-surface-2);
+  --bs-btn-active-border-color: var(--att-border-strong);
+}
+
+.btn-success {
+  --bs-btn-color: var(--att-accent-ink); --bs-btn-bg: var(--att-accent); --bs-btn-border-color: var(--att-accent);
+  --bs-btn-hover-color: var(--att-accent-ink); --bs-btn-hover-bg: var(--att-accent-hover); --bs-btn-hover-border-color: var(--att-accent-hover);
+}
+.btn-danger {
+  --bs-btn-bg: var(--att-danger-btn); --bs-btn-border-color: var(--att-danger-btn); --bs-btn-hover-bg: var(--att-danger-btn-hover); --bs-btn-hover-border-color: var(--att-danger-btn-hover);
+}
+.btn-link { --bs-btn-color: var(--att-link); --bs-btn-hover-color: var(--att-link-hover); text-decoration: none; font-weight: 500; }
+
+.btn-sm { --bs-btn-padding-x:.7rem; --bs-btn-padding-y:.32rem; --bs-btn-border-radius:.5rem; --bs-btn-font-size:.82rem; }
+
+/* ----------------------------------------------------------------------------
+   4. CARDS / SURFACES
+   ------------------------------------------------------------------------- */
+.card {
+  --bs-card-bg: var(--att-surface);
+  --bs-card-color: var(--att-text);
+  --bs-card-border-color: var(--att-border);
+  --bs-card-border-radius: var(--att-radius-lg);
+  --bs-card-cap-bg: transparent;
+  --bs-card-cap-color: var(--att-heading);
+  --bs-card-inner-border-radius: calc(var(--att-radius-lg) - 1px);
+  box-shadow: var(--att-shadow);
+}
+.card-header { border-bottom-color: var(--att-border); font-weight: 600; }
+.card-footer { border-top-color: var(--att-border); background: transparent; }
+
+/* generic panel + table wrapper (MARKUP TWEAK: wrap <table> in <div class="table-card">) */
+.surface, .table-card {
+  background: var(--att-surface);
+  border: 1px solid var(--att-border);
+  border-radius: var(--att-radius-lg);
+  box-shadow: var(--att-shadow);
+}
+.table-card { overflow: hidden; }
+.table-card > .table { margin: 0; }
+
+/* ----------------------------------------------------------------------------
+   5. TABLES
+   ------------------------------------------------------------------------- */
+.table {
+  --bs-table-bg: transparent;
+  --bs-table-color: var(--att-text);
+  --bs-table-border-color: var(--att-border);
+  --bs-table-hover-bg: var(--att-surface-2);
+  --bs-table-hover-color: var(--att-heading);
+  margin-bottom: 0;
+  vertical-align: middle;
+}
+.table > thead th {
+  font-family: 'Instrument Sans', sans-serif;
+  font-size: .68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--att-text-dim);
+  background: transparent;
+  border-bottom: 1px solid var(--att-border);
+  padding: .8rem 1rem;
+  white-space: nowrap;
+}
+.table > tbody td {
+  padding: .85rem 1rem;
+  border-bottom: 1px solid var(--att-border);
+  border-top: 0;
+  color: var(--att-text);
+}
+.table > tbody tr:last-child > td { border-bottom: 0; }
+.table td.text-end, .table th.text-end { white-space: nowrap; }
+.table-hover > tbody > tr { transition: background-color .12s ease; }
+.table-hover > tbody > tr:hover > * { background: var(--att-surface-2); }
+.table .cell-id { font-family:'IBM Plex Mono',monospace; font-size:.8rem; color: var(--att-text); }
+.table .cell-url { font-family:'IBM Plex Mono',monospace; font-size:.8rem; color: var(--att-text-muted); }
+
+/* ----------------------------------------------------------------------------
+   6. STATUS BADGES  (MARKUP TWEAK)
+   <span class="badge-soft is-success">Recording</span>
+   variants: is-neutral / is-success / is-danger / is-warning / is-info
+   ------------------------------------------------------------------------- */
+.badge-soft {
+  display: inline-flex; align-items: center; gap: .45em;
+  padding: .3rem .6rem .3rem .55rem;
+  font-size: .76rem; font-weight: 600; line-height: 1;
+  border-radius: 999px; border: 1px solid transparent;
+  white-space: nowrap;
+}
+.badge-soft::before { content:""; width:.42em; height:.42em; border-radius:50%; background: currentColor; flex: none; }
+.badge-soft.is-neutral { color: var(--st-neutral-fg); background: var(--st-neutral-bg); border-color: var(--st-neutral-line); }
+.badge-soft.is-success { color: var(--st-success-fg); background: var(--st-success-bg); border-color: var(--st-success-line); }
+.badge-soft.is-danger  { color: var(--st-danger-fg);  background: var(--st-danger-bg);  border-color: var(--st-danger-line); }
+.badge-soft.is-warning { color: var(--st-warning-fg); background: var(--st-warning-bg); border-color: var(--st-warning-line); }
+.badge-soft.is-info    { color: var(--st-info-fg);    background: var(--st-info-bg);    border-color: var(--st-info-line); }
+.badge-soft.is-success::before,
+.badge-soft.is-warning::before,
+.badge-soft.is-danger::before { box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 18%, transparent); }
+
+/* keep stock .badge usages legible, in case you don't switch them */
+.badge.bg-secondary { background: var(--st-neutral-bg) !important; color: var(--st-neutral-fg) !important; border:1px solid var(--st-neutral-line); }
+.badge.bg-danger    { background: var(--st-danger-bg)  !important; color: var(--st-danger-fg)  !important; border:1px solid var(--st-danger-line); }
+.badge.bg-success   { background: var(--st-success-bg) !important; color: var(--st-success-fg) !important; border:1px solid var(--st-success-line); }
+.badge { font-weight: 600; border-radius: 999px; }
+
+/* ----------------------------------------------------------------------------
+   7. FORMS
+   ------------------------------------------------------------------------- */
+.form-control, .form-select {
+  background: var(--att-surface);
+  border-color: var(--att-border-strong);
+  color: var(--att-text);
+  border-radius: var(--att-radius);
+  padding: .55rem .8rem;
+}
+.form-control:hover, .form-select:hover { border-color: var(--att-input-hover-border); }
+.form-control:focus, .form-select:focus {
+  background: var(--att-surface);
+  border-color: var(--att-accent);
+  color: var(--att-text);
+  box-shadow: 0 0 0 var(--bs-focus-ring-width) var(--bs-focus-ring-color);
+}
+.form-control::placeholder { color: var(--att-text-dim); }
+.form-label { font-weight: 600; color: var(--att-heading); margin-bottom: .4rem; font-size: .88rem; }
+.form-text  { color: var(--att-text-muted); }
+.input-group-text { background: var(--att-surface-2); border-color: var(--att-border-strong); color: var(--att-text-muted); }
+.form-check-input { background-color: var(--att-surface); border-color: var(--att-border-strong); }
+.form-check-input:checked { background-color: var(--att-accent); border-color: var(--att-accent); }
+.form-check-input:focus { border-color: var(--att-accent); box-shadow: 0 0 0 var(--bs-focus-ring-width) var(--bs-focus-ring-color); }
+
+/* ----------------------------------------------------------------------------
+   8. SIDEBAR
+   ------------------------------------------------------------------------- */
+.sidebar {
+  background: var(--att-sidebar-bg) !important;
+  border-right: 1px solid var(--att-border) !important;
+  top: 0; z-index: 100;
+}
+.sidebar.overflow-auto, .sidebar { overflow-x: hidden !important; }
+.sidebar .nav { gap: 2px; }
+.sidebar .nav-link {
+  display: flex; align-items: center; gap: .6rem;
+  color: var(--att-nav-fg);
+  padding: .42rem .55rem;
+  margin: 0 .45rem;          /* .45 margin + .55 padding = text aligns at 1rem, same as logo & labels */
+  border-radius: .5rem;
+  font-weight: 500; font-size: .86rem;
+  letter-spacing: .005em;
+  cursor: pointer;
+  transition: background-color .13s ease, color .13s ease;
+}
+.sidebar .nav-link i { font-size: .95rem; width: 1.15rem; text-align: center; color: var(--att-nav-icon); transition: color .13s ease; }
+.sidebar .nav-link:hover { background: var(--att-surface-2); color: var(--att-heading); }
+.sidebar .nav-link:hover i { color: var(--att-text-muted); }
+.sidebar .nav-link.active {
+  background: var(--att-nav-active-bg) !important;   /* quiet neutral highlight — green is reserved for CTAs */
+  color: var(--att-nav-active-fg) !important;
+  font-weight: 600;
+}
+.sidebar .nav-link.active i { color: var(--att-nav-active-fg) !important; }
+
+/* small section labels (MARKUP TWEAK: <div class="nav-section">Activity</div>) */
+.nav-section {
+  font-size: .82rem; font-weight: 700; letter-spacing: -.005em;
+  color: var(--att-heading);
+  padding: 0 1rem; margin: 1.4rem 0 .45rem;
+}
+
+/* project selector */
+.project-dropdown-toggle {
+  color: var(--att-heading) !important;
+  background: var(--att-surface) !important;
+  border: 1px solid var(--att-border) !important;
+  border-radius: .6rem !important;
+  padding: .5rem .7rem !important;
+  font-weight: 600 !important;
+  font-size: .86rem !important;
+}
+.project-dropdown-toggle:hover { background: var(--att-surface-2) !important; border-color: var(--att-border-strong) !important; }
+.project-dropdown-toggle .bi-chevron-down { color: var(--att-text-muted); margin-left: auto; transition: transform .15s ease; }
+
+.settings-caret, .account-caret { color: var(--att-text-dim); }
+.sidebar form .nav-link { width: 100%; }
+
+/* ----------------------------------------------------------------------------
+   9. DROPDOWN MENUS
+   ------------------------------------------------------------------------- */
+.dropdown-menu {
+  --bs-dropdown-bg: var(--att-surface);
+  --bs-dropdown-color: var(--att-text);
+  --bs-dropdown-border-color: var(--att-border);
+  --bs-dropdown-border-radius: .8rem;
+  --bs-dropdown-link-color: var(--att-text);
+  --bs-dropdown-link-hover-bg: var(--att-surface-2);
+  --bs-dropdown-link-hover-color: var(--att-heading);
+  --bs-dropdown-link-active-bg: var(--att-accent-soft);
+  --bs-dropdown-link-active-color: var(--att-heading);
+  padding: .35rem;
+  box-shadow: var(--att-shadow-pop);
+}
+.dropdown-item { border-radius: .5rem; padding: .5rem .6rem; font-size: .92rem; }
+.dropdown-divider { border-color: var(--att-border); }
+
+/* ----------------------------------------------------------------------------
+   10. MODALS
+   ------------------------------------------------------------------------- */
+.modal-content {
+  background: var(--att-surface);
+  border: 1px solid var(--att-border);
+  border-radius: 1.1rem;
+  box-shadow: var(--att-shadow-pop);
+}
+.modal-header, .modal-footer { border-color: var(--att-border); padding: 1.1rem 1.35rem; }
+.modal-body { padding: 1.35rem; }
+.modal-title { font-weight: 600; }
+.modal-backdrop.show { opacity: .65; }
+.btn-close { filter: var(--att-close-filter); opacity: .6; }
+.btn-close:hover { opacity: 1; }
+
+/* ----------------------------------------------------------------------------
+   11. ALERTS
+   ------------------------------------------------------------------------- */
+.alert { border-radius: var(--att-radius); border-width: 1px; }
+.alert-danger  { --bs-alert-color: var(--st-danger-fg);  --bs-alert-bg: var(--st-danger-bg);  --bs-alert-border-color: var(--st-danger-line); }
+.alert-success { --bs-alert-color: var(--st-success-fg); --bs-alert-bg: var(--st-success-bg); --bs-alert-border-color: var(--st-success-line); }
+.alert-warning { --bs-alert-color: var(--st-warning-fg); --bs-alert-bg: var(--st-warning-bg); --bs-alert-border-color: var(--st-warning-line); }
+.alert-info    { --bs-alert-color: var(--st-info-fg);    --bs-alert-bg: var(--st-info-bg);    --bs-alert-border-color: var(--st-info-line); }
+.alert-link { color: inherit; font-weight: 600; }
+
+/* ----------------------------------------------------------------------------
+   12. PAGINATION
+   ------------------------------------------------------------------------- */
+.pagination { --bs-pagination-border-color: transparent; gap: 4px; }
+.page-link {
+  color: var(--att-text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: .5rem !important;
+  padding: .4rem .7rem;
+  min-width: 2.25rem; text-align: center;
+  transition: background-color .12s ease, color .12s ease;
+}
+.page-link:hover { background: var(--att-surface-2); color: var(--att-heading); }
+.page-item.active .page-link {
+  background: var(--att-accent); border-color: var(--att-accent); color: var(--att-accent-ink); font-weight: 600;
+}
+.page-item.disabled .page-link { color: var(--att-text-dim); background: transparent; }
+
+/* ----------------------------------------------------------------------------
+   13. CODE BLOCK (developer tools panel — stays dark in both themes)
+   ------------------------------------------------------------------------- */
+.code-block {
+  background: #0e0e10;
+  border: 1px solid #26262b;
+  border-radius: var(--att-radius);
+  padding: 1rem 1.1rem;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: .86rem;
+  color: #cfd2d8;
+  overflow-x: auto;
+}
+.code-block .tok-cmd { color: #20e5a0; }
+.code-block .tok-flag { color: #8fb4ff; }
+.code-block .tok-str { color: #e6b873; }
+
+/* ----------------------------------------------------------------------------
+   14. MISC
+   ------------------------------------------------------------------------- */
+.page-title { font-size: clamp(1.7rem, 2.4vw, 2.1rem); font-weight: 700; letter-spacing: -.02em; }
+.text-accent { color: var(--att-accent) !important; }
+.divider { height: 1px; background: var(--att-border); border: 0; }
+.btn-icon { display: inline-flex; align-items: center; justify-content: center; gap: .5rem; }
