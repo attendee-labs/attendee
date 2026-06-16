@@ -830,7 +830,7 @@ class GoogleMeetUIMethods:
         logger.info("Filling in the email input...")
         # Look for input type = email and fill it in
         session_email = self.google_meet_bot_login_session.get("login_email")
-        email_input = self.locate_element(step="email_input_for_google_account_sign_in", condition=EC.element_to_be_clickable((By.CSS_SELECTOR, 'input[type="email"]')), wait_time_seconds=10)
+        email_input = self.locate_element(step="email_input_for_google_account_sign_in", condition=EC.element_to_be_clickable((By.CSS_SELECTOR, 'input[type="email"], input[aria-label="Email or phone"], input#identifierId')), wait_time_seconds=10)
         email_input.send_keys(session_email)
 
         # Press the enter key to submit the email input
