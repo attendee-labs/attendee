@@ -90,6 +90,39 @@ class TeamsUIMethods:
         logger.info(f"Sleeping for {time_to_sleep_for} seconds.")
         time.sleep(time_to_sleep_for)
 
+    def ensure_x11_input(self):
+        if not hasattr(self, "x11_input"):
+            from bots.google_meet_bot_adapter.x11_input import X11Input
+
+            self.x11_input = X11Input()
+
+    # Wiggle mouse to defeat bot detection
+    def wiggle_mouse(self):
+        try:
+            self.ensure_x11_input()
+
+            # The root window geometry matches the (virtual) screen size, so we
+            # can pick random in-bounds targets to move the OS cursor to.
+            geometry = self.x11_input.root.get_geometry()
+            screen_width = max(1, geometry.width)
+            screen_height = max(1, geometry.height)
+
+            # Start from the center of the screen before wiggling around.
+            self.x11_input.move_abs(screen_width // 2, screen_height // 2)
+            time.sleep(random.uniform(0.1, 0.4))
+
+            num_movements = 5
+            logger.info(f"Wiggling mouse at OS level with {num_movements} movements")
+            for _ in range(num_movements):
+                target_x = random.randint(0, screen_width - 1)
+                target_y = random.randint(0, screen_height - 1)
+                self.x11_input.move_abs(target_x, target_y)
+                time.sleep(0.1)
+        except Exception as e:
+            # Mouse wiggling is best-effort anti-bot-detection; never let it
+            # break the join flow.
+            logger.warning(f"Error wiggling mouse at OS level: {e}")
+
     def fill_out_name_input(self):
         num_attempts = 60
         logger.info("Waiting for the name input field...")
@@ -97,6 +130,7 @@ class TeamsUIMethods:
             try:
                 name_input = WebDriverWait(self.driver, 1).until(EC.presence_of_element_located((By.CSS_SELECTOR, '[data-tid="prejoin-display-name-input"]')))
                 logger.info("Name input found")
+                self.wiggle_mouse()
                 name_input.send_keys(self.display_name)
                 return
             except TimeoutException as e:
