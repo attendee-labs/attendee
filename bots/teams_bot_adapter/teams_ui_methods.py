@@ -130,7 +130,6 @@ class TeamsUIMethods:
             try:
                 name_input = WebDriverWait(self.driver, 1).until(EC.presence_of_element_located((By.CSS_SELECTOR, '[data-tid="prejoin-display-name-input"]')))
                 logger.info("Name input found")
-                self.wiggle_mouse()
                 name_input.send_keys(self.display_name)
                 return
             except TimeoutException as e:
@@ -377,6 +376,8 @@ class TeamsUIMethods:
         )
 
         self.fill_out_name_input()
+
+        self.wiggle_mouse()
 
         self.turn_off_media_inputs()
 
