@@ -105,6 +105,4 @@ python-xlib==0.33
 django-csp==4.0
 pyotp==2.9.0
 Cython==3.2.4
-PyJWT==2.9.0
 gdown==6.0.0
-python-dotenv==1.0.1
