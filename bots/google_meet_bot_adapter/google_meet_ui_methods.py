@@ -336,7 +336,7 @@ class GoogleMeetUIMethods:
 
     def ensure_x11_input(self):
         if not hasattr(self, "x11_input"):
-            from .x11_input import X11Input
+            from bots.web_bot_adapter.x11_input import X11Input
 
             self.x11_input = X11Input()
 
