@@ -38,7 +38,7 @@ prompt_toolkit==3.0.48
 psycopg2==2.9.10
 pycparser==2.22
 pydub==0.25.1
-PyJWT==2.9.0
+PyJWT==2.12.0
 PySocks==1.7.1
 python-dateutil==2.9.0.post0
 python-dotenv==1.0.1
@@ -105,6 +105,4 @@ python-xlib==0.33
 django-csp==4.0
 pyotp==2.9.0
 Cython==3.2.4
-PyJWT==2.9.0
 gdown==6.0.0
-python-dotenv==1.0.1
