@@ -5,7 +5,7 @@ import os
 import random
 import subprocess
 import time
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, urlparse, urlunparse
 
 import redis
 import requests
@@ -1047,6 +1047,8 @@ class GoogleMeetUIMethods:
         logger.info("Logging in to Google Meet account")
         session_id = self.google_meet_bot_login_session.get("session_id")
         google_meet_set_cookie_url = get_google_meet_set_cookie_url(session_id)
+        parsed_set_cookie_url = urlparse(google_meet_set_cookie_url)
+        google_meet_set_cookie_url = urlunparse(parsed_set_cookie_url._replace(query="", params="", fragment=""))
         logger.info(f"Navigating to Google Meet set cookie URL: {google_meet_set_cookie_url}")
         self.driver.get(google_meet_set_cookie_url)
 
