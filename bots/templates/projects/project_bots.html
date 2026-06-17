@@ -72,7 +72,7 @@
     </div>
     
     <!-- Filters Collapsible Panel -->
-    {% if filter_params.start_date or filter_params.end_date or filter_params.join_at_start or filter_params.join_at_end or filter_params.ended_at_start or filter_params.ended_at_end or filter_params.states or filter_params.search or filter_params.joined_meeting or filter_params.unexpected_error or filter_params.metadata_pairs or bots %}
+    {% if filter_params.start_date or filter_params.end_date or filter_params.join_at_start or filter_params.join_at_end or filter_params.ended_at_start or filter_params.ended_at_end or filter_params.states or filter_params.search or filter_params.joined_meeting or filter_params.unexpected_error or filter_params.transcript or filter_params.other_participants or filter_params.metadata_pairs or bots %}
     <div class="filter-panel mb-3">
         <div class="filter-header p-2 rounded d-flex align-items-center" 
              style="background-color: #f8f9fa; cursor: pointer;" 
@@ -81,12 +81,12 @@
             <span>Filters</span>
             <span style="margin-left: 5px;" class="filter-caret-container ms-auto">
                 <svg width="21" height="21" viewBox="0 0 14 14" fill="none" class="filter-caret" 
-                     style="transform: {% if filter_params.start_date or filter_params.end_date or filter_params.join_at_start or filter_params.join_at_end or filter_params.ended_at_start or filter_params.ended_at_end or filter_params.states or filter_params.search or filter_params.joined_meeting or filter_params.unexpected_error or filter_params.metadata_pairs %}rotate(180deg){% else %}rotate(0deg){% endif %};">
+                     style="transform: {% if filter_params.start_date or filter_params.end_date or filter_params.join_at_start or filter_params.join_at_end or filter_params.ended_at_start or filter_params.ended_at_end or filter_params.states or filter_params.search or filter_params.joined_meeting or filter_params.unexpected_error or filter_params.transcript or filter_params.other_participants or filter_params.metadata_pairs %}rotate(180deg){% else %}rotate(0deg){% endif %};">
                     <path d="M4.3225 5.0108L7 7.68247L9.6775 5.0108L10.5 5.8333L7 9.3333L3.5 5.8333L4.3225 5.0108Z" fill="currentcolor"></path>
                 </svg>
             </span>
         </div>
-        <div class="filter-content" style="display: {% if filter_params.start_date or filter_params.end_date or filter_params.join_at_start or filter_params.join_at_end or filter_params.ended_at_start or filter_params.ended_at_end or filter_params.states or filter_params.search or filter_params.joined_meeting or filter_params.unexpected_error or filter_params.metadata_pairs %}block{% else %}none{% endif %};">
+        <div class="filter-content" style="display: {% if filter_params.start_date or filter_params.end_date or filter_params.join_at_start or filter_params.join_at_end or filter_params.ended_at_start or filter_params.ended_at_end or filter_params.states or filter_params.search or filter_params.joined_meeting or filter_params.unexpected_error or filter_params.transcript or filter_params.other_participants or filter_params.metadata_pairs %}block{% else %}none{% endif %};">
             <div class="filter-container">
                 <form method="get" class="row g-3">
                     <!-- Search and Metadata filters in a single row -->
@@ -161,6 +161,30 @@
                                     <label class="btn btn-outline-secondary" for="unexpected_error_yes">Yes</label>
                                     <input type="radio" class="btn-check" name="unexpected_error" id="unexpected_error_no" value="no" {% if filter_params.unexpected_error == "no" %}checked{% endif %}>
                                     <label class="btn btn-outline-secondary" for="unexpected_error_no">No</label>
+                                </div>
+                            </div>
+                            <div style="border-left: 1px solid #dee2e6; height: 24px; align-self: center;"></div>
+                            <div style="display: inline-flex; align-items: center;">
+                                <span class="me-2" style="flex-shrink: 0;">Transcript</span>
+                                <div class="btn-group btn-group-sm" role="group">
+                                    <input type="radio" class="btn-check" name="transcript" id="transcript_any" value="" {% if not filter_params.transcript %}checked{% endif %}>
+                                    <label class="btn btn-outline-secondary" for="transcript_any">Any</label>
+                                    <input type="radio" class="btn-check" name="transcript" id="transcript_yes" value="yes" {% if filter_params.transcript == "yes" %}checked{% endif %}>
+                                    <label class="btn btn-outline-secondary" for="transcript_yes">Yes</label>
+                                    <input type="radio" class="btn-check" name="transcript" id="transcript_no" value="no" {% if filter_params.transcript == "no" %}checked{% endif %}>
+                                    <label class="btn btn-outline-secondary" for="transcript_no">No</label>
+                                </div>
+                            </div>
+                            <div style="border-left: 1px solid #dee2e6; height: 24px; align-self: center;"></div>
+                            <div style="display: inline-flex; align-items: center;">
+                                <span class="me-2" style="flex-shrink: 0;">Other Participants</span>
+                                <div class="btn-group btn-group-sm" role="group">
+                                    <input type="radio" class="btn-check" name="other_participants" id="other_participants_any" value="" {% if not filter_params.other_participants %}checked{% endif %}>
+                                    <label class="btn btn-outline-secondary" for="other_participants_any">Any</label>
+                                    <input type="radio" class="btn-check" name="other_participants" id="other_participants_yes" value="yes" {% if filter_params.other_participants == "yes" %}checked{% endif %}>
+                                    <label class="btn btn-outline-secondary" for="other_participants_yes">Yes</label>
+                                    <input type="radio" class="btn-check" name="other_participants" id="other_participants_no" value="no" {% if filter_params.other_participants == "no" %}checked{% endif %}>
+                                    <label class="btn btn-outline-secondary" for="other_participants_no">No</label>
                                 </div>
                             </div>
                         </div>
@@ -266,7 +290,7 @@
         {% else %}
             <div class="alert alert-info" role="alert">
                 <i class="bi bi-info-circle me-2"></i>
-                {% if filter_params.start_date or filter_params.end_date or filter_params.join_at_start or filter_params.join_at_end or filter_params.ended_at_start or filter_params.ended_at_end or filter_params.states or filter_params.search or filter_params.joined_meeting or filter_params.unexpected_error or filter_params.metadata_pairs %}
+                {% if filter_params.start_date or filter_params.end_date or filter_params.join_at_start or filter_params.join_at_end or filter_params.ended_at_start or filter_params.ended_at_end or filter_params.states or filter_params.search or filter_params.joined_meeting or filter_params.unexpected_error or filter_params.transcript or filter_params.other_participants or filter_params.metadata_pairs %}
                     {% if session_type == SessionTypes.APP_SESSION %}
                         No app sessions found matching the current filters.
                     {% endif %}
