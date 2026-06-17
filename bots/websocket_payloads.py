@@ -65,3 +65,19 @@ def per_participant_audio_websocket_payload(participant_uuid: str, chunk: bytes,
             "sample_rate": output_sample_rate,
         },
     }
+
+
+def per_participant_video_websocket_payload(frame: bytes, bot_object_id: str, participant_uuid: str, source: str) -> dict:
+    if source not in ["webcam", "screenshare"]:
+        raise ValueError(f"Invalid source: {source}")
+
+    return {
+        "trigger": RealtimeTriggerTypes.type_to_api_code(RealtimeTriggerTypes.PER_PARTICIPANT_VIDEO_FRAME),
+        "bot_id": bot_object_id,
+        "data": {
+            "frame": frame.decode("ascii"),
+            "format": "jpeg",
+            "participant_uuid": str(participant_uuid),
+            "source": source,
+        },
+    }

@@ -38,6 +38,10 @@
           "type": "page"
         },
         {
+          "path": "docs/realtime_video.md",
+          "type": "page"
+        },
+        {
           "path": "docs/calendar_integration.md",
           "type": "page"
         },

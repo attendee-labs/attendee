@@ -269,7 +269,7 @@ paths:
                     type: image/png
                     data: iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==
                 summary: Update name and image
-                description: Example of updating the bot name and/or image
+                description: Example of updating the bot name and/or image (supports PNG and JPEG)
       security:
       - {}
       responses:
@@ -589,7 +589,7 @@ paths:
                 value:
                   type: image/png
                   data: iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==
-                summary: Valid image
+                summary: Valid PNG image
                 description: An image of a red pixel encoded in base64 in PNG format
         required: true
       security:
@@ -792,8 +792,7 @@ paths:
   /api/v1/bots/{object_id}/pause_recording:
     post:
       operationId: Pause Recording
-      description: Pauses the recording for the specified bot. This functionality
-        is in beta and only supported for Google Meet and MS Teams bots.
+      description: Pauses the recording for the specified bot.
       summary: Pause the bot's recording
       parameters:
       - in: header
@@ -1853,14 +1852,14 @@ components:
           allOf:
           - $ref: '#/components/schemas/TypeEnum'
           description: |-
-            Image content type. Currently only PNG is supported.
+            Image content type. Supported formats: PNG and JPEG.
 
-            * `image/png` - image/png
+            * `image/png` - PNG Image
+            * `image/jpeg` - JPEG Image
         data:
           type: string
           minLength: 1
-          description: 'Base64 encoded image data. Simple example of a red pixel encoded
-            in PNG format: iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+          description: Base64 encoded image data.
       required:
       - data
       - type
@@ -2128,9 +2127,11 @@ components:
                 tokens the bot will use when it joins the meeting. Our server will
                 make a POST request to this URL with information about the bot and
                 expects a JSON response with the format: {"zak_token": "<zak_token>",
-                "join_token": "<join_token>", "app_privilege_token": "<app_privilege_token>", "onbehalf_token": "<onbehalf_token>"}.
-                Not every token needs to be provided, i.e. you can reply with {"zak_token":
-                "<zak_token>"}.'
+                "join_token": "<join_token>", "app_privilege_token": "<app_privilege_token>",
+                "onbehalf_token": "<onbehalf_token>"}. Not every token needs to be
+                provided, i.e. you can reply with {"zak_token": "<zak_token>"}. For
+                the onbehalf_token attribute, you can send a comma separated list
+                of tokens which will be tried one by one, if the previous one failed.'
           required: []
           additionalProperties: false
           description: Callback urls for the bot to call when it needs to fetch certain
@@ -2161,7 +2162,7 @@ components:
               description: URL of a website containing a voice agent that gets the
                 user's responses from the microphone. The bot will load this website
                 and stream its video and audio to the meeting. The audio from the
-                meeting will be sent to website via the microphone. See https://docs.attendee.dev/guides/voice-agents
+                meeting will be sent to website via the microphone. See https://docs.attendee.dev/guides/voiceagents
                 for further details. The video will be displayed through the bot's
                 webcam. To display the video through screenshare, use the screenshare_url
                 parameter instead.
@@ -2409,13 +2410,6 @@ components:
                     docs for details.
                 speech_model:
                   type: string
-                  enum:
-                  - best
-                  - nano
-                  - slam-1
-                  - universal
-                  - universal-2
-                  - universal-3-pro
                   description: The speech model to use for transcription. See AssemblyAI
                     docs for details. This parameter is deprecated, use the speech_models
                     param instead.
@@ -2423,9 +2417,6 @@ components:
                   type: array
                   items:
                     type: string
-                    enum:
-                    - universal-2
-                    - universal-3-pro
                   uniqueItems: true
                   description: The speech models to use for transcription in order
                     of preference. Defaults to ['universal-3-pro', 'universal-2'].
@@ -2516,6 +2507,27 @@ components:
                 supported if self-hosting Attendee.
               required: []
               additionalProperties: true
+            custom_async_v2:
+              type: object
+              properties:
+                headers:
+                  type: object
+                  additionalProperties:
+                    type: string
+                  description: Optional headers to include in the request to the custom
+                    transcription service.
+                form_data:
+                  type: object
+                  additionalProperties:
+                    type: string
+                  description: Optional form data to include in the request to the custom transcription
+                    service.
+              description: Custom self-hosted transcription service with async processing.
+                Use `headers` for HTTP request headers (e.g. auth tokens) and `form_data`
+                for multipart form fields sent alongside the audio file. Only supported
+                if self-hosting Attendee.
+              required: []
+              additionalProperties: true
           required: []
           description: 'The transcription settings for the bot, e.g. {''deepgram'':
             {''language'': ''en''}}'
@@ -2529,7 +2541,7 @@ components:
                   type: string
                   description: The URL of the websocket to use for receiving meeting
                     audio in real time and having the bot output audio in real time.
-                    It must start with wss://. See https://docs.attendee.dev/guides/realtime-audio-input-and-output
+                    It must start with wss://. See https://docs.attendee.dev/guides/realtimeaudio
                     for details on how to receive and send audio through the websocket
                     connection.
                 sample_rate:
@@ -2550,7 +2562,7 @@ components:
                 url:
                   type: string
                   description: The URL of the websocket to use for receiving per participant
-                    meeting audio in real time. It must start with wss://. See https://docs.attendee.dev/guides/realtime-audio-input-and-output
+                    meeting audio in real time. It must start with wss://. See https://docs.attendee.dev/guides/realtimeaudio#per-participant-audio-streaming
                     for details on how to receive per participant audio through the
                     websocket connection.
                 sample_rate:
@@ -2564,6 +2576,39 @@ components:
               required:
               - url
               additionalProperties: false
+            per_participant_video:
+              type: object
+              properties:
+                url:
+                  type: string
+                  description: The URL of the websocket to use for receiving per-participant
+                    video and screenshare in real time. It must start with wss://.
+                    See https://docs.attendee.dev/guides/realtimevideo for details
+                    on how to receive video through the websocket connection.
+                webcam_resolution:
+                  type: string
+                  enum:
+                  - none
+                  - 360p
+                  - 720p
+                  - 1080p
+                  default: 360p
+                  description: 'Resolution for per-participant webcam video. ''none''
+                    disables webcam streaming. Framerate and JPEG quality are determined
+                    by resolution: 360p (2fps, quality 70), 720p (1fps, quality 60),
+                    1080p (1fps, quality 50). Defaults to ''360p''.'
+                screenshare_resolution:
+                  type: string
+                  enum:
+                  - none
+                  - 360p
+                  - 720p
+                  - 1080p
+                  default: 360p
+                  description: 'Resolution for per-participant screenshare video.
+                    ''none'' disables screenshare streaming. Framerate and JPEG quality
+                    are determined by resolution: 360p (2fps, quality 70), 720p (1fps,
+                    quality 60), 1080p (1fps, quality 50). Defaults to ''360p''.'
           required: []
           additionalProperties: false
           description: 'The websocket settings for the bot, e.g. {''audio'': {''url'':
@@ -2638,11 +2683,29 @@ components:
                 means the bot will always login, 'only_if_required' means the bot
                 will only login if the meeting requires authentication.
               default: always
+            ui_interaction_mode:
+              type: string
+              enum:
+              - robotic
+              - humanized
+              description: The UI interaction mode for the Google Meet bot. 'humanized'
+                performs more human-like interactions to evade bot detection, but
+                the bot will take about 10 seconds longer to join the meeting.
+              default: humanized
+            login_group_name:
+              type:
+              - string
+              - 'null'
+              description: Optional bot login group name to use for Google Meet signed-in
+                bot selection. If no group is specified, the oldest Google Meet group
+                will be selected.
+              default: null
           required: []
           additionalProperties: false
           default:
             use_login: false
             login_mode: always
+            login_group_name: null
           description: The Google Meet-specific settings for the bot.
         teams_settings:
           type: object
@@ -2662,11 +2725,20 @@ components:
                 the bot will always login, 'only_if_required' means the bot will only
                 login if the meeting requires authentication.
               default: always
+            login_group_name:
+              type:
+              - string
+              - 'null'
+              description: Optional bot login group name to use for Teams signed-in
+                bot selection. If no group is specified, the oldest Teams group will
+                be selected.
+              default: null
           required: []
           additionalProperties: false
           default:
             use_login: false
             login_mode: always
+            login_group_name: null
           description: The Microsoft Teams-specific settings for the bot.
         zoom_settings:
           type: object
@@ -2828,6 +2900,12 @@ components:
           type: boolean
           default: false
           description: Whether to loop the video. Defaults to false.
+        mute_video:
+          type: boolean
+          default: false
+          description: Whether to mute the video's audio track. Main purpose is to
+            play a video as the bot's webcam while keeping the bot's microphone muted.
+            Defaults to false.
       required:
       - url
     PaginatedBotList:
@@ -3115,7 +3193,7 @@ components:
           description: URL of a website containing a voice agent that gets the user's
             responses from the microphone. The bot will load this website and stream
             its video and audio to the meeting. The audio from the meeting will be
-            sent to website via the microphone. See https://docs.attendee.dev/guides/voice-agents
+            sent to website via the microphone. See https://docs.attendee.dev/guides/voiceagents
             for further details. The video will be displayed through the bot's webcam.
             To display the video through screenshare, use the screenshare_url parameter
             instead. Set to "" to turn off.
@@ -3233,8 +3311,11 @@ components:
     TypeEnum:
       enum:
       - image/png
+      - image/jpeg
       type: string
-      description: '* `image/png` - image/png'
+      description: '* `image/png` - PNG Image
+
+        * `image/jpeg` - JPEG Image'
     ZoomOAuthConnection:
       type: object
       properties:
