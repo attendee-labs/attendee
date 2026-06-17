@@ -395,7 +395,7 @@ class BotSsoViewsIntegrationTest(TransactionTestCase):
         # Extract and verify SAMLResponse is base64-encoded
         import re
 
-        saml_response_match = re.search(r'name="SAMLResponse" value="([^"]+)"', content)
+        saml_response_match = re.search(r'name="SAMLResponse"\s+value="([^"]+)"', content)
         self.assertIsNotNone(saml_response_match)
         saml_response_b64 = saml_response_match.group(1)
 
