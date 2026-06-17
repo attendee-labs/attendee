@@ -621,16 +621,13 @@ class ProjectBotsView(LoginRequiredMixin, ProjectUrlContextMixin, ListView):
             else:
                 queryset = queryset.filter(~has_transcript)
 
-        # Apply "other participants" filter if provided. A meeting had other
-        # participants when there was at least one participant other than the
-        # bot itself.
-        other_participants = self.request.GET.get("other_participants", "").strip()
-        if other_participants in ("yes", "no"):
-            has_other_participant = models.Exists(Participant.objects.filter(bot=models.OuterRef("pk"), is_the_bot=False))
-            if other_participants == "yes":
-                queryset = queryset.filter(has_other_participant)
-            else:
-                queryset = queryset.filter(~has_other_participant)
+        # Apply "minimum participants" filter if provided. This counts only
+        # non-bot participants, so a value of 2 means the meeting had at least
+        # two participants other than the bot itself.
+        min_participants = self.request.GET.get("min_participants", "").strip()
+        if min_participants.isdigit() and int(min_participants) >= 1:
+            other_participant_count = Participant.objects.filter(bot=models.OuterRef("pk"), is_the_bot=False).order_by().values("bot").annotate(count=models.Count("id")).values("count")
+            queryset = queryset.annotate(other_participant_count=models.Subquery(other_participant_count, output_field=models.IntegerField())).filter(other_participant_count__gte=int(min_participants))
 
         # Get the latest bot event type and subtype for each bot using subquery annotations
         latest_event_subquery_base = BotEvent.objects.filter(bot=models.OuterRef("pk")).order_by("-created_at")
@@ -655,7 +652,7 @@ class ProjectBotsView(LoginRequiredMixin, ProjectUrlContextMixin, ListView):
         context["session_type"] = self.get_session_type()
 
         # Add filter parameters to context for maintaining state
-        context["filter_params"] = {"start_date": self.request.GET.get("start_date", ""), "end_date": self.request.GET.get("end_date", ""), "join_at_start": self.request.GET.get("join_at_start", ""), "join_at_end": self.request.GET.get("join_at_end", ""), "ended_at_start": self.request.GET.get("ended_at_start", ""), "ended_at_end": self.request.GET.get("ended_at_end", ""), "states": self.request.GET.getlist("states"), "search": self.request.GET.get("search", ""), "joined_meeting": self.request.GET.get("joined_meeting", ""), "unexpected_error": self.request.GET.get("unexpected_error", ""), "transcript": self.request.GET.get("transcript", ""), "other_participants": self.request.GET.get("other_participants", ""), "metadata_pairs": self.get_metadata_pairs()}
+        context["filter_params"] = {"start_date": self.request.GET.get("start_date", ""), "end_date": self.request.GET.get("end_date", ""), "join_at_start": self.request.GET.get("join_at_start", ""), "join_at_end": self.request.GET.get("join_at_end", ""), "ended_at_start": self.request.GET.get("ended_at_start", ""), "ended_at_end": self.request.GET.get("ended_at_end", ""), "states": self.request.GET.getlist("states"), "search": self.request.GET.get("search", ""), "joined_meeting": self.request.GET.get("joined_meeting", ""), "unexpected_error": self.request.GET.get("unexpected_error", ""), "transcript": self.request.GET.get("transcript", ""), "min_participants": self.request.GET.get("min_participants", ""), "metadata_pairs": self.get_metadata_pairs()}
 
         # Add flag to detect if create modal should be automatically opened
         context["open_create_modal"] = self.request.GET.get("open_create_modal") == "true"
@@ -1209,6 +1206,7 @@ class ProjectUsageView(AdminRequiredMixin, ProjectUrlContextMixin, View):
 
         context = self.get_project_context(object_id, project)
         context.update(get_usage_data(project, interval, measure, platform, category_set))
+        context["show_category_selector"] = settings.SHOW_CATEGORY_SELECTOR_IN_USAGE_DASHBOARD
         return render(request, "projects/project_usage.html", context)
 
 

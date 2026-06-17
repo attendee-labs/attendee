@@ -26,12 +26,14 @@
                 <a href="?interval={{ interval }}&measure={{ measure }}&platform=meet{% if category_set != 'default' %}&category_set={{ category_set }}{% endif %}" class="btn {% if platform == 'meet' %}btn-secondary{% else %}btn-outline-secondary{% endif %}">Google Meet</a>
                 <a href="?interval={{ interval }}&measure={{ measure }}&platform=teams{% if category_set != 'default' %}&category_set={{ category_set }}{% endif %}" class="btn {% if platform == 'teams' %}btn-secondary{% else %}btn-outline-secondary{% endif %}">Teams</a>
             </div>
+            {% if show_category_selector %}
             <span class="border-start ms-1" style="height: 1.5rem;"></span>
             <span class="text-muted small fw-semibold">Categories</span>
             <div class="btn-group btn-group-sm">
                 <a href="?interval={{ interval }}&measure={{ measure }}{% if platform %}&platform={{ platform }}{% endif %}" class="btn {% if category_set == 'default' %}btn-secondary{% else %}btn-outline-secondary{% endif %}">Default</a>
                 <a href="?interval={{ interval }}&measure={{ measure }}{% if platform %}&platform={{ platform }}{% endif %}&category_set=transcript" class="btn {% if category_set == 'transcript' %}btn-secondary{% else %}btn-outline-secondary{% endif %}">Transcript</a>
             </div>
+            {% endif %}
         </div>
     </div>
     <p class="text-muted">{{ subtitle }}</p>

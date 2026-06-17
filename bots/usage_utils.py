@@ -209,11 +209,11 @@ def _build_heatmap_row(label, values, color, date_ranges, category_params, forma
 
 CATEGORY_FILTERS = {
     "Successful": "joined_meeting=yes&unexpected_error=no",
-    "Successful With Other Participants": "joined_meeting=yes&unexpected_error=no&other_participants=yes",
+    "Successful With Other Participants": "joined_meeting=yes&unexpected_error=no&min_participants=2",
     "Could Not Join": "joined_meeting=no&unexpected_error=no",
     "Unexpected Error": "unexpected_error=yes",
-    "Transcript Generated": "joined_meeting=yes&unexpected_error=no&other_participants=yes&transcript=yes",
-    "No Transcript": "joined_meeting=yes&unexpected_error=no&other_participants=yes&transcript=no",
+    "Transcript Generated": "joined_meeting=yes&unexpected_error=no&min_participants=2&transcript=yes",
+    "No Transcript": "joined_meeting=yes&unexpected_error=no&min_participants=2&transcript=no",
     "Total": "",
 }
 
@@ -240,13 +240,11 @@ def _build_categories(category_set, base_qs):
     successful_qs = base_qs.filter(bot_events__event_type=BotEventTypes.BOT_JOINED_MEETING).exclude(bot_events__event_type=BotEventTypes.FATAL_ERROR)
 
     if category_set == "transcript":
-        # Only consider meetings that had more than one participant. When the
-        # bot is the only participant there is nothing to transcribe, so a
-        # missing transcript is expected rather than a sign of a problem. A
-        # meeting had "more than one participant" when there was at least one
-        # participant other than the bot itself.
-        has_other_participant = Exists(Participant.objects.filter(bot=OuterRef("pk"), is_the_bot=False))
-        successful_qs = successful_qs.filter(has_other_participant)
+        # Only consider meetings that had at least two non-bot participants.
+        # With fewer real participants there is little to transcribe, so a
+        # missing transcript is expected rather than a sign of a problem.
+        enough_participants = Exists(Participant.objects.filter(bot=OuterRef("pk"), is_the_bot=False).order_by().values("bot").annotate(count=Count("id")).filter(count__gte=2))
+        successful_qs = successful_qs.filter(enough_participants)
 
         # Subcategories of successful: did the bot generate a transcript?
         # A transcript is "generated" when the bot has at least one utterance
@@ -259,7 +257,7 @@ def _build_categories(category_set, base_qs):
             ("No Transcript", no_transcript_qs, "255, 193, 7", CATEGORY_FILTERS["No Transcript"]),
         ]
         # The two transcript subcategories sum to all successful bots whose
-        # meeting had more than one participant.
+        # meeting had at least two non-bot participants.
         return categories, CATEGORY_FILTERS["Successful With Other Participants"]
 
     fatal_error_qs = base_qs.filter(bot_events__event_type=BotEventTypes.FATAL_ERROR)
