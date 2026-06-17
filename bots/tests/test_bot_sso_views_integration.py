@@ -217,7 +217,6 @@ class BotSsoViewsIntegrationTest(TransactionTestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.content.decode(), "Could not set cookie")
 
-    @patch("bots.bot_sso_utils.XMLSEC_BINARY", "/usr/bin/xmlsec1")
     def test_sign_in_view_with_valid_saml_request(self):
         """Test GoogleMeetSignInView with a valid SAML AuthnRequest"""
         # Create a session in Redis
@@ -307,7 +306,6 @@ class BotSsoViewsIntegrationTest(TransactionTestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.content.decode(), "Missing SAMLRequest")
 
-    @patch("bots.bot_sso_utils.XMLSEC_BINARY", "/usr/bin/xmlsec1")
     def test_sign_in_view_with_invalid_cert_or_key(self):
         """Test GoogleMeetSignInView with invalid certificate or private key"""
         # Create a new bot login with invalid credentials
@@ -351,7 +349,6 @@ class BotSsoViewsIntegrationTest(TransactionTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.content.decode(), "Signed Out Successfully")
 
-    @patch("bots.bot_sso_utils.XMLSEC_BINARY", "/usr/bin/xmlsec1")
     def test_full_sso_flow_end_to_end(self):
         """Test the complete SSO flow from session creation to SAML response"""
         # Step 1: Create a session in Redis
