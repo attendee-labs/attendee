@@ -1003,6 +1003,10 @@ class ZoomBotAdapter(BotAdapter):
 
         join_result = self.meeting_service.Join(join_param)
         logger.info(f"join_result = {join_result}")
+        if join_result != zoom.SDKERR_SUCCESS:
+            logger.error(f"Failed to join meeting with join_result = {join_result}")
+            self.send_message_callback({"message": self.Messages.ZOOM_AUTHORIZATION_FAILED, "zoom_result_code": join_result})
+            return
 
         self.audio_settings = self.setting_service.GetAudioSettings()
         self.audio_settings.EnableAutoJoinAudio(True)
