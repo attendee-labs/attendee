@@ -10,6 +10,8 @@ from django.conf import settings
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import models, transaction
+from django.db.models.fields.json import KeyTextTransform
+from django.db.models.functions import Cast
 from django.http import HttpResponse, QueryDict
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -629,6 +631,15 @@ class ProjectBotsView(LoginRequiredMixin, ProjectUrlContextMixin, ListView):
             other_participant_count = Participant.objects.filter(bot=models.OuterRef("pk"), is_the_bot=False).order_by().values("bot").annotate(count=models.Count("id")).values("count")
             queryset = queryset.annotate(other_participant_count=models.Subquery(other_participant_count, output_field=models.IntegerField())).filter(other_participant_count__gte=int(min_participants))
 
+        # Apply "minimum duration" filter (in minutes) if provided. Duration is
+        # pulled from the metadata of the terminal BotEvent (the one that
+        # transitioned the bot to ENDED or FATAL_ERROR), matching how usage
+        # stats compute per-bot duration.
+        min_duration = self.request.GET.get("min_duration", "").strip()
+        if min_duration.isdigit() and int(min_duration) >= 1:
+            bot_duration_seconds = BotEvent.objects.filter(bot=models.OuterRef("pk"), new_state__in=[BotStates.ENDED, BotStates.FATAL_ERROR]).annotate(_dur=Cast(KeyTextTransform("bot_duration_seconds", "metadata"), output_field=models.IntegerField())).order_by("created_at").values("_dur")[:1]
+            queryset = queryset.annotate(bot_duration_seconds=models.Subquery(bot_duration_seconds, output_field=models.IntegerField())).filter(bot_duration_seconds__gte=int(min_duration) * 60)
+
         # Get the latest bot event type and subtype for each bot using subquery annotations
         latest_event_subquery_base = BotEvent.objects.filter(bot=models.OuterRef("pk")).order_by("-created_at")
         latest_event_type = latest_event_subquery_base.values("event_type")[:1]
@@ -652,7 +663,7 @@ class ProjectBotsView(LoginRequiredMixin, ProjectUrlContextMixin, ListView):
         context["session_type"] = self.get_session_type()
 
         # Add filter parameters to context for maintaining state
-        context["filter_params"] = {"start_date": self.request.GET.get("start_date", ""), "end_date": self.request.GET.get("end_date", ""), "join_at_start": self.request.GET.get("join_at_start", ""), "join_at_end": self.request.GET.get("join_at_end", ""), "ended_at_start": self.request.GET.get("ended_at_start", ""), "ended_at_end": self.request.GET.get("ended_at_end", ""), "states": self.request.GET.getlist("states"), "search": self.request.GET.get("search", ""), "joined_meeting": self.request.GET.get("joined_meeting", ""), "unexpected_error": self.request.GET.get("unexpected_error", ""), "transcript": self.request.GET.get("transcript", ""), "min_participants": self.request.GET.get("min_participants", ""), "metadata_pairs": self.get_metadata_pairs()}
+        context["filter_params"] = {"start_date": self.request.GET.get("start_date", ""), "end_date": self.request.GET.get("end_date", ""), "join_at_start": self.request.GET.get("join_at_start", ""), "join_at_end": self.request.GET.get("join_at_end", ""), "ended_at_start": self.request.GET.get("ended_at_start", ""), "ended_at_end": self.request.GET.get("ended_at_end", ""), "states": self.request.GET.getlist("states"), "search": self.request.GET.get("search", ""), "joined_meeting": self.request.GET.get("joined_meeting", ""), "unexpected_error": self.request.GET.get("unexpected_error", ""), "transcript": self.request.GET.get("transcript", ""), "min_participants": self.request.GET.get("min_participants", ""), "min_duration": self.request.GET.get("min_duration", ""), "metadata_pairs": self.get_metadata_pairs()}
 
         # Add flag to detect if create modal should be automatically opened
         context["open_create_modal"] = self.request.GET.get("open_create_modal") == "true"

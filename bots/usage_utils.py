@@ -209,11 +209,11 @@ def _build_heatmap_row(label, values, color, date_ranges, category_params, forma
 
 CATEGORY_FILTERS = {
     "Successful": "joined_meeting=yes&unexpected_error=no",
-    "Successful With Other Participants": "joined_meeting=yes&unexpected_error=no&min_participants=2",
+    "Successful With Other Participants": "joined_meeting=yes&unexpected_error=no&min_participants=2&min_duration=15",
     "Could Not Join": "joined_meeting=no&unexpected_error=no",
     "Unexpected Error": "unexpected_error=yes",
-    "Transcript Generated": "joined_meeting=yes&unexpected_error=no&min_participants=2&transcript=yes",
-    "No Transcript": "joined_meeting=yes&unexpected_error=no&min_participants=2&transcript=no",
+    "Transcript Generated": "joined_meeting=yes&unexpected_error=no&min_participants=2&min_duration=15&transcript=yes",
+    "No Transcript": "joined_meeting=yes&unexpected_error=no&min_participants=2&min_duration=15&transcript=no",
     "Total": "",
 }
 
@@ -244,14 +244,16 @@ def _build_categories(category_set, base_qs):
         # With fewer real participants there is little to transcribe, so a
         # missing transcript is expected rather than a sign of a problem.
         enough_participants = Exists(Participant.objects.filter(bot=OuterRef("pk"), is_the_bot=False).order_by().values("bot").annotate(count=Count("id")).filter(count__gte=2))
-        successful_qs = successful_qs.filter(enough_participants)
+        # Also require the bot to have been in the meeting long enough that a
+        # missing transcript would be meaningful (at least 15 minutes).
+        transcribable_qs = successful_qs.filter(enough_participants).filter(bot_duration__gte=15 * 60)
 
         # Subcategories of successful: did the bot generate a transcript?
         # A transcript is "generated" when the bot has at least one utterance
         # that did not error (failure_data is null).
         has_transcript = Exists(Utterance.objects.filter(recording__bot=OuterRef("pk"), failure_data__isnull=True))
-        transcript_generated_qs = successful_qs.filter(has_transcript)
-        no_transcript_qs = successful_qs.filter(~has_transcript)
+        transcript_generated_qs = transcribable_qs.filter(has_transcript)
+        no_transcript_qs = transcribable_qs.filter(~has_transcript)
         categories = [
             ("Transcript Generated", transcript_generated_qs, "40, 167, 69", CATEGORY_FILTERS["Transcript Generated"]),
             ("No Transcript", no_transcript_qs, "255, 193, 7", CATEGORY_FILTERS["No Transcript"]),
@@ -295,14 +297,20 @@ def get_usage_data(project, interval, measure="count", platform="", category_set
     }
     bucket_keys, start_date, labels, subtitle, date_ranges, counts_by_bucket = builders[interval](now)
 
+    base_qs = Bot.objects.annotate(ended_at=_BOT_ENDED_AT_SUBQUERY).filter(project=project, ended_at__gte=start_date)
+
+    # bot_duration is only needed when the "time" measure aggregates on it or
+    # the "transcript" category set filters on it (minimum meeting duration), so
+    # only pay for the subquery in those cases.
+    if measure == "time" or category_set == "transcript":
+        base_qs = base_qs.annotate(bot_duration=_BOT_DURATION_SUBQUERY)
+
     if measure == "time":
         aggregator = _build_duration_aggregator(interval)
         formatter = _format_duration
-        base_qs = Bot.objects.annotate(ended_at=_BOT_ENDED_AT_SUBQUERY, bot_duration=_BOT_DURATION_SUBQUERY).filter(project=project, ended_at__gte=start_date)
     else:
         aggregator = counts_by_bucket
         formatter = None
-        base_qs = Bot.objects.annotate(ended_at=_BOT_ENDED_AT_SUBQUERY).filter(project=project, ended_at__gte=start_date)
 
     if platform_url_substring:
         base_qs = base_qs.filter(meeting_url__icontains=platform_url_substring)
