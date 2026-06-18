@@ -178,12 +178,12 @@
                             <div style="border-left: 1px solid #dee2e6; height: 24px; align-self: center;"></div>
                             <div style="display: inline-flex; align-items: center;">
                                 <span class="me-2" style="flex-shrink: 0;">Min Participants</span>
-                                <input type="number" min="1" step="1" class="form-control form-control-sm" style="width: 90px;" name="min_participants" value="{{ filter_params.min_participants }}" placeholder="Any" title="Show meetings with at least this many non-bot participants">
+                                <input type="number" min="1" step="1" class="form-control form-control-sm" style="width: 60px;" name="min_participants" value="{{ filter_params.min_participants }}" placeholder="Any" title="Show meetings with at least this many non-bot participants">
                             </div>
                             <div style="border-left: 1px solid #dee2e6; height: 24px; align-self: center;"></div>
                             <div style="display: inline-flex; align-items: center;">
-                                <span class="me-2" style="flex-shrink: 0;">Min Duration (min)</span>
-                                <input type="number" min="1" step="1" class="form-control form-control-sm" style="width: 90px;" name="min_duration" value="{{ filter_params.min_duration }}" placeholder="Any" title="Show bots that were in the meeting for at least this many minutes">
+                                <span class="me-2" style="flex-shrink: 0;">Min Duration <small class="text-muted">(minutes)</small></span>
+                                <input type="number" min="1" step="1" class="form-control form-control-sm" style="width: 60px;" name="min_duration" value="{{ filter_params.min_duration }}" placeholder="Any" title="Show bots that were in the meeting for at least this many minutes">
                             </div>
                         </div>
                     </div>
