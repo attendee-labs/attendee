@@ -1,6 +1,7 @@
 import os
 import threading
 import time
+from types import SimpleNamespace
 from unittest.mock import MagicMock, call, patch
 
 import kubernetes
@@ -370,6 +371,30 @@ class TestGoogleMeetBot2(TransactionTestCase):
         mock_k8s_api = MagicMock()
         MockCoreV1Api.return_value = mock_k8s_api
 
+        # The pod was created but its container never started (stuck Pending with
+        # ImagePullBackOff) — this is the failure mode the diagnostics capture targets.
+        mock_k8s_api.read_namespaced_pod.return_value = SimpleNamespace(
+            status=SimpleNamespace(
+                phase="Pending",
+                reason=None,
+                message=None,
+                conditions=[SimpleNamespace(type="PodScheduled", status="True", reason=None, message=None)],
+                container_statuses=[
+                    SimpleNamespace(
+                        name="bot",
+                        ready=False,
+                        restart_count=0,
+                        state=SimpleNamespace(
+                            waiting=SimpleNamespace(reason="ImagePullBackOff", message="Back-off pulling image"),
+                            terminated=None,
+                            running=None,
+                        ),
+                    )
+                ],
+            )
+        )
+        mock_k8s_api.list_namespaced_event.return_value = SimpleNamespace(items=[SimpleNamespace(type="Warning", reason="Failed", message="Failed to pull image", count=3, last_timestamp=None)])
+
         # Set up config.load_incluster_config to raise ConfigException so load_kube_config gets called
         mock_load_incluster_config.side_effect = kubernetes.config.config_exception.ConfigException("Mock ConfigException")
 
@@ -404,6 +429,45 @@ class TestGoogleMeetBot2(TransactionTestCase):
         # Verify Kubernetes pod deletion was attempted with the correct pod name
         pod_name = self.bot.k8s_pod_name()
         mock_k8s_api.delete_namespaced_pod.assert_called_once_with(name=pod_name, namespace="attendee", grace_period_seconds=0)
+
+        # Verify the launch failure was captured into the event metadata so it's diagnosable
+        diagnostics = fatal_error_event.metadata["launch_diagnostics"]
+        self.assertTrue(diagnostics["pod_found"])
+        self.assertEqual(diagnostics["phase"], "Pending")
+        self.assertEqual(diagnostics["container_statuses"][0]["reason"], "ImagePullBackOff")
+        self.assertEqual(diagnostics["events"][0]["reason"], "Failed")
+
+    @patch("kubernetes.client.CoreV1Api")
+    @patch("kubernetes.config.load_incluster_config")
+    @patch("kubernetes.config.load_kube_config")
+    def test_terminate_bots_that_never_launched_when_pod_already_gone(self, mock_load_kube_config, mock_load_incluster_config, MockCoreV1Api):
+        # If the pod has already disappeared (e.g. node scaled down), diagnostics capture
+        # must still record the failure rather than blow up.
+        mock_k8s_api = MagicMock()
+        MockCoreV1Api.return_value = mock_k8s_api
+        mock_k8s_api.read_namespaced_pod.side_effect = kubernetes.client.ApiException(status=404)
+        mock_k8s_api.list_namespaced_event.return_value = SimpleNamespace(items=[])
+        mock_load_incluster_config.side_effect = kubernetes.config.config_exception.ConfigException("Mock ConfigException")
+
+        two_days_ago = timezone.now() - timezone.timedelta(days=2)
+        self.bot.first_heartbeat_timestamp = None
+        self.bot.last_heartbeat_timestamp = None
+        self.bot.state = BotStates.JOINING
+        self.bot.created_at = two_days_ago
+        self.bot.save()
+
+        with patch.dict(os.environ, {"LAUNCH_BOT_METHOD": "kubernetes"}):
+            from bots.management.commands.clean_up_bots_with_heartbeat_timeout_or_that_never_launched import Command
+
+            Command().handle()
+
+        self.bot.refresh_from_db()
+        self.assertEqual(self.bot.state, BotStates.FATAL_ERROR)
+        fatal_error_event = self.bot.bot_events.filter(event_type=BotEventTypes.FATAL_ERROR, event_sub_type=BotEventSubTypes.FATAL_ERROR_BOT_NOT_LAUNCHED).first()
+        self.assertIsNotNone(fatal_error_event)
+        diagnostics = fatal_error_event.metadata["launch_diagnostics"]
+        self.assertFalse(diagnostics["pod_found"])
+        self.assertEqual(diagnostics["pod_read_error"], "not_found")
 
     def test_recent_bots_with_no_heartbeat_not_terminated(self):
         # Create a bot that was created 30 minutes ago but never launched

@@ -8,6 +8,7 @@ from django.db import models
 from django.utils import timezone
 from kubernetes import client, config
 
+from bots.k8s_diagnostics import gather_pod_launch_diagnostics
 from bots.models import Bot, BotEventManager, BotEventSubTypes, BotEventTypes
 
 logger = logging.getLogger(__name__)
@@ -19,13 +20,37 @@ class Command(BaseCommand):
     def __init__(self):
         super().__init__()
         self.namespace = settings.BOT_POD_NAMESPACE
+        self._v1 = None
+
+    def _k8s_client(self):
+        # Lazily initialize (and cache) the kubernetes client.
+        if self._v1 is None:
+            try:
+                config.load_incluster_config()
+            except config.ConfigException:
+                config.load_kube_config()
+            self._v1 = client.CoreV1Api()
+            logger.info("initialized kubernetes client")
+        return self._v1
 
     def terminate_bot(self, bot, event_sub_type):
+        # For bots that never launched, capture why the pod never started (pod status +
+        # k8s events) before we delete it, so the failure is diagnosable. The pod's
+        # container waiting reason (e.g. ImagePullBackOff) persists even though the
+        # failure isn't recorded until this cleanup job runs.
+        event_metadata = {}
+        if event_sub_type == BotEventSubTypes.FATAL_ERROR_BOT_NOT_LAUNCHED and os.getenv("LAUNCH_BOT_METHOD") == "kubernetes":
+            try:
+                event_metadata["launch_diagnostics"] = gather_pod_launch_diagnostics(self._k8s_client(), self.namespace, bot.k8s_pod_name())
+            except Exception as e:
+                logger.warning(f"Failed to gather launch diagnostics for bot {bot.object_id}: {str(e)}")
+
         try:
             BotEventManager.create_event(
                 bot=bot,
                 event_type=BotEventTypes.FATAL_ERROR,
                 event_sub_type=event_sub_type,
+                event_metadata=event_metadata,
             )
         except Exception as e:
             logger.error(f"Failed to create fatal error {event_sub_type} event for bot {bot.id}: {str(e)}")
@@ -37,13 +62,7 @@ class Command(BaseCommand):
             self._terminate_ephemeral_docker_container(bot)
 
     def _terminate_kubernetes_pod(self, bot):
-        # Initialize kubernetes client
-        try:
-            config.load_incluster_config()
-        except config.ConfigException:
-            config.load_kube_config()
-        v1 = client.CoreV1Api()
-        logger.info("initialized kubernetes client")
+        v1 = self._k8s_client()
 
         # Try to delete the pod if it exists
         try:
