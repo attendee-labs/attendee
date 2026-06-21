@@ -10,7 +10,7 @@ from django.utils import timezone
 
 from bots.models import SessionTypes, WebhookDeliveryAttempt, WebhookDeliveryAttemptStatus, WebhookTriggerTypes
 from bots.redis_utils import incr_and_expire_nx
-from bots.webhook_utils import sign_payload
+from bots.webhook_utils import sign_payload, url_is_public
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +69,19 @@ def deliver_webhook(self, delivery_id):
             "status_code": None,  # No HTTP status since request failed
             "error_type": "InactiveSubscription",
             "error_message": "Webhook subscription is no longer active",
+            "request_url": subscription.url,
+        }
+        delivery.add_to_response_body_list(error_response)
+        delivery.save()
+        return
+
+    # If webhook URL is not public, mark as failure and return
+    if settings.REQUIRE_PUBLIC_WEBHOOK_URLS and not url_is_public(subscription.url):
+        delivery.status = WebhookDeliveryAttemptStatus.FAILURE
+        error_response = {
+            "status_code": None,  # No HTTP status since request failed
+            "error_type": "PublicURLRequired",
+            "error_message": "Webhook URL must be public",
             "request_url": subscription.url,
         }
         delivery.add_to_response_body_list(error_response)
