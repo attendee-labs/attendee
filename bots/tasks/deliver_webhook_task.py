@@ -136,6 +136,7 @@ def deliver_webhook(self, delivery_id):
             },
             timeout=10,  # 10-second timeout
             verify=os.getenv("DELIVER_WEBHOOK_VERIFY_SSL", "true").lower() != "false",
+            follow_redirects=False,
         )
 
         # Update the delivery attempt with the response
