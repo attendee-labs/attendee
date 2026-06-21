@@ -139,10 +139,8 @@ def deliver_webhook(self, delivery_id):
         )
 
         # Update the delivery attempt with the response
-        delivery.response_status_code = response.status_code
-
         # Limit response body storage to prevent DB issues with large responses
-        response_body = response.text[:1000]
+        response_body = response.text[:500]
         delivery.add_to_response_body_list(response_body)
 
         # Check if the delivery was successful (2xx status code)
