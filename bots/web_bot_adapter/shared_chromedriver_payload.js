@@ -8,6 +8,7 @@ class BotVideoOutputStream {
         getGainNode = () => {},
         getAudioContext = () => {},
         createSourceAudioTrack = () => {},
+        forceRgba = false,
     }) {
         this.turnOnInput = turnOnInput;
         this.turnOffInput = turnOffInput;
@@ -16,6 +17,9 @@ class BotVideoOutputStream {
         this.getGainNode = getGainNode;
         this.getAudioContext = getAudioContext;
         this.createSourceAudioTrack = createSourceAudioTrack;
+        // Teams rejects the canvas captureStream's default ARGB pixel format, so we
+        // optionally re-encode every frame to RGBA before exposing the source track.
+        this.forceRgba = forceRgba;
 
         // --- VIDEO SOURCE SETUP (single source canvas) ---
         this.canvas = document.createElement("canvas");
@@ -36,11 +40,81 @@ class BotVideoOutputStream {
 
         // This is our *source* video track; we will CLONE it for callers.
         const videoTracks = sourceVideoStream.getVideoTracks();
-        this.sourceVideoTrack = videoTracks[0] || null;
+        const rawSourceVideoTrack = videoTracks[0] || null;
+        this.sourceVideoTrack = this.forceRgba
+            ? this._buildRgbaSourceVideoTrack(rawSourceVideoTrack)
+            : rawSourceVideoTrack;
 
         this.videoElement = null;
         this.videoRafId = null;
         this.videoAudioSource = null;
+    }
+
+    /**
+     * Re-encode the canvas capture track so each frame is emitted in RGBA pixel
+     * format. The default canvas captureStream frames are ARGB, which Teams
+     * rejects. Uses the WebCodecs insertable-streams API
+     * (MediaStreamTrackProcessor -> TransformStream -> MediaStreamTrackGenerator).
+     *
+     * Falls back to the original track if the required APIs are unavailable.
+     *
+     * @param {MediaStreamTrack|null} rawTrack
+     * @returns {MediaStreamTrack|null}
+     */
+    _buildRgbaSourceVideoTrack(rawTrack) {
+        if (!rawTrack) {
+            return rawTrack;
+        }
+
+        if (
+            typeof MediaStreamTrackProcessor === "undefined" ||
+            typeof MediaStreamTrackGenerator === "undefined" ||
+            typeof VideoFrame === "undefined"
+        ) {
+            console.warn(
+                "forceRgba requested but WebCodecs insertable streams are unavailable; using raw track."
+            );
+            return rawTrack;
+        }
+
+        try {
+            const processor = new MediaStreamTrackProcessor({ track: rawTrack });
+            const generator = new MediaStreamTrackGenerator({ kind: "video" });
+
+            const transformer = new TransformStream({
+                async transform(frame, controller) {
+                    try {
+                        const width = frame.codedWidth;
+                        const height = frame.codedHeight;
+                        const buffer = new Uint8Array(width * height * 4);
+                        // copyTo with an explicit RGBA format performs the conversion.
+                        await frame.copyTo(buffer, { format: "RGBA" });
+                        const rgbaFrame = new VideoFrame(buffer, {
+                            format: "RGBA",
+                            codedWidth: width,
+                            codedHeight: height,
+                            timestamp: frame.timestamp,
+                            duration: frame.duration,
+                        });
+                        controller.enqueue(rgbaFrame);
+                    } catch (e) {
+                        console.error("Error converting frame to RGBA:", e);
+                    } finally {
+                        frame.close();
+                    }
+                },
+            });
+
+            processor.readable
+                .pipeThrough(transformer)
+                .pipeTo(generator.writable)
+                .catch((e) => console.error("RGBA video pipeline error:", e));
+
+            return generator;
+        } catch (e) {
+            console.error("Failed to build RGBA source video track:", e);
+            return rawTrack;
+        }
     }
 
     /**
@@ -485,6 +559,7 @@ class BotOutputManager {
         turnOnMic = () => {},
         turnOffMic = () => {},
         callOriginalGetUserMedia = false,
+        forceRgba = false,
     } = {}) {
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
             throw new Error("navigator.mediaDevices.getUserMedia is not available in this context.");
@@ -497,6 +572,9 @@ class BotOutputManager {
         this.turnOnMic = turnOnMic;
         this.turnOffMic = turnOffMic;
         this.callOriginalGetUserMedia = callOriginalGetUserMedia;
+        // When true, video output tracks emit RGBA frames instead of the default
+        // ARGB. Teams rejects ARGB, so its adapter enables this.
+        this.forceRgba = forceRgba;
         
         // We don't create the sourceAudioTrack until we need it. Otherwise it will play through the speakers. Not sure why this happens.
         this.sourceAudioTrack = null;
@@ -528,6 +606,7 @@ class BotOutputManager {
             getGainNode: () => this.gainNode,
             getAudioContext: () => this.audioContext,
             createSourceAudioTrack: () => this._createSourceAudioTrack(),
+            forceRgba: this.forceRgba,
         });
 
         this.screenShareVideoOutputStream = new BotVideoOutputStream({
@@ -538,6 +617,7 @@ class BotOutputManager {
             getGainNode: () => this.gainNode,
             getAudioContext: () => this.audioContext,
             createSourceAudioTrack: () => this._createSourceAudioTrack(),
+            forceRgba: this.forceRgba,
         });
 
         this._installGetUserMediaInterceptor();
