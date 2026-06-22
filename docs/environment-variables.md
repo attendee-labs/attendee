@@ -115,7 +115,7 @@ This document lists all supported environment variables for the Attendee applica
 | `SYNC_CALENDAR_CELERY_QUEUE` | String | `celery` | Celery queue name for calendar synchronization. |
 | `LAUNCH_SCHEDULED_BOT_CELERY_QUEUE` | String | `celery` | Celery queue name for launching scheduled bots. |
 | `DELIVER_WEBHOOK_CELERY_QUEUE` | String | `celery` | Celery queue name for webhook delivery. |
-| `LAUNCH_BOT_METHOD` | String | `kubernetes` | Method to launch bots: `kubernetes` or `docker-compose-multi-host`. |
+| `LAUNCH_BOT_METHOD` | String | `kubernetes` | Method to launch bots: `kubernetes`, `ecs`, or `docker-compose-multi-host` (defaults to in-process `celery` when unset). See [ECS launch method](#ecs-launch-method) for the `ecs` variables. |
 | `IS_A_BOT_POD` | Boolean | `false` | Set to `true` when running as a bot pod worker. |
 | `CONSERVE_BOT_POD_REDIS_CONNECTIONS` | Boolean | `false` | When `true` and `IS_A_BOT_POD` is `true`, reuse Redis connections to reduce connection count. |
 | `BOT_POD_CELERY_BROKER_POOL_LIMIT` | Integer | `1` | Celery broker pool limit for bot pods. Set to `0` to create/close connections per task. |
@@ -159,6 +159,25 @@ This document lists all supported environment variables for the Attendee applica
 | `CUSTOM_BOT_POD_SPEC_TYPES` | String | (Empty) | Comma-separated list of custom bot pod specification types. |
 | `ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME` | Boolean | `false` | Enforce domain allowlist in Chrome web bot. |
 | `MASK_TRANSCRIPT_IN_LOGS` | Boolean | `false` | Mask transcript content in application logs for privacy. |
+
+### ECS launch method
+
+Used only when `LAUNCH_BOT_METHOD=ecs`. Each bot runs as a standalone, run-to-completion ECS task (one task per bot), the ECS analogue of the Kubernetes bot pod. The bot task definition itself supplies the full app environment/secrets (database, Redis, `DJANGO_SECRET_KEY`, `CREDENTIALS_ENCRYPTION_KEY`, storage); the launcher only injects the `run_bot` command and `IS_A_BOT_POD=true`. The container in that task definition must be named to match `BOT_TASK_CONTAINER_NAME`.
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `BOT_ECS_CLUSTER` | String | **Required** | Name or ARN of the ECS cluster to launch bot tasks in. |
+| `BOT_TASK_DEFINITION` | String | **Required** | Task definition family (optionally `family:revision`) for the bot task. |
+| `BOT_TASK_DEFINITION_<TYPE>` | String | (None) | Optional per-spec-type task definition override (e.g. `BOT_TASK_DEFINITION_HIGHMEM`), selected by the bot's pod spec type. Falls back to `BOT_TASK_DEFINITION`. |
+| `BOT_TASK_SUBNETS` | String | **Required** | Comma-separated subnet IDs for the task's `awsvpc` network configuration. |
+| `BOT_TASK_SECURITY_GROUPS` | String | **Required** | Comma-separated security group IDs for the task. |
+| `BOT_TASK_CONTAINER_NAME` | String | `bot-proc` | Name of the container in the task definition that receives the command/env overrides. |
+| `BOT_TASK_LAUNCH_TYPE` | String | `FARGATE` | Launch type (`FARGATE` or `EC2`). Ignored if `BOT_TASK_CAPACITY_PROVIDER` is set. |
+| `BOT_TASK_CAPACITY_PROVIDER` | String | (None) | Capacity provider name. When set, used instead of `BOT_TASK_LAUNCH_TYPE`. |
+| `BOT_TASK_ASSIGN_PUBLIC_IP` | String | `DISABLED` | `ENABLED` or `DISABLED`. Leave `DISABLED` for private subnets with egress via NAT. |
+| `BOT_TASK_ENABLE_EXECUTE_COMMAND` | Boolean | `false` | Enable ECS Exec on bot tasks for debugging. |
+| `BOT_TASK_CREATE_MAX_RETRIES` | Integer | `3` | Retries when RunTask hits a transient/capacity error. |
+| `BOT_TASK_CREATE_RETRY_DELAY_SECONDS` | Number | `2` | Base delay (exponential backoff) between RunTask retries. |
 
 ---
 
