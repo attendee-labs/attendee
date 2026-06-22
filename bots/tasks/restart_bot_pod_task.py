@@ -1,21 +1,20 @@
 import logging
+import os
 import time
 
 from celery import shared_task
+from django.conf import settings
 from kubernetes import client, config
 
 from bots.models import Bot, BotEventTypes
 
 logger = logging.getLogger(__name__)
-from django.conf import settings
-
-from bots.bot_pod_creator import BotPodCreator
 
 
 @shared_task(bind=True, soft_time_limit=3600)
 def restart_bot_pod(self, bot_id):
     """
-    Restart a bot pod.
+    Restart a bot's pod (Kubernetes) or task (ECS).
     """
 
     logger.info(f"Restarting bot pod for bot {bot_id}")
@@ -28,6 +27,52 @@ def restart_bot_pod(self, bot_id):
         logger.info(f"Bot {bot_id} is not in JOINING state, so not restarting pod")
         return
 
+    # Tear down any existing infra for this bot so it can be re-launched cleanly.
+    if os.getenv("LAUNCH_BOT_METHOD") == "ecs":
+        _stop_existing_bot_task_and_wait(bot)
+    else:
+        _delete_existing_bot_pod_and_wait(bot)
+
+    last_bot_event.requested_bot_action_taken_at = None
+    if "pod_recreations" not in last_bot_event.metadata:
+        last_bot_event.metadata["pod_recreations"] = []
+    last_bot_event.metadata["pod_recreations"].append(int(time.time()))
+    last_bot_event.save()
+
+    bot.first_heartbeat_timestamp = None
+    bot.last_heartbeat_timestamp = None
+    bot.save()
+
+    create_result = _relaunch_bot(bot)
+    logger.info(f"Bot pod create result: {create_result}")
+
+
+def _relaunch_bot(bot):
+    if os.getenv("LAUNCH_BOT_METHOD") == "ecs":
+        from bots.bot_ecs_task_creator import BotEcsTaskCreator
+
+        return BotEcsTaskCreator().create_bot_task(
+            bot_id=bot.id,
+            bot_pod_spec_type=bot.bot_pod_spec_type,
+            add_webpage_streamer=bot.should_launch_webpage_streamer(),
+            add_persistent_storage=bot.reserve_additional_storage(),
+        )
+
+    from bots.bot_pod_creator import BotPodCreator
+
+    return BotPodCreator().create_bot_pod(
+        bot_id=bot.id,
+        bot_name=bot.k8s_pod_name(),
+        bot_cpu_request=bot.cpu_request(),
+        add_webpage_streamer=bot.should_launch_webpage_streamer(),
+        add_persistent_storage=bot.reserve_additional_storage(),
+        bot_pod_spec_type=bot.bot_pod_spec_type,
+    )
+
+
+def _delete_existing_bot_pod_and_wait(bot):
+    """Delete a bot's Kubernetes pod (if present) and wait for it to disappear so
+    the deterministic pod name is free to be re-used by the relaunch."""
     # Initialize kubernetes client
     try:
         config.load_incluster_config()
@@ -70,24 +115,27 @@ def restart_bot_pod(self, bot_id):
             # Some other API error occurred
             logger.error(f"Error checking for existing pod: {str(e)}")
 
-    last_bot_event.requested_bot_action_taken_at = None
-    if "pod_recreations" not in last_bot_event.metadata:
-        last_bot_event.metadata["pod_recreations"] = []
-    last_bot_event.metadata["pod_recreations"].append(int(time.time()))
-    last_bot_event.save()
 
-    bot.first_heartbeat_timestamp = None
-    bot.last_heartbeat_timestamp = None
-    bot.save()
+def _stop_existing_bot_task_and_wait(bot):
+    """Stop a bot's ECS task(s) (if any) and wait until none are running before relaunch."""
+    from bots.bot_ecs_task_creator import BotEcsTaskCreator
 
-    bot_pod_creator = BotPodCreator()
-    bot_pod_create_result = bot_pod_creator.create_bot_pod(
-        bot_id=bot.id,
-        bot_name=bot.k8s_pod_name(),
-        bot_cpu_request=bot.cpu_request(),
-        add_webpage_streamer=bot.should_launch_webpage_streamer(),
-        add_persistent_storage=bot.reserve_additional_storage(),
-        bot_pod_spec_type=bot.bot_pod_spec_type,
-    )
+    creator = BotEcsTaskCreator()
+    arns = creator.find_bot_task_arns(bot.id)
+    if not arns:
+        logger.info(f"No running ECS task for bot {bot.id}, no need to stop")
+        return
 
-    logger.info(f"Bot pod create result: {bot_pod_create_result}")
+    logger.info(f"Found existing ECS task(s) {arns} for bot {bot.id}, stopping before relaunch")
+    creator.stop_bot_task(bot.id, reason="Restarting bot via restart_bot_pod")
+
+    # Wait until no running task remains so the relaunch starts clean.
+    num_retries = 20
+    for i in range(num_retries):
+        if not creator.find_bot_task_arns(bot.id):
+            logger.info(f"ECS task(s) for bot {bot.id} stopped successfully")
+            break
+        if i == num_retries - 1:
+            logger.error(f"ECS task(s) for bot {bot.id} did not stop after {num_retries} retries")
+            raise Exception(f"ECS task(s) for bot {bot.id} did not stop after {num_retries} retries")
+        time.sleep(5)

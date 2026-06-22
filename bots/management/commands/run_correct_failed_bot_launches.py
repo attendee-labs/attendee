@@ -1,4 +1,5 @@
 import logging
+import os
 import signal
 import time
 
@@ -35,13 +36,20 @@ class Command(BaseCommand):
         self._keep_running = False
 
     def handle(self, *args, **opts):
-        # Initialize kubernetes client
-        try:
-            config.load_incluster_config()
-        except config.ConfigException:
-            config.load_kube_config()
-        self.v1 = client.CoreV1Api()
-        self.namespace = settings.BOT_POD_NAMESPACE
+        self.launch_bot_method = os.getenv("LAUNCH_BOT_METHOD")
+
+        if self.launch_bot_method == "ecs":
+            from bots.bot_ecs_task_creator import BotEcsTaskCreator
+
+            self.ecs_task_creator = BotEcsTaskCreator()
+        else:
+            # Initialize kubernetes client
+            try:
+                config.load_incluster_config()
+            except config.ConfigException:
+                config.load_kube_config()
+            self.v1 = client.CoreV1Api()
+            self.namespace = settings.BOT_POD_NAMESPACE
 
         # Trap SIGINT / SIGTERM so Kubernetes or Heroku can stop the container cleanly
         signal.signal(signal.SIGINT, self._graceful_exit)
@@ -76,6 +84,14 @@ class Command(BaseCommand):
                 logger.warning(f"Correct failed bot launches cycle took {elapsed}s, which is longer than the interval of {interval}s")
 
         logger.info("Correct failed bot launches daemon exited")
+
+    def bot_infra_is_active(self, bot) -> bool:
+        """Return True if the bot already has running infra (pod or ECS task)."""
+        if self.launch_bot_method == "ecs":
+            active = bool(self.ecs_task_creator.find_bot_task_arns(bot.id))
+            logger.info(f"Bot {bot.object_id} ECS task active: {active}")
+            return active
+        return self.bot_pod_is_active(bot.k8s_pod_name())
 
     def bot_pod_is_active(self, pod_name: str) -> bool:
         try:
@@ -118,7 +134,7 @@ class Command(BaseCommand):
             # Re-launch each bot
             for bot in problem_non_scheduled_bots:
                 try:
-                    if self.bot_pod_is_active(bot.k8s_pod_name()):
+                    if self.bot_infra_is_active(bot):
                         logger.info(f"Bot {bot.object_id} already has a pod, skipping re-launch")
                         continue
                     if bot.should_launch_webpage_streamer():
@@ -138,7 +154,7 @@ class Command(BaseCommand):
 
             for bot in problem_scheduled_bots:
                 try:
-                    if self.bot_pod_is_active(bot.k8s_pod_name()):
+                    if self.bot_infra_is_active(bot):
                         logger.info(f"Bot {bot.object_id} already has a pod, skipping re-launch")
                         continue
                     if bot.should_launch_webpage_streamer():
