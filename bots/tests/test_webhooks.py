@@ -385,6 +385,89 @@ class WebhookDeliveryTest(TransactionTestCase):
         self.assertIsNone(attempt.succeeded_at)
         self.assertEqual(attempt.attempt_count, 0)
 
+    @override_settings(REQUIRE_PUBLIC_WEBHOOK_URLS=True)
+    @patch("bots.tasks.deliver_webhook_task.requests.post")
+    def test_webhook_delivery_non_public_url(self, mock_post):
+        """Test that webhook delivery fails without sending when the URL is not public and public URLs are required"""
+        # Use a real loopback URL so url_is_public actually rejects it (no mocking).
+        # A literal IP avoids any DNS lookup, keeping the test hermetic.
+        self.webhook_subscription.url = "https://127.0.0.1/webhook"
+        self.webhook_subscription.save()
+
+        attempt = WebhookDeliveryAttempt.objects.create(
+            webhook_subscription=self.webhook_subscription,
+            webhook_trigger_type=WebhookTriggerTypes.BOT_STATE_CHANGE,
+            bot=self.bot,
+            idempotency_key=uuid.uuid4(),
+            payload={"test": "data"},
+        )
+
+        # Call delivery task
+        deliver_webhook.apply(args=[attempt.id])
+
+        # Refresh the attempt object from the db
+        attempt.refresh_from_db()
+
+        # No HTTP request should have been made
+        mock_post.assert_not_called()
+
+        self.assertEqual(attempt.status, WebhookDeliveryAttemptStatus.FAILURE)
+        self.assertEqual(len(attempt.response_body_list), 1)
+        self.assertIsNone(attempt.response_body_list[0]["status_code"])
+        self.assertEqual(attempt.response_body_list[0]["error_type"], "PublicURLRequired")
+        self.assertEqual(attempt.response_body_list[0]["error_message"], "Webhook URL must be public")
+        self.assertEqual(attempt.response_body_list[0]["request_url"], self.webhook_subscription.url)
+        self.assertIsNone(attempt.succeeded_at)
+        self.assertEqual(attempt.attempt_count, 0)
+
+    @override_settings(REQUIRE_PUBLIC_WEBHOOK_URLS=True)
+    @patch("bots.tasks.deliver_webhook_task.requests.post")
+    def test_webhook_delivery_public_url_proceeds(self, mock_post):
+        """Test that webhook delivery proceeds when the URL is public and public URLs are required"""
+        # Use a real public URL so url_is_public actually accepts it (no mocking).
+        # A literal global IP avoids any DNS lookup, keeping the test hermetic.
+        self.webhook_subscription.url = "https://8.8.8.8/webhook"
+        self.webhook_subscription.save()
+        mock_post.return_value.status_code = 200
+        mock_post.return_value.text = "OK"
+
+        attempt = WebhookDeliveryAttempt.objects.create(
+            webhook_subscription=self.webhook_subscription,
+            webhook_trigger_type=WebhookTriggerTypes.BOT_STATE_CHANGE,
+            bot=self.bot,
+            idempotency_key=uuid.uuid4(),
+            payload={"test": "data"},
+        )
+
+        deliver_webhook.apply(args=[attempt.id])
+
+        attempt.refresh_from_db()
+
+        mock_post.assert_called_once()
+        self.assertEqual(attempt.status, WebhookDeliveryAttemptStatus.SUCCESS)
+        self.assertIsNotNone(attempt.succeeded_at)
+
+    @patch("bots.tasks.deliver_webhook_task.requests.post")
+    def test_webhook_delivery_does_not_allow_redirects(self, mock_post):
+        """Test that the webhook request is sent without following redirects"""
+        mock_post.return_value.status_code = 200
+        mock_post.return_value.text = "OK"
+
+        attempt = WebhookDeliveryAttempt.objects.create(
+            webhook_subscription=self.webhook_subscription,
+            webhook_trigger_type=WebhookTriggerTypes.BOT_STATE_CHANGE,
+            bot=self.bot,
+            idempotency_key=uuid.uuid4(),
+            payload={"test": "data"},
+        )
+
+        deliver_webhook.apply(args=[attempt.id])
+
+        mock_post.assert_called_once()
+        _, call_kwargs = mock_post.call_args
+        self.assertIn("allow_redirects", call_kwargs)
+        self.assertFalse(call_kwargs["allow_redirects"])
+
     @patch("bots.tasks.deliver_webhook_task.requests.post")
     def test_bot_webhook_prioritization(self, mock_post):
         """Test that bot-level webhooks are prioritized over project-level webhooks"""

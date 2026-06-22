@@ -3051,6 +3051,7 @@ class TestZoomBot(TransactionTestCase):
             headers=ANY,
             json=ANY,
             timeout=30,
+            allow_redirects=False,
         )
 
         # Verify that meeting_service.Join was called with the correct tokens
