@@ -137,9 +137,7 @@ class TestCreateBotTask(TestCase):
 
     def test_non_transient_client_error_returns_not_created(self):
         creator, mock_ecs = self._creator_with_mock_ecs(BASE_ENV)
-        mock_ecs.run_task.side_effect = ClientError(
-            {"Error": {"Code": "AccessDeniedException", "Message": "nope"}}, "RunTask"
-        )
+        mock_ecs.run_task.side_effect = ClientError({"Error": {"Code": "AccessDeniedException", "Message": "nope"}}, "RunTask")
 
         result = creator.create_bot_task(bot_id=8)
 
