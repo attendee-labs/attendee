@@ -448,7 +448,7 @@ class WebhookDeliveryTest(TransactionTestCase):
         self.assertIsNotNone(attempt.succeeded_at)
 
     @patch("bots.tasks.deliver_webhook_task.requests.post")
-    def test_webhook_delivery_does_not_follow_redirects(self, mock_post):
+    def test_webhook_delivery_does_not_allow_redirects(self, mock_post):
         """Test that the webhook request is sent without following redirects"""
         mock_post.return_value.status_code = 200
         mock_post.return_value.text = "OK"
@@ -465,8 +465,8 @@ class WebhookDeliveryTest(TransactionTestCase):
 
         mock_post.assert_called_once()
         _, call_kwargs = mock_post.call_args
-        self.assertIn("follow_redirects", call_kwargs)
-        self.assertFalse(call_kwargs["follow_redirects"])
+        self.assertIn("allow_redirects", call_kwargs)
+        self.assertFalse(call_kwargs["allow_redirects"])
 
     @patch("bots.tasks.deliver_webhook_task.requests.post")
     def test_bot_webhook_prioritization(self, mock_post):

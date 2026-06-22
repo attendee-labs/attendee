@@ -82,7 +82,7 @@ def make_callback_request(url: str, bot, callback_type: str, additional_data: Op
                 "User-Agent": "Attendee-Callback/1.0",
                 "X-Webhook-Signature": signature,
             },
-            follow_redirects=False,
+            allow_redirects=False,
             timeout=30,  # 30-second timeout
         )
 
