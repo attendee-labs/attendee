@@ -381,6 +381,8 @@ class TeamsUIMethods:
 
         self.turn_off_media_inputs()
 
+        self.disable_video_effects()
+
         logger.info("Waiting for the Join now button...")
         join_button = self.locate_element(step="join_button", condition=EC.presence_of_element_located((By.CSS_SELECTOR, '[data-tid="prejoin-join-button"]')), wait_time_seconds=10)
         logger.info("Clicking the Join now button...")
@@ -398,6 +400,18 @@ class TeamsUIMethods:
             self.disable_incoming_video_in_ui()
 
         self.ready_to_show_bot_image()
+
+    def disable_video_effects(self):
+        if not (self.teams_bot_login_is_available and self.teams_bot_login_should_be_used):
+            logger.info("Not disabling video effects because teams bot is not logged in.")
+            return
+
+        logger.info("Disabling video effects...")
+        disable_video_effects_result = self.driver.execute_script("return window.callManager?.disableVideoEffects()")
+        if disable_video_effects_result:
+            logger.info("Video effects disabled programmatically")
+        else:
+            logger.error("Failed to disable video effects programmatically")
 
     def disable_incoming_video_in_ui(self):
         logger.info("Waiting for the view button...")
