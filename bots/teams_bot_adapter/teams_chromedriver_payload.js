@@ -3115,6 +3115,32 @@ class CallManager {
         // return this.activeCall.currentUserSkypeIdentity?.id;
     }
 
+    disableVideoEffects() {
+        try {
+            this.setActiveCall();
+            if (!this.activeCall) {
+                return false;
+            }
+
+            const videoEffectManager = this.activeCall?.mediaAgent?.deviceManager?.effectsManagerInternal?.videoEffectManager;
+            if (!videoEffectManager) {
+                return false;
+            }
+
+            if (!videoEffectManager.__attendeeIsEffectEnabledPatched) {
+                Object.defineProperty(videoEffectManager, "isEffectEnabled", {
+                    get() {
+                        return false;
+                    },
+                    configurable: true,
+                });
+                videoEffectManager.__attendeeIsEffectEnabledPatched = true;
+            }
+            return true;
+        } catch (error) {
+            return false;
+        }
+    }
 
     getSpeakingParticipantIds(contributingSources) {
         this.setActiveCall();
