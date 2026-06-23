@@ -432,7 +432,7 @@ class TestGoogleMeetBot2(TransactionTestCase):
         mock_k8s_api.delete_namespaced_pod.assert_called_once_with(name=pod_name, namespace="attendee", grace_period_seconds=0)
 
         # Verify the launch failure was captured into the event metadata so it's diagnosable
-        diagnostics = json.loads(fatal_error_event.metadata["pod_launch_failure_information"])
+        diagnostics = json.loads(fatal_error_event.metadata["infrastructure_information"])
         self.assertTrue(diagnostics["pod_found"])
         self.assertEqual(diagnostics["phase"], "Pending")
         self.assertEqual(diagnostics["container_statuses"][0]["reason"], "ImagePullBackOff")
@@ -466,7 +466,7 @@ class TestGoogleMeetBot2(TransactionTestCase):
         self.assertEqual(self.bot.state, BotStates.FATAL_ERROR)
         fatal_error_event = self.bot.bot_events.filter(event_type=BotEventTypes.FATAL_ERROR, event_sub_type=BotEventSubTypes.FATAL_ERROR_BOT_NOT_LAUNCHED).first()
         self.assertIsNotNone(fatal_error_event)
-        diagnostics = json.loads(fatal_error_event.metadata["pod_launch_failure_information"])
+        diagnostics = json.loads(fatal_error_event.metadata["infrastructure_information"])
         self.assertFalse(diagnostics["pod_found"])
         self.assertEqual(diagnostics["pod_read_error"], "not_found")
 

@@ -321,6 +321,8 @@ GLOBAL_WEBHOOK_DELIVERIES_PER_SECOND_RATE_LIMIT = int(os.getenv("GLOBAL_WEBHOOK_
 LOG_BOT_STATE_CHANGES = os.getenv("LOG_BOT_STATE_CHANGES", "false") == "true"
 LAUNCH_ADHOC_BOTS_ASYNC = os.getenv("LAUNCH_ADHOC_BOTS_ASYNC", "false") == "true"
 
+STORE_INFRASTRUCTURE_INFORMATION_IN_BOT_EVENT_METADATA = os.getenv("STORE_INFRASTRUCTURE_INFORMATION_IN_BOT_EVENT_METADATA", "true") == "true"
+
 # Content Security Policy
 if os.getenv("ENABLE_CSP", "false") == "true":
     _csp_media_src = [d for d in os.getenv("CSP_MEDIA_SRC", "").split(",") if d]

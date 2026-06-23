@@ -9,7 +9,7 @@ from django.db import models
 from django.utils import timezone
 from kubernetes import client, config
 
-from bots.k8s_utils import gather_pod_launch_diagnostics
+from bots.k8s_utils import gather_bot_pod_information
 from bots.models import Bot, BotEventManager, BotEventSubTypes, BotEventTypes
 
 logger = logging.getLogger(__name__)
@@ -29,16 +29,28 @@ class Command(BaseCommand):
             config.load_kube_config()
         return client.CoreV1Api()
 
-    def retrieve_information_about_bot_launch_failure(self, bot) -> dict | None:
+    def retrieve_bot_infrastructure_information(self, bot) -> dict | None:
         if os.getenv("LAUNCH_BOT_METHOD") == "kubernetes":
             try:
-                return gather_pod_launch_diagnostics(self.create_k8s_client(), self.namespace, bot.k8s_pod_name())
+                return gather_bot_pod_information(self.create_k8s_client(), self.namespace, bot.k8s_pod_name())
             except Exception:
-                logger.exception(f"Failed to gather launch diagnostics for k8s pod for bot {bot.object_id}")
+                logger.exception(f"Failed to gather bot pod information for bot {bot.object_id}")
         return None
 
-    def terminate_bot(self, bot, event_sub_type, event_metadata: dict = None):
+    def terminate_bot(self, bot, event_sub_type):
         try:
+            # Retrieve the bot infrastructure information this may help understand why it needed to be terminated
+            infrastructure_information = self.retrieve_bot_infrastructure_information(bot)
+            event_metadata = None
+            if settings.STORE_INFRASTRUCTURE_INFORMATION_IN_BOT_EVENT_METADATA:
+                event_metadata = {"infrastructure_information": json.dumps(infrastructure_information)}
+            else:
+                logger.warning(
+                    "Infrastructure information for bot %s (not stored in event metadata because STORE_INFRASTRUCTURE_DATA_IN_BOT_EVENT_METADATA is false): %s",
+                    bot.object_id,
+                    json.dumps(infrastructure_information),
+                )
+
             BotEventManager.create_event(
                 bot=bot,
                 event_type=BotEventTypes.FATAL_ERROR,
@@ -132,11 +144,7 @@ class Command(BaseCommand):
             # Create fatal error events for each bot
             for bot in problem_bots:
                 try:
-                    logger.info(f"Terminating bot {bot.object_id} due to heartbeat timeout")
-                    event_metadata = {
-                        "pod_failure_information": json.dumps(self.retrieve_information_about_bot_launch_failure(bot)),
-                    }
-                    self.terminate_bot(bot, BotEventSubTypes.FATAL_ERROR_HEARTBEAT_TIMEOUT, event_metadata=event_metadata)
+                    self.terminate_bot(bot, BotEventSubTypes.FATAL_ERROR_HEARTBEAT_TIMEOUT)
 
                 except Exception as e:
                     logger.error(f"Failed to terminate bot {bot.object_id}: {str(e)}")
@@ -166,14 +174,7 @@ class Command(BaseCommand):
             for bot in problem_bots:
                 try:
                     logger.info(f"Terminating bot {bot.object_id} that never launched")
-                    event_metadata = {
-                        "pod_launch_failure_information": json.dumps(self.retrieve_information_about_bot_launch_failure(bot)),
-                    }
-                    self.terminate_bot(
-                        bot,
-                        BotEventSubTypes.FATAL_ERROR_BOT_NOT_LAUNCHED,
-                        event_metadata=event_metadata,
-                    )
+                    self.terminate_bot(bot, BotEventSubTypes.FATAL_ERROR_BOT_NOT_LAUNCHED)
 
                 except Exception as e:
                     logger.error(f"Failed to terminate bot {bot.object_id}: {str(e)}")
