@@ -14,7 +14,7 @@
                 <!-- Project selector -->
                 <div class="project-selector px-3">
                     <div class="dropdown w-100">
-                        <button class="btn project-dropdown-toggle w-100 d-flex align-items-center" type="button" id="currentProjectDropdown" data-bs-toggle="dropdown" aria-expanded="false">
+                        <button class="btn project-dropdown-toggle w-100 d-flex align-items-center" type="button" id="currentProjectDropdown" aria-expanded="false" onclick="toggleProjectDropdown(event)">
                             <div class="d-flex align-items-center">
                                 <span id="currentProjectName" class="project-name-multiline" style="font-size: 0.9rem; max-width: 100%;">{{ project.name }}</span>
                                 <i class="bi bi-chevron-down ms-2"></i>
@@ -321,6 +321,34 @@
         const createProjectModal = new bootstrap.Modal(document.getElementById('createProjectModal'));
         createProjectModal.show();
     }
+
+    function setProjectDropdownOpen(toggle, menu, isOpen) {
+        menu.classList.toggle('show', isOpen);
+        toggle.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+    }
+
+    function toggleProjectDropdown(event) {
+        event.preventDefault();
+        event.stopPropagation();
+        const toggle = document.getElementById('currentProjectDropdown');
+        const menu = toggle.nextElementSibling;
+        if (!menu) {
+            return;
+        }
+        setProjectDropdownOpen(toggle, menu, !menu.classList.contains('show'));
+    }
+
+    // Close the dropdown when clicking outside of it.
+    document.addEventListener('click', function (event) {
+        const toggle = document.getElementById('currentProjectDropdown');
+        if (!toggle) {
+            return;
+        }
+        const menu = toggle.nextElementSibling;
+        if (menu && menu.classList.contains('show') && !toggle.contains(event.target) && !menu.contains(event.target)) {
+            setProjectDropdownOpen(toggle, menu, false);
+        }
+    });
 </script>
 
 <!-- Add this style block -->
@@ -404,6 +432,14 @@
     }
     .project-selector .dropdown-menu {
         border-radius: 0.5rem;
+    }
+    /* Position the menu below the toggle without relying on Bootstrap's Popper */
+    .project-selector .dropdown-menu.show {
+        display: block;
+        position: absolute;
+        top: 100%;
+        left: 0;
+        margin-top: 0.125rem;
     }
     .project-selector .dropdown-item {
         cursor: pointer;
