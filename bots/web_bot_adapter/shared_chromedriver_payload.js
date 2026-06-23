@@ -8,7 +8,7 @@ class BotVideoOutputStream {
         getGainNode = () => {},
         getAudioContext = () => {},
         createSourceAudioTrack = () => {},
-        forceRgba = false,
+        encodeVideoFramesAsRGBA = false,
     }) {
         this.turnOnInput = turnOnInput;
         this.turnOffInput = turnOffInput;
@@ -17,9 +17,8 @@ class BotVideoOutputStream {
         this.getGainNode = getGainNode;
         this.getAudioContext = getAudioContext;
         this.createSourceAudioTrack = createSourceAudioTrack;
-        // Teams rejects the canvas captureStream's default ARGB pixel format, so we
-        // optionally re-encode every frame to RGBA before exposing the source track.
-        this.forceRgba = forceRgba;
+        // Needed because Teams rejects the canvas captureStream's default ARGB pixel format
+        this.encodeVideoFramesAsRGBA = encodeVideoFramesAsRGBA;
 
         // --- VIDEO SOURCE SETUP (single source canvas) ---
         this.canvas = document.createElement("canvas");
@@ -41,7 +40,7 @@ class BotVideoOutputStream {
         // This is our *source* video track; we will CLONE it for callers.
         const videoTracks = sourceVideoStream.getVideoTracks();
         const rawSourceVideoTrack = videoTracks[0] || null;
-        this.sourceVideoTrack = this.forceRgba
+        this.sourceVideoTrack = this.encodeVideoFramesAsRGBA
             ? this._buildRgbaSourceVideoTrack(rawSourceVideoTrack)
             : rawSourceVideoTrack;
 
@@ -63,17 +62,6 @@ class BotVideoOutputStream {
      */
     _buildRgbaSourceVideoTrack(rawTrack) {
         if (!rawTrack) {
-            return rawTrack;
-        }
-
-        if (
-            typeof MediaStreamTrackProcessor === "undefined" ||
-            typeof MediaStreamTrackGenerator === "undefined" ||
-            typeof VideoFrame === "undefined"
-        ) {
-            console.warn(
-                "forceRgba requested but WebCodecs insertable streams are unavailable; using raw track."
-            );
             return rawTrack;
         }
 
@@ -559,7 +547,7 @@ class BotOutputManager {
         turnOnMic = () => {},
         turnOffMic = () => {},
         callOriginalGetUserMedia = false,
-        forceRgba = false,
+        encodeVideoFramesAsRGBA = false,
     } = {}) {
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
             throw new Error("navigator.mediaDevices.getUserMedia is not available in this context.");
@@ -572,9 +560,6 @@ class BotOutputManager {
         this.turnOnMic = turnOnMic;
         this.turnOffMic = turnOffMic;
         this.callOriginalGetUserMedia = callOriginalGetUserMedia;
-        // When true, video output tracks emit RGBA frames instead of the default
-        // ARGB. Teams rejects ARGB, so its adapter enables this.
-        this.forceRgba = forceRgba;
         
         // We don't create the sourceAudioTrack until we need it. Otherwise it will play through the speakers. Not sure why this happens.
         this.sourceAudioTrack = null;
@@ -606,7 +591,7 @@ class BotOutputManager {
             getGainNode: () => this.gainNode,
             getAudioContext: () => this.audioContext,
             createSourceAudioTrack: () => this._createSourceAudioTrack(),
-            forceRgba: this.forceRgba,
+            encodeVideoFramesAsRGBA,
         });
 
         this.screenShareVideoOutputStream = new BotVideoOutputStream({
@@ -617,7 +602,6 @@ class BotOutputManager {
             getGainNode: () => this.gainNode,
             getAudioContext: () => this.audioContext,
             createSourceAudioTrack: () => this._createSourceAudioTrack(),
-            forceRgba: this.forceRgba,
         });
 
         this._installGetUserMediaInterceptor();
