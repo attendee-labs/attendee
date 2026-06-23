@@ -1,3 +1,4 @@
+import json
 import os
 import threading
 import time
@@ -431,7 +432,7 @@ class TestGoogleMeetBot2(TransactionTestCase):
         mock_k8s_api.delete_namespaced_pod.assert_called_once_with(name=pod_name, namespace="attendee", grace_period_seconds=0)
 
         # Verify the launch failure was captured into the event metadata so it's diagnosable
-        diagnostics = fatal_error_event.metadata["launch_diagnostics"]
+        diagnostics = json.loads(fatal_error_event.metadata["pod_launch_failure_information"])
         self.assertTrue(diagnostics["pod_found"])
         self.assertEqual(diagnostics["phase"], "Pending")
         self.assertEqual(diagnostics["container_statuses"][0]["reason"], "ImagePullBackOff")
