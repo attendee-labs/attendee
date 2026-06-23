@@ -8,8 +8,6 @@ class BotVideoOutputStream {
         getGainNode = () => {},
         getAudioContext = () => {},
         createSourceAudioTrack = () => {},
-        encodeVideoFramesAsRGBA = false,
-        videoStreamFPS = 30,
     }) {
         this.turnOnInput = turnOnInput;
         this.turnOffInput = turnOffInput;
@@ -18,9 +16,7 @@ class BotVideoOutputStream {
         this.getGainNode = getGainNode;
         this.getAudioContext = getAudioContext;
         this.createSourceAudioTrack = createSourceAudioTrack;
-        // Needed because Teams rejects the canvas captureStream's default ARGB pixel format
-        this.encodeVideoFramesAsRGBA = encodeVideoFramesAsRGBA;
-        this.videoStreamFPS = videoStreamFPS;
+
         // --- VIDEO SOURCE SETUP (single source canvas) ---
         this.canvas = document.createElement("canvas");
         // Canvas must be 1280x640. Needed to work in Teams.
@@ -36,85 +32,15 @@ class BotVideoOutputStream {
         this.canvasCtx.fillStyle = "black";
         this.canvasCtx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
-        const sourceVideoStream = this.canvas.captureStream(this.videoStreamFPS); // NEEDS to be 30 or Google Meet complains
+        const sourceVideoStream = this.canvas.captureStream(30); // NEEDS to be 30 or Google Meet complains
 
         // This is our *source* video track; we will CLONE it for callers.
         const videoTracks = sourceVideoStream.getVideoTracks();
-        const rawSourceVideoTrack = videoTracks[0] || null;
-        this.sourceVideoTrack = this.encodeVideoFramesAsRGBA
-            ? this._buildRgbaSourceVideoTrack(rawSourceVideoTrack)
-            : rawSourceVideoTrack;
+        this.sourceVideoTrack = videoTracks[0] || null;
 
         this.videoElement = null;
         this.videoRafId = null;
         this.videoAudioSource = null;
-    }
-
-    /**
-     * Re-encode the canvas capture track so each frame is emitted in RGBA pixel
-     * format. The default canvas captureStream frames are ARGB, which Teams
-     * rejects. Uses the WebCodecs insertable-streams API
-     * (MediaStreamTrackProcessor -> TransformStream -> MediaStreamTrackGenerator).
-     *
-     * Falls back to the original track if the required APIs are unavailable.
-     *
-     * @param {MediaStreamTrack|null} rawTrack
-     * @returns {MediaStreamTrack|null}
-     */
-    _buildRgbaSourceVideoTrack(rawTrack) {
-        if (!rawTrack) {
-            return rawTrack;
-        }
-
-        try {
-            const processor = new MediaStreamTrackProcessor({ track: rawTrack });
-            const generator = new MediaStreamTrackGenerator({ kind: "video" });
-
-            // Reused across frames to avoid a ~3MB allocation + GC churn per frame.
-            // Safe because the VideoFrame constructor copies the buffer into its
-            // own internal storage, so we can overwrite it on the next frame.
-            let rgbaBuffer = null;
-
-            const transformer = new TransformStream({
-                async transform(frame, controller) {
-                    try {
-                        const width = frame.codedWidth;
-                        const height = frame.codedHeight;
-                        const needed = width * height * 4;
-                        if (!rgbaBuffer || rgbaBuffer.byteLength < needed) {
-                            rgbaBuffer = new Uint8Array(needed);
-                        }
-                        // copyTo with an explicit RGBA format performs the conversion.
-                        await frame.copyTo(rgbaBuffer, { format: "RGBA" });
-                        // Use an exact-size view in case the pooled buffer is
-                        // larger than this frame (a subarray is a view, not a copy).
-                        const frameData = rgbaBuffer.byteLength === needed ? rgbaBuffer : rgbaBuffer.subarray(0, needed);
-                        const rgbaFrame = new VideoFrame(frameData, {
-                            format: "RGBA",
-                            codedWidth: width,
-                            codedHeight: height,
-                            timestamp: frame.timestamp,
-                            duration: frame.duration,
-                        });
-                        controller.enqueue(rgbaFrame);
-                    } catch (e) {
-                        console.error("Error converting frame to RGBA:", e);
-                    } finally {
-                        frame.close();
-                    }
-                },
-            });
-
-            processor.readable
-                .pipeThrough(transformer)
-                .pipeTo(generator.writable)
-                .catch((e) => console.error("RGBA video pipeline error:", e));
-
-            return generator;
-        } catch (e) {
-            console.error("Failed to build RGBA source video track:", e);
-            return rawTrack;
-        }
     }
 
     /**
@@ -559,8 +485,6 @@ class BotOutputManager {
         turnOnMic = () => {},
         turnOffMic = () => {},
         callOriginalGetUserMedia = false,
-        encodeVideoFramesAsRGBA = false,
-        videoStreamFPS = 30,
     } = {}) {
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
             throw new Error("navigator.mediaDevices.getUserMedia is not available in this context.");
@@ -604,8 +528,6 @@ class BotOutputManager {
             getGainNode: () => this.gainNode,
             getAudioContext: () => this.audioContext,
             createSourceAudioTrack: () => this._createSourceAudioTrack(),
-            encodeVideoFramesAsRGBA,
-            videoStreamFPS,
         });
 
         this.screenShareVideoOutputStream = new BotVideoOutputStream({
