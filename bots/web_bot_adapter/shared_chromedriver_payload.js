@@ -69,15 +69,26 @@ class BotVideoOutputStream {
             const processor = new MediaStreamTrackProcessor({ track: rawTrack });
             const generator = new MediaStreamTrackGenerator({ kind: "video" });
 
+            // Reused across frames to avoid a ~3MB allocation + GC churn per frame.
+            // Safe because the VideoFrame constructor copies the buffer into its
+            // own internal storage, so we can overwrite it on the next frame.
+            let rgbaBuffer = null;
+
             const transformer = new TransformStream({
                 async transform(frame, controller) {
                     try {
                         const width = frame.codedWidth;
                         const height = frame.codedHeight;
-                        const buffer = new Uint8Array(width * height * 4);
+                        const needed = width * height * 4;
+                        if (!rgbaBuffer || rgbaBuffer.byteLength < needed) {
+                            rgbaBuffer = new Uint8Array(needed);
+                        }
                         // copyTo with an explicit RGBA format performs the conversion.
-                        await frame.copyTo(buffer, { format: "RGBA" });
-                        const rgbaFrame = new VideoFrame(buffer, {
+                        await frame.copyTo(rgbaBuffer, { format: "RGBA" });
+                        // Use an exact-size view in case the pooled buffer is
+                        // larger than this frame (a subarray is a view, not a copy).
+                        const frameData = rgbaBuffer.byteLength === needed ? rgbaBuffer : rgbaBuffer.subarray(0, needed);
+                        const rgbaFrame = new VideoFrame(frameData, {
                             format: "RGBA",
                             codedWidth: width,
                             codedHeight: height,
