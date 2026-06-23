@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 
@@ -8,7 +9,7 @@ from django.db import models
 from django.utils import timezone
 from kubernetes import client, config
 
-from bots.k8s_diagnostics import gather_pod_launch_diagnostics
+from bots.k8s_utils import gather_pod_launch_diagnostics
 from bots.models import Bot, BotEventManager, BotEventSubTypes, BotEventTypes
 
 logger = logging.getLogger(__name__)
@@ -20,31 +21,23 @@ class Command(BaseCommand):
     def __init__(self):
         super().__init__()
         self.namespace = settings.BOT_POD_NAMESPACE
-        self._v1 = None
 
-    def _k8s_client(self):
-        # Lazily initialize (and cache) the kubernetes client.
-        if self._v1 is None:
+    def create_k8s_client(self):
+        try:
+            config.load_incluster_config()
+        except config.ConfigException:
+            config.load_kube_config()
+        return client.CoreV1Api()
+
+    def retrieve_information_about_bot_launch_failure(self, bot) -> dict | None:
+        if os.getenv("LAUNCH_BOT_METHOD") == "kubernetes":
             try:
-                config.load_incluster_config()
-            except config.ConfigException:
-                config.load_kube_config()
-            self._v1 = client.CoreV1Api()
-            logger.info("initialized kubernetes client")
-        return self._v1
+                return gather_pod_launch_diagnostics(self.create_k8s_client(), self.namespace, bot.k8s_pod_name())
+            except Exception:
+                logger.exception(f"Failed to gather launch diagnostics for k8s pod for bot {bot.object_id}")
+        return None
 
-    def terminate_bot(self, bot, event_sub_type):
-        # For bots that never launched, capture why the pod never started (pod status +
-        # k8s events) before we delete it, so the failure is diagnosable. The pod's
-        # container waiting reason (e.g. ImagePullBackOff) persists even though the
-        # failure isn't recorded until this cleanup job runs.
-        event_metadata = {}
-        if event_sub_type == BotEventSubTypes.FATAL_ERROR_BOT_NOT_LAUNCHED and os.getenv("LAUNCH_BOT_METHOD") == "kubernetes":
-            try:
-                event_metadata["launch_diagnostics"] = gather_pod_launch_diagnostics(self._k8s_client(), self.namespace, bot.k8s_pod_name())
-            except Exception as e:
-                logger.warning(f"Failed to gather launch diagnostics for bot {bot.object_id}: {str(e)}")
-
+    def terminate_bot(self, bot, event_sub_type, event_metadata: dict = None):
         try:
             BotEventManager.create_event(
                 bot=bot,
@@ -62,7 +55,7 @@ class Command(BaseCommand):
             self._terminate_ephemeral_docker_container(bot)
 
     def _terminate_kubernetes_pod(self, bot):
-        v1 = self._k8s_client()
+        v1 = self.create_k8s_client()
 
         # Try to delete the pod if it exists
         try:
@@ -170,7 +163,14 @@ class Command(BaseCommand):
             for bot in problem_bots:
                 try:
                     logger.info(f"Terminating bot {bot.object_id} that never launched")
-                    self.terminate_bot(bot, BotEventSubTypes.FATAL_ERROR_BOT_NOT_LAUNCHED)
+                    event_metadata = {
+                        "pod_launch_failure_information": json.dumps(self.retrieve_information_about_bot_launch_failure(bot)),
+                    }
+                    self.terminate_bot(
+                        bot,
+                        BotEventSubTypes.FATAL_ERROR_BOT_NOT_LAUNCHED,
+                        event_metadata=event_metadata,
+                    )
 
                 except Exception as e:
                     logger.error(f"Failed to terminate bot {bot.object_id}: {str(e)}")
