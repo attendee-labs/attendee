@@ -162,7 +162,8 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
             window.teamsInitialData = {{
                 shouldLogNetworkRequests: {"true" if self.should_log_network_requests else "false"},
                 modifyDomForVideoRecording: {"true" if self.modify_dom_for_video_recording else "false"},
-                enforceTeamsClosedCaptionsLanguageTimeoutSeconds: {enforce_teams_closed_captions_language_timeout_seconds}
+                enforceTeamsClosedCaptionsLanguageTimeoutSeconds: {enforce_teams_closed_captions_language_timeout_seconds},
+                encodeBotVideoFramesAsRGBA: {"true" if self.teams_bot_login_should_be_used and self.teams_bot_login_is_available else "false"},
             }}
         """
 
