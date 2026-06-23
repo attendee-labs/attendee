@@ -6,7 +6,7 @@ from kubernetes import client
 logger = logging.getLogger(__name__)
 
 
-def gather_bot_pod_information(v1, namespace, pod_name):
+def retrieve_bot_pod_information(v1, namespace, pod_name):
     """Best-effort snapshot of a bot pod's infrastructure state.
 
     Reads the pod's current status and its recent Kubernetes events. The container
@@ -18,13 +18,13 @@ def gather_bot_pod_information(v1, namespace, pod_name):
     the result to event metadata without risking the surrounding workflow.
     """
     try:
-        return _gather_bot_pod_information(v1, namespace, pod_name)
+        return _retrieve_bot_pod_information(v1, namespace, pod_name)
     except Exception as e:
         logger.warning("Failed to gather bot pod information for %s: %s", pod_name, e)
         return {"pod_name": pod_name, "diagnostics_error": str(e)}
 
 
-def _gather_bot_pod_information(v1, namespace, pod_name):
+def _retrieve_bot_pod_information(v1, namespace, pod_name):
     diagnostics = {"pod_name": pod_name}
 
     try:

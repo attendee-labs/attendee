@@ -9,7 +9,7 @@ from django.db import models
 from django.utils import timezone
 from kubernetes import client, config
 
-from bots.k8s_utils import gather_bot_pod_information
+from bots.k8s_utils import retrieve_bot_pod_information
 from bots.models import Bot, BotEventManager, BotEventSubTypes, BotEventTypes
 
 logger = logging.getLogger(__name__)
@@ -32,7 +32,7 @@ class Command(BaseCommand):
     def retrieve_bot_infrastructure_information(self, bot) -> dict | None:
         if os.getenv("LAUNCH_BOT_METHOD") == "kubernetes":
             try:
-                return gather_bot_pod_information(self.create_k8s_client(), self.namespace, bot.k8s_pod_name())
+                return retrieve_bot_pod_information(self.create_k8s_client(), self.namespace, bot.k8s_pod_name())
             except Exception:
                 logger.exception(f"Failed to gather bot pod information for bot {bot.object_id}")
         return None
