@@ -9,6 +9,7 @@ class BotVideoOutputStream {
         getAudioContext = () => {},
         createSourceAudioTrack = () => {},
         encodeVideoFramesAsRGBA = false,
+        videoStreamFPS = 30,
     }) {
         this.turnOnInput = turnOnInput;
         this.turnOffInput = turnOffInput;
@@ -19,7 +20,7 @@ class BotVideoOutputStream {
         this.createSourceAudioTrack = createSourceAudioTrack;
         // Needed because Teams rejects the canvas captureStream's default ARGB pixel format
         this.encodeVideoFramesAsRGBA = encodeVideoFramesAsRGBA;
-
+        this.videoStreamFPS = videoStreamFPS;
         // --- VIDEO SOURCE SETUP (single source canvas) ---
         this.canvas = document.createElement("canvas");
         // Canvas must be 1280x640. Needed to work in Teams.
@@ -35,7 +36,7 @@ class BotVideoOutputStream {
         this.canvasCtx.fillStyle = "black";
         this.canvasCtx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
-        const sourceVideoStream = this.canvas.captureStream(30); // NEEDS to be 30 or Google Meet complains
+        const sourceVideoStream = this.canvas.captureStream(this.videoStreamFPS); // NEEDS to be 30 or Google Meet complains
 
         // This is our *source* video track; we will CLONE it for callers.
         const videoTracks = sourceVideoStream.getVideoTracks();
@@ -559,6 +560,7 @@ class BotOutputManager {
         turnOffMic = () => {},
         callOriginalGetUserMedia = false,
         encodeVideoFramesAsRGBA = false,
+        videoStreamFPS = 30,
     } = {}) {
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
             throw new Error("navigator.mediaDevices.getUserMedia is not available in this context.");
@@ -603,6 +605,7 @@ class BotOutputManager {
             getAudioContext: () => this.audioContext,
             createSourceAudioTrack: () => this._createSourceAudioTrack(),
             encodeVideoFramesAsRGBA,
+            videoStreamFPS,
         });
 
         this.screenShareVideoOutputStream = new BotVideoOutputStream({

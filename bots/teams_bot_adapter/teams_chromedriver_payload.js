@@ -3036,6 +3036,8 @@ botOutputManager = new BotOutputManager({
     turnOffMic: turnOffMic,
     // Teams rejects the canvas captureStream's default ARGB pixel format when the bot is signed in
     encodeVideoFramesAsRGBA: window.teamsInitialData.encodeBotVideoFramesAsRGBA,
+    // Save CPU by using 15 FPS when encoding as RGBA
+    videoStreamFPS: window.teamsInitialData.encodeBotVideoFramesAsRGBA ? 15 : 30,
 });
 
 window.botOutputManager = botOutputManager;
