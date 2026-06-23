@@ -133,7 +133,10 @@ class Command(BaseCommand):
             for bot in problem_bots:
                 try:
                     logger.info(f"Terminating bot {bot.object_id} due to heartbeat timeout")
-                    self.terminate_bot(bot, BotEventSubTypes.FATAL_ERROR_HEARTBEAT_TIMEOUT)
+                    event_metadata = {
+                        "pod_failure_information": json.dumps(self.retrieve_information_about_bot_launch_failure(bot)),
+                    }
+                    self.terminate_bot(bot, BotEventSubTypes.FATAL_ERROR_HEARTBEAT_TIMEOUT, event_metadata=event_metadata)
 
                 except Exception as e:
                     logger.error(f"Failed to terminate bot {bot.object_id}: {str(e)}")
