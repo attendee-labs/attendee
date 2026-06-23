@@ -3034,10 +3034,6 @@ botOutputManager = new BotOutputManager({
     turnOffScreenshare: turnOffScreenshare,
     turnOnMic: turnOnMic,
     turnOffMic: turnOffMic,
-    // Teams rejects the canvas captureStream's default ARGB pixel format when the bot is signed in
-    encodeVideoFramesAsRGBA: window.teamsInitialData.encodeBotVideoFramesAsRGBA,
-    // Save CPU by using 15 FPS when encoding as RGBA
-    videoStreamFPS: window.teamsInitialData.encodeBotVideoFramesAsRGBA ? 15 : 30,
 });
 
 window.botOutputManager = botOutputManager;
@@ -3119,6 +3115,32 @@ class CallManager {
         // return this.activeCall.currentUserSkypeIdentity?.id;
     }
 
+    disableVideoEffects() {
+        try {
+            this.setActiveCall();
+            if (!this.activeCall) {
+                return false;
+            }
+
+            const videoEffectManager = this.activeCall?.mediaAgent?.deviceManager?.effectsManagerInternal?.videoEffectManager;
+            if (!videoEffectManager) {
+                return false;
+            }
+
+            if (!videoEffectManager.__attendeeIsEffectEnabledPatched) {
+                Object.defineProperty(videoEffectManager, "isEffectEnabled", {
+                    get() {
+                        return false;
+                    },
+                    configurable: true,
+                });
+                videoEffectManager.__attendeeIsEffectEnabledPatched = true;
+            }
+            return true;
+        } catch (error) {
+            return false;
+        }
+    }
 
     getSpeakingParticipantIds(contributingSources) {
         this.setActiveCall();
