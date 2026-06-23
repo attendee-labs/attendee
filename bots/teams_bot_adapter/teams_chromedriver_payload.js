@@ -3034,8 +3034,8 @@ botOutputManager = new BotOutputManager({
     turnOffScreenshare: turnOffScreenshare,
     turnOnMic: turnOnMic,
     turnOffMic: turnOffMic,
-    // Teams rejects the canvas captureStream's default ARGB pixel format.
-    encodeVideoFramesAsRGBA: true,
+    // Teams rejects the canvas captureStream's default ARGB pixel format when the bot is signed in
+    encodeVideoFramesAsRGBA: window.teamsInitialData.encodeBotVideoFramesAsRGBA,
 });
 
 window.botOutputManager = botOutputManager;
