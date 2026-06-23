@@ -407,8 +407,11 @@ class TeamsUIMethods:
             return
 
         logger.info("Disabling video effects...")
-        self.driver.execute_script("window.callManager.disableVideoEffects();")
-        logger.info("Video effects disabled")
+        disable_video_effects_result = self.driver.execute_script("return window.callManager?.disableVideoEffects()")
+        if disable_video_effects_result:
+            logger.info("Video effects disabled programmatically")
+        else:
+            logger.error("Failed to disable video effects programmatically")
 
     def disable_incoming_video_in_ui(self):
         logger.info("Waiting for the view button...")
