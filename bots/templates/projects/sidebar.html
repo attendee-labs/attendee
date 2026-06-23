@@ -349,6 +349,17 @@
             setProjectDropdownOpen(toggle, menu, false);
         }
     });
+
+    window.addEventListener('pageshow', function () {
+        const toggle = document.getElementById('currentProjectDropdown');
+        if (!toggle) {
+            return;
+        }
+        const menu = toggle.nextElementSibling;
+        if (menu) {
+            setProjectDropdownOpen(toggle, menu, false);
+        }
+    });
 </script>
 
 <!-- Add this style block -->
