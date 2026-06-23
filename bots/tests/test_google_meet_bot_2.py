@@ -466,7 +466,7 @@ class TestGoogleMeetBot2(TransactionTestCase):
         self.assertEqual(self.bot.state, BotStates.FATAL_ERROR)
         fatal_error_event = self.bot.bot_events.filter(event_type=BotEventTypes.FATAL_ERROR, event_sub_type=BotEventSubTypes.FATAL_ERROR_BOT_NOT_LAUNCHED).first()
         self.assertIsNotNone(fatal_error_event)
-        diagnostics = fatal_error_event.metadata["launch_diagnostics"]
+        diagnostics = json.loads(fatal_error_event.metadata["pod_launch_failure_information"])
         self.assertFalse(diagnostics["pod_found"])
         self.assertEqual(diagnostics["pod_read_error"], "not_found")
 
