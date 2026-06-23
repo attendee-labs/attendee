@@ -414,62 +414,19 @@
                                         {% endif %}
                                     </td>
                                 </tr>
-                                {% if attempt.response_body_list or attempt.payload %}
+                                {% if attempt.payload %}
                                     <tr>
                                         <td colspan="7">
                                             <div class="accordion" id="responseAccordion{{ attempt.id }}">
                                                 <div class="accordion-item">
                                                     <h2 class="accordion-header" id="heading{{ attempt.id }}">
                                                         <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapse{{ attempt.id }}" aria-expanded="false" aria-controls="collapse{{ attempt.id }}">
-                                                            Webhook Details
+                                                            Payload
                                                         </button>
                                                     </h2>
                                                     <div id="collapse{{ attempt.id }}" class="accordion-collapse collapse" aria-labelledby="heading{{ attempt.id }}" data-bs-parent="#responseAccordion{{ attempt.id }}">
                                                         <div class="accordion-body">
-                                                            <ul class="nav nav-tabs mb-3" role="tablist">
-                                                                <li class="nav-item" role="presentation">
-                                                                    <button class="nav-link active" 
-                                                                            id="payload-tab-{{ attempt.id }}" 
-                                                                            data-bs-toggle="tab" 
-                                                                            data-bs-target="#payload-{{ attempt.id }}" 
-                                                                            type="button" 
-                                                                            role="tab">
-                                                                        Payload
-                                                                    </button>
-                                                                </li>
-                                                                <li class="nav-item" role="presentation">
-                                                                    <button class="nav-link" 
-                                                                            id="responses-tab-{{ attempt.id }}" 
-                                                                            data-bs-toggle="tab" 
-                                                                            data-bs-target="#responses-{{ attempt.id }}" 
-                                                                            type="button" 
-                                                                            role="tab">
-                                                                        Responses
-                                                                    </button>
-                                                                </li>
-                                                            </ul>
-                                                            <div class="tab-content">
-                                                                <div class="tab-pane fade show active" id="payload-{{ attempt.id }}" role="tabpanel">
-                                                                    {% if attempt.payload %}
-                                                                        <pre class="small mb-0">{{ attempt.payload|pprint }}</pre>
-                                                                    {% else %}
-                                                                        <div class="alert alert-info">No payload data available.</div>
-                                                                    {% endif %}
-                                                                </div>
-                                                                <div class="tab-pane fade" id="responses-{{ attempt.id }}" role="tabpanel">
-                                                                    {% if attempt.response_body_list %}
-                                                                        <ul class="list-group">
-                                                                            {% for response in attempt.response_body_list %}
-                                                                                <li class="list-group-item">
-                                                                                    <pre class="small mb-0">{{ response|pprint }}</pre>
-                                                                                </li>
-                                                                            {% endfor %}
-                                                                        </ul>
-                                                                    {% else %}
-                                                                        <div class="alert alert-info">No response data available.</div>
-                                                                    {% endif %}
-                                                                </div>
-                                                            </div>
+                                                            <pre class="small mb-0">{{ attempt.payload|pprint }}</pre>
                                                         </div>
                                                     </div>
                                                 </div>
