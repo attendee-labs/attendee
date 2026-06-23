@@ -46,7 +46,7 @@ class Command(BaseCommand):
                 event_metadata = {"infrastructure_information": json.dumps(infrastructure_information)}
             else:
                 logger.warning(
-                    "Infrastructure information for bot %s (not stored in event metadata because STORE_INFRASTRUCTURE_DATA_IN_BOT_EVENT_METADATA is false): %s",
+                    "Infrastructure information for bot %s (not stored in event metadata because STORE_INFRASTRUCTURE_INFORMATION_IN_BOT_EVENT_METADATA is false): %s",
                     bot.object_id,
                     json.dumps(infrastructure_information),
                 )
