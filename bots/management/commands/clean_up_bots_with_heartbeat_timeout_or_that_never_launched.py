@@ -144,6 +144,7 @@ class Command(BaseCommand):
             # Create fatal error events for each bot
             for bot in problem_bots:
                 try:
+                    logger.info(f"Terminating bot {bot.object_id} due to heartbeat timeout")
                     self.terminate_bot(bot, BotEventSubTypes.FATAL_ERROR_HEARTBEAT_TIMEOUT)
 
                 except Exception as e:
