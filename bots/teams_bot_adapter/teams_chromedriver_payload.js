@@ -3122,20 +3122,11 @@ class CallManager {
                 return false;
             }
 
-            const videoEffectManager = this.activeCall?.mediaAgent?.deviceManager?.effectsManagerInternal?.videoEffectManager;
-            if (!videoEffectManager) {
+            const webcv = this.activeCall?.mediaAgent?.deviceManager?.effectsManagerInternal?.videoEffectManager?.effectProvider?.configProvider?.webcv;
+            if (!webcv) {
                 return false;
             }
-
-            if (!videoEffectManager.__attendeeIsEffectEnabledPatched) {
-                Object.defineProperty(videoEffectManager, "isEffectEnabled", {
-                    get() {
-                        return false;
-                    },
-                    configurable: true,
-                });
-                videoEffectManager.__attendeeIsEffectEnabledPatched = true;
-            }
+            webcv.useTrackProcessorInWorker=true;
             return true;
         } catch (error) {
             return false;
