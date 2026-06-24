@@ -308,6 +308,9 @@ def get_transcription_via_assemblyai_from_mp3(
     keyterms_prompt = transcription_settings.assemblyai_keyterms_prompt()
     if keyterms_prompt:
         data["keyterms_prompt"] = keyterms_prompt
+    prompt = transcription_settings.assemblyai_prompt()
+    if prompt:
+        data["prompt"] = prompt
     speech_model = transcription_settings.assemblyai_speech_model()
     if speech_model:
         if "speech_models" in data:

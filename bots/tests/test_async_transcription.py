@@ -561,6 +561,64 @@ class TestEndToEndAsyncTranscriptionAssemblyAI(AsyncTranscriptionTestCase):
         self.assertEqual(webhook_attempts.count(), 2)  # IN_PROGRESS and COMPLETE
 
     @mock.patch("bots.tasks.deliver_webhook_task.deliver_webhook")
+    @mock.patch("bots.transcription_utils.requests.delete")
+    @mock.patch("bots.transcription_utils.requests.get")
+    @mock.patch("bots.transcription_utils.requests.post")
+    @mock.patch("bots.transcription_utils.get_mp3_for_utterance_group")
+    def test_prompt_is_forwarded_to_transcribe_request(
+        self,
+        mock_get_mp3,
+        mock_post,
+        mock_get,
+        mock_delete,
+        mock_deliver_webhook,
+    ):
+        """The assembly_ai.prompt setting is forwarded to the transcribe request body."""
+        mock_deliver_webhook.return_value = None
+
+        self._create_audio_chunks(count=1, duration_ms=1000)
+
+        async_transcription = AsyncTranscription.objects.create(
+            recording=self.recording,
+            settings={"transcription_settings": {"assembly_ai": {"prompt": "Q3 planning for the Acme logistics platform; participants discuss the Helsinki rollout."}}},
+        )
+
+        mock_get_mp3.return_value = b"fake-mp3-data"
+
+        upload_response = mock.Mock()
+        upload_response.status_code = 200
+        upload_response.json.return_value = {"upload_url": "https://assemblyai.com/upload/123"}
+
+        transcribe_response = mock.Mock()
+        transcribe_response.status_code = 200
+        transcribe_response.json.return_value = {"id": "transcript-123"}
+
+        mock_post.side_effect = [upload_response, transcribe_response]
+
+        poll_response = mock.Mock()
+        poll_response.status_code = 200
+        poll_response.json.return_value = {
+            "status": "completed",
+            "text": "hello world test",
+            "language_code": "en",
+            "words": [{"text": "hello", "start": 0, "end": 500, "confidence": 0.99}],
+        }
+        mock_get.return_value = poll_response
+
+        delete_response = mock.Mock()
+        delete_response.status_code = 200
+        mock_delete.return_value = delete_response
+
+        process_async_transcription.delay(async_transcription.id)
+
+        # The second POST is the /transcript request carrying the settings.
+        transcribe_call = mock_post.call_args_list[1]
+        self.assertEqual(
+            transcribe_call.kwargs["json"]["prompt"],
+            "Q3 planning for the Acme logistics platform; participants discuss the Helsinki rollout.",
+        )
+
+    @mock.patch("bots.tasks.deliver_webhook_task.deliver_webhook")
     @mock.patch("bots.transcription_utils.requests.post")
     @mock.patch("bots.transcription_utils.get_mp3_for_utterance_group")
     def test_async_transcription_fails_with_invalid_credentials(
