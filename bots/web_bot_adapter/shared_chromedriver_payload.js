@@ -475,6 +475,7 @@ class BotOutputManager {
      * @param {Function} [callbacks.turnOffWebcam]
      * @param {Function} [callbacks.turnOnMic]
      * @param {Function} [callbacks.turnOffMic]
+     * @param {Function} [callbacks.onBeforeGetUserMedia]
      * @param {boolean} [callOriginalGetUserMedia=false]
      */
     constructor({
@@ -484,6 +485,7 @@ class BotOutputManager {
         turnOffScreenshare = () => {},
         turnOnMic = () => {},
         turnOffMic = () => {},
+        onBeforeGetUserMedia = () => {},
         callOriginalGetUserMedia = false,
     } = {}) {
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -496,6 +498,7 @@ class BotOutputManager {
         this.turnOffScreenshare = turnOffScreenshare;
         this.turnOnMic = turnOnMic;
         this.turnOffMic = turnOffMic;
+        this.onBeforeGetUserMedia = onBeforeGetUserMedia;
         this.callOriginalGetUserMedia = callOriginalGetUserMedia;
         
         // We don't create the sourceAudioTrack until we need it. Otherwise it will play through the speakers. Not sure why this happens.
@@ -570,6 +573,12 @@ class BotOutputManager {
         navigator.mediaDevices.getUserMedia = async function interceptedGetUserMedia(
             constraints
         ) {
+            try {
+                self.onBeforeGetUserMedia();
+            } catch (err) {
+                console.error("Error in onBeforeGetUserMedia callback:", err);
+            }
+
             const needAudio =
                 !!(constraints && constraints.audio !== false && constraints.audio != null);
             const needVideo =

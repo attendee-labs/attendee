@@ -3034,6 +3034,9 @@ botOutputManager = new BotOutputManager({
     turnOffScreenshare: turnOffScreenshare,
     turnOnMic: turnOnMic,
     turnOffMic: turnOffMic,
+    onBeforeGetUserMedia: () => {
+        window.callManager?.disableVideoEffects();
+    },
 });
 
 window.botOutputManager = botOutputManager;
