@@ -3122,16 +3122,22 @@ class CallManager {
         // return this.activeCall.currentUserSkypeIdentity?.id;
     }
 
+
+    
     disableVideoEffects() {
         try {
-            this.setActiveCall();
-            if (!this.activeCall) {
-                return false;
+            if (!window.msteamscalling) {
+                return "no window.msteamscalling";
+            }
+            const microsoftCalling = window.msteamscalling.deref();
+            if (!microsoftCalling) {
+                return "no microsoft calling";
             }
 
-            const videoEffectManager = this.activeCall?.mediaAgent?.deviceManager?.effectsManagerInternal?.videoEffectManager;
+            const videoEffectManager = microsoftCalling?.callingAgentsService?.callingStack?._mediaAgentProvider?.deviceManager?.effectsManagerInternal?.videoEffectManager;
+
             if (!videoEffectManager) {
-                return false;
+                return "no video effect manager";
             }
 
             if (!videoEffectManager.__attendeeIsEffectEnabledPatched) {
@@ -3142,10 +3148,11 @@ class CallManager {
                     configurable: true,
                 });
                 videoEffectManager.__attendeeIsEffectEnabledPatched = true;
+                return "video effects disabled";
             }
-            return true;
+            return "video effects already disabled";
         } catch (error) {
-            return false;
+            return "error disabling video effects: " + error;
         }
     }
 
