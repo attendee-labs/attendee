@@ -3035,7 +3035,11 @@ botOutputManager = new BotOutputManager({
     turnOnMic: turnOnMic,
     turnOffMic: turnOffMic,
     onBeforeGetUserMedia: () => {
-        window.callManager?.disableVideoEffects();
+        const disableResult = window.callManager?.disableVideoEffects();
+        window.ws?.sendJson({
+            type: "videoEffectsDisabled",
+            disableResult: disableResult
+        });
     },
 });
 
