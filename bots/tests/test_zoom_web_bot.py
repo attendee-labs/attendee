@@ -3,8 +3,11 @@ import os
 import struct
 import threading
 import time
+from base64 import b64decode
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import numpy as np
 import requests
 from django.db import connection
 from django.test import TransactionTestCase, tag
@@ -13,6 +16,7 @@ from selenium.common.exceptions import NoSuchElementException
 from bots.bot_adapter import BotAdapter
 from bots.bot_controller.bot_controller import BotController
 from bots.models import Bot, BotEventManager, BotEventSubTypes, BotEventTypes, BotStates, Credentials, Organization, Project, Recording, RecordingTypes, TranscriptionProviders, TranscriptionTypes, WebhookDeliveryAttempt, WebhookSubscription, WebhookTriggerTypes, ZoomMeetingToZoomOAuthConnectionMapping, ZoomOAuthApp, ZoomOAuthConnection, ZoomOAuthConnectionStates
+from bots.zoom_web_bot_adapter.zoom_web_bot_adapter import ZoomWebBotAdapter
 
 
 # Helper functions for creating mocks
@@ -343,6 +347,99 @@ class TestZoomWebBot(TransactionTestCase):
         self.assertIsNotNone(last_event, "Expected a bot event to be created")
         self.assertEqual(last_event.event_type, BotEventTypes.COULD_NOT_JOIN)
         self.assertEqual(last_event.event_sub_type, BotEventSubTypes.COULD_NOT_JOIN_MEETING_BLOCKED_BY_CAPTCHA)
+
+    def test_zoom_web_payload_routes_mixed_audio_frames_to_websocket(self):
+        payload_path = Path(__file__).resolve().parents[1] / "zoom_web_bot_adapter" / "zoom_web_chromedriver_payload.js"
+        payload_code = payload_path.read_text()
+
+        self.assertIn(
+            "this.mixedAudioTrack = this.destination.stream.getAudioTracks()[0];",
+            payload_code,
+            "Zoom payload should capture the mixed audio track before trying to forward it",
+        )
+        self.assertIn(
+            "if (window.initialData.sendMixedAudio && this.mixedAudioTrack) {",
+            payload_code,
+            "Zoom payload should only start mixed-audio forwarding when enabled and a track exists",
+        )
+        self.assertIn(
+            "this.processMixedAudioTrack();",
+            payload_code,
+            "Zoom payload should start the mixed-audio processing loop",
+        )
+        self.assertIn(
+            "window.ws.sendMixedAudio(timestamp, audioData);",
+            payload_code,
+            "Zoom payload should forward mixed audio frames over the websocket",
+        )
+
+    def test_zoom_web_payload_initializes_mixed_audio_stream_when_track_arrives(self):
+        payload_path = Path(__file__).resolve().parents[1] / "zoom_web_bot_adapter" / "zoom_web_chromedriver_payload.js"
+        payload_code = payload_path.read_text()
+
+        block_start = payload_code.index("    addAudioTrack(track) {")
+        block_end = payload_code.index("    createStream()", block_start)
+        add_audio_track_block = payload_code[block_start:block_end]
+
+        self.assertIn(
+            "if (window.initialData.sendMixedAudio && !this.meetingAudioStream && !this.audioContext) {",
+            add_audio_track_block,
+            "Zoom payload should initialize mixed-audio streaming as soon as the first meeting track is added",
+        )
+        self.assertIn(
+            "this.getMeetingAudioStream();",
+            add_audio_track_block,
+            "Zoom payload should bootstrap the mixed-audio stream from addAudioTrack()",
+        )
+
+    def test_zoom_web_process_mixed_audio_frame_forwards_pcm_to_callback(self):
+        adapter = object.__new__(ZoomWebBotAdapter)
+        adapter.recording_paused = False
+        adapter.last_media_message_processed_time = None
+        adapter.last_audio_message_processed_time = None
+        adapter.add_mixed_audio_chunk_callback = MagicMock()
+        adapter.wants_any_video_frames_callback = None
+        adapter.send_frames = True
+
+        float_samples = np.array([0.25, -0.25, 0.0, 0.5], dtype=np.float32)
+        message = (3).to_bytes(4, byteorder="little") + float_samples.tobytes()
+
+        adapter.process_mixed_audio_frame(message)
+
+        adapter.add_mixed_audio_chunk_callback.assert_called_once()
+        forwarded_chunk = adapter.add_mixed_audio_chunk_callback.call_args.kwargs["chunk"]
+        forwarded_samples = np.frombuffer(forwarded_chunk, dtype=np.int16)
+        expected_samples = (float_samples * 32768.0).astype(np.int16)
+        np.testing.assert_array_equal(forwarded_samples, expected_samples)
+
+    @patch("time.time", return_value=1700000000.123)
+    def test_zoom_web_mixed_audio_callback_sends_realtime_audio_payload(self, mock_time):
+        self.bot.settings = {
+            "zoom_settings": {"sdk": "web"},
+            "recording_settings": {"format": "none"},
+            "websocket_settings": {"audio": {"url": "wss://example.com/audio-stream", "sample_rate": 16000}},
+        }
+        self.bot.save()
+
+        controller = BotController(self.bot.id)
+        controller.gstreamer_pipeline = None
+        controller.websocket_client_manager = MagicMock()
+
+        pcm_chunk = (np.array([0, 1200, -1200, 2400], dtype=np.int16)).tobytes()
+
+        controller.add_mixed_audio_chunk_callback(pcm_chunk)
+
+        controller.websocket_client_manager.send_mixed_audio.assert_called_once()
+        payload = controller.websocket_client_manager.send_mixed_audio.call_args.args[0]
+
+        self.assertEqual(payload["trigger"], "realtime_audio.mixed")
+        self.assertEqual(payload["bot_id"], self.bot.object_id)
+        self.assertEqual(payload["data"]["sample_rate"], 16000)
+        self.assertEqual(payload["data"]["timestamp_ms"], 1700000000123)
+
+        decoded_chunk = b64decode(payload["data"]["chunk"])
+        self.assertGreater(len(decoded_chunk), 0)
+        self.assertEqual(controller.pipeline_configuration.websocket_stream_audio, True)
 
     @patch("bots.zoom_oauth_connections_utils.requests.post")
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
