@@ -127,24 +127,24 @@ class TestAsyncTranscriptionUsesGroupedUtterances(AsyncTranscriptionTestCase):
         self.assertEqual(async_transcription.transcription_provider, TranscriptionProviders.ASSEMBLY_AI)
         self.assertTrue(async_transcription.use_grouped_utterances)
 
-    def test_deepgram_transcription_does_not_use_grouped_utterances(self):
+    def test_gladia_transcription_does_not_use_grouped_utterances(self):
         """Verify that other providers do NOT use grouped utterances."""
-        # Create a recording with Deepgram
-        deepgram_recording = Recording.objects.create(
+        # Create a recording with Gladia
+        gladia_recording = Recording.objects.create(
             bot=self.bot,
             recording_type=RecordingTypes.AUDIO_AND_VIDEO,
             transcription_type=TranscriptionTypes.NON_REALTIME,
-            transcription_provider=TranscriptionProviders.DEEPGRAM,
+            transcription_provider=TranscriptionProviders.GLADIA,
             is_default_recording=False,
             state=RecordingStates.COMPLETE,
         )
 
         async_transcription = AsyncTranscription.objects.create(
-            recording=deepgram_recording,
-            settings={"transcription_settings": {"deepgram": {}}},
+            recording=gladia_recording,
+            settings={"transcription_settings": {"gladia": {}}},
         )
 
-        self.assertEqual(async_transcription.transcription_provider, TranscriptionProviders.DEEPGRAM)
+        self.assertEqual(async_transcription.transcription_provider, TranscriptionProviders.GLADIA)
         self.assertFalse(async_transcription.use_grouped_utterances)
 
 
@@ -380,7 +380,7 @@ class TestSplitTranscriptionByUtterance(AsyncTranscriptionTestCase):
 class TestProcessUtteranceGroup(AsyncTranscriptionTestCase):
     """Tests for the process_utterance_group_for_async_transcription task."""
 
-    @mock.patch("bots.tasks.process_utterance_group_for_async_transcription_task.get_transcription_via_assemblyai_for_utterance_group")
+    @mock.patch("bots.tasks.process_utterance_group_for_async_transcription_task.get_transcription_for_utterance_group")
     def test_successful_transcription_writes_to_all_utterances(self, mock_get_transcription):
         """Verify successful transcription writes results to all utterances in the group."""
         chunks = self._create_audio_chunks(count=3, duration_ms=1000)
@@ -424,7 +424,7 @@ class TestProcessUtteranceGroup(AsyncTranscriptionTestCase):
         utterances[0].refresh_from_db()
         self.assertEqual(utterances[0].transcription["transcript"], "hello")
 
-    @mock.patch("bots.tasks.process_utterance_group_for_async_transcription_task.get_transcription_via_assemblyai_for_utterance_group")
+    @mock.patch("bots.tasks.process_utterance_group_for_async_transcription_task.get_transcription_for_utterance_group")
     def test_failed_transcription_marks_all_utterances_failed(self, mock_get_transcription):
         """Verify failed transcription marks all utterances in the group as failed."""
         chunks = self._create_audio_chunks(count=2, duration_ms=1000)
