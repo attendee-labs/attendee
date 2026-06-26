@@ -936,6 +936,14 @@ class StyleManager {
 
     onlyShowSubsetofZoomUI() {
         try {
+            // Inject a style element that hides any ReactModal content
+            if (!document.getElementById('attendee-custom-style')) {
+                const styleElement = document.createElement('style');
+                styleElement.id = 'attendee-custom-style';
+                styleElement.textContent = '.ReactModal__Content { display: none !important; } #notificationManager { display: none !important; }';
+                document.head.appendChild(styleElement);
+            }
+
             // Find the main element that contains all the video elements
             this.mainElement = document.querySelector('#video-pip-container');
             if (!this.mainElement) {
@@ -973,6 +981,12 @@ class StyleManager {
 
 
     showAllOfZoomUI() {
+        // Remove the injected style element that hid the ReactModal content
+        const styleElement = document.getElementById('attendee-custom-style');
+        if (styleElement) {
+            styleElement.remove();
+        }
+
         // Restore all elements that were hidden by onlyShowSubsetofZoomUI
         document.querySelectorAll('body *').forEach(element => {
             if (element.style.display === 'none') {
