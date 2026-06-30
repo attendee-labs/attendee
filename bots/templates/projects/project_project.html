@@ -30,6 +30,10 @@
       </button>
     </form>
   </div>
+
+  {% if project.concurrent_bots_limit_override is not None %}
+  <p class="mt-4">Concurrent bots limit: {{ project.concurrent_bots_limit_override }}</p>
+  {% endif %}
   
   <!-- Users with access section -->
   <div class="card mt-4">
