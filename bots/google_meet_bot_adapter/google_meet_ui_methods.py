@@ -545,7 +545,14 @@ class GoogleMeetUIMethods:
                 )
 
     def check_if_meeting_is_found(self):
-        meeting_not_found_element = self.find_element_by_selector(By.XPATH, '//*[contains(text(), "Check your meeting code") or contains(text(), "Invalid video call name") or contains(text(), "Your meeting code has expired")]')
+        meeting_not_found_texts = [
+            "Check your meeting code",
+            "Invalid video call name",
+            "Your meeting code has expired",
+            "The meeting code you entered doesn’t work",
+        ]
+        meeting_not_found_xpath = "//*[" + " or ".join(f'contains(text(), "{text}")' for text in meeting_not_found_texts) + "]"
+        meeting_not_found_element = self.find_element_by_selector(By.XPATH, meeting_not_found_xpath)
         if meeting_not_found_element:
             logger.warning("Meeting not found. Raising UiMeetingNotFoundException")
             raise UiMeetingNotFoundException("Meeting not found", "check_if_meeting_is_found")
