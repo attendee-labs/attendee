@@ -343,6 +343,7 @@ TRANSCRIPTION_SETTINGS_SCHEMA = {
                     "description": "Whether to automatically detect the spoken language.",
                 },
                 "keyterms_prompt": {"type": "array", "items": {"type": "string"}, "description": "List of words or phrases to boost in the transcript. Only supported for when using the 'slam-1' speech model. See AssemblyAI docs for details."},
+                "prompt": {"type": "string", "description": "Natural language prompt of up to 1500 words providing contextual information (e.g. meeting topic, participant names, domain terms) to bias transcription. Only supported for the 'universal-3-pro' speech model; ignored otherwise. See AssemblyAI docs for details."},
                 "speech_model": {"type": "string", "description": "The speech model to use for transcription. See AssemblyAI docs for details. This parameter is deprecated, use the speech_models param instead."},
                 "speech_models": {"type": "array", "items": {"type": "string"}, "uniqueItems": True, "description": "The speech models to use for transcription in order of preference. Defaults to ['universal-3-pro', 'universal-2']. See AssemblyAI docs for details."},
                 "speaker_labels": {"type": "boolean", "description": "Whether to enable AssemblyAI's ML-based diarization. Only needed if multiple people are speaking into a single microphone. Defaults to false."},
