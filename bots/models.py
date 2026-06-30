@@ -713,6 +713,9 @@ class TranscriptionSettings:
     def assemblyai_custom_spelling(self):
         return self._settings.get("assembly_ai", {}).get("custom_spelling", None)
 
+    def assemblyai_prompt(self):
+        return self._settings.get("assembly_ai", {}).get("prompt", None)
+
     def assemblyai_speech_model(self):
         return self._settings.get("assembly_ai", {}).get("speech_model", None)
 

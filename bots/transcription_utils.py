@@ -321,9 +321,15 @@ def get_transcription_via_assemblyai_from_mp3(
     keyterms_prompt = transcription_settings.assemblyai_keyterms_prompt()
     if keyterms_prompt:
         data["keyterms_prompt"] = keyterms_prompt
+<<<<<<< HEAD
     custom_spelling = transcription_settings.assemblyai_custom_spelling()
     if custom_spelling:
         data["custom_spelling"] = custom_spelling
+=======
+    prompt = transcription_settings.assemblyai_prompt()
+    if prompt:
+        data["prompt"] = prompt
+>>>>>>> main
     speech_model = transcription_settings.assemblyai_speech_model()
     if speech_model:
         if "speech_models" in data:
@@ -350,6 +356,7 @@ def get_transcription_via_assemblyai_from_mp3(
 
     transcript_id = response.json()["id"]
     polling_endpoint = f"{base_url}/transcript/{transcript_id}"
+    logger.info(f"AssemblyAI transcription polling endpoint: {polling_endpoint} for utterance {identifier}")
 
     # Poll the result_url until we get a completed transcription
     max_retries = int(os.getenv("TRANSCRIPTION_POLLING_TIMEOUT_SECONDS", 120))  # Maximum number of retries (2 minutes with 1s sleep)
