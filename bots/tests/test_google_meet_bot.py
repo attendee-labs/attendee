@@ -384,9 +384,15 @@ class TestGoogleMeetBot(TransactionTestCase):
         # Close the database connection since we're in a thread
         connection.close()
 
-        # Now test creating an async transcription
+        # Now test creating an async transcription.
+        # Deepgram async transcription uses the grouped utterances path: the audio for each
+        # group is concatenated into a single MP3, transcribed in one Deepgram request, and
+        # the result is split back into per-utterance transcriptions. Mock the MP3 generation
+        # so the test doesn't depend on ffmpeg; the existing mocked Deepgram client provides
+        # the (combined) transcription result that then gets split across the group.
         async_transcription = AsyncTranscription.objects.create(recording=self.recording, settings={"transcription_settings": {"deepgram": {}}})
         self.assertEqual(async_transcription.state, AsyncTranscriptionStates.NOT_STARTED)
+        self.assertTrue(async_transcription.use_grouped_utterances)
 
         process_async_transcription.delay(async_transcription.id)
 
@@ -396,8 +402,30 @@ class TestGoogleMeetBot(TransactionTestCase):
         self.assertIsNotNone(async_transcription.completed_at)
         self.assertIsNotNone(async_transcription.started_at)
         self.assertIsNone(async_transcription.failure_data)
-        self.assertEqual(utterances.first().transcription, async_transcription.utterances.first().transcription)
-        self.assertEqual(Utterance.objects.filter(recording=self.recording, async_transcription=async_transcription).count(), Utterance.objects.filter(recording=self.recording, async_transcription=None).count())
+
+        # One async utterance should be created per (non-async) recording utterance.
+        async_utterances = async_transcription.utterances.all()
+        self.assertGreater(async_utterances.count(), 0)
+        self.assertEqual(async_utterances.count(), Utterance.objects.filter(recording=self.recording, async_transcription=None).count())
+
+        # Each async utterance gets its own split transcription (not the full group transcript),
+        # so we verify the per-utterance transcription structure rather than equality with the
+        # realtime utterance's transcription.
+        for async_utterance in async_utterances:
+            self.assertIsNotNone(async_utterance.transcription)
+            self.assertIsNone(async_utterance.failure_data)
+            self.assertIn("transcript", async_utterance.transcription)
+            self.assertIn("words", async_utterance.transcription)
+
+        # The mocked Deepgram result only contains the words "This" and "is", so the words
+        # split across the group's utterances must come from that set, and the first utterance
+        # (whose window starts at 0.0) must contain the first word.
+        all_async_words = [word["word"] for async_utterance in async_utterances for word in async_utterance.transcription.get("words", [])]
+        for word in all_async_words:
+            self.assertIn(word, ["This", "is"])
+
+        first_async_utterance = async_transcription.utterances.order_by("timestamp_ms").first()
+        self.assertIn("This", first_async_utterance.transcription["transcript"])
 
         # Verify webhook delivery attempts were created for async transcription state changes
         async_transcription_webhook_attempts = WebhookDeliveryAttempt.objects.filter(bot=self.bot, webhook_trigger_type=WebhookTriggerTypes.ASYNC_TRANSCRIPTION_STATE_CHANGE)

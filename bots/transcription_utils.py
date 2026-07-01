@@ -1,5 +1,6 @@
 import copy
 import io
+import json
 import logging
 import os
 import subprocess
@@ -9,7 +10,7 @@ from typing import Any, Callable, Dict, List, Sequence
 
 import requests
 
-from bots.models import Credentials, ParticipantEvent, ParticipantEventTypes, Recording, TranscriptionFailureReasons, TranscriptionSettings, Utterance
+from bots.models import Credentials, ParticipantEvent, ParticipantEventTypes, Recording, TranscriptionFailureReasons, TranscriptionProviders, TranscriptionSettings, Utterance
 
 logger = logging.getLogger(__name__)
 
@@ -492,22 +493,34 @@ def split_transcription_by_utterance(
     return output
 
 
-def get_transcription_via_assemblyai_for_utterance_group(utterances):
-    first_utterance = utterances[0]
-    total_duration_ms = sum(utterance.duration_ms for utterance in utterances)
+def get_transcription_for_utterance_group(utterances):
+    try:
+        first_utterance = utterances[0]
+        total_duration_ms = sum(utterance.duration_ms for utterance in utterances)
 
-    transcription, error = get_transcription_via_assemblyai_from_mp3(
-        retrieve_mp3_data_callback=lambda: get_mp3_for_utterance_group(utterances, sample_rate=first_utterance.get_sample_rate()),
-        duration_ms=total_duration_ms,
-        identifier=f"utterances {[utterance.id for utterance in utterances]}",
-        transcription_settings=first_utterance.transcription_settings,
-        recording=first_utterance.recording,
-    )
+        transcription_provider = first_utterance.transcription_provider
 
-    if error:
-        return None, error
+        if transcription_provider == TranscriptionProviders.ASSEMBLY_AI:
+            get_transcription_from_mp3_method = get_transcription_via_assemblyai_from_mp3
+        elif transcription_provider == TranscriptionProviders.DEEPGRAM:
+            get_transcription_from_mp3_method = get_transcription_via_deepgram_from_mp3
+        else:
+            raise Exception(f"Unknown or unsupported transcription provider: {transcription_provider}")
 
-    return split_transcription_by_utterance(transcription, utterances), None
+        transcription, error = get_transcription_from_mp3_method(
+            retrieve_mp3_data_callback=lambda: get_mp3_for_utterance_group(utterances, sample_rate=first_utterance.get_sample_rate()),
+            duration_ms=total_duration_ms,
+            identifier=f"utterances {[utterance.id for utterance in utterances]}",
+            transcription_settings=first_utterance.transcription_settings,
+            recording=first_utterance.recording,
+        )
+
+        if error:
+            return None, error
+
+        return split_transcription_by_utterance(transcription, utterances), None
+    except Exception as e:
+        return None, {"reason": TranscriptionFailureReasons.INTERNAL_ERROR, "error": str(e)}
 
 
 def get_transcription_via_assemblyai_using_speaker_events(speaker_events, recording, transcription_settings):
@@ -737,6 +750,12 @@ def get_transcription_via_assemblyai_from_mp3(
     keyterms_prompt = transcription_settings.assemblyai_keyterms_prompt()
     if keyterms_prompt:
         data["keyterms_prompt"] = keyterms_prompt
+    custom_spelling = transcription_settings.assemblyai_custom_spelling()
+    if custom_spelling:
+        data["custom_spelling"] = custom_spelling
+    prompt = transcription_settings.assemblyai_prompt()
+    if prompt:
+        data["prompt"] = prompt
     speech_model = transcription_settings.assemblyai_speech_model()
     if speech_model:
         if "speech_models" in data:
@@ -767,6 +786,7 @@ def get_transcription_via_assemblyai_from_mp3(
 
     transcript_id = response.json()["id"]
     polling_endpoint = f"{base_url}/transcript/{transcript_id}"
+    logger.info(f"AssemblyAI transcription polling endpoint: {polling_endpoint} for utterance {identifier}")
 
     # Poll the result_url until we get a completed transcription
     max_retries = int(os.getenv("TRANSCRIPTION_POLLING_TIMEOUT_SECONDS", 120))  # Maximum number of retries (2 minutes with 1s sleep)
@@ -829,3 +849,97 @@ def get_transcription_via_assemblyai_from_mp3(
 
     # If we've reached here, we've timed out
     return None, {"reason": TranscriptionFailureReasons.TIMED_OUT, "step": "transcribe_result_poll"}
+
+
+def get_transcription_via_deepgram_from_mp3(
+    retrieve_mp3_data_callback: Callable[[], bytes],
+    duration_ms: int,
+    identifier: str,
+    transcription_settings: TranscriptionSettings,
+    recording: Recording,
+):
+    return get_transcription_via_deepgram_from_audio_data(identifier=identifier, transcription_settings=transcription_settings, recording=recording, retrieve_mp3_data_callback=retrieve_mp3_data_callback)
+
+
+def get_transcription_via_deepgram_from_audio_data(
+    identifier: str,
+    transcription_settings: TranscriptionSettings,
+    recording: Recording,
+    retrieve_mp3_data_callback: Callable[[], bytes] | None = None,
+    retrieve_pcm_data_callback: Callable[[], tuple[bytes, Dict[str, Any]]] | None = None,
+):
+    """
+    Transcribe audio with Deepgram.
+
+    Exactly one of the following callbacks must be provided:
+      - retrieve_mp3_data_callback: returns MP3 bytes. Deepgram auto-detects the
+        container/encoding, so no extra audio options are passed.
+      - retrieve_pcm_data_callback: returns a tuple of (raw PCM bytes, audio_options),
+        where audio_options is a dict of extra PrerecordedOptions kwargs describing the
+        PCM data (e.g. {"encoding": "linear16", "sample_rate": 16000}).
+    """
+    if (retrieve_mp3_data_callback is None) == (retrieve_pcm_data_callback is None):
+        raise ValueError("Exactly one of retrieve_mp3_data_callback or retrieve_pcm_data_callback must be provided.")
+
+    from deepgram import (
+        DeepgramApiError,
+        DeepgramClient,
+        DeepgramClientOptions,
+        FileSource,
+        PrerecordedOptions,
+    )
+
+    deepgram_credentials_record = recording.bot.project.credentials.filter(credential_type=Credentials.CredentialTypes.DEEPGRAM).first()
+    if not deepgram_credentials_record:
+        return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND}
+
+    deepgram_credentials = deepgram_credentials_record.get_credentials()
+    if not deepgram_credentials:
+        return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND}
+
+    deepgram_model = transcription_settings.deepgram_model()
+
+    if retrieve_pcm_data_callback is not None:
+        buffer, audio_options = retrieve_pcm_data_callback()
+    else:
+        buffer = retrieve_mp3_data_callback()
+        audio_options = {}
+
+    payload: FileSource = {
+        "buffer": buffer,
+    }
+
+    options = PrerecordedOptions(
+        model=deepgram_model,
+        smart_format=True,
+        language=transcription_settings.deepgram_language(),
+        detect_language=transcription_settings.deepgram_detect_language(),
+        keyterm=transcription_settings.deepgram_keyterms(),
+        keywords=transcription_settings.deepgram_keywords(),
+        redact=transcription_settings.deepgram_redaction_settings(),
+        replace=transcription_settings.deepgram_replace_settings(),
+        **audio_options,
+    )
+
+    deepgram_base_url = transcription_settings.deepgram_base_url()
+    if deepgram_base_url:
+        logger.info(f"Using Deepgram base URL {deepgram_base_url} for transcription")
+        config = DeepgramClientOptions(url=deepgram_base_url)
+        deepgram = DeepgramClient(deepgram_credentials["api_key"], config)
+    else:
+        deepgram = DeepgramClient(deepgram_credentials["api_key"])
+
+    try:
+        response = deepgram.listen.rest.v("1").transcribe_file(payload, options)
+    except DeepgramApiError as e:
+        original_error_json = json.loads(e.original_error)
+        if original_error_json.get("err_code") == "INVALID_AUTH":
+            return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_INVALID}
+        return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "error_code": original_error_json.get("err_code"), "error_json": original_error_json}
+
+    logger.info(f"Deepgram transcription complete for {identifier} with model {deepgram_model}")
+    alternatives = response.results.channels[0].alternatives
+    if len(alternatives) == 0:
+        logger.info(f"Deepgram transcription for {identifier} with model {deepgram_model} had no alternatives, returning empty transcription")
+        return {"transcript": "", "words": []}, None
+    return json.loads(alternatives[0].to_json()), None

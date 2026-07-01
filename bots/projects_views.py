@@ -10,6 +10,8 @@ from django.conf import settings
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import models, transaction
+from django.db.models.fields.json import KeyTextTransform
+from django.db.models.functions import Cast
 from django.http import HttpResponse, QueryDict
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -508,6 +510,13 @@ class ProjectBotsView(LoginRequiredMixin, ProjectUrlContextMixin, ListView):
         """Get session type from class attribute"""
         return self.session_type
 
+    def get_metadata_pairs(self):
+        """Build metadata key/value pairs from parallel GET lists, keeping only
+        pairs with a non-empty key."""
+        metadata_keys = self.request.GET.getlist("metadata_key")
+        metadata_values = self.request.GET.getlist("metadata_value")
+        return [{"key": key.strip(), "value": value} for key, value in zip(metadata_keys, metadata_values) if key.strip()]
+
     def get_queryset(self):
         project = get_project_for_user(user=self.request.user, project_object_id=self.kwargs["object_id"])
 
@@ -566,6 +575,11 @@ class ProjectBotsView(LoginRequiredMixin, ProjectUrlContextMixin, ListView):
         if search_query:
             queryset = queryset.filter(models.Q(object_id__icontains=search_query) | models.Q(meeting_url__icontains=search_query) | models.Q(name__icontains=search_query))
 
+        # Apply metadata key/value filters if provided. Each non-empty key/value
+        # pair must match exactly in the bot's metadata JSON.
+        for pair in self.get_metadata_pairs():
+            queryset = queryset.filter(metadata__contains={pair["key"]: pair["value"]})
+
         # Apply ended_at date filters if provided
         ended_at_start = self.request.GET.get("ended_at_start")
         ended_at_end = self.request.GET.get("ended_at_end")
@@ -599,6 +613,33 @@ class ProjectBotsView(LoginRequiredMixin, ProjectUrlContextMixin, ListView):
         elif unexpected_error == "no":
             queryset = queryset.exclude(bot_events__event_type=BotEventTypes.FATAL_ERROR)
 
+        # Apply transcript filter if provided. A bot has "generated a transcript"
+        # when it has at least one non-errored utterance (failure_data is null).
+        transcript = self.request.GET.get("transcript", "").strip()
+        if transcript in ("yes", "no"):
+            has_transcript = models.Exists(Utterance.objects.filter(recording__bot=models.OuterRef("pk"), failure_data__isnull=True))
+            if transcript == "yes":
+                queryset = queryset.filter(has_transcript)
+            else:
+                queryset = queryset.filter(~has_transcript)
+
+        # Apply "minimum participants" filter if provided. This counts only
+        # non-bot participants, so a value of 2 means the meeting had at least
+        # two participants other than the bot itself.
+        min_participants = self.request.GET.get("min_participants", "").strip()
+        if min_participants.isdigit() and int(min_participants) >= 1:
+            other_participant_count = Participant.objects.filter(bot=models.OuterRef("pk"), is_the_bot=False).order_by().values("bot").annotate(count=models.Count("id")).values("count")
+            queryset = queryset.annotate(other_participant_count=models.Subquery(other_participant_count, output_field=models.IntegerField())).filter(other_participant_count__gte=int(min_participants))
+
+        # Apply "minimum duration" filter (in minutes) if provided. Duration is
+        # pulled from the metadata of the terminal BotEvent (the one that
+        # transitioned the bot to ENDED or FATAL_ERROR), matching how usage
+        # stats compute per-bot duration.
+        min_duration = self.request.GET.get("min_duration", "").strip()
+        if min_duration.isdigit() and int(min_duration) >= 1:
+            bot_duration_seconds = BotEvent.objects.filter(bot=models.OuterRef("pk"), new_state__in=[BotStates.ENDED, BotStates.FATAL_ERROR]).annotate(_dur=Cast(KeyTextTransform("bot_duration_seconds", "metadata"), output_field=models.IntegerField())).order_by("created_at").values("_dur")[:1]
+            queryset = queryset.annotate(bot_duration_seconds=models.Subquery(bot_duration_seconds, output_field=models.IntegerField())).filter(bot_duration_seconds__gte=int(min_duration) * 60)
+
         # Get the latest bot event type and subtype for each bot using subquery annotations
         latest_event_subquery_base = BotEvent.objects.filter(bot=models.OuterRef("pk")).order_by("-created_at")
         latest_event_type = latest_event_subquery_base.values("event_type")[:1]
@@ -622,7 +663,7 @@ class ProjectBotsView(LoginRequiredMixin, ProjectUrlContextMixin, ListView):
         context["session_type"] = self.get_session_type()
 
         # Add filter parameters to context for maintaining state
-        context["filter_params"] = {"start_date": self.request.GET.get("start_date", ""), "end_date": self.request.GET.get("end_date", ""), "join_at_start": self.request.GET.get("join_at_start", ""), "join_at_end": self.request.GET.get("join_at_end", ""), "ended_at_start": self.request.GET.get("ended_at_start", ""), "ended_at_end": self.request.GET.get("ended_at_end", ""), "states": self.request.GET.getlist("states"), "search": self.request.GET.get("search", ""), "joined_meeting": self.request.GET.get("joined_meeting", ""), "unexpected_error": self.request.GET.get("unexpected_error", "")}
+        context["filter_params"] = {"start_date": self.request.GET.get("start_date", ""), "end_date": self.request.GET.get("end_date", ""), "join_at_start": self.request.GET.get("join_at_start", ""), "join_at_end": self.request.GET.get("join_at_end", ""), "ended_at_start": self.request.GET.get("ended_at_start", ""), "ended_at_end": self.request.GET.get("ended_at_end", ""), "states": self.request.GET.getlist("states"), "search": self.request.GET.get("search", ""), "joined_meeting": self.request.GET.get("joined_meeting", ""), "unexpected_error": self.request.GET.get("unexpected_error", ""), "transcript": self.request.GET.get("transcript", ""), "min_participants": self.request.GET.get("min_participants", ""), "min_duration": self.request.GET.get("min_duration", ""), "metadata_pairs": self.get_metadata_pairs()}
 
         # Add flag to detect if create modal should be automatically opened
         context["open_create_modal"] = self.request.GET.get("open_create_modal") == "true"
@@ -1172,9 +1213,11 @@ class ProjectUsageView(AdminRequiredMixin, ProjectUrlContextMixin, View):
         interval = request.GET.get("interval", "months")
         measure = request.GET.get("measure", "count")
         platform = request.GET.get("platform", "")
+        category_set = request.GET.get("category_set", "default")
 
         context = self.get_project_context(object_id, project)
-        context.update(get_usage_data(project, interval, measure, platform))
+        context.update(get_usage_data(project, interval, measure, platform, category_set))
+        context["show_category_selector"] = settings.SHOW_CATEGORY_SELECTOR_IN_USAGE_DASHBOARD
         return render(request, "projects/project_usage.html", context)
 
 

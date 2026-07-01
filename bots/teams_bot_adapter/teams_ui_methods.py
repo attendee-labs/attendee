@@ -1,4 +1,5 @@
 import logging
+import os
 import random
 import time
 
@@ -89,6 +90,39 @@ class TeamsUIMethods:
         logger.info(f"Sleeping for {time_to_sleep_for} seconds.")
         time.sleep(time_to_sleep_for)
 
+    def ensure_x11_input(self):
+        if not hasattr(self, "x11_input"):
+            from bots.web_bot_adapter.x11_input import X11Input
+
+            self.x11_input = X11Input()
+
+    # Wiggle mouse to defeat bot detection
+    def wiggle_mouse(self):
+        try:
+            self.ensure_x11_input()
+
+            # The root window geometry matches the (virtual) screen size, so we
+            # can pick random in-bounds targets to move the OS cursor to.
+            geometry = self.x11_input.root.get_geometry()
+            screen_width = max(1, geometry.width)
+            screen_height = max(1, geometry.height)
+
+            # Start from the center of the screen before wiggling around.
+            self.x11_input.move_abs(screen_width // 2, screen_height // 2)
+            time.sleep(random.uniform(0.1, 0.4))
+
+            num_movements = 5
+            logger.info(f"Wiggling mouse at OS level with {num_movements} movements")
+            for _ in range(num_movements):
+                target_x = random.randint(0, screen_width - 1)
+                target_y = random.randint(0, screen_height - 1)
+                self.x11_input.move_abs(target_x, target_y)
+                time.sleep(0.1)
+        except Exception as e:
+            # Mouse wiggling is best-effort anti-bot-detection; never let it
+            # break the join flow.
+            logger.warning(f"Error wiggling mouse at OS level: {e}")
+
     def fill_out_name_input(self):
         num_attempts = 60
         logger.info("Waiting for the name input field...")
@@ -143,6 +177,44 @@ class TeamsUIMethods:
         logger.info("Clicking the closed captions button...")
         self.click_element(closed_captions_button, "closed_captions_button")
 
+    def check_if_waiting_room_connection_failed(self, waiting_room_timeout_started_at, step):
+        if os.getenv("CHECK_IF_TEAMS_WAITING_ROOM_CONNECTION_FAILED", "false") == "false":
+            return
+
+        try:
+            # If it has been less than 30 seconds since the waiting room timeout started, then we should not assume that the connection failed
+            if time.time() - waiting_room_timeout_started_at < 30:
+                return
+
+            # If it has been more than 300 seconds, then we should also return
+            if time.time() - waiting_room_timeout_started_at > 300:
+                return
+
+            # If the join button is present but it is NOT disabled, then we should assume the connection failed and things were reset.
+            join_button = self.find_element_by_selector(By.CSS_SELECTOR, '[data-tid="prejoin-join-button"]')
+            issue_detected = join_button and join_button.is_enabled()
+            should_raise_exception = os.getenv("RAISE_IF_TEAMS_WAITING_ROOM_CONNECTION_FAILED", "false") == "true"
+
+            if issue_detected:
+                # When bot retries joining the meeting, this will cause it to log network requests from the start
+                self.should_log_network_requests = True
+
+            if issue_detected and should_raise_exception:
+                logger.info("Join button is present but it is NOT disabled after entering waiting room. Assuming waiting room connection failed. Raising UiTeamsBlockingUsException")
+                raise UiTeamsBlockingUsException("Waiting room connection failed.", step)
+
+            if issue_detected and not should_raise_exception:
+                if not getattr(self, "_waiting_room_connection_failed_logged", False):
+                    logger.info("Join button is present but it is NOT disabled after entering waiting room. Assuming waiting room connection failed. Not raising exception.")
+                    self._waiting_room_connection_failed_logged = True
+                return
+
+        except UiTeamsBlockingUsException:
+            raise
+        except Exception as e:
+            logger.info(f"Unknown error occurred in check_if_waiting_room_connection_failed. Exception type = {type(e)}")
+            return
+
     def check_if_waiting_room_timeout_exceeded(self, waiting_room_timeout_started_at, step):
         waiting_room_timeout_exceeded = time.time() - waiting_room_timeout_started_at > self.automatic_leave_configuration.waiting_room_timeout_seconds
         if waiting_room_timeout_exceeded:
@@ -185,6 +257,7 @@ class TeamsUIMethods:
                 self.look_for_we_could_not_connect_you_element("click_show_more_button")
 
                 self.check_if_waiting_room_timeout_exceeded(waiting_room_timeout_started_at, "click_show_more_button")
+                self.check_if_waiting_room_connection_failed(waiting_room_timeout_started_at, "click_show_more_button")
 
             except Exception as e:
                 logger.info("Exception raised in locate_element for show_more_button")
@@ -304,7 +377,11 @@ class TeamsUIMethods:
 
         self.fill_out_name_input()
 
+        self.wiggle_mouse()
+
         self.turn_off_media_inputs()
+
+        self.disable_video_effects()
 
         logger.info("Waiting for the Join now button...")
         join_button = self.locate_element(step="join_button", condition=EC.presence_of_element_located((By.CSS_SELECTOR, '[data-tid="prejoin-join-button"]')), wait_time_seconds=10)
@@ -323,6 +400,18 @@ class TeamsUIMethods:
             self.disable_incoming_video_in_ui()
 
         self.ready_to_show_bot_image()
+
+    def disable_video_effects(self):
+        if not (self.teams_bot_login_is_available and self.teams_bot_login_should_be_used):
+            logger.info("Not disabling video effects because teams bot is not logged in.")
+            return
+
+        logger.info("Disabling video effects...")
+        disable_video_effects_result = self.driver.execute_script("return window.callManager?.disableVideoEffects()")
+        if disable_video_effects_result:
+            logger.info("Video effects disabled programmatically")
+        else:
+            logger.error("Failed to disable video effects programmatically")
 
     def disable_incoming_video_in_ui(self):
         logger.info("Waiting for the view button...")

@@ -5,7 +5,7 @@ import os
 import random
 import subprocess
 import time
-from urllib.parse import quote, urlparse
+from urllib.parse import parse_qsl, quote, urlencode, urlparse, urlunparse
 
 import redis
 import requests
@@ -25,6 +25,13 @@ from bots.web_bot_adapter.ui_methods import UiCouldNotClickElementException, UiC
 from .mocap_manager import MocapManager
 
 logger = logging.getLogger(__name__)
+
+
+def mask_url_query_param_values(url, mask="***"):
+    """Return the URL with each query parameter's value replaced by a mask, preserving the param keys."""
+    parsed_url = urlparse(url)
+    masked_query = urlencode([(key, mask) for key, _ in parse_qsl(parsed_url.query, keep_blank_values=True)])
+    return urlunparse(parsed_url._replace(query=masked_query, params="", fragment=""))
 
 
 class UiGoogleBlockingUsException(UiRetryableExpectedException):
@@ -329,7 +336,7 @@ class GoogleMeetUIMethods:
 
     def ensure_x11_input(self):
         if not hasattr(self, "x11_input"):
-            from .x11_input import X11Input
+            from bots.web_bot_adapter.x11_input import X11Input
 
             self.x11_input = X11Input()
 
@@ -538,7 +545,14 @@ class GoogleMeetUIMethods:
                 )
 
     def check_if_meeting_is_found(self):
-        meeting_not_found_element = self.find_element_by_selector(By.XPATH, '//*[contains(text(), "Check your meeting code") or contains(text(), "Invalid video call name") or contains(text(), "Your meeting code has expired")]')
+        meeting_not_found_texts = [
+            "Check your meeting code",
+            "Invalid video call name",
+            "Your meeting code has expired",
+            "The meeting code you entered doesn’t work",
+        ]
+        meeting_not_found_xpath = "//*[" + " or ".join(f'contains(text(), "{text}")' for text in meeting_not_found_texts) + "]"
+        meeting_not_found_element = self.find_element_by_selector(By.XPATH, meeting_not_found_xpath)
         if meeting_not_found_element:
             logger.warning("Meeting not found. Raising UiMeetingNotFoundException")
             raise UiMeetingNotFoundException("Meeting not found", "check_if_meeting_is_found")
@@ -830,7 +844,7 @@ class GoogleMeetUIMethods:
         logger.info("Filling in the email input...")
         # Look for input type = email and fill it in
         session_email = self.google_meet_bot_login_session.get("login_email")
-        email_input = self.locate_element(step="email_input_for_google_account_sign_in", condition=EC.element_to_be_clickable((By.CSS_SELECTOR, 'input[type="email"]')), wait_time_seconds=10)
+        email_input = self.locate_element(step="email_input_for_google_account_sign_in", condition=EC.element_to_be_clickable((By.CSS_SELECTOR, 'input[type="email"], input[aria-label="Email or phone"], input#identifierId')), wait_time_seconds=10)
         email_input.send_keys(session_email)
 
         # Press the enter key to submit the email input
@@ -1047,7 +1061,7 @@ class GoogleMeetUIMethods:
         logger.info("Logging in to Google Meet account")
         session_id = self.google_meet_bot_login_session.get("session_id")
         google_meet_set_cookie_url = get_google_meet_set_cookie_url(session_id)
-        logger.info(f"Navigating to Google Meet set cookie URL: {google_meet_set_cookie_url}")
+        logger.info(f"Navigating to Google Meet set cookie URL: {mask_url_query_param_values(google_meet_set_cookie_url)}")
         self.driver.get(google_meet_set_cookie_url)
 
         # There's two ways you can login to Google. You can type in a specific email or you can go to this

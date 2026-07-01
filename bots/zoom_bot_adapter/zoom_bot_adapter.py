@@ -11,7 +11,7 @@ import zoom_meeting_sdk as zoom
 from bots.automatic_leave_utils import participant_is_another_bot
 from bots.bot_adapter import BotAdapter
 from bots.meeting_url_utils import parse_zoom_join_url
-from bots.utils import image_to_yuv420_frame, scale_i420
+from bots.utils import image_to_yuv420_frame, scale_i420, select_from_comma_separated_list_with_wrapping_index
 
 from .mp4_demuxer import MP4Demuxer
 from .realtime_per_participant_video_frame_generator import RealtimePerParticipantVideoFrameGenerator
@@ -215,7 +215,8 @@ class ZoomBotAdapter(BotAdapter):
         self.ready_to_send_chat_messages = False
 
         self.should_retry_after_meeting_ends = False
-        self.attempts_to_join_started_at = time.time()
+        self.authorized_user_not_in_meeting_first_seen_at = None
+        self.authorized_user_not_in_meeting_retries = 0
 
     def pause_recording(self):
         self.recording_is_paused = True
@@ -987,7 +988,12 @@ class ZoomBotAdapter(BotAdapter):
         if self.zoom_tokens.get("app_privilege_token"):
             param.app_privilege_token = self.zoom_tokens.get("app_privilege_token")
         if self.zoom_tokens.get("onbehalf_token"):
-            param.onBehalfToken = self.zoom_tokens.get("onbehalf_token")
+            # Switch which onbehalf token is used based on how many times we've retried on behalf of the authorized user not in the meeting
+            param.onBehalfToken = select_from_comma_separated_list_with_wrapping_index(
+                comma_separated_list=self.zoom_tokens.get("onbehalf_token"),
+                index=self.authorized_user_not_in_meeting_retries,
+            )
+            logger.info(f"Using onbehalf token {(param.onBehalfToken or '')[:6]}...{(param.onBehalfToken or '')[-6:]} for retry {self.authorized_user_not_in_meeting_retries}")
         # Set the webinarToken only if joining a webinar as an attendee (in webinars, all attendees are in Guest Mode).
         # If joining as a signed-in bot (for panelists and co-hosts), use the ZAK token instead, and leave the webinarToken as NULL.
         if self.zoom_tokens.get("registrant_token") and not self.zoom_tokens.get("zak_token"):
@@ -997,6 +1003,10 @@ class ZoomBotAdapter(BotAdapter):
 
         join_result = self.meeting_service.Join(join_param)
         logger.info(f"join_result = {join_result}")
+        if join_result != zoom.SDKERR_SUCCESS:
+            logger.error(f"Failed to join meeting with join_result = {join_result}")
+            self.send_message_callback({"message": self.Messages.ZOOM_AUTHORIZATION_FAILED, "zoom_result_code": join_result})
+            return
 
         self.audio_settings = self.setting_service.GetAudioSettings()
         self.audio_settings.EnableAutoJoinAudio(True)
@@ -1057,13 +1067,17 @@ class ZoomBotAdapter(BotAdapter):
         logger.info(f"Set a timeout to abort if we're still in the connecting state after {self.stuck_in_connecting_state_timeout} seconds. timeout_id = {self.stuck_in_connecting_state_timeout_id}")
 
     def handle_failed_to_join_because_onbehalf_token_user_not_in_meeting(self):
-        if time.time() - self.attempts_to_join_started_at > self.automatic_leave_configuration.authorized_user_not_in_meeting_timeout_seconds:
+        self.authorized_user_not_in_meeting_retries += 1
+        if self.authorized_user_not_in_meeting_first_seen_at is None:
+            self.authorized_user_not_in_meeting_first_seen_at = time.time()
+
+        if time.time() - self.authorized_user_not_in_meeting_first_seen_at > self.automatic_leave_configuration.authorized_user_not_in_meeting_timeout_seconds:
             self.send_message_callback({"message": self.Messages.AUTHORIZED_USER_NOT_IN_MEETING_TIMEOUT_EXCEEDED})
             return
 
         # We don't explicitly retry here because the retry will fail if we do it immediately
         # Instead, we set a flag to retry after the meeting ends
-        logger.info(f"Failed to join meeting and the onbehalf token user is not in the meeting but the timeout of {self.automatic_leave_configuration.authorized_user_not_in_meeting_timeout_seconds} seconds has not exceeded, so retrying")
+        logger.info(f"Failed to join meeting and the onbehalf token user is not in the meeting but the timeout of {self.automatic_leave_configuration.authorized_user_not_in_meeting_timeout_seconds} seconds has not exceeded ({time.time() - self.authorized_user_not_in_meeting_first_seen_at:.1f} seconds elapsed), so retrying")
         self.should_retry_after_meeting_ends = True
 
     def meeting_status_changed(self, status, iResult):
@@ -1107,9 +1121,10 @@ class ZoomBotAdapter(BotAdapter):
             self.send_message_callback({"message": self.Messages.MEETING_ENDED})
 
         if status == zoom.MEETING_STATUS_FAILED:
-            # This is a hacky way to determine if the bot failed to join because the onbehalf token user is not in the meeting.
-            # On our current version of the Zoom SDK, there is no specific error code for this.
-            failed_because_onbehalf_token_user_not_in_meeting = iResult == zoom.MEETING_FAIL_AUTHORIZED_USER_NOT_INMEETING and self.zoom_tokens.get("onbehalf_token")
+            # Zoom SDK SHOULD emit zoom.MEETING_FAIL_AUTHORIZED_USER_NOT_INMEETING when the onbehalf token user
+            # is not in the meeting. However, it is also currently emitting 65535 in this exact situation, for
+            # certain types of meetings. See here: https://devforum.zoom.us/t/unexpected-meeting-fail-unknown-failure-code-when-authorized-user-not-in-meeting/143985
+            failed_because_onbehalf_token_user_not_in_meeting = (iResult == zoom.MEETING_FAIL_AUTHORIZED_USER_NOT_INMEETING or iResult == 65535) and self.zoom_tokens.get("onbehalf_token")
 
             # Since the unable to join external meeting issue is so common, we'll handle it separately
             if iResult == zoom.MeetingFailCode.MEETING_FAIL_UNABLE_TO_JOIN_EXTERNAL_MEETING:

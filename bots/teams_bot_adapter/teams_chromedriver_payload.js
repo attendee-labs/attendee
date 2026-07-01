@@ -3115,6 +3115,32 @@ class CallManager {
         // return this.activeCall.currentUserSkypeIdentity?.id;
     }
 
+    disableVideoEffects() {
+        try {
+            this.setActiveCall();
+            if (!this.activeCall) {
+                return false;
+            }
+
+            const videoEffectManager = this.activeCall?.mediaAgent?.deviceManager?.effectsManagerInternal?.videoEffectManager;
+            if (!videoEffectManager) {
+                return false;
+            }
+
+            if (!videoEffectManager.__attendeeIsEffectEnabledPatched) {
+                Object.defineProperty(videoEffectManager, "isEffectEnabled", {
+                    get() {
+                        return false;
+                    },
+                    configurable: true,
+                });
+                videoEffectManager.__attendeeIsEffectEnabledPatched = true;
+            }
+            return true;
+        } catch (error) {
+            return false;
+        }
+    }
 
     getSpeakingParticipantIds(contributingSources) {
         this.setActiveCall();
@@ -3260,3 +3286,305 @@ class CallManager {
 
 const callManager = new CallManager();
 window.callManager = callManager;
+
+if (window.teamsInitialData?.shouldLogNetworkRequests) {
+    
+(function installFetchAndXhrNetworkInterceptor() {
+    if (window.__attendeeNetworkInterceptorInstalled) {
+      return;
+    }
+    window.__attendeeNetworkInterceptorInstalled = true;
+    
+    let enabled = false;
+    let interceptorStarted = false;
+    let nextRequestId = 1;
+  
+    function nowMs() {
+      return Math.round(performance.timeOrigin + performance.now());
+    }
+  
+    function safeSendJson(payload) {
+      try {
+        window.ws?.sendJson({
+          type: "NetworkRequest",
+          ...payload,
+        });
+      } catch (err) {
+        // Never let logging interfere with the page.
+      }
+    }
+  
+    function truncateForLog(value, maxChars) {
+      if (value == null) {
+        return "";
+      }
+  
+      const str = String(value);
+      if (str.length <= maxChars) {
+        return str;
+      }
+  
+      return str.slice(0, maxChars);
+    }
+  
+    function normalizeFetchUrl(input) {
+      try {
+        if (typeof input === "string") {
+          return input;
+        }
+  
+        if (input instanceof URL) {
+          return input.toString();
+        }
+  
+        if (input instanceof Request) {
+          return input.url;
+        }
+  
+        return String(input);
+      } catch (err) {
+        return "<unknown>";
+      }
+    }
+  
+    function normalizeFetchMethod(input, init) {
+      try {
+        if (init?.method) {
+          return String(init.method).toUpperCase();
+        }
+  
+        if (input instanceof Request && input.method) {
+          return String(input.method).toUpperCase();
+        }
+  
+        return "GET";
+      } catch (err) {
+        return "GET";
+      }
+    }
+  
+    async function readResponsePreview(response, maxChars) {
+      try {
+        const clone = response.clone();
+  
+        // Use streaming when available so we do not need to buffer an entire large response.
+        if (clone.body?.getReader) {
+          const reader = clone.body.getReader();
+          const decoder = new TextDecoder("utf-8", { fatal: false });
+  
+          let preview = "";
+          while (preview.length < maxChars) {
+            const { value, done } = await reader.read();
+            if (done) {
+              break;
+            }
+  
+            preview += decoder.decode(value, { stream: true });
+          }
+  
+          try {
+            await reader.cancel();
+          } catch (err) {}
+  
+          preview += decoder.decode();
+          return truncateForLog(preview, maxChars);
+        }
+  
+        // Fallback for older browsers / weird Response objects.
+        return truncateForLog(await clone.text(), maxChars);
+      } catch (err) {
+        return `<response body unavailable: ${err?.name || "Error"}: ${err?.message || String(err)}>`;
+      }
+    }
+  
+    window.startInterceptingFetchAndXhrRequests = function startInterceptingFetchAndXhrRequests(options = {}) {
+      if (interceptorStarted) {
+        return;
+      }
+        
+      interceptorStarted = true;
+      enabled = true;
+  
+      const originalFetch = window.fetch;
+      const originalXhrOpen = XMLHttpRequest.prototype.open;
+      const originalXhrSend = XMLHttpRequest.prototype.send;
+      const originalXhrSetRequestHeader = XMLHttpRequest.prototype.setRequestHeader;
+
+      const maxResponseChars = Number.isFinite(options.maxResponseChars)
+        ? options.maxResponseChars
+        : 500;
+  
+      safeSendJson({
+        event: "network_interceptor_started",
+        timestampMs: nowMs(),
+        maxResponseChars,
+      });
+  
+      window.fetch = function interceptedFetch(input, init) {
+        if (!enabled) {
+          return originalFetch.apply(this, arguments);
+        }
+  
+        const requestId = nextRequestId++;
+        const startedAtMs = nowMs();
+        const url = normalizeFetchUrl(input);
+        const method = normalizeFetchMethod(input, init);
+  
+        let fetchPromise;
+        try {
+          fetchPromise = originalFetch.apply(this, arguments);
+        } catch (err) {
+          safeSendJson({
+            event: "request_failed",
+            requestId,
+            requestType: "fetch",
+            method,
+            url,
+            startedAtMs,
+            finishedAtMs: nowMs(),
+            errorName: err?.name,
+            errorMessage: err?.message || String(err),
+          });
+          throw err;
+        }
+  
+        return fetchPromise.then(
+          (response) => {
+            const finishedAtMs = nowMs();
+  
+            // Do this async and do not delay the page's fetch caller.
+            readResponsePreview(response, maxResponseChars).then((responsePreview) => {
+              safeSendJson({
+                event: "request_finished",
+                requestId,
+                requestType: "fetch",
+                method,
+                url,
+                status: response.status,
+                statusText: response.statusText,
+                ok: response.ok,
+                responseUrl: response.url,
+                contentType: response.headers?.get?.("content-type"),
+                startedAtMs,
+                finishedAtMs,
+                durationMs: finishedAtMs - startedAtMs,
+                responsePreview,
+              });
+            });
+  
+            return response;
+          },
+          (err) => {
+            safeSendJson({
+              event: "request_failed",
+              requestId,
+              requestType: "fetch",
+              method,
+              url,
+              startedAtMs,
+              finishedAtMs: nowMs(),
+              errorName: err?.name,
+              errorMessage: err?.message || String(err),
+            });
+            throw err;
+          }
+        );
+      };
+  
+      XMLHttpRequest.prototype.open = function interceptedXhrOpen(method, url) {
+        this.__attendeeNetworkLog = {
+          requestId: nextRequestId++,
+          requestType: "xhr",
+          method: method ? String(method).toUpperCase() : "GET",
+          url: url ? String(url) : "<unknown>",
+          startedAtMs: null,
+          requestHeaders: {},
+        };
+  
+        return originalXhrOpen.apply(this, arguments);
+      };
+  
+      XMLHttpRequest.prototype.setRequestHeader = function interceptedXhrSetRequestHeader(name, value) {
+        try {
+          if (this.__attendeeNetworkLog) {
+            this.__attendeeNetworkLog.requestHeaders[String(name)] = String(value);
+          }
+        } catch (err) {}
+  
+        return originalXhrSetRequestHeader.apply(this, arguments);
+      };
+  
+      XMLHttpRequest.prototype.send = function interceptedXhrSend() {
+        if (!enabled || !this.__attendeeNetworkLog) {
+          return originalXhrSend.apply(this, arguments);
+        }
+  
+        const metadata = this.__attendeeNetworkLog;
+        metadata.startedAtMs = nowMs();
+  
+        this.addEventListener("loadend", function onXhrLoadEnd() {
+          const finishedAtMs = nowMs();
+  
+          let responsePreview = "";
+          try {
+            // responseText throws unless responseType is "" or "text".
+            if (this.responseType === "" || this.responseType === "text") {
+              responsePreview = truncateForLog(this.responseText, maxResponseChars);
+            } else {
+              responsePreview = `<non-text responseType: ${this.responseType}>`;
+            }
+          } catch (err) {
+            responsePreview = `<response body unavailable: ${err?.name || "Error"}: ${err?.message || String(err)}>`;
+          }
+  
+          let responseUrl = metadata.url;
+          try {
+            responseUrl = this.responseURL || metadata.url;
+          } catch (err) {}
+  
+          let contentType = null;
+          try {
+            contentType = this.getResponseHeader("content-type");
+          } catch (err) {}
+  
+          safeSendJson({
+            event: "request_finished",
+            requestId: metadata.requestId,
+            requestType: "xhr",
+            method: metadata.method,
+            url: metadata.url,
+            status: this.status,
+            statusText: this.statusText,
+            ok: this.status >= 200 && this.status < 300,
+            responseUrl,
+            contentType,
+            startedAtMs: metadata.startedAtMs,
+            finishedAtMs,
+            durationMs: finishedAtMs - metadata.startedAtMs,
+            responsePreview,
+          });
+        });
+  
+        try {
+          return originalXhrSend.apply(this, arguments);
+        } catch (err) {
+          safeSendJson({
+            event: "request_failed",
+            requestId: metadata.requestId,
+            requestType: "xhr",
+            method: metadata.method,
+            url: metadata.url,
+            startedAtMs: metadata.startedAtMs,
+            finishedAtMs: nowMs(),
+            errorName: err?.name,
+            errorMessage: err?.message || String(err),
+          });
+          throw err;
+        }
+      };
+    };
+  })();
+
+
+    window.startInterceptingFetchAndXhrRequests({ maxResponseChars: 500 });
+  }

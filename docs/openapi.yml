@@ -2127,9 +2127,11 @@ components:
                 tokens the bot will use when it joins the meeting. Our server will
                 make a POST request to this URL with information about the bot and
                 expects a JSON response with the format: {"zak_token": "<zak_token>",
-                "join_token": "<join_token>", "app_privilege_token": "<app_privilege_token>", "onbehalf_token": "<onbehalf_token>"}.
-                Not every token needs to be provided, i.e. you can reply with {"zak_token":
-                "<zak_token>"}.'
+                "join_token": "<join_token>", "app_privilege_token": "<app_privilege_token>",
+                "onbehalf_token": "<onbehalf_token>"}. Not every token needs to be
+                provided, i.e. you can reply with {"zak_token": "<zak_token>"}. For
+                the onbehalf_token attribute, you can send a comma separated list
+                of tokens which will be tried one by one, if the previous one failed.'
           required: []
           additionalProperties: false
           description: Callback urls for the bot to call when it needs to fetch certain
@@ -2406,6 +2408,25 @@ components:
                   description: List of words or phrases to boost in the transcript.
                     Only supported for when using the 'slam-1' speech model. See AssemblyAI
                     docs for details.
+                custom_spelling:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      from:
+                        type: array
+                        items:
+                          type: string
+                      to:
+                        type: string
+                    required:
+                    - from
+                    - to
+                    additionalProperties: false
+                  description: 'List of {from: [...], to: ...} entries that deterministically
+                    replace known misspellings with the correct spelling at the engine
+                    level, preserving word-level timestamps. See AssemblyAI docs for
+                    details.'
                 speech_model:
                   type: string
                   description: The speech model to use for transcription. See AssemblyAI

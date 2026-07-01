@@ -6,13 +6,13 @@ boto3==1.35.64
 botocore==1.35.64
 celery==5.4.0
 certifi==2024.8.30
-cffi==1.17.1
+cffi==2.0.0
 charset-normalizer==3.4.0
 click==8.1.7
 click-didyoumean==0.3.1
 click-plugins==1.1.1
 click-repl==0.3.0
-cryptography==43.0.3
+cryptography==48.0.1
 dj-database-url==2.3.0
 Django==5.1.14
 django-allauth==65.1.0
@@ -38,7 +38,7 @@ prompt_toolkit==3.0.48
 psycopg2==2.9.10
 pycparser==2.22
 pydub==0.25.1
-PyJWT==2.9.0
+PyJWT==2.13.0
 PySocks==1.7.1
 python-dateutil==2.9.0.post0
 python-dotenv==1.0.1
@@ -59,7 +59,7 @@ sortedcontainers==2.4.0
 sqlparse==0.5.1
 trio==0.28.0
 trio-websocket==0.11.1
-typing_extensions==4.13.0
+typing_extensions==4.13.2
 tzdata==2024.2
 uritemplate==4.1.1
 urllib3==2.7.0
@@ -96,7 +96,8 @@ msgpack==1.1.0
 azure-identity==1.25.1
 azure-storage-blob==12.26.0
 python-json-logger==4.0.0
-pysaml2==7.5.4
+signxml==4.5.1
+lxml==6.1.1
 jsonpatch==1.33
 jsonpointer==3.0.0
 sentry-sdk[celery,django]>=2.0.0
@@ -104,6 +105,4 @@ python-xlib==0.33
 django-csp==4.0
 pyotp==2.9.0
 Cython==3.2.4
-PyJWT==2.9.0
 gdown==6.0.0
-python-dotenv==1.0.1
