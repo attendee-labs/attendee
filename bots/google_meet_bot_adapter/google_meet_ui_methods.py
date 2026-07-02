@@ -901,15 +901,7 @@ class GoogleMeetUIMethods:
             time.sleep(1)
             logger.info(f"Waiting for Google auth cookies. Current URL: {self.driver.current_url}")
 
-            # Google shows a SAML "confirm account" speedbump that requires clicking "Continue"
-            if "speedbump/samlconfirmaccount" in self.driver.current_url and not saml_continue_clicked:
-                try:
-                    continue_button = WebDriverWait(self.driver, 10).until(EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Continue')] | //input[@type='submit'] | //div[@role='button'][contains(., 'Continue')]")))
-                    continue_button.click()
-                    saml_continue_clicked = True
-                    logger.info("Clicked SAML confirm account Continue button")
-                except Exception as e:
-                    logger.warning(f"Could not click SAML Continue button: {e}")
+            saml_continue_clicked = self.maybe_click_saml_confirm_account_continue(saml_continue_clicked)
 
             if time.time() - start_waiting_at > 60:
                 logger.warning(f"Login timed out after 60s. Current URL: {self.driver.current_url}")
@@ -1074,15 +1066,30 @@ class GoogleMeetUIMethods:
 
         # Wait for cookies indicating that we have logged in successfully
         start_waiting_at = time.time()
+        saml_continue_clicked = False
         while not self.has_google_cookies_that_indicate_logged_in(self.driver):
             time.sleep(1)
             logger.info(f"Waiting for cookies indicating that we have logged in successfully. Current URL: {self.driver.current_url}")
+            saml_continue_clicked = self.maybe_click_saml_confirm_account_continue(saml_continue_clicked)
             if time.time() - start_waiting_at > 30:
                 # We'll raise an exception if it's not logged in after 30 seconds
                 logger.warning(f"Login timed out, after 30 seconds, no Google auth cookies were present. Current URL: {self.driver.current_url}")
                 raise UiLoginAttemptFailedException("No Google auth cookies were present", "login_to_google_meet_account")
 
         logger.info(f"After waiting, URL is {self.driver.current_url}")
+
+    def maybe_click_saml_confirm_account_continue(self, already_clicked: bool) -> bool:
+        """Click the SAML 'confirm account' Continue button if present."""
+        if already_clicked or "speedbump/samlconfirmaccount" not in self.driver.current_url:
+            return already_clicked
+        try:
+            continue_button = WebDriverWait(self.driver, 10).until(EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Continue')] | //input[@type='submit'] | //div[@role='button'][contains(., 'Continue')]")))
+            continue_button.click()
+            logger.info("Clicked SAML confirm account Continue button")
+            return True
+        except Exception as e:
+            logger.warning(f"Could not click SAML Continue button: {e}")
+            return False
 
     def has_google_cookies_that_indicate_logged_in(self, driver) -> bool:
         google_auth_cookie_names = {
