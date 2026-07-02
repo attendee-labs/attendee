@@ -41,6 +41,13 @@ else:
     SESSION_COOKIE_SECURE = False
     CSRF_COOKIE_SECURE = False
 
+# Trusted origins for CSRF (e.g. behind a reverse proxy like Traefik).
+# Defaults to https://<SITE_DOMAIN> when not explicitly set.
+CSRF_TRUSTED_ORIGINS = os.getenv(
+    "CSRF_TRUSTED_ORIGINS",
+    f"https://{os.getenv('SITE_DOMAIN', 'app.attendee.dev')}",
+).split(",")
+
 if os.getenv("DISABLE_EMAIL", "false") != "true":
     EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
     EMAIL_HOST = os.getenv("EMAIL_HOST", "smtp.mailgun.org")
