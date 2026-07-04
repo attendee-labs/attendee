@@ -31,25 +31,3 @@ jobs:
             ghcr.io/shinyduo/attendee:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-  # Auto-deploy: restart web + worker on the LKE cluster so they pull the new
-  # :main image (bot pods already pull :main fresh per meeting, so they self-update;
-  # we deliberately do NOT touch bot pods/nodes or run migrations here, so in-progress
-  # meetings keep recording). Skips gracefully until the KUBE_CONFIG_DATA secret is set.
-  deploy:
-    needs: build-push
-    runs-on: ubuntu-latest
-    steps:
-      - name: Roll out web + worker on LKE
-        env:
-          KUBE_CONFIG_DATA: ${{ secrets.KUBE_CONFIG_DATA }}
-        run: |
-          if [ -z "$KUBE_CONFIG_DATA" ]; then
-            echo "::warning::KUBE_CONFIG_DATA secret not set — skipping cluster deploy."
-            exit 0
-          fi
-          echo "$KUBE_CONFIG_DATA" | base64 -d > "$RUNNER_TEMP/kubeconfig"
-          export KUBECONFIG="$RUNNER_TEMP/kubeconfig"
-          kubectl -n attendee rollout restart deployment/attendee-web deployment/attendee-worker
-          kubectl -n attendee rollout status deployment/attendee-web --timeout=180s
-          kubectl -n attendee rollout status deployment/attendee-worker --timeout=180s
