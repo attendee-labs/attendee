@@ -13,9 +13,9 @@ from cryptography.fernet import Fernet, InvalidToken
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.files.storage import Storage, storages
-from django.db import models, transaction
+from django.db import close_old_connections, models, transaction
 from django.db.models import F, Q
-from django.db.utils import IntegrityError
+from django.db.utils import IntegrityError, InterfaceError, OperationalError
 from django.utils import timezone
 from django.utils.crypto import get_random_string
 
@@ -2024,6 +2024,20 @@ class BotEventManager:
                     return event
 
             except RecordModifiedError:
+                retry_count += 1
+                if retry_count >= max_retries:
+                    raise
+                continue
+            except (InterfaceError, OperationalError):
+                # The bot runs as a long-lived `manage.py run_bot` process that holds a
+                # single DB connection for the entire meeting. Django's CONN_MAX_AGE /
+                # CONN_HEALTH_CHECKS only recycle connections at request boundaries, which
+                # never fire here — so the connection can be dropped mid-meeting (Postgres
+                # idle timeout, or Railway's TCP proxy closing it). The final state-write
+                # then fails with "connection already closed" and the bot is left
+                # non-terminal (orphaned). Drop the dead connection so the next attempt
+                # opens a fresh one, then retry.
+                close_old_connections()
                 retry_count += 1
                 if retry_count >= max_retries:
                     raise

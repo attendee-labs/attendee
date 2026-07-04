@@ -12,6 +12,7 @@ import gi
 import redis
 from django.conf import settings
 from django.core.files.base import ContentFile
+from django.db import close_old_connections
 from django.utils import timezone
 
 from bots.automatic_leave_configuration import AutomaticLeaveConfiguration
@@ -1258,6 +1259,11 @@ class BotController:
         )
 
     def set_bot_heartbeat(self):
+        # This runs periodically for the whole meeting. Recycle any DB connection that
+        # has exceeded CONN_MAX_AGE (or gone unusable) so the long-lived bot process
+        # keeps a healthy connection instead of holding one until it's silently dropped
+        # (Postgres idle timeout / Railway TCP proxy) and orphaning the bot at teardown.
+        close_old_connections()
         if self.bot_in_db.last_heartbeat_timestamp is None or self.bot_in_db.last_heartbeat_timestamp <= int(timezone.now().timestamp()) - 60:
             self.bot_in_db.set_heartbeat()
 
