@@ -37,6 +37,12 @@ class Project(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    concurrent_bots_limit_override = models.IntegerField(
+        null=True,
+        blank=True,
+        help_text="Per-project concurrent bots limit. If null, the global CONCURRENT_BOTS_LIMIT setting is used.",
+    )
+
     @classmethod
     def accessible_to(cls, user):
         if not user.is_active:
@@ -49,7 +55,9 @@ class Project(models.Model):
         return self.organization.users.filter(is_active=True).filter(Q(project_accesses__project=self) | Q(role=UserRole.ADMIN))
 
     def concurrent_bots_limit(self):
-        return int(os.getenv("CONCURRENT_BOTS_LIMIT", 2500))
+        if self.concurrent_bots_limit_override is not None:
+            return self.concurrent_bots_limit_override
+        return settings.CONCURRENT_BOTS_LIMIT
 
     def save(self, *args, **kwargs):
         if not self.object_id:
@@ -709,6 +717,12 @@ class TranscriptionSettings:
 
     def assemblyai_keyterms_prompt(self):
         return self._settings.get("assembly_ai", {}).get("keyterms_prompt", None)
+
+    def assemblyai_custom_spelling(self):
+        return self._settings.get("assembly_ai", {}).get("custom_spelling", None)
+
+    def assemblyai_prompt(self):
+        return self._settings.get("assembly_ai", {}).get("prompt", None)
 
     def assemblyai_speech_model(self):
         return self._settings.get("assembly_ai", {}).get("speech_model", None)
@@ -2530,7 +2544,7 @@ class AsyncTranscription(models.Model):
 
     @property
     def use_grouped_utterances(self):
-        return self.transcription_provider == TranscriptionProviders.ASSEMBLY_AI
+        return self.transcription_provider in [TranscriptionProviders.ASSEMBLY_AI, TranscriptionProviders.DEEPGRAM]
 
 
 class AsyncTranscriptionManager:

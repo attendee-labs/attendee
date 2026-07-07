@@ -1439,6 +1439,93 @@ class AssemblyAIProviderTest(TransactionTestCase):
             self.assertEqual(data["speech_model"], "slam-1")
             self.assertNotIn("speech_models", data)
 
+    def test_custom_spelling_included(self):
+        """Test that custom_spelling is included in the AssemblyAI request if set in settings."""
+        custom_spelling = [
+            {"from": ["coober netties", "kubernets"], "to": "Kubernetes"},
+            {"from": ["macos"], "to": "macOS"},
+        ]
+        self.bot.settings = {
+            "transcription_settings": {
+                "assembly_ai": {
+                    "custom_spelling": custom_spelling,
+                }
+            }
+        }
+        self.bot.save()
+        with (
+            self._patch_creds(),
+            mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3"),
+            mock.patch("bots.tasks.process_utterance_task.requests.post") as m_post,
+            mock.patch("bots.tasks.process_utterance_task.requests.get") as m_get,
+            mock.patch("bots.tasks.process_utterance_task.requests.delete") as m_delete,
+        ):
+            # 1. Mock upload response
+            upload_response = mock.Mock(status_code=200)
+            upload_response.json.return_value = {"upload_url": "https://cdn.assemblyai.com/upload/123"}
+
+            # 2. Mock transcript creation response
+            transcript_response = mock.Mock(status_code=200)
+            transcript_response.json.return_value = {"id": "transcript-abc"}
+
+            m_post.side_effect = [upload_response, transcript_response]
+
+            # 3. Mock polling responses
+            done_response = mock.Mock(status_code=200)
+            done_response.json.return_value = {
+                "status": "completed",
+                "text": "hello assembly",
+                "words": [],
+            }
+            m_get.return_value = done_response
+
+            # 4. Mock delete response
+            delete_response = mock.Mock(status_code=200)
+            m_delete.return_value = delete_response
+
+            transcript, failure = get_transcription_via_assemblyai(self.utterance)
+
+            self.assertIsNone(failure)
+            self.assertEqual(transcript["transcript"], "hello assembly")
+
+            # Check that the transcript creation request included custom_spelling
+            transcript_call = m_post.call_args_list[1]
+            _, kwargs = transcript_call
+            data = kwargs["json"]
+            self.assertIn("custom_spelling", data)
+            self.assertEqual(data["custom_spelling"], custom_spelling)
+
+    def test_custom_spelling_omitted_when_not_set(self):
+        """Test that custom_spelling is not included in the AssemblyAI request when unset."""
+        with (
+            self._patch_creds(),
+            mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3"),
+            mock.patch("bots.tasks.process_utterance_task.requests.post") as m_post,
+            mock.patch("bots.tasks.process_utterance_task.requests.get") as m_get,
+            mock.patch("bots.tasks.process_utterance_task.requests.delete") as m_delete,
+        ):
+            upload_response = mock.Mock(status_code=200)
+            upload_response.json.return_value = {"upload_url": "https://cdn.assemblyai.com/upload/123"}
+            transcript_response = mock.Mock(status_code=200)
+            transcript_response.json.return_value = {"id": "transcript-abc"}
+            m_post.side_effect = [upload_response, transcript_response]
+
+            done_response = mock.Mock(status_code=200)
+            done_response.json.return_value = {"status": "completed", "text": "hello", "words": []}
+            m_get.return_value = done_response
+
+            delete_response = mock.Mock(status_code=200)
+            m_delete.return_value = delete_response
+
+            transcript, failure = get_transcription_via_assemblyai(self.utterance)
+
+            self.assertIsNone(failure)
+
+            transcript_call = m_post.call_args_list[1]
+            _, kwargs = transcript_call
+            data = kwargs["json"]
+            self.assertNotIn("custom_spelling", data)
+
     def test_default_speech_models(self):
         """Test that the default speech_models are included when no speech_model settings are configured."""
         with (
