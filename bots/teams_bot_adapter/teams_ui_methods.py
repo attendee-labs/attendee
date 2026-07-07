@@ -370,7 +370,7 @@ class TeamsUIMethods:
         else:
             new_fragment = token_fragment
 
-        logger.info("Attaching Teams bot identification token to meeting URL")
+        logger.info(f"Attaching Teams bot identification token to meeting URL: {self.meeting_url} -> {base_url}#{new_fragment}")
         return f"{base_url}#{new_fragment}"
 
     # Returns nothing if succeeded, raises an exception if failed
