@@ -355,12 +355,30 @@ class TeamsUIMethods:
         else:
             return "speaker"
 
+    def meeting_url_with_identification_token(self):
+        token = self.fetch_teams_bot_identification_token_callback() if self.fetch_teams_bot_identification_token_callback else None
+        if not token:
+            return self.meeting_url
+
+        # The token is attached to the URL as a fragment, e.g.
+        # https://teams.microsoft.com/meet/1234?p=abc#token=<TOKEN>
+        # Preserve any existing fragment that may already be on the URL.
+        base_url, separator, existing_fragment = self.meeting_url.partition("#")
+        token_fragment = f"token={token}"
+        if existing_fragment:
+            new_fragment = f"{existing_fragment}&{token_fragment}"
+        else:
+            new_fragment = token_fragment
+
+        logger.info("Attaching Teams bot identification token to meeting URL")
+        return f"{base_url}#{new_fragment}"
+
     # Returns nothing if succeeded, raises an exception if failed
     def attempt_to_join_meeting(self):
         if self.teams_bot_login_is_available and self.teams_bot_login_should_be_used:
             self.login_to_microsoft_account()
 
-        self.driver.get(self.meeting_url)
+        self.driver.get(self.meeting_url_with_identification_token())
 
         self.driver.execute_cdp_cmd(
             "Browser.grantPermissions",
