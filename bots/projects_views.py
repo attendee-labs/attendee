@@ -509,6 +509,7 @@ class ProjectCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
                 "external_media_storage_credential_type": Credentials.CredentialTypes.EXTERNAL_MEDIA_STORAGE,
                 "teams_bot_identification_credentials": teams_bot_identification_credentials.get_credentials() if teams_bot_identification_credentials else None,
                 "teams_bot_identification_credential_type": Credentials.CredentialTypes.TEAMS_BOT_IDENTIFICATION_CREDENTIALS,
+                "show_teams_bot_identification_credentials": settings.SHOW_TEAMS_BOT_IDENTIFICATION_CREDENTIALS,
             }
         )
 
