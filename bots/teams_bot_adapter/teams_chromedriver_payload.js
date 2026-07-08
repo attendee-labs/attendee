@@ -745,6 +745,7 @@ class AudioConnectionDiagnosticsManager {
         this.hasEncounteredNonSilentAudioTrack = false;
         this.hasEncounteredActiveSpeakerHistoryChange = false;
         this.hasEncounteredNonSilenceFromSilenceDetection = false;
+        this.hasEncounteredUnMutedParticipant = false;
         this.intervalId = null;
     }
 
@@ -775,15 +776,26 @@ class AudioConnectionDiagnosticsManager {
         this.hasEncounteredActiveSpeakerHistoryChange = true;
     }
 
+    recordUnMutedParticipant() {
+        this.hasEncounteredUnMutedParticipant = true;
+    }
+
     check() {
+        if (window.callManager?.getUnmutedParticipantIds()?.length) {
+            this.recordUnMutedParticipant();
+        }
         // If active speakers have been changing but we've never received any non-silent
         // audio, the audio connection is likely broken.
-        if (nonSilent && !this.hasEncounteredNonSilentAudioTrack && !this.hasEncounteredNonSilenceFromSilenceDetection) {
+        const silentOnWebRTC = !this.hasEncounteredNonSilentAudioTrack && !this.hasEncounteredNonSilenceFromSilenceDetection;
+        const nonSilentOnNotWebRTC = this.hasEncounteredActiveSpeakerHistoryChange || this.hasEncounteredUnMutedParticipant
+        if (nonSilentOnNotWebRTC && silentOnWebRTC) {
             window.ws?.sendJson({
                 type: 'AudioConnectionDiagnosticsWarning',
-                message: 'Active speaker history changes have been observed but no non-silent audio tracks have been received. The audio connection may be broken.',
+                message: 'No audio data has been received via webrtc, but data from other sources indicates that people have talked.',
                 hasEncounteredActiveSpeakerHistoryChange: this.hasEncounteredActiveSpeakerHistoryChange,
                 hasEncounteredNonSilentAudioTrack: this.hasEncounteredNonSilentAudioTrack,
+                hasEncounteredUnMutedParticipant: this.hasEncounteredUnMutedParticipant,
+                hasEncounteredNonSilenceFromSilenceDetection: this.hasEncounteredNonSilenceFromSilenceDetection,
             });
         }
     }
