@@ -370,7 +370,13 @@ class TeamsUIMethods:
         else:
             new_fragment = token_fragment
 
-        logger.info(f"Attaching Teams bot identification token to meeting URL: {self.meeting_url} -> {base_url}#{new_fragment}")
+        obfuscated_token = f"{(token or '')[:6]}...{(token or '')[-6:]}"
+        if existing_fragment:
+            obfuscated_fragment = f"{existing_fragment}&token={obfuscated_token}"
+        else:
+            obfuscated_fragment = f"token={obfuscated_token}"
+
+        logger.info(f"Attaching Teams bot identification token to meeting URL: {self.meeting_url} -> {base_url}#{obfuscated_fragment}")
         return f"{base_url}#{new_fragment}"
 
     # Returns nothing if succeeded, raises an exception if failed
