@@ -2650,6 +2650,18 @@ const handleVideoTrack = async (event) => {
 new RTCInterceptor({
     onPeerConnectionCreate: (peerConnection) => {
         realConsole?.log('New RTCPeerConnection created:', peerConnection);
+
+        // Unique id so downstream consumers can tell which peer connection a
+        // given stats/state message belongs to (Teams creates several).
+        const peerConnectionId = (crypto?.randomUUID?.() ?? `pc-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+
+        window.ws?.sendJson({
+            type: 'WebRTCPeerConnectionCreated',
+            peerConnectionId,
+            connectionState: peerConnection.connectionState,
+            iceConnectionState: peerConnection.iceConnectionState,
+        });
+
         peerConnection.addEventListener('datachannel', (event) => {
             realConsole?.log('datachannel', event);
             realConsole?.log('datachannel label', event.channel.label);
@@ -2759,6 +2771,116 @@ new RTCInterceptor({
         peerConnection.addEventListener('icecandidate', (event) => {
             if (event.candidate) {
                 //console.log('ICE Candidate:', event.candidate);
+            }
+        });
+
+        // Periodically collect and report WebRTC receive-path stats for this peer connection
+        const collectReceivePathStats = async (pc) => {
+            // close() does not fire connectionstatechange, so guard here to stop
+            // reporting (and leaking the interval) once the PC is gone.
+            if (pc.connectionState === 'closed' || pc.connectionState === 'failed') {
+                window.ws?.sendJson({
+                    type: 'WebRTCConnectionStateChanged',
+                    peerConnectionId,
+                    connectionState: pc.connectionState,
+                });
+                clearInterval(receivePathStatsInterval);
+                return;
+            }
+            try {
+                const stats = await pc.getStats();
+
+                let selectedPair;
+                let localCandidate;
+                let remoteCandidate;
+                const inboundAudio = [];
+                const dataChannels = [];
+
+                for (const report of stats.values()) {
+                    if (report.type === "candidate-pair" && report.selected) {
+                        selectedPair = report;
+                    }
+
+                    if (report.type === "local-candidate") {
+                        localCandidate ??= report;
+                    }
+
+                    if (report.type === "remote-candidate") {
+                        remoteCandidate ??= report;
+                    }
+
+                    if (report.type === "inbound-rtp" && report.kind === "audio") {
+                        inboundAudio.push({
+                            ssrc: report.ssrc,
+                            bytesReceived: report.bytesReceived,
+                            packetsReceived: report.packetsReceived,
+                            packetsLost: report.packetsLost,
+                            jitter: report.jitter,
+                        });
+                    }
+
+                    if (report.type === "data-channel") {
+                        dataChannels.push({
+                            label: report.label,
+                            state: report.state,
+                            messagesReceived: report.messagesReceived,
+                            bytesReceived: report.bytesReceived,
+                            messagesSent: report.messagesSent,
+                        });
+                    }
+                }
+
+                window.ws?.sendJson({
+                    type: "WebRTCReceivePathStats",
+                    peerConnectionId,
+                    connectionState: pc.connectionState,
+                    iceConnectionState: pc.iceConnectionState,
+                    selectedPair: selectedPair && {
+                        state: selectedPair.state,
+                        nominated: selectedPair.nominated,
+                        bytesSent: selectedPair.bytesSent,
+                        bytesReceived: selectedPair.bytesReceived,
+                        currentRoundTripTime: selectedPair.currentRoundTripTime,
+                        localCandidateId: selectedPair.localCandidateId,
+                        remoteCandidateId: selectedPair.remoteCandidateId,
+                    },
+                    localCandidate: localCandidate && {
+                        candidateType: localCandidate.candidateType,
+                        protocol: localCandidate.protocol,
+                        address: localCandidate.address,
+                        port: localCandidate.port,
+                    },
+                    remoteCandidate: remoteCandidate && {
+                        candidateType: remoteCandidate.candidateType,
+                        protocol: remoteCandidate.protocol,
+                        address: remoteCandidate.address,
+                        port: remoteCandidate.port,
+                    },
+                    inboundAudio,
+                    dataChannels,
+                });
+            } catch (error) {
+                window.ws?.sendJson({
+                    type: "WebRTCReceivePathStatsError",
+                    peerConnectionId,
+                    error: error?.message ?? String(error),
+                });
+            }
+        };
+
+        const receivePathStatsInterval = setInterval(() => {
+            collectReceivePathStats(peerConnection);
+        }, 60000);
+
+        peerConnection.addEventListener('connectionstatechange', () => {
+            window.ws?.sendJson({
+                type: 'WebRTCConnectionStateChanged',
+                peerConnectionId,
+                connectionState: peerConnection.connectionState,
+            });
+            if (peerConnection.connectionState === 'closed' ||
+                peerConnection.connectionState === 'failed') {
+                clearInterval(receivePathStatsInterval);
             }
         });
     },
