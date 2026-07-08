@@ -747,6 +747,7 @@ class AudioConnectionDiagnosticsManager {
         this.hasEncounteredNonSilenceFromSilenceDetection = false;
         this.hasEncounteredUnMutedParticipant = false;
         this.intervalId = null;
+        this.lastUpdate = null;
     }
 
     start() {
@@ -784,18 +785,20 @@ class AudioConnectionDiagnosticsManager {
         if (window.callManager?.getUnmutedParticipantIds()?.length) {
             this.recordUnMutedParticipant();
         }
-        // If active speakers have been changing but we've never received any non-silent
-        // audio, the audio connection is likely broken.
-        const silentOnWebRTC = !this.hasEncounteredNonSilentAudioTrack && !this.hasEncounteredNonSilenceFromSilenceDetection;
-        const nonSilentOnNotWebRTC = this.hasEncounteredActiveSpeakerHistoryChange || this.hasEncounteredUnMutedParticipant
-        if (nonSilentOnNotWebRTC && silentOnWebRTC) {
+        const update = {
+            hasEncounteredActiveSpeakerHistoryChange: this.hasEncounteredActiveSpeakerHistoryChange,
+            hasEncounteredNonSilentAudioTrack: this.hasEncounteredNonSilentAudioTrack,
+            hasEncounteredUnMutedParticipant: this.hasEncounteredUnMutedParticipant,
+            hasEncounteredNonSilenceFromSilenceDetection: this.hasEncounteredNonSilenceFromSilenceDetection,
+        };
+
+        // Only send an update when the state has changed from the last update.
+        const hasChanged = this.lastUpdate === null || Object.keys(update).some((key) => update[key] !== this.lastUpdate[key]);
+        if (hasChanged) {
+            this.lastUpdate = update;
             window.ws?.sendJson({
-                type: 'AudioConnectionDiagnosticsWarning',
-                message: 'No audio data has been received via webrtc, but data from other sources indicates that people have talked.',
-                hasEncounteredActiveSpeakerHistoryChange: this.hasEncounteredActiveSpeakerHistoryChange,
-                hasEncounteredNonSilentAudioTrack: this.hasEncounteredNonSilentAudioTrack,
-                hasEncounteredUnMutedParticipant: this.hasEncounteredUnMutedParticipant,
-                hasEncounteredNonSilenceFromSilenceDetection: this.hasEncounteredNonSilenceFromSilenceDetection,
+                type: 'AudioConnectionDiagnosticsUpdate',
+                ...update,
             });
         }
     }
