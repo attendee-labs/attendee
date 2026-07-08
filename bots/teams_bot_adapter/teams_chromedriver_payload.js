@@ -743,7 +743,6 @@ class AudioConnectionDiagnosticsManager {
     constructor(checkIntervalMs = 60000) {
         this.checkIntervalMs = checkIntervalMs;
         this.hasEncounteredNonSilentAudioTrack = false;
-        this.hasEncounteredActiveSpeakerHistoryChange = false;
         this.hasEncounteredNonSilenceFromSilenceDetection = false;
         this.hasEncounteredUnMutedParticipant = false;
         this.intervalId = null;
@@ -773,10 +772,6 @@ class AudioConnectionDiagnosticsManager {
         this.hasEncounteredNonSilentAudioTrack = true;
     }
 
-    recordActiveSpeakerHistoryChange() {
-        this.hasEncounteredActiveSpeakerHistoryChange = true;
-    }
-
     recordUnMutedParticipant() {
         this.hasEncounteredUnMutedParticipant = true;
     }
@@ -786,7 +781,6 @@ class AudioConnectionDiagnosticsManager {
             this.recordUnMutedParticipant();
         }
         const update = {
-            hasEncounteredActiveSpeakerHistoryChange: this.hasEncounteredActiveSpeakerHistoryChange,
             hasEncounteredNonSilentAudioTrack: this.hasEncounteredNonSilentAudioTrack,
             hasEncounteredUnMutedParticipant: this.hasEncounteredUnMutedParticipant,
             hasEncounteredNonSilenceFromSilenceDetection: this.hasEncounteredNonSilenceFromSilenceDetection,
@@ -2165,7 +2159,6 @@ const processDominantSpeakerHistoryMessage = (item) => {
     realConsole?.log('processDominantSpeakerHistoryMessage', item);
     const newDominantSpeakerAudioVirtualStreamId = item.history[0];
     dominantSpeakerManager.setDominantSpeakerStreamId(newDominantSpeakerAudioVirtualStreamId);
-    window.audioConnectionDiagnosticsManager?.recordActiveSpeakerHistoryChange();
     realConsole?.log('newDominantSpeakerParticipant', dominantSpeakerManager.getDominantSpeaker());
 }
 
