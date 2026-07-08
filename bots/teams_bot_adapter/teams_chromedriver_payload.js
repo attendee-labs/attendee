@@ -249,6 +249,7 @@ const handleVideoTrackForRealTimePerParticipantVideo = async ({ track, streams }
                 type: 'SilenceStatus',
                 isSilent: false
             });
+            window.audioConnectionDiagnosticsManager?.recordNonSilenceFromSilenceDetection();
         }
     }
 
@@ -731,6 +732,60 @@ class DominantSpeakerManager {
 
     getDominantSpeaker() {
         return virtualStreamToPhysicalStreamMappingManager.virtualStreamIdToParticipant(this.dominantSpeakerStreamId);
+    }
+}
+
+// Receives events from other parts of the payload and determines whether the audio
+// connection appears to be in an inconsistent state. If we've observed active speaker
+// activity (which implies people are talking) but have never received any non-silent
+// audio, it's likely the audio connection is broken and we surface a warning.
+class AudioConnectionDiagnosticsManager {
+    constructor(checkIntervalMs = 60000) {
+        this.checkIntervalMs = checkIntervalMs;
+        this.hasEncounteredNonSilentAudioTrack = false;
+        this.hasEncounteredActiveSpeakerHistoryChange = false;
+        this.hasEncounteredNonSilenceFromSilenceDetection = false;
+        this.intervalId = null;
+    }
+
+    start() {
+        if (this.intervalId !== null)
+            return;
+
+        this.intervalId = setInterval(() => this.check(), this.checkIntervalMs);
+    }
+
+    stop() {
+        if (this.intervalId === null)
+            return;
+
+        clearInterval(this.intervalId);
+        this.intervalId = null;
+    }
+
+    recordNonSilenceFromSilenceDetection() {
+        this.hasEncounteredNonSilenceFromSilenceDetection = true;
+    }
+
+    recordNonSilentAudioTrack() {
+        this.hasEncounteredNonSilentAudioTrack = true;
+    }
+
+    recordActiveSpeakerHistoryChange() {
+        this.hasEncounteredActiveSpeakerHistoryChange = true;
+    }
+
+    check() {
+        // If active speakers have been changing but we've never received any non-silent
+        // audio, the audio connection is likely broken.
+        if (nonSilent && !this.hasEncounteredNonSilentAudioTrack && !this.hasEncounteredNonSilenceFromSilenceDetection) {
+            window.ws?.sendJson({
+                type: 'AudioConnectionDiagnosticsWarning',
+                message: 'Active speaker history changes have been observed but no non-silent audio tracks have been received. The audio connection may be broken.',
+                hasEncounteredActiveSpeakerHistoryChange: this.hasEncounteredActiveSpeakerHistoryChange,
+                hasEncounteredNonSilentAudioTrack: this.hasEncounteredNonSilentAudioTrack,
+            });
+        }
     }
 }
 
@@ -2078,6 +2133,10 @@ window.chatMessageManager = chatMessageManager;
 const virtualStreamToPhysicalStreamMappingManager = new VirtualStreamToPhysicalStreamMappingManager();
 const dominantSpeakerManager = new DominantSpeakerManager();
 
+const audioConnectionDiagnosticsManager = new AudioConnectionDiagnosticsManager();
+window.audioConnectionDiagnosticsManager = audioConnectionDiagnosticsManager;
+audioConnectionDiagnosticsManager.start();
+
 const styleManager = new StyleManager();
 window.styleManager = styleManager;
 
@@ -2091,6 +2150,7 @@ const processDominantSpeakerHistoryMessage = (item) => {
     realConsole?.log('processDominantSpeakerHistoryMessage', item);
     const newDominantSpeakerAudioVirtualStreamId = item.history[0];
     dominantSpeakerManager.setDominantSpeakerStreamId(newDominantSpeakerAudioVirtualStreamId);
+    window.audioConnectionDiagnosticsManager?.recordActiveSpeakerHistoryChange();
     realConsole?.log('newDominantSpeakerParticipant', dominantSpeakerManager.getDominantSpeaker());
 }
 
@@ -2568,6 +2628,7 @@ const handleVideoTrack = async (event) => {
                         type: 'WebRTCTrackIsNonSilent',
                         trackId: event.track?.id,
                     });
+                    window.audioConnectionDiagnosticsManager?.recordNonSilentAudioTrack();
                   }
 
                   // Don't bother sending unless we've gotten some non-silent audio data in this track.
@@ -3262,6 +3323,23 @@ class CallManager {
         } catch (error) {
             return false;
         }
+    }
+
+    getUnmutedParticipantIds() {
+        this.setActiveCall();
+        if (!this.activeCall) {
+            return [];
+        }
+        if (!this.activeCall.participants) {
+            return [];
+        }
+        const unmutedParticipantIds = new Set();
+        this.activeCall.participants.forEach(participant => {
+            if (participant.isServerMuted === false && participant.displayName) {
+                unmutedParticipantIds.add(participant.id);
+            }
+        });
+        return Array.from(unmutedParticipantIds);
     }
 
     getSpeakingParticipantIds(contributingSources) {
