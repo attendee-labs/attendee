@@ -55,6 +55,7 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
         teams_bot_login_should_be_used: bool,
         fetch_teams_bot_login_credentials_callback: Callable[[], dict],
         modify_dom_for_video_recording: bool,
+        fetch_teams_bot_identification_token_callback: Callable[[], str | None],
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -63,6 +64,7 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
         self.teams_bot_login_should_be_used = teams_bot_login_should_be_used and teams_bot_login_is_available
         self.fetch_teams_bot_login_credentials_callback = fetch_teams_bot_login_credentials_callback
         self.modify_dom_for_video_recording = modify_dom_for_video_recording
+        self.fetch_teams_bot_identification_token_callback = fetch_teams_bot_identification_token_callback
         self.should_log_network_requests = False
 
     def should_retry_joining_meeting_that_requires_login_by_logging_in(self):

@@ -2733,6 +2733,7 @@ class Credentials(models.Model):
         EXTERNAL_MEDIA_STORAGE = 9, "External Media Storage"
         ELEVENLABS = 10, "ElevenLabs"
         KYUTAI = 11, "Kyutai"
+        TEAMS_BOT_IDENTIFICATION_CREDENTIALS = 12, "Teams Bot Identification Credentials"
 
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="credentials")
     credential_type = models.IntegerField(choices=CredentialTypes.choices, null=False)
