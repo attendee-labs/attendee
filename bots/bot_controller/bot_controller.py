@@ -10,6 +10,7 @@ from datetime import timedelta
 
 import gi
 import redis
+import requests
 from django.conf import settings
 from django.core.files.base import ContentFile
 from django.utils import timezone
@@ -231,6 +232,49 @@ class BotController:
     def teams_bot_login_is_available(self):
         return self.bot_in_db.teams_use_bot_login() and BotLoginGroup.first_available_login(project=self.bot_in_db.project, platform=BotLoginPlatform.TEAMS, group_name=self.bot_in_db.teams_login_group_name()) is not None
 
+    def get_teams_bot_identification_token(self):
+        teams_bot_identification_credentials = self.bot_in_db.project.credentials.filter(credential_type=Credentials.CredentialTypes.TEAMS_BOT_IDENTIFICATION_CREDENTIALS).first()
+        if not teams_bot_identification_credentials:
+            return None
+
+        credentials = teams_bot_identification_credentials.get_credentials()
+        if not credentials:
+            logger.warning("Teams bot identification credentials record exists but has no data")
+            return None
+
+        tenant_id = credentials.get("tenant_id")
+        client_id = credentials.get("client_id")
+        client_secret = credentials.get("client_secret")
+        if not all([tenant_id, client_id, client_secret]):
+            logger.warning("Teams bot identification credentials are missing tenant_id, client_id, or client_secret")
+            return None
+
+        # The token is only valid for ~1 hour, so it must be minted right before the bot joins.
+        try:
+            response = requests.post(
+                f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token",
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                data={
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "scope": "https://ic3.teams.office.com/.default",
+                    "grant_type": "client_credentials",
+                },
+                timeout=30,
+            )
+            response.raise_for_status()
+        except Exception as e:
+            logger.error(f"Failed to fetch Teams bot identification token: {e}")
+            return None
+
+        token = response.json().get("access_token")
+        if not token:
+            logger.error("Teams bot identification token response did not contain an access_token")
+            return None
+
+        logger.info("Successfully fetched Teams bot identification token")
+        return token
+
     def get_teams_bot_adapter(self):
         from bots.teams_bot_adapter import TeamsBotAdapter
 
@@ -262,6 +306,7 @@ class BotController:
             record_participant_speech_start_stop_events=self.bot_in_db.record_participant_speech_start_stop_events(),
             disable_incoming_video=self.disable_incoming_video_for_web_bots(),
             modify_dom_for_video_recording=self.should_modify_dom_for_video_recording_for_web_bots(),
+            fetch_teams_bot_identification_token_callback=self.get_teams_bot_identification_token,
         )
 
     def get_zoom_oauth_credentials_via_credentials_record(self):
