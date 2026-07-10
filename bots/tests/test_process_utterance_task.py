@@ -1552,7 +1552,7 @@ class AssemblyAIProviderTest(TransactionTestCase):
             transcript_call = m_post.call_args_list[1]
             _, kwargs = transcript_call
             data = kwargs["json"]
-            self.assertEqual(data["speech_models"], ["universal-3-pro", "universal-2"])
+            self.assertEqual(data["speech_models"], ["universal-3-5-pro", "universal-2"])
 
     def test_speech_models_plural_overrides_default(self):
         """Test that the speech_models (plural) setting overrides the default speech_models."""
@@ -1596,7 +1596,7 @@ class AssemblyAIProviderTest(TransactionTestCase):
             "transcription_settings": {
                 "assembly_ai": {
                     "speech_model": "slam-1",
-                    "speech_models": ["universal-3-pro"],
+                    "speech_models": ["universal-3-5-pro"],
                 }
             }
         }
@@ -1625,7 +1625,7 @@ class AssemblyAIProviderTest(TransactionTestCase):
             transcript_call = m_post.call_args_list[1]
             _, kwargs = transcript_call
             data = kwargs["json"]
-            self.assertEqual(data["speech_models"], ["universal-3-pro"])
+            self.assertEqual(data["speech_models"], ["universal-3-5-pro"])
 
 
 from unittest import mock
