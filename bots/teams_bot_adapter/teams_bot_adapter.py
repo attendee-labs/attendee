@@ -66,6 +66,7 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
         self.modify_dom_for_video_recording = modify_dom_for_video_recording
         self.fetch_teams_bot_identification_token_callback = fetch_teams_bot_identification_token_callback
         self.should_log_network_requests = False
+        self.had_disable_light_experience_redirect = False
 
     def should_retry_joining_meeting_that_requires_login_by_logging_in(self):
         # If we don't have the ability to login, we can't retry

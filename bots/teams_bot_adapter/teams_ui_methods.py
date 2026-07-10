@@ -24,6 +24,11 @@ class UiWaitingRoomTransitionFailedException(UiRetryableException):
         super().__init__(message, step, inner_exception)
 
 
+class UiDisableLightExperienceRedirectException(UiRetryableException):
+    def __init__(self, message, step=None, inner_exception=None):
+        super().__init__(message, step, inner_exception)
+
+
 class TeamsUIMethods:
     def __init__(self, driver, meeting_url, display_name):
         self.driver = driver
@@ -215,6 +220,12 @@ class TeamsUIMethods:
             logger.info(f"Unknown error occurred in check_if_waiting_room_connection_failed. Exception type = {type(e)}")
             return
 
+    def check_if_disable_light_experience_redirect_occurred(self, step):
+        if "lightExperience=false" in self.driver.current_url:
+            logger.info(f"Disable light experience redirect occurred (lightExperience=false is in the url). Raising UiDisableLightExperienceRedirectException and retrying. Current page url: {self.driver.current_url}")
+            self.had_disable_light_experience_redirect = True
+            raise UiDisableLightExperienceRedirectException("Light experience redirect occurred", step)
+
     def check_if_waiting_room_timeout_exceeded(self, waiting_room_timeout_started_at, step):
         waiting_room_timeout_exceeded = time.time() - waiting_room_timeout_started_at > self.automatic_leave_configuration.waiting_room_timeout_seconds
         if waiting_room_timeout_exceeded:
@@ -256,6 +267,7 @@ class TeamsUIMethods:
                 self.look_for_denied_your_request_element("click_show_more_button")
                 self.look_for_we_could_not_connect_you_element("click_show_more_button")
 
+                self.check_if_disable_light_experience_redirect_occurred("click_show_more_button")
                 self.check_if_waiting_room_timeout_exceeded(waiting_room_timeout_started_at, "click_show_more_button")
                 self.check_if_waiting_room_connection_failed(waiting_room_timeout_started_at, "click_show_more_button")
 
@@ -379,6 +391,42 @@ class TeamsUIMethods:
         logger.info(f"Attaching Teams bot identification token to meeting URL: {self.meeting_url} -> {base_url}#{obfuscated_fragment}")
         return f"{base_url}#{new_fragment}"
 
+    def wait_for_page_url_to_stabilize(self):
+        # We only do this if a disable light experience redirect occurred in the previous join attempt
+        # We wait for the page url to stabilize because the disable light experience redirect may have caused the page to reload
+        # If we don't wait then the reload may occur in the middle of our UI navigation which breaks things.
+        if not self.had_disable_light_experience_redirect:
+            logger.info("Not waiting for page url to stabilize because a disable light experience redirect did not occur")
+            return
+
+        stable_period_seconds = 10
+        max_wait_seconds = 60
+        poll_interval_seconds = 1
+
+        start_time = time.time()
+        last_url = self.driver.current_url
+        last_change_time = start_time
+        logger.info(f"Waiting for page url to stabilize. Current url: {last_url}")
+
+        while True:
+            time.sleep(poll_interval_seconds)
+
+            current_url = self.driver.current_url
+            now = time.time()
+
+            if current_url != last_url:
+                logger.info(f"Page url changed: {last_url} -> {current_url}")
+                last_url = current_url
+                last_change_time = now
+
+            if now - last_change_time >= stable_period_seconds:
+                logger.info(f"Page url has been stable for {stable_period_seconds} seconds: {last_url}")
+                return
+
+            if now - start_time >= max_wait_seconds:
+                logger.info(f"Page url did not stabilize within {max_wait_seconds} seconds. Proceeding with url: {last_url}")
+                return
+
     # Returns nothing if succeeded, raises an exception if failed
     def attempt_to_join_meeting(self):
         if self.teams_bot_login_is_available and self.teams_bot_login_should_be_used:
@@ -398,6 +446,8 @@ class TeamsUIMethods:
                 ],
             },
         )
+
+        self.wait_for_page_url_to_stabilize()
 
         self.fill_out_name_input()
 
