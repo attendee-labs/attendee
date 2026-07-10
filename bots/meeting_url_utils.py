@@ -1,7 +1,7 @@
 import base64
 import json
 import re
-from urllib.parse import parse_qs, unquote, urlparse, urlunparse
+from urllib.parse import parse_qs, unquote, urlencode, urlparse, urlunparse
 
 import tldextract
 
@@ -243,6 +243,14 @@ def normalize_meeting_url_raw(url):
                 return MeetingTypes.TEAMS, canonical_url
 
     return None, None
+
+
+def add_query_param_to_url(url, param, value):
+    parsed = urlparse(url)
+    query_params = parse_qs(parsed.query, keep_blank_values=True)
+    query_params[param] = [value]
+    new_query = urlencode(query_params, doseq=True)
+    return urlunparse(parsed._replace(query=new_query))
 
 
 # Returns (meeting_id, password) from a Zoom join URL

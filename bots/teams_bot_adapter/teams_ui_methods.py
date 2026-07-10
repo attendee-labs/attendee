@@ -8,6 +8,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
+from bots.meeting_url_utils import add_query_param_to_url
 from bots.models import RecordingViews
 from bots.web_bot_adapter.ui_methods import UiBlockedByCaptchaException, UiCouldNotClickElementException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableException, UiRetryableExpectedException
 
@@ -384,7 +385,11 @@ class TeamsUIMethods:
         if self.teams_bot_login_is_available and self.teams_bot_login_should_be_used:
             self.login_to_microsoft_account()
 
-        self.driver.get(self.meeting_url_with_identification_token())
+        url_to_load = self.meeting_url_with_identification_token()
+
+        url_to_load = add_query_param_to_url(url_to_load, "lightExperience", "true")
+
+        self.driver.get(url_to_load)
 
         self.driver.execute_cdp_cmd(
             "Browser.grantPermissions",
