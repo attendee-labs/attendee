@@ -1,6 +1,7 @@
 import logging
 import os
 import random
+import threading
 import time
 
 from selenium.common.exceptions import ElementClickInterceptedException, ElementNotInteractableException, NoSuchElementException, StaleElementReferenceException, TimeoutException
@@ -220,6 +221,17 @@ class TeamsUIMethods:
             logger.info(f"Unknown error occurred in check_if_waiting_room_connection_failed. Exception type = {type(e)}")
             return
 
+    def monitor_for_disable_light_experience_redirect(self):
+        # Runs check_if_disable_light_experience_redirect_occurred once per second in the background.
+        # The check will set self.had_disable_light_experience_redirect if the redirect is detected.
+        # The thread exits once the redirect has been detected or once the bot has joined the meeting.
+        while not self.had_disable_light_experience_redirect and not self.joined_at:
+            try:
+                self.check_if_disable_light_experience_redirect_occurred("monitor_for_disable_light_experience_redirect")
+            except Exception as e:
+                logger.info(f"Unknown error occurred in monitor_for_disable_light_experience_redirect. Exception type = {type(e)}")
+            time.sleep(0.5)
+
     def check_if_disable_light_experience_redirect_occurred(self, step):
         if self.had_disable_light_experience_redirect:
             return
@@ -432,6 +444,8 @@ class TeamsUIMethods:
 
     # Returns nothing if succeeded, raises an exception if failed
     def attempt_to_join_meeting(self):
+        threading.Thread(target=self.monitor_for_disable_light_experience_redirect, daemon=True).start()
+
         if self.teams_bot_login_is_available and self.teams_bot_login_should_be_used:
             self.login_to_microsoft_account()
 
