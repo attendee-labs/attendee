@@ -221,6 +221,9 @@ class TeamsUIMethods:
             return
 
     def check_if_disable_light_experience_redirect_occurred(self, step):
+        if self.had_disable_light_experience_redirect:
+            return
+
         if "lightExperience=false" in self.driver.current_url:
             logger.info(f"Disable light experience redirect occurred (lightExperience=false is in the url). Raising UiDisableLightExperienceRedirectException and retrying. Current page url: {self.driver.current_url}")
             self.had_disable_light_experience_redirect = True
