@@ -1,7 +1,7 @@
 import base64
 import json
 import re
-from urllib.parse import parse_qs, unquote, urlencode, urlparse, urlunparse
+from urllib.parse import parse_qs, unquote, urlparse, urlunparse
 
 import tldextract
 
@@ -246,10 +246,11 @@ def normalize_meeting_url_raw(url):
 
 
 def add_query_param_to_url(url, param, value):
+    # Append the param directly to the raw query string so we don't decode/re-encode
+    # (and potentially mutate) the existing query params, e.g. a Teams passcode or token.
     parsed = urlparse(url)
-    query_params = parse_qs(parsed.query, keep_blank_values=True)
-    query_params[param] = [value]
-    new_query = urlencode(query_params, doseq=True)
+    new_param = f"{param}={value}"
+    new_query = f"{parsed.query}&{new_param}" if parsed.query else new_param
     return urlunparse(parsed._replace(query=new_query))
 
 
