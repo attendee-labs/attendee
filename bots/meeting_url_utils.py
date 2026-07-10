@@ -245,6 +245,15 @@ def normalize_meeting_url_raw(url):
     return None, None
 
 
+def add_query_param_to_url(url, param, value):
+    # Append the param directly to the raw query string so we don't decode/re-encode
+    # (and potentially mutate) the existing query params, e.g. a Teams passcode or token.
+    parsed = urlparse(url)
+    new_param = f"{param}={value}"
+    new_query = f"{parsed.query}&{new_param}" if parsed.query else new_param
+    return urlunparse(parsed._replace(query=new_query))
+
+
 # Returns (meeting_id, password) from a Zoom join URL
 def parse_zoom_join_url(join_url):
     # Parse the URL into components
