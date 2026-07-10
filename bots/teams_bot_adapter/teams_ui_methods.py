@@ -387,7 +387,9 @@ class TeamsUIMethods:
 
         url_to_load = self.meeting_url_with_identification_token()
 
-        url_to_load = add_query_param_to_url(url_to_load, "lightExperience", "true")
+        url_to_load = add_query_param_to_url(url_to_load, "lightExperience", "false")
+
+        logger.info(f"Loading URL: {url_to_load}")
 
         self.driver.get(url_to_load)
 
