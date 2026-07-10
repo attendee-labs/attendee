@@ -389,8 +389,6 @@ class TeamsUIMethods:
 
         url_to_load = add_query_param_to_url(url_to_load, "lightExperience", "false")
 
-        logger.info(f"Loading URL: {url_to_load}")
-
         self.driver.get(url_to_load)
 
         self.driver.execute_cdp_cmd(
