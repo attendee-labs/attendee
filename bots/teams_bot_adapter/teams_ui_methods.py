@@ -25,11 +25,6 @@ class UiWaitingRoomTransitionFailedException(UiRetryableException):
         super().__init__(message, step, inner_exception)
 
 
-class UiDisableLightExperienceRedirectException(UiRetryableException):
-    def __init__(self, message, step=None, inner_exception=None):
-        super().__init__(message, step, inner_exception)
-
-
 class TeamsUIMethods:
     def __init__(self, driver, meeting_url, display_name):
         self.driver = driver
@@ -222,24 +217,13 @@ class TeamsUIMethods:
             return
 
     def monitor_for_disable_light_experience_redirect(self):
-        # Runs check_if_disable_light_experience_redirect_occurred once per second in the background.
-        # The check will set self.had_disable_light_experience_redirect if the redirect is detected.
-        # The thread exits once the redirect has been detected or once the bot has joined the meeting.
         while not self.had_disable_light_experience_redirect and not self.joined_at:
-            try:
-                self.check_if_disable_light_experience_redirect_occurred("monitor_for_disable_light_experience_redirect")
-            except Exception as e:
-                logger.info(f"Unknown error occurred in monitor_for_disable_light_experience_redirect. Exception type = {type(e)}")
+            if "lightExperience=false" in self.driver.current_url:
+                logger.info(f"Disable light experience redirect occurred (lightExperience=false is in the url). Current page url: {self.driver.current_url}. Quitting driver to trigger retry.")
+                self.had_disable_light_experience_redirect = True
+                # Since we're on a separate thread, we can't just raise an exception, we need to quit the driver to trigger the retry.
+                self.driver.quit()
             time.sleep(0.5)
-
-    def check_if_disable_light_experience_redirect_occurred(self, step):
-        if self.had_disable_light_experience_redirect:
-            return
-
-        if "lightExperience=false" in self.driver.current_url:
-            logger.info(f"Disable light experience redirect occurred (lightExperience=false is in the url). Raising UiDisableLightExperienceRedirectException and retrying. Current page url: {self.driver.current_url}")
-            self.had_disable_light_experience_redirect = True
-            raise UiDisableLightExperienceRedirectException("Light experience redirect occurred", step)
 
     def check_if_waiting_room_timeout_exceeded(self, waiting_room_timeout_started_at, step):
         waiting_room_timeout_exceeded = time.time() - waiting_room_timeout_started_at > self.automatic_leave_configuration.waiting_room_timeout_seconds
@@ -282,7 +266,6 @@ class TeamsUIMethods:
                 self.look_for_denied_your_request_element("click_show_more_button")
                 self.look_for_we_could_not_connect_you_element("click_show_more_button")
 
-                self.check_if_disable_light_experience_redirect_occurred("click_show_more_button")
                 self.check_if_waiting_room_timeout_exceeded(waiting_room_timeout_started_at, "click_show_more_button")
                 self.check_if_waiting_room_connection_failed(waiting_room_timeout_started_at, "click_show_more_button")
 
