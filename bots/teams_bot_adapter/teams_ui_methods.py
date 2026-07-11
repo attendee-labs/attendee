@@ -223,19 +223,31 @@ class TeamsUIMethods:
         thread_id = threading.get_ident()
         logger.info(f"monitor_for_disable_light_experience_redirect thread started (thread_id={thread_id})")
         driver = self.driver
-        while not self.had_disable_light_experience_redirect and not self.joined_at and self.driver is driver:
-            try:
-                current_url = driver.current_url
-            except InvalidSessionIdException:
-                logger.info(f"Driver session has expired. monitor_for_disable_light_experience_redirect thread exiting (thread_id={thread_id})")
-                return
-            if "lightExperience=false" in current_url:
-                logger.info(f"Disable light experience redirect occurred (lightExperience=false is in the url). Current page url: {current_url}. Quitting driver to trigger retry.")
-                self.had_disable_light_experience_redirect = True
-                # Since we're on a separate thread, we can't just raise an exception, we need to quit the driver to trigger the retry.
-                driver.quit()
-            time.sleep(0.5)
-        logger.info(f"monitor_for_disable_light_experience_redirect thread leaving (thread_id={thread_id})")
+
+        # Polling driver.current_url from this thread while the main thread is also
+        # issuing webdriver commands overflows selenium's urllib3 connection pool
+        # (size 1), which spams "Connection pool is full, discarding connection".
+        # Temporarily raise the urllib3 connectionpool log level for as long as this
+        # thread runs, then restore it when the thread leaves.
+        urllib3_logger = logging.getLogger("urllib3.connectionpool")
+        previous_level = urllib3_logger.level
+        urllib3_logger.setLevel(logging.ERROR)
+        try:
+            while not self.had_disable_light_experience_redirect and not self.joined_at and self.driver is driver:
+                try:
+                    current_url = driver.current_url
+                except InvalidSessionIdException:
+                    logger.info(f"Driver session has expired. monitor_for_disable_light_experience_redirect thread exiting (thread_id={thread_id})")
+                    return
+                if "lightExperience=false" in current_url:
+                    logger.info(f"Disable light experience redirect occurred (lightExperience=false is in the url). Current page url: {current_url}. Quitting driver to trigger retry.")
+                    self.had_disable_light_experience_redirect = True
+                    # Since we're on a separate thread, we can't just raise an exception, we need to quit the driver to trigger the retry.
+                    driver.quit()
+                time.sleep(0.5)
+            logger.info(f"monitor_for_disable_light_experience_redirect thread leaving (thread_id={thread_id})")
+        finally:
+            urllib3_logger.setLevel(previous_level)
 
     def check_if_waiting_room_timeout_exceeded(self, waiting_room_timeout_started_at, step):
         waiting_room_timeout_exceeded = time.time() - waiting_room_timeout_started_at > self.automatic_leave_configuration.waiting_room_timeout_seconds
