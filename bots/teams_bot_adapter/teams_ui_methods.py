@@ -217,12 +217,16 @@ class TeamsUIMethods:
             return
 
     def monitor_for_disable_light_experience_redirect(self):
-        while not self.had_disable_light_experience_redirect and not self.joined_at:
-            if "lightExperience=false" in self.driver.current_url:
-                logger.info(f"Disable light experience redirect occurred (lightExperience=false is in the url). Current page url: {self.driver.current_url}. Quitting driver to trigger retry.")
+        # Capture the driver this thread was started for. If a retry replaces self.driver
+        # with a new instance, this thread is stale and should exit instead of polling the
+        # new driver (which has its own monitor thread).
+        driver = self.driver
+        while not self.had_disable_light_experience_redirect and not self.joined_at and self.driver is driver:
+            if "lightExperience=false" in driver.current_url:
+                logger.info(f"Disable light experience redirect occurred (lightExperience=false is in the url). Current page url: {driver.current_url}. Quitting driver to trigger retry.")
                 self.had_disable_light_experience_redirect = True
                 # Since we're on a separate thread, we can't just raise an exception, we need to quit the driver to trigger the retry.
-                self.driver.quit()
+                driver.quit()
             time.sleep(0.5)
 
     def check_if_waiting_room_timeout_exceeded(self, waiting_room_timeout_started_at, step):
