@@ -220,6 +220,8 @@ class TeamsUIMethods:
         # Capture the driver this thread was started for. If a retry replaces self.driver
         # with a new instance, this thread is stale and should exit instead of polling the
         # new driver (which has its own monitor thread).
+        thread_id = threading.get_ident()
+        logger.info(f"monitor_for_disable_light_experience_redirect thread started (thread_id={thread_id})")
         driver = self.driver
         while not self.had_disable_light_experience_redirect and not self.joined_at and self.driver is driver:
             if "lightExperience=false" in driver.current_url:
@@ -228,6 +230,7 @@ class TeamsUIMethods:
                 # Since we're on a separate thread, we can't just raise an exception, we need to quit the driver to trigger the retry.
                 driver.quit()
             time.sleep(0.5)
+        logger.info(f"monitor_for_disable_light_experience_redirect thread leaving (thread_id={thread_id})")
 
     def check_if_waiting_room_timeout_exceeded(self, waiting_room_timeout_started_at, step):
         waiting_room_timeout_exceeded = time.time() - waiting_room_timeout_started_at > self.automatic_leave_configuration.waiting_room_timeout_seconds
@@ -398,7 +401,6 @@ class TeamsUIMethods:
         # We wait for the page url to stabilize because the disable light experience redirect may have caused the page to reload
         # If we don't wait then the reload may occur in the middle of our UI navigation which breaks things.
         if not self.had_disable_light_experience_redirect:
-            logger.info("Not waiting for page url to stabilize because a disable light experience redirect did not occur")
             return
 
         stable_period_seconds = 10
