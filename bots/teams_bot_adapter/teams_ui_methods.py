@@ -4,7 +4,7 @@ import random
 import threading
 import time
 
-from selenium.common.exceptions import ElementClickInterceptedException, ElementNotInteractableException, NoSuchElementException, StaleElementReferenceException, TimeoutException
+from selenium.common.exceptions import ElementClickInterceptedException, ElementNotInteractableException, InvalidSessionIdException, NoSuchElementException, StaleElementReferenceException, TimeoutException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
@@ -224,8 +224,13 @@ class TeamsUIMethods:
         logger.info(f"monitor_for_disable_light_experience_redirect thread started (thread_id={thread_id})")
         driver = self.driver
         while not self.had_disable_light_experience_redirect and not self.joined_at and self.driver is driver:
-            if "lightExperience=false" in driver.current_url:
-                logger.info(f"Disable light experience redirect occurred (lightExperience=false is in the url). Current page url: {driver.current_url}. Quitting driver to trigger retry.")
+            try:
+                current_url = driver.current_url
+            except InvalidSessionIdException:
+                logger.info(f"Driver session has expired. monitor_for_disable_light_experience_redirect thread exiting (thread_id={thread_id})")
+                return
+            if "lightExperience=false" in current_url:
+                logger.info(f"Disable light experience redirect occurred (lightExperience=false is in the url). Current page url: {current_url}. Quitting driver to trigger retry.")
                 self.had_disable_light_experience_redirect = True
                 # Since we're on a separate thread, we can't just raise an exception, we need to quit the driver to trigger the retry.
                 driver.quit()
