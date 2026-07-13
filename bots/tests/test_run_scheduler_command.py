@@ -87,9 +87,19 @@ class RunSchedulerCommandTestCase(TestCase):
         """A failed heartbeat write must never raise, so it can't crash the scheduler loop."""
         command = Command()
 
-        with patch("builtins.open", side_effect=OSError("read-only file system")):
-            # Should not raise
-            command._write_heartbeat()
+        with patch("bots.management.commands.run_scheduler.SCHEDULER_HEARTBEAT_FILE", "/tmp/scheduler_heartbeat"):
+            with patch("builtins.open", side_effect=OSError("read-only file system")):
+                # Should not raise
+                command._write_heartbeat()
+
+    def test_write_heartbeat_noop_when_unset(self):
+        """With SCHEDULER_HEARTBEAT_FILE unset, heartbeat writes are a no-op (opt-in)."""
+        command = Command()
+
+        with patch("bots.management.commands.run_scheduler.SCHEDULER_HEARTBEAT_FILE", None):
+            with patch("builtins.open") as mock_open:
+                command._write_heartbeat()
+                mock_open.assert_not_called()
 
     def test_run_scheduled_bots_ignores_bots_outside_time_threshold(self):
         """Test that bots outside the 5-minute time window are ignored"""

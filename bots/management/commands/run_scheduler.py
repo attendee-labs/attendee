@@ -27,7 +27,8 @@ CALENDAR_SYNC_THRESHOLD_HOURS = 24  # The longest a calendar can go without havi
 
 # Heartbeat file the scheduler rewrites each cycle so a liveness probe can
 # restart the pod if the loop stalls (a process-liveness check wouldn't catch it).
-SCHEDULER_HEARTBEAT_FILE = os.getenv("SCHEDULER_HEARTBEAT_FILE", "/tmp/scheduler_heartbeat")
+# Opt-in: unset by default, so heartbeat writes are a no-op unless configured.
+SCHEDULER_HEARTBEAT_FILE = os.getenv("SCHEDULER_HEARTBEAT_FILE")
 
 
 class Command(BaseCommand):
@@ -66,6 +67,8 @@ class Command(BaseCommand):
 
     def _write_heartbeat(self):
         """Rewrite the heartbeat file so a liveness probe can detect a stalled loop."""
+        if not SCHEDULER_HEARTBEAT_FILE:
+            return
         try:
             with open(SCHEDULER_HEARTBEAT_FILE, "w") as f:
                 f.write(str(time.time()))
