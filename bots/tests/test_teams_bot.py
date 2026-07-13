@@ -11,7 +11,7 @@ from selenium.common.exceptions import TimeoutException
 from bots.bot_controller.bot_controller import BotController
 from bots.bots_api_views import send_sync_command
 from bots.models import Bot, BotChatMessageRequest, BotChatMessageRequestStates, BotChatMessageToOptions, BotEventManager, BotEventSubTypes, BotEventTypes, BotLogin, BotLoginGroup, BotLoginPlatform, BotMediaRequest, BotMediaRequestMediaTypes, BotMediaRequestStates, BotStates, MediaBlob, Organization, Project, Recording, RecordingStates, RecordingTypes, TranscriptionProviders, TranscriptionTypes
-from bots.teams_bot_adapter.teams_ui_methods import TeamsUIMethods, UiTeamsBlockingUsException
+from bots.teams_bot_adapter.teams_ui_methods import TeamsUIMethods, UiTeamsBlockingUsException, UiWaitingRoomTransitionFailedException
 from bots.web_bot_adapter.ui_methods import UiLoginRequiredException
 
 
@@ -894,6 +894,152 @@ class TestTeamsBot(TransactionTestCase):
             adapter.fetch_teams_bot_login_credentials_callback(),
             {"username": "named@example.com", "password": "named-group-password"},
         )
+
+    @patch("bots.bot_controller.bot_controller.BotController.save_debug_recording", return_value=None)
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
+    def test_disable_light_experience_redirect_triggers_join_retry(
+        self,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+        MockSaveDebugRecording,
+    ):
+        """Test that a 'lightExperience=false' redirect during the first join attempt
+        causes the bot to quit the driver, retry, and successfully join on the second attempt.
+
+        This exercises the real retry logic in repeatedly_attempt_to_join_meeting(),
+        attempt_to_join_meeting(), and the real monitor_for_disable_light_experience_redirect()
+        background thread by mocking at a low level (the individual UI navigation steps).
+
+        Flow:
+        1. First join attempt: driver.current_url contains 'lightExperience=false'
+        2. The real monitor_for_disable_light_experience_redirect thread detects it,
+           sets had_disable_light_experience_redirect=True, and quits the driver
+        3. fill_out_name_input observes the quit (redirect flag) and raises a retryable exception
+           (simulating the join failing because the driver was quit)
+        4. Exception caught in repeatedly_attempt_to_join_meeting -> retry
+        5. wait_for_page_url_to_stabilize runs on the retry because the redirect flag is set
+        6. Second join attempt succeeds and the bot records until auto-leave
+        """
+        # Use a "none" recording format to keep the test lightweight
+        self.bot.settings = {"recording_settings": {"format": "none"}}
+        self.bot.save()
+
+        # Configure the mock uploader
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        # Mock the Chrome driver. The URL contains lightExperience=false so the real
+        # monitor thread detects the redirect on the first join attempt.
+        mock_driver = create_mock_teams_driver()
+        mock_driver.current_url = "https://teams.microsoft.com/meet/123123213?p=123123213&lightExperience=false"
+        MockChromeDriver.return_value = mock_driver
+
+        # Mock virtual display
+        mock_display = MagicMock()
+        MockDisplay.return_value = mock_display
+
+        # Track calls to fill_out_name_input to control which join attempt we're on
+        fill_out_name_input_call_count = [0]
+
+        def mock_fill_out_name_input(*args, **kwargs):
+            """Fail the first join attempt once the redirect is detected, succeed thereafter.
+
+            On the first attempt, we wait for the real monitor thread to detect the
+            lightExperience=false redirect (which sets had_disable_light_experience_redirect
+            and quits the driver), then raise a retryable exception to simulate the join
+            failing because the driver was quit out from under us.
+            """
+            fill_out_name_input_call_count[0] += 1
+
+            if fill_out_name_input_call_count[0] <= 1:
+                # Wait for the monitor thread to detect the redirect and quit the driver
+                deadline = time.time() + 5
+                while time.time() < deadline and not controller.adapter.had_disable_light_experience_redirect:
+                    time.sleep(0.05)
+                raise UiWaitingRoomTransitionFailedException("Driver was quit due to light experience redirect", "fill_out_name_input")
+
+            # Second attempt: the driver has been reinitialized, join succeeds
+            return None
+
+        # Spy on wait_for_page_url_to_stabilize so we can verify it runs on the retry
+        # (and to avoid its real multi-second stabilization polling loop).
+        with (
+            patch.object(TeamsUIMethods, "fill_out_name_input", side_effect=mock_fill_out_name_input),
+            patch.object(TeamsUIMethods, "wait_for_page_url_to_stabilize", return_value=None) as mock_wait_for_page_url_to_stabilize,
+            patch.object(TeamsUIMethods, "turn_off_media_inputs", return_value=None),
+            patch.object(TeamsUIMethods, "locate_element", return_value=MagicMock()),
+            patch.object(TeamsUIMethods, "click_element", return_value=None),
+            patch.object(TeamsUIMethods, "click_show_more_button", return_value=None),
+            patch.object(TeamsUIMethods, "click_captions_button", return_value=None),
+            patch.object(TeamsUIMethods, "set_layout", return_value=None),
+            patch.object(TeamsUIMethods, "disable_incoming_video_in_ui", return_value=None),
+            patch("bots.web_bot_adapter.web_bot_adapter.WebBotAdapter.ready_to_show_bot_image", return_value=None),
+        ):
+            # Create bot controller
+            controller = BotController(self.bot.id)
+
+            # Run the bot in a separate thread since it has an event loop
+            bot_thread = threading.Thread(target=controller.run)
+            bot_thread.daemon = True
+            bot_thread.start()
+
+            def simulate_join_flow():
+                # Sleep to allow initialization and join attempts
+                time.sleep(1)
+
+                # Add participants to keep the bot in the meeting
+                controller.adapter.participants_info["user1"] = {"deviceId": "user1", "fullName": "Test User", "active": True, "isCurrentUser": False}
+
+                # Let the bot run for a bit to "record"
+                time.sleep(1)
+
+                # Trigger auto-leave
+                controller.adapter.only_one_participant_in_meeting_at = time.time() - 10000000000
+                time.sleep(1)
+
+                # Clean up connections in thread
+                connection.close()
+
+            # Run join flow simulation after a short delay
+            threading.Timer(2, simulate_join_flow).start()
+
+            # Give the bot some time to process
+            bot_thread.join(timeout=20)
+
+            time.sleep(1.25)
+
+            # Refresh the bot from the database
+            self.bot.refresh_from_db()
+
+            # Assert that the bot is in the ENDED state
+            self.assertEqual(self.bot.state, BotStates.ENDED)
+
+            # Verify that the redirect was detected and recorded by the monitor thread
+            self.assertTrue(controller.adapter.had_disable_light_experience_redirect, "Expected had_disable_light_experience_redirect to be True after the redirect was detected")
+
+            # Verify the monitor quit the driver to trigger the retry
+            self.assertTrue(mock_driver.quit.called, "Expected the driver to be quit after the light experience redirect was detected")
+
+            # Verify fill_out_name_input was called twice - once for the failed first
+            # attempt and once for the successful retry
+            self.assertEqual(fill_out_name_input_call_count[0], 2, "Expected fill_out_name_input to be called twice - once for the initial failure and once for the retry")
+
+            # Verify wait_for_page_url_to_stabilize ran on the retry (once per join attempt)
+            self.assertEqual(mock_wait_for_page_url_to_stabilize.call_count, 2, "Expected wait_for_page_url_to_stabilize to be called once per join attempt")
+
+            # Verify that the recording was finished
+            self.recording.refresh_from_db()
+            self.assertEqual(self.recording.state, RecordingStates.COMPLETE)
+
+            # Cleanup
+            controller.cleanup()
+            bot_thread.join(timeout=5)
+
+            # Close the database connection since we're in a thread
+            connection.close()
 
     @patch.dict("os.environ", {"ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME": "true"})
     @patch("bots.web_bot_adapter.web_bot_adapter.settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME", True)
