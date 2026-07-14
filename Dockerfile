@@ -67,9 +67,6 @@ RUN apt-get update && apt-get install -y libasound2 libasound2-plugins alsa alsa
 # Install Pulseaudio
 RUN apt-get install -y  pulseaudio pulseaudio-utils ffmpeg
 
-# Install Linux Kernel Dev
-RUN apt-get update && apt-get install -y linux-libc-dev
-
 # Update certificates
 RUN apt-get update && apt-get install -y \
     ca-certificates \
@@ -128,6 +125,20 @@ RUN mkdir -p "$cwd/staticfiles" && chown -R app:app "$cwd/staticfiles"
 # Therefore, we create a symlink at that path that points to a file in /tmp which the app can write to.
 RUN mkdir -p /etc/opt/chrome/policies/managed \
   && ln -s /tmp/attendee-chrome-policies.json /etc/opt/chrome/policies/managed/attendee-chrome-policies.json
+
+# Harden the runtime image. linux-libc-dev provides Linux kernel *headers*, needed only to compile
+# native Python extensions (e.g. av, opencv) during the build above; at runtime the container uses
+# the host's kernel, so purge them here along with their build-only dependents (libc6-dev,
+# build-essential, ...). Also apply any pending Ubuntu security updates the base image predates.
+# This removes every CRITICAL and nearly all HIGH findings from image vulnerability scans without
+# changing runtime behaviour: already-compiled .so files link the runtime libc (libc6), which is
+# retained. Chrome is installed from a pinned local .deb with no apt source, so it is not upgraded.
+RUN apt-get update \
+    && apt-get purge -y linux-libc-dev \
+    && apt-get upgrade -y \
+    && apt-get autoremove -y --purge \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
 # Switch to non-root AFTER copies to avoid permission flakiness
 USER app
