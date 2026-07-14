@@ -25,6 +25,11 @@ log = logging.getLogger(__name__)
 
 CALENDAR_SYNC_THRESHOLD_HOURS = 24  # The longest a calendar can go without having been synced
 
+# Heartbeat file the scheduler rewrites each cycle so a liveness probe can
+# restart the pod if the loop stalls (a process-liveness check wouldn't catch it).
+# Opt-in: unset by default, so heartbeat writes are a no-op unless configured.
+SCHEDULER_HEARTBEAT_FILE = os.getenv("SCHEDULER_HEARTBEAT_FILE")
+
 
 class Command(BaseCommand):
     help = "Runs celery tasks for scheduled bots."
@@ -60,6 +65,16 @@ class Command(BaseCommand):
             log.exception("Failed to get Celery queue %s size", queue_name)
             self._redis_client = None  # Reset connection on failure
 
+    def _write_heartbeat(self):
+        """Rewrite the heartbeat file so a liveness probe can detect a stalled loop."""
+        if not SCHEDULER_HEARTBEAT_FILE:
+            return
+        try:
+            with open(SCHEDULER_HEARTBEAT_FILE, "w") as f:
+                f.write(str(time.time()))
+        except Exception:
+            log.warning("Failed to write scheduler heartbeat file", exc_info=True)
+
     def _log_celery_queue_sizes(self):
         try:
             # Get all the celery queue names from the CELERY_TASK_ROUTES setting
@@ -76,6 +91,8 @@ class Command(BaseCommand):
 
         interval = opts["interval"]
         log.info("Scheduler daemon started, polling every %s seconds", interval)
+        # Write an initial heartbeat so the liveness probe passes during startup.
+        self._write_heartbeat()
 
         while self._keep_running:
             began = time.monotonic()
@@ -91,6 +108,10 @@ class Command(BaseCommand):
             finally:
                 # Close stale connections so the loop never inherits a dead socket
                 connection.close()
+
+            # A completed cycle refreshes the heartbeat. If the loop stalls mid-cycle,
+            # this stops updating and the liveness probe restarts the pod.
+            self._write_heartbeat()
 
             # Sleep the *remainder* of the interval, even if work took time T
             elapsed = time.monotonic() - began

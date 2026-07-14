@@ -309,7 +309,7 @@ def get_transcription_via_assemblyai_from_mp3(
 
     data = {
         "audio_url": upload_url,
-        "speech_models": ["universal-3-pro", "universal-2"],
+        "speech_models": ["universal-3-5-pro", "universal-2"],
     }
 
     if transcription_settings.assembly_ai_language_detection():
