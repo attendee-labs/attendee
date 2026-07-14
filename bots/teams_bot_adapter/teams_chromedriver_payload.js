@@ -742,9 +742,9 @@ class DominantSpeakerManager {
 class AudioConnectionDiagnosticsManager {
     constructor(checkIntervalMs = 60000) {
         this.checkIntervalMs = checkIntervalMs;
-        this.hasEncounteredNonSilentAudioTrack = false;
         this.hasEncounteredNonSilenceFromSilenceDetection = false;
-        this.hasEncounteredUnMutedParticipant = false;
+        this.numberOfChecksWithUnMutedParticipant = 0;
+        this.hasSentInconsistencyWarning = false;
         this.intervalId = null;
         this.lastUpdate = null;
     }
@@ -768,31 +768,23 @@ class AudioConnectionDiagnosticsManager {
         this.hasEncounteredNonSilenceFromSilenceDetection = true;
     }
 
-    recordNonSilentAudioTrack() {
-        this.hasEncounteredNonSilentAudioTrack = true;
-    }
-
     recordUnMutedParticipant() {
-        this.hasEncounteredUnMutedParticipant = true;
+        this.numberOfChecksWithUnMutedParticipant++;
     }
 
     check() {
+        if (!window.ws?.mediaSendingEnabled)
+            return;
+
         if (window.callManager?.getUnmutedParticipantIds()?.length) {
             this.recordUnMutedParticipant();
         }
-        const update = {
-            hasEncounteredNonSilentAudioTrack: this.hasEncounteredNonSilentAudioTrack,
-            hasEncounteredUnMutedParticipant: this.hasEncounteredUnMutedParticipant,
-            hasEncounteredNonSilenceFromSilenceDetection: this.hasEncounteredNonSilenceFromSilenceDetection,
-        };
 
-        // Only send an update when the state has changed from the last update.
-        const hasChanged = this.lastUpdate === null || Object.keys(update).some((key) => update[key] !== this.lastUpdate[key]);
-        if (hasChanged) {
-            this.lastUpdate = update;
+        if (this.numberOfChecksWithUnMutedParticipant > 5 && !this.hasEncounteredNonSilenceFromSilenceDetection && !this.hasSentInconsistencyWarning) {
+            this.hasSentInconsistencyWarning = true;
             window.ws?.sendJson({
-                type: 'AudioConnectionDiagnosticsUpdate',
-                ...update,
+                type: 'AudioConnectionDiagnosticsWarning',
+                message: `Observed unmuted participants across ${this.numberOfChecksWithUnMutedParticipant} checks but never received any non-silent audio`
             });
         }
     }
@@ -2636,7 +2628,6 @@ const handleVideoTrack = async (event) => {
                         type: 'WebRTCTrackIsNonSilent',
                         trackId: event.track?.id,
                     });
-                    window.audioConnectionDiagnosticsManager?.recordNonSilentAudioTrack();
                   }
 
                   // Don't bother sending unless we've gotten some non-silent audio data in this track.
