@@ -9,7 +9,6 @@ from allauth.socialaccount.models import SocialAccount, SocialApp, SocialLogin, 
 from allauth.socialaccount.providers.oauth2.client import OAuth2Client
 from django.contrib.sites.models import Site
 from django.core import mail
-from django.core.cache import cache
 from django.test import Client, TransactionTestCase, override_settings
 from django.urls import reverse
 
@@ -22,8 +21,10 @@ class UserSignupIntegrationTest(TransactionTestCase):
 
     def setUp(self):
         """Set up test environment"""
-        # Test data
-        self.signup_email = "newuser@example.com"
+        # Test data. Use a unique address per test so allauth's per-email
+        # confirm_email rate limit (1/180s/key) doesn't leak across tests via
+        # the process-global cache.
+        self.signup_email = f"newuser-{uuid.uuid4().hex}@example.com"
         self.password = "testpassword123"
 
         # Create test client
@@ -31,10 +32,6 @@ class UserSignupIntegrationTest(TransactionTestCase):
 
         # Clear any existing emails
         mail.outbox = []
-
-        # Reset allauth's rate-limit counters, which live in the process-global
-        # cache and otherwise leak across tests (confirm_email is 1/180s/key).
-        cache.clear()
 
     def test_user_signup_happy_path(self):
         """Test the complete happy path of user signup"""
@@ -234,11 +231,10 @@ class SignupMailgunValidationTest(TransactionTestCase):
     """Tests for the Mailgun email validation performed in StandardAccountAdapter.clean_email"""
 
     def setUp(self):
-        self.signup_email = "newuser@example.com"
+        self.signup_email = f"newuser-{uuid.uuid4().hex}@example.com"
         self.password = "testpassword123"
         self.client = Client()
         mail.outbox = []
-        cache.clear()
 
     def _post_signup(self):
         return self.client.post(
