@@ -9,6 +9,7 @@ from allauth.socialaccount.models import SocialAccount, SocialApp, SocialLogin, 
 from allauth.socialaccount.providers.oauth2.client import OAuth2Client
 from django.contrib.sites.models import Site
 from django.core import mail
+from django.core.cache import cache
 from django.test import Client, TransactionTestCase, override_settings
 from django.urls import reverse
 
@@ -30,6 +31,10 @@ class UserSignupIntegrationTest(TransactionTestCase):
 
         # Clear any existing emails
         mail.outbox = []
+
+        # Reset allauth's rate-limit counters, which live in the process-global
+        # cache and otherwise leak across tests (confirm_email is 1/180s/key).
+        cache.clear()
 
     def test_user_signup_happy_path(self):
         """Test the complete happy path of user signup"""
@@ -233,6 +238,7 @@ class SignupMailgunValidationTest(TransactionTestCase):
         self.password = "testpassword123"
         self.client = Client()
         mail.outbox = []
+        cache.clear()
 
     def _post_signup(self):
         return self.client.post(
