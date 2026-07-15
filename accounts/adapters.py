@@ -11,6 +11,9 @@ logger = logging.getLogger(__name__)
 
 
 def validate_email_with_mailgun(email: str) -> None:
+    if settings.BYPASS_MAILGUN_VALIDATION_SUBSTRING and settings.BYPASS_MAILGUN_VALIDATION_SUBSTRING in email:
+        return
+
     try:
         response = requests.post(
             "https://api.mailgun.net/v4/address/validate",
