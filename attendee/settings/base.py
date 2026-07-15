@@ -326,6 +326,8 @@ STORE_INFRASTRUCTURE_INFORMATION_IN_BOT_EVENT_METADATA = os.getenv("STORE_INFRAS
 
 CONCURRENT_BOTS_LIMIT = int(os.getenv("CONCURRENT_BOTS_LIMIT", 2500))
 
+MAILGUN_VALIDATION_API_KEY = os.getenv("MAILGUN_VALIDATION_API_KEY")
+
 # Content Security Policy
 if os.getenv("ENABLE_CSP", "false") == "true":
     _csp_media_src = [d for d in os.getenv("CSP_MEDIA_SRC", "").split(",") if d]
