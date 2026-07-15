@@ -1323,7 +1323,7 @@ class BotController:
             # Degrade video recording if file size exceeds limit
             if self.screen_and_audio_recorder:
                 self.screen_and_audio_recorder.degrade_recording_if_file_size_exceeded(
-                    max_file_size_bytes=settings.BOT_RECORDING_MAX_VIDEO_BYTES,
+                    max_file_size_bytes=settings.BOT_RECORDING_VIDEO_DEGRADE_THRESHOLD_BYTES,
                 )
 
             # Process completed audio chunk uploads
