@@ -102,8 +102,6 @@ class ScreenAndAudioRecorder:
         if not self.file_location or not os.path.exists(self.file_location):
             return
 
-        logger.info(f"Checking recording file size to see if it exceeds limit of {max_file_size_bytes} bytes")
-
         try:
             file_size = os.path.getsize(self.file_location)
         except OSError as e:
@@ -111,6 +109,7 @@ class ScreenAndAudioRecorder:
             return
 
         if file_size <= max_file_size_bytes:
+            logger.info(f"Recording file size {file_size} bytes is less than or equal to limit of {max_file_size_bytes} bytes, not degrading video recording")
             return
 
         logger.warning(f"Recording file size {file_size} bytes exceeds limit of {max_file_size_bytes} bytes, degrading video recording")
