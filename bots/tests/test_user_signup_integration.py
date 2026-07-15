@@ -1,8 +1,9 @@
 import re
 import uuid
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 from urllib.parse import parse_qs, urlparse
 
+import requests
 from allauth.account.models import EmailAddress
 from allauth.socialaccount.models import SocialAccount, SocialApp, SocialLogin, SocialToken
 from allauth.socialaccount.providers.oauth2.client import OAuth2Client
@@ -218,6 +219,113 @@ class UserSignupIntegrationTest(TransactionTestCase):
             self.assertEqual(response.status_code, 200)
             self.assertContains(response, "We are sorry, but the sign up is currently closed")
             self.assertContains(response, "Sign Up Closed")
+
+
+@override_settings(
+    MAILGUN_VALIDATION_API_KEY="test-mailgun-key",
+    BYPASS_MAILGUN_VALIDATION_SUBSTRING=None,
+)
+class SignupMailgunValidationTest(TransactionTestCase):
+    """Tests for the Mailgun email validation performed in StandardAccountAdapter.clean_email"""
+
+    def setUp(self):
+        self.signup_email = "newuser@example.com"
+        self.password = "testpassword123"
+        self.client = Client()
+        mail.outbox = []
+
+    def _post_signup(self):
+        return self.client.post(
+            reverse("account_signup"),
+            {
+                "email": self.signup_email,
+                "password1": self.password,
+                "password2": self.password,
+            },
+        )
+
+    @staticmethod
+    def _mailgun_response(payload):
+        """Build a fake requests.Response-like object for the Mailgun call."""
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = payload
+        return mock_response
+
+    @patch("accounts.adapters.requests.post")
+    def test_signup_rejected_for_disposable_email(self, mock_post):
+        """A disposable address should block signup with a validation error."""
+        mock_post.return_value = self._mailgun_response({"is_disposable_address": True, "result": "deliverable"})
+
+        response = self._post_signup()
+
+        # Form should be re-rendered with the validation error
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Please use a permanent email address.")
+
+        # Mailgun should have been consulted and no user created
+        mock_post.assert_called_once()
+        self.assertFalse(User.objects.filter(email=self.signup_email).exists())
+        self.assertEqual(len(mail.outbox), 0)
+
+    @patch("accounts.adapters.requests.post")
+    def test_signup_rejected_for_undeliverable_email(self, mock_post):
+        """An undeliverable result should block signup with a validation error."""
+        mock_post.return_value = self._mailgun_response({"is_disposable_address": False, "result": "undeliverable"})
+
+        response = self._post_signup()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "This email address does not appear to be valid.")
+        self.assertFalse(User.objects.filter(email=self.signup_email).exists())
+        self.assertEqual(len(mail.outbox), 0)
+
+    @patch("accounts.adapters.requests.post")
+    def test_signup_rejected_for_do_not_send_email(self, mock_post):
+        """A do_not_send result should block signup with a validation error."""
+        mock_post.return_value = self._mailgun_response({"is_disposable_address": False, "result": "do_not_send"})
+
+        response = self._post_signup()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "This email address does not appear to be valid.")
+        self.assertFalse(User.objects.filter(email=self.signup_email).exists())
+        self.assertEqual(len(mail.outbox), 0)
+
+    @patch("accounts.adapters.requests.post")
+    def test_signup_allowed_for_deliverable_email(self, mock_post):
+        """A deliverable, non-disposable address should be allowed through."""
+        mock_post.return_value = self._mailgun_response({"is_disposable_address": False, "result": "deliverable"})
+
+        response = self._post_signup()
+
+        self.assertRedirects(response, reverse("account_email_verification_sent"))
+        mock_post.assert_called_once()
+        self.assertTrue(User.objects.filter(email=self.signup_email).exists())
+        self.assertEqual(len(mail.outbox), 1)
+
+    @patch("accounts.adapters.requests.post")
+    def test_signup_allowed_when_mailgun_request_fails(self, mock_post):
+        """If the Mailgun request raises, validation should fail open and allow signup."""
+        mock_post.side_effect = requests.RequestException("boom")
+
+        response = self._post_signup()
+
+        self.assertRedirects(response, reverse("account_email_verification_sent"))
+        mock_post.assert_called_once()
+        self.assertTrue(User.objects.filter(email=self.signup_email).exists())
+        self.assertEqual(len(mail.outbox), 1)
+
+    @override_settings(BYPASS_MAILGUN_VALIDATION_SUBSTRING="example.com")
+    @patch("accounts.adapters.requests.post")
+    def test_signup_bypasses_mailgun_for_matching_substring(self, mock_post):
+        """Emails matching the bypass substring should skip the Mailgun call entirely."""
+        response = self._post_signup()
+
+        self.assertRedirects(response, reverse("account_email_verification_sent"))
+        mock_post.assert_not_called()
+        self.assertTrue(User.objects.filter(email=self.signup_email).exists())
+        self.assertEqual(len(mail.outbox), 1)
 
 
 @override_settings(
