@@ -307,6 +307,7 @@ class TeamsUIMethods:
             "To join this Teams meeting, you need to be signed in to an account.",
             "To join this meeting, sign in again or select another account.",
             "Due to org policy, you need to sign in or use Teams on the web to join this meeting.",
+            "External participants are not permitted to join before the event begins. Please join after the event has started.",
         ]
         xpath_conditions = " or ".join([f'contains(text(), "{msg}")' for msg in sign_in_required_messages])
         xpath_selector = f"//*[{xpath_conditions}]"
