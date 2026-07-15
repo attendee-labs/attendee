@@ -91,6 +91,8 @@ class ScreenAndAudioRecorder:
     def degrade_recording_if_file_size_exceeded(self, max_file_size_bytes):
         if not max_file_size_bytes:
             return
+        if self.audio_only:
+            return
         # Only check every 60 seconds
         if time.time() - self.last_recording_file_size_check_time < 60:
             return
