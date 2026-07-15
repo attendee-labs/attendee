@@ -34,7 +34,7 @@ def validate_email_with_mailgun(email: str) -> None:
     result = validation.get("result")
 
     if result in {"undeliverable", "do_not_send"}:
-        raise ValidationError("This email address does not appear to be deliverable.")
+        raise ValidationError("This email address does not appear to be valid.")
 
 
 class StandardAccountAdapter(DefaultAccountAdapter):
