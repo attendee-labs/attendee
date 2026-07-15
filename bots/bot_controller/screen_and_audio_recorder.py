@@ -1,6 +1,7 @@
 import logging
 import os
 import subprocess
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +16,9 @@ class ScreenAndAudioRecorder:
         self.audio_only = audio_only
         self.paused = False
         self.xterm_proc = None
+        self.video_degraded = False
+        self.video_degradation_xterm_proc = None
+        self.last_recording_file_size_check_time = time.time()
 
     def start_recording(self, display_var):
         logger.info(f"Starting screen recorder for display {display_var} with dimensions {self.screen_dimensions} and file location {self.file_location}")
@@ -80,6 +84,43 @@ class ScreenAndAudioRecorder:
         except Exception as e:
             logger.error(f"Failed to resume recording: {e}")
             return False
+
+    # Checks the current recording file size and, if it exceeds the limit, degrades the
+    # video recording by covering the screen with a black xterm window. This is permanent
+    # for the rest of the recording; degradation is never stopped once it has started.
+    def degrade_recording_if_file_size_exceeded(self, max_file_size_bytes):
+        if not max_file_size_bytes:
+            return
+        # Only check every 60 seconds
+        if time.time() - self.last_recording_file_size_check_time < 60:
+            return
+        logger.info(f"Checking recording file size to see if it exceeds limit of {max_file_size_bytes} bytes")
+        self.last_recording_file_size_check_time = time.time()
+
+        if self.video_degraded:
+            return
+
+        if not self.file_location or not os.path.exists(self.file_location):
+            return
+
+        try:
+            file_size = os.path.getsize(self.file_location)
+        except OSError as e:
+            logger.error(f"Failed to get recording file size: {e}")
+            return
+
+        if file_size <= max_file_size_bytes:
+            return
+
+        logger.warning(f"Recording file size {file_size} bytes exceeds limit of {max_file_size_bytes} bytes, degrading video recording")
+
+        try:
+            sw, sh = self.screen_dimensions
+            x, y = 0, 0
+            self.video_degradation_xterm_proc = subprocess.Popen(["xterm", "-bg", "black", "-fg", "black", "-geometry", f"{sw}x{sh}+{x}+{y}", "-xrm", "*borderWidth:0", "-xrm", "*scrollBar:false"])
+            self.video_degraded = True
+        except Exception as e:
+            logger.error(f"Failed to degrade video of recording: {e}")
 
     def stop_recording(self):
         if not self.ffmpeg_proc:
