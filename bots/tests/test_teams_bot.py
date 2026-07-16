@@ -1159,6 +1159,100 @@ class TestTeamsBot(TransactionTestCase):
             # Close the database connection since we're in a thread
             connection.close()
 
+    @patch("bots.bot_controller.bot_controller.settings.BOT_RECORDING_VIDEO_DEGRADE_THRESHOLD_BYTES", 100)
+    @patch("bots.bot_controller.screen_and_audio_recorder.subprocess.Popen")
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
+    def test_recording_video_degraded_when_file_size_exceeds_threshold(
+        self,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+        MockRecorderPopen,
+    ):
+        """Test that the main loop degrades the video recording once the recording file
+        size exceeds BOT_RECORDING_VIDEO_DEGRADE_THRESHOLD_BYTES.
+
+        This exercises the real degrade_recording_if_file_size_exceeded() logic that is
+        invoked from on_main_loop_timeout(). subprocess.Popen inside the recorder is mocked
+        so no real ffmpeg/xterm processes are spawned, and the recording file is written
+        directly so we control its size.
+
+        Flow:
+        1. Bot joins meeting and a ScreenAndAudioRecorder is created.
+        2. A recording file larger than the (patched, small) threshold is written to disk.
+        3. The file-size check throttle is reset so the check runs on the next main loop tick.
+        4. The main loop detects the oversized file and degrades the recording, covering the
+           screen with a black xterm and setting video_degraded=True (permanently).
+        """
+        # Configure the mock uploader
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        # Mock the Chrome driver
+        mock_driver = create_mock_teams_driver()
+        MockChromeDriver.return_value = mock_driver
+
+        # Mock virtual display
+        mock_display = MagicMock()
+        MockDisplay.return_value = mock_display
+
+        # subprocess.Popen inside the recorder is mocked so ffmpeg (start_recording) and the
+        # degradation xterm are never actually spawned.
+        MockRecorderPopen.return_value = MagicMock()
+
+        # Create bot controller
+        controller = BotController(self.bot.id)
+
+        # Mock the attempt_to_join_meeting to succeed immediately
+        with patch("bots.teams_bot_adapter.teams_ui_methods.TeamsUIMethods.attempt_to_join_meeting") as mock_attempt_to_join:
+            mock_attempt_to_join.return_value = None  # Successful join
+
+            # Run the bot in a separate thread since it has an event loop
+            bot_thread = threading.Thread(target=controller.run)
+            bot_thread.daemon = True
+            bot_thread.start()
+
+            # Wait for the bot to join and the screen/audio recorder to be created
+            time.sleep(3)
+
+            recorder = controller.screen_and_audio_recorder
+            self.assertIsNotNone(recorder, "A screen and audio recorder should be created for an audio+video recording")
+
+            # The recording should not be degraded yet
+            self.assertFalse(recorder.video_degraded, "Recording should not be degraded before the file exceeds the threshold")
+
+            # Write a recording file larger than the patched threshold (100 bytes)
+            with open(recorder.file_location, "wb") as recording_file:
+                recording_file.write(b"\x00" * 1000)
+
+            # Reset the check throttle so the size check runs on the next main loop tick
+            # (degrade_recording_if_file_size_exceeded only checks once every 60 seconds)
+            recorder.last_recording_file_size_check_time = time.time() - 61
+
+            # Give the main loop (runs every 100ms) time to detect the oversized file
+            time.sleep(1)
+
+            # Verify the recording was degraded
+            self.assertTrue(recorder.video_degraded, "Recording should be degraded after the file exceeds the threshold")
+            self.assertIsNotNone(recorder.video_degradation_xterm_proc, "A black xterm process should be spawned to degrade the video")
+
+            # Clean up: simulate meeting ending to trigger cleanup
+            controller.adapter.left_meeting = True
+            controller.adapter.send_message_callback({"message": controller.adapter.Messages.MEETING_ENDED})
+            time.sleep(1)
+
+            # Now wait for the thread to finish naturally
+            bot_thread.join(timeout=5)
+
+            # If thread is still running after timeout, that's a problem to report
+            if bot_thread.is_alive():
+                print("WARNING: Bot thread did not terminate properly after cleanup")
+
+            # Close the database connection since we're in a thread
+            connection.close()
+
     @patch.dict("os.environ", {"USE_REMOTE_STORAGE_FOR_AUDIO_CHUNKS": "true", "FALLBACK_TO_DB_STORAGE_FOR_AUDIO_CHUNKS_IF_REMOTE_STORAGE_FAILS": "true"})
     @patch("bots.bot_controller.bot_controller.settings.USE_REMOTE_STORAGE_FOR_AUDIO_CHUNKS", True)
     @patch("bots.bot_controller.bot_controller.settings.FALLBACK_TO_DB_STORAGE_FOR_AUDIO_CHUNKS_IF_REMOTE_STORAGE_FAILS", True)

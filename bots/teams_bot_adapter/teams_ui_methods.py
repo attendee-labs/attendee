@@ -195,16 +195,32 @@ class TeamsUIMethods:
             join_button = self.find_element_by_selector(By.CSS_SELECTOR, '[data-tid="prejoin-join-button"]')
             issue_detected = join_button and join_button.is_enabled()
             should_raise_exception = os.getenv("RAISE_IF_TEAMS_WAITING_ROOM_CONNECTION_FAILED", "false") == "true"
+            should_click_join_button = os.getenv("CLICK_JOIN_BUTTON_IF_TEAMS_WAITING_ROOM_CONNECTION_FAILED", "false") == "true"
 
             if issue_detected:
                 # When bot retries joining the meeting, this will cause it to log network requests from the start
                 self.should_log_network_requests = True
 
-            if issue_detected and should_raise_exception:
+            if issue_detected and should_raise_exception and not should_click_join_button:
                 logger.info("Join button is present but it is NOT disabled after entering waiting room. Assuming waiting room connection failed. Raising UiTeamsBlockingUsException")
                 raise UiTeamsBlockingUsException("Waiting room connection failed.", step)
 
-            if issue_detected and not should_raise_exception:
+            if issue_detected and not should_raise_exception and should_click_join_button:
+                last_join_button_click_at = getattr(self, "_last_join_button_click_at", None)
+                if last_join_button_click_at is not None and time.time() - last_join_button_click_at < 5:
+                    return
+                logger.info("Join button is present but it is NOT disabled after entering waiting room. Assuming waiting room connection failed. Turning off media inputs and clicking join button.")
+                self.turn_off_media_inputs()
+                logger.info("Clicking join button...")
+                join_button_inner = self.find_element_by_selector(By.CSS_SELECTOR, '[data-tid="prejoin-join-button"]')
+                if not join_button_inner.is_enabled():
+                    logger.info("Join button is not enabled after turning off media inputs. Assuming waiting room connection failed. Not clicking join button.")
+                    return
+                self.click_element(join_button_inner, "join_button")
+                self._last_join_button_click_at = time.time()
+                return
+
+            if issue_detected and not should_raise_exception and not should_click_join_button:
                 if not getattr(self, "_waiting_room_connection_failed_logged", False):
                     logger.info("Join button is present but it is NOT disabled after entering waiting room. Assuming waiting room connection failed. Not raising exception.")
                     self._waiting_room_connection_failed_logged = True
@@ -307,6 +323,7 @@ class TeamsUIMethods:
             "To join this Teams meeting, you need to be signed in to an account.",
             "To join this meeting, sign in again or select another account.",
             "Due to org policy, you need to sign in or use Teams on the web to join this meeting.",
+            "External participants are not permitted to join before the event begins. Please join after the event has started.",
         ]
         xpath_conditions = " or ".join([f'contains(text(), "{msg}")' for msg in sign_in_required_messages])
         xpath_selector = f"//*[{xpath_conditions}]"
