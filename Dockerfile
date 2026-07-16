@@ -132,7 +132,12 @@ RUN mkdir -p /etc/opt/chrome/policies/managed \
 # build-essential, ...). Also apply any pending Ubuntu security updates the base image predates.
 # This removes every CRITICAL and nearly all HIGH findings from image vulnerability scans without
 # changing runtime behaviour: already-compiled .so files link the runtime libc (libc6), which is
-# retained. Chrome is installed from a pinned local .deb with no apt source, so it is not upgraded.
+# retained.
+#
+# Chrome must NOT be upgraded: the google-chrome-stable .deb registers the Google apt repo, so a bare
+# `apt-get upgrade` would pull Chrome to latest and break the ChromeDriver<->Chrome version pairing
+# the Selenium bots require (ChromeDriver is pinned separately, above). We `apt-mark hold` it so the
+# security upgrade leaves Chrome at the pinned version chromedriver was matched to.
 #
 # BEFORE purging, explicitly (re)install the runtime packages that are otherwise present only as
 # transitive dependencies of the -dev packages we are about to remove. Installing them marks them
@@ -143,6 +148,7 @@ RUN mkdir -p /etc/opt/chrome/policies/managed \
 #   - libgirepository-1.0-1: the GObject-introspection runtime loaded by python3-gi.
 #   - libpq5: psycopg2's runtime library (came in via libpq-dev).
 RUN apt-get update \
+    && apt-mark hold google-chrome-stable \
     && apt-get install -y --no-install-recommends \
         python3-gi \
         gir1.2-glib-2.0 \
