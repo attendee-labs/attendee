@@ -408,6 +408,24 @@ class StyleManager {
             // Wait until the chat input element appears in the DOM
             this.waitForChatInputAndSendReadyMessage();
         }
+
+        // Check for the Teams E2EE encryption error screen
+        const encryptionErrorScreen = document.querySelector(
+            '[data-tid="calling-e2ee-end-screen"]'
+        );
+
+        if (encryptionErrorScreen && !this.encryptionErrorReported) {
+            const screenText = encryptionErrorScreen.textContent || '';
+
+            if (screenText.includes('An encryption error occurred')) {
+                this.encryptionErrorReported = true;
+
+                window.ws.sendJson({
+                    type: 'MeetingStatusChange',
+                    change: 'post_join_encryption_error'
+                });
+            }
+        }
     }
 
     waitForChatInputAndSendReadyMessage() {
