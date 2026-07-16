@@ -2715,12 +2715,83 @@ new RTCInterceptor({
         // given stats/state message belongs to (Teams creates several).
         const peerConnectionId = (crypto?.randomUUID?.() ?? `pc-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 
-        window.ws?.sendJson({
-            type: 'WebRTCPeerConnectionCreated',
-            peerConnectionId,
-            connectionState: peerConnection.connectionState,
-            iceConnectionState: peerConnection.iceConnectionState,
-        });
+        const peerConnectionCreatedAt = performance.now();
+        let peerConnectionStateSequence = 0;
+
+        const getDescriptionSummary = (description) => {
+            if (!description) {
+                return null;
+            }
+
+            return {
+                type: description.type,
+                // Avoid sending the entire SDP unless you specifically need it.
+                sdpLength: description.sdp?.length ?? 0,
+            };
+        };
+
+        const sendPeerConnectionState = (eventName) => {
+            window.ws?.sendJson({
+                type: 'WebRTCPeerConnectionStateChanged',
+                peerConnectionId,
+                eventName,
+                sequence: ++peerConnectionStateSequence,
+                elapsedMsSincePeerConnectionCreated: Math.round(
+                    performance.now() - peerConnectionCreatedAt
+                ),
+
+                connectionState: peerConnection.connectionState,
+                iceConnectionState: peerConnection.iceConnectionState,
+                iceGatheringState: peerConnection.iceGatheringState,
+                signalingState: peerConnection.signalingState,
+
+                localDescription: getDescriptionSummary(
+                    peerConnection.localDescription
+                ),
+                remoteDescription: getDescriptionSummary(
+                    peerConnection.remoteDescription
+                ),
+                currentLocalDescription: getDescriptionSummary(
+                    peerConnection.currentLocalDescription
+                ),
+                currentRemoteDescription: getDescriptionSummary(
+                    peerConnection.currentRemoteDescription
+                ),
+                pendingLocalDescription: getDescriptionSummary(
+                    peerConnection.pendingLocalDescription
+                ),
+                pendingRemoteDescription: getDescriptionSummary(
+                    peerConnection.pendingRemoteDescription
+                ),
+            });
+        };
+
+        // Initial snapshot.
+        sendPeerConnectionState('created');
+
+        const peerConnectionStateEventNames = [
+            'connectionstatechange',
+            'iceconnectionstatechange',
+            'icegatheringstatechange',
+            'signalingstatechange',
+            'negotiationneeded',
+        ];
+
+        for (const eventName of peerConnectionStateEventNames) {
+            peerConnection.addEventListener(eventName, () => {
+                sendPeerConnectionState(eventName);
+
+                if (
+                    eventName === 'connectionstatechange' &&
+                    (
+                        peerConnection.connectionState === 'closed' ||
+                        peerConnection.connectionState === 'failed'
+                    )
+                ) {
+                    clearInterval(receivePathStatsInterval);
+                }
+            });
+        }
 
         peerConnection.addEventListener('datachannel', (event) => {
             realConsole?.log('datachannel', event);
@@ -2855,8 +2926,23 @@ new RTCInterceptor({
                 let remoteCandidate;
                 const inboundAudio = [];
                 const dataChannels = [];
+                const transports = [];
 
                 for (const report of stats.values()) {
+                    if (report.type === 'transport') {
+                        transports.push({
+                            id: report.id,
+                            dtlsState: report.dtlsState,
+                            iceState: report.iceState,
+                            iceRole: report.iceRole,
+                            selectedCandidatePairId: report.selectedCandidatePairId,
+                            bytesSent: report.bytesSent,
+                            bytesReceived: report.bytesReceived,
+                            packetsSent: report.packetsSent,
+                            packetsReceived: report.packetsReceived,
+                        });
+                    }
+
                     if (report.type === "candidate-pair" && report.selected) {
                         selectedPair = report;
                     }
@@ -2893,8 +2979,24 @@ new RTCInterceptor({
                 window.ws?.sendJson({
                     type: "WebRTCReceivePathStats",
                     peerConnectionId,
+
                     connectionState: pc.connectionState,
                     iceConnectionState: pc.iceConnectionState,
+                    iceGatheringState: pc.iceGatheringState,
+                    signalingState: pc.signalingState,
+
+                    hasLocalDescription: !!pc.localDescription,
+                    hasRemoteDescription: !!pc.remoteDescription,
+
+                    currentLocalDescriptionType:
+                        pc.currentLocalDescription?.type ?? null,
+                    currentRemoteDescriptionType:
+                        pc.currentRemoteDescription?.type ?? null,
+                    pendingLocalDescriptionType:
+                        pc.pendingLocalDescription?.type ?? null,
+                    pendingRemoteDescriptionType:
+                        pc.pendingRemoteDescription?.type ?? null,
+
                     selectedPair: selectedPair && {
                         state: selectedPair.state,
                         nominated: selectedPair.nominated,
@@ -2916,6 +3018,7 @@ new RTCInterceptor({
                         address: remoteCandidate.address,
                         port: remoteCandidate.port,
                     },
+                    transports,
                     inboundAudio,
                     dataChannels,
                 });
@@ -2931,18 +3034,6 @@ new RTCInterceptor({
         const receivePathStatsInterval = setInterval(() => {
             collectReceivePathStats(peerConnection);
         }, 60000);
-
-        peerConnection.addEventListener('connectionstatechange', () => {
-            window.ws?.sendJson({
-                type: 'WebRTCConnectionStateChanged',
-                peerConnectionId,
-                connectionState: peerConnection.connectionState,
-            });
-            if (peerConnection.connectionState === 'closed' ||
-                peerConnection.connectionState === 'failed') {
-                clearInterval(receivePathStatsInterval);
-            }
-        });
     },
     onDataChannelCreate: (dataChannel, peerConnection) => {
         realConsole?.log('New DataChannel created:', dataChannel);
