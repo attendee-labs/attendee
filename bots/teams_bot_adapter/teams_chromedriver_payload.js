@@ -408,6 +408,24 @@ class StyleManager {
             // Wait until the chat input element appears in the DOM
             this.waitForChatInputAndSendReadyMessage();
         }
+
+        // Check for the Teams E2EE encryption error screen
+        const encryptionErrorScreen = document.querySelector(
+            '[data-tid="calling-e2ee-end-screen"]'
+        );
+
+        if (encryptionErrorScreen && !this.encryptionErrorReported) {
+            const screenText = encryptionErrorScreen.textContent || '';
+
+            if (screenText.includes('An encryption error occurred')) {
+                this.encryptionErrorReported = true;
+
+                window.ws.sendJson({
+                    type: 'MeetingStatusChange',
+                    change: 'post_join_encryption_error'
+                });
+            }
+        }
     }
 
     waitForChatInputAndSendReadyMessage() {
@@ -2715,12 +2733,156 @@ new RTCInterceptor({
         // given stats/state message belongs to (Teams creates several).
         const peerConnectionId = (crypto?.randomUUID?.() ?? `pc-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 
-        window.ws?.sendJson({
-            type: 'WebRTCPeerConnectionCreated',
-            peerConnectionId,
-            connectionState: peerConnection.connectionState,
-            iceConnectionState: peerConnection.iceConnectionState,
-        });
+        const peerConnectionCreatedAt = performance.now();
+        let peerConnectionStateSequence = 0;
+
+        const getDescriptionSummary = (description) => {
+            if (!description) {
+                return null;
+            }
+
+            return {
+                type: description.type,
+                // Avoid sending the entire SDP unless you specifically need it.
+                sdpLength: description.sdp?.length ?? 0,
+            };
+        };
+
+        // Pull the DTLS/ICE transport state out of getStats() so we can prove,
+        // directly from the transport layer, when the DTLS handshake actually
+        // completes. connectionState is an aggregate of ICE + DTLS, so when it
+        // flips to 'connected' while iceConnectionState was already 'connected',
+        // the deciding factor is almost always the DTLS handshake finishing
+        // (dtlsState: connecting -> connected). Capturing dtlsState here lets us
+        // confirm that transition rather than infer it.
+        const getTransportStats = async () => {
+            try {
+                const stats = await peerConnection.getStats();
+                const transports = [];
+                const candidatePairsById = new Map();
+
+                stats.forEach((report) => {
+                    if (report.type === 'candidate-pair') {
+                        candidatePairsById.set(report.id, report);
+                    }
+                });
+
+                stats.forEach((report) => {
+                    if (report.type !== 'transport') {
+                        return;
+                    }
+
+                    const selectedPair =
+                        report.selectedCandidatePairId != null
+                            ? candidatePairsById.get(
+                                  report.selectedCandidatePairId
+                              )
+                            : null;
+
+                    transports.push({
+                        // The two fields that actually prove the handshake:
+                        // dtlsState transitions connecting -> connected when the
+                        // DTLS handshake finishes; iceState should already be
+                        // 'connected' before that happens.
+                        dtlsState: report.dtlsState,
+                        iceState: report.iceState,
+
+                        // Extra context that only exists once DTLS negotiates.
+                        dtlsRole: report.dtlsRole,
+                        dtlsCipher: report.dtlsCipher,
+                        srtpCipher: report.srtpCipher,
+                        tlsVersion: report.tlsVersion,
+
+                        selectedCandidatePairId: report.selectedCandidatePairId,
+                        selectedCandidatePair: selectedPair
+                            ? {
+                                  state: selectedPair.state,
+                                  nominated: selectedPair.nominated,
+                                  currentRoundTripTime:
+                                      selectedPair.currentRoundTripTime,
+                              }
+                            : null,
+                    });
+                });
+
+                return transports;
+            } catch (error) {
+                realConsole?.log('getTransportStats error', error);
+                return { error: error?.message ?? String(error) };
+            }
+        };
+
+        const sendPeerConnectionState = async (eventName) => {
+            // Capture the synchronous state first so it reflects the exact moment
+            // the event fired, before we await the (async) transport stats.
+            const snapshot = {
+                type: 'WebRTCPeerConnectionStateChanged',
+                peerConnectionId,
+                eventName,
+                sequence: ++peerConnectionStateSequence,
+                elapsedMsSincePeerConnectionCreated: Math.round(
+                    performance.now() - peerConnectionCreatedAt
+                ),
+
+                connectionState: peerConnection.connectionState,
+                iceConnectionState: peerConnection.iceConnectionState,
+                iceGatheringState: peerConnection.iceGatheringState,
+                signalingState: peerConnection.signalingState,
+
+                localDescription: getDescriptionSummary(
+                    peerConnection.localDescription
+                ),
+                remoteDescription: getDescriptionSummary(
+                    peerConnection.remoteDescription
+                ),
+                currentLocalDescription: getDescriptionSummary(
+                    peerConnection.currentLocalDescription
+                ),
+                currentRemoteDescription: getDescriptionSummary(
+                    peerConnection.currentRemoteDescription
+                ),
+                pendingLocalDescription: getDescriptionSummary(
+                    peerConnection.pendingLocalDescription
+                ),
+                pendingRemoteDescription: getDescriptionSummary(
+                    peerConnection.pendingRemoteDescription
+                ),
+            };
+
+            // transports[].dtlsState is what lets you distinguish a DTLS-driven
+            // connectionState change (dtlsState connecting -> connected) from an
+            // ICE-driven one. This is the direct proof of the DTLS handshake.
+            snapshot.transports = await getTransportStats();
+
+            window.ws?.sendJson(snapshot);
+        };
+
+        // Initial snapshot.
+        sendPeerConnectionState('created');
+
+        const peerConnectionStateEventNames = [
+            'connectionstatechange',
+            'iceconnectionstatechange',
+            'icegatheringstatechange',
+            'signalingstatechange',
+            'negotiationneeded',
+        ];
+
+        for (const eventName of peerConnectionStateEventNames) {
+            peerConnection.addEventListener(eventName, () => {
+                sendPeerConnectionState(eventName);
+
+                if (
+                    eventName === 'connectionstatechange' &&
+                    (
+                        peerConnection.connectionState === 'closed' ||
+                        peerConnection.connectionState === 'failed'
+                    )
+                ) {
+                    clearInterval(receivePathStatsInterval);
+                }
+            });
+        }
 
         peerConnection.addEventListener('datachannel', (event) => {
             realConsole?.log('datachannel', event);
@@ -2855,8 +3017,23 @@ new RTCInterceptor({
                 let remoteCandidate;
                 const inboundAudio = [];
                 const dataChannels = [];
+                const transports = [];
 
                 for (const report of stats.values()) {
+                    if (report.type === 'transport') {
+                        transports.push({
+                            id: report.id,
+                            dtlsState: report.dtlsState,
+                            iceState: report.iceState,
+                            iceRole: report.iceRole,
+                            selectedCandidatePairId: report.selectedCandidatePairId,
+                            bytesSent: report.bytesSent,
+                            bytesReceived: report.bytesReceived,
+                            packetsSent: report.packetsSent,
+                            packetsReceived: report.packetsReceived,
+                        });
+                    }
+
                     if (report.type === "candidate-pair" && report.selected) {
                         selectedPair = report;
                     }
@@ -2893,8 +3070,24 @@ new RTCInterceptor({
                 window.ws?.sendJson({
                     type: "WebRTCReceivePathStats",
                     peerConnectionId,
+
                     connectionState: pc.connectionState,
                     iceConnectionState: pc.iceConnectionState,
+                    iceGatheringState: pc.iceGatheringState,
+                    signalingState: pc.signalingState,
+
+                    hasLocalDescription: !!pc.localDescription,
+                    hasRemoteDescription: !!pc.remoteDescription,
+
+                    currentLocalDescriptionType:
+                        pc.currentLocalDescription?.type ?? null,
+                    currentRemoteDescriptionType:
+                        pc.currentRemoteDescription?.type ?? null,
+                    pendingLocalDescriptionType:
+                        pc.pendingLocalDescription?.type ?? null,
+                    pendingRemoteDescriptionType:
+                        pc.pendingRemoteDescription?.type ?? null,
+
                     selectedPair: selectedPair && {
                         state: selectedPair.state,
                         nominated: selectedPair.nominated,
@@ -2916,6 +3109,7 @@ new RTCInterceptor({
                         address: remoteCandidate.address,
                         port: remoteCandidate.port,
                     },
+                    transports,
                     inboundAudio,
                     dataChannels,
                 });
@@ -2931,18 +3125,6 @@ new RTCInterceptor({
         const receivePathStatsInterval = setInterval(() => {
             collectReceivePathStats(peerConnection);
         }, 60000);
-
-        peerConnection.addEventListener('connectionstatechange', () => {
-            window.ws?.sendJson({
-                type: 'WebRTCConnectionStateChanged',
-                peerConnectionId,
-                connectionState: peerConnection.connectionState,
-            });
-            if (peerConnection.connectionState === 'closed' ||
-                peerConnection.connectionState === 'failed') {
-                clearInterval(receivePathStatsInterval);
-            }
-        });
     },
     onDataChannelCreate: (dataChannel, peerConnection) => {
         realConsole?.log('New DataChannel created:', dataChannel);
