@@ -2730,8 +2730,74 @@ new RTCInterceptor({
             };
         };
 
-        const sendPeerConnectionState = (eventName) => {
-            window.ws?.sendJson({
+        // Pull the DTLS/ICE transport state out of getStats() so we can prove,
+        // directly from the transport layer, when the DTLS handshake actually
+        // completes. connectionState is an aggregate of ICE + DTLS, so when it
+        // flips to 'connected' while iceConnectionState was already 'connected',
+        // the deciding factor is almost always the DTLS handshake finishing
+        // (dtlsState: connecting -> connected). Capturing dtlsState here lets us
+        // confirm that transition rather than infer it.
+        const getTransportStats = async () => {
+            try {
+                const stats = await peerConnection.getStats();
+                const transports = [];
+                const candidatePairsById = new Map();
+
+                stats.forEach((report) => {
+                    if (report.type === 'candidate-pair') {
+                        candidatePairsById.set(report.id, report);
+                    }
+                });
+
+                stats.forEach((report) => {
+                    if (report.type !== 'transport') {
+                        return;
+                    }
+
+                    const selectedPair =
+                        report.selectedCandidatePairId != null
+                            ? candidatePairsById.get(
+                                  report.selectedCandidatePairId
+                              )
+                            : null;
+
+                    transports.push({
+                        // The two fields that actually prove the handshake:
+                        // dtlsState transitions connecting -> connected when the
+                        // DTLS handshake finishes; iceState should already be
+                        // 'connected' before that happens.
+                        dtlsState: report.dtlsState,
+                        iceState: report.iceState,
+
+                        // Extra context that only exists once DTLS negotiates.
+                        dtlsRole: report.dtlsRole,
+                        dtlsCipher: report.dtlsCipher,
+                        srtpCipher: report.srtpCipher,
+                        tlsVersion: report.tlsVersion,
+
+                        selectedCandidatePairId: report.selectedCandidatePairId,
+                        selectedCandidatePair: selectedPair
+                            ? {
+                                  state: selectedPair.state,
+                                  nominated: selectedPair.nominated,
+                                  currentRoundTripTime:
+                                      selectedPair.currentRoundTripTime,
+                              }
+                            : null,
+                    });
+                });
+
+                return transports;
+            } catch (error) {
+                realConsole?.log('getTransportStats error', error);
+                return { error: error?.message ?? String(error) };
+            }
+        };
+
+        const sendPeerConnectionState = async (eventName) => {
+            // Capture the synchronous state first so it reflects the exact moment
+            // the event fired, before we await the (async) transport stats.
+            const snapshot = {
                 type: 'WebRTCPeerConnectionStateChanged',
                 peerConnectionId,
                 eventName,
@@ -2763,7 +2829,14 @@ new RTCInterceptor({
                 pendingRemoteDescription: getDescriptionSummary(
                     peerConnection.pendingRemoteDescription
                 ),
-            });
+            };
+
+            // transports[].dtlsState is what lets you distinguish a DTLS-driven
+            // connectionState change (dtlsState connecting -> connected) from an
+            // ICE-driven one. This is the direct proof of the DTLS handshake.
+            snapshot.transports = await getTransportStats();
+
+            window.ws?.sendJson(snapshot);
         };
 
         // Initial snapshot.
