@@ -127,13 +127,29 @@ RUN mkdir -p /etc/opt/chrome/policies/managed \
   && ln -s /tmp/attendee-chrome-policies.json /etc/opt/chrome/policies/managed/attendee-chrome-policies.json
 
 # Harden the runtime image. linux-libc-dev provides Linux kernel *headers*, needed only to compile
-# native Python extensions (e.g. av, opencv) during the build above; at runtime the container uses
+# native Python extensions (e.g. av, webrtcvad) during the build above; at runtime the container uses
 # the host's kernel, so purge them here along with their build-only dependents (libc6-dev,
 # build-essential, ...). Also apply any pending Ubuntu security updates the base image predates.
 # This removes every CRITICAL and nearly all HIGH findings from image vulnerability scans without
 # changing runtime behaviour: already-compiled .so files link the runtime libc (libc6), which is
 # retained. Chrome is installed from a pinned local .deb with no apt source, so it is not upgraded.
+#
+# BEFORE purging, explicitly (re)install the runtime packages that are otherwise present only as
+# transitive dependencies of the -dev packages we are about to remove. Installing them marks them
+# manually-installed, so `autoremove` keeps them AND their runtime dependencies:
+#   - python3-gi + gir1.2-* typelibs: the PyGObject bindings the bots import at runtime
+#     (gi.require_version for Gst / GstApp / GLib / GObject). Without this, autoremove deletes the
+#     typelibs and every bot import dies with `ValueError: Namespace Gst not available`.
+#   - libgirepository-1.0-1: the GObject-introspection runtime loaded by python3-gi.
+#   - libpq5: psycopg2's runtime library (came in via libpq-dev).
 RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        python3-gi \
+        gir1.2-glib-2.0 \
+        gir1.2-gstreamer-1.0 \
+        gir1.2-gst-plugins-base-1.0 \
+        libgirepository-1.0-1 \
+        libpq5 \
     && apt-get purge -y linux-libc-dev \
     && apt-get upgrade -y \
     && apt-get autoremove -y --purge \
