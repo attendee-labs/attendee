@@ -329,6 +329,9 @@ CONCURRENT_BOTS_LIMIT = int(os.getenv("CONCURRENT_BOTS_LIMIT", 2500))
 MAILGUN_VALIDATION_API_KEY = os.getenv("MAILGUN_VALIDATION_API_KEY")
 BYPASS_MAILGUN_VALIDATION_SUBSTRING = os.getenv("BYPASS_MAILGUN_VALIDATION_SUBSTRING")
 
+# After the bots recording exceeds this size, we will degrade the video recording to black to conserve storage space.
+BOT_RECORDING_VIDEO_DEGRADE_THRESHOLD_BYTES = int(os.getenv("BOT_RECORDING_VIDEO_DEGRADE_THRESHOLD_BYTES")) if os.getenv("BOT_RECORDING_VIDEO_DEGRADE_THRESHOLD_BYTES") else None
+
 # Content Security Policy
 if os.getenv("ENABLE_CSP", "false") == "true":
     _csp_media_src = [d for d in os.getenv("CSP_MEDIA_SRC", "").split(",") if d]
