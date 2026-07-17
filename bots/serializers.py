@@ -270,6 +270,7 @@ TRANSCRIPTION_SETTINGS_SCHEMA = {
                 "redact": {"type": "array", "items": {"type": "string", "enum": ["pci", "pii", "numbers"]}, "uniqueItems": True, "description": "Array of redaction types to apply to transcription. Automatically removes or masks sensitive information like PII, PCI data, and numbers from transcripts. See here for details: https://developers.deepgram.com/docs/redaction"},
                 "replace": {"type": "array", "items": {"type": "string"}, "description": "Array of terms to find and replace in the transcript. Each string should be in the format 'term_to_find:replacement_term' (e.g., 'kpis:Key Performance Indicators'). See here for details: https://developers.deepgram.com/docs/find-and-replace"},
                 "use_eu_server": {"type": "boolean", "description": "Whether to use the EU server for transcription. Defaults to false."},
+                "mip_opt_out": {"type": "boolean", "description": "Whether to opt out of Deepgram's Model Improvement Program. Defaults to true. When true, data from this request is retained only for the duration necessary to process the request. See here for details: https://developers.deepgram.com/docs/the-deepgram-model-improvement-partnership-program#want-to-opt-out"},
             },
             "additionalProperties": False,
         },

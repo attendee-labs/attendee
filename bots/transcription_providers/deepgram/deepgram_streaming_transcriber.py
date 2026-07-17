@@ -12,16 +12,14 @@ logger = logging.getLogger(__name__)
 
 
 class DeepgramStreamingTranscriber:
-    def __init__(self, *, deepgram_api_key, interim_results, language, model, sample_rate, metadata, callback, redaction_settings=None, replace_settings=None):
+    def __init__(self, *, deepgram_api_key, interim_results, language, model, sample_rate, metadata, callback, redaction_settings=None, replace_settings=None, mip_opt_out=None):
         # Configure the DeepgramClientOptions to enable KeepAlive for maintaining the WebSocket connection (only if necessary to your scenario)
         config = DeepgramClientOptions(options={"keepalive": "true"})
 
         self.last_send_time = time.time()
 
-        # Create a websocket connection using the DEEPGRAM_API_KEY from environment variables
         self.deepgram = DeepgramClient(deepgram_api_key, config)
 
-        # Use the listen.live class to create the websocket connection
         self.dg_connection = self.deepgram.listen.websocket.v("1")
 
         def on_message(self, result, **kwargs):
@@ -49,6 +47,7 @@ class DeepgramStreamingTranscriber:
             redact=redaction_settings,
             replace=replace_settings,
         )
+        # TODO: pass mip_opt_out once LiveOptions supports it (SDK v5+)
 
         self.dg_connection.start(options)
 
