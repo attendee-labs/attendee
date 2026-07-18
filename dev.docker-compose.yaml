@@ -3,6 +3,8 @@ services:
     build: ./
     volumes:
      - .:/attendee
+    env_file:         # <--- Add this line
+      - .env
     networks:
       - attendee_network
     environment:
