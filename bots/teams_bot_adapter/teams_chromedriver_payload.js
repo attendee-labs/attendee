@@ -2271,10 +2271,10 @@ const processClosedCaptionData = (item) => {
 
     // Caption-based backup for the dominant speaker intervals. Only used for participants who have
     // never produced a receiver-based (audio energy) interval, so it never overrides the primary path.
-    if (window.initialData.sendPerParticipantAudio && !dominantSpeakerManager.hasReceiverBasedIntervals(item.userId))
+    if (window.initialData.sendPerParticipantAudio && !dominantSpeakerManager.hasReceiverBasedIntervals(item.userId) && item.timestampAudioSent && item.duration)
     {
         const startMs = convertTimestampAudioSentToUnixTimeMs(item.timestampAudioSent);
-        const durationMs = item.duration ? Math.floor(item.duration / 1e4) : 0;
+        const durationMs = Math.floor(item.duration / 1e4);
         dominantSpeakerManager.upsertCaptionSpeechInterval(captionId, startMs, startMs + durationMs, item.userId);
     }
 
