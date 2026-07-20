@@ -2243,9 +2243,9 @@ const processClosedCaptionData = (item) => {
         // Convert the caption to add epoch timestamps for the start and end of the audio interval.
         // If it is finalized, add the end time to the caption.
         const itemWithEpochTimestamps = addEpochTimestamps(item);
-        dominantSpeakerManager.addCaptionAudioTime(itemWithEpochTimestamps.startTimestampEpoch, item.userId);
         if (item.isFinal) {
-            dominantSpeakerManager.addCaptionAudioTime(itemWithEpochTimestamps.endTimestampEpoch, item.userId);
+            dominantSpeakerManager.addSpeechIntervalStart(itemWithEpochTimestamps.startTimestampEpoch, item.userId);
+            dominantSpeakerManager.addSpeechIntervalEnd(itemWithEpochTimestamps.endTimestampEpoch, item.userId);
         }
     }
 
