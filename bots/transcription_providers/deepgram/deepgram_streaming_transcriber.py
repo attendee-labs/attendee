@@ -18,8 +18,10 @@ class DeepgramStreamingTranscriber:
 
         self.last_send_time = time.time()
 
+        # Create a websocket connection using the DEEPGRAM_API_KEY from environment variables
         self.deepgram = DeepgramClient(deepgram_api_key, config)
 
+        # Use the listen.live class to create the websocket connection
         self.dg_connection = self.deepgram.listen.websocket.v("1")
 
         def on_message(self, result, **kwargs):
