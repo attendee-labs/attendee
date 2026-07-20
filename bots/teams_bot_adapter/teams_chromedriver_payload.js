@@ -638,6 +638,16 @@ class DominantSpeakerManager {
         this.dominantSpeakerStreamId = null;
         this.captionAudioTimes = [];
         this.speechIntervalsPerParticipant = {};
+        // Set of participant ids for whom we have ever received a receiver-based (audio energy)
+        // speech interval. Receiver-based intervals are the primary source of truth; caption-based
+        // intervals are only used as a per-participant backup for participants who never produced
+        // any receiver-based interval (~2% of the time we miss the receiver-based signal).
+        this.participantsWithReceiverIntervals = new Set();
+    }
+
+    // Whether we've ever recorded a receiver-based speech interval for the given participant.
+    hasReceiverBasedIntervals(speakerId) {
+        return this.participantsWithReceiverIntervals.has(speakerId);
     }
 
     getLastSpeakerIdForTimestampMs(timestampMs) {
@@ -722,6 +732,10 @@ class DominantSpeakerManager {
     addSpeechIntervalStart(timestampMs, speakerId) {
         if (!this.speechIntervalsPerParticipant[speakerId])
             this.speechIntervalsPerParticipant[speakerId] = [];
+
+        // Mark this participant as having a receiver-based interval so the caption-based
+        // backup is skipped for them.
+        this.participantsWithReceiverIntervals.add(speakerId);
 
         // Open a new interval with an as-yet-unknown end.
         this.speechIntervalsPerParticipant[speakerId].push({id: crypto.randomUUID(), startMs: timestampMs, endMs: null});
@@ -2062,14 +2076,12 @@ class ParticipantSpeakingStateMachine {
 
         if (previousState == 'NOT_SPEAKING' && this.state == 'SPEAKING') {
             realConsole?.log('SPEAKING: adding speech start for participant', this.participantId);
-            if (!window.captureDominantSpeakerViaCaptions)
-                dominantSpeakerManager.addSpeechIntervalStart(firstOfLastFiveSamplesTimestamp, this.participantId);
+            dominantSpeakerManager.addSpeechIntervalStart(firstOfLastFiveSamplesTimestamp, this.participantId);
             if (window.initialData.recordParticipantSpeechStartStopEvents)
                 this.sendSpeechStartStopEvent(this.participantId, true, firstOfLastFiveSamplesTimestamp);
         } else if (previousState == 'SPEAKING' && this.state == 'NOT_SPEAKING') {
             realConsole?.log('NOT_SPEAKING: adding speech stop for participant', this.participantId);
-            if (!window.captureDominantSpeakerViaCaptions)
-                dominantSpeakerManager.addSpeechIntervalEnd(firstOfLastFiveSamplesTimestamp - 100, this.participantId);
+            dominantSpeakerManager.addSpeechIntervalEnd(firstOfLastFiveSamplesTimestamp - 100, this.participantId);
             if (window.initialData.recordParticipantSpeechStartStopEvents)
                 this.sendSpeechStartStopEvent(this.participantId, false, firstOfLastFiveSamplesTimestamp - 100);
         }
@@ -2236,8 +2248,6 @@ class UtteranceIdGenerator {
 
 const utteranceIdGenerator = new UtteranceIdGenerator();
 
-window.captureDominantSpeakerViaCaptions = true;
-
 const NTP_EPOCH_OFFSET_MS = Date.UTC(1970, 0, 1) - Date.UTC(1900, 0, 1); // 2208988800000
 
 function addEpochTimestamps(entry) {
@@ -2263,9 +2273,12 @@ const processClosedCaptionData = (item) => {
     // both as the caption id sent to the server and as the speech interval id below.
     const captionId = utteranceIdGenerator.next(item.userId, item.isFinal);
 
-    // If we're collecting per participant audio, we actually need the caption data because it's the most accurate
-    // way to estimate when someone started speaking.
-    if (window.initialData.sendPerParticipantAudio && window.captureDominantSpeakerViaCaptions)
+    // If we're collecting per participant audio, caption data is a good backup way to estimate when
+    // someone started speaking. It's only used as a per-participant backup to the receiver-based
+    // (audio energy) intervals: we only record a caption-based interval for a participant if we have
+    // never received any receiver-based interval for them (~2% of the time the receiver-based signal
+    // is missed for one or more participants).
+    if (window.initialData.sendPerParticipantAudio && !dominantSpeakerManager.hasReceiverBasedIntervals(item.userId))
     {
         // Convert the caption to add epoch timestamps for the start and end of the audio interval.
         // Captions can be updated (extended / corrected) before they are finalized, so upsert the
