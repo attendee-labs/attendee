@@ -638,6 +638,17 @@ class DominantSpeakerManager {
         this.dominantSpeakerStreamId = null;
         this.captionAudioTimes = [];
         this.speechIntervalsPerParticipant = {};
+        // Participants for whom we've ever recorded a receiver-based interval.
+        // Those are the primary source of truth; caption-based intervals are only a per-participant
+        // backup for participants who never produced any receiver-based interval.
+        this.participantsWithReceiverIntervals = new Set();
+        // Caption-derived start/end event pairs keyed by caption id, so later caption updates can
+        // refine the same interval instead of creating a new one.
+        this.captionIntervalEventsById = {};
+    }
+
+    hasReceiverBasedIntervals(speakerId) {
+        return this.participantsWithReceiverIntervals.has(speakerId);
     }
 
     getLastSpeakerIdForTimestampMs(timestampMs) {
@@ -709,6 +720,9 @@ class DominantSpeakerManager {
         if (!this.speechIntervalsPerParticipant[speakerId])
             this.speechIntervalsPerParticipant[speakerId] = [];
 
+        // Mark this participant as having a receiver-based interval so the caption-based backup is skipped for them.
+        this.participantsWithReceiverIntervals.add(speakerId);
+
         this.speechIntervalsPerParticipant[speakerId].push({type: 'start', timestampMs: timestampMs});
 
         // Not going to send this to server for now.
@@ -741,6 +755,33 @@ class DominantSpeakerManager {
         this.captionAudioTimes.push({
             timestampMs: timestampMs,
             speakerId: speakerId
+        });
+    }
+
+    // Backup only: inserts or updates a caption-derived speech interval using the same
+    // {type, timestampMs} event structure as the receiver-based path. Keying on captionId lets
+    // subsequent (partial/final) caption updates refine the same interval. Events are kept sorted
+    // so getSpeakerIdForTimestampMsUsingSpeechIntervals, which walks events in order, still works.
+    upsertCaptionSpeechInterval(captionId, startMs, endMs, speakerId) {
+        if (!this.speechIntervalsPerParticipant[speakerId])
+            this.speechIntervalsPerParticipant[speakerId] = [];
+
+        const existing = captionId != null ? this.captionIntervalEventsById[captionId] : null;
+        if (existing) {
+            existing.start.timestampMs = startMs;
+            existing.end.timestampMs = endMs;
+        } else {
+            const start = {type: 'start', timestampMs: startMs};
+            const end = {type: 'end', timestampMs: endMs};
+            this.speechIntervalsPerParticipant[speakerId].push(start, end);
+            if (captionId != null)
+                this.captionIntervalEventsById[captionId] = {start, end};
+        }
+
+        this.speechIntervalsPerParticipant[speakerId].sort((a, b) => {
+            if (a.timestampMs !== b.timestampMs)
+                return a.timestampMs - b.timestampMs;
+            return a.type === b.type ? 0 : (a.type === 'start' ? -1 : 1);
         });
     }
 
@@ -2217,12 +2258,24 @@ window.captureDominantSpeakerViaCaptions = false;
 const processClosedCaptionData = (item) => {
     realConsole?.log('processClosedCaptionData', item);
 
+    // Stable id reused across all partial/final updates for this utterance.
+    const captionId = utteranceIdGenerator.next(item.userId, item.isFinal);
+
     // If we're collecting per participant audio, we actually need the caption data because it's the most accurate
     // way to estimate when someone started speaking.
     if (window.initialData.sendPerParticipantAudio && window.captureDominantSpeakerViaCaptions)
     {
         const timeStampAudioSentUnixMs = convertTimestampAudioSentToUnixTimeMs(item.timestampAudioSent);
         dominantSpeakerManager.addCaptionAudioTime(timeStampAudioSentUnixMs, item.userId);
+    }
+
+    // Caption-based backup for the dominant speaker intervals. Only used for participants who have
+    // never produced a receiver-based (audio energy) interval, so it never overrides the primary path.
+    if (window.initialData.sendPerParticipantAudio && !dominantSpeakerManager.hasReceiverBasedIntervals(item.userId))
+    {
+        const startMs = convertTimestampAudioSentToUnixTimeMs(item.timestampAudioSent);
+        const durationMs = item.duration ? Math.floor(item.duration / 1e4) : 0;
+        dominantSpeakerManager.upsertCaptionSpeechInterval(captionId, startMs, startMs + durationMs, item.userId);
     }
 
     // If we don't need the captions, we can leave.
@@ -2237,7 +2290,7 @@ const processClosedCaptionData = (item) => {
 
     const itemConverted = {
         deviceId: item.userId,
-        captionId: utteranceIdGenerator.next(item.userId, item.isFinal),
+        captionId: captionId,
         text: item.text,
         audioTimestamp: item.timestampAudioSent,
         isFinal: item.isFinal
