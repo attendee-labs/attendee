@@ -653,28 +653,23 @@ class DominantSpeakerManager {
     getSpeakerIdForTimestampMsUsingSpeechIntervals(timestampMs) {
         const speakersAtTimestamp = [];
         
-        // Check each participant to see if they have a speech interval at the given timestamp
+        // Check each participant to see if they have a speech interval covering the given timestamp
         for (const [speakerId, intervals] of Object.entries(this.speechIntervalsPerParticipant)) {
             
-            let isCurrentlySpeaking = false;
             let timestampMsOfLastStart = null;
             
-            // Process each interval event to determine if participant is speaking at timestampMs
+            // A participant is speaking at timestampMs if any of their intervals contains it.
+            // endMs may be null for an interval that is still open (speaker hasn't stopped yet).
             for (const interval of intervals) {
-                if (interval.timestampMs > timestampMs) {
-                    // We've passed the timestamp, stop checking this participant
-                    break;
-                }
-                
-                if (interval.type === 'start') {
-                    isCurrentlySpeaking = true;
-                    timestampMsOfLastStart = interval.timestampMs;
-                } else if (interval.type === 'end') {
-                    isCurrentlySpeaking = false;
+                const endMs = interval.endMs == null ? Infinity : interval.endMs;
+                if (interval.startMs <= timestampMs && timestampMs <= endMs) {
+                    if (timestampMsOfLastStart === null || interval.startMs < timestampMsOfLastStart) {
+                        timestampMsOfLastStart = interval.startMs;
+                    }
                 }
             }
             
-            if (isCurrentlySpeaking) {
+            if (timestampMsOfLastStart !== null) {
                 speakersAtTimestamp.push({
                     speakerId,
                     timestampMsOfLastStart
@@ -705,11 +700,31 @@ class DominantSpeakerManager {
         // return speakersAtTimestamp.reduce((max, speaker) => speaker.timestampMsOfLastStart > max.timestampMsOfLastStart ? speaker : max).speakerId;
     }
 
+    // Inserts a new speech interval or updates an existing one identified by intervalId.
+    // This lets us record a speech interval from a caption before it has been finalized and
+    // then keep extending / correcting its bounds as later (partial and final) caption
+    // updates for the same utterance arrive.
+    upsertSpeechInterval(intervalId, startMs, endMs, speakerId) {
+        if (!this.speechIntervalsPerParticipant[speakerId])
+            this.speechIntervalsPerParticipant[speakerId] = [];
+
+        const intervals = this.speechIntervalsPerParticipant[speakerId];
+        const existingInterval = intervalId != null ? intervals.find(interval => interval.id === intervalId) : null;
+
+        if (existingInterval) {
+            existingInterval.startMs = startMs;
+            existingInterval.endMs = endMs;
+        } else {
+            intervals.push({id: intervalId, startMs: startMs, endMs: endMs});
+        }
+    }
+
     addSpeechIntervalStart(timestampMs, speakerId) {
         if (!this.speechIntervalsPerParticipant[speakerId])
             this.speechIntervalsPerParticipant[speakerId] = [];
 
-        this.speechIntervalsPerParticipant[speakerId].push({type: 'start', timestampMs: timestampMs});
+        // Open a new interval with an as-yet-unknown end.
+        this.speechIntervalsPerParticipant[speakerId].push({id: crypto.randomUUID(), startMs: timestampMs, endMs: null});
 
         // Not going to send this to server for now.
         /*
@@ -725,7 +740,14 @@ class DominantSpeakerManager {
         if (!this.speechIntervalsPerParticipant[speakerId])
             this.speechIntervalsPerParticipant[speakerId] = [];
 
-        this.speechIntervalsPerParticipant[speakerId].push({type: 'end', timestampMs: timestampMs});
+        // Close the most recently opened interval that is still open.
+        const intervals = this.speechIntervalsPerParticipant[speakerId];
+        for (let i = intervals.length - 1; i >= 0; i--) {
+            if (intervals[i].endMs == null) {
+                intervals[i].endMs = timestampMs;
+                break;
+            }
+        }
 
         // Not going to send this to server for now.
         /*
@@ -2236,17 +2258,26 @@ function addEpochTimestamps(entry) {
 const processClosedCaptionData = (item) => {
     realConsole?.log('processClosedCaptionData', item);
 
+    // A single stable id for this utterance that is reused across all of its partial updates
+    // and its final update (the generator returns the same id until isFinal is seen). We use it
+    // both as the caption id sent to the server and as the speech interval id below.
+    const captionId = utteranceIdGenerator.next(item.userId, item.isFinal);
+
     // If we're collecting per participant audio, we actually need the caption data because it's the most accurate
     // way to estimate when someone started speaking.
     if (window.initialData.sendPerParticipantAudio && window.captureDominantSpeakerViaCaptions)
     {
         // Convert the caption to add epoch timestamps for the start and end of the audio interval.
-        // If it is finalized, add the end time to the caption.
+        // Captions can be updated (extended / corrected) before they are finalized, so upsert the
+        // interval on every update rather than waiting for the final. Keying on captionId means each
+        // subsequent partial/final update refines the same interval instead of creating new ones.
         const itemWithEpochTimestamps = addEpochTimestamps(item);
-        if (item.isFinal) {
-            dominantSpeakerManager.addSpeechIntervalStart(itemWithEpochTimestamps.startTimestampEpoch, item.userId);
-            dominantSpeakerManager.addSpeechIntervalEnd(itemWithEpochTimestamps.endTimestampEpoch, item.userId);
-        }
+        dominantSpeakerManager.upsertSpeechInterval(
+            captionId,
+            itemWithEpochTimestamps.startTimestampEpoch,
+            itemWithEpochTimestamps.endTimestampEpoch,
+            item.userId
+        );
     }
 
     // If we don't need the captions, we can leave.
@@ -2261,7 +2292,7 @@ const processClosedCaptionData = (item) => {
 
     const itemConverted = {
         deviceId: item.userId,
-        captionId: utteranceIdGenerator.next(item.userId, item.isFinal),
+        captionId: captionId,
         text: item.text,
         audioTimestamp: item.timestampAudioSent,
         isFinal: item.isFinal
@@ -2517,7 +2548,7 @@ const handleVideoTrack = async (event) => {
   const handleAudioTrack = async (event) => {
     let lastAudioFormat = null;  // Track last seen format
     const audioDataQueue = [];
-    const ACTIVE_SPEAKER_LATENCY_MS = 10000;
+    const ACTIVE_SPEAKER_LATENCY_MS = 2000;
     let trackIsNonSilent = false;
     let handleAudioTrackDebugInfo = {
         framesWithoutDominantSpeaker: 0,
