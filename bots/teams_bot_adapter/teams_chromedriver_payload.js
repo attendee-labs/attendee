@@ -2040,12 +2040,14 @@ class ParticipantSpeakingStateMachine {
 
         if (previousState == 'NOT_SPEAKING' && this.state == 'SPEAKING') {
             realConsole?.log('SPEAKING: adding speech start for participant', this.participantId);
-            dominantSpeakerManager.addSpeechIntervalStart(firstOfLastFiveSamplesTimestamp, this.participantId);
+            if (!window.captureDominantSpeakerViaCaptions)
+                dominantSpeakerManager.addSpeechIntervalStart(firstOfLastFiveSamplesTimestamp, this.participantId);
             if (window.initialData.recordParticipantSpeechStartStopEvents)
                 this.sendSpeechStartStopEvent(this.participantId, true, firstOfLastFiveSamplesTimestamp);
         } else if (previousState == 'SPEAKING' && this.state == 'NOT_SPEAKING') {
             realConsole?.log('NOT_SPEAKING: adding speech stop for participant', this.participantId);
-            dominantSpeakerManager.addSpeechIntervalEnd(firstOfLastFiveSamplesTimestamp - 100, this.participantId);
+            if (!window.captureDominantSpeakerViaCaptions)
+                dominantSpeakerManager.addSpeechIntervalEnd(firstOfLastFiveSamplesTimestamp - 100, this.participantId);
             if (window.initialData.recordParticipantSpeechStartStopEvents)
                 this.sendSpeechStartStopEvent(this.participantId, false, firstOfLastFiveSamplesTimestamp - 100);
         }
@@ -2212,7 +2214,24 @@ class UtteranceIdGenerator {
 
 const utteranceIdGenerator = new UtteranceIdGenerator();
 
-window.captureDominantSpeakerViaCaptions = false;
+window.captureDominantSpeakerViaCaptions = true;
+
+const NTP_EPOCH_OFFSET_MS = Date.UTC(1970, 0, 1) - Date.UTC(1900, 0, 1); // 2208988800000
+
+function addEpochTimestamps(entry) {
+  const startTimestampEpoch = entry.timestampAudioSent
+    ? Math.floor(entry.timestampAudioSent / 1e4 - NTP_EPOCH_OFFSET_MS)
+    : Date.now();
+
+  const durationMs = entry.duration ? Math.floor(entry.duration / 1e4) : 0;
+
+  return {
+    ...entry,
+    startTimestampEpoch,
+    endTimestampEpoch: startTimestampEpoch + durationMs,
+  };
+}
+
 
 const processClosedCaptionData = (item) => {
     realConsole?.log('processClosedCaptionData', item);
@@ -2221,8 +2240,13 @@ const processClosedCaptionData = (item) => {
     // way to estimate when someone started speaking.
     if (window.initialData.sendPerParticipantAudio && window.captureDominantSpeakerViaCaptions)
     {
-        const timeStampAudioSentUnixMs = convertTimestampAudioSentToUnixTimeMs(item.timestampAudioSent);
-        dominantSpeakerManager.addCaptionAudioTime(timeStampAudioSentUnixMs, item.userId);
+        // Convert the caption to add epoch timestamps for the start and end of the audio interval.
+        // If it is finalized, add the end time to the caption.
+        const itemWithEpochTimestamps = addEpochTimestamps(item);
+        dominantSpeakerManager.addCaptionAudioTime(itemWithEpochTimestamps.startTimestampEpoch, item.userId);
+        if (item.isFinal) {
+            dominantSpeakerManager.addCaptionAudioTime(itemWithEpochTimestamps.endTimestampEpoch, item.userId);
+        }
     }
 
     // If we don't need the captions, we can leave.
@@ -2493,7 +2517,7 @@ const handleVideoTrack = async (event) => {
   const handleAudioTrack = async (event) => {
     let lastAudioFormat = null;  // Track last seen format
     const audioDataQueue = [];
-    const ACTIVE_SPEAKER_LATENCY_MS = 2000;
+    const ACTIVE_SPEAKER_LATENCY_MS = 10000;
     let trackIsNonSilent = false;
     let handleAudioTrackDebugInfo = {
         framesWithoutDominantSpeaker: 0,
