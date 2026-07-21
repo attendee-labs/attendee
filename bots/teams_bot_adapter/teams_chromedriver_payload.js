@@ -2305,6 +2305,11 @@ const processClosedCaptionData = (item) => {
     {
         const startMs = convertTimestampAudioSentToUnixTimeMs(item.timestampAudioSent);
         const durationMs = Math.floor(item.duration / 1e4);
+        // log that we upserted a caption-based speech interval for participant item.userId
+        window.ws?.sendJson({
+            type: 'LogUpsertedCaptionBasedSpeechInterval',
+            message: `Upserted caption-based speech interval for participant ${item.userId}`
+        });
         dominantSpeakerManager.upsertSpeechInterval(captionId, startMs, startMs + durationMs, item.userId);
     }
 
@@ -3617,7 +3622,11 @@ class CallManager {
 
         const speakingParticipantIds = new Set();
 
+        // Filter out the participant with name "Speaker 1" for debugging purposes
         this.activeCall.participants.forEach(participant => {
+            if (participant.displayName === "Speaker 1") {
+                return;
+            }
             if (contributingSources.some(contributingSource => participant.hasAudioSource(contributingSource.source)) && participant.id)
                 speakingParticipantIds.add(participant.id);
         });
