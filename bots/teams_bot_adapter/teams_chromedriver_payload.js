@@ -3595,7 +3595,6 @@ class CallManager {
 
         const speakingParticipantIds = new Set();
 
-        // Filter out the participant with name "Speaker 1" for debugging purposes
         this.activeCall.participants.forEach(participant => {
             if (contributingSources.some(contributingSource => participant.hasAudioSource(contributingSource.source)) && participant.id)
                 speakingParticipantIds.add(participant.id);
