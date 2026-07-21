@@ -638,12 +638,8 @@ class DominantSpeakerManager {
         this.dominantSpeakerStreamId = null;
         this.captionAudioTimes = [];
         this.speechIntervalsPerParticipant = {};
-        // Participants for whom we've ever recorded a receiver-based interval.
-        // Those are the primary source of truth; caption-based intervals are only a per-participant
-        // backup for participants who never produced any receiver-based interval.
-        this.participantsWithReceiverIntervals = new Set();
-        // Caption-based intervals, kept separate from the receiver-based structure above.
         this.captionSpeechIntervalsPerParticipant = {};
+        this.participantsWithReceiverIntervals = new Set();
     }
 
     hasReceiverBasedIntervals(speakerId) {
@@ -691,10 +687,31 @@ class DominantSpeakerManager {
                 });
             }
         }
-        
-        // No receiver-based speaker found: fall back to the caption-based intervals.
+
+        // Give caption-based intervals equal weight by adding their active speakers to the
+        // same candidate list used for receiver-based intervals.
+        for (const [speakerId, intervals] of Object.entries(this.captionSpeechIntervalsPerParticipant)) {
+            let timestampMsOfLastStart = null;
+
+            for (const interval of intervals) {
+                const endMs = interval.endMs == null ? Infinity : interval.endMs;
+                if (interval.startMs <= timestampMs && timestampMs <= endMs) {
+                    if (timestampMsOfLastStart === null || interval.startMs < timestampMsOfLastStart)
+                        timestampMsOfLastStart = interval.startMs;
+                }
+            }
+
+            if (timestampMsOfLastStart !== null) {
+                const existingSpeaker = speakersAtTimestamp.find(speaker => speaker.speakerId === speakerId);
+                if (existingSpeaker)
+                    existingSpeaker.timestampMsOfLastStart = Math.min(existingSpeaker.timestampMsOfLastStart, timestampMsOfLastStart);
+                else
+                    speakersAtTimestamp.push({speakerId, timestampMsOfLastStart});
+            }
+        }
+
         if (speakersAtTimestamp.length === 0)
-            return this.getSpeakerIdForTimestampMsUsingCaptionSpeechIntervals(timestampMs);
+            return null;
 
         if (speakersAtTimestamp.length === 1)
             return speakersAtTimestamp[0].speakerId;
@@ -720,9 +737,7 @@ class DominantSpeakerManager {
         if (!this.speechIntervalsPerParticipant[speakerId])
             this.speechIntervalsPerParticipant[speakerId] = [];
 
-        // Mark this participant as having a receiver-based interval so the caption-based backup is skipped for them.
         this.participantsWithReceiverIntervals.add(speakerId);
-
         this.speechIntervalsPerParticipant[speakerId].push({type: 'start', timestampMs: timestampMs});
 
         // Not going to send this to server for now.
@@ -756,47 +771,6 @@ class DominantSpeakerManager {
             timestampMs: timestampMs,
             speakerId: speakerId
         });
-    }
-
-    // Caption-based backup. Uses the same interval containment logic as the receiver-based path.
-    getSpeakerIdForTimestampMsUsingCaptionSpeechIntervals(timestampMs) {
-        const speakersAtTimestamp = [];
-
-        for (const [speakerId, intervals] of Object.entries(this.captionSpeechIntervalsPerParticipant)) {
-
-            let timestampMsOfLastStart = null;
-
-            for (const interval of intervals) {
-                const endMs = interval.endMs == null ? Infinity : interval.endMs;
-                if (interval.startMs <= timestampMs && timestampMs <= endMs) {
-                    if (timestampMsOfLastStart === null || interval.startMs < timestampMsOfLastStart) {
-                        timestampMsOfLastStart = interval.startMs;
-                    }
-                }
-            }
-
-            if (timestampMsOfLastStart !== null) {
-                speakersAtTimestamp.push({
-                    speakerId,
-                    timestampMsOfLastStart
-                });
-            }
-        }
-
-        if (speakersAtTimestamp.length === 0)
-            return null;
-
-        if (speakersAtTimestamp.length === 1)
-            return speakersAtTimestamp[0].speakerId;
-
-        if (this.captionAudioTimes.length > 0)
-        {
-            const participantForLastCaptionAudioTime = this.getLastSpeakerIdForTimestampMs(timestampMs);
-            if (participantForLastCaptionAudioTime && speakersAtTimestamp.some(speaker => speaker.speakerId === participantForLastCaptionAudioTime))
-                return participantForLastCaptionAudioTime;
-        }
-
-        return speakersAtTimestamp.reduce((min, speaker) => speaker.timestampMsOfLastStart < min.timestampMsOfLastStart ? speaker : min).speakerId;
     }
 
     // Inserts or updates a caption-based speech interval identified by intervalId.
@@ -2299,8 +2273,7 @@ const processClosedCaptionData = (item) => {
         dominantSpeakerManager.addCaptionAudioTime(timeStampAudioSentUnixMs, item.userId);
     }
 
-    // Caption-based backup for the dominant speaker intervals. Only used for participants who have
-    // never produced a receiver-based (audio energy) interval, so it never overrides the primary path.
+    // Stop adding caption-based intervals for a participant once receiver-based intervals exist.
     if (window.initialData.sendPerParticipantAudio && !dominantSpeakerManager.hasReceiverBasedIntervals(item.userId) && item.timestampAudioSent && item.duration)
     {
         const startMs = convertTimestampAudioSentToUnixTimeMs(item.timestampAudioSent);
