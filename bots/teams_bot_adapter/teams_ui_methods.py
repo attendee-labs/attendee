@@ -1,9 +1,10 @@
 import logging
 import os
 import random
+import threading
 import time
 
-from selenium.common.exceptions import ElementClickInterceptedException, ElementNotInteractableException, NoSuchElementException, StaleElementReferenceException, TimeoutException
+from selenium.common.exceptions import ElementClickInterceptedException, ElementNotInteractableException, InvalidSessionIdException, NoSuchElementException, StaleElementReferenceException, TimeoutException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
@@ -195,16 +196,32 @@ class TeamsUIMethods:
             join_button = self.find_element_by_selector(By.CSS_SELECTOR, '[data-tid="prejoin-join-button"]')
             issue_detected = join_button and join_button.is_enabled()
             should_raise_exception = os.getenv("RAISE_IF_TEAMS_WAITING_ROOM_CONNECTION_FAILED", "false") == "true"
+            should_click_join_button = os.getenv("CLICK_JOIN_BUTTON_IF_TEAMS_WAITING_ROOM_CONNECTION_FAILED", "false") == "true"
 
             if issue_detected:
                 # When bot retries joining the meeting, this will cause it to log network requests from the start
                 self.should_log_network_requests = True
 
-            if issue_detected and should_raise_exception:
+            if issue_detected and should_raise_exception and not should_click_join_button:
                 logger.info("Join button is present but it is NOT disabled after entering waiting room. Assuming waiting room connection failed. Raising UiTeamsBlockingUsException")
                 raise UiTeamsBlockingUsException("Waiting room connection failed.", step)
 
-            if issue_detected and not should_raise_exception:
+            if issue_detected and not should_raise_exception and should_click_join_button:
+                last_join_button_click_at = getattr(self, "_last_join_button_click_at", None)
+                if last_join_button_click_at is not None and time.time() - last_join_button_click_at < 5:
+                    return
+                logger.info("Join button is present but it is NOT disabled after entering waiting room. Assuming waiting room connection failed. Turning off media inputs and clicking join button.")
+                self.turn_off_media_inputs()
+                logger.info("Clicking join button...")
+                join_button_inner = self.find_element_by_selector(By.CSS_SELECTOR, '[data-tid="prejoin-join-button"]')
+                if not join_button_inner.is_enabled():
+                    logger.info("Join button is not enabled after turning off media inputs. Assuming waiting room connection failed. Not clicking join button.")
+                    return
+                self.click_element(join_button_inner, "join_button")
+                self._last_join_button_click_at = time.time()
+                return
+
+            if issue_detected and not should_raise_exception and not should_click_join_button:
                 if not getattr(self, "_waiting_room_connection_failed_logged", False):
                     logger.info("Join button is present but it is NOT disabled after entering waiting room. Assuming waiting room connection failed. Not raising exception.")
                     self._waiting_room_connection_failed_logged = True
@@ -215,6 +232,39 @@ class TeamsUIMethods:
         except Exception as e:
             logger.info(f"Unknown error occurred in check_if_waiting_room_connection_failed. Exception type = {type(e)}")
             return
+
+    def monitor_for_disable_light_experience_redirect(self):
+        # Capture the driver this thread was started for. If a retry replaces self.driver
+        # with a new instance, this thread is stale and should exit instead of polling the
+        # new driver (which has its own monitor thread).
+        thread_id = threading.get_ident()
+        logger.info(f"monitor_for_disable_light_experience_redirect thread started (thread_id={thread_id})")
+        driver = self.driver
+
+        # Polling driver.current_url from this thread while the main thread is also
+        # issuing webdriver commands overflows selenium's urllib3 connection pool
+        # (size 1), which spams "Connection pool is full, discarding connection".
+        # Temporarily raise the urllib3 connectionpool log level for as long as this
+        # thread runs, then restore it when the thread leaves.
+        urllib3_logger = logging.getLogger("urllib3.connectionpool")
+        previous_level = urllib3_logger.level
+        urllib3_logger.setLevel(logging.ERROR)
+        try:
+            while not self.had_disable_light_experience_redirect and not self.joined_at and self.driver is driver:
+                try:
+                    current_url = driver.current_url
+                except InvalidSessionIdException:
+                    logger.info(f"Driver session has expired. monitor_for_disable_light_experience_redirect thread exiting (thread_id={thread_id})")
+                    return
+                if "lightExperience=false" in current_url:
+                    logger.info(f"Disable light experience redirect occurred (lightExperience=false is in the url). Current page url: {current_url}. Quitting driver to trigger retry.")
+                    self.had_disable_light_experience_redirect = True
+                    # Since we're on a separate thread, we can't just raise an exception, we need to quit the driver to trigger the retry.
+                    driver.quit()
+                time.sleep(0.5)
+            logger.info(f"monitor_for_disable_light_experience_redirect thread leaving (thread_id={thread_id})")
+        finally:
+            urllib3_logger.setLevel(previous_level)
 
     def check_if_waiting_room_timeout_exceeded(self, waiting_room_timeout_started_at, step):
         waiting_room_timeout_exceeded = time.time() - waiting_room_timeout_started_at > self.automatic_leave_configuration.waiting_room_timeout_seconds
@@ -274,6 +324,7 @@ class TeamsUIMethods:
             "To join this Teams meeting, you need to be signed in to an account.",
             "To join this meeting, sign in again or select another account.",
             "Due to org policy, you need to sign in or use Teams on the web to join this meeting.",
+            "External participants are not permitted to join before the event begins. Please join after the event has started.",
         ]
         xpath_conditions = " or ".join([f'contains(text(), "{msg}")' for msg in sign_in_required_messages])
         xpath_selector = f"//*[{xpath_conditions}]"
@@ -380,10 +431,47 @@ class TeamsUIMethods:
         logger.info(f"Attaching Teams bot identification token to meeting URL: {self.meeting_url} -> {base_url}#{obfuscated_fragment}")
         return f"{base_url}#{new_fragment}"
 
+    def wait_for_page_url_to_stabilize(self):
+        # We only do this if a disable light experience redirect occurred in the previous join attempt
+        # We wait for the page url to stabilize because the disable light experience redirect may have caused the page to reload
+        # If we don't wait then the reload may occur in the middle of our UI navigation which breaks things.
+        if not self.had_disable_light_experience_redirect:
+            return
+
+        stable_period_seconds = 10
+        max_wait_seconds = 60
+        poll_interval_seconds = 1
+
+        start_time = time.time()
+        last_url = self.driver.current_url
+        last_change_time = start_time
+        logger.info(f"Waiting for page url to stabilize. Current url: {last_url}")
+
+        while True:
+            time.sleep(poll_interval_seconds)
+
+            current_url = self.driver.current_url
+            now = time.time()
+
+            if current_url != last_url:
+                logger.info(f"Page url changed: {last_url} -> {current_url}")
+                last_url = current_url
+                last_change_time = now
+
+            if now - last_change_time >= stable_period_seconds:
+                logger.info(f"Page url has been stable for {stable_period_seconds} seconds: {last_url}")
+                return
+
+            if now - start_time >= max_wait_seconds:
+                logger.info(f"Page url did not stabilize within {max_wait_seconds} seconds. Proceeding with url: {last_url}")
+                return
+
     # Returns nothing if succeeded, raises an exception if failed
     def attempt_to_join_meeting(self):
+        threading.Thread(target=self.monitor_for_disable_light_experience_redirect, daemon=True).start()
+
         if self.teams_bot_login_is_available and self.teams_bot_login_should_be_used:
-            self.login_to_microsoft_account()
+            self.login_to_microsoft_account_with_retries()
 
         url_to_load = self.meeting_url_with_identification_token()
 
@@ -403,6 +491,8 @@ class TeamsUIMethods:
                 ],
             },
         )
+
+        self.wait_for_page_url_to_stabilize()
 
         self.fill_out_name_input()
 
@@ -489,6 +579,20 @@ class TeamsUIMethods:
         # You need to wait a bit after canceling because we close the browser immediately after this.
         # If you close the browser immediately, then teams will not show them as leaving
         time.sleep(1)
+
+    def login_to_microsoft_account_with_retries(self):
+        # Blanket guard against transient errors on Microsoft's side
+        num_attempts = int(os.getenv("MAX_RETRIES_FOR_BOT_MICROSOFT_LOGIN", "3"))
+        for attempt_index in range(num_attempts):
+            try:
+                self.login_to_microsoft_account()
+                return
+            except UiLoginAttemptFailedException as e:
+                last_attempt = attempt_index == num_attempts - 1
+                if last_attempt:
+                    raise e
+                logger.warning(f"Error logging in to Microsoft account. Clearing cookies and retrying... Attempts remaining: {num_attempts - attempt_index - 1}")
+                self.driver.delete_all_cookies()
 
     def login_to_microsoft_account(self):
         credentials = self.fetch_teams_bot_login_credentials_callback()

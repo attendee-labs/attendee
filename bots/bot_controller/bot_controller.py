@@ -1320,6 +1320,12 @@ class BotController:
             # Process audio chunks
             self.per_participant_non_streaming_audio_input_manager.process_chunks()
 
+            # Degrade video recording if file size exceeds limit
+            if self.screen_and_audio_recorder:
+                self.screen_and_audio_recorder.degrade_recording_if_file_size_exceeded(
+                    max_file_size_bytes=settings.BOT_RECORDING_VIDEO_DEGRADE_THRESHOLD_BYTES,
+                )
+
             # Process completed audio chunk uploads
             if self.audio_chunk_uploader:
                 self.audio_chunk_uploader.process_uploads()
@@ -1659,6 +1665,12 @@ class BotController:
         GLib.idle_add(lambda: self.take_action_based_on_message_from_adapter(message))
 
     def flush_utterances(self):
+        try:
+            self.flush_utterances_with_no_error_handling()
+        except Exception:
+            logger.exception("Error flushing utterances")
+
+    def flush_utterances_with_no_error_handling(self):
         if self.per_participant_non_streaming_audio_input_manager:
             logger.info("Flushing utterances...")
             self.per_participant_non_streaming_audio_input_manager.flush_utterances()

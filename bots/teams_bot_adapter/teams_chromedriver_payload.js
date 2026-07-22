@@ -249,6 +249,7 @@ const handleVideoTrackForRealTimePerParticipantVideo = async ({ track, streams }
                 type: 'SilenceStatus',
                 isSilent: false
             });
+            window.audioConnectionDiagnosticsManager?.recordNonSilenceFromSilenceDetection();
         }
     }
 
@@ -406,6 +407,24 @@ class StyleManager {
             
             // Wait until the chat input element appears in the DOM
             this.waitForChatInputAndSendReadyMessage();
+        }
+
+        // Check for the Teams E2EE encryption error screen
+        const encryptionErrorScreen = document.querySelector(
+            '[data-tid="calling-e2ee-end-screen"]'
+        );
+
+        if (encryptionErrorScreen && !this.encryptionErrorReported) {
+            const screenText = encryptionErrorScreen.textContent || '';
+
+            if (screenText.includes('An encryption error occurred')) {
+                this.encryptionErrorReported = true;
+
+                window.ws.sendJson({
+                    type: 'MeetingStatusChange',
+                    change: 'post_join_encryption_error'
+                });
+            }
         }
     }
 
@@ -617,18 +636,13 @@ class StyleManager {
 class DominantSpeakerManager {
     constructor() {
         this.dominantSpeakerStreamId = null;
-        this.captionAudioTimes = [];
         this.speechIntervalsPerParticipant = {};
+        this.captionSpeechIntervalsPerParticipant = {};
+        this.participantsWithReceiverIntervals = new Set();
     }
 
-    getLastSpeakerIdForTimestampMs(timestampMs) {
-        // Find the caption audio times that are before timestampMs
-        const captionAudioTimesBeforeTimestampMs = this.captionAudioTimes.filter(captionAudioTime => captionAudioTime.timestampMs <= timestampMs);
-        if (captionAudioTimesBeforeTimestampMs.length === 0) {
-            return null;
-        }
-        // Return the caption audio time with the highest timestampMs
-        return captionAudioTimesBeforeTimestampMs.reduce((max, captionAudioTime) => captionAudioTime.timestampMs > max.timestampMs ? captionAudioTime : max).speakerId;
+    hasReceiverBasedIntervals(speakerId) {
+        return this.participantsWithReceiverIntervals.has(speakerId);
     }
 
     getSpeakerIdForTimestampMsUsingSpeechIntervals(timestampMs) {
@@ -662,7 +676,29 @@ class DominantSpeakerManager {
                 });
             }
         }
-        
+
+        // Give caption-based intervals equal weight by adding their active speakers to the
+        // same candidate list used for receiver-based intervals.
+        for (const [speakerId, intervals] of Object.entries(this.captionSpeechIntervalsPerParticipant)) {
+            let timestampMsOfLastStart = null;
+
+            for (const interval of intervals) {
+                const endMs = interval.endMs == null ? Infinity : interval.endMs;
+                if (interval.startMs <= timestampMs && timestampMs <= endMs) {
+                    if (timestampMsOfLastStart === null || interval.startMs < timestampMsOfLastStart)
+                        timestampMsOfLastStart = interval.startMs;
+                }
+            }
+
+            if (timestampMsOfLastStart !== null) {
+                const existingSpeaker = speakersAtTimestamp.find(speaker => speaker.speakerId === speakerId);
+                if (existingSpeaker)
+                    existingSpeaker.timestampMsOfLastStart = Math.min(existingSpeaker.timestampMsOfLastStart, timestampMsOfLastStart);
+                else
+                    speakersAtTimestamp.push({speakerId, timestampMsOfLastStart});
+            }
+        }
+
         if (speakersAtTimestamp.length === 0)
             return null;
 
@@ -671,15 +707,7 @@ class DominantSpeakerManager {
 
         // If there were multiple speakers in this interval, we need a "tie breaker"
 
-        // If we have captions, then look at the participant for the last caption audio time
-        if (this.captionAudioTimes.length > 0)
-        {
-            const participantForLastCaptionAudioTime = this.getLastSpeakerIdForTimestampMs(timestampMs);
-            if (participantForLastCaptionAudioTime && speakersAtTimestamp.some(speaker => speaker.speakerId === participantForLastCaptionAudioTime))
-                return participantForLastCaptionAudioTime;
-        }
-
-        // Otherwise use the the speaker with the earliest timestampMsOfLastStart
+        // Use the the speaker with the earliest timestampMsOfLastStart
         return speakersAtTimestamp.reduce((min, speaker) => speaker.timestampMsOfLastStart < min.timestampMsOfLastStart ? speaker : min).speakerId;
 
         // Otherwise use the speaker with the highest timestampMsOfLastStart (Not using)
@@ -690,6 +718,7 @@ class DominantSpeakerManager {
         if (!this.speechIntervalsPerParticipant[speakerId])
             this.speechIntervalsPerParticipant[speakerId] = [];
 
+        this.participantsWithReceiverIntervals.add(speakerId);
         this.speechIntervalsPerParticipant[speakerId].push({type: 'start', timestampMs: timestampMs});
 
         // Not going to send this to server for now.
@@ -718,11 +747,20 @@ class DominantSpeakerManager {
         */
     }
 
-    addCaptionAudioTime(timestampMs, speakerId) {
-        this.captionAudioTimes.push({
-            timestampMs: timestampMs,
-            speakerId: speakerId
-        });
+    // Inserts or updates a caption-based speech interval identified by intervalId.
+    upsertSpeechInterval(intervalId, startMs, endMs, speakerId) {
+        if (!this.captionSpeechIntervalsPerParticipant[speakerId])
+            this.captionSpeechIntervalsPerParticipant[speakerId] = [];
+
+        const intervals = this.captionSpeechIntervalsPerParticipant[speakerId];
+        const existingInterval = intervalId != null ? intervals.find(interval => interval.id === intervalId) : null;
+
+        if (existingInterval) {
+            existingInterval.startMs = startMs;
+            existingInterval.endMs = endMs;
+        } else {
+            intervals.push({id: intervalId, startMs: startMs, endMs: endMs});
+        }
     }
 
     setDominantSpeakerStreamId(dominantSpeakerStreamId) {
@@ -731,6 +769,61 @@ class DominantSpeakerManager {
 
     getDominantSpeaker() {
         return virtualStreamToPhysicalStreamMappingManager.virtualStreamIdToParticipant(this.dominantSpeakerStreamId);
+    }
+}
+
+// Receives events from other parts of the payload and determines whether the audio
+// connection appears to be in an inconsistent state. If we've observed active speaker
+// activity (which implies people are talking) but have never received any non-silent
+// audio, it's likely the audio connection is broken and we surface a warning.
+class AudioConnectionDiagnosticsManager {
+    constructor(checkIntervalMs = 60000) {
+        this.checkIntervalMs = checkIntervalMs;
+        this.hasEncounteredNonSilenceFromSilenceDetection = false;
+        this.numberOfChecksWithUnMutedParticipant = 0;
+        this.hasSentInconsistencyWarning = false;
+        this.intervalId = null;
+        this.lastUpdate = null;
+    }
+
+    start() {
+        if (this.intervalId !== null)
+            return;
+
+        this.intervalId = setInterval(() => this.check(), this.checkIntervalMs);
+    }
+
+    stop() {
+        if (this.intervalId === null)
+            return;
+
+        clearInterval(this.intervalId);
+        this.intervalId = null;
+    }
+
+    recordNonSilenceFromSilenceDetection() {
+        this.hasEncounteredNonSilenceFromSilenceDetection = true;
+    }
+
+    recordUnMutedParticipant() {
+        this.numberOfChecksWithUnMutedParticipant++;
+    }
+
+    check() {
+        if (!window.ws?.mediaSendingEnabled)
+            return;
+
+        if (window.callManager?.getUnmutedParticipantIds()?.length) {
+            this.recordUnMutedParticipant();
+        }
+
+        if (this.numberOfChecksWithUnMutedParticipant > 5 && !this.hasEncounteredNonSilenceFromSilenceDetection && !this.hasSentInconsistencyWarning) {
+            this.hasSentInconsistencyWarning = true;
+            window.ws?.sendJson({
+                type: 'AudioConnectionDiagnosticsWarning',
+                message: `Observed unmuted participants across ${this.numberOfChecksWithUnMutedParticipant} checks but never received any non-silent audio`
+            });
+        }
     }
 }
 
@@ -2078,6 +2171,10 @@ window.chatMessageManager = chatMessageManager;
 const virtualStreamToPhysicalStreamMappingManager = new VirtualStreamToPhysicalStreamMappingManager();
 const dominantSpeakerManager = new DominantSpeakerManager();
 
+const audioConnectionDiagnosticsManager = new AudioConnectionDiagnosticsManager();
+window.audioConnectionDiagnosticsManager = audioConnectionDiagnosticsManager;
+audioConnectionDiagnosticsManager.start();
+
 const styleManager = new StyleManager();
 window.styleManager = styleManager;
 
@@ -2134,17 +2231,23 @@ class UtteranceIdGenerator {
 
 const utteranceIdGenerator = new UtteranceIdGenerator();
 
-window.captureDominantSpeakerViaCaptions = false;
-
 const processClosedCaptionData = (item) => {
     realConsole?.log('processClosedCaptionData', item);
 
-    // If we're collecting per participant audio, we actually need the caption data because it's the most accurate
-    // way to estimate when someone started speaking.
-    if (window.initialData.sendPerParticipantAudio && window.captureDominantSpeakerViaCaptions)
+    // Stable id reused across all partial/final updates for this utterance.
+    const captionId = utteranceIdGenerator.next(item.userId, item.isFinal);
+
+    // Stop adding caption-based intervals for a participant once receiver-based intervals exist.
+    if (window.initialData.sendPerParticipantAudio && !dominantSpeakerManager.hasReceiverBasedIntervals(item.userId) && item.timestampAudioSent && item.duration)
     {
-        const timeStampAudioSentUnixMs = convertTimestampAudioSentToUnixTimeMs(item.timestampAudioSent);
-        dominantSpeakerManager.addCaptionAudioTime(timeStampAudioSentUnixMs, item.userId);
+        const startMs = convertTimestampAudioSentToUnixTimeMs(item.timestampAudioSent);
+        const durationMs = Math.floor(item.duration / 1e4);
+        // log that we upserted a caption-based speech interval for participant item.userId
+        window.ws?.sendJson({
+            type: 'LogUpsertedCaptionBasedSpeechInterval',
+            message: `Upserted caption-based speech interval for participant ${item.userId}`
+        });
+        dominantSpeakerManager.upsertSpeechInterval(captionId, startMs, startMs + durationMs, item.userId);
     }
 
     // If we don't need the captions, we can leave.
@@ -2159,7 +2262,7 @@ const processClosedCaptionData = (item) => {
 
     const itemConverted = {
         deviceId: item.userId,
-        captionId: utteranceIdGenerator.next(item.userId, item.isFinal),
+        captionId: captionId,
         text: item.text,
         audioTimestamp: item.timestampAudioSent,
         isFinal: item.isFinal
@@ -2650,6 +2753,162 @@ const handleVideoTrack = async (event) => {
 new RTCInterceptor({
     onPeerConnectionCreate: (peerConnection) => {
         realConsole?.log('New RTCPeerConnection created:', peerConnection);
+
+        // Unique id so downstream consumers can tell which peer connection a
+        // given stats/state message belongs to (Teams creates several).
+        const peerConnectionId = (crypto?.randomUUID?.() ?? `pc-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+
+        const peerConnectionCreatedAt = performance.now();
+        let peerConnectionStateSequence = 0;
+
+        const getDescriptionSummary = (description) => {
+            if (!description) {
+                return null;
+            }
+
+            return {
+                type: description.type,
+                // Avoid sending the entire SDP unless you specifically need it.
+                sdpLength: description.sdp?.length ?? 0,
+            };
+        };
+
+        // Pull the DTLS/ICE transport state out of getStats() so we can prove,
+        // directly from the transport layer, when the DTLS handshake actually
+        // completes. connectionState is an aggregate of ICE + DTLS, so when it
+        // flips to 'connected' while iceConnectionState was already 'connected',
+        // the deciding factor is almost always the DTLS handshake finishing
+        // (dtlsState: connecting -> connected). Capturing dtlsState here lets us
+        // confirm that transition rather than infer it.
+        const getTransportStats = async () => {
+            try {
+                const stats = await peerConnection.getStats();
+                const transports = [];
+                const candidatePairsById = new Map();
+
+                stats.forEach((report) => {
+                    if (report.type === 'candidate-pair') {
+                        candidatePairsById.set(report.id, report);
+                    }
+                });
+
+                stats.forEach((report) => {
+                    if (report.type !== 'transport') {
+                        return;
+                    }
+
+                    const selectedPair =
+                        report.selectedCandidatePairId != null
+                            ? candidatePairsById.get(
+                                  report.selectedCandidatePairId
+                              )
+                            : null;
+
+                    transports.push({
+                        // The two fields that actually prove the handshake:
+                        // dtlsState transitions connecting -> connected when the
+                        // DTLS handshake finishes; iceState should already be
+                        // 'connected' before that happens.
+                        dtlsState: report.dtlsState,
+                        iceState: report.iceState,
+
+                        // Extra context that only exists once DTLS negotiates.
+                        dtlsRole: report.dtlsRole,
+                        dtlsCipher: report.dtlsCipher,
+                        srtpCipher: report.srtpCipher,
+                        tlsVersion: report.tlsVersion,
+
+                        selectedCandidatePairId: report.selectedCandidatePairId,
+                        selectedCandidatePair: selectedPair
+                            ? {
+                                  state: selectedPair.state,
+                                  nominated: selectedPair.nominated,
+                                  currentRoundTripTime:
+                                      selectedPair.currentRoundTripTime,
+                              }
+                            : null,
+                    });
+                });
+
+                return transports;
+            } catch (error) {
+                realConsole?.log('getTransportStats error', error);
+                return { error: error?.message ?? String(error) };
+            }
+        };
+
+        const sendPeerConnectionState = async (eventName) => {
+            // Capture the synchronous state first so it reflects the exact moment
+            // the event fired, before we await the (async) transport stats.
+            const snapshot = {
+                type: 'WebRTCPeerConnectionStateChanged',
+                peerConnectionId,
+                eventName,
+                sequence: ++peerConnectionStateSequence,
+                elapsedMsSincePeerConnectionCreated: Math.round(
+                    performance.now() - peerConnectionCreatedAt
+                ),
+
+                connectionState: peerConnection.connectionState,
+                iceConnectionState: peerConnection.iceConnectionState,
+                iceGatheringState: peerConnection.iceGatheringState,
+                signalingState: peerConnection.signalingState,
+
+                localDescription: getDescriptionSummary(
+                    peerConnection.localDescription
+                ),
+                remoteDescription: getDescriptionSummary(
+                    peerConnection.remoteDescription
+                ),
+                currentLocalDescription: getDescriptionSummary(
+                    peerConnection.currentLocalDescription
+                ),
+                currentRemoteDescription: getDescriptionSummary(
+                    peerConnection.currentRemoteDescription
+                ),
+                pendingLocalDescription: getDescriptionSummary(
+                    peerConnection.pendingLocalDescription
+                ),
+                pendingRemoteDescription: getDescriptionSummary(
+                    peerConnection.pendingRemoteDescription
+                ),
+            };
+
+            // transports[].dtlsState is what lets you distinguish a DTLS-driven
+            // connectionState change (dtlsState connecting -> connected) from an
+            // ICE-driven one. This is the direct proof of the DTLS handshake.
+            snapshot.transports = await getTransportStats();
+
+            window.ws?.sendJson(snapshot);
+        };
+
+        // Initial snapshot.
+        sendPeerConnectionState('created');
+
+        const peerConnectionStateEventNames = [
+            'connectionstatechange',
+            'iceconnectionstatechange',
+            'icegatheringstatechange',
+            'signalingstatechange',
+            'negotiationneeded',
+        ];
+
+        for (const eventName of peerConnectionStateEventNames) {
+            peerConnection.addEventListener(eventName, () => {
+                sendPeerConnectionState(eventName);
+
+                if (
+                    eventName === 'connectionstatechange' &&
+                    (
+                        peerConnection.connectionState === 'closed' ||
+                        peerConnection.connectionState === 'failed'
+                    )
+                ) {
+                    clearInterval(receivePathStatsInterval);
+                }
+            });
+        }
+
         peerConnection.addEventListener('datachannel', (event) => {
             realConsole?.log('datachannel', event);
             realConsole?.log('datachannel label', event.channel.label);
@@ -2761,6 +3020,136 @@ new RTCInterceptor({
                 //console.log('ICE Candidate:', event.candidate);
             }
         });
+
+        // Periodically collect and report WebRTC receive-path stats for this peer connection
+        const collectReceivePathStats = async (pc) => {
+            // close() does not fire connectionstatechange, so guard here to stop
+            // reporting (and leaking the interval) once the PC is gone.
+            if (pc.connectionState === 'closed' || pc.connectionState === 'failed') {
+                window.ws?.sendJson({
+                    type: 'WebRTCConnectionStateChanged',
+                    peerConnectionId,
+                    connectionState: pc.connectionState,
+                });
+                clearInterval(receivePathStatsInterval);
+                return;
+            }
+            try {
+                const stats = await pc.getStats();
+
+                let selectedPair;
+                let localCandidate;
+                let remoteCandidate;
+                const inboundAudio = [];
+                const dataChannels = [];
+                const transports = [];
+
+                for (const report of stats.values()) {
+                    if (report.type === 'transport') {
+                        transports.push({
+                            id: report.id,
+                            dtlsState: report.dtlsState,
+                            iceState: report.iceState,
+                            iceRole: report.iceRole,
+                            selectedCandidatePairId: report.selectedCandidatePairId,
+                            bytesSent: report.bytesSent,
+                            bytesReceived: report.bytesReceived,
+                            packetsSent: report.packetsSent,
+                            packetsReceived: report.packetsReceived,
+                        });
+                    }
+
+                    if (report.type === "candidate-pair" && report.selected) {
+                        selectedPair = report;
+                    }
+
+                    if (report.type === "local-candidate") {
+                        localCandidate ??= report;
+                    }
+
+                    if (report.type === "remote-candidate") {
+                        remoteCandidate ??= report;
+                    }
+
+                    if (report.type === "inbound-rtp" && report.kind === "audio") {
+                        inboundAudio.push({
+                            ssrc: report.ssrc,
+                            bytesReceived: report.bytesReceived,
+                            packetsReceived: report.packetsReceived,
+                            packetsLost: report.packetsLost,
+                            jitter: report.jitter,
+                        });
+                    }
+
+                    if (report.type === "data-channel") {
+                        dataChannels.push({
+                            label: report.label,
+                            state: report.state,
+                            messagesReceived: report.messagesReceived,
+                            bytesReceived: report.bytesReceived,
+                            messagesSent: report.messagesSent,
+                        });
+                    }
+                }
+
+                window.ws?.sendJson({
+                    type: "WebRTCReceivePathStats",
+                    peerConnectionId,
+
+                    connectionState: pc.connectionState,
+                    iceConnectionState: pc.iceConnectionState,
+                    iceGatheringState: pc.iceGatheringState,
+                    signalingState: pc.signalingState,
+
+                    hasLocalDescription: !!pc.localDescription,
+                    hasRemoteDescription: !!pc.remoteDescription,
+
+                    currentLocalDescriptionType:
+                        pc.currentLocalDescription?.type ?? null,
+                    currentRemoteDescriptionType:
+                        pc.currentRemoteDescription?.type ?? null,
+                    pendingLocalDescriptionType:
+                        pc.pendingLocalDescription?.type ?? null,
+                    pendingRemoteDescriptionType:
+                        pc.pendingRemoteDescription?.type ?? null,
+
+                    selectedPair: selectedPair && {
+                        state: selectedPair.state,
+                        nominated: selectedPair.nominated,
+                        bytesSent: selectedPair.bytesSent,
+                        bytesReceived: selectedPair.bytesReceived,
+                        currentRoundTripTime: selectedPair.currentRoundTripTime,
+                        localCandidateId: selectedPair.localCandidateId,
+                        remoteCandidateId: selectedPair.remoteCandidateId,
+                    },
+                    localCandidate: localCandidate && {
+                        candidateType: localCandidate.candidateType,
+                        protocol: localCandidate.protocol,
+                        address: localCandidate.address,
+                        port: localCandidate.port,
+                    },
+                    remoteCandidate: remoteCandidate && {
+                        candidateType: remoteCandidate.candidateType,
+                        protocol: remoteCandidate.protocol,
+                        address: remoteCandidate.address,
+                        port: remoteCandidate.port,
+                    },
+                    transports,
+                    inboundAudio,
+                    dataChannels,
+                });
+            } catch (error) {
+                window.ws?.sendJson({
+                    type: "WebRTCReceivePathStatsError",
+                    peerConnectionId,
+                    error: error?.message ?? String(error),
+                });
+            }
+        };
+
+        const receivePathStatsInterval = setInterval(() => {
+            collectReceivePathStats(peerConnection);
+        }, 60000);
     },
     onDataChannelCreate: (dataChannel, peerConnection) => {
         realConsole?.log('New DataChannel created:', dataChannel);
@@ -3154,6 +3543,23 @@ class CallManager {
         } catch (error) {
             return "error disabling video effects: " + error;
         }
+    }
+
+    getUnmutedParticipantIds() {
+        this.setActiveCall();
+        if (!this.activeCall) {
+            return [];
+        }
+        if (!this.activeCall.participants) {
+            return [];
+        }
+        const unmutedParticipantIds = new Set();
+        this.activeCall.participants.forEach(participant => {
+            if (participant.isServerMuted === false && participant.displayName) {
+                unmutedParticipantIds.add(participant.id);
+            }
+        });
+        return Array.from(unmutedParticipantIds);
     }
 
     getSpeakingParticipantIds(contributingSources) {
