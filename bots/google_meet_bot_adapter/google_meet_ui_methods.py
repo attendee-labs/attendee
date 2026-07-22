@@ -504,13 +504,14 @@ class GoogleMeetUIMethods:
         captions_and_translation_button = self.find_element_by_selector(By.CSS_SELECTOR, 'button[aria-label="Captions and translation"]')
         if not captions_and_translation_button:
             return False
+        # Make sure it is clickable
+        if not captions_and_translation_button.is_enabled():
+            return False
 
-        logger.info("Found 'Captions and translation' button. Enabling captions via ctrl+c keyboard shortcut.")
+        logger.info("Found 'Captions and translation' button. Enabling captions via 'c' keyboard shortcut.")
         self.ensure_x11_input()
-        self.x11_input.key_press("Control")
         self.x11_input.key_press("c")
         self.x11_input.key_release("c")
-        self.x11_input.key_release("Control")
         return True
 
     def click_captions_button(self):
