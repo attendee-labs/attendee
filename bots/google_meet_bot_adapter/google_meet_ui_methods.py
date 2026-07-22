@@ -897,9 +897,9 @@ class GoogleMeetUIMethods:
         # Wait for cookies indicating that we have logged in successfully
         start_waiting_at = time.time()
         saml_continue_clicked = False
-        while not self.has_google_cookies_that_indicate_logged_in(self.driver):
+        while not self.is_logged_into_google_by_url(self.driver):
             time.sleep(1)
-            logger.info(f"Waiting for Google auth cookies. Current URL: {self.driver.current_url}")
+            logger.info(f"Waiting for Gmail inbox URL. Current URL: {self.get_current_url_fast()}")
 
             # Google shows a SAML "confirm account" speedbump that requires clicking "Continue"
             if "speedbump/samlconfirmaccount" in self.driver.current_url and not saml_continue_clicked:
@@ -911,14 +911,17 @@ class GoogleMeetUIMethods:
                 except Exception as e:
                     logger.warning(f"Could not click SAML Continue button: {e}")
 
+            if self.is_logged_into_google_by_url(self.driver):
+                break
+
             if time.time() - start_waiting_at > 60:
-                logger.warning(f"Login timed out after 60s. Current URL: {self.driver.current_url}")
+                logger.warning(f"Login timed out after 60s. Current URL: {self.get_current_url_fast()}")
                 # The cached Okta session may be invalid (e.g. revoked server-side). Evict it
                 # so the next attempt regenerates instead of reusing a likely-bad cookie.
                 self._clear_cached_okta_session()
                 # Save a screenshot so we can see why the login failed
                 self.send_screenshot_and_mhtml_file_message()
-                raise UiLoginAttemptFailedException("No Google auth cookies were present", "login_to_google_meet_account_with_okta")
+                raise UiLoginAttemptFailedException("Did not reach Gmail inbox after Okta SSO login", "login_to_google_meet_account_with_okta")
 
         logger.info(f"Google login complete. URL: {self.driver.current_url}")
 
@@ -1074,35 +1077,39 @@ class GoogleMeetUIMethods:
 
         # Wait for cookies indicating that we have logged in successfully
         start_waiting_at = time.time()
-        while not self.has_google_cookies_that_indicate_logged_in(self.driver):
+        while not self.is_logged_into_google_by_url(self.driver):
             time.sleep(1)
-            logger.info(f"Waiting for cookies indicating that we have logged in successfully. Current URL: {self.driver.current_url}")
+            logger.info(f"Waiting for Gmail inbox URL indicating that we have logged in successfully. Current URL: {self.get_current_url_fast()}")
+            if self.is_logged_into_google_by_url(self.driver):
+                break
             if time.time() - start_waiting_at > 30:
                 # We'll raise an exception if it's not logged in after 30 seconds
-                logger.warning(f"Login timed out, after 30 seconds, no Google auth cookies were present. Current URL: {self.driver.current_url}")
-                raise UiLoginAttemptFailedException("No Google auth cookies were present", "login_to_google_meet_account")
+                logger.warning(f"Login timed out after 30 seconds, did not reach Gmail inbox. Current URL: {self.get_current_url_fast()}")
+                raise UiLoginAttemptFailedException("Did not reach Gmail inbox after SSO login", "login_to_google_meet_account")
 
-        logger.info(f"After waiting, URL is {self.driver.current_url}")
+        logger.info(f"After waiting, URL is {self.get_current_url_fast()}")
 
-    def has_google_cookies_that_indicate_logged_in(self, driver) -> bool:
-        google_auth_cookie_names = {
-            "SID",
-            "HSID",
-            "SSID",
-            "APISID",
-            "SAPISID",
-            "__Secure-1PSID",
-            "__Secure-3PSID",
-            "__Secure-1PAPISID",
-            "__Secure-3PAPISID",
-            "SIDCC",
-        }
+    def get_current_url_fast(self) -> str:
+        # driver.current_url blocks until document.readyState === "complete",
+        # which can take a long time during a Gmail page load. Reading
+        # window.location.href via execute_script returns immediately, without
+        # waiting for the page to finish loading, so the wait loop stays
+        # responsive and the timeout check actually fires on time.
+        try:
+            return self.driver.execute_script("return window.location.href")
+        except Exception:
+            return self.driver.current_url
 
-        cookies = driver.get_cookies()
-        names = {c.get("name") for c in cookies if c.get("name")}
-        any_google_auth_cookies_present = bool(names & google_auth_cookie_names)
-        logger.warning(f"Cookie names: {names}. Any Google auth cookies present: {any_google_auth_cookies_present}.")
-        return any_google_auth_cookies_present
+    def is_logged_into_google_by_url(self, driver) -> bool:
+        # Match scheme+host+path only. Matching the raw URL would also match
+        # the `continue=` query parameter that accounts.google.com includes
+        # during sign-in, producing false positives.
+        current_url = self.get_current_url_fast()
+        parsed = urlparse(current_url)
+        is_inbox = parsed.hostname == "mail.google.com" and (parsed.path or "/").startswith("/mail")
+        if is_inbox:
+            logger.info(f"Reached Gmail inbox URL, considering login complete: {current_url}")
+        return is_inbox
 
     def position_mouse_for_humanized_interaction(self):
         self.ensure_x11_input()
