@@ -31,6 +31,8 @@ def validate_email_with_mailgun(email: str) -> None:
         )
         return
 
+    logger.info(f"Mailgun email validation response for email {email}: {validation}")
+
     if validation.get("is_disposable_address"):
         raise ValidationError("Please use a permanent email address.")
 
