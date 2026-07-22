@@ -498,6 +498,21 @@ class GoogleMeetUIMethods:
                 logger.warning(f"Could not find name input. Unknown error {e} of type {type(e)}. Raising UiCouldNotLocateElementException")
                 raise UiCouldNotLocateElementException("Could not find name input. Unknown error.", "name_input", e)
 
+    def found_captions_and_translation_button_and_enabled_captions_that_way(self, step):
+        # Look for this alternate captions button. If it is found, then simulate pressing ctrl+c (activates captions)
+        # and then return True. Otherwise return False.
+        captions_and_translation_button = self.find_element_by_selector(By.CSS_SELECTOR, 'button[aria-label="Captions and translation"]')
+        if not captions_and_translation_button:
+            return False
+
+        logger.info("Found 'Captions and translation' button. Enabling captions via ctrl+c keyboard shortcut.")
+        self.ensure_x11_input()
+        self.x11_input.key_press("Control")
+        self.x11_input.key_press("c")
+        self.x11_input.key_release("c")
+        self.x11_input.key_release("Control")
+        return True
+
     def click_captions_button(self):
         num_attempts_to_look_for_captions_button = self.automatic_leave_configuration.waiting_room_timeout_seconds * 2
         logger.info("Waiting for captions button...")
@@ -524,6 +539,9 @@ class GoogleMeetUIMethods:
                 self.click_this_meeting_is_being_recorded_join_now_button("click_captions_button")
                 self.click_others_may_see_your_meeting_differently_button("click_captions_button")
                 self.check_if_waiting_room_timeout_exceeded(waiting_room_timeout_started_at, "click_captions_button")
+                # If we found this alternate button and enabled it via that, then return
+                if self.found_captions_and_translation_button_and_enabled_captions_that_way("click_captions_button"):
+                    return
 
                 last_check_timed_out = attempt_to_look_for_captions_button_index == num_attempts_to_look_for_captions_button - 1
                 if last_check_timed_out:
