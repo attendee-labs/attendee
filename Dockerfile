@@ -1,4 +1,4 @@
-FROM --platform=linux/amd64 ubuntu:22.04 AS base
+FROM ubuntu:22.04 AS base
 
 SHELL ["/bin/bash", "-c"]
 
