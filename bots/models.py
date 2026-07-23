@@ -813,6 +813,10 @@ class TranscriptionSettings:
     def deepgram_replace_settings(self):
         return self._settings.get("deepgram", {}).get("replace", [])
 
+    def deepgram_mip_opt_out(self):
+        """https://developers.deepgram.com/docs/the-deepgram-model-improvement-partnership-program#want-to-opt-out"""
+        return os.getenv("DEEPGRAM_MIP_OPT_OUT", "true") == "true"
+
     def deepgram_base_url(self):
         if os.getenv("DEEPGRAM_BASE_URL"):
             return os.getenv("DEEPGRAM_BASE_URL")

@@ -470,7 +470,7 @@ class TeamsUIMethods:
         threading.Thread(target=self.monitor_for_disable_light_experience_redirect, daemon=True).start()
 
         if self.teams_bot_login_is_available and self.teams_bot_login_should_be_used:
-            self.login_to_microsoft_account()
+            self.login_to_microsoft_account_with_retries()
 
         self.driver.get(self.meeting_url_with_identification_token())
 
@@ -588,6 +588,20 @@ class TeamsUIMethods:
         # You need to wait a bit after canceling because we close the browser immediately after this.
         # If you close the browser immediately, then teams will not show them as leaving
         time.sleep(1)
+
+    def login_to_microsoft_account_with_retries(self):
+        # Blanket guard against transient errors on Microsoft's side
+        num_attempts = int(os.getenv("MAX_RETRIES_FOR_BOT_MICROSOFT_LOGIN", "3"))
+        for attempt_index in range(num_attempts):
+            try:
+                self.login_to_microsoft_account()
+                return
+            except UiLoginAttemptFailedException as e:
+                last_attempt = attempt_index == num_attempts - 1
+                if last_attempt:
+                    raise e
+                logger.warning(f"Error logging in to Microsoft account. Clearing cookies and retrying... Attempts remaining: {num_attempts - attempt_index - 1}")
+                self.driver.delete_all_cookies()
 
     def login_to_microsoft_account(self):
         credentials = self.fetch_teams_bot_login_credentials_callback()

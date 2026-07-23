@@ -488,6 +488,10 @@ def get_transcription_via_deepgram_from_audio_data(
         **audio_options,
     )
 
+    addons = {}
+    if transcription_settings.deepgram_mip_opt_out():
+        addons["mip_opt_out"] = "true"
+
     deepgram_base_url = transcription_settings.deepgram_base_url()
     if deepgram_base_url:
         logger.info(f"Using Deepgram base URL {deepgram_base_url} for transcription")
@@ -497,7 +501,7 @@ def get_transcription_via_deepgram_from_audio_data(
         deepgram = DeepgramClient(deepgram_credentials["api_key"])
 
     try:
-        response = deepgram.listen.rest.v("1").transcribe_file(payload, options)
+        response = deepgram.listen.rest.v("1").transcribe_file(payload, options, addons or None)
     except DeepgramApiError as e:
         original_error_json = json.loads(e.original_error)
         if original_error_json.get("err_code") == "INVALID_AUTH":
