@@ -1,4 +1,4 @@
-FROM --platform=linux/amd64 ubuntu:22.04 AS base
+FROM ubuntu:22.04 AS base
 
 SHELL ["/bin/bash", "-c"]
 
@@ -67,9 +67,6 @@ RUN apt-get update && apt-get install -y libasound2 libasound2-plugins alsa alsa
 # Install Pulseaudio
 RUN apt-get install -y  pulseaudio pulseaudio-utils ffmpeg
 
-# Install Linux Kernel Dev
-RUN apt-get update && apt-get install -y linux-libc-dev
-
 # Update certificates
 RUN apt-get update && apt-get install -y \
     ca-certificates \
@@ -128,6 +125,42 @@ RUN mkdir -p "$cwd/staticfiles" && chown -R app:app "$cwd/staticfiles"
 # Therefore, we create a symlink at that path that points to a file in /tmp which the app can write to.
 RUN mkdir -p /etc/opt/chrome/policies/managed \
   && ln -s /tmp/attendee-chrome-policies.json /etc/opt/chrome/policies/managed/attendee-chrome-policies.json
+
+# Harden the runtime image. linux-libc-dev provides Linux kernel *headers*, needed only to compile
+# native Python extensions (e.g. av, webrtcvad) during the build above; at runtime the container uses
+# the host's kernel, so purge them here along with their build-only dependents (libc6-dev,
+# build-essential, ...). Also apply any pending Ubuntu security updates the base image predates.
+# This removes every CRITICAL and nearly all HIGH findings from image vulnerability scans without
+# changing runtime behaviour: already-compiled .so files link the runtime libc (libc6), which is
+# retained.
+#
+# Chrome must NOT be upgraded: the google-chrome-stable .deb registers the Google apt repo, so a bare
+# `apt-get upgrade` would pull Chrome to latest and break the ChromeDriver<->Chrome version pairing
+# the Selenium bots require (ChromeDriver is pinned separately, above). We `apt-mark hold` it so the
+# security upgrade leaves Chrome at the pinned version chromedriver was matched to.
+#
+# BEFORE purging, explicitly (re)install the runtime packages that are otherwise present only as
+# transitive dependencies of the -dev packages we are about to remove. Installing them marks them
+# manually-installed, so `autoremove` keeps them AND their runtime dependencies:
+#   - python3-gi + gir1.2-* typelibs: the PyGObject bindings the bots import at runtime
+#     (gi.require_version for Gst / GstApp / GLib / GObject). Without this, autoremove deletes the
+#     typelibs and every bot import dies with `ValueError: Namespace Gst not available`.
+#   - libgirepository-1.0-1: the GObject-introspection runtime loaded by python3-gi.
+#   - libpq5: psycopg2's runtime library (came in via libpq-dev).
+RUN apt-get update \
+    && apt-mark hold google-chrome-stable \
+    && apt-get install -y --no-install-recommends \
+        python3-gi \
+        gir1.2-glib-2.0 \
+        gir1.2-gstreamer-1.0 \
+        gir1.2-gst-plugins-base-1.0 \
+        libgirepository-1.0-1 \
+        libpq5 \
+    && apt-get purge -y linux-libc-dev \
+    && apt-get upgrade -y \
+    && apt-get autoremove -y --purge \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
 # Switch to non-root AFTER copies to avoid permission flakiness
 USER app
