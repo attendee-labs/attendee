@@ -630,16 +630,16 @@ class GoogleMeetUIMethods:
         logger.info("Waiting for the more options button...")
         MORE_OPTIONS_BUTTON_SELECTOR = 'button[jsname="NakZHc"][aria-label="More options"]'
         more_options_button = self.locate_element(
-            step="more_options_button_for_language_selection",
+            step="disable_incoming_video:more_options_button",
             condition=EC.element_to_be_clickable((By.CSS_SELECTOR, MORE_OPTIONS_BUTTON_SELECTOR)),
             wait_time_seconds=6,
         )
         logger.info("Clicking the more options button...")
-        self.click_element(more_options_button, "disable_incoming_video:more_options_button")
+        self.click_element_forcefully(more_options_button, "disable_incoming_video:more_options_button")
 
         logger.info("Waiting for the settings list item...")
         settings_list_item = self.locate_element(
-            step="settings_list_item",
+            step="disable_incoming_video:settings_list_item",
             condition=EC.element_to_be_clickable((By.XPATH, '//li[.//span[text()="Settings"]]')),
             wait_time_seconds=6,
         )
