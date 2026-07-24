@@ -634,7 +634,7 @@ class GoogleMeetUIMethods:
             condition=EC.element_to_be_clickable((By.CSS_SELECTOR, MORE_OPTIONS_BUTTON_SELECTOR)),
             wait_time_seconds=6,
         )
-        logger.info("Clicking the more options button...")
+        logger.info("Forcefully clicking the more options button...")
         self.click_element_forcefully(more_options_button, "disable_incoming_video:more_options_button")
 
         logger.info("Waiting for the settings list item...")
