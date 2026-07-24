@@ -20,7 +20,7 @@ def validate_email_with_mailgun(email: str) -> None:
             auth=("api", settings.MAILGUN_VALIDATION_API_KEY),
             data={"address": email},
             params={"provider_lookup": "true"},
-            timeout=(2, 4),  # connect timeout, read timeout,
+            timeout=(3, 15),  # connect timeout, read timeout,
         )
         response.raise_for_status()
         validation = response.json()
@@ -38,7 +38,7 @@ def validate_email_with_mailgun(email: str) -> None:
 
     result = validation.get("result")
 
-    if result in {"undeliverable", "do_not_send"}:
+    if result in {"undeliverable", "do_not_send", "unknown"}:
         raise ValidationError("This email address does not appear to be valid.")
 
 
