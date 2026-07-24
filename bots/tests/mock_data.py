@@ -142,10 +142,16 @@ def create_mock_file_uploader():
 
 def create_mock_google_meet_driver():
     mock_driver = MagicMock()
-    mock_driver.execute_script.side_effect = [
-        None,  # First call (window.ws.enableMediaSending())
-        12345,  # Second call (performance.timeOrigin)
-    ]
+
+    # Return values are keyed off the script string rather than call order, since
+    # the join flow issues an unpredictable number of execute_script calls (e.g.
+    # forceful "arguments[0].click();" clicks) before media sending is enabled.
+    def mock_execute_script(script, *args):
+        if script == "return performance.timeOrigin;":
+            return 12345
+        return None
+
+    mock_driver.execute_script.side_effect = mock_execute_script
 
     # Make save_screenshot actually create an empty PNG file
     def mock_save_screenshot(filepath):
