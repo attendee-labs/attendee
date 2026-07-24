@@ -713,7 +713,7 @@ class WebBotAdapter(BotAdapter):
         # Expected exceptions are ones that we expect to happen and are not a big deal, so we only increment num_retries once every three expected exceptions
         num_expected_exceptions = 0
         num_retries = 0
-        max_retries = 0
+        max_retries = 3
         authorized_user_not_in_meeting_first_seen_at = None
 
         while num_retries <= max_retries:
