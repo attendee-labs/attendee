@@ -1158,7 +1158,7 @@ class GoogleMeetUIMethods:
         if self.ui_interaction_mode == "humanized":
             self.humanized_navigate_to_and_click_element(join_button)
         else:
-            self.click_element(join_button, "join_button")
+            self.click_element_forcefully(join_button, "join_button")
 
         self.click_captions_button()
 
