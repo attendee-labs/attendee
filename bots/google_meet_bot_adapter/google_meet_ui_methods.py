@@ -97,6 +97,16 @@ class GoogleMeetUIMethods:
             logger.warning(f"Error occurred when clicking element for step {step}, will retry. Exception class name was {e.__class__.__name__}")
             raise UiCouldNotClickElementException("Error occurred when clicking element", step, e)
 
+    def click_element_with_fallback_to_forceful_click(self, element, step):
+        try:
+            self.click_element(element, step)
+        except UiCouldNotClickElementException as e:
+            if isinstance(e.inner_exception, ElementNotInteractableException):
+                logger.warning(f"Element was not interactable for step {step}, falling back to forceful click")
+                self.click_element_forcefully(element, step)
+            else:
+                raise
+
     # If the meeting you're about to join is being recorded, gmeet makes you click an additional button after you're admitted to the meeting
     def click_this_meeting_is_being_recorded_join_now_button(self, step):
         this_meeting_is_being_recorded_join_now_button = self.find_element_by_selector(By.XPATH, '//button[.//span[text()="Join now"]]')
@@ -233,7 +243,7 @@ class GoogleMeetUIMethods:
                 logger.warning("Camera button did not seem to be turned off. Retrying...")
 
     def join_now_button_selector(self):
-        return '//button[.//span[text()="Ask to join" or text()="Join now" or text()="Join the call now" or text()="Join anyway"]]'
+        return '//button[.//span[text()="Ask to join" or text()="Join now" or text()="Join the call now" or text()="Join anyway" or text()="Join here too"]]'
 
     def check_for_failed_logged_in_bot_attempt(self):
         if not self.google_meet_bot_login_session:
@@ -1158,7 +1168,7 @@ class GoogleMeetUIMethods:
         if self.ui_interaction_mode == "humanized":
             self.humanized_navigate_to_and_click_element(join_button)
         else:
-            self.click_element(join_button, "join_button")
+            self.click_element_with_fallback_to_forceful_click(join_button, "join_button")
 
         self.click_captions_button()
 
