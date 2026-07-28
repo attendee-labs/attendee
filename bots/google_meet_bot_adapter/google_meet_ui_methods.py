@@ -97,7 +97,7 @@ class GoogleMeetUIMethods:
             logger.warning(f"Error occurred when clicking element for step {step}, will retry. Exception class name was {e.__class__.__name__}")
             raise UiCouldNotClickElementException("Error occurred when clicking element", step, e)
 
-    def click_element_and_click_forcefully_if_needed(self, element, step):
+    def click_element_with_fallback_to_forceful_click(self, element, step):
         try:
             self.click_element(element, step)
         except UiCouldNotClickElementException as e:
@@ -1168,7 +1168,7 @@ class GoogleMeetUIMethods:
         if self.ui_interaction_mode == "humanized":
             self.humanized_navigate_to_and_click_element(join_button)
         else:
-            self.click_element_and_click_forcefully_if_needed(join_button, "join_button")
+            self.click_element_with_fallback_to_forceful_click(join_button, "join_button")
 
         self.click_captions_button()
 
