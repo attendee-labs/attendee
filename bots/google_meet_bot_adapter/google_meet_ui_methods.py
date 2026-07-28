@@ -97,6 +97,16 @@ class GoogleMeetUIMethods:
             logger.warning(f"Error occurred when clicking element for step {step}, will retry. Exception class name was {e.__class__.__name__}")
             raise UiCouldNotClickElementException("Error occurred when clicking element", step, e)
 
+    def click_element_and_click_forcefully_if_needed(self, element, step):
+        try:
+            self.click_element(element, step)
+        except UiCouldNotClickElementException as e:
+            if isinstance(e.inner_exception, ElementNotInteractableException):
+                logger.warning(f"Element was not interactable for step {step}, falling back to forceful click")
+                self.click_element_forcefully(element, step)
+            else:
+                raise
+
     # If the meeting you're about to join is being recorded, gmeet makes you click an additional button after you're admitted to the meeting
     def click_this_meeting_is_being_recorded_join_now_button(self, step):
         this_meeting_is_being_recorded_join_now_button = self.find_element_by_selector(By.XPATH, '//button[.//span[text()="Join now"]]')
@@ -1158,7 +1168,7 @@ class GoogleMeetUIMethods:
         if self.ui_interaction_mode == "humanized":
             self.humanized_navigate_to_and_click_element(join_button)
         else:
-            self.click_element_forcefully(join_button, "join_button")
+            self.click_element_and_click_forcefully_if_needed(join_button, "join_button")
 
         self.click_captions_button()
 
