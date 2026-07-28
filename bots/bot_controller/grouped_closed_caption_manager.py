@@ -1,3 +1,4 @@
+import threading
 from datetime import datetime, timedelta
 from typing import Dict, Optional
 
@@ -79,6 +80,7 @@ class GroupedClosedCaptionManager:
         self.caption_entry_groups: Dict[str, CaptionEntryGroup] = {}
         self.save_utterance_callback = save_utterance_callback
         self.get_participant_callback = get_participant_callback
+        self.lock = threading.Lock()
 
     def upsert_caption(self, caption_data: dict):
         """
@@ -88,22 +90,23 @@ class GroupedClosedCaptionManager:
         device_id = caption_data["deviceId"]
         key = f"{device_id}:{caption_id}"
 
-        # Check if this caption is already in a group
-        for group in self.caption_entry_groups.values():
-            if group.caption_entries.get(key):
-                group.caption_entries[key].update(caption_data)
-                return
+        with self.lock:
+            # Check if this caption is already in a group
+            for group in self.caption_entry_groups.values():
+                if group.caption_entries.get(key):
+                    group.caption_entries[key].update(caption_data)
+                    return
 
-        # Check if the caption should be merged with any existing groups
-        for group in self.caption_entry_groups.values():
-            if group.device_id != device_id:
-                continue
-            if group.modified_at + timedelta(seconds=1) > datetime.utcnow():
-                group.merge_caption_entry(key, caption_data)
-                return
+            # Check if the caption should be merged with any existing groups
+            for group in self.caption_entry_groups.values():
+                if group.device_id != device_id:
+                    continue
+                if group.modified_at + timedelta(seconds=1) > datetime.utcnow():
+                    group.merge_caption_entry(key, caption_data)
+                    return
 
-        # If no opportunity to merge, create a new group
-        self.caption_entry_groups[key] = CaptionEntryGroup(key, caption_data)
+            # If no opportunity to merge, create a new group
+            self.caption_entry_groups[key] = CaptionEntryGroup(key, caption_data)
 
     def flush_captions(self):
         self.process_captions(should_flush=True)
@@ -112,27 +115,45 @@ class GroupedClosedCaptionManager:
         """
         Process captions that are ready to be upserted to the database
         """
-        for key, group in list(self.caption_entry_groups.items()):
-            if group.should_upsert_to_db(should_flush=should_flush):
-                device_id = group.device_id
-                participant = self.get_participant_callback(device_id)
-
-                if participant:
-                    # Save as an utterance
-                    self.save_utterance_callback(
-                        {
-                            **participant,
-                            "timestamp_ms": int(group.created_at.timestamp() * 1000),
-                            "duration_ms": int((group.modified_at - group.created_at).total_seconds() * 1000),
-                            "text": group.get_text(),
-                            "source_uuid_suffix": f"{device_id}-{group.caption_entries[key].caption_data['captionId']}",
-                            "sample_rate": None,
-                        }
+        with self.lock:
+            ready = []
+            for key, group in list(self.caption_entry_groups.items()):
+                if group.should_upsert_to_db(should_flush=should_flush):
+                    ready.append(
+                        (
+                            key,
+                            group,
+                            {
+                                "device_id": group.device_id,
+                                "text": group.get_text(),
+                                "created_at": group.created_at,
+                                "modified_at": group.modified_at,
+                                "caption_id": group.caption_entries[key].caption_data["captionId"],
+                            },
+                        )
                     )
 
-                    # Mark as upserted and remove if it hasn't been modified recently
-                    group.mark_upserted_to_db()
+        for key, group, snap in ready:
+            participant = self.get_participant_callback(snap["device_id"])
+            if not participant:
+                continue
 
-                    # If this caption hasn't been modified in a while, remove it from memory
-                    if (datetime.utcnow() - group.modified_at) > timedelta(seconds=60):
-                        del self.caption_entry_groups[key]
+            self.save_utterance_callback(
+                {
+                    **participant,
+                    "timestamp_ms": int(snap["created_at"].timestamp() * 1000),
+                    "duration_ms": int((snap["modified_at"] - snap["created_at"]).total_seconds() * 1000),
+                    "text": snap["text"],
+                    "source_uuid_suffix": f"{snap['device_id']}-{snap['caption_id']}",
+                    "sample_rate": None,
+                }
+            )
+
+            with self.lock:
+                if key not in self.caption_entry_groups or self.caption_entry_groups[key] is not group:
+                    continue
+                if group.modified_at != snap["modified_at"]:
+                    continue
+                group.mark_upserted_to_db()
+                if (datetime.utcnow() - group.modified_at) > timedelta(seconds=60):
+                    del self.caption_entry_groups[key]
