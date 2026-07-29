@@ -139,6 +139,8 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
                 appPrivilegeToken: {json.dumps(self.zoom_tokens.get("app_privilege_token", ""))},
                 onBehalfToken: {json.dumps(onbehalf_token or "")},
                 modifyDomForVideoRecording: {"true" if self.modify_dom_for_video_recording else "false"},
+                livekitUrl: {json.dumps(os.getenv("LIVEKIT_URL", ""))},
+                livekitToken: {json.dumps(os.getenv("LIVEKIT_TOKEN", ""))},
             }}
         """
 

@@ -649,6 +649,7 @@ class WebBotAdapter(BotAdapter):
         JS_LIBRARIES = [
             os.path.join(current_dir, "js_libs", "protobufjs", "7.4.0", "protobuf.min.js"),
             os.path.join(current_dir, "js_libs", "pako", "2.1.0", "pako.min.js"),
+            os.path.join(current_dir, "js_libs", "livekit-client", "2.21.0", "livekit-client.umd.min.js"),
         ]
 
         libraries_code = ""

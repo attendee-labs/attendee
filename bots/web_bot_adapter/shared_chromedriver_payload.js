@@ -41,6 +41,16 @@ class BotVideoOutputStream {
         this.videoElement = null;
         this.videoRafId = null;
         this.videoAudioSource = null;
+
+        // --- DIRECT FRAME-WRITING (MediaStreamTrackGenerator) STATE ---
+        // Used by playMediaStream() to push decoded VideoFrames straight into a
+        // generated video track instead of drawing to canvas + captureStream().
+        this.mediaStreamFrameLoopRunning = false;
+        this.mediaStreamTrackGenerator = null;
+        this.mediaStreamTrackProcessor = null;
+        this.mediaStreamVideoReader = null;
+        this.mediaStreamVideoWriter = null;
+        this.mediaStreamAudioSource = null;
     }
 
     /**
@@ -333,6 +343,9 @@ class BotVideoOutputStream {
     }
 
     _stopVideoPlayback() {
+        // Tear down any direct frame-writing (generator) session first.
+        this._stopMediaStreamGeneratorPlayback();
+
         if (this.videoRafId != null) {
             cancelAnimationFrame(this.videoRafId);
             this.videoRafId = null;
@@ -397,9 +410,16 @@ class BotVideoOutputStream {
      * Play a MediaStream (e.g. from a WebRTC peer connection) through the
      * virtual webcam and mic.
      *
-     * - Video tracks are drawn onto the canvas (same path as playVideo).
-     * - Audio tracks, if present, are routed into the same gainNode /
-     *   virtual mic pipeline as playPCMAudio / playVideo.
+     * Video path (POC): instead of drawing frames onto the canvas and relying
+     * on canvas.captureStream() for the source video track, we pull decoded
+     * VideoFrames straight off the incoming track with a
+     * MediaStreamTrackProcessor and write them directly into a
+     * MediaStreamTrackGenerator. That generator becomes `this.sourceVideoTrack`,
+     * which getUserMedia() clones hand out to the app. This mirrors the
+     * direct frame-writing technique used elsewhere for the WS media path.
+     *
+     * Audio tracks, if present, are still routed into the same gainNode /
+     * virtual mic pipeline as playPCMAudio / playVideo.
      *
      * @param {MediaStream} mediaStream
      * @returns {Promise<void>}
@@ -410,42 +430,78 @@ class BotVideoOutputStream {
         }
         try{
 
-            // Stop any previous video playback and image redraw loop
+            // Stop any previous playback (canvas/RAF, image redraw, or a prior
+            // generator-backed frame loop).
             this._stopVideoPlayback();
             this._stopImageRedrawInterval();
 
-            if (!this.videoElement) {
-                this.videoElement = document.createElement("video");
-                this.videoElement.playsInline = true;
-            }
-
-            this.videoElement.muted = true;
-            // Attach the MediaStream to the video element
-            this.videoElement.srcObject = mediaStream;
-            this.videoElement.loop = false;
-            this.videoElement.autoplay = true;
-
-            ///---- NOT SURE IF WE NEED THIS
+            // --- AUDIO: route incoming audio into the virtual mic pipeline ---
             this.createSourceAudioTrack();
 
-            // (Re)wire a MediaStreamAudioSourceNode from the stream into the same gainNode
             if (this.mediaStreamAudioSource) {
-                this.mediaStreamAudioSource.disconnect();
+                try { this.mediaStreamAudioSource.disconnect(); } catch {}
+                this.mediaStreamAudioSource = null;
             }
-            this.mediaStreamAudioSource =
-                this.getAudioContext().createMediaStreamSource(mediaStream);
-            this.mediaStreamAudioSource.connect(this.getGainNode());
-            ///----
+            if (mediaStream.getAudioTracks().length > 0) {
+                this.mediaStreamAudioSource =
+                    this.getAudioContext().createMediaStreamSource(mediaStream);
+                this.mediaStreamAudioSource.connect(this.getGainNode());
+            }
 
             if (this.getAudioContext().state === "suspended") {
                 await this.getAudioContext().resume();
             }
 
-            await this.videoElement.play();
+            // --- VIDEO: direct frame-writing path (no canvas / captureStream) ---
+            const videoTrack = mediaStream.getVideoTracks()[0] || null;
+            if (videoTrack) {
+                const trackGenerator = new MediaStreamTrackGenerator({ kind: "video" });
+                const trackProcessor = new MediaStreamTrackProcessor({ track: videoTrack });
+
+                // Swap the source track that getUserMedia() clones hand out.
+                // Existing clones won't switch, but for a fresh POC session
+                // this is fine.
+                this.sourceVideoTrack = trackGenerator;
+                this.mediaStreamTrackGenerator = trackGenerator;
+                this.mediaStreamTrackProcessor = trackProcessor;
+
+                const writer = trackGenerator.writable.getWriter();
+                const reader = trackProcessor.readable.getReader();
+                this.mediaStreamVideoWriter = writer;
+                this.mediaStreamVideoReader = reader;
+                this.mediaStreamFrameLoopRunning = true;
+
+                // Fire-and-forget copy loop: read a VideoFrame from the incoming
+                // track and write it straight into the generated track, then
+                // close it so we don't leak decoder buffers.
+                (async () => {
+                    try {
+                        while (this.mediaStreamFrameLoopRunning) {
+                            const { value: frame, done } = await reader.read();
+                            if (done) break;
+                            if (!this.mediaStreamFrameLoopRunning) {
+                                try { frame.close(); } catch {}
+                                break;
+                            }
+                            try {
+                                await writer.write(frame);
+                            } catch (err) {
+                                try { frame.close(); } catch {}
+                                break;
+                            }
+                            try { frame.close(); } catch {}
+                        }
+                    } catch (err) {
+                        window.ws?.sendJson({
+                            type: 'PLAY_MEDIA_STREAM_FRAME_LOOP_ERROR',
+                            error: err && err.message ? err.message : String(err),
+                        });
+                    }
+                })();
+            }
+
             this.ensureInputOn();
             this.ensureMicOn();
-
-            this._startVideoDrawingLoop();
         }
         catch (e) {
             window.ws.sendJson({
@@ -453,6 +509,29 @@ class BotVideoOutputStream {
                 error: e.message
             });
         }
+    }
+
+    /**
+     * Tear down a direct frame-writing session started by playMediaStream():
+     * stops the copy loop, cancels the reader, closes the writer, and stops the
+     * generated track and audio source node.
+     */
+    _stopMediaStreamGeneratorPlayback() {
+        this.mediaStreamFrameLoopRunning = false;
+
+        try { this.mediaStreamVideoReader?.cancel(); } catch {}
+        this.mediaStreamVideoReader = null;
+
+        try { this.mediaStreamVideoWriter?.close(); } catch {}
+        this.mediaStreamVideoWriter = null;
+
+        try { this.mediaStreamTrackGenerator?.stop(); } catch {}
+        this.mediaStreamTrackGenerator = null;
+
+        this.mediaStreamTrackProcessor = null;
+
+        try { this.mediaStreamAudioSource?.disconnect(); } catch {}
+        this.mediaStreamAudioSource = null;
     }
 
     async stopMediaStream() {
@@ -799,6 +878,10 @@ class BotOutputManager {
 
     botOutputMediaStreamIsReady() {
         return this.botOutputMediaStream.getVideoTracks().length > 0 && this.botOutputMediaStream.getAudioTracks().length > 0;
+    }
+
+    setBotOutputMediaStream(mediaStream) {
+        this.botOutputMediaStream = mediaStream;
     }
 
     async playBotOutputMediaStream(outputDestination) {

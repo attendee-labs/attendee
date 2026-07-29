@@ -1,4 +1,328 @@
 (() => {
+    "use strict";
+  
+    if (window.LiveKitMediaStreamReceiver) {
+      return;
+    }
+  
+    const livekit = window.LivekitClient;
+  
+    if (!livekit?.Room || !livekit?.RoomEvent) {
+      throw new Error(
+        "LiveKit SDK is not loaded. Paste livekit-client.umd.min.js before this script."
+      );
+    }
+  
+    const { Room, RoomEvent } = livekit;
+  
+    let activeConnection = null;
+  
+    function waitForTrackKinds(stream, requiredKinds, timeoutMs) {
+      const hasRequiredTracks = () =>
+        requiredKinds.every((kind) =>
+          stream
+            .getTracks()
+            .some(
+              (track) =>
+                track.kind === kind &&
+                track.readyState === "live"
+            )
+        );
+  
+      if (hasRequiredTracks()) {
+        return Promise.resolve();
+      }
+  
+      return new Promise((resolve, reject) => {
+        let timeout;
+  
+        const cleanup = () => {
+          stream.removeEventListener("addtrack", check);
+          stream.removeEventListener("removetrack", check);
+          clearTimeout(timeout);
+        };
+  
+        const check = () => {
+          if (!hasRequiredTracks()) {
+            return;
+          }
+  
+          cleanup();
+          resolve();
+        };
+  
+        stream.addEventListener("addtrack", check);
+        stream.addEventListener("removetrack", check);
+  
+        timeout = setTimeout(() => {
+          cleanup();
+  
+          const presentKinds =
+            stream.getTracks().map((track) => track.kind).join(", ") ||
+            "none";
+  
+          reject(
+            new Error(
+              `Timed out waiting for LiveKit tracks: ` +
+                `${requiredKinds.join(", ")}. Present: ${presentKinds}`
+            )
+          );
+        }, timeoutMs);
+      });
+    }
+  
+    async function disconnect() {
+      const connection = activeConnection;
+      activeConnection = null;
+  
+      window.__liveKitRoom = null;
+      window.__liveKitMediaStream = null;
+  
+      if (!connection) {
+        return;
+      }
+  
+      // Remove the tracks from our wrapper MediaStream, but do not call
+      // MediaStreamTrack.stop(). LiveKit owns the remote tracks.
+      for (const track of connection.stream.getTracks()) {
+        connection.stream.removeTrack(track);
+      }
+  
+      try {
+        await connection.room.disconnect();
+      } catch (error) {
+        console.warn("[LiveKit receiver] Disconnect failed", error);
+      }
+    }
+  
+    async function connect({
+      url,
+      token,
+  
+      // Strongly recommended when the room can contain multiple publishers.
+      // When omitted, the first remote publisher received is selected.
+      participantIdentity = null,
+  
+      waitForAudio = true,
+      waitForVideo = true,
+      timeoutMs = 20_000,
+    }) {
+      if (typeof url !== "string" || !url) {
+        throw new TypeError("url must be a non-empty LiveKit WebSocket URL");
+      }
+  
+      if (typeof token !== "string" || !token) {
+        throw new TypeError("token must be a non-empty participant token");
+      }
+  
+      await disconnect();
+  
+      const room = new Room({
+        /*
+         * We consume RemoteTrack.mediaStreamTrack directly instead of
+         * attaching video to an HTMLVideoElement. Adaptive stream is
+         * therefore deliberately disabled.
+         */
+        adaptiveStream: false,
+      });
+  
+      const outputStream = new MediaStream();
+  
+      // The output contains at most one audio and one video track.
+      const outputTrackByKind = new Map();
+  
+      let selectedParticipantIdentity = participantIdentity;
+  
+      const acceptsParticipant = (participant) => {
+        if (selectedParticipantIdentity === null) {
+          selectedParticipantIdentity = participant.identity;
+        }
+  
+        return participant.identity === selectedParticipantIdentity;
+      };
+  
+      const addRemoteTrack = (
+        remoteTrack,
+        publication,
+        participant
+      ) => {
+        if (!acceptsParticipant(participant)) {
+          return;
+        }
+  
+        const mediaTrack = remoteTrack.mediaStreamTrack;
+  
+        if (
+          !mediaTrack ||
+          (mediaTrack.kind !== "audio" &&
+            mediaTrack.kind !== "video")
+        ) {
+          return;
+        }
+  
+        // Replace the previous track of the same kind.
+        const previousTrack =
+          outputTrackByKind.get(mediaTrack.kind);
+  
+        if (previousTrack === mediaTrack) {
+          return;
+        }
+  
+        if (previousTrack) {
+          outputStream.removeTrack(previousTrack);
+        }
+  
+        outputTrackByKind.set(mediaTrack.kind, mediaTrack);
+        outputStream.addTrack(mediaTrack);
+  
+        console.info("[LiveKit receiver] Added track", {
+          participantIdentity: participant.identity,
+          publicationSid:
+            publication.trackSid ?? publication.sid,
+          kind: mediaTrack.kind,
+          id: mediaTrack.id,
+        });
+      };
+  
+      const removeRemoteTrack = (
+        remoteTrack,
+        publication,
+        participant
+      ) => {
+        const mediaTrack = remoteTrack.mediaStreamTrack;
+  
+        if (!mediaTrack) {
+          return;
+        }
+  
+        if (
+          outputTrackByKind.get(mediaTrack.kind) === mediaTrack
+        ) {
+          outputTrackByKind.delete(mediaTrack.kind);
+          outputStream.removeTrack(mediaTrack);
+        }
+  
+        console.info("[LiveKit receiver] Removed track", {
+          participantIdentity: participant.identity,
+          publicationSid:
+            publication.trackSid ?? publication.sid,
+          kind: mediaTrack.kind,
+          id: mediaTrack.id,
+        });
+      };
+  
+      room.on(RoomEvent.TrackSubscribed, addRemoteTrack);
+      room.on(RoomEvent.TrackUnsubscribed, removeRemoteTrack);
+  
+      room.on(RoomEvent.Disconnected, () => {
+        console.info("[LiveKit receiver] Room disconnected");
+      });
+  
+      activeConnection = {
+        room,
+        stream: outputStream,
+  
+        get selectedParticipantIdentity() {
+          return selectedParticipantIdentity;
+        },
+      };
+  
+      // Expose these immediately for debugging and downstream use.
+      window.__liveKitRoom = room;
+      window.__liveKitMediaStream = outputStream;
+  
+      try {
+        await room.connect(url, token, {
+          autoSubscribe: true,
+        });
+  
+        /*
+         * Usually TrackSubscribed handles everything. Scan existing
+         * publications too, in case subscription completed around the
+         * same time as room.connect().
+         */
+        for (const participant of room.remoteParticipants.values()) {
+          for (
+            const publication of
+            participant.trackPublications.values()
+          ) {
+            if (publication.track) {
+              addRemoteTrack(
+                publication.track,
+                publication,
+                participant
+              );
+            }
+          }
+        }
+  
+        const requiredKinds = [];
+  
+        if (waitForAudio) {
+          requiredKinds.push("audio");
+        }
+  
+        if (waitForVideo) {
+          requiredKinds.push("video");
+        }
+  
+        if (requiredKinds.length > 0) {
+          await waitForTrackKinds(
+            outputStream,
+            requiredKinds,
+            timeoutMs
+          );
+        }
+  
+        console.info(
+          "[LiveKit receiver] MediaStream ready",
+          {
+            roomName: room.name,
+            selectedParticipantIdentity,
+            tracks: outputStream
+              .getTracks()
+              .map((track) => ({
+                kind: track.kind,
+                id: track.id,
+                readyState: track.readyState,
+                muted: track.muted,
+              })),
+          }
+        );
+  
+        return outputStream;
+      } catch (error) {
+        console.error(
+          "[LiveKit receiver] Connection failed",
+          error
+        );
+  
+        await disconnect();
+        throw error;
+      }
+    }
+  
+    window.LiveKitMediaStreamReceiver = Object.freeze({
+      connect,
+      disconnect,
+  
+      get room() {
+        return activeConnection?.room ?? null;
+      },
+  
+      get stream() {
+        return activeConnection?.stream ?? null;
+      },
+  
+      get selectedParticipantIdentity() {
+        return (
+          activeConnection?.selectedParticipantIdentity ?? null
+        );
+      },
+    });
+  })();
+
+(() => {
     if (window.self !== window.top) {
         console.log("Running inside an iframe, aborting payload.");
         return;
@@ -767,7 +1091,7 @@ class RTCInterceptor {
         const onDataChannelCreate = callbacks.onDataChannelCreate || (() => {});
         
         // Override the RTCPeerConnection constructor
-        window.RTCPeerConnection = function(...args) {
+        const RTCPeerConnectionProxy = function(...args) {
             // Create instance using the original constructor
             const peerConnection = Reflect.construct(
                 originalRTCPeerConnection, 
@@ -787,6 +1111,25 @@ class RTCInterceptor {
             
             return peerConnection;
         };
+
+        // Preserve the original prototype so that feature detection on the
+        // prototype keeps working (e.g. 'addTransceiver'/'addTrack' in
+        // RTCPeerConnection.prototype), falling back to the original methods.
+        RTCPeerConnectionProxy.prototype = originalRTCPeerConnection.prototype;
+
+        // Preserve static members/methods (e.g. generateCertificate) so that
+        // any access on the constructor itself falls back to the original.
+        Object.getOwnPropertyNames(originalRTCPeerConnection).forEach((prop) => {
+            if (prop in RTCPeerConnectionProxy) {
+                return;
+            }
+            const descriptor = Object.getOwnPropertyDescriptor(originalRTCPeerConnection, prop);
+            if (descriptor) {
+                Object.defineProperty(RTCPeerConnectionProxy, prop, descriptor);
+            }
+        });
+
+        window.RTCPeerConnection = RTCPeerConnectionProxy;
     }
 }
 
@@ -901,6 +1244,29 @@ class MixedAudioStreamManager {
     }
 }
 
+async function createLivekitEmbeddedVideo() {
+    const mediaStream = await window.LiveKitMediaStreamReceiver.connect({
+        url: window.zoomInitialData.livekitUrl,
+        token: window.zoomInitialData.livekitToken,
+        //participantIdentity: "avatar-publisher",
+      });
+  
+  const videoTrack = mediaStream.getVideoTracks()[0];
+  
+  if (!videoTrack) {
+    throw new Error(
+      "Participant timestamp-bot-436073 has no subscribed video track"
+    );
+  }
+  
+  // Route the LiveKit media stream through the bot's webcam instead of
+  // rendering it into an embedded video element on the page.
+  window.botOutputManager.setBotOutputMediaStream(mediaStream);
+  await window.botOutputManager.playBotOutputMediaStream("webcam");
+  
+  console.log("LiveKit media stream routed to bot webcam:", mediaStream);
+}
+
 // Style manager
 class StyleManager {
     constructor() {
@@ -908,6 +1274,10 @@ class StyleManager {
     }
 
     async start() {
+        window.ws?.sendJson({
+            type: 'StyleManagerStart',
+            message: 'StyleManager start',
+        });
         console.log('StyleManager start');
 
         this.started = true;
@@ -919,6 +1289,16 @@ class StyleManager {
         if (initialData.sendPerParticipantVideo) {
             window.perParticipantVideoCaptureManager.start();
         }
+
+        window.ws?.sendJson({
+            type: 'CreateLivekitEmbeddedVideo',
+            message: 'CreateLivekitEmbeddedVideo',
+        });
+        await createLivekitEmbeddedVideo();
+        window.ws?.sendJson({
+            type: 'CreateLivekitEmbeddedVideoDone',
+            message: 'CreateLivekitEmbeddedVideoDone',
+        });
     }
     
     getMeetingAudioStream() {
