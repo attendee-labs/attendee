@@ -271,6 +271,10 @@ class ZoomBotAdapter(BotAdapter):
         other_bots_in_meeting_names = []
         for participant_id in all_participant_ids:
             participant = self.get_participant(participant_id)
+            if participant is None:
+                logger.warning(f"Unable to update only-participant timer because participant {participant_id} is not available")
+                self.only_one_participant_in_meeting_at = None
+                return
             if not participant_is_another_bot(participant["participant_full_name"], participant["participant_is_the_bot"], self.automatic_leave_configuration):
                 all_participant_ids_excluding_other_bots.append(participant_id)
             else:

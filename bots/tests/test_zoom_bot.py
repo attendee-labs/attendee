@@ -6,7 +6,7 @@ from unittest.mock import ANY, MagicMock, call, patch
 
 import zoom_meeting_sdk as zoom
 from django.db import connection
-from django.test import override_settings, tag
+from django.test import SimpleTestCase, override_settings, tag
 from django.test.testcases import TransactionTestCase
 
 from bots.automatic_leave_configuration import AutomaticLeaveConfiguration
@@ -51,6 +51,7 @@ from bots.models import (
     ZoomOAuthConnection,
 )
 from bots.utils import mp3_to_pcm, png_to_yuv420_frame, scale_i420
+from bots.zoom_bot_adapter.zoom_bot_adapter import ZoomBotAdapter
 
 from .mock_data import MockPCMAudioFrame, MockVideoFrame
 
@@ -352,6 +353,25 @@ def create_mock_deepgram():
     # Set up the mock client
     mock_deepgram.listen.rest.v.return_value.transcribe_file.return_value = mock_response
     return mock_deepgram
+
+
+@tag("zoom_tests")
+class TestZoomParticipantTracking(SimpleTestCase):
+    def test_missing_participant_does_not_start_only_participant_timer(self):
+        adapter = ZoomBotAdapter.__new__(ZoomBotAdapter)
+        adapter.joined_at = 1
+        adapter.is_webinar = False
+        adapter.only_one_participant_in_meeting_at = 123.0
+        adapter.number_of_participants_ever_in_meeting_excluding_other_bots = MagicMock(return_value=2)
+        adapter.participants_ctrl = MagicMock()
+        adapter.participants_ctrl.GetParticipantsList.return_value = [456]
+        adapter.get_participant = MagicMock(return_value=None)
+
+        with self.assertLogs("bots.zoom_bot_adapter.zoom_bot_adapter", level="WARNING") as logs:
+            adapter.update_only_one_participant_in_meeting_at()
+
+        self.assertIsNone(adapter.only_one_participant_in_meeting_at)
+        self.assertIn("participant 456 is not available", logs.output[0])
 
 
 @tag("zoom_tests")
