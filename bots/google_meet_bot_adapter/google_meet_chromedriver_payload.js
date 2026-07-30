@@ -347,7 +347,7 @@
 
   // Publish the meeting's mixed audio into the LiveKit room as this
   // participant's microphone audio.
-  //await publishMeetingAudioToLivekit();
+  await publishMeetingAudioToLivekit();
 }
 
 async function publishMeetingAudioToLivekit() {
@@ -358,8 +358,7 @@ async function publishMeetingAudioToLivekit() {
 
   // The mixed meeting audio is exposed as a MediaStream whose single audio
   // track is the summed output of every meeting participant's audio.
-  const meetingAudioStream =
-    window.mixedAudioStreamManager?.getMeetingAudioStream();
+  const meetingAudioStream = window.styleManager.getMeetingAudioStream();
   const audioTrack = meetingAudioStream?.getAudioTracks?.()[0];
 
   if (!audioTrack) {
