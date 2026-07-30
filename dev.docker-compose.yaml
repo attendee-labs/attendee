@@ -116,6 +116,7 @@ services:
       /bin/sh -c "
       until mc alias set local http://minio:9000 minioadmin minioadmin; do sleep 1; done;
       mc mb --ignore-existing local/attendee-recordings;
+      mc mb --ignore-existing local/minutesiq-dev;
       "
 
 networks:
