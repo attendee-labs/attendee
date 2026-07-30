@@ -371,7 +371,7 @@ class TestZoomParticipantTracking(SimpleTestCase):
             adapter.update_only_one_participant_in_meeting_at()
 
         self.assertIsNone(adapter.only_one_participant_in_meeting_at)
-        self.assertIn("participant 456 is not available", logs.output[0])
+        self.assertIn("only_one_participant_in_meeting_at set to None because participant 456 is not available", logs.output[0])
 
 
 @tag("zoom_tests")
