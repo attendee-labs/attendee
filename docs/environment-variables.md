@@ -54,10 +54,28 @@ This document lists all supported environment variables for the Attendee applica
 | `AWS_ACCESS_KEY_ID` | String | **Required** | AWS IAM access key ID for S3 authentication. |
 | `AWS_SECRET_ACCESS_KEY` | String | **Required** | AWS IAM secret access key for S3 authentication. |
 | `AWS_DEFAULT_REGION` | String | `us-east-1` | Default AWS region for S3 operations. |
-| `AWS_ENDPOINT_URL` | String | (None) | Custom S3-compatible endpoint URL (e.g., for MinIO or LocalStack). |
+| `AWS_ENDPOINT_URL` | String | (None) | Custom S3-compatible endpoint URL (e.g., for MinIO or LocalStack). When set, path-style addressing is used automatically instead of virtual-hosted-style. |
 | `AWS_RECORDING_STORAGE_BUCKET_NAME` | String | **Required** | S3 bucket name for storing meeting recordings. |
 | `AWS_AUDIO_CHUNK_STORAGE_BUCKET_NAME` | String | (Uses recording bucket) | S3 bucket name for storing audio chunks. Falls back to `AWS_RECORDING_STORAGE_BUCKET_NAME` if not set. |
 | `USE_IRSA_FOR_S3_STORAGE` | Boolean | `false` | Use IRSA (IAM Roles for Service Accounts) for S3 authentication in EKS. Set to `true` when running on Kubernetes with IRSA. |
+
+### Running against MinIO locally
+
+`dev.docker-compose.yaml` includes a `minio` service plus a `minio-createbuckets` one-shot job that
+creates the `attendee-recordings` bucket on startup. `.env` is preconfigured to point at it
+(`AWS_ENDPOINT_URL=http://minio:9000`, `AWS_ACCESS_KEY_ID=minioadmin`, `AWS_SECRET_ACCESS_KEY=minioadmin`).
+
+Recording download links are generated as presigned URLs against `AWS_ENDPOINT_URL`, so the `minio`
+hostname needs to resolve both from inside the Docker network (it does, via Compose's built-in DNS)
+and from your host machine (for opening those links in a browser or via `curl`). Add this line to
+your machine's hosts file (`/etc/hosts` on macOS/Linux, `C:\Windows\System32\drivers\etc\hosts` on Windows):
+
+```
+127.0.0.1 minio
+```
+
+The MinIO console is available at http://localhost:9001 (login `minioadmin` / `minioadmin`) if you want
+to browse uploaded recordings directly.
 
 ### Azure Blob Storage Configuration
 

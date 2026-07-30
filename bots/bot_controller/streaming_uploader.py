@@ -5,13 +5,17 @@ from io import BytesIO
 from queue import Queue
 
 import boto3
+from botocore.config import Config
 
 logger = logging.getLogger(__name__)
 
 
 class StreamingUploader:
     def __init__(self, bucket, key, chunk_size=5242880):  # 5MB chunks
-        self.s3_client = boto3.client("s3", endpoint_url=os.getenv("AWS_ENDPOINT_URL"))
+        endpoint_url = os.getenv("AWS_ENDPOINT_URL")
+        # S3-compatible endpoints like MinIO/LocalStack require path-style addressing.
+        config = Config(s3={"addressing_style": "path"}) if endpoint_url else None
+        self.s3_client = boto3.client("s3", endpoint_url=endpoint_url, config=config)
         self.bucket = bucket
         self.key = key
         self.chunk_size = chunk_size

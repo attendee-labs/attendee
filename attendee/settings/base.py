@@ -283,6 +283,10 @@ else:
             "secret_key": os.getenv("AWS_SECRET_ACCESS_KEY"),
         },
     }
+    # S3-compatible endpoints like MinIO/LocalStack don't support virtual-hosted-style
+    # requests (bucket-as-subdomain), so fall back to path-style addressing for them.
+    if os.getenv("AWS_ENDPOINT_URL"):
+        DEFAULT_STORAGE_BACKEND["OPTIONS"]["addressing_style"] = "path"
     # Deep copy the DEFAULT_STORAGE_BACKEND
     RECORDING_STORAGE_BACKEND = copy.deepcopy(DEFAULT_STORAGE_BACKEND)
     RECORDING_STORAGE_BACKEND["OPTIONS"]["bucket_name"] = AWS_RECORDING_STORAGE_BUCKET_NAME

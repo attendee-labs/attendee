@@ -3,6 +3,7 @@ import threading
 from pathlib import Path
 
 import boto3
+from botocore.config import Config
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -16,7 +17,9 @@ class S3FileUploader:
             bucket (str): The name of the S3 bucket to upload to
             filename (str): The name of the to be stored file
         """
-        self.s3_client = boto3.client("s3", endpoint_url=endpoint_url, region_name=region_name, aws_access_key_id=access_key_id, aws_secret_access_key=access_key_secret)
+        # S3-compatible endpoints like MinIO/LocalStack require path-style addressing.
+        config = Config(s3={"addressing_style": "path"}) if endpoint_url else None
+        self.s3_client = boto3.client("s3", endpoint_url=endpoint_url, region_name=region_name, aws_access_key_id=access_key_id, aws_secret_access_key=access_key_secret, config=config)
         self.bucket = bucket
         self.filename = filename
         self._upload_thread = None

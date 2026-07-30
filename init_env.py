@@ -16,10 +16,11 @@ def main():
 
     print(f"CREDENTIALS_ENCRYPTION_KEY={credentials_key}")
     print(f"DJANGO_SECRET_KEY={django_key}")
-    print("AWS_RECORDING_STORAGE_BUCKET_NAME=")
-    print("AWS_ACCESS_KEY_ID=")
-    print("AWS_SECRET_ACCESS_KEY=")
+    print("AWS_RECORDING_STORAGE_BUCKET_NAME=attendee-recordings")
+    print("AWS_ACCESS_KEY_ID=minioadmin")
+    print("AWS_SECRET_ACCESS_KEY=minioadmin")
     print("AWS_DEFAULT_REGION=us-east-1")
+    print("AWS_ENDPOINT_URL=http://minio:9000")
 
 
 if __name__ == "__main__":
