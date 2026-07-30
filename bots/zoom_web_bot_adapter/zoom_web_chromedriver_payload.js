@@ -1265,6 +1265,54 @@ async function createLivekitEmbeddedVideo() {
   await window.botOutputManager.playBotOutputMediaStream("webcam");
   
   console.log("LiveKit media stream routed to bot webcam:", mediaStream);
+
+  // Publish the meeting's mixed audio into the LiveKit room as this
+  // participant's microphone audio.
+  await publishMeetingAudioToLivekit();
+}
+
+async function publishMeetingAudioToLivekit() {
+  const room = window.LiveKitMediaStreamReceiver.room;
+  if (!room) {
+    throw new Error("No active LiveKit room to publish meeting audio to");
+  }
+
+  // The mixed meeting audio is exposed as a MediaStream whose single audio
+  // track is the summed output of every meeting participant's audio.
+  const meetingAudioStream =
+    window.mixedAudioStreamManager?.getMeetingAudioStream();
+  const audioTrack = meetingAudioStream?.getAudioTracks?.()[0];
+
+  if (!audioTrack) {
+    window.ws?.sendJson({
+      type: 'Error',
+      message: 'No mixed meeting audio track available to publish to LiveKit',
+    });
+    console.warn("[LiveKit publisher] No mixed meeting audio track available");
+    return;
+  }
+
+  const publishOptions = {
+    source: window.LivekitClient.Track.Source.Microphone,
+    // The mixed track is already the desired output; disable DTX/RED so the
+    // continuous meeting mix is transmitted faithfully.
+    dtx: false,
+    red: false,
+  };
+
+  // publishTrack accepts a raw MediaStreamTrack and wraps it in a
+  // LocalAudioTrack, marking it as user-provided so LiveKit will not try to
+  // manage the underlying device.
+  await room.localParticipant.publishTrack(audioTrack, publishOptions);
+
+  window.ws?.sendJson({
+    type: 'MeetingAudioPublishedToLivekit',
+    trackId: audioTrack.id,
+  });
+  console.log(
+    "[LiveKit publisher] Published mixed meeting audio track to LiveKit:",
+    audioTrack.id,
+  );
 }
 
 // Style manager
