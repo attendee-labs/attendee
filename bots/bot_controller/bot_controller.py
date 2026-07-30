@@ -213,6 +213,7 @@ class BotController:
             google_meet_bot_login_should_be_used=self.bot_in_db.google_meet_login_mode_is_always(),
             create_google_meet_bot_login_session_callback=self.create_google_meet_bot_login_session,
             ui_interaction_mode=self.bot_in_db.google_meet_ui_interaction_mode(),
+            livekit_settings=self.bot_in_db.voice_agent_livekit_settings(),
         )
 
     def retrieve_teams_bot_login_credentials(self):

@@ -1373,7 +1373,7 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
             if meeting_type == MeetingTypes.ZOOM and not use_zoom_web_adapter:
                 raise serializers.ValidationError("Voice agent is not supported for Zoom when using the native SDK. Please set 'zoom_settings.sdk' to 'web' in the bot creation request.")
 
-        # LiveKit settings are only consumed by the Zoom web adapter.
+        # LiveKit settings are only consumed by the Zoom web and Google Meet adapters.
         if value.get("livekit"):
             meeting_url = self.initial_data.get("meeting_url")
             meeting_type = meeting_type_from_url(meeting_url)
