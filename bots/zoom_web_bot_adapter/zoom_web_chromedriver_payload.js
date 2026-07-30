@@ -1,6 +1,4 @@
-(() => {
-    "use strict";
-  
+(() => {  
     if (window.LiveKitMediaStreamReceiver) {
       return;
     }
