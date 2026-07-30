@@ -72,10 +72,12 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
         should_ask_for_recording_permission: bool,
         zoom_tokens: dict,
         modify_dom_for_video_recording: bool,
+        livekit_settings: dict | None = None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
         self.modify_dom_for_video_recording = modify_dom_for_video_recording
+        self.livekit_settings = livekit_settings or {}
         self.meeting_id, self.meeting_password = parse_zoom_join_url(self.meeting_url)
         self.zoom_oauth_credentials_callback = zoom_oauth_credentials_callback
 
@@ -139,8 +141,8 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
                 appPrivilegeToken: {json.dumps(self.zoom_tokens.get("app_privilege_token", ""))},
                 onBehalfToken: {json.dumps(onbehalf_token or "")},
                 modifyDomForVideoRecording: {"true" if self.modify_dom_for_video_recording else "false"},
-                livekitUrl: {json.dumps(os.getenv("LIVEKIT_URL", ""))},
-                livekitToken: {json.dumps(os.getenv("LIVEKIT_TOKEN", ""))},
+                livekitUrl: {json.dumps(self.livekit_settings.get("url", ""))},
+                livekitToken: {json.dumps(self.livekit_settings.get("token", ""))},
             }}
         """
 
