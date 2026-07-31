@@ -152,18 +152,18 @@
         publication,
         participant
       ) => {
+        const mediaTrack = remoteTrack.mediaStreamTrack;
+  
         if (!acceptsParticipant(participant)) {
           window.ws?.sendJson({
             type: 'LiveKitTrackNotAccepted',
             participantIdentity: participant.identity,
             publicationSid: publication.trackSid ?? publication.sid,
-            kind: mediaTrack.kind,
-            id: mediaTrack.id,
+            kind: mediaTrack?.kind ?? null,
+            id: mediaTrack?.id ?? null,
           });
           return;
         }
-  
-        const mediaTrack = remoteTrack.mediaStreamTrack;
   
         if (
           !mediaTrack ||
@@ -174,8 +174,8 @@
             type: 'LiveKitTrackNotAccepted',
             participantIdentity: participant.identity,
             publicationSid: publication.trackSid ?? publication.sid,
-            kind: mediaTrack.kind,
-            id: mediaTrack.id,
+            kind: mediaTrack?.kind ?? null,
+            id: mediaTrack?.id ?? null,
           });
           return;
         }
