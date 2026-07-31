@@ -896,8 +896,12 @@ class ZoomBotAdapter(BotAdapter):
         if self.recording_is_paused:
             return
 
-        current_time = datetime.utcnow()
         self.last_audio_received_at = time.time()
+
+        if self.add_audio_chunk_callback is None:
+            return
+
+        current_time = datetime.utcnow()
         self.add_audio_chunk_callback(node_id, current_time, data.GetBuffer())
 
     def add_mixed_audio_chunk_convert_to_bytes(self, data):
