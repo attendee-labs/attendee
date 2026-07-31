@@ -202,15 +202,15 @@
           kind: mediaTrack.kind,
           id: mediaTrack.id,
         });
-      };
 
-      window.ws?.sendJson({
-        type: 'LiveKitTrackAdded',
-        participantIdentity: participant.identity,
-        publicationSid: publication.trackSid ?? publication.sid,
-        kind: mediaTrack.kind,
-        id: mediaTrack.id,
-      });
+        window.ws?.sendJson({
+          type: 'LiveKitTrackAdded',
+          participantIdentity: participant.identity,
+          publicationSid: publication.trackSid ?? publication.sid,
+          kind: mediaTrack.kind,
+          id: mediaTrack.id,
+        });
+      };
   
       const removeRemoteTrack = (
         remoteTrack,
