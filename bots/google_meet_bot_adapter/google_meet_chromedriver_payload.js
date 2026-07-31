@@ -389,7 +389,7 @@
     const mediaStream = await window.LiveKitMediaStreamReceiver.connect({
         url: window.googleMeetInitialData.livekitUrl,
         token: window.googleMeetInitialData.livekitToken,
-        //participantIdentity: "avatar-publisher",
+        participantIdentity: window.googleMeetInitialData.livekitParticipantIdentity,
       });
   
   const videoTrack = mediaStream.getVideoTracks()[0];

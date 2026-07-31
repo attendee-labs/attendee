@@ -1135,6 +1135,10 @@ VOICE_AGENT_SETTINGS_SCHEMA = {
                     "type": "string",
                     "description": "The LiveKit access token the bot should use to join the room.",
                 },
+                "participant_identity": {
+                    "type": "string",
+                    "description": "The identity of the LiveKit participant whose audio and video the bot should stream into the meeting. If not provided, the bot uses the first remote publisher it receives a track from.",
+                },
             },
             "required": ["url", "token"],
             "additionalProperties": False,

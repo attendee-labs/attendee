@@ -97,6 +97,7 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
                 modifyDomForVideoRecording: {"true" if self.modify_dom_for_video_recording else "false"},
                 livekitUrl: {json.dumps(self.livekit_settings.get("url", ""))},
                 livekitToken: {json.dumps(self.livekit_settings.get("token", ""))},
+                livekitParticipantIdentity: {json.dumps(self.livekit_settings.get("participant_identity") or None)},
             }}
         """
 
