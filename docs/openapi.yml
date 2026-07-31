@@ -2183,6 +2183,12 @@ components:
         transcription_settings:
           type: object
           properties:
+            enabled:
+              type: boolean
+              description: Whether Attendee transcription is enabled for the bot. Set
+                to false to disable both third-party providers and ingestion of platform
+                closed captions. When set to true, an explicit transcription provider
+                is required.
             deepgram:
               type: object
               properties:

@@ -799,8 +799,7 @@ class ZoomRTMSAdapter(BotAdapter):
                 join_payload=self.zoom_rtms,
                 use_audio=need_audio,
                 use_video=need_video,
-                # Only subscribe to transcript if we are NOT doing our own audio transcription
-                use_transcript=self.add_audio_chunk_callback is None,
+                use_transcript=self.upsert_caption_callback is not None,
                 adapter=self,
             )
 
@@ -872,8 +871,7 @@ class ZoomRTMSAdapter(BotAdapter):
                 }
             )
         elif json_data.get("type") == "transcriptUpdate":
-            # Don't need captions if we're transcribing from audio
-            if self.add_audio_chunk_callback:
+            if not self.upsert_caption_callback:
                 return
 
             logger.info("RTMS transcriptUpdate: %s", json_data)

@@ -481,8 +481,11 @@ def generate_utterance_json_for_bot_detail_view(recording, async_transcription=N
 
 def transcription_provider_from_bot_creation_data(data):
     url = data.get("meeting_url")
-    settings = data.get("transcription_settings", {})
-    use_zoom_web_adapter = data.get("zoom_settings", {}).get("sdk") == "web"
+    settings = data.get("transcription_settings") or {}
+    use_zoom_web_adapter = (data.get("zoom_settings") or {}).get("sdk") == "web"
+
+    if settings.get("enabled") is False:
+        return TranscriptionProviders.NO_TRANSCRIPTION
 
     if "deepgram" in settings:
         return TranscriptionProviders.DEEPGRAM

@@ -258,6 +258,10 @@ BOT_IMAGE_SCHEMA = {
 TRANSCRIPTION_SETTINGS_SCHEMA = {
     "type": "object",
     "properties": {
+        "enabled": {
+            "type": "boolean",
+            "description": "Whether transcription is enabled for the bot. Set to false to disable both third-party and closed caption-based transcription. When set to true, an explicit transcription provider is required.",
+        },
         "deepgram": {
             "type": "object",
             "properties": {
@@ -1167,6 +1171,9 @@ class CreateAsyncTranscriptionSerializer(serializers.Serializer):
         except jsonschema.exceptions.ValidationError as e:
             raise serializers.ValidationError(e.message)
 
+        if value.get("enabled") is False:
+            raise serializers.ValidationError({"transcription_settings": "Transcription cannot be disabled for an async transcription request."})
+
         if "meeting_closed_captions" in value:
             raise serializers.ValidationError({"transcription_settings": "Meeting closed captions are not available for async transcription."})
 
@@ -1176,7 +1183,7 @@ class CreateAsyncTranscriptionSerializer(serializers.Serializer):
         if ("custom_async" in value or "custom_async_v2" in value) and not os.getenv("CUSTOM_ASYNC_TRANSCRIPTION_URL"):
             raise serializers.ValidationError({"transcription_settings": "CUSTOM_ASYNC_TRANSCRIPTION_URL environment variable is not set. Please set the CUSTOM_ASYNC_TRANSCRIPTION_URL environment variable to the URL of your custom async transcription service."})
 
-        if not value:
+        if not set(value) - {"enabled"}:
             raise serializers.ValidationError({"transcription_settings": "Please specify a transcription provider."})
 
         return value
@@ -1388,6 +1395,14 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
             jsonschema.validate(instance=value, schema=TRANSCRIPTION_SETTINGS_SCHEMA)
         except jsonschema.exceptions.ValidationError as e:
             raise serializers.ValidationError(e.message)
+
+        provider_keys = set(value) - {"enabled"}
+
+        if value.get("enabled") is False and provider_keys:
+            raise serializers.ValidationError({"transcription_settings": "enabled cannot be false when a transcription provider is configured."})
+
+        if value.get("enabled") is True and not provider_keys:
+            raise serializers.ValidationError({"transcription_settings": "A transcription provider is required when enabled is true."})
 
         # If deepgram key is specified but language is not, set to "multi"
         if "deepgram" in value and ("language" not in value["deepgram"] or value["deepgram"]["language"] is None):
