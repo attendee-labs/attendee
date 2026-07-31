@@ -1396,14 +1396,6 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
         except jsonschema.exceptions.ValidationError as e:
             raise serializers.ValidationError(e.message)
 
-        provider_keys = set(value) - {"enabled"}
-
-        if value.get("enabled") is False and provider_keys:
-            raise serializers.ValidationError({"transcription_settings": "enabled cannot be false when a transcription provider is configured."})
-
-        if value.get("enabled") is True and not provider_keys:
-            raise serializers.ValidationError({"transcription_settings": "A transcription provider is required when enabled is true."})
-
         # If deepgram key is specified but language is not, set to "multi"
         if "deepgram" in value and ("language" not in value["deepgram"] or value["deepgram"]["language"] is None):
             value["deepgram"]["language"] = "multi"
