@@ -260,7 +260,7 @@ TRANSCRIPTION_SETTINGS_SCHEMA = {
     "properties": {
         "enabled": {
             "type": "boolean",
-            "description": "Whether transcription is enabled for the bot. Set to false to disable both third-party and closed caption-based transcription. When set to true, an explicit transcription provider is required.",
+            "description": "Set to false to disable transcription. Defaults to true.",
         },
         "deepgram": {
             "type": "object",

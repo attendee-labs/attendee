@@ -89,18 +89,6 @@ For example, if you want to use Deepgram with english and the nova-2 model, you 
 }
 ```
 
-Existing platform defaults are preserved when `transcription_settings` is omitted. Zoom bots using the native SDK default to Deepgram in that case. To receive or record meeting media without generating a transcript, disable transcription explicitly:
-
-```json
-{
-    "transcription_settings": {
-        "enabled": false
-    }
-}
-```
-
-This disables Attendee transcription through both third-party providers and platform closed captions. A platform's caption UI may still be used for meeting interaction or speaker metadata, but those captions are not collected as transcripts. Recording and realtime audio WebSocket streaming remain available. The `enabled` option cannot be set to `false` together with a transcription provider. When `enabled` is explicitly set to `true`, a transcription provider must also be configured.
-
 ## Setting up webhooks for real time transcription
 
 You can set up webhooks for real time transcription in the dashboard. Go to the Settings > Webhooks page and click the 'Create Webhook' button.
@@ -157,3 +145,13 @@ Example: `OPENAI_BASE_URL=https://your-proxy.com/v1` and `OPENAI_MODEL_NAME=whis
 ### Custom Async (Bring Your Own Platform)
 
 For Attendee self-hosters only. Lets you use your own self-hosted transcription service. See the [Custom Async Transcription](https://github.com/attendee-labs/attendee/blob/main/docs/custom_async_transcription.md) page for more details.
+
+### Disabling transcription
+
+To disable transcription, set the `transcription_settings` to:
+
+```json
+{
+    "enabled": false
+}
+```
