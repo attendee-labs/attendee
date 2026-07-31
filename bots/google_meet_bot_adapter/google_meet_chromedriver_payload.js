@@ -295,6 +295,11 @@
           "[LiveKit receiver] Connection failed",
           error
         );
+
+        window.ws?.sendJson({
+          type: 'LiveKitConnectionFailed',
+          error: error.message,
+        });
   
         await disconnect();
         throw error;
