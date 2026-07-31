@@ -55,17 +55,24 @@
   
         timeout = setTimeout(() => {
           cleanup();
-  
+
           const presentKinds =
             stream.getTracks().map((track) => track.kind).join(", ") ||
             "none";
-  
-          reject(
-            new Error(
-              `Timed out waiting for LiveKit tracks: ` +
-                `${requiredKinds.join(", ")}. Present: ${presentKinds}`
-            )
-          );
+
+          const message =
+            `Timed out waiting for LiveKit tracks: ` +
+            `${requiredKinds.join(", ")}. Present: ${presentKinds}`;
+
+          window.ws?.sendJson({
+            type: 'LiveKitTrackWaitTimedOut',
+            error: message,
+            requiredKinds: requiredKinds,
+            presentKinds: presentKinds,
+            timeoutMs: timeoutMs,
+          });
+
+          reject(new Error(message));
         }, timeoutMs);
       });
     }
