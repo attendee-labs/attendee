@@ -263,7 +263,35 @@
         await room.connect(url, token, {
           autoSubscribe: true,
         });
-  
+
+        const describeParticipant = (participant) => ({
+          identity: participant.identity,
+          sid: participant.sid,
+          name: participant.name,
+          metadata: participant.metadata,
+          isLocal: participant.isLocal === true,
+          publications: Array.from(
+            participant.trackPublications.values()
+          ).map((publication) => ({
+            sid: publication.trackSid ?? publication.sid,
+            kind: publication.kind,
+            source: publication.source,
+            muted: publication.isMuted,
+            subscribed: publication.isSubscribed,
+          })),
+        });
+
+        window.ws?.sendJson({
+          type: 'LiveKitRoomParticipants',
+          roomName: room.name,
+          localParticipant: room.localParticipant
+            ? describeParticipant(room.localParticipant)
+            : null,
+          remoteParticipants: Array.from(
+            room.remoteParticipants.values()
+          ).map(describeParticipant),
+        });
+
         /*
          * Usually TrackSubscribed handles everything. Scan existing
          * publications too, in case subscription completed around the
