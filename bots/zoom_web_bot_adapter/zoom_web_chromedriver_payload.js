@@ -54,17 +54,24 @@
   
         timeout = setTimeout(() => {
           cleanup();
-  
+
           const presentKinds =
             stream.getTracks().map((track) => track.kind).join(", ") ||
             "none";
-  
-          reject(
-            new Error(
-              `Timed out waiting for LiveKit tracks: ` +
-                `${requiredKinds.join(", ")}. Present: ${presentKinds}`
-            )
-          );
+
+          const message =
+            `Timed out waiting for LiveKit tracks: ` +
+            `${requiredKinds.join(", ")}. Present: ${presentKinds}`;
+
+          window.ws?.sendJson({
+            type: 'LiveKitTrackWaitTimedOut',
+            error: message,
+            requiredKinds: requiredKinds,
+            presentKinds: presentKinds,
+            timeoutMs: timeoutMs,
+          });
+
+          reject(new Error(message));
         }, timeoutMs);
       });
     }
@@ -145,6 +152,13 @@
         participant
       ) => {
         if (!acceptsParticipant(participant)) {
+          window.ws?.sendJson({
+            type: 'LiveKitTrackNotAccepted',
+            participantIdentity: participant.identity,
+            publicationSid: publication.trackSid ?? publication.sid,
+            kind: mediaTrack.kind,
+            id: mediaTrack.id,
+          });
           return;
         }
   
@@ -155,6 +169,13 @@
           (mediaTrack.kind !== "audio" &&
             mediaTrack.kind !== "video")
         ) {
+          window.ws?.sendJson({
+            type: 'LiveKitTrackNotAccepted',
+            participantIdentity: participant.identity,
+            publicationSid: publication.trackSid ?? publication.sid,
+            kind: mediaTrack.kind,
+            id: mediaTrack.id,
+          });
           return;
         }
   
@@ -177,6 +198,14 @@
           participantIdentity: participant.identity,
           publicationSid:
             publication.trackSid ?? publication.sid,
+          kind: mediaTrack.kind,
+          id: mediaTrack.id,
+        });
+
+        window.ws?.sendJson({
+          type: 'LiveKitTrackAdded',
+          participantIdentity: participant.identity,
+          publicationSid: publication.trackSid ?? publication.sid,
           kind: mediaTrack.kind,
           id: mediaTrack.id,
         });
@@ -294,6 +323,11 @@
           "[LiveKit receiver] Connection failed",
           error
         );
+
+        window.ws?.sendJson({
+          type: 'LiveKitConnectionFailed',
+          error: error.message,
+        });
   
         await disconnect();
         throw error;
@@ -1246,7 +1280,7 @@ async function createLivekitEmbeddedVideo() {
     const mediaStream = await window.LiveKitMediaStreamReceiver.connect({
         url: window.zoomInitialData.livekitUrl,
         token: window.zoomInitialData.livekitToken,
-        //participantIdentity: "avatar-publisher",
+        participantIdentity: window.zoomInitialData.livekitParticipantIdentity,
       });
   
   const videoTrack = mediaStream.getVideoTracks()[0];
