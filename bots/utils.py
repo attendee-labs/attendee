@@ -484,7 +484,9 @@ def transcription_provider_from_bot_creation_data(data):
     settings = data.get("transcription_settings") or {}
     use_zoom_web_adapter = (data.get("zoom_settings") or {}).get("sdk") == "web"
 
-    if settings.get("enabled") is False:
+    # The enabled flag defaults to True. If it is set to False, it takes precedence over any other
+    # provider being specified.
+    if settings.get("enabled", True) is False:
         return TranscriptionProviders.NO_TRANSCRIPTION
 
     if "deepgram" in settings:
