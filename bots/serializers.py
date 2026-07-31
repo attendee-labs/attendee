@@ -1171,8 +1171,8 @@ class CreateAsyncTranscriptionSerializer(serializers.Serializer):
         except jsonschema.exceptions.ValidationError as e:
             raise serializers.ValidationError(e.message)
 
-        if value.get("enabled") is False:
-            raise serializers.ValidationError({"transcription_settings": "Transcription cannot be disabled for an async transcription request."})
+        if "enabled" in value:
+            raise serializers.ValidationError({"transcription_settings": "The enabled field is not applicable to an async transcription request."})
 
         if "meeting_closed_captions" in value:
             raise serializers.ValidationError({"transcription_settings": "Meeting closed captions are not available for async transcription."})
@@ -1183,7 +1183,7 @@ class CreateAsyncTranscriptionSerializer(serializers.Serializer):
         if ("custom_async" in value or "custom_async_v2" in value) and not os.getenv("CUSTOM_ASYNC_TRANSCRIPTION_URL"):
             raise serializers.ValidationError({"transcription_settings": "CUSTOM_ASYNC_TRANSCRIPTION_URL environment variable is not set. Please set the CUSTOM_ASYNC_TRANSCRIPTION_URL environment variable to the URL of your custom async transcription service."})
 
-        if not set(value) - {"enabled"}:
+        if not value:
             raise serializers.ValidationError({"transcription_settings": "Please specify a transcription provider."})
 
         return value
