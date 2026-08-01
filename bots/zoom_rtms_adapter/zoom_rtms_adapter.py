@@ -625,7 +625,6 @@ class ZoomRTMSAdapter(BotAdapter):
     def __init__(
         self,
         *,
-        use_one_way_audio,
         use_mixed_audio,
         use_video,
         send_message_callback,
@@ -642,7 +641,6 @@ class ZoomRTMSAdapter(BotAdapter):
         video_frame_size: tuple[int, int],
     ):
         self.zoom_rtms = zoom_rtms
-        self.use_one_way_audio = use_one_way_audio
         self.use_mixed_audio = use_mixed_audio
         self.use_video = use_video
         self.send_message_callback = send_message_callback
@@ -713,7 +711,7 @@ class ZoomRTMSAdapter(BotAdapter):
         try:
             if self.use_mixed_audio and self.add_mixed_audio_chunk_callback:
                 self.add_mixed_audio_chunk_callback(frame)
-            if self.use_one_way_audio and self.add_audio_chunk_callback:
+            if self.add_audio_chunk_callback:
                 current_time = datetime.utcnow()
                 userIdToSend = userId or self.active_speaker_id
                 if userIdToSend is not None:
@@ -789,7 +787,7 @@ class ZoomRTMSAdapter(BotAdapter):
     def initialize_rtms_connection(self):
         logger.info("Initializing RTMS connection...")
 
-        need_audio = self.use_one_way_audio or self.use_mixed_audio
+        need_audio = self.add_audio_chunk_callback is not None or self.use_mixed_audio
         need_video = self.use_video
 
         try:

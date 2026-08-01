@@ -149,7 +149,6 @@ class TestCreateBot(TestCase):
             controller.get_zoom_bot_adapter()
 
         adapter_kwargs = zoom_bot_adapter.call_args.kwargs
-        self.assertTrue(adapter_kwargs["use_one_way_audio"])
         self.assertIsNone(adapter_kwargs["add_audio_chunk_callback"])
         self.assertTrue(adapter_kwargs["use_mixed_audio"])
         self.assertIsNotNone(adapter_kwargs["add_mixed_audio_chunk_callback"])
@@ -158,7 +157,6 @@ class TestCreateBot(TestCase):
             controller.get_zoom_rtms_adapter()
 
         rtms_adapter_kwargs = zoom_rtms_adapter.call_args.kwargs
-        self.assertFalse(rtms_adapter_kwargs["use_one_way_audio"])
         self.assertIsNone(rtms_adapter_kwargs["add_audio_chunk_callback"])
         self.assertIsNone(rtms_adapter_kwargs["upsert_caption_callback"])
 

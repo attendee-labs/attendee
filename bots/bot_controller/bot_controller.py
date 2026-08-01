@@ -386,18 +386,13 @@ class BotController:
         from bots.zoom_bot_adapter import ZoomBotAdapter
 
         zoom_oauth_credentials, zoom_tokens = self.get_zoom_oauth_credentials_and_tokens()
-        audio_chunk_callback = self.get_per_participant_audio_chunk_callback()
-        use_one_way_audio = audio_chunk_callback is not None or self.get_recording_transcription_provider() == TranscriptionProviders.NO_TRANSCRIPTION
 
         return ZoomBotAdapter(
-            # Keep receiving one-way audio locally for silence detection even
-            # when no chunks are forwarded for transcription.
-            use_one_way_audio=use_one_way_audio,
             use_mixed_audio=self.pipeline_configuration.record_audio or self.pipeline_configuration.rtmp_stream_audio or self.pipeline_configuration.websocket_stream_audio,
             use_video=self.pipeline_configuration.record_video or self.pipeline_configuration.rtmp_stream_video,
             display_name=self.bot_in_db.name,
             send_message_callback=self.on_message_from_adapter,
-            add_audio_chunk_callback=audio_chunk_callback,
+            add_audio_chunk_callback=self.get_per_participant_audio_chunk_callback(),
             zoom_client_id=zoom_oauth_credentials["client_id"],
             zoom_client_secret=zoom_oauth_credentials["client_secret"],
             meeting_url=self.bot_in_db.meeting_url,
@@ -420,14 +415,12 @@ class BotController:
         from bots.zoom_rtms_adapter import ZoomRTMSAdapter
 
         zoom_oauth_credentials, zoom_tokens = self.get_zoom_oauth_credentials_and_tokens()
-        audio_chunk_callback = self.get_per_participant_audio_chunk_callback()
 
         return ZoomRTMSAdapter(
-            use_one_way_audio=audio_chunk_callback is not None,
             use_mixed_audio=self.pipeline_configuration.record_audio or self.pipeline_configuration.rtmp_stream_audio or self.pipeline_configuration.websocket_stream_audio,
             use_video=self.pipeline_configuration.record_video or self.pipeline_configuration.rtmp_stream_video,
             send_message_callback=self.on_message_from_adapter,
-            add_audio_chunk_callback=audio_chunk_callback,
+            add_audio_chunk_callback=self.get_per_participant_audio_chunk_callback(),
             upsert_caption_callback=self.closed_caption_manager.upsert_caption if self.save_utterances_for_closed_captions() else None,
             zoom_client_id=zoom_oauth_credentials["client_id"],
             zoom_client_secret=zoom_oauth_credentials["client_secret"],
