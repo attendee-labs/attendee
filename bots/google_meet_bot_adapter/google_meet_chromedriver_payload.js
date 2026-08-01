@@ -1,5 +1,5 @@
 
-(() => {  
+(() => {
     if (window.LiveKitMediaStreamReceiver) {
       return;
     }
@@ -14,68 +14,240 @@
   
     const { Room, RoomEvent } = livekit;
   
-    let activeConnection = null;
+    const sendJson = (payload) => window.ws?.sendJson(payload);
   
-    function waitForTrackKinds(stream, requiredKinds, timeoutMs) {
-      const hasRequiredTracks = () =>
-        requiredKinds.every((kind) =>
-          stream
-            .getTracks()
-            .some(
-              (track) =>
-                track.kind === kind &&
-                track.readyState === "live"
-            )
+    const describeParticipant = (participant) => ({
+      identity: participant.identity,
+      sid: participant.sid,
+      name: participant.name,
+      metadata: participant.metadata,
+      isLocal: participant.isLocal === true,
+      publications: Array.from(participant.trackPublications.values()).map(
+        (publication) => ({
+          sid: publication.trackSid ?? publication.sid,
+          kind: publication.kind,
+          source: publication.source,
+          muted: publication.isMuted,
+          subscribed: publication.isSubscribed,
+        })
+      ),
+    });
+  
+    /*
+     * Wraps one LiveKit room connection and exposes the remote participant's
+     * audio/video as a single MediaStream. Track arrival is observed through
+     * an internal EventTarget so that waiting code can be written as a plain
+     * async loop instead of subscription callbacks.
+     */
+    class LiveKitConnection {
+      constructor(room) {
+        this.room = room;
+        this.stream = new MediaStream();
+        this.selectedParticipantIdentity = null;
+  
+        // The output contains at most one audio and one video track.
+        this.outputTrackByKind = new Map();
+  
+        this.trackEvents = new EventTarget();
+  
+        room.on(RoomEvent.TrackSubscribed, (track, publication, participant) =>
+          this.addRemoteTrack(track, publication, participant)
         );
   
-      if (hasRequiredTracks()) {
-        return Promise.resolve();
+        room.on(RoomEvent.TrackUnsubscribed, (track, publication, participant) =>
+          this.removeRemoteTrack(track, publication, participant)
+        );
+  
+        room.on(RoomEvent.Disconnected, () => {
+          console.info("[LiveKit receiver] Room disconnected");
+        });
       }
   
-      return new Promise((resolve, reject) => {
-        let timeout;
+      acceptsParticipant(participant) {
+        // When no identity was requested, latch onto the first publisher seen.
+        if (this.selectedParticipantIdentity === null) {
+          this.selectedParticipantIdentity = participant.identity;
+        }
   
-        const cleanup = () => {
-          stream.removeEventListener("addtrack", check);
-          stream.removeEventListener("removetrack", check);
-          clearTimeout(timeout);
-        };
+        return participant.identity === this.selectedParticipantIdentity;
+      }
   
-        const check = () => {
-          if (!hasRequiredTracks()) {
-            return;
+      addRemoteTrack(remoteTrack, publication, participant) {
+        const mediaTrack = remoteTrack.mediaStreamTrack;
+  
+        const isUsableKind =
+          mediaTrack?.kind === "audio" || mediaTrack?.kind === "video";
+  
+        if (!this.acceptsParticipant(participant) || !isUsableKind) {
+          sendJson({
+            type: "LiveKitTrackNotAccepted",
+            participantIdentity: participant.identity,
+            publicationSid: publication.trackSid ?? publication.sid,
+            kind: mediaTrack?.kind ?? null,
+            id: mediaTrack?.id ?? null,
+          });
+          return;
+        }
+  
+        const previousTrack = this.outputTrackByKind.get(mediaTrack.kind);
+  
+        if (previousTrack === mediaTrack) {
+          return;
+        }
+  
+        // Replace the previous track of the same kind.
+        if (previousTrack) {
+          this.stream.removeTrack(previousTrack);
+        }
+  
+        this.outputTrackByKind.set(mediaTrack.kind, mediaTrack);
+        this.stream.addTrack(mediaTrack);
+  
+        console.info("[LiveKit receiver] Added track", {
+          participantIdentity: participant.identity,
+          publicationSid: publication.trackSid ?? publication.sid,
+          kind: mediaTrack.kind,
+          id: mediaTrack.id,
+        });
+  
+        sendJson({
+          type: "LiveKitTrackAdded",
+          participantIdentity: participant.identity,
+          publicationSid: publication.trackSid ?? publication.sid,
+          kind: mediaTrack.kind,
+          id: mediaTrack.id,
+        });
+  
+        this.notifyTrackChange();
+      }
+  
+      removeRemoteTrack(remoteTrack, publication, participant) {
+        const mediaTrack = remoteTrack.mediaStreamTrack;
+  
+        if (!mediaTrack) {
+          return;
+        }
+  
+        if (this.outputTrackByKind.get(mediaTrack.kind) === mediaTrack) {
+          this.outputTrackByKind.delete(mediaTrack.kind);
+          this.stream.removeTrack(mediaTrack);
+          this.notifyTrackChange();
+        }
+  
+        console.info("[LiveKit receiver] Removed track", {
+          participantIdentity: participant.identity,
+          publicationSid: publication.trackSid ?? publication.sid,
+          kind: mediaTrack.kind,
+          id: mediaTrack.id,
+        });
+      }
+  
+      notifyTrackChange() {
+        this.trackEvents.dispatchEvent(new Event("trackchange"));
+      }
+  
+      hasLiveTracks(requiredKinds) {
+        return requiredKinds.every((kind) =>
+          this.stream
+            .getTracks()
+            .some((track) => track.kind === kind && track.readyState === "live")
+        );
+      }
+  
+      /*
+       * Resolves on the next track change, or after timeoutMs — whichever
+       * comes first. Never rejects; the caller re-checks the deadline.
+       * MediaStream's own addtrack/removetrack events cannot be used here:
+       * they only fire for user-agent-initiated changes, not for our own
+       * addTrack()/removeTrack() calls.
+       */
+      nextTrackChangeOrTimeout(timeoutMs) {
+        return new Promise((resolve) => {
+          const settle = () => {
+            this.trackEvents.removeEventListener("trackchange", settle);
+            clearTimeout(timer);
+            resolve();
+          };
+  
+          const timer = setTimeout(settle, timeoutMs);
+          this.trackEvents.addEventListener("trackchange", settle);
+        });
+      }
+  
+      async waitForTrackKinds(requiredKinds, timeoutMs) {
+        const deadline = Date.now() + timeoutMs;
+  
+        while (!this.hasLiveTracks(requiredKinds)) {
+          const remainingMs = deadline - Date.now();
+  
+          if (remainingMs <= 0) {
+            const presentKinds =
+              this.stream.getTracks().map((track) => track.kind).join(", ") ||
+              "none";
+  
+            const message =
+              `Timed out waiting for LiveKit tracks: ` +
+              `${requiredKinds.join(", ")}. Present: ${presentKinds}`;
+  
+            sendJson({
+              type: "LiveKitTrackWaitTimedOut",
+              error: message,
+              requiredKinds: requiredKinds,
+              presentKinds: presentKinds,
+              timeoutMs: timeoutMs,
+            });
+  
+            throw new Error(message);
           }
   
-          cleanup();
-          resolve();
-        };
+          await this.nextTrackChangeOrTimeout(remainingMs);
+        }
+      }
   
-        stream.addEventListener("addtrack", check);
-        stream.addEventListener("removetrack", check);
+      reportParticipants() {
+        sendJson({
+          type: "LiveKitRoomParticipants",
+          roomName: this.room.name,
+          localParticipant: this.room.localParticipant
+            ? describeParticipant(this.room.localParticipant)
+            : null,
+          remoteParticipants: Array.from(
+            this.room.remoteParticipants.values()
+          ).map(describeParticipant),
+        });
+      }
   
-        timeout = setTimeout(() => {
-          cleanup();
-
-          const presentKinds =
-            stream.getTracks().map((track) => track.kind).join(", ") ||
-            "none";
-
-          const message =
-            `Timed out waiting for LiveKit tracks: ` +
-            `${requiredKinds.join(", ")}. Present: ${presentKinds}`;
-
-          window.ws?.sendJson({
-            type: 'LiveKitTrackWaitTimedOut',
-            error: message,
-            requiredKinds: requiredKinds,
-            presentKinds: presentKinds,
-            timeoutMs: timeoutMs,
-          });
-
-          reject(new Error(message));
-        }, timeoutMs);
-      });
+      /*
+       * Usually TrackSubscribed handles everything. Scan existing publications
+       * too, in case subscription completed around the same time as
+       * room.connect().
+       */
+      collectExistingTracks() {
+        for (const participant of this.room.remoteParticipants.values()) {
+          for (const publication of participant.trackPublications.values()) {
+            if (publication.track) {
+              this.addRemoteTrack(publication.track, publication, participant);
+            }
+          }
+        }
+      }
+  
+      async close() {
+        // Remove the tracks from our wrapper MediaStream, but do not call
+        // MediaStreamTrack.stop(). LiveKit owns the remote tracks.
+        for (const track of this.stream.getTracks()) {
+          this.stream.removeTrack(track);
+        }
+  
+        try {
+          await this.room.disconnect();
+        } catch (error) {
+          console.warn("[LiveKit receiver] Disconnect failed", error);
+        }
+      }
     }
+  
+    let activeConnection = null;
   
     async function disconnect() {
       const connection = activeConnection;
@@ -84,20 +256,8 @@
       window.__liveKitRoom = null;
       window.__liveKitMediaStream = null;
   
-      if (!connection) {
-        return;
-      }
-  
-      // Remove the tracks from our wrapper MediaStream, but do not call
-      // MediaStreamTrack.stop(). LiveKit owns the remote tracks.
-      for (const track of connection.stream.getTracks()) {
-        connection.stream.removeTrack(track);
-      }
-  
-      try {
-        await connection.room.disconnect();
-      } catch (error) {
-        console.warn("[LiveKit receiver] Disconnect failed", error);
+      if (connection) {
+        await connection.close();
       }
     }
   
@@ -132,229 +292,47 @@
         adaptiveStream: false,
       });
   
-      const outputStream = new MediaStream();
+      const connection = new LiveKitConnection(room);
+      connection.selectedParticipantIdentity = participantIdentity;
   
-      // The output contains at most one audio and one video track.
-      const outputTrackByKind = new Map();
-  
-      let selectedParticipantIdentity = participantIdentity;
-  
-      const acceptsParticipant = (participant) => {
-        if (selectedParticipantIdentity === null) {
-          selectedParticipantIdentity = participant.identity;
-        }
-  
-        return participant.identity === selectedParticipantIdentity;
-      };
-  
-      const addRemoteTrack = (
-        remoteTrack,
-        publication,
-        participant
-      ) => {
-        const mediaTrack = remoteTrack.mediaStreamTrack;
-  
-        if (!acceptsParticipant(participant)) {
-          window.ws?.sendJson({
-            type: 'LiveKitTrackNotAccepted',
-            participantIdentity: participant.identity,
-            publicationSid: publication.trackSid ?? publication.sid,
-            kind: mediaTrack?.kind ?? null,
-            id: mediaTrack?.id ?? null,
-          });
-          return;
-        }
-  
-        if (
-          !mediaTrack ||
-          (mediaTrack.kind !== "audio" &&
-            mediaTrack.kind !== "video")
-        ) {
-          window.ws?.sendJson({
-            type: 'LiveKitTrackNotAccepted',
-            participantIdentity: participant.identity,
-            publicationSid: publication.trackSid ?? publication.sid,
-            kind: mediaTrack?.kind ?? null,
-            id: mediaTrack?.id ?? null,
-          });
-          return;
-        }
-  
-        // Replace the previous track of the same kind.
-        const previousTrack =
-          outputTrackByKind.get(mediaTrack.kind);
-  
-        if (previousTrack === mediaTrack) {
-          return;
-        }
-  
-        if (previousTrack) {
-          outputStream.removeTrack(previousTrack);
-        }
-  
-        outputTrackByKind.set(mediaTrack.kind, mediaTrack);
-        outputStream.addTrack(mediaTrack);
-  
-        console.info("[LiveKit receiver] Added track", {
-          participantIdentity: participant.identity,
-          publicationSid:
-            publication.trackSid ?? publication.sid,
-          kind: mediaTrack.kind,
-          id: mediaTrack.id,
-        });
-
-        window.ws?.sendJson({
-          type: 'LiveKitTrackAdded',
-          participantIdentity: participant.identity,
-          publicationSid: publication.trackSid ?? publication.sid,
-          kind: mediaTrack.kind,
-          id: mediaTrack.id,
-        });
-      };
-  
-      const removeRemoteTrack = (
-        remoteTrack,
-        publication,
-        participant
-      ) => {
-        const mediaTrack = remoteTrack.mediaStreamTrack;
-  
-        if (!mediaTrack) {
-          return;
-        }
-  
-        if (
-          outputTrackByKind.get(mediaTrack.kind) === mediaTrack
-        ) {
-          outputTrackByKind.delete(mediaTrack.kind);
-          outputStream.removeTrack(mediaTrack);
-        }
-  
-        console.info("[LiveKit receiver] Removed track", {
-          participantIdentity: participant.identity,
-          publicationSid:
-            publication.trackSid ?? publication.sid,
-          kind: mediaTrack.kind,
-          id: mediaTrack.id,
-        });
-      };
-  
-      room.on(RoomEvent.TrackSubscribed, addRemoteTrack);
-      room.on(RoomEvent.TrackUnsubscribed, removeRemoteTrack);
-  
-      room.on(RoomEvent.Disconnected, () => {
-        console.info("[LiveKit receiver] Room disconnected");
-      });
-  
-      activeConnection = {
-        room,
-        stream: outputStream,
-  
-        get selectedParticipantIdentity() {
-          return selectedParticipantIdentity;
-        },
-      };
+      activeConnection = connection;
   
       // Expose these immediately for debugging and downstream use.
       window.__liveKitRoom = room;
-      window.__liveKitMediaStream = outputStream;
+      window.__liveKitMediaStream = connection.stream;
   
       try {
-        await room.connect(url, token, {
-          autoSubscribe: true,
-        });
-
-        const describeParticipant = (participant) => ({
-          identity: participant.identity,
-          sid: participant.sid,
-          name: participant.name,
-          metadata: participant.metadata,
-          isLocal: participant.isLocal === true,
-          publications: Array.from(
-            participant.trackPublications.values()
-          ).map((publication) => ({
-            sid: publication.trackSid ?? publication.sid,
-            kind: publication.kind,
-            source: publication.source,
-            muted: publication.isMuted,
-            subscribed: publication.isSubscribed,
-          })),
-        });
-
-        window.ws?.sendJson({
-          type: 'LiveKitRoomParticipants',
-          roomName: room.name,
-          localParticipant: room.localParticipant
-            ? describeParticipant(room.localParticipant)
-            : null,
-          remoteParticipants: Array.from(
-            room.remoteParticipants.values()
-          ).map(describeParticipant),
-        });
-
-        /*
-         * Usually TrackSubscribed handles everything. Scan existing
-         * publications too, in case subscription completed around the
-         * same time as room.connect().
-         */
-        for (const participant of room.remoteParticipants.values()) {
-          for (
-            const publication of
-            participant.trackPublications.values()
-          ) {
-            if (publication.track) {
-              addRemoteTrack(
-                publication.track,
-                publication,
-                participant
-              );
-            }
-          }
-        }
+        await room.connect(url, token, { autoSubscribe: true });
   
-        const requiredKinds = [];
+        connection.reportParticipants();
+        connection.collectExistingTracks();
   
-        if (waitForAudio) {
-          requiredKinds.push("audio");
-        }
-  
-        if (waitForVideo) {
-          requiredKinds.push("video");
-        }
+        const requiredKinds = [
+          ...(waitForAudio ? ["audio"] : []),
+          ...(waitForVideo ? ["video"] : []),
+        ];
   
         if (requiredKinds.length > 0) {
-          await waitForTrackKinds(
-            outputStream,
-            requiredKinds,
-            timeoutMs
-          );
+          await connection.waitForTrackKinds(requiredKinds, timeoutMs);
         }
   
-        console.info(
-          "[LiveKit receiver] MediaStream ready",
-          {
-            roomName: room.name,
-            selectedParticipantIdentity,
-            tracks: outputStream
-              .getTracks()
-              .map((track) => ({
-                kind: track.kind,
-                id: track.id,
-                readyState: track.readyState,
-                muted: track.muted,
-              })),
-          }
-        );
+        console.info("[LiveKit receiver] MediaStream ready", {
+          roomName: room.name,
+          selectedParticipantIdentity: connection.selectedParticipantIdentity,
+          tracks: connection.stream.getTracks().map((track) => ({
+            kind: track.kind,
+            id: track.id,
+            readyState: track.readyState,
+            muted: track.muted,
+          })),
+        });
   
-        return outputStream;
+        return connection.stream;
       } catch (error) {
-        console.error(
-          "[LiveKit receiver] Connection failed",
-          error
-        );
-
-        window.ws?.sendJson({
-          type: 'LiveKitConnectionFailed',
+        console.error("[LiveKit receiver] Connection failed", error);
+  
+        sendJson({
+          type: "LiveKitConnectionFailed",
           error: error.message,
         });
   
@@ -376,9 +354,7 @@
       },
   
       get selectedParticipantIdentity() {
-        return (
-          activeConnection?.selectedParticipantIdentity ?? null
-        );
+        return activeConnection?.selectedParticipantIdentity ?? null;
       },
     });
   })();
