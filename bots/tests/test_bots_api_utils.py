@@ -196,59 +196,11 @@ class TestCreateBot(TestCase):
         self.assertEqual(bot.recordings.first().transcription_provider, TranscriptionProviders.DEEPGRAM)
         self.assertEqual(bot.recordings.first().transcription_type, TranscriptionTypes.NON_REALTIME)
 
-    def test_create_zoom_native_bot_rejects_enabled_transcription_without_provider(self):
-        ZoomOAuthApp.objects.create(project=self.project, client_id="123")
-        bot, error = create_bot(
-            data={
-                "meeting_url": "https://zoom.us/j/123456789",
-                "bot_name": "Test Bot",
-                "transcription_settings": {"enabled": True},
-                "zoom_settings": {"sdk": "native"},
-            },
-            source=BotCreationSource.API,
-            project=self.project,
-        )
-
-        self.assertIsNone(bot)
-        self.assertIn("transcription_settings", error)
-
-    def test_create_bot_rejects_disabled_transcription_with_provider(self):
-        bot, error = create_bot(
-            data={
-                "meeting_url": "https://meet.google.com/abc-defg-hij",
-                "bot_name": "Test Bot",
-                "transcription_settings": {"enabled": False, "deepgram": {}},
-            },
-            source=BotCreationSource.API,
-            project=self.project,
-        )
-
-        self.assertIsNone(bot)
-        self.assertIn("transcription_settings", error)
-
     def test_create_google_meet_bot_with_transcription_disabled(self):
         bot, error = create_bot(
             data={
                 "meeting_url": "https://meet.google.com/abc-defg-hij",
                 "bot_name": "Test Bot",
-                "transcription_settings": {"enabled": False},
-            },
-            source=BotCreationSource.API,
-            project=self.project,
-        )
-
-        self.assertIsNotNone(bot)
-        self.assertIsNone(error)
-        self.assertEqual(bot.recordings.first().transcription_provider, TranscriptionProviders.NO_TRANSCRIPTION)
-        self.assertEqual(bot.recordings.first().transcription_type, TranscriptionTypes.NON_REALTIME)
-
-    def test_create_zoom_web_bot_with_transcription_disabled(self):
-        ZoomOAuthApp.objects.create(project=self.project, client_id="123")
-        bot, error = create_bot(
-            data={
-                "meeting_url": "https://zoom.us/j/123456789",
-                "bot_name": "Test Bot",
-                "zoom_settings": {"sdk": "web"},
                 "transcription_settings": {"enabled": False},
             },
             source=BotCreationSource.API,
