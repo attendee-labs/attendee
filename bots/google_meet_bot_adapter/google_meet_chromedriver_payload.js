@@ -21,6 +21,7 @@
       sid: participant.sid,
       name: participant.name,
       metadata: participant.metadata,
+      attributes: participant.attributes ?? null,
       isLocal: participant.isLocal === true,
       publications: Array.from(participant.trackPublications.values()).map(
         (publication) => ({
@@ -69,7 +70,7 @@
           this.selectedParticipantIdentity = participant.identity;
         }
   
-        return participant.identity === this.selectedParticipantIdentity;
+        return participant.attributes?.["lk.publish_on_behalf"] === this.selectedParticipantIdentity;
       }
   
       addRemoteTrack(remoteTrack, publication, participant) {
