@@ -95,34 +95,81 @@ const handleVideoTrackForRealTimePerParticipantVideo = async ({ track, streams }
     }
 };
 
-function sendChatMessage(text) {
-    
-    // First try to find the chat input textarea
-    let chatInput = document.querySelector('textarea[aria-label="Send a message"]');
-    
+async function waitForChatElement(getElement, timeoutMs = 5000) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+        const element = getElement();
+        if (element) {
+            return element;
+        }
+        await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    return null;
+}
+
+function findLatestChatMessageElement(text) {
+    const normalizedText = text.trim();
+    const matchingMessageContainers = Array.from(document.querySelectorAll('[data-message-id]'))
+        .filter(element => Array.from(element.querySelectorAll('*'))
+            .some(descendant => descendant.textContent?.trim() === normalizedText));
+    return matchingMessageContainers.at(-1) || null;
+}
+
+async function pinChatMessage(text) {
+    const pinButton = await waitForChatElement(() => {
+        const messageContainer = findLatestChatMessageElement(text);
+        if (!messageContainer) {
+            return null;
+        }
+
+        messageContainer.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+        messageContainer.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+        return messageContainer.querySelector('button[aria-label="Pin"], button[aria-label="Pin message"], [role="button"][aria-label="Pin"], [role="button"][aria-label="Pin message"]');
+    });
+    if (!pinButton) {
+        console.error('Pin action not found for sent chat message');
+        return false;
+    }
+
+    pinButton.click();
+
+    const confirmationButton = await waitForChatElement(() => {
+        const pinningDialog = Array.from(document.querySelectorAll('[role="dialog"]'))
+            .find(dialog => dialog.textContent?.includes('Pinning messages'));
+        return Array.from(pinningDialog?.querySelectorAll('button') || [])
+            .find(button => ['Pin', 'Pin this message'].includes(button.textContent?.trim()));
+    }, 1000);
+    confirmationButton?.click();
+
+    const unpinButton = await waitForChatElement(() => {
+        const messageContainer = findLatestChatMessageElement(text);
+        return messageContainer?.querySelector('button[aria-label="Unpin"], button[aria-label="Unpin message"], [role="button"][aria-label="Unpin"], [role="button"][aria-label="Unpin message"]');
+    }, 3000);
+    return Boolean(unpinButton);
+}
+
+async function sendChatMessage(text, pin = false) {
+    const chatInput = document.querySelector('textarea[aria-label="Send a message"]');
     if (!chatInput) {
         console.error('Chat input not found');
         return false;
     }
-    
-    // Type the message
+
     chatInput.focus();
     chatInput.value = text;
-    
-    // Trigger input event to ensure the UI updates
     chatInput.dispatchEvent(new Event('input', { bubbles: true }));
-    
-    // Send Enter keypress to submit the message
-    const enterEvent = new KeyboardEvent('keydown', {
+    chatInput.dispatchEvent(new KeyboardEvent('keydown', {
         key: 'Enter',
         code: 'Enter',
         keyCode: 13,
         which: 13,
         bubbles: true
-    });
-    chatInput.dispatchEvent(enterEvent);
-    
-    return true;
+    }));
+
+    if (!pin) {
+        return true;
+    }
+    return pinChatMessage(text);
 }
 
 class ParticipantSpeechStartStopManager {

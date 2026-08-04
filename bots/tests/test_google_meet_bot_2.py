@@ -14,6 +14,7 @@ from selenium.common.exceptions import TimeoutException
 
 from bots.bot_adapter import BotAdapter
 from bots.bot_controller import BotController
+from bots.google_meet_bot_adapter.google_meet_bot_adapter import GoogleMeetBotAdapter
 from bots.google_meet_bot_adapter.google_meet_ui_methods import GoogleMeetUIMethods
 from bots.models import (
     Bot,
@@ -44,6 +45,26 @@ from bots.models import (
 )
 from bots.tests.mock_data import create_mock_file_uploader, create_mock_google_meet_driver
 from bots.web_bot_adapter.ui_methods import UiLoginRequiredException, UiRetryableException
+
+
+class TestGoogleMeetChatMessagePinning(TransactionTestCase):
+    def test_send_chat_message_passes_pin_option_to_browser(self):
+        adapter = object.__new__(GoogleMeetBotAdapter)
+        adapter.driver = MagicMock()
+        adapter.driver.execute_async_script.return_value = True
+
+        adapter.send_chat_message("Important meeting link", None, pin=True)
+
+        args = adapter.driver.execute_async_script.call_args.args
+        self.assertEqual(args[1:], ("Important meeting link", True))
+
+    def test_send_chat_message_raises_when_browser_operation_fails(self):
+        adapter = object.__new__(GoogleMeetBotAdapter)
+        adapter.driver = MagicMock()
+        adapter.driver.execute_async_script.return_value = False
+
+        with self.assertRaisesRegex(RuntimeError, "could not be sent or pinned"):
+            adapter.send_chat_message("Important meeting link", None, pin=True)
 
 
 @override_settings(

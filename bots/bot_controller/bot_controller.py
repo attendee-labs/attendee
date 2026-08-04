@@ -1144,8 +1144,16 @@ class BotController:
 
         chat_message_requests = self.bot_in_db.chat_message_requests.filter(state=BotChatMessageRequestStates.ENQUEUED)
         for chat_message_request in chat_message_requests:
-            self.adapter.send_chat_message(text=chat_message_request.message, to_user_uuid=chat_message_request.to_user_uuid)
-            BotChatMessageRequestManager.set_chat_message_request_sent(chat_message_request)
+            try:
+                self.adapter.send_chat_message(
+                    text=chat_message_request.message,
+                    to_user_uuid=chat_message_request.to_user_uuid,
+                    pin=chat_message_request.additional_data.get("pin", False),
+                )
+                BotChatMessageRequestManager.set_chat_message_request_sent(chat_message_request)
+            except Exception as e:
+                logger.warning(f"Error sending chat message request {chat_message_request.id}: {e}")
+                BotChatMessageRequestManager.set_chat_message_request_failed(chat_message_request)
 
     def take_action_based_on_voice_agent_settings_in_db(self):
         if self.bot_in_db.should_launch_webpage_streamer():

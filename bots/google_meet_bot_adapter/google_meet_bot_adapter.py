@@ -64,8 +64,22 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
         logger.info(f"send_video called with video_url = {video_url}, loop = {loop}, mute_video = {mute_video}")
         self.driver.execute_script(f"window.botOutputManager.playVideo({json.dumps(video_url)}, {json.dumps(loop)}, {json.dumps(mute_video)})")
 
-    def send_chat_message(self, text, to_user_uuid):
-        self.driver.execute_script("window?.sendChatMessage(arguments[0]);", text)
+    def send_chat_message(self, text, to_user_uuid, pin=False):
+        result = self.driver.execute_async_script(
+            """
+            const done = arguments[arguments.length - 1];
+            Promise.resolve(window?.sendChatMessage(arguments[0], arguments[1]))
+                .then(done)
+                .catch((error) => {
+                    console.error("Error sending Google Meet chat message", error);
+                    done(false);
+                });
+            """,
+            text,
+            pin,
+        )
+        if not result:
+            raise RuntimeError("Google Meet chat message could not be sent or pinned")
 
     def update_closed_captions_language(self, language):
         if self.google_meet_closed_captions_language == language:

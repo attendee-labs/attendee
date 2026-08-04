@@ -506,7 +506,7 @@ class ZoomBotAdapter(BotAdapter):
             self.active_sharer_source_id = new_active_sharer_source_id
             self.set_video_input_manager_based_on_state()
 
-    def send_chat_message(self, text, to_user_uuid):
+    def send_chat_message(self, text, to_user_uuid, pin=False):
         # Send a welcome message to the chat
         builder = self.chat_ctrl.GetChatMessageBuilder()
         builder.SetContent(text)
