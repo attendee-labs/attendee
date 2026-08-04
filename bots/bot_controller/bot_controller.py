@@ -633,6 +633,7 @@ class BotController:
             bucket=settings.AWS_RECORDING_STORAGE_BUCKET_NAME,
             filename=self.get_recording_filename(),
             endpoint_url=settings.RECORDING_STORAGE_BACKEND.get("OPTIONS").get("endpoint_url"),
+            use_path_style_addressing=settings.RECORDING_STORAGE_BACKEND.get("OPTIONS").get("addressing_style") == "path",
         )
 
     def cleanup(self):

@@ -10,15 +10,16 @@ logger.setLevel(logging.INFO)
 
 
 class S3FileUploader:
-    def __init__(self, bucket, filename, endpoint_url=None, region_name=None, access_key_id=None, access_key_secret=None):
+    def __init__(self, bucket, filename, endpoint_url=None, region_name=None, access_key_id=None, access_key_secret=None, use_path_style_addressing=False):
         """Initialize the S3FileUploader with an S3 bucket name.
 
         Args:
             bucket (str): The name of the S3 bucket to upload to
             filename (str): The name of the to be stored file
         """
-        # S3-compatible endpoints like MinIO/LocalStack require path-style addressing.
-        config = Config(s3={"addressing_style": "path"}) if endpoint_url else None
+        # Path-style addressing is required by some S3-compatible endpoints (MinIO,
+        # LocalStack) but breaks others, so callers must opt in explicitly.
+        config = Config(s3={"addressing_style": "path"}) if use_path_style_addressing else None
         self.s3_client = boto3.client("s3", endpoint_url=endpoint_url, region_name=region_name, aws_access_key_id=access_key_id, aws_secret_access_key=access_key_secret, config=config)
         self.bucket = bucket
         self.filename = filename

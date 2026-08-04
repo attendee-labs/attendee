@@ -13,8 +13,9 @@ logger = logging.getLogger(__name__)
 class StreamingUploader:
     def __init__(self, bucket, key, chunk_size=5242880):  # 5MB chunks
         endpoint_url = os.getenv("AWS_ENDPOINT_URL")
-        # S3-compatible endpoints like MinIO/LocalStack require path-style addressing.
-        config = Config(s3={"addressing_style": "path"}) if endpoint_url else None
+        # Path-style addressing is required by some S3-compatible endpoints (MinIO,
+        # LocalStack) but breaks others, so this is an explicit opt-in.
+        config = Config(s3={"addressing_style": "path"}) if os.getenv("AWS_S3_USE_PATH_STYLE_ADDRESSING", "false") == "true" else None
         self.s3_client = boto3.client("s3", endpoint_url=endpoint_url, config=config)
         self.bucket = bucket
         self.key = key

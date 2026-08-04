@@ -11,9 +11,6 @@ services:
       - DJANGO_SETTINGS_MODULE=attendee.settings.development
       - ENABLE_CHROME_SANDBOX=false
     command: "celery -A attendee worker -l INFO"
-    depends_on:
-      minio-createbuckets:
-        condition: service_completed_successfully
 
   attendee-scheduler-local:
     build: ./
@@ -27,9 +24,6 @@ services:
       - DJANGO_SETTINGS_MODULE=attendee.settings.development
     command: "python manage.py run_scheduler"
     entrypoint: []
-    depends_on:
-      minio-createbuckets:
-        condition: service_completed_successfully
 
   attendee-app-local:
     build: ./
@@ -45,9 +39,6 @@ services:
       - DJANGO_SETTINGS_MODULE=attendee.settings.development
     command: python manage.py runserver 0.0.0.0:8000
     entrypoint: []
-    depends_on:
-      minio-createbuckets:
-        condition: service_completed_successfully
 
   attendee-webpage-streamer-local:
     build: ./
@@ -89,6 +80,7 @@ services:
     volumes:
       - redis:/data/redis
 
+  # Optional local S3-compatible storage — see README.md for setup.
   minio:
     image: minio/minio:latest
     command: server /data --console-address ":9001"
@@ -103,9 +95,9 @@ services:
     networks:
       - attendee_network
     restart: unless-stopped
+    profiles:
+      - minio
 
-  # One-shot job that creates the recording bucket on startup so the app
-  # never has to worry about bucket provisioning.
   minio-createbuckets:
     image: minio/mc:latest
     networks:
@@ -116,8 +108,9 @@ services:
       /bin/sh -c "
       until mc alias set local http://minio:9000 minioadmin minioadmin; do sleep 1; done;
       mc mb --ignore-existing local/attendee-recordings;
-      mc mb --ignore-existing local/minutesiq-dev;
       "
+    profiles:
+      - minio
 
 networks:
   attendee_network:

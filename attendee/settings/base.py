@@ -283,9 +283,11 @@ else:
             "secret_key": os.getenv("AWS_SECRET_ACCESS_KEY"),
         },
     }
-    # S3-compatible endpoints like MinIO/LocalStack don't support virtual-hosted-style
-    # requests (bucket-as-subdomain), so fall back to path-style addressing for them.
-    if os.getenv("AWS_ENDPOINT_URL"):
+    # Some S3-compatible endpoints (MinIO, LocalStack) require path-style addressing,
+    # while others (e.g. Google Cloud Storage's S3-compatible API) require virtual-hosted
+    # style. We can't infer which is needed just from AWS_ENDPOINT_URL being set, so this
+    # is an explicit opt-in.
+    if os.getenv("AWS_S3_USE_PATH_STYLE_ADDRESSING", "false") == "true":
         DEFAULT_STORAGE_BACKEND["OPTIONS"]["addressing_style"] = "path"
     # Deep copy the DEFAULT_STORAGE_BACKEND
     RECORDING_STORAGE_BACKEND = copy.deepcopy(DEFAULT_STORAGE_BACKEND)
