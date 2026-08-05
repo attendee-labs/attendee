@@ -1,6 +1,10 @@
 import json
 import logging
+import time
 from typing import Callable
+
+from selenium.common.exceptions import StaleElementReferenceException
+from selenium.webdriver.common.by import By
 
 from bots.google_meet_bot_adapter.google_meet_ui_methods import (
     GoogleMeetUIMethods,
@@ -68,18 +72,156 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
         result = self.driver.execute_async_script(
             """
             const done = arguments[arguments.length - 1];
-            Promise.resolve(window?.sendChatMessage(arguments[0], arguments[1]))
+            Promise.resolve(window?.sendChatMessage(arguments[0]))
                 .then(done)
                 .catch((error) => {
                     console.error("Error sending Google Meet chat message", error);
-                    done(false);
+                    done({sent: false, failure_stage: "send", failure_reason: String(error)});
                 });
             """,
             text,
-            pin,
         )
-        if not result:
-            raise RuntimeError("Google Meet chat message could not be sent or pinned")
+        if not isinstance(result, dict) or not result.get("sent"):
+            return result or {
+                "sent": False,
+                "failure_stage": "send",
+                "failure_reason": "invalid_browser_result",
+            }
+
+        if not pin:
+            return result
+
+        pin_result = self._pin_chat_message(result.get("message_id"), text)
+        result.update(pin_result)
+        return result
+
+    def _pin_chat_message(self, message_id, text, timeout_seconds=20):
+        if not message_id:
+            return {
+                "pinned": False,
+                "failure_stage": "pin_target",
+                "failure_reason": "message_id_missing",
+            }
+
+        deadline = time.monotonic() + timeout_seconds
+        last_failure_reason = "pin_button_not_found"
+        while time.monotonic() < deadline:
+            try:
+                messages = self.driver.find_elements(By.CSS_SELECTOR, "[data-message-id]")
+                message = next((candidate for candidate in messages if candidate.get_attribute("data-message-id") == message_id), None)
+                if message is None:
+                    message = self.driver.execute_script(
+                        """
+                        const text = arguments[0];
+                        const matchingMessages = Array.from(document.querySelectorAll('[data-message-id]'))
+                            .filter(candidate => Array.from(candidate.querySelectorAll('div'))
+                                .some(descendant => descendant.textContent?.trim() === text));
+                        return matchingMessages.at(-1) || null;
+                        """,
+                        text,
+                    )
+                if message is None:
+                    last_failure_reason = "message_element_not_found"
+                    time.sleep(0.25)
+                    continue
+                self.driver.execute_script(
+                    """
+                    arguments[0].scrollIntoView({block: 'center'});
+                    for (const eventType of ['mouseenter', 'mouseover', 'mousemove']) {
+                        arguments[0].dispatchEvent(new MouseEvent(eventType, {bubbles: true, view: window}));
+                    }
+                    """,
+                    message,
+                )
+
+                unpin_buttons = message.find_elements(By.CSS_SELECTOR, '[aria-label="Unpin"], [aria-label="Unpin message"], [aria-label="Unpin from board"]')
+                if unpin_buttons:
+                    return {"pinned": True, "message_id": message_id}
+
+                pin_buttons = message.find_elements(By.CSS_SELECTOR, '[aria-label="Pin"], [aria-label="Pin message"]')
+                if pin_buttons:
+                    self.driver.execute_script("arguments[0].click();", pin_buttons[-1])
+                    self._confirm_chat_message_pin()
+                    last_failure_reason = "pin_not_verified"
+                else:
+                    board_pin_result = self._pin_chat_message_to_board(message)
+                    if board_pin_result == "pinned":
+                        return {
+                            "pinned": True,
+                            "message_id": message_id,
+                            "pin_method": "board",
+                        }
+                    if board_pin_result == "clicked":
+                        last_failure_reason = "board_pin_not_verified"
+                    else:
+                        last_failure_reason = "pin_action_not_found"
+            except StaleElementReferenceException:
+                last_failure_reason = "stale_message_element"
+            except Exception as exc:
+                last_failure_reason = type(exc).__name__
+            time.sleep(0.25)
+
+        return {
+            "pinned": False,
+            "message_id": message_id,
+            "failure_stage": "pin",
+            "failure_reason": last_failure_reason,
+        }
+
+    def _pin_chat_message_to_board(self, message):
+        more_actions = message.find_elements(
+            By.CSS_SELECTOR,
+            '[aria-label="More actions"], [aria-label="More options"], [aria-label*="More actions"]',
+        )
+        if not more_actions:
+            more_actions = [
+                button
+                for button in self.driver.find_elements(By.CSS_SELECTOR, 'button[aria-label^="More options for "]')
+                if button.is_displayed()
+            ]
+        if not more_actions:
+            return "not_found"
+
+        self.driver.execute_script("arguments[0].click();", more_actions[-1])
+        menu_items = []
+        menu_deadline = time.monotonic() + 2
+        while time.monotonic() < menu_deadline and not menu_items:
+            menu_items = [item for item in self.driver.find_elements(By.CSS_SELECTOR, '[role="menuitem"]') if item.is_displayed()]
+            if not menu_items:
+                time.sleep(0.1)
+        unpin_from_board = next(
+            (
+                item
+                for item in reversed(menu_items)
+                if item.text.strip() in {"Unpin", "Unpin from board"} or item.get_attribute("aria-label") == "Unpin from board"
+            ),
+            None,
+        )
+        if unpin_from_board is not None:
+            return "pinned"
+
+        pin_to_board = next(
+            (
+                item
+                for item in reversed(menu_items)
+                if item.text.strip() == "Pin to board" or item.get_attribute("aria-label") == "Pin to board"
+            ),
+            None,
+        )
+        if pin_to_board is None:
+            return "not_found"
+
+        self.driver.execute_script("arguments[0].click();", pin_to_board)
+        return "clicked"
+
+    def _confirm_chat_message_pin(self):
+        dialogs = self.driver.find_elements(By.CSS_SELECTOR, '[role="dialog"]')
+        for dialog in reversed(dialogs):
+            buttons = dialog.find_elements(By.CSS_SELECTOR, "button")
+            matching_buttons = [button for button in buttons if button.text.strip() in {"Pin", "Pin this message"}]
+            if matching_buttons:
+                matching_buttons[-1].click()
+                return
 
     def update_closed_captions_language(self, language):
         if self.google_meet_closed_captions_language == language:
