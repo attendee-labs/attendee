@@ -102,8 +102,24 @@ class TestGoogleMeetChatMessagePinning(TransactionTestCase):
         message.get_attribute.return_value = "message-123"
         pin_button = MagicMock()
         unpin_button = MagicMock()
-        message.find_elements.side_effect = [[], [pin_button], [unpin_button]]
-        adapter.driver.find_elements.return_value = [message]
+
+        def find_message_controls(_, selector):
+            if "Unpin" in selector:
+                return [unpin_button] if pin_button_clicked else []
+            if "Pin message" in selector:
+                return [pin_button]
+            return []
+
+        pin_button_clicked = False
+
+        def execute_script(script, *args):
+            nonlocal pin_button_clicked
+            if script == "arguments[0].click();" and args[0] is pin_button:
+                pin_button_clicked = True
+
+        message.find_elements.side_effect = find_message_controls
+        adapter.driver.find_elements.side_effect = lambda _, selector: [] if selector == '[role="dialog"]' else [message]
+        adapter.driver.execute_script.side_effect = execute_script
 
         result = adapter._pin_chat_message("message-123", "Important meeting link", timeout_seconds=0.5)
 
