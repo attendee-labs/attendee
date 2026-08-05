@@ -79,6 +79,69 @@ class TestGoogleMeetChatMessagePinning(TransactionTestCase):
         pin_chat_message.assert_not_called()
         self.assertEqual(result["failure_reason"], "own_message_not_observed")
 
+    def test_send_chat_message_defers_missing_pin_action_until_host_joins(self):
+        adapter = object.__new__(GoogleMeetBotAdapter)
+        adapter.driver = MagicMock()
+        adapter.driver.execute_async_script.return_value = {
+            "sent": True,
+            "message_id": "message-123",
+        }
+        adapter.pending_chat_message_pin = None
+        adapter.participants_info = {}
+
+        with patch.object(
+            adapter,
+            "_pin_chat_message",
+            return_value={
+                "pinned": False,
+                "failure_stage": "pin",
+                "failure_reason": "pin_action_not_found",
+            },
+        ):
+            adapter.send_chat_message("Important meeting link", None, pin=True)
+
+        self.assertEqual(
+            adapter.pending_chat_message_pin,
+            {"message_id": "message-123", "text": "Important meeting link"},
+        )
+
+    def test_host_join_retries_deferred_pin_without_resending_message(self):
+        adapter = object.__new__(GoogleMeetBotAdapter)
+        adapter.driver = MagicMock()
+        adapter.pending_chat_message_pin = {
+            "message_id": "message-123",
+            "text": "Important meeting link",
+        }
+
+        with patch(
+            "bots.google_meet_bot_adapter.google_meet_bot_adapter.WebBotAdapter.handle_participant_update"
+        ) as handle_participant_update, patch.object(
+            adapter,
+            "_pin_chat_message",
+            return_value={"pinned": True, "message_id": "message-123"},
+        ) as pin_chat_message:
+            adapter.handle_participant_update({"active": True, "isHost": True})
+
+        handle_participant_update.assert_called_once_with({"active": True, "isHost": True})
+        pin_chat_message.assert_called_once_with("message-123", "Important meeting link")
+        self.assertIsNone(adapter.pending_chat_message_pin)
+        adapter.driver.execute_async_script.assert_not_called()
+
+    def test_non_host_join_does_not_retry_deferred_pin(self):
+        adapter = object.__new__(GoogleMeetBotAdapter)
+        adapter.pending_chat_message_pin = {
+            "message_id": "message-123",
+            "text": "Important meeting link",
+        }
+
+        with patch(
+            "bots.google_meet_bot_adapter.google_meet_bot_adapter.WebBotAdapter.handle_participant_update"
+        ), patch.object(adapter, "_pin_chat_message") as pin_chat_message:
+            adapter.handle_participant_update({"active": True, "isHost": False})
+
+        pin_chat_message.assert_not_called()
+        self.assertIsNotNone(adapter.pending_chat_message_pin)
+
     def test_pin_chat_message_targets_exact_message_id(self):
         adapter = object.__new__(GoogleMeetBotAdapter)
         adapter.driver = MagicMock()

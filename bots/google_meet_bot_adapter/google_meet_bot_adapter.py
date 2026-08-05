@@ -36,6 +36,7 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
         self.number_of_times_blocked_by_google = 0
         self.number_of_times_mocap_sequence_not_available = 0
         self.ui_interaction_mode = ui_interaction_mode
+        self.pending_chat_message_pin = None
 
     def should_retry_joining_meeting_that_requires_login_by_logging_in(self):
         # If we don't have the ability to login, we can't retry
@@ -93,7 +94,27 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
 
         pin_result = self._pin_chat_message(result.get("message_id"), text)
         result.update(pin_result)
+        active_host_present = any(
+            participant.get("active") and participant.get("isHost")
+            for participant in getattr(self, "participants_info", {}).values()
+        )
+        if pin_result.get("failure_reason") == "pin_action_not_found" and not active_host_present:
+            self.pending_chat_message_pin = {
+                "message_id": result.get("message_id"),
+                "text": text,
+            }
         return result
+
+    def handle_participant_update(self, user):
+        super().handle_participant_update(user)
+        if not user.get("active") or not user.get("isHost") or not self.pending_chat_message_pin:
+            return
+
+        pending_pin = self.pending_chat_message_pin
+        self.pending_chat_message_pin = None
+        pin_result = self._pin_chat_message(pending_pin["message_id"], pending_pin["text"])
+        if not pin_result.get("pinned"):
+            logger.warning("Deferred chat message pin failed after host joined: %s", pin_result)
 
     def _pin_chat_message(self, message_id, text, timeout_seconds=20):
         if not message_id:
