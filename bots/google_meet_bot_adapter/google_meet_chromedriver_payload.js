@@ -361,33 +361,88 @@
   })();
 
 
-
   async function createLivekitEmbeddedVideo() {
     const mediaStream = await window.LiveKitMediaStreamReceiver.connect({
         url: window.googleMeetInitialData.livekitUrl,
         token: window.googleMeetInitialData.livekitToken,
         participantIdentity: window.googleMeetInitialData.livekitParticipantIdentity,
+        // Audio-only participants are allowed; we handle video ourselves below.
+        waitForVideo: false,
+        });
+    
+    // Give a real video track a short grace period to arrive, then fall back
+    // to a locally generated black video track so the combined stream always
+    // has both audio and video.
+    let videoTrack = await waitForVideoTrack(mediaStream, 5_000);
+   
+    if (!videoTrack) {
+      videoTrack = createBlackVideoTrack();
+      mediaStream.addTrack(videoTrack);
+      console.log(
+        "[LiveKit receiver] No remote video track; using black video track:",
+        videoTrack.id
+      );
+      window.ws?.sendJson({
+        type: 'LiveKitVideoTrackNotAvailable',
+        trackId: videoTrack.id,
       });
-  
-  const videoTrack = mediaStream.getVideoTracks()[0];
-  
-  if (!videoTrack) {
-    throw new Error(
-      "Participant timestamp-bot-436073 has no subscribed video track"
-    );
+    }
+   
+    // Route the LiveKit media stream through the bot's webcam instead of
+    // rendering it into an embedded video element on the page.
+    window.botOutputManager.setBotOutputMediaStream(mediaStream);
+    await window.botOutputManager.playBotOutputMediaStream("webcam");
+   
+    console.log("LiveKit media stream routed to bot webcam:", mediaStream);
+   
+    // Publish the meeting's mixed audio into the LiveKit room as this
+    // participant's microphone audio.
+    await publishMeetingAudioToLivekit();
   }
-  
-  // Route the LiveKit media stream through the bot's webcam instead of
-  // rendering it into an embedded video element on the page.
-  window.botOutputManager.setBotOutputMediaStream(mediaStream);
-  await window.botOutputManager.playBotOutputMediaStream("webcam");
-  
-  console.log("LiveKit media stream routed to bot webcam:", mediaStream);
-
-  // Publish the meeting's mixed audio into the LiveKit room as this
-  // participant's microphone audio.
-  await publishMeetingAudioToLivekit();
-}
+   
+  // Polls the stream for a video track until timeoutMs elapses.
+  // Resolves with the track, or null if none appeared in time.
+  function waitForVideoTrack(stream, timeoutMs) {
+    return new Promise((resolve) => {
+      const deadline = Date.now() + timeoutMs;
+   
+      const poll = () => {
+        const track = stream.getVideoTracks()[0];
+   
+        if (track) {
+          resolve(track);
+        } else if (Date.now() >= deadline) {
+          resolve(null);
+        } else {
+          setTimeout(poll, 250);
+        }
+      };
+   
+      poll();
+    });
+  }
+   
+  // Creates a video track that continuously renders black frames.
+  function createBlackVideoTrack(width = 1280, height = 720, fps = 5) {
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+   
+    const ctx = canvas.getContext("2d");
+   
+    const draw = () => {
+      ctx.fillStyle = "#000000";
+      ctx.fillRect(0, 0, width, height);
+    };
+   
+    // Draw once immediately, then keep drawing so captureStream keeps
+    // producing frames (some browsers stop emitting frames from a static
+    // canvas otherwise).
+    draw();
+    setInterval(draw, 1000 / fps);
+   
+    return canvas.captureStream(fps).getVideoTracks()[0];
+  }
 
 async function publishMeetingAudioToLivekit() {
   const room = window.LiveKitMediaStreamReceiver.room;
