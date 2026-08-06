@@ -41,10 +41,11 @@
      * async loop instead of subscription callbacks.
      */
     class LiveKitConnection {
-      constructor(room) {
+      constructor(room, matchParticipantOnPublishOnBehalf) {
         this.room = room;
         this.stream = new MediaStream();
         this.selectedParticipantIdentity = null;
+        this.matchParticipantOnPublishOnBehalf = matchParticipantOnPublishOnBehalf;
   
         // The output contains at most one audio and one video track.
         this.outputTrackByKind = new Map();
@@ -64,13 +65,32 @@
         });
       }
   
+      /*
+       * A LiveKit agent publishing for someone else carries that person's
+       * identity in "lk.publish_on_behalf" rather than in its own identity,
+       * so which field identifies the participant depends on the room setup.
+       */
+      participantMatchKey(participant) {
+        if (this.matchParticipantOnPublishOnBehalf) {
+          return participant.attributes?.["lk.publish_on_behalf"] ?? null;
+        }
+
+        return participant.identity ?? null;
+      }
+
       acceptsParticipant(participant) {
+        const matchKey = this.participantMatchKey(participant);
+
+        if (matchKey === null) {
+          return false;
+        }
+
         // When no identity was requested, latch onto the first publisher seen.
         if (this.selectedParticipantIdentity === null) {
-          this.selectedParticipantIdentity = participant.identity;
+          this.selectedParticipantIdentity = matchKey;
         }
-  
-        return participant.attributes?.["lk.publish_on_behalf"] === this.selectedParticipantIdentity;
+
+        return matchKey === this.selectedParticipantIdentity;
       }
   
       addRemoteTrack(remoteTrack, publication, participant) {
@@ -269,7 +289,11 @@
       // Strongly recommended when the room can contain multiple publishers.
       // When omitted, the first remote publisher received is selected.
       participantIdentity = null,
-  
+
+      // Match participantIdentity against the publisher's
+      // "lk.publish_on_behalf" attribute instead of its own identity.
+      matchParticipantOnPublishOnBehalf = true,
+
       waitForAudio = true,
       waitForVideo = true,
       timeoutMs = 20_000,
@@ -293,7 +317,10 @@
         adaptiveStream: false,
       });
   
-      const connection = new LiveKitConnection(room);
+      const connection = new LiveKitConnection(
+        room,
+        matchParticipantOnPublishOnBehalf
+      );
       connection.selectedParticipantIdentity = participantIdentity;
   
       activeConnection = connection;
@@ -366,6 +393,8 @@
         url: window.googleMeetInitialData.livekitUrl,
         token: window.googleMeetInitialData.livekitToken,
         participantIdentity: window.googleMeetInitialData.livekitParticipantIdentity,
+        matchParticipantOnPublishOnBehalf:
+          window.googleMeetInitialData.livekitMatchParticipantOnPublishOnBehalf,
         // Audio-only participants are allowed; we handle video ourselves below.
         waitForVideo: false,
         });

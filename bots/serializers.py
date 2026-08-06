@@ -1139,6 +1139,11 @@ VOICE_AGENT_SETTINGS_SCHEMA = {
                     "type": "string",
                     "description": "The identity of the LiveKit participant whose audio and video the bot should stream into the meeting. If not provided, the bot uses the first remote publisher it receives a track from.",
                 },
+                "match_participant_on_publish_on_behalf": {
+                    "type": "boolean",
+                    "description": "Controls how participant_identity is matched against the publishers in the room. When true, the bot streams tracks from publishers whose 'lk.publish_on_behalf' attribute equals participant_identity, which is how a LiveKit agent publishes on behalf of another participant. When false, the bot matches the publisher's own identity instead. Only applies to Google Meet.",
+                    "default": True,
+                },
             },
             "required": ["url", "token"],
             "additionalProperties": False,

@@ -98,6 +98,7 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
                 livekitUrl: {json.dumps(self.livekit_settings.get("url", ""))},
                 livekitToken: {json.dumps(self.livekit_settings.get("token", ""))},
                 livekitParticipantIdentity: {json.dumps(self.livekit_settings.get("participant_identity") or None)},
+                livekitMatchParticipantOnPublishOnBehalf: {json.dumps(self.livekit_settings.get("match_participant_on_publish_on_behalf", True))},
             }}
         """
 
