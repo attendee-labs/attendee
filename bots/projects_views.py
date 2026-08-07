@@ -5,7 +5,8 @@ import os
 import uuid
 
 import stripe
-from allauth.account.utils import send_email_confirmation
+from allauth.account.internal.flows.email_verification import send_verification_email_to_address
+from allauth.account.models import EmailAddress
 from django.conf import settings
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.exceptions import PermissionDenied, ValidationError
@@ -1141,8 +1142,13 @@ class InviteUserView(AdminRequiredMixin, ProjectUrlContextMixin, View):
                         project = Project.objects.get(object_id=project_id, organization=request.user.organization)
                         ProjectAccess.objects.create(project=project, user=user)
 
-                # Send verification email
-                send_email_confirmation(request, user, email=email)
+                # Send verification email (allauth >=65.13 removed send_email_confirmation)
+                email_address, _ = EmailAddress.objects.get_or_create(
+                    user=user,
+                    email=email.lower(),
+                    defaults={"primary": True, "verified": False},
+                )
+                send_verification_email_to_address(request, email_address, signup=True)
 
                 # Return success response
                 return HttpResponse("Invitation sent successfully", status=200)
