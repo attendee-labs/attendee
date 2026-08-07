@@ -738,6 +738,7 @@ class RecordingView(APIView):
 
 class TranscriptView(APIView):
     authentication_classes = [ApiKeyAuthentication]
+    throttle_classes = [ProjectPostThrottle]
 
     @extend_schema(
         operation_id="Get Bot Transcript",

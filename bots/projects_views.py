@@ -106,7 +106,8 @@ def get_calendar_event_for_user(user, calendar_event_object_id):
 
 
 def get_bot_login_group_for_user(project, user, bot_login_group_object_id):
-    bot_login_group = get_object_or_404(BotLoginGroup, object_id=bot_login_group_object_id, project__organization=project.organization)
+    # Scope to the URL project so org-wide admins cannot mutate another project's logins via this project's routes
+    bot_login_group = get_object_or_404(BotLoginGroup, object_id=bot_login_group_object_id, project=project)
     # If you're an admin you can access any bot login group in the organization
     if user.role != UserRole.ADMIN and not ProjectAccess.objects.filter(project=bot_login_group.project, user=user).exists():
         raise PermissionDenied
@@ -114,7 +115,8 @@ def get_bot_login_group_for_user(project, user, bot_login_group_object_id):
 
 
 def get_bot_login_for_user(project, user, bot_login_object_id):
-    bot_login = get_object_or_404(BotLogin, object_id=bot_login_object_id, group__project__organization=project.organization)
+    # Scope to the URL project so org-wide admins cannot mutate another project's logins via this project's routes
+    bot_login = get_object_or_404(BotLogin, object_id=bot_login_object_id, group__project=project)
     # If you're an admin you can access any bot login in the organization
     if user.role != UserRole.ADMIN and not ProjectAccess.objects.filter(project=bot_login.group.project, user=user).exists():
         raise PermissionDenied
