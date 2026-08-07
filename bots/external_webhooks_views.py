@@ -1,3 +1,4 @@
+import hmac
 import json
 import logging
 import os
@@ -15,6 +16,18 @@ from .stripe_utils import process_checkout_session_completed, process_customer_u
 from .zoom_oauth_connections_utils import _upsert_zoom_meeting_to_zoom_oauth_connection_mapping, _verify_zoom_webhook_signature, compute_zoom_webhook_validation_response
 
 logger = logging.getLogger(__name__)
+
+
+def _expected_calendar_webhook_token(calendar) -> str:
+    """Token/clientState set when creating Google/Microsoft calendar subscriptions."""
+    return json.dumps({"calendar_id": calendar.object_id})
+
+
+def _calendar_webhook_token_is_valid(provided: str | None, calendar) -> bool:
+    if not provided:
+        return False
+    expected = _expected_calendar_webhook_token(calendar)
+    return hmac.compare_digest(provided, expected)
 
 
 @method_decorator(csrf_exempt, name="dispatch")
@@ -43,20 +56,24 @@ class ExternalWebhookMicrosoftCalendarView(View):
                 logger.warning("No notifications found in Microsoft Calendar webhook payload")
                 return HttpResponse(status=200)
 
-            # Process the first notification
             for notification in notifications:
                 subscription_id = notification.get("subscriptionId")
 
                 if not subscription_id:
                     logger.warning("No subscription ID found in Microsoft Calendar webhook notification")
-                    return HttpResponse(status=200)
+                    continue
 
                 # Look up the calendar notification channel by subscription ID
                 calendar_notification_channel = CalendarNotificationChannel.objects.filter(platform_uuid=subscription_id).first()
                 if not calendar_notification_channel:
                     logger.warning(f"No calendar notification channel found for subscription ID: {subscription_id}")
                     # TODO make request to stop the subscription in Microsoft Graph API
-                    return HttpResponse(status=200)
+                    continue
+
+                # Require clientState to match what we set when creating the subscription
+                if not _calendar_webhook_token_is_valid(notification.get("clientState"), calendar_notification_channel.calendar):
+                    logger.warning(f"Invalid or missing clientState for subscription ID: {subscription_id}")
+                    continue
 
                 # Update the last received timestamp
                 calendar_notification_channel.notification_last_received_at = timezone.now()
@@ -98,6 +115,12 @@ class ExternalWebhookGoogleCalendarView(View):
         if not calendar_notification_channel:
             logger.warning(f"No calendar notification channel found for channel ID: {channel_id}")
             # TODO make request to stop the channel in Google API
+            return HttpResponse(status=200)
+
+        # Require channel token to match what we set when creating the watch channel
+        channel_token = request.headers.get("X-Goog-Channel-Token")
+        if not _calendar_webhook_token_is_valid(channel_token, calendar_notification_channel.calendar):
+            logger.warning(f"Invalid or missing channel token for channel ID: {channel_id}")
             return HttpResponse(status=200)
 
         calendar_notification_channel.notification_last_received_at = timezone.now()

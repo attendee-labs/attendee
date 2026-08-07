@@ -6,6 +6,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from accounts.models import Organization
+from bots.external_webhooks_views import _expected_calendar_webhook_token
 from bots.models import (
     Calendar,
     CalendarNotificationChannel,
@@ -33,6 +34,7 @@ class TestGoogleCalendarWebhooks(TestCase):
             expires_at=timezone.now() + timedelta(days=7),
             raw={"test": "data"},
         )
+        self.channel_token = _expected_calendar_webhook_token(self.calendar)
         self.url = reverse("external_webhooks:external-webhook-google-calendar")
 
     def test_google_webhook_success(self):
@@ -42,6 +44,7 @@ class TestGoogleCalendarWebhooks(TestCase):
             data="",
             content_type="application/json",
             HTTP_X_GOOG_CHANNEL_ID="test_channel_123",
+            HTTP_X_GOOG_CHANNEL_TOKEN=self.channel_token,
             HTTP_X_GOOG_RESOURCE_STATE="exists",
         )
 
@@ -62,6 +65,7 @@ class TestGoogleCalendarWebhooks(TestCase):
             data="",
             content_type="application/json",
             HTTP_X_GOOG_CHANNEL_ID="test_channel_123",
+            HTTP_X_GOOG_CHANNEL_TOKEN=self.channel_token,
             HTTP_X_GOOG_RESOURCE_STATE="sync",
         )
 
@@ -82,6 +86,7 @@ class TestGoogleCalendarWebhooks(TestCase):
             data="",
             content_type="application/json",
             HTTP_X_GOOG_CHANNEL_ID="unknown_channel_id",
+            HTTP_X_GOOG_CHANNEL_TOKEN=self.channel_token,
             HTTP_X_GOOG_RESOURCE_STATE="exists",
         )
 
@@ -108,6 +113,35 @@ class TestGoogleCalendarWebhooks(TestCase):
         self.notification_channel.refresh_from_db()
         self.assertIsNone(self.notification_channel.notification_last_received_at)
 
+    def test_google_webhook_spoof_with_channel_id_only_rejected(self):
+        """Spoofing with channel UUID alone (no/invalid token) must not trigger sync."""
+        response = self.client.post(
+            self.url,
+            data="",
+            content_type="application/json",
+            HTTP_X_GOOG_CHANNEL_ID="test_channel_123",
+            HTTP_X_GOOG_RESOURCE_STATE="exists",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.notification_channel.refresh_from_db()
+        self.assertIsNone(self.notification_channel.notification_last_received_at)
+        self.calendar.refresh_from_db()
+        self.assertIsNone(self.calendar.sync_task_requested_at)
+
+        response = self.client.post(
+            self.url,
+            data="",
+            content_type="application/json",
+            HTTP_X_GOOG_CHANNEL_ID="test_channel_123",
+            HTTP_X_GOOG_CHANNEL_TOKEN=json.dumps({"calendar_id": "cal_wrong"}),
+            HTTP_X_GOOG_RESOURCE_STATE="exists",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.notification_channel.refresh_from_db()
+        self.assertIsNone(self.notification_channel.notification_last_received_at)
+
     def test_google_webhook_update_resource_state(self):
         """Test Google webhook with 'update' resource state."""
         response = self.client.post(
@@ -115,6 +149,7 @@ class TestGoogleCalendarWebhooks(TestCase):
             data="",
             content_type="application/json",
             HTTP_X_GOOG_CHANNEL_ID="test_channel_123",
+            HTTP_X_GOOG_CHANNEL_TOKEN=self.channel_token,
             HTTP_X_GOOG_RESOURCE_STATE="update",
         )
 
@@ -144,6 +179,7 @@ class TestGoogleCalendarWebhooks(TestCase):
             data="",
             content_type="application/json",
             HTTP_X_GOOG_CHANNEL_ID="test_channel_123",
+            HTTP_X_GOOG_CHANNEL_TOKEN=self.channel_token,
             HTTP_X_GOOG_RESOURCE_STATE="exists",
         )
 
@@ -176,6 +212,7 @@ class TestMicrosoftCalendarWebhooks(TestCase):
             expires_at=timezone.now() + timedelta(days=7),
             raw={"test": "data"},
         )
+        self.client_state = _expected_calendar_webhook_token(self.calendar)
         self.url = reverse("external_webhooks:external-webhook-microsoft-calendar")
 
     def test_microsoft_webhook_validation_request(self):
@@ -199,6 +236,7 @@ class TestMicrosoftCalendarWebhooks(TestCase):
             "value": [
                 {
                     "subscriptionId": "test_subscription_123",
+                    "clientState": self.client_state,
                     "changeType": "created",
                     "resource": "me/events/event_id_123",
                 }
@@ -221,12 +259,54 @@ class TestMicrosoftCalendarWebhooks(TestCase):
         self.calendar.refresh_from_db()
         self.assertIsNotNone(self.calendar.sync_task_requested_at)
 
+    def test_microsoft_webhook_spoof_with_subscription_id_only_rejected(self):
+        """Spoofing with subscription UUID alone (no/invalid clientState) must not trigger sync."""
+        payload_missing = {
+            "value": [
+                {
+                    "subscriptionId": "test_subscription_123",
+                    "changeType": "created",
+                    "resource": "me/events/event_id_123",
+                }
+            ]
+        }
+        response = self.client.post(
+            self.url,
+            data=json.dumps(payload_missing),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.notification_channel.refresh_from_db()
+        self.assertIsNone(self.notification_channel.notification_last_received_at)
+
+        payload_wrong = {
+            "value": [
+                {
+                    "subscriptionId": "test_subscription_123",
+                    "clientState": json.dumps({"calendar_id": "cal_wrong"}),
+                    "changeType": "created",
+                    "resource": "me/events/event_id_123",
+                }
+            ]
+        }
+        response = self.client.post(
+            self.url,
+            data=json.dumps(payload_wrong),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.notification_channel.refresh_from_db()
+        self.assertIsNone(self.notification_channel.notification_last_received_at)
+        self.calendar.refresh_from_db()
+        self.assertIsNone(self.calendar.sync_task_requested_at)
+
     def test_microsoft_webhook_unknown_subscription_id(self):
         """Test Microsoft webhook with unknown subscription ID returns 200 but does nothing."""
         payload = {
             "value": [
                 {
                     "subscriptionId": "unknown_subscription_id",
+                    "clientState": self.client_state,
                     "changeType": "created",
                     "resource": "me/events/event_id_123",
                 }
@@ -312,16 +392,19 @@ class TestMicrosoftCalendarWebhooks(TestCase):
             expires_at=timezone.now() + timedelta(days=7),
             raw={"test": "data"},
         )
+        other_client_state = _expected_calendar_webhook_token(other_calendar)
 
         payload = {
             "value": [
                 {
                     "subscriptionId": "test_subscription_123",
+                    "clientState": self.client_state,
                     "changeType": "created",
                     "resource": "me/events/event_id_1",
                 },
                 {
                     "subscriptionId": "other_subscription_456",
+                    "clientState": other_client_state,
                     "changeType": "updated",
                     "resource": "me/events/event_id_2",
                 },
@@ -350,12 +433,67 @@ class TestMicrosoftCalendarWebhooks(TestCase):
         other_calendar.refresh_from_db()
         self.assertIsNotNone(other_calendar.sync_task_requested_at)
 
+    def test_microsoft_webhook_continues_after_invalid_item_in_batch(self):
+        """Invalid items must not short-circuit processing of later valid notifications."""
+        other_calendar = Calendar.objects.create(
+            project=self.project,
+            platform=CalendarPlatform.MICROSOFT,
+            client_id="other_client_id",
+        )
+        other_channel = CalendarNotificationChannel.objects.create(
+            calendar=other_calendar,
+            platform_uuid="other_subscription_456",
+            unique_key="notification_channel_" + other_calendar.object_id,
+            expires_at=timezone.now() + timedelta(days=7),
+            raw={"test": "data"},
+        )
+        other_client_state = _expected_calendar_webhook_token(other_calendar)
+
+        payload = {
+            "value": [
+                {
+                    # Missing subscriptionId — previously caused early return
+                    "changeType": "created",
+                    "resource": "me/events/event_id_1",
+                },
+                {
+                    "subscriptionId": "unknown_subscription_id",
+                    "clientState": self.client_state,
+                    "changeType": "created",
+                    "resource": "me/events/event_id_2",
+                },
+                {
+                    "subscriptionId": "other_subscription_456",
+                    "clientState": other_client_state,
+                    "changeType": "updated",
+                    "resource": "me/events/event_id_3",
+                },
+            ]
+        }
+
+        response = self.client.post(
+            self.url,
+            data=json.dumps(payload),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        self.notification_channel.refresh_from_db()
+        self.assertIsNone(self.notification_channel.notification_last_received_at)
+
+        other_channel.refresh_from_db()
+        self.assertIsNotNone(other_channel.notification_last_received_at)
+        other_calendar.refresh_from_db()
+        self.assertIsNotNone(other_calendar.sync_task_requested_at)
+
     def test_microsoft_webhook_updated_change_type(self):
         """Test Microsoft webhook with 'updated' change type."""
         payload = {
             "value": [
                 {
                     "subscriptionId": "test_subscription_123",
+                    "clientState": self.client_state,
                     "changeType": "updated",
                     "resource": "me/events/event_id_123",
                 }
@@ -380,6 +518,7 @@ class TestMicrosoftCalendarWebhooks(TestCase):
             "value": [
                 {
                     "subscriptionId": "test_subscription_123",
+                    "clientState": self.client_state,
                     "changeType": "deleted",
                     "resource": "me/events/event_id_123",
                 }
