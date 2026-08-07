@@ -1174,7 +1174,8 @@ class GoogleMeetUIMethods:
 
         self.wait_for_host_if_needed()
 
-        self.set_layout(layout_to_select)
+        if not self.disable_incoming_video:
+            self.set_layout(layout_to_select)
 
         if self.disable_incoming_video:
             self.disable_incoming_video_in_ui()
