@@ -20,6 +20,7 @@ from bots.bots_api_utils import build_site_url, delete_bot, patch_bot
 from bots.calendars_api_utils import remove_bots_from_calendar
 from bots.meeting_url_utils import meeting_type_from_url
 from bots.models import Bot, BotStates, Calendar, CalendarEvent, CalendarNotificationChannel, CalendarPlatform, CalendarStates, WebhookTriggerTypes
+from bots.redis_utils import calendar_sync_lock
 from bots.webhook_payloads import calendar_webhook_payload
 from bots.webhook_utils import trigger_webhook
 
@@ -109,11 +110,15 @@ def sync_calendar(self, calendar_id):
     calendar = Calendar.objects.get(id=calendar_id)
     if calendar.platform == CalendarPlatform.GOOGLE:
         sync_handler = GoogleCalendarSyncHandler(calendar_id)
+        return sync_handler.sync_events()
     elif calendar.platform == CalendarPlatform.MICROSOFT:
-        sync_handler = MicrosoftCalendarSyncHandler(calendar_id)
+        # Microsoft rotates refresh_token on each refresh; concurrent syncs can
+        # invalidate credentials and delete SCHEDULED bots. Serialize per calendar.
+        with calendar_sync_lock(calendar_id):
+            sync_handler = MicrosoftCalendarSyncHandler(calendar_id)
+            return sync_handler.sync_events()
     else:
         raise ValueError(f"Unsupported calendar platform: {calendar.platform}")
-    return sync_handler.sync_events()
 
 
 class CalendarAPIError(Exception):
@@ -680,7 +685,11 @@ class MicrosoftCalendarSyncHandler(CalendarSyncHandler):
         Exchange the stored refresh token for a new access token.
         Microsoft returns a new refresh_token on each successful refresh.
         Persist it so we don't lose the chain.
+
+        Callers must hold calendar_sync_lock for this calendar (see sync_calendar).
         """
+        # Reload in case another refresh under the same lock rotated credentials.
+        self.calendar.refresh_from_db()
         credentials = self.calendar.get_credentials()
         if not credentials:
             raise CalendarAPIAuthenticationError("No credentials found for calendar")
