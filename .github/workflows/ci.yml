@@ -54,13 +54,13 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
       - name: Restore Docker layer cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ runner.temp }}/.buildx-cache
           key: ${{ runner.os }}-buildx-${{ hashFiles('Dockerfile', '.dockerignore', 'requirements.txt') }}
@@ -68,7 +68,7 @@ jobs:
             ${{ runner.os }}-buildx-
 
       - name: Build and cache Docker image
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           push: false
@@ -78,12 +78,14 @@ jobs:
           cache-to: type=local,dest=${{ runner.temp }}/.buildx-cache-new,mode=min
 
       - name: Rotate Docker layer cache
+        env:
+          RUNNER_TEMP: ${{ runner.temp }}
         run: |
-          rm -rf ${{ runner.temp }}/.buildx-cache
-          mv ${{ runner.temp }}/.buildx-cache-new ${{ runner.temp }}/.buildx-cache
+          rm -rf "${RUNNER_TEMP}/.buildx-cache"
+          mv "${RUNNER_TEMP}/.buildx-cache-new" "${RUNNER_TEMP}/.buildx-cache"
 
       - name: Save Docker layer cache
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ runner.temp }}/.buildx-cache
           key: ${{ runner.os }}-buildx-${{ hashFiles('Dockerfile', '.dockerignore', 'requirements.txt') }}
@@ -93,16 +95,19 @@ jobs:
           POSTGRES_HOST: localhost
           REDIS_URL: redis://localhost:6379/5
           DJANGO_SETTINGS_MODULE: attendee.settings.test
+          TEST_ARGS: ${{ matrix.test_args }}
         run: |
           docker run --rm \
             --network host \
             -e POSTGRES_HOST \
             -e REDIS_URL \
             -e DJANGO_SETTINGS_MODULE \
+            -e TEST_ARGS \
             attendee-test:latest bash -lc '
               set -e
               python init_env.py > /tmp/.env
-              python -m dotenv -f /tmp/.env run -- python manage.py test --keepdb ${{ matrix.test_args }} --verbosity 2
+              # shellcheck disable=SC2086
+              python -m dotenv -f /tmp/.env run -- python manage.py test --keepdb ${TEST_ARGS} --verbosity 2
             '
 
   lint:
@@ -110,8 +115,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: test
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.10'
           cache: 'pip'
