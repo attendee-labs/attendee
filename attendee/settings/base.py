@@ -253,6 +253,13 @@ STORAGE_PROTOCOL = os.getenv("STORAGE_PROTOCOL", "s3")
 AWS_RECORDING_STORAGE_BUCKET_NAME = os.getenv("AWS_RECORDING_STORAGE_BUCKET_NAME")
 AZURE_RECORDING_STORAGE_CONTAINER_NAME = os.getenv("AZURE_RECORDING_STORAGE_CONTAINER_NAME")
 
+# Chrome profile cache settings
+# When set to true, signed-in Google Meet bots will cache their Chrome profile
+# (cookies + auth state) to S3 after a successful SSO login, and reuse it for
+# future bots on the same workspace domain to skip the SSO flow.
+CHROME_PROFILE_CACHE_ENABLED = os.getenv("CHROME_PROFILE_CACHE_ENABLED", "true") == "true"
+AWS_CHROME_PROFILE_STORAGE_BUCKET_NAME = os.getenv("AWS_CHROME_PROFILE_STORAGE_BUCKET_NAME") or AWS_RECORDING_STORAGE_BUCKET_NAME
+
 # Audio chunk storage settings
 USE_REMOTE_STORAGE_FOR_AUDIO_CHUNKS = os.getenv("USE_REMOTE_STORAGE_FOR_AUDIO_CHUNKS", "false") == "true"
 FALLBACK_TO_DB_STORAGE_FOR_AUDIO_CHUNKS_IF_REMOTE_STORAGE_FAILS = os.getenv("FALLBACK_TO_DB_STORAGE_FOR_AUDIO_CHUNKS_IF_REMOTE_STORAGE_FAILS", "false") == "true"
