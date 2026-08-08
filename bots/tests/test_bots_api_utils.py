@@ -563,6 +563,50 @@ class TestCreateBot(TestCase):
         self.assertEqual(Bot.objects.count(), 2)
 
 
+class TestCreateBotWhenOutOfCredits(TestCase):
+    OUT_OF_CREDITS_ERROR = {"error": "Organization has run out of credits. Please add more credits in the Account -> Billing page."}
+
+    def setUp(self):
+        self.organization = Organization.objects.create(name="Test Organization")
+        self.project = Project.objects.create(name="Test Project", organization=self.organization)
+
+    def test_create_bot_out_of_credits_without_autopay(self):
+        """Test that an organization without autopay is rejected once its balance drops below -1 credit."""
+        self.organization.centicredits = -200
+        self.organization.save()
+        self.assertFalse(self.organization.has_working_autopay())
+        self.assertTrue(self.organization.out_of_credits())
+
+        bot, error = create_bot(data={"meeting_url": "https://meet.google.com/abc-defg-hij", "bot_name": "Test Bot"}, source=BotCreationSource.API, project=self.project)
+        self.assertIsNone(bot)
+        self.assertEqual(Bot.objects.count(), 0)
+        self.assertEqual(error, self.OUT_OF_CREDITS_ERROR)
+
+    def test_create_bot_out_of_credits_with_autopay(self):
+        """Test that an organization with working autopay gets extra leeway, but is still rejected below -25 credits."""
+        self.organization.autopay_enabled = True
+        self.organization.autopay_stripe_customer_id = "cus_test123"
+        self.organization.centicredits = -200
+        self.organization.save()
+        self.assertTrue(self.organization.has_working_autopay())
+        self.assertFalse(self.organization.out_of_credits())
+
+        # Within the autopay leeway, so bot creation still succeeds
+        bot, error = create_bot(data={"meeting_url": "https://meet.google.com/abc-defg-hij", "bot_name": "Test Bot"}, source=BotCreationSource.API, project=self.project)
+        self.assertIsNotNone(bot)
+        self.assertIsNone(error)
+
+        # Past the autopay leeway, so bot creation is rejected
+        self.organization.centicredits = -3000
+        self.organization.save()
+        self.assertTrue(self.organization.out_of_credits())
+
+        bot, error = create_bot(data={"meeting_url": "https://meet.google.com/abc-defg-hij", "bot_name": "Test Bot 2"}, source=BotCreationSource.API, project=self.project)
+        self.assertIsNone(bot)
+        self.assertEqual(Bot.objects.count(), 1)
+        self.assertEqual(error, self.OUT_OF_CREDITS_ERROR)
+
+
 class TestCalendarIntegration(TestCase):
     def setUp(self):
         organization = Organization.objects.create(name="Test Organization")
