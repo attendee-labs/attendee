@@ -28,12 +28,19 @@ if sslCertRequirements is not None:
 else:
     app = Celery("attendee")
 
-# Currently the only use case for CELERY_BROKER_TRANSPORT_OPTIONS is to enable support for Redis Cluster hash
+# The Redis broker redelivers unacked tasks after visibility_timeout (default 3600s). With acks_late, run_bot stays
+# unacked for the whole meeting, so this must exceed the longest bot runtime or a duplicate run_bot task gets
+# delivered mid-meeting (issue #587).
+broker_transport_options = {"visibility_timeout": int(os.getenv("CELERY_BROKER_VISIBILITY_TIMEOUT_SECONDS", 21600))}
+
+# One use case for CELERY_BROKER_TRANSPORT_OPTIONS is to enable support for Redis Cluster hash
 # tags. This is mainly to prevent CROSSSLOT errors when using Redis Cluster (https://github.com/celery/celery/issues/8276#issuecomment-3714489309)
 # For this case set CELERY_BROKER_TRANSPORT_OPTIONS='{"global_keyprefix":"{celeryattendee}:","fanout_prefix":true,"fanout_patterns":true}'
 
 if os.getenv("CELERY_BROKER_TRANSPORT_OPTIONS"):
-    app.conf.update(broker_transport_options=json.loads(os.getenv("CELERY_BROKER_TRANSPORT_OPTIONS")))
+    broker_transport_options.update(json.loads(os.getenv("CELERY_BROKER_TRANSPORT_OPTIONS")))
+
+app.conf.update(broker_transport_options=broker_transport_options)
 
 # Load configuration from Django settings
 app.config_from_object("django.conf:settings", namespace="CELERY")
