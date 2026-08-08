@@ -335,6 +335,7 @@ class TestTeamsBot(TransactionTestCase):
                 call_args = mock_send_chat_message.call_args
                 self.assertEqual(call_args.kwargs["text"], "Test message")
                 self.assertEqual(call_args.kwargs["to_user_uuid"], None)
+                self.assertEqual(call_args.kwargs["pin"], False)
 
                 # Verify that the chat message request is now in SENT state
                 chat_message_request.refresh_from_db()

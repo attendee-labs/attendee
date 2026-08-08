@@ -964,6 +964,7 @@ class BotChatMessageRequestSerializer(serializers.Serializer):
     )
     to = serializers.ChoiceField(choices=BotChatMessageToOptions.values, help_text="Who to send the message to.", default=BotChatMessageToOptions.EVERYONE)
     message = serializers.CharField(help_text="The message text to send. Does not support emojis currently. For Microsoft Teams, you can use basic HTML tags to format the message including <p>, <br>, <b>, <i>, and <a>.")
+    pin = serializers.BooleanField(required=False, default=False, help_text="Whether to pin the message after sending it. Currently supported only for Google Meet.")
 
     def validate(self, data):
         to_value = data.get("to")
