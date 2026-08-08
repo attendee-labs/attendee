@@ -15,7 +15,7 @@ jobs:
 
     steps:
       - name: Checkout (full history + tags)
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
 
@@ -32,8 +32,9 @@ jobs:
 
       - name: Ensure tag does not already exist
         id: tag_check
+        env:
+          TAG: ${{ steps.get_version.outputs.tag }}
         run: |
-          TAG="${{ steps.get_version.outputs.tag }}"
           if git rev-parse "$TAG" >/dev/null 2>&1; then
             echo "exists=true" >> $GITHUB_OUTPUT
           else
@@ -42,8 +43,9 @@ jobs:
 
       - name: Create annotated tag and push
         if: steps.tag_check.outputs.exists == 'false'
+        env:
+          TAG: ${{ steps.get_version.outputs.tag }}
         run: |
-          TAG="${{ steps.get_version.outputs.tag }}"
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
           git tag -a "$TAG" -m "Release $TAG"
@@ -53,8 +55,8 @@ jobs:
         if: steps.tag_check.outputs.exists == 'false'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.get_version.outputs.tag }}
         run: |
-          TAG="${{ steps.get_version.outputs.tag }}"
           gh release create "$TAG" \
             --title "$TAG" \
             --generate-notes

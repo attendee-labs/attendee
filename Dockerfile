@@ -1,4 +1,5 @@
-FROM --platform=linux/amd64 ubuntu:22.04 AS base
+# Pin to the ubuntu:22.04 multi-arch index digest (Docker Hub, as of 2026-08-04).
+FROM --platform=linux/amd64 ubuntu:22.04@sha256:3b06811b2afd352be909dd088a004166d665dc76d38b13eada33522a9d915c6f AS base
 
 SHELL ["/bin/bash", "-c"]
 
@@ -54,8 +55,9 @@ RUN wget --progress=dot:giga --timeout=30 --tries=3 https://build-assets.attende
 RUN echo "df557edb3d24d8dcaff9557d80733b42afb6626685200d3f34a3b6f528065cad  google-chrome-stable_134.0.6998.88-1_amd64.deb" | sha256sum -c -
 RUN apt-get install -y ./google-chrome-stable_134.0.6998.88-1_amd64.deb
 
-# Install a specific version of ChromeDriver.
+# Install a specific version of ChromeDriver (checksum of the official zip).
 RUN wget -q https://storage.googleapis.com/chrome-for-testing-public/134.0.6998.88/linux64/chromedriver-linux64.zip \
+    && echo "58df717d51484b9f3ac188af5231cdc77255daa72d0b2b86481bee54e398ce2f  chromedriver-linux64.zip" | sha256sum -c - \
     && unzip chromedriver-linux64.zip \
     && mv chromedriver-linux64/chromedriver /usr/local/bin/chromedriver \
     && chmod +x /usr/local/bin/chromedriver \
@@ -101,8 +103,11 @@ COPY requirements.txt .
 RUN pip install -r requirements.txt
 
 ENV TINI_VERSION=v0.19.0
-ADD https://github.com/krallin/tini/releases/download/${TINI_VERSION}/tini /tini
-RUN chmod +x /tini
+# Official tini release checksum: https://github.com/krallin/tini/releases/download/v0.19.0/tini.sha256sum
+ENV TINI_SHA256=93dcc18adc78c65a028a84799ecf8ad40c936fdfc5f2a57b1acda5a8117fa82c
+RUN curl -fsSL -o /tini "https://github.com/krallin/tini/releases/download/${TINI_VERSION}/tini" \
+    && echo "${TINI_SHA256}  /tini" | sha256sum -c - \
+    && chmod +x /tini
 
 WORKDIR /opt
 

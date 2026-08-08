@@ -17,24 +17,26 @@ jobs:
     name: Validate PR title + version.json
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
           persist-credentials: false
 
       - name: Validate PR title (Conventional Commits)
-        uses: amannn/action-semantic-pull-request@v6
+        uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6.1.1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup Node (for version check script)
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '20'
 
       - name: Fetch base branch (for version.json on main/base)
+        env:
+          BASE_REF: ${{ github.base_ref }}
         run: |
-          git fetch origin "${{ github.base_ref }}" --depth=1
+          git fetch origin "${BASE_REF}" --depth=1
 
       - name: Validate version.json matches expected bump from PR title
         env:
@@ -43,7 +45,7 @@ jobs:
         run: |
           node <<'NODE'
           const fs = require("fs");
-          const { execSync } = require("child_process");
+          const { execFileSync } = require("child_process");
 
           function die(msg) {
             console.error("\n❌ " + msg + "\n");
@@ -85,9 +87,14 @@ jobs:
           else if (type === "feat") level = "minor";
           else if (["fix", "perf"].includes(type)) level = "patch";
 
+          // Reject path-like / unexpected chars before using as a git ref argument.
+          if (!/^[A-Za-z0-9._\/-]+$/.test(baseRef)) {
+            die(`Invalid base ref: "${baseRef}"`);
+          }
+
           let baseJsonRaw;
           try {
-            baseJsonRaw = execSync(`git show origin/${baseRef}:version.json`, { encoding: "utf8" });
+            baseJsonRaw = execFileSync("git", ["show", `origin/${baseRef}:version.json`], { encoding: "utf8" });
           } catch {
             die(`Could not read version.json from base branch "${baseRef}".`);
           }
