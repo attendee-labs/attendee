@@ -690,15 +690,19 @@ class BotController:
             logger.info("Telling websocket client manager to cleanup...")
             self.websocket_client_manager.cleanup()
 
-        if self.get_recording_file_location():
+        recording_file_location = self.get_recording_file_location()
+        if recording_file_location and not self.local_recording_file_has_content(recording_file_location):
+            # Skip upload of a missing/empty file so we don't overwrite an existing recording (issue #587).
+            logger.warning(f"Recording file at {recording_file_location} is missing or empty, skipping upload to avoid overwriting an existing recording")
+        elif recording_file_location:
             self.upload_recording_to_external_media_storage_if_enabled()
 
             logger.info("Telling file uploader to upload recording file...")
             file_uploader = self.get_file_uploader()
-            file_uploader.upload_file(self.get_recording_file_location())
+            file_uploader.upload_file(recording_file_location)
             file_uploader.wait_for_upload()
             logger.info("File uploader finished uploading file")
-            file_uploader.delete_file(self.get_recording_file_location())
+            file_uploader.delete_file(recording_file_location)
             logger.info("File uploader deleted file from local filesystem")
             self.recording_file_saved(file_uploader.filename)
 
@@ -793,6 +797,13 @@ class BotController:
             return None
         else:
             return os.path.join(self.get_recording_storage_directory(), self.get_recording_filename())
+
+    def local_recording_file_has_content(self, recording_file_location):
+        """True only if the local recording file exists and is non-empty (issue #587)."""
+        try:
+            return os.path.getsize(recording_file_location) > 0
+        except OSError:
+            return False
 
     def get_recording_storage_directory(self):
         if self.bot_in_db.reserve_additional_storage():
