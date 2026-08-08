@@ -60,7 +60,6 @@ class ZoomBotAdapter(BotAdapter):
     def __init__(
         self,
         *,
-        use_one_way_audio,
         use_mixed_audio,
         use_video,
         display_name,
@@ -83,7 +82,6 @@ class ZoomBotAdapter(BotAdapter):
         record_chat_messages_when_paused: bool,
         record_participant_speech_start_stop_events: bool,
     ):
-        self.use_one_way_audio = use_one_way_audio
         self.use_mixed_audio = use_mixed_audio
         self.use_video = use_video
         self.display_name = display_name
@@ -896,8 +894,12 @@ class ZoomBotAdapter(BotAdapter):
         if self.recording_is_paused:
             return
 
-        current_time = datetime.utcnow()
         self.last_audio_received_at = time.time()
+
+        if self.add_audio_chunk_callback is None:
+            return
+
+        current_time = datetime.utcnow()
         self.add_audio_chunk_callback(node_id, current_time, data.GetBuffer())
 
     def add_mixed_audio_chunk_convert_to_bytes(self, data):
@@ -940,7 +942,7 @@ class ZoomBotAdapter(BotAdapter):
         if self.audio_source is None:
             self.audio_source = zoom.ZoomSDKAudioRawDataDelegateCallbacks(
                 collectPerformanceData=True,
-                onOneWayAudioRawDataReceivedCallback=self.on_one_way_audio_raw_data_received_callback if self.use_one_way_audio else None,
+                onOneWayAudioRawDataReceivedCallback=self.on_one_way_audio_raw_data_received_callback,
                 onMixedAudioRawDataReceivedCallback=self.add_mixed_audio_chunk_convert_to_bytes if self.use_mixed_audio else None,
             )
 
