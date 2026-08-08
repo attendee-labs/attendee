@@ -37,6 +37,12 @@ class Project(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    concurrent_bots_limit_override = models.IntegerField(
+        null=True,
+        blank=True,
+        help_text="Per-project concurrent bots limit. If null, the global CONCURRENT_BOTS_LIMIT setting is used.",
+    )
+
     @classmethod
     def accessible_to(cls, user):
         if not user.is_active:
@@ -49,7 +55,9 @@ class Project(models.Model):
         return self.organization.users.filter(is_active=True).filter(Q(project_accesses__project=self) | Q(role=UserRole.ADMIN))
 
     def concurrent_bots_limit(self):
-        return int(os.getenv("CONCURRENT_BOTS_LIMIT", 2500))
+        if self.concurrent_bots_limit_override is not None:
+            return self.concurrent_bots_limit_override
+        return settings.CONCURRENT_BOTS_LIMIT
 
     def save(self, *args, **kwargs):
         if not self.object_id:
@@ -710,6 +718,12 @@ class TranscriptionSettings:
     def assemblyai_keyterms_prompt(self):
         return self._settings.get("assembly_ai", {}).get("keyterms_prompt", None)
 
+    def assemblyai_custom_spelling(self):
+        return self._settings.get("assembly_ai", {}).get("custom_spelling", None)
+
+    def assemblyai_prompt(self):
+        return self._settings.get("assembly_ai", {}).get("prompt", None)
+
     def assemblyai_speech_model(self):
         return self._settings.get("assembly_ai", {}).get("speech_model", None)
 
@@ -798,6 +812,10 @@ class TranscriptionSettings:
 
     def deepgram_replace_settings(self):
         return self._settings.get("deepgram", {}).get("replace", [])
+
+    def deepgram_mip_opt_out(self):
+        """https://developers.deepgram.com/docs/the-deepgram-model-improvement-partnership-program#want-to-opt-out"""
+        return os.getenv("DEEPGRAM_MIP_OPT_OUT", "true") == "true"
 
     def deepgram_base_url(self):
         if os.getenv("DEEPGRAM_BASE_URL"):
@@ -1501,7 +1519,7 @@ class BotEvent(models.Model):
         ordering = ["created_at"]
         constraints = [
             models.CheckConstraint(
-                check=(
+                condition=(
                     # For FATAL_ERROR event type, must have one of the valid event subtypes
                     (Q(event_type=BotEventTypes.FATAL_ERROR) & (Q(event_sub_type=BotEventSubTypes.FATAL_ERROR_PROCESS_TERMINATED) | Q(event_sub_type=BotEventSubTypes.FATAL_ERROR_ATTENDEE_INTERNAL_ERROR) | Q(event_sub_type=BotEventSubTypes.FATAL_ERROR_OUT_OF_CREDITS) | Q(event_sub_type=BotEventSubTypes.FATAL_ERROR_RTMP_CONNECTION_FAILED) | Q(event_sub_type=BotEventSubTypes.FATAL_ERROR_UI_ELEMENT_NOT_FOUND) | Q(event_sub_type=BotEventSubTypes.FATAL_ERROR_HEARTBEAT_TIMEOUT) | Q(event_sub_type=BotEventSubTypes.FATAL_ERROR_GLOBAL_RUNTIME_TIMEOUT) | Q(event_sub_type=BotEventSubTypes.FATAL_ERROR_BOT_NOT_LAUNCHED)))
                     |
@@ -2530,7 +2548,7 @@ class AsyncTranscription(models.Model):
 
     @property
     def use_grouped_utterances(self):
-        return self.transcription_provider == TranscriptionProviders.ASSEMBLY_AI
+        return self.transcription_provider in [TranscriptionProviders.ASSEMBLY_AI, TranscriptionProviders.DEEPGRAM]
 
 
 class AsyncTranscriptionManager:
@@ -2719,6 +2737,7 @@ class Credentials(models.Model):
         EXTERNAL_MEDIA_STORAGE = 9, "External Media Storage"
         ELEVENLABS = 10, "ElevenLabs"
         KYUTAI = 11, "Kyutai"
+        TEAMS_BOT_IDENTIFICATION_CREDENTIALS = 12, "Teams Bot Identification Credentials"
 
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="credentials")
     credential_type = models.IntegerField(choices=CredentialTypes.choices, null=False)

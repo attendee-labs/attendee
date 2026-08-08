@@ -2,7 +2,7 @@ from datetime import timedelta
 from unittest.mock import patch
 
 from django.core.exceptions import ValidationError
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.utils import timezone
 
 from accounts.models import Organization
@@ -460,6 +460,50 @@ class TestCreateBot(TestCase):
         self.assertIsNotNone(bot2)
         self.assertIsNone(error2)
         self.assertEqual(Bot.objects.count(), 2)
+
+
+class TestCreateBotWhenOutOfCredits(TestCase):
+    OUT_OF_CREDITS_ERROR = {"error": "Organization has run out of credits. Please add more credits in the Account -> Billing page."}
+
+    def setUp(self):
+        self.organization = Organization.objects.create(name="Test Organization")
+        self.project = Project.objects.create(name="Test Project", organization=self.organization)
+
+    def test_create_bot_out_of_credits_without_autopay(self):
+        """Test that an organization without autopay is rejected once its balance drops below -1 credit."""
+        self.organization.centicredits = -200
+        self.organization.save()
+        self.assertFalse(self.organization.has_working_autopay())
+        self.assertTrue(self.organization.out_of_credits())
+
+        bot, error = create_bot(data={"meeting_url": "https://meet.google.com/abc-defg-hij", "bot_name": "Test Bot"}, source=BotCreationSource.API, project=self.project)
+        self.assertIsNone(bot)
+        self.assertEqual(Bot.objects.count(), 0)
+        self.assertEqual(error, self.OUT_OF_CREDITS_ERROR)
+
+    def test_create_bot_out_of_credits_with_autopay(self):
+        """Test that an organization with working autopay gets extra leeway, but is still rejected below -25 credits."""
+        self.organization.autopay_enabled = True
+        self.organization.autopay_stripe_customer_id = "cus_test123"
+        self.organization.centicredits = -200
+        self.organization.save()
+        self.assertTrue(self.organization.has_working_autopay())
+        self.assertFalse(self.organization.out_of_credits())
+
+        # Within the autopay leeway, so bot creation still succeeds
+        bot, error = create_bot(data={"meeting_url": "https://meet.google.com/abc-defg-hij", "bot_name": "Test Bot"}, source=BotCreationSource.API, project=self.project)
+        self.assertIsNotNone(bot)
+        self.assertIsNone(error)
+
+        # Past the autopay leeway, so bot creation is rejected
+        self.organization.centicredits = -3000
+        self.organization.save()
+        self.assertTrue(self.organization.out_of_credits())
+
+        bot, error = create_bot(data={"meeting_url": "https://meet.google.com/abc-defg-hij", "bot_name": "Test Bot 2"}, source=BotCreationSource.API, project=self.project)
+        self.assertIsNone(bot)
+        self.assertEqual(Bot.objects.count(), 1)
+        self.assertEqual(error, self.OUT_OF_CREDITS_ERROR)
 
 
 class TestCalendarIntegration(TestCase):
@@ -1142,3 +1186,42 @@ class TestConcurrentBotLimit(TestCase):
         self.assertIsNotNone(bot)
         self.assertIsNone(error)
         mock_limit.assert_called()
+
+    @override_settings(CONCURRENT_BOTS_LIMIT=7)
+    def test_concurrent_bots_limit_falls_back_to_setting_when_override_is_null(self):
+        """When the per-project override is null, the global setting is used."""
+        self.assertIsNone(self.project.concurrent_bots_limit_override)
+        self.assertEqual(self.project.concurrent_bots_limit(), 7)
+
+    @override_settings(CONCURRENT_BOTS_LIMIT=7)
+    def test_concurrent_bots_limit_uses_override_when_set(self):
+        """When the per-project override is set, it takes precedence over the setting."""
+        self.project.concurrent_bots_limit_override = 2
+        self.project.save()
+        self.assertEqual(self.project.concurrent_bots_limit(), 2)
+
+    @override_settings(CONCURRENT_BOTS_LIMIT=100)
+    def test_validate_bot_concurrency_limit_uses_project_override(self):
+        """Validation should enforce the per-project override rather than the global setting."""
+        self.project.concurrent_bots_limit_override = 2
+        self.project.save()
+
+        # Under the override limit of 2 -> passes
+        Bot.objects.create(
+            project=self.project,
+            meeting_url="https://meet.google.com/override-0",
+            name="Override Bot 0",
+            state=BotStates.JOINED_RECORDING,
+        )
+        self.assertIsNone(validate_bot_concurrency_limit(self.project))
+
+        # At the override limit of 2 -> fails (even though global setting is 100)
+        Bot.objects.create(
+            project=self.project,
+            meeting_url="https://meet.google.com/override-1",
+            name="Override Bot 1",
+            state=BotStates.JOINED_RECORDING,
+        )
+        error = validate_bot_concurrency_limit(self.project)
+        self.assertIsNotNone(error)
+        self.assertEqual(error["error"], "You have exceeded the maximum number of concurrent bots (2) for your account. Please reach out to customer support to increase the limit.")
