@@ -154,3 +154,7 @@ class ProjectThrottleTests(TestCase):
             # Now a POST to a *different* endpoint with same scope should be throttled
             r3 = self._post_send_chat(mock_auth, "projScope")
             self.assertEqual(r3.status_code, 429)
+
+    def test_transcript_view_uses_project_post_throttle(self):
+        """Async transcription POSTs share the project_post throttle budget."""
+        self.assertIn(ProjectPostThrottle, bots_views.TranscriptView.throttle_classes)
