@@ -24,6 +24,7 @@ from bots.models import (
 from bots.projects_views import (
     get_api_key_for_user,
     get_bot_login_for_user,
+    get_bot_login_group_for_user,
     get_calendar_event_for_user,
     get_calendar_for_user,
     get_project_for_user,
@@ -352,6 +353,16 @@ class ObjectAccessIntegrationTest(TransactionTestCase):
         """Test that regular users cannot access Google Meet bot logins in different organizations"""
         with self.assertRaises(Http404):
             get_bot_login_for_user(self.project_a1, self.regular_user_a, self.google_meet_bot_login_b1.object_id)
+
+    def test_get_bot_login_for_user_denied_cross_project_same_org(self):
+        """Bot logins must belong to the URL project, even for org admins."""
+        with self.assertRaises(Http404):
+            get_bot_login_for_user(self.project_a1, self.admin_user_a, self.google_meet_bot_login_a2.object_id)
+
+    def test_get_bot_login_group_for_user_denied_cross_project_same_org(self):
+        """Bot login groups must belong to the URL project, even for org admins."""
+        with self.assertRaises(Http404):
+            get_bot_login_group_for_user(self.project_a1, self.admin_user_a, self.google_meet_bot_login_group_a2.object_id)
 
     # Tests for view-level access control through HTTP requests
     def test_project_dashboard_access_control(self):

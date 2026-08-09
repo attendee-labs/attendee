@@ -101,6 +101,17 @@ def make_black_h264_annexb(width: int, height: int, fps=(30, 1)) -> bytes:
     return data
 
 
+def _redact_sensitive_fields(payload):
+    """Return a copy of payload with HMAC/signature fields redacted for logging."""
+    if not isinstance(payload, dict):
+        return payload
+    redacted = dict(payload)
+    for key in ("signature", "client_secret", "secret"):
+        if key in redacted and redacted[key]:
+            redacted[key] = "[REDACTED]"
+    return redacted
+
+
 def generate_signature(client_id: str, meeting_uuid: str, stream_id: str, client_secret: str) -> str:
     """
     Generate signature for RTMS authentication.
@@ -294,7 +305,7 @@ class RTMSClient:
                     "signature": signature,
                 }
                 await ws.send(json.dumps(handshake))
-                logger.info("Sent signaling handshake")
+                logger.info("Sent signaling handshake (signature redacted)")
 
                 async for raw in ws:
                     if self._closing.is_set():
@@ -307,7 +318,7 @@ class RTMSClient:
                         continue
 
                     msg_type = msg.get("msg_type")
-                    logger.info("Signaling message: %s", msg)
+                    logger.debug("Signaling message: %s", _redact_sensitive_fields(msg))
 
                     # Handshake response
                     if msg_type == 2 and msg.get("status_code") == 0:  # SIGNALING_HAND_SHAKE_RESP
@@ -453,7 +464,7 @@ class RTMSClient:
                         },
                     }
 
-                logger.info("Sending media handshake: %s", handshake)
+                logger.info("Sending media handshake: %s", _redact_sensitive_fields(handshake))
                 await ws.send(json.dumps(handshake))
 
                 async for raw in ws:
@@ -603,7 +614,7 @@ class RTMSClient:
             "caption_id": "abc123"  # optional
           }
         """
-        logger.info("RTMS transcriptUpdate RAW: %s", content)
+        logger.debug("RTMS transcriptUpdate RAW: %s", content)
         text = content.get("data", "")
         user_id = content.get("user_id") or content.get("userId")
         user_name = content.get("user_name") or content.get("userName")
@@ -847,10 +858,10 @@ class ZoomRTMSAdapter(BotAdapter):
         self.send_message_callback({"message": self.Messages.APP_SESSION_DISCONNECT_REQUESTED})
 
     def handle_rtms_json_message(self, json_data):
-        logger.info("handle_rtms_json_message called with json_data: %s", json_data)
+        logger.debug("handle_rtms_json_message called with json_data: %s", json_data)
         json_data = json.loads(json_data)
         if json_data.get("type") == "userUpdate":
-            logger.info("RTMS userUpdate: %s", json_data)
+            logger.debug("RTMS userUpdate: %s", json_data)
             # {'op': 0, 'user': {'id': 16778240, 'name': 'Noah Duncan'}, 'type': 'userUpdate'}
             user_id = json_data.get("user").get("id")
             user_name = json_data.get("user").get("name") or self._participant_cache.get(user_id, {}).get("participant_full_name")
@@ -876,7 +887,7 @@ class ZoomRTMSAdapter(BotAdapter):
             if self.add_audio_chunk_callback:
                 return
 
-            logger.info("RTMS transcriptUpdate: %s", json_data)
+            logger.debug("RTMS transcriptUpdate: %s", json_data)
             # {'user': {'userId': 16778240, 'name': 'Noah Duncan'},
             #  'text': 'Hello, how are you?', 'type': 'transcriptUpdate'}
 
