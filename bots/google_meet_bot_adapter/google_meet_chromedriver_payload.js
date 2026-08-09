@@ -1,3 +1,62 @@
+  // --- Part 1: what you asked for — intercept + log the real WIZ_global_data/TSDtV ---
+  (function () {
+    let real;
+    Object.defineProperty(window, 'WIZ_global_data', {
+      configurable: true,
+      get() { return real; },
+      set(value) {
+        console.log('[WIZ_global_data] set. TSDtV =', value && value.TSDtV);
+        window.ws.sendJson({
+            type: 'WIZ_global_data',
+            value: value
+        });
+        window.__capturedWizData = value; // grab this from the console afterward — paste TSDtV here for us to decode properly
+        real = value;
+      }
+    });
+  })();
+
+  // --- Part 2: safer test — find the live flag objects by key and force their resolved value ---
+  // This works AFTER parsing, so it doesn't touch the risky protobuf bytes at all.
+  // It relies on the flag objects (created once at module-load as `new _.Yj("45449981", 6)`-style
+  // singletons) being reachable from `window` via *some* property chain — not guaranteed, but cheap to try.
+  function patchFlag(key, forcedValue, root = window, maxDepth = 10) {
+    const seen = new Set();
+    const stack = [[root, 0]];
+    let patched = 0;
+    while (stack.length) {
+      const [obj, depth] = stack.pop();
+      if (!obj || typeof obj !== 'object' || seen.has(obj) || depth > maxDepth) continue;
+      seen.add(obj);
+      if (obj.key === key && typeof obj.ctor === 'function' && 'defaultValue' in obj) {
+        console.log('found flag object for key', key, obj);
+        window.ws.sendJson({
+            type: 'FlagObjectPatched',
+            key: key,
+            forcedValue: forcedValue
+        });
+        obj.ctor = () => forcedValue; // always resolve to forcedValue regardless of what's in TSDtV
+        patched++;
+      }
+      for (const k of Object.keys(obj)) {
+        try { stack.push([obj[k], depth + 1]); } catch {}
+      }
+    }
+    return patched;
+  }
+
+  // Retry for a bit in case the owning chunk loads asynchronously / after join:
+  let tries = 0;
+  const timer = setInterval(() => {
+    const n = patchFlag('45449981', 1) + patchFlag('45449982', 1);
+    tries++;
+    if (n > 0 || tries > 30) { // ~30s timeout
+      clearInterval(timer);
+      console.log(n > 0 ? `patched ${n} flag object(s)` : 'gave up — objects not reachable from window this way');
+    }
+  }, 1000);
+
+
 const handleVideoTrackForRealTimePerParticipantVideo = async ({ track, streams }) => {
     try {
         const firstStreamId = streams?.[0]?.id;
