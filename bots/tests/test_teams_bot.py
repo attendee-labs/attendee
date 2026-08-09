@@ -921,9 +921,12 @@ class TestTeamsBot(TransactionTestCase):
            (simulating the join failing because the driver was quit)
         4. Exception caught in repeatedly_attempt_to_join_meeting -> retry
         5. wait_for_page_url_to_stabilize runs on the retry because the redirect flag is set
-        6. Second join attempt succeeds and the bot records until auto-leave
+        6. Second join attempt runs the real fill_out_name_input (against a stubbed name
+           input element) and succeeds, and the bot records until auto-leave
         """
-        # Use a "none" recording format to keep the test lightweight
+        # Use a "none" recording format to keep the test lightweight. The bot name contains
+        # "Notetaker" so the real fill_out_name_input has a keyword to cyrillicize.
+        self.bot.name = "Test Notetaker Bot"
         self.bot.settings = {"recording_settings": {"format": "none"}}
         self.bot.save()
 
@@ -944,6 +947,11 @@ class TestTeamsBot(TransactionTestCase):
         # Track calls to fill_out_name_input to control which join attempt we're on
         fill_out_name_input_call_count = [0]
 
+        # The real fill_out_name_input runs on the successful retry so we can inspect the
+        # name it types into this stubbed name input element.
+        real_fill_out_name_input = TeamsUIMethods.fill_out_name_input
+        mock_name_input = MagicMock()
+
         def mock_fill_out_name_input(*args, **kwargs):
             """Fail the first join attempt once the redirect is detected, succeed thereafter.
 
@@ -961,8 +969,11 @@ class TestTeamsBot(TransactionTestCase):
                     time.sleep(0.05)
                 raise UiWaitingRoomTransitionFailedException("Driver was quit due to light experience redirect", "fill_out_name_input")
 
-            # Second attempt: the driver has been reinitialized, join succeeds
-            return None
+            # Second attempt: the driver has been reinitialized, so run the real
+            # implementation with the name input lookup stubbed out
+            with patch("bots.teams_bot_adapter.teams_ui_methods.WebDriverWait") as mock_name_input_wait:
+                mock_name_input_wait.return_value.until.return_value = mock_name_input
+                return real_fill_out_name_input(controller.adapter)
 
         # Spy on wait_for_page_url_to_stabilize so we can verify it runs on the retry
         # (and to avoid its real multi-second stabilization polling loop).
@@ -1029,6 +1040,13 @@ class TestTeamsBot(TransactionTestCase):
 
             # Verify wait_for_page_url_to_stabilize ran on the retry (once per join attempt)
             self.assertEqual(mock_wait_for_page_url_to_stabilize.call_count, 2, "Expected wait_for_page_url_to_stabilize to be called once per join attempt")
+
+            # Verify the name typed into the prejoin name input had the "notetaker" keyword
+            # cyrillicized, with the rest of the display name left alone
+            mock_name_input.send_keys.assert_called_once_with("Test N\u043et\u0435t\u0430k\u0435r Bot")
+            typed_name = mock_name_input.send_keys.call_args[0][0]
+            self.assertNotEqual(typed_name, self.bot.name, "Expected the typed display name to differ from the raw bot name")
+            self.assertNotIn("notetaker", typed_name.lower(), "Expected the typed display name to no longer match a 'notetaker' keyword search")
 
             # Verify that the recording was finished
             self.recording.refresh_from_db()
