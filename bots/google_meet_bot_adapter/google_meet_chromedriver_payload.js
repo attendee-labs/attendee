@@ -1,9 +1,15 @@
-// Google Meet reads its persisted preferences very early during page load, so the preference
-// that disables incoming video has to be written before any of Meet's own scripts run. This
-// payload is injected via Page.addScriptToEvaluateOnNewDocument, which is early enough.
+// Google Meet uses localstorage to store its preferences. We can use this to disable incoming video.
 const disableIncomingVideoViaLocalStorage = () => {
     const MEET_PREFERENCES_LOCAL_STORAGE_KEY = "meet-preferences";
-    const DISABLED_INCOMING_VIDEO_PREFERENCES = '"[null,null,null,null,[null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null],null,null,null,[null,null,null,null,null,1],null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null]"';
+
+    // It's a protobuf. The only non-null field we need to write is the nested field at index 8, 5.
+    // This controls the video receive resolution. Setting it to 1 will disable incoming video.
+    const preferencesArray = Array(9).fill(null);
+    preferencesArray[8] = Array(6).fill(null);
+    preferencesArray[8][5] = 1;
+    
+    // You need to stringify twice to get a quoted string.
+    const DISABLED_INCOMING_VIDEO_PREFERENCES = JSON.stringify(JSON.stringify(preferencesArray));
 
     try {
         localStorage.setItem(MEET_PREFERENCES_LOCAL_STORAGE_KEY, DISABLED_INCOMING_VIDEO_PREFERENCES);
