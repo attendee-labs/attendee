@@ -75,9 +75,8 @@ class StandardAccountAdapter(DefaultAccountAdapter):
 
         return confirm_email_response
 
-    # Ensure we use settings.SITE_DOMAIN for the password reset and email confirmation URLs
-    def get_reset_password_from_key_url(self, key):
-        url = super().get_reset_password_from_key_url(key)
+    # Ensure we use settings.SITE_DOMAIN for the URLs in emails
+    def _use_site_domain(self, url):
         parsed = urlsplit(url)
 
         return urlunsplit(
@@ -90,19 +89,14 @@ class StandardAccountAdapter(DefaultAccountAdapter):
             )
         )
 
-    def get_email_confirmation_url(self, request, emailconfirmation):
-        url = super().get_email_confirmation_url(request, emailconfirmation)
-        parsed = urlsplit(url)
+    def send_mail(self, template_prefix, email, context):
+        context = context.copy()
 
-        return urlunsplit(
-            (
-                parsed.scheme,
-                settings.SITE_DOMAIN,
-                parsed.path,
-                parsed.query,
-                parsed.fragment,
-            )
-        )
+        for key, value in context.items():
+            if key.endswith("_url") and isinstance(value, str):
+                context[key] = self._use_site_domain(value)
+
+        return super().send_mail(template_prefix, email, context)
 
 
 class NoNewUsersAccountAdapter(StandardAccountAdapter):
