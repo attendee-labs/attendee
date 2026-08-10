@@ -258,6 +258,10 @@ BOT_IMAGE_SCHEMA = {
 TRANSCRIPTION_SETTINGS_SCHEMA = {
     "type": "object",
     "properties": {
+        "enabled": {
+            "type": "boolean",
+            "description": "Set to false to disable transcription. Defaults to true.",
+        },
         "deepgram": {
             "type": "object",
             "properties": {
@@ -1166,6 +1170,9 @@ class CreateAsyncTranscriptionSerializer(serializers.Serializer):
             jsonschema.validate(instance=value, schema=TRANSCRIPTION_SETTINGS_SCHEMA)
         except jsonschema.exceptions.ValidationError as e:
             raise serializers.ValidationError(e.message)
+
+        if "enabled" in value:
+            raise serializers.ValidationError({"transcription_settings": "The enabled field is not applicable to an async transcription request."})
 
         if "meeting_closed_captions" in value:
             raise serializers.ValidationError({"transcription_settings": "Meeting closed captions are not available for async transcription."})

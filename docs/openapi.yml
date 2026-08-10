@@ -2183,6 +2183,9 @@ components:
         transcription_settings:
           type: object
           properties:
+            enabled:
+              type: boolean
+              description: Set to false to disable transcription. Defaults to true.
             deepgram:
               type: object
               properties:
