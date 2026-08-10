@@ -1,3 +1,29 @@
+// Google Meet uses localstorage to store its preferences. We can use this to disable incoming video.
+const disableIncomingVideoViaLocalStorage = () => {
+    const MEET_PREFERENCES_LOCAL_STORAGE_KEY = "meet-preferences";
+
+    // It's a protobuf. The only non-null field we need to write is the nested field at index 8, 5.
+    // This controls the video receive resolution. Setting it to 1 will disable incoming video.
+    const preferencesArray = Array(9).fill(null);
+    preferencesArray[8] = Array(6).fill(null);
+    preferencesArray[8][5] = 1;
+    
+    // You need to stringify twice to get a quoted string.
+    const DISABLED_INCOMING_VIDEO_PREFERENCES = JSON.stringify(JSON.stringify(preferencesArray));
+
+    try {
+        localStorage.setItem(MEET_PREFERENCES_LOCAL_STORAGE_KEY, DISABLED_INCOMING_VIDEO_PREFERENCES);
+        console.log("Disabled incoming video via setting localstorage");
+    } catch (error) {
+        // localStorage is unavailable in opaque origins, which this script also runs in
+        console.log("Failed to disable incoming video via setting localstorage", error);
+    }
+};
+
+if (window.googleMeetInitialData.disableIncomingVideo) {
+    disableIncomingVideoViaLocalStorage();
+}
+
 const handleVideoTrackForRealTimePerParticipantVideo = async ({ track, streams }) => {
     try {
         const firstStreamId = streams?.[0]?.id;

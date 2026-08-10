@@ -93,6 +93,7 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
         return f"""
             window.googleMeetInitialData = {{
                 modifyDomForVideoRecording: {"true" if self.modify_dom_for_video_recording else "false"},
+                disableIncomingVideo: {"true" if self.disable_incoming_video else "false"},
             }}
         """
 
