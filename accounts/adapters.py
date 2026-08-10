@@ -1,4 +1,5 @@
 import logging
+from urllib.parse import urlsplit, urlunsplit
 
 import requests
 from allauth.account.adapter import DefaultAccountAdapter
@@ -73,6 +74,35 @@ class StandardAccountAdapter(DefaultAccountAdapter):
             login(request, user, backend="django.contrib.auth.backends.ModelBackend")
 
         return confirm_email_response
+
+    # Ensure we use settings.SITE_DOMAIN for the password reset and email confirmation URLs
+    def get_reset_password_from_key_url(self, key):
+        url = super().get_reset_password_from_key_url(key)
+        parsed = urlsplit(url)
+
+        return urlunsplit(
+            (
+                parsed.scheme,
+                settings.SITE_DOMAIN,
+                parsed.path,
+                parsed.query,
+                parsed.fragment,
+            )
+        )
+
+    def get_email_confirmation_url(self, request, emailconfirmation):
+        url = super().get_email_confirmation_url(request, emailconfirmation)
+        parsed = urlsplit(url)
+
+        return urlunsplit(
+            (
+                parsed.scheme,
+                settings.SITE_DOMAIN,
+                parsed.path,
+                parsed.query,
+                parsed.fragment,
+            )
+        )
 
 
 class NoNewUsersAccountAdapter(StandardAccountAdapter):
