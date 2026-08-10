@@ -26,12 +26,8 @@ class StandardAccountAdapterEmailUnitTests(SimpleTestCase):
     @patch.object(DefaultAccountAdapter, "send_mail")
     def test_rewrites_all_context_values_ending_in_url(self, mock_send_mail):
         context = {
-            "activate_url": (
-                "http://localhost:8000/accounts/confirm-email/abc123/"
-            ),
-            "password_reset_url": (
-                "https://example.com/accounts/password/reset/key/123/"
-            ),
+            "activate_url": ("http://localhost:8000/accounts/confirm-email/abc123/"),
+            "password_reset_url": ("https://example.com/accounts/password/reset/key/123/"),
             "username": "noah",
         }
 
@@ -69,10 +65,7 @@ class StandardAccountAdapterEmailUnitTests(SimpleTestCase):
     @patch.object(DefaultAccountAdapter, "send_mail")
     def test_preserves_scheme_path_query_and_fragment(self, mock_send_mail):
         context = {
-            "signup_url": (
-                "https://localhost:8000/accounts/signup/"
-                "?next=%2Fdashboard%2F#some-fragment"
-            ),
+            "signup_url": ("https://localhost:8000/accounts/signup/?next=%2Fdashboard%2F#some-fragment"),
         }
 
         self.adapter.send_mail(
@@ -85,10 +78,7 @@ class StandardAccountAdapterEmailUnitTests(SimpleTestCase):
 
         self.assertEqual(
             passed_context["signup_url"],
-            (
-                "https://attendee.dev/accounts/signup/"
-                "?next=%2Fdashboard%2F#some-fragment"
-            ),
+            ("https://attendee.dev/accounts/signup/?next=%2Fdashboard%2F#some-fragment"),
         )
 
     @patch.object(DefaultAccountAdapter, "send_mail")
@@ -164,9 +154,7 @@ class StandardAccountAdapterEmailUnitTests(SimpleTestCase):
     @patch.object(DefaultAccountAdapter, "send_mail")
     def test_does_not_mutate_original_context(self, mock_send_mail):
         context = {
-            "activate_url": (
-                "http://localhost:8000/accounts/confirm-email/abc123/"
-            ),
+            "activate_url": ("http://localhost:8000/accounts/confirm-email/abc123/"),
         }
 
         self.adapter.send_mail(
@@ -218,15 +206,9 @@ class StandardAccountAdapterRenderedEmailTests(TestCase):
         )
 
     def test_email_is_rendered_and_sent_with_site_domain(self):
-        original_url = (
-            "http://localhost:8000/accounts/confirm-email/abc123/"
-            "?next=%2Fdashboard%2F#confirmed"
-        )
+        original_url = "http://localhost:8000/accounts/confirm-email/abc123/?next=%2Fdashboard%2F#confirmed"
 
-        expected_url = (
-            "http://attendee.dev/accounts/confirm-email/abc123/"
-            "?next=%2Fdashboard%2F#confirmed"
-        )
+        expected_url = "http://attendee.dev/accounts/confirm-email/abc123/?next=%2Fdashboard%2F#confirmed"
 
         self.adapter.send_mail(
             "account/email/email_confirmation",
