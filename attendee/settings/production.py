@@ -62,6 +62,8 @@ if os.getenv("ERROR_REPORTS_RECEIVER_EMAIL_ADDRESS"):
 
 SERVER_EMAIL = os.getenv("SERVER_EMAIL", "noreply@mail.attendee.dev")
 
+CSRF_TRUSTED_ORIGINS = os.getenv("CSRF_TRUSTED_ORIGINS").split(",") if os.getenv("CSRF_TRUSTED_ORIGINS") else []
+
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,

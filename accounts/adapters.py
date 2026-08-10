@@ -1,4 +1,5 @@
 import logging
+from urllib.parse import urlsplit, urlunsplit
 
 import requests
 from allauth.account.adapter import DefaultAccountAdapter
@@ -73,6 +74,37 @@ class StandardAccountAdapter(DefaultAccountAdapter):
             login(request, user, backend="django.contrib.auth.backends.ModelBackend")
 
         return confirm_email_response
+
+    # Ensure we use settings.SITE_DOMAIN for the URLs in emails
+    def _use_site_domain(self, url):
+        try:
+            parsed = urlsplit(url)
+        except ValueError:
+            return url
+
+        # Anything without both a scheme and a host isn't an absolute URL we can
+        # swap the domain on, and rewriting it would corrupt the original value.
+        if not parsed.scheme or not parsed.netloc:
+            return url
+
+        return urlunsplit(
+            (
+                parsed.scheme,
+                settings.SITE_DOMAIN,
+                parsed.path,
+                parsed.query,
+                parsed.fragment,
+            )
+        )
+
+    def send_mail(self, template_prefix, email, context):
+        context = context.copy()
+
+        for key, value in context.items():
+            if key.endswith("_url") and isinstance(value, str):
+                context[key] = self._use_site_domain(value)
+
+        return super().send_mail(template_prefix, email, context)
 
 
 class NoNewUsersAccountAdapter(StandardAccountAdapter):
