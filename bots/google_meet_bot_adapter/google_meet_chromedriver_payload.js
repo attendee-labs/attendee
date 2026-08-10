@@ -3,7 +3,6 @@
 // payload is injected via Page.addScriptToEvaluateOnNewDocument, which is early enough.
 const disableIncomingVideoViaLocalStorage = () => {
     const MEET_PREFERENCES_LOCAL_STORAGE_KEY = "meet-preferences";
-    // Captured from a Meet session where the video setting was switched to "Audio only".
     const DISABLED_INCOMING_VIDEO_PREFERENCES = '"[null,null,null,null,[null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,1,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,1],null,null,null,[null,null,null,null,null,1],null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,1]"';
 
     try {
