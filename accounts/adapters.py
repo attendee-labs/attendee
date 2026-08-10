@@ -77,7 +77,15 @@ class StandardAccountAdapter(DefaultAccountAdapter):
 
     # Ensure we use settings.SITE_DOMAIN for the URLs in emails
     def _use_site_domain(self, url):
-        parsed = urlsplit(url)
+        try:
+            parsed = urlsplit(url)
+        except ValueError:
+            return url
+
+        # Anything without both a scheme and a host isn't an absolute URL we can
+        # swap the domain on, and rewriting it would corrupt the original value.
+        if not parsed.scheme or not parsed.netloc:
+            return url
 
         return urlunsplit(
             (

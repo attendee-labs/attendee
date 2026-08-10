@@ -141,6 +141,27 @@ class StandardAccountAdapterEmailUnitTests(SimpleTestCase):
         self.assertEqual(passed_context["another_url"], 123)
 
     @patch.object(DefaultAccountAdapter, "send_mail")
+    def test_leaves_values_that_are_not_absolute_urls_alone(self, mock_send_mail):
+        context = {
+            "empty_url": "",
+            "plain_text_url": "Click the link below to continue",
+            "relative_url": "/accounts/confirm-email/abc123/",
+            "scheme_relative_url": "//localhost:8000/accounts/signup/",
+            "mailto_url": "mailto:support@example.com",
+            "malformed_url": "http://[::1/accounts/signup/",
+        }
+
+        self.adapter.send_mail(
+            "account/email/test",
+            "noah@example.com",
+            context,
+        )
+
+        passed_context = mock_send_mail.call_args.args[2]
+
+        self.assertEqual(passed_context, context)
+
+    @patch.object(DefaultAccountAdapter, "send_mail")
     def test_does_not_mutate_original_context(self, mock_send_mail):
         context = {
             "activate_url": (
