@@ -1,3 +1,24 @@
+// Google Meet reads its persisted preferences very early during page load, so the preference
+// that disables incoming video has to be written before any of Meet's own scripts run. This
+// payload is injected via Page.addScriptToEvaluateOnNewDocument, which is early enough.
+const disableIncomingVideoViaLocalStorage = () => {
+    const MEET_PREFERENCES_LOCAL_STORAGE_KEY = "meet-preferences";
+    // Captured from a Meet session where the video setting was switched to "Audio only".
+    const DISABLED_INCOMING_VIDEO_PREFERENCES = '"[null,null,null,null,[null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,1,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,1],null,null,null,[null,null,null,null,null,1],null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,1]"';
+
+    try {
+        localStorage.setItem(MEET_PREFERENCES_LOCAL_STORAGE_KEY, DISABLED_INCOMING_VIDEO_PREFERENCES);
+        console.log("Disabled incoming video via setting localstorage");
+    } catch (error) {
+        // localStorage is unavailable in opaque origins, which this script also runs in
+        console.log("Failed to disable incoming video via setting localstorage", error);
+    }
+};
+
+if (window.googleMeetInitialData.disableIncomingVideo) {
+    disableIncomingVideoViaLocalStorage();
+}
+
 const handleVideoTrackForRealTimePerParticipantVideo = async ({ track, streams }) => {
     try {
         const firstStreamId = streams?.[0]?.id;
