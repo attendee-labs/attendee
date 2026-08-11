@@ -113,13 +113,12 @@ When a participant denies the bot's request to join, or removes the bot from the
 
 ```json
 {
-  "new_state": "ended",
+  "new_state": "post_processing",
   "old_state": "joined_recording",
   "created_at": "2023-07-15T14:30:45.123456Z",
   "event_type": "meeting_ended",
   "event_sub_type": null,
   "event_metadata": {
-    "bot_duration_seconds": 1820,
     "bot_removed_by": {
       "id": "par_xxxxxxxxxxxxxxxx",
       "name": "Test User",
