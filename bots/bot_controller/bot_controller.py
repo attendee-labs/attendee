@@ -1789,6 +1789,18 @@ class BotController:
                     save=True,
                 )
 
+    def get_bot_removed_by_metadata(self, message):
+        """Event metadata naming the participant who removed the bot, when the meeting told us who it was."""
+        removed_by = message.get("removed_by")
+        if not removed_by:
+            return {}
+
+        participant = Participant.objects.filter(bot=self.bot_in_db, uuid=removed_by["uuid"]).first()
+        if participant is None:
+            return {"bot_removed_by": {"name": removed_by["name"], "uuid": removed_by["uuid"], "user_uuid": None}}
+
+        return {"bot_removed_by": {"id": participant.object_id, "name": participant.full_name, "uuid": participant.uuid, "user_uuid": participant.user_uuid, "is_host": participant.is_host}}
+
     def take_action_based_on_message_from_adapter(self, message):
         if message.get("message") == BotAdapter.Messages.SAVE_SCREENSHOT_AND_MHTML_FILE:
             logger.info("Received message to save screenshot and mhtml file")
@@ -1811,6 +1823,7 @@ class BotController:
                 bot=self.bot_in_db,
                 event_type=BotEventTypes.COULD_NOT_JOIN,
                 event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_REQUEST_TO_JOIN_DENIED,
+                event_metadata=self.get_bot_removed_by_metadata(message),
             )
             self.cleanup()
             return
@@ -1971,10 +1984,11 @@ class BotController:
         if message.get("message") == BotAdapter.Messages.MEETING_ENDED:
             logger.info("Received message that meeting ended")
             self.flush_utterances()
+            event_metadata = self.get_bot_removed_by_metadata(message)
             if self.bot_in_db.state == BotStates.LEAVING:
-                new_bot_event = BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.BOT_LEFT_MEETING)
+                new_bot_event = BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.BOT_LEFT_MEETING, event_metadata=event_metadata)
             else:
-                new_bot_event = BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.MEETING_ENDED)
+                new_bot_event = BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.MEETING_ENDED, event_metadata=event_metadata)
 
             self.save_debug_artifacts(message, new_bot_event)
 

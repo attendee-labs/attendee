@@ -102,8 +102,43 @@ For webhooks triggered by `bot.state_change`, the `data` field contains:
   "created_at": < The timestamp when the state change occurred >,
   "event_type": < The type of event that triggered the state change >,
   "event_sub_type": < The sub-type of event that triggered the state change >,
+  "event_metadata": < Extra details about the event, when there are any >,
 }
 ```
+
+### Knowing who removed the bot
+
+When a participant denies the bot's request to join, or removes the bot from the meeting,
+`event_metadata` contains a `bot_removed_by` object naming them:
+
+```json
+{
+  "new_state": "ended",
+  "old_state": "joined_recording",
+  "created_at": "2023-07-15T14:30:45.123456Z",
+  "event_type": "meeting_ended",
+  "event_sub_type": null,
+  "event_metadata": {
+    "bot_duration_seconds": 1820,
+    "bot_removed_by": {
+      "id": "par_xxxxxxxxxxxxxxxx",
+      "name": "Test User",
+      "uuid": "8:orgid:00000000-0000-0000-0000-000000000001",
+      "user_uuid": null,
+      "is_host": true
+    }
+  }
+}
+```
+
+The fields are the same as those of a participant returned by `GET /api/v1/bots/{object_id}/participants`.
+
+A few things to know about this object:
+
+- Only Microsoft Teams reports who removed the bot. Google Meet and Zoom tell the bot that it was removed but not by whom.
+- `id` and `is_host` are only present when that participant was in the meeting with the bot. When the bot is denied from the lobby it never sees the meeting's participants, so only `name`, `uuid` and `user_uuid` are reported.
+- The object is absent whenever the bot was not told who was responsible. Its absence is not evidence that nobody removed the bot.
+- On a `meeting_ended` event, this object means a participant removed the bot, so the meeting itself may still be going.
 
 ### Using webhooks to know when the recording is available
 

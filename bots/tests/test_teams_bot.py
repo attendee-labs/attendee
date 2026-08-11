@@ -17,7 +17,7 @@ from selenium.common.exceptions import TimeoutException
 
 from bots.bot_controller.bot_controller import BotController
 from bots.bots_api_views import send_sync_command
-from bots.models import Bot, BotChatMessageRequest, BotChatMessageRequestStates, BotChatMessageToOptions, BotDebugScreenshot, BotEventManager, BotEventSubTypes, BotEventTypes, BotLogin, BotLoginGroup, BotLoginPlatform, BotMediaRequest, BotMediaRequestMediaTypes, BotMediaRequestStates, BotStates, Credentials, MediaBlob, Organization, Project, Recording, RecordingStates, RecordingTypes, TranscriptionProviders, TranscriptionTypes
+from bots.models import Bot, BotChatMessageRequest, BotChatMessageRequestStates, BotChatMessageToOptions, BotDebugScreenshot, BotEventManager, BotEventSubTypes, BotEventTypes, BotLogin, BotLoginGroup, BotLoginPlatform, BotMediaRequest, BotMediaRequestMediaTypes, BotMediaRequestStates, BotStates, Credentials, MediaBlob, Organization, Participant, Project, Recording, RecordingStates, RecordingTypes, TranscriptionProviders, TranscriptionTypes
 from bots.teams_bot_adapter.teams_ui_methods import TeamsUIMethods, UiTeamsBlockingUsException, UiWaitingRoomTransitionFailedException
 from bots.web_bot_adapter.ui_methods import UiLoginRequiredException
 
@@ -1611,3 +1611,128 @@ class TestTeamsBot(TransactionTestCase):
 
             self.assertIn("take_action_based_on_bot_in_db - JOINING", saved_logs, "The saved logs should contain the messages logged while the bot was joining")
             self.assertIn("Telling adapter to leave meeting...", saved_logs, "The saved logs should contain the messages logged during cleanup")
+
+    def test_bot_removed_by_metadata_for_a_participant_in_the_meeting(self):
+        """A participant the bot saw is reported with every field the participants endpoint returns."""
+        participant = Participant.objects.create(
+            bot=self.bot,
+            uuid="8:orgid:00000000-0000-0000-0000-000000000001",
+            full_name="Test User",
+            is_host=True,
+        )
+
+        controller = BotController(self.bot.id)
+        metadata = controller.get_bot_removed_by_metadata({"removed_by": {"uuid": participant.uuid, "name": "Test User"}})
+
+        self.assertEqual(
+            metadata,
+            {
+                "bot_removed_by": {
+                    "id": participant.object_id,
+                    "name": "Test User",
+                    "uuid": participant.uuid,
+                    "user_uuid": None,
+                    "is_host": True,
+                }
+            },
+        )
+
+    def test_bot_removed_by_metadata_for_a_participant_the_bot_never_saw(self):
+        """A participant with no record, as when the bot is denied from the lobby, reports only what the meeting told us."""
+        controller = BotController(self.bot.id)
+        metadata = controller.get_bot_removed_by_metadata({"removed_by": {"uuid": "8:orgid:00000000-0000-0000-0000-000000000002", "name": "Test User"}})
+
+        self.assertEqual(
+            metadata,
+            {
+                "bot_removed_by": {
+                    "name": "Test User",
+                    "uuid": "8:orgid:00000000-0000-0000-0000-000000000002",
+                    "user_uuid": None,
+                }
+            },
+        )
+
+    def test_bot_removed_by_metadata_is_empty_when_nobody_removed_the_bot(self):
+        """A message with no actor adds no metadata, rather than a null or an empty object."""
+        controller = BotController(self.bot.id)
+
+        self.assertEqual(controller.get_bot_removed_by_metadata({}), {})
+        self.assertEqual(controller.get_bot_removed_by_metadata({"removed_by": None}), {})
+
+    def test_bot_removed_by_metadata_ignores_a_participant_of_another_bot(self):
+        """Participants are looked up per bot, so another bot's participant is not reported as a record we have."""
+        other_bot = Bot.objects.create(
+            name="Test Teams Bot Two",
+            meeting_url="https://teams.microsoft.com/meet/456456456?p=456456456",
+            state=BotStates.READY,
+            project=self.project,
+        )
+        Participant.objects.create(
+            bot=other_bot,
+            uuid="8:orgid:00000000-0000-0000-0000-000000000003",
+            full_name="Test User",
+            is_host=True,
+        )
+
+        controller = BotController(self.bot.id)
+        metadata = controller.get_bot_removed_by_metadata({"removed_by": {"uuid": "8:orgid:00000000-0000-0000-0000-000000000003", "name": "Test User"}})
+
+        self.assertNotIn("id", metadata["bot_removed_by"])
+        self.assertNotIn("is_host", metadata["bot_removed_by"])
+
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
+    def test_participant_who_removed_the_bot_is_reported_in_the_meeting_ended_event(
+        self,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+    ):
+        """When a participant removes the bot, the meeting ended event names them."""
+        MockFileUploader.return_value = create_mock_file_uploader()
+        MockChromeDriver.return_value = create_mock_teams_driver()
+        MockDisplay.return_value = MagicMock()
+
+        controller = BotController(self.bot.id)
+
+        with patch("bots.teams_bot_adapter.teams_ui_methods.TeamsUIMethods.attempt_to_join_meeting") as mock_attempt_to_join:
+            mock_attempt_to_join.return_value = None
+
+            bot_thread = threading.Thread(target=controller.run)
+            bot_thread.daemon = True
+            bot_thread.start()
+
+            time.sleep(3)
+
+            participant = Participant.objects.create(
+                bot=self.bot,
+                uuid="8:orgid:00000000-0000-0000-0000-000000000004",
+                full_name="Test User",
+                is_host=True,
+            )
+
+            # The websocket message from the meeting arrives before the bot notices it is gone.
+            controller.adapter.removed_by = {"uuid": participant.uuid, "name": "Test User"}
+            controller.adapter.handle_meeting_ended(controller.adapter.meeting_uuid)
+
+            time.sleep(2)
+
+            bot_thread.join(timeout=5)
+
+            # The bot posts more events while it shuts down, so ask for the one under test.
+            meeting_ended_event = self.bot.bot_events.get(event_type=BotEventTypes.MEETING_ENDED)
+            self.assertEqual(
+                meeting_ended_event.metadata["bot_removed_by"],
+                {
+                    "id": participant.object_id,
+                    "name": "Test User",
+                    "uuid": participant.uuid,
+                    "user_uuid": None,
+                    "is_host": True,
+                },
+            )
+            self.assertIn("bot_duration_seconds", meeting_ended_event.metadata)
+
+            connection.close()
