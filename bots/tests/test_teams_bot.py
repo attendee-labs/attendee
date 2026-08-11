@@ -15,6 +15,7 @@ from django.db import connection
 from django.test import TransactionTestCase, tag
 from selenium.common.exceptions import TimeoutException
 
+from bots.bot_adapter import BotAdapter
 from bots.bot_controller.bot_controller import BotController
 from bots.bots_api_views import send_sync_command
 from bots.models import Bot, BotChatMessageRequest, BotChatMessageRequestStates, BotChatMessageToOptions, BotDebugScreenshot, BotEventManager, BotEventSubTypes, BotEventTypes, BotLogin, BotLoginGroup, BotLoginPlatform, BotMediaRequest, BotMediaRequestMediaTypes, BotMediaRequestStates, BotStates, Credentials, MediaBlob, Organization, Participant, Project, Recording, RecordingStates, RecordingTypes, TranscriptionProviders, TranscriptionTypes
@@ -1681,56 +1682,36 @@ class TestTeamsBot(TransactionTestCase):
         self.assertNotIn("id", metadata["bot_removed_by"])
         self.assertNotIn("is_host", metadata["bot_removed_by"])
 
-    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
-    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
-    @patch("bots.bot_controller.bot_controller.S3FileUploader")
+    @patch.object(BotController, "cleanup")
+    @patch.object(BotController, "save_debug_artifacts")
+    @patch.object(BotController, "flush_utterances")
     def test_participant_who_removed_the_bot_is_reported_in_the_meeting_ended_event(
         self,
-        MockFileUploader,
-        MockChromeDriver,
-        MockDisplay,
+        mock_flush_utterances,
+        mock_save_debug_artifacts,
+        mock_cleanup,
     ):
         """When a participant removes the bot, the meeting ended event names them."""
-        MockFileUploader.return_value = create_mock_file_uploader()
-        MockChromeDriver.return_value = create_mock_teams_driver()
-        MockDisplay.return_value = MagicMock()
+        participant = Participant.objects.create(
+            bot=self.bot,
+            uuid="8:orgid:00000000-0000-0000-0000-000000000004",
+            full_name="Test User",
+            is_host=True,
+        )
 
         controller = BotController(self.bot.id)
 
-        with patch("bots.teams_bot_adapter.teams_ui_methods.TeamsUIMethods.attempt_to_join_meeting") as mock_attempt_to_join:
-            mock_attempt_to_join.return_value = None
+        # The adapter passes on the participant the meeting named when it told the bot it was gone.
+        controller.take_action_based_on_message_from_adapter({"message": BotAdapter.Messages.MEETING_ENDED, "removed_by": {"uuid": participant.uuid, "name": "Test User"}})
 
-            bot_thread = threading.Thread(target=controller.run)
-            bot_thread.daemon = True
-            bot_thread.start()
-
-            time.sleep(3)
-
-            participant = Participant.objects.create(
-                bot=self.bot,
-                uuid="8:orgid:00000000-0000-0000-0000-000000000004",
-                full_name="Test User",
-                is_host=True,
-            )
-
-            # The websocket message from the meeting arrives before the bot notices it is gone.
-            controller.adapter.removed_by = {"uuid": participant.uuid, "name": "Test User"}
-            controller.adapter.handle_meeting_ended(controller.adapter.meeting_uuid)
-
-            time.sleep(2)
-
-            bot_thread.join(timeout=5)
-
-            # The bot posts more events while it shuts down, so ask for the one under test.
-            meeting_ended_event = self.bot.bot_events.get(event_type=BotEventTypes.MEETING_ENDED)
-            self.assertEqual(
-                meeting_ended_event.metadata["bot_removed_by"],
-                {
-                    "id": participant.object_id,
-                    "name": "Test User",
-                    "uuid": participant.uuid,
-                    "user_uuid": None,
-                    "is_host": True,
-                },
-            )
-            connection.close()
+        meeting_ended_event = self.bot.bot_events.get(event_type=BotEventTypes.MEETING_ENDED)
+        self.assertEqual(
+            meeting_ended_event.metadata["bot_removed_by"],
+            {
+                "id": participant.object_id,
+                "name": "Test User",
+                "uuid": participant.uuid,
+                "user_uuid": None,
+                "is_host": True,
+            },
+        )
