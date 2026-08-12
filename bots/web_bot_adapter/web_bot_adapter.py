@@ -607,6 +607,7 @@ class WebBotAdapter(BotAdapter):
         options.add_argument("--disable-application-cache")
         options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--disable-blink-features=AutomationControlled")
+        options.add_argument("--disable-features=LocalNetworkAccessChecks")
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
 
         if os.getenv("ENABLE_CHROME_SANDBOX", "false").lower() != "true":
