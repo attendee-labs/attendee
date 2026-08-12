@@ -12,6 +12,7 @@ https://docs.djangoproject.com/en/5.1/ref/settings/
 
 import copy
 import os
+import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -207,7 +208,9 @@ if os.getenv("LAUNCH_BOT_METHOD") != "kubernetes" and os.getenv("LAUNCH_BOT_METH
     # Needed because latest Zoom SDK has segfault issue unless we recreate the process after each bot.
     CELERY_WORKER_MAX_TASKS_PER_CHILD = 1
 
-if os.getenv("IS_A_BOT_POD", "false") == "true" and os.getenv("CONSERVE_BOT_POD_REDIS_CONNECTIONS", "false") == "true":
+IS_A_BOT_POD = os.getenv("IS_A_BOT_POD", "false") == "true"
+
+if IS_A_BOT_POD and os.getenv("CONSERVE_BOT_POD_REDIS_CONNECTIONS", "false") == "true":
     # Setting this to 1 means that bot pods keep one celery broker pool connection alive for the duration of the bot.
     # Note: this results in 2 underlying Redis connections (one for commands, one for pub/sub).
     # Setting this to 0 means that no dedicated redis connection is created.
@@ -246,6 +249,34 @@ LOG_FORMATTERS = {
     "plain": {"format": "{levelname} {message}", "style": "{"},
     "json": {"class": "attendee.logging.ISOJsonFormatter", "format": "%(timestamp)s %(name)s %(levelname)s %(message)s"},
 }
+
+# When enabled on a bot pod, the pod's application logs are also written to a size capped file
+# which is attached to the bot's last event as a debug artifact when the bot cleans up.
+SAVE_BOT_LOGS_TO_DASHBOARD = os.getenv("SAVE_BOT_LOGS_TO_DASHBOARD", "false") == "true"
+BOT_POD_LOG_FILE_PATH = os.getenv("BOT_POD_LOG_FILE_PATH", "/tmp/bot_pod_logs.log")
+BOT_POD_LOG_FILE_MAX_BYTES = int(os.getenv("BOT_POD_LOG_FILE_MAX_BYTES", 100 * 1024 * 1024))
+
+# Log handlers - shared across environments
+LOG_HANDLERS = {
+    "console": {
+        "class": "logging.StreamHandler",
+        "stream": sys.stdout,
+        "formatter": os.getenv("ATTENDEE_LOG_FORMAT"),  # `None` (default formatter) is the default
+    },
+}
+
+if IS_A_BOT_POD and SAVE_BOT_LOGS_TO_DASHBOARD:
+    LOG_HANDLERS["bot_pod_log_file"] = {
+        "class": "logging.handlers.RotatingFileHandler",
+        "filename": BOT_POD_LOG_FILE_PATH,
+        # A single backup of half the cap keeps the most recent logs while staying under the cap.
+        "maxBytes": BOT_POD_LOG_FILE_MAX_BYTES // 2,
+        "backupCount": 1,
+        "formatter": os.getenv("ATTENDEE_LOG_FORMAT"),  # `None` (default formatter) is the default
+    }
+
+# The handlers every logger writes to.
+LOG_HANDLER_NAMES = list(LOG_HANDLERS)
 
 # Set up django storage backend
 # Use s3 by default, but if the STORAGE_PROTOCOL env var is set to "azure", use azure storage
