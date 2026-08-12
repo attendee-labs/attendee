@@ -23,9 +23,32 @@
         setTimeout(trySendMeetingEnded, 200);
     }
   })();
-
-// Get the frontend tracking id for debugging
-(() => {
+  
+  (() => {
+    function setFlagsInJsonString(value, flags) {
+      if (typeof value !== 'string') {
+        return value;
+      }
+  
+      try {
+        const parsed = JSON.parse(value);
+  
+        for (const flag of flags) {
+          parsed[flag] = true;
+        }
+  
+        return JSON.stringify(parsed);
+      } catch (e) {
+        console.warn('Failed to modify JSON string', e);
+        window.ws?.sendJson({
+          type: 'FailedToModifyJSONStringInInterceptedJsonpCallback',
+          error: e.message,
+          value: value,
+        });
+        return value;
+      }
+    }
+  
     function interceptJsonpCallback(name) {
       Object.defineProperty(window, name, {
         configurable: true,
@@ -34,16 +57,31 @@
           Object.defineProperty(window, name, {
             configurable: true,
             writable: true,
+  
             value: function interceptedZoomJsonpResponse(payload) {
               try {
+                const result = payload?.result;
+  
+                // Get the frontend tracking id for debugging
+                const MEETING_OPTIONS_FLAGS_TO_ENABLE = [
+                    'isEnableClosedCaption','isEnableLiveTranscription','isEnableAutomatedCaptions','isEnableSaveCaptions','isEnableViewFullTranscript'
+                ];
+
+                if (result) {
+                  result.meetingOptions = setFlagsInJsonString(
+                    result.meetingOptions,
+                    MEETING_OPTIONS_FLAGS_TO_ENABLE,
+                  );
+                }
+  
                 window.ws?.sendJson({
                   type: 'ZoomFrontendTrackingId',
-                  trackingId: payload?.result?.tid ?? 'No tracking id found'
+                  trackingId: result?.tid ?? 'No tracking id found',
                 });
               } catch (e) {
-                console.warn('ZoomFrontendTrackingId send failed', e);
+                console.warn('Zoom JSONP response manipulation failed', e);
               }
-
+  
               return originalCallback.call(this, payload);
             },
           });
@@ -55,7 +93,7 @@
       });
     }
   
-    interceptJsonpCallback("localJsonpCallback1");
+    interceptJsonpCallback('localJsonpCallback1');
   })();
 
 // Captures per-participant webcam/screenshare video by periodically scanning
