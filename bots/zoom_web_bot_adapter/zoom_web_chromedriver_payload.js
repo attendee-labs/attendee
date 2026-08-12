@@ -32,11 +32,23 @@
   
       try {
         const parsed = JSON.parse(value);
-  
+        const changedFlags = {};
+
         for (const flag of flags) {
-          parsed[flag] = true;
+          if (parsed[flag] !== true) {
+            changedFlags[flag] = { from: parsed[flag], to: true };
+            parsed[flag] = true;
+          }
         }
-  
+
+        if (Object.keys(changedFlags).length > 0) {
+          console.log('Modified flags in intercepted JSON string', changedFlags);
+          window.ws?.sendJson({
+            type: 'ModifiedFlagsInInterceptedJsonpCallback',
+            changedFlags: changedFlags,
+          });
+        }
+
         return JSON.stringify(parsed);
       } catch (e) {
         console.warn('Failed to modify JSON string', e);
