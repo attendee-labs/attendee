@@ -308,6 +308,13 @@ class WebBotAdapter(BotAdapter):
         else:
             self.only_one_participant_in_meeting_at = None
 
+    def handle_remover_data(self, json_data):
+        # A meeting status change names the participant who removed us when it knows who that was.
+        if not json_data.get("remover") or self.meeting_uuid_mismatch(json_data):
+            return
+
+        self.remover = json_data["remover"]
+
     def handle_removed_from_meeting(self):
         self.left_meeting = True
         self.send_message_callback({"message": self.Messages.MEETING_ENDED, "remover": self.remover})
@@ -412,8 +419,7 @@ class WebBotAdapter(BotAdapter):
                                 self.send_message_callback({"message": self.Messages.READY_TO_SEND_CHAT_MESSAGE})
 
                         elif json_data.get("type") == "MeetingStatusChange":
-                            if json_data.get("remover") and not self.meeting_uuid_mismatch(json_data):
-                                self.remover = json_data["remover"]
+                            self.handle_remover_data(json_data)
 
                             if json_data.get("change") == "removed_from_meeting":
                                 self.handle_removed_from_meeting()
