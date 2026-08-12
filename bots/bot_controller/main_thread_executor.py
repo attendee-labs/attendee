@@ -9,13 +9,14 @@ class MainThreadExecutor:
     """Runs callables on the GLib main loop thread and blocks the caller until done."""
 
     def __init__(self):
-        self._main_thread_id = None
-        self._main_thread_id = threading.get_ident()
+        # Held as a Thread object rather than an ident, since idents are recycled
+        # once a thread exits and another thread could then look like the main one.
+        self._main_thread = threading.current_thread()
 
     def run(self, func, *args, timeout_seconds=60, **kwargs):
         # If we're already on the main thread, just call it. This avoids
         # deadlocking when the same callback is invoked from the main loop.
-        if threading.get_ident() == self._main_thread_id:
+        if threading.current_thread() is self._main_thread:
             return func(*args, **kwargs)
 
         done = threading.Event()
