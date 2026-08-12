@@ -2,6 +2,7 @@ import base64
 import json
 import threading
 import time
+from urllib.parse import urlparse
 from unittest.mock import MagicMock, mock_open, patch
 
 from django.db import connection
@@ -959,7 +960,8 @@ class TestTeamsBot(TransactionTestCase):
         def mock_identification_token_post(*args, **kwargs):
             url = args[0] if args else kwargs.get("url")
             mock_response = MagicMock()
-            if url and "login.microsoftonline.com" in url:
+            hostname = urlparse(url).hostname.lower() if url and urlparse(url).hostname else None
+            if hostname and (hostname == "login.microsoftonline.com" or hostname.endswith(".login.microsoftonline.com")):
                 identification_token_requests.append({"url": url, "data": kwargs.get("data")})
                 mock_response.json.return_value = {"access_token": f"test-identification-token-{len(identification_token_requests)}"}
             return mock_response
