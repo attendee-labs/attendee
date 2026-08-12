@@ -412,7 +412,7 @@ class TeamsUIMethods:
             return "speaker"
 
     def meeting_url_with_identification_token(self):
-        token = self.fetch_teams_bot_identification_token_callback() if self.fetch_teams_bot_identification_token_callback else None
+        token = self.get_teams_bot_identification_token()
         if not token:
             return self.meeting_url
 
