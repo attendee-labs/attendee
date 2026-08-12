@@ -10,7 +10,6 @@ from datetime import timedelta
 
 import gi
 import redis
-import requests
 from django.conf import settings
 from django.core.files.base import ContentFile
 from django.utils import timezone
@@ -18,6 +17,7 @@ from django.utils import timezone
 from bots.automatic_leave_configuration import AutomaticLeaveConfiguration
 from bots.bot_adapter import BotAdapter
 from bots.bot_controller.bot_websocket_client_manager import BotWebsocketClientManager
+from bots.bot_controller.main_thread_executor import MainThreadExecutor
 from bots.bot_sso_utils import create_google_meet_sign_in_session
 from bots.bots_api_utils import BotCreationSource
 from bots.external_callback_utils import get_zoom_tokens
@@ -211,7 +211,10 @@ class BotController:
             modify_dom_for_video_recording=self.should_modify_dom_for_video_recording_for_web_bots(),
             google_meet_bot_login_is_available=self.google_meet_bot_login_is_available(),
             google_meet_bot_login_should_be_used=self.bot_in_db.google_meet_login_mode_is_always(),
-            create_google_meet_bot_login_session_callback=self.create_google_meet_bot_login_session,
+            # Guarantees db query is run on main thread, so no extra sql connection is added
+            create_google_meet_bot_login_session_callback=self.main_thread_executor.wraps(
+                self.create_google_meet_bot_login_session,
+            ),
             ui_interaction_mode=self.bot_in_db.google_meet_ui_interaction_mode(),
         )
 
@@ -232,48 +235,23 @@ class BotController:
     def teams_bot_login_is_available(self):
         return self.bot_in_db.teams_use_bot_login() and BotLoginGroup.first_available_login(project=self.bot_in_db.project, platform=BotLoginPlatform.TEAMS, group_name=self.bot_in_db.teams_login_group_name()) is not None
 
-    def get_teams_bot_identification_token(self):
+    def get_teams_bot_identification_credentials(self):
         teams_bot_identification_credentials = self.bot_in_db.project.credentials.filter(credential_type=Credentials.CredentialTypes.TEAMS_BOT_IDENTIFICATION_CREDENTIALS).first()
         if not teams_bot_identification_credentials:
             return None
 
-        credentials = teams_bot_identification_credentials.get_credentials()
+        # These credentials are optional, so a failure to read them should not prevent the bot from joining
+        try:
+            credentials = teams_bot_identification_credentials.get_credentials()
+        except Exception as e:
+            logger.warning(f"Failed to read Teams bot identification credentials: {e}")
+            return None
+
         if not credentials:
             logger.warning("Teams bot identification credentials record exists but has no data")
             return None
 
-        tenant_id = credentials.get("tenant_id")
-        client_id = credentials.get("client_id")
-        client_secret = credentials.get("client_secret")
-        if not all([tenant_id, client_id, client_secret]):
-            logger.warning("Teams bot identification credentials are missing tenant_id, client_id, or client_secret")
-            return None
-
-        # The token is only valid for ~1 hour, so it must be minted right before the bot joins.
-        try:
-            response = requests.post(
-                f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token",
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
-                data={
-                    "client_id": client_id,
-                    "client_secret": client_secret,
-                    "scope": "https://ic3.teams.office.com/.default",
-                    "grant_type": "client_credentials",
-                },
-                timeout=30,
-            )
-            response.raise_for_status()
-        except Exception as e:
-            logger.error(f"Failed to fetch Teams bot identification token: {e}")
-            return None
-
-        token = response.json().get("access_token")
-        if not token:
-            logger.error("Teams bot identification token response did not contain an access_token")
-            return None
-
-        logger.info("Successfully fetched Teams bot identification token")
-        return token
+        return credentials
 
     def get_teams_bot_adapter(self):
         from bots.teams_bot_adapter import TeamsBotAdapter
@@ -301,12 +279,15 @@ class BotController:
             video_frame_size=self.bot_in_db.recording_dimensions(),
             teams_bot_login_is_available=self.teams_bot_login_is_available(),
             teams_bot_login_should_be_used=self.bot_in_db.teams_login_mode_is_always(),
-            fetch_teams_bot_login_credentials_callback=self.retrieve_teams_bot_login_credentials,
+            # Guarantees db query is run on main thread, so no extra sql connection is added
+            fetch_teams_bot_login_credentials_callback=self.main_thread_executor.wraps(
+                self.retrieve_teams_bot_login_credentials,
+            ),
             record_chat_messages_when_paused=self.bot_in_db.record_chat_messages_when_paused(),
             record_participant_speech_start_stop_events=self.bot_in_db.record_participant_speech_start_stop_events(),
             disable_incoming_video=self.disable_incoming_video_for_web_bots(),
             modify_dom_for_video_recording=self.should_modify_dom_for_video_recording_for_web_bots(),
-            fetch_teams_bot_identification_token_callback=self.get_teams_bot_identification_token,
+            teams_bot_identification_credentials=self.get_teams_bot_identification_credentials(),
         )
 
     def get_zoom_oauth_credentials_via_credentials_record(self):
@@ -750,6 +731,8 @@ class BotController:
         )
 
         self.pipeline_configuration = self.get_pipeline_configuration()
+
+        self.main_thread_executor = MainThreadExecutor()
 
     def get_pipeline_configuration(self):
         if self.bot_in_db.rtmp_destination_url():
