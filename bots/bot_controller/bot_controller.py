@@ -1793,7 +1793,7 @@ class BotController:
         """Event metadata naming the participant who removed the bot, when the meeting told us who it was."""
         remover = message.get("remover")
         if not remover:
-            return {}
+            return None
 
         # The bot has no record of the participant when it never saw the meeting's roster, as when it is denied from the lobby.
         participant = Participant.objects.filter(bot=self.bot_in_db, uuid=remover["uuid"]).first()

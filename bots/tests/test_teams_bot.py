@@ -1650,12 +1650,12 @@ class TestTeamsBot(TransactionTestCase):
             },
         )
 
-    def test_remover_metadata_is_empty_when_nobody_removed_the_bot(self):
-        """A message with no remover adds no metadata, rather than a null or an empty object."""
+    def test_remover_metadata_is_none_when_nobody_removed_the_bot(self):
+        """A message with no remover adds no metadata, leaving create_event with its default."""
         controller = BotController(self.bot.id)
 
-        self.assertEqual(controller.get_remover_metadata({}), {})
-        self.assertEqual(controller.get_remover_metadata({"remover": None}), {})
+        self.assertIsNone(controller.get_remover_metadata({}))
+        self.assertIsNone(controller.get_remover_metadata({"remover": None}))
 
     def test_remover_metadata_ignores_a_participant_of_another_bot(self):
         """Participants are looked up per bot, so another bot's participant is not reported as a record we have."""
