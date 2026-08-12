@@ -87,7 +87,7 @@ class WebBotAdapter(BotAdapter):
 
         self.left_meeting = False
         self.was_removed_from_meeting = False
-        self.triggered_by = None
+        self.remover = None
         self.cleaned_up = False
 
         self.websocket_port = None
@@ -310,7 +310,7 @@ class WebBotAdapter(BotAdapter):
 
     def handle_removed_from_meeting(self):
         self.left_meeting = True
-        self.send_message_callback({"message": self.Messages.MEETING_ENDED, "triggered_by": self.triggered_by})
+        self.send_message_callback({"message": self.Messages.MEETING_ENDED, "remover": self.remover})
 
     def handle_meeting_ended(self, meeting_id):
         # If a meeting id was passed in the meeting ended message and we have one on the backend, then
@@ -320,7 +320,7 @@ class WebBotAdapter(BotAdapter):
             return
 
         self.left_meeting = True
-        self.send_message_callback({"message": self.Messages.MEETING_ENDED, "triggered_by": self.triggered_by})
+        self.send_message_callback({"message": self.Messages.MEETING_ENDED, "remover": self.remover})
 
     def handle_failed_to_join(self, reason):
         logger.info(f"failed to join meeting with reason {reason}")
@@ -412,8 +412,8 @@ class WebBotAdapter(BotAdapter):
                                 self.send_message_callback({"message": self.Messages.READY_TO_SEND_CHAT_MESSAGE})
 
                         elif json_data.get("type") == "MeetingStatusChange":
-                            if json_data.get("triggeredBy") and not self.meeting_uuid_mismatch(json_data):
-                                self.triggered_by = json_data["triggeredBy"]
+                            if json_data.get("remover") and not self.meeting_uuid_mismatch(json_data):
+                                self.remover = json_data["remover"]
 
                             if json_data.get("change") == "removed_from_meeting":
                                 self.handle_removed_from_meeting()
@@ -478,7 +478,7 @@ class WebBotAdapter(BotAdapter):
                 raise  # Re-raise other OSErrors
 
     def send_request_to_join_denied_message(self):
-        self.send_message_callback({"message": self.Messages.REQUEST_TO_JOIN_DENIED, "triggered_by": self.triggered_by})
+        self.send_message_callback({"message": self.Messages.REQUEST_TO_JOIN_DENIED, "remover": self.remover})
 
     def send_meeting_not_found_message(self):
         self.send_message_callback({"message": self.Messages.MEETING_NOT_FOUND})

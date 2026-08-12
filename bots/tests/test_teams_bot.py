@@ -1613,8 +1613,8 @@ class TestTeamsBot(TransactionTestCase):
             self.assertIn("take_action_based_on_bot_in_db - JOINING", saved_logs, "The saved logs should contain the messages logged while the bot was joining")
             self.assertIn("Telling adapter to leave meeting...", saved_logs, "The saved logs should contain the messages logged during cleanup")
 
-    def test_triggered_by_metadata_for_a_participant_in_the_meeting(self):
-        """A participant the bot saw is reported with every field the participants endpoint returns."""
+    def test_remover_metadata_for_a_participant_in_the_meeting(self):
+        """A participant the bot saw is reported with every attribute we hold for them."""
         participant = Participant.objects.create(
             bot=self.bot,
             uuid="8:orgid:00000000-0000-0000-0000-000000000001",
@@ -1623,45 +1623,41 @@ class TestTeamsBot(TransactionTestCase):
         )
 
         controller = BotController(self.bot.id)
-        metadata = controller.get_triggered_by_metadata({"triggered_by": {"uuid": participant.uuid, "name": "Test User"}})
+        metadata = controller.get_remover_metadata({"remover": {"uuid": participant.uuid, "name": "Test User"}})
 
         self.assertEqual(
             metadata,
             {
-                "triggered_by": {
-                    "id": participant.object_id,
-                    "name": "Test User",
-                    "uuid": participant.uuid,
-                    "user_uuid": None,
-                    "is_host": True,
-                }
+                "remover_name": "Test User",
+                "remover_uuid": participant.uuid,
+                "remover_user_uuid": None,
+                "remover_is_host": True,
             },
         )
 
-    def test_triggered_by_metadata_for_a_participant_the_bot_never_saw(self):
-        """A participant with no record, as when the bot is denied from the lobby, reports only what the meeting told us."""
+    def test_remover_metadata_for_a_participant_the_bot_never_saw(self):
+        """A participant with no record, as when the bot is denied from the lobby, reports what the meeting told us and nulls for the rest."""
         controller = BotController(self.bot.id)
-        metadata = controller.get_triggered_by_metadata({"triggered_by": {"uuid": "8:orgid:00000000-0000-0000-0000-000000000002", "name": "Test User"}})
+        metadata = controller.get_remover_metadata({"remover": {"uuid": "8:orgid:00000000-0000-0000-0000-000000000002", "name": "Test User"}})
 
         self.assertEqual(
             metadata,
             {
-                "triggered_by": {
-                    "name": "Test User",
-                    "uuid": "8:orgid:00000000-0000-0000-0000-000000000002",
-                    "user_uuid": None,
-                }
+                "remover_name": "Test User",
+                "remover_uuid": "8:orgid:00000000-0000-0000-0000-000000000002",
+                "remover_user_uuid": None,
+                "remover_is_host": None,
             },
         )
 
-    def test_triggered_by_metadata_is_empty_when_nobody_removed_the_bot(self):
-        """A message with no actor adds no metadata, rather than a null or an empty object."""
+    def test_remover_metadata_is_empty_when_nobody_removed_the_bot(self):
+        """A message with no remover adds no metadata, rather than a null or an empty object."""
         controller = BotController(self.bot.id)
 
-        self.assertEqual(controller.get_triggered_by_metadata({}), {})
-        self.assertEqual(controller.get_triggered_by_metadata({"triggered_by": None}), {})
+        self.assertEqual(controller.get_remover_metadata({}), {})
+        self.assertEqual(controller.get_remover_metadata({"remover": None}), {})
 
-    def test_triggered_by_metadata_ignores_a_participant_of_another_bot(self):
+    def test_remover_metadata_ignores_a_participant_of_another_bot(self):
         """Participants are looked up per bot, so another bot's participant is not reported as a record we have."""
         other_bot = Bot.objects.create(
             name="Test Teams Bot Two",
@@ -1677,10 +1673,9 @@ class TestTeamsBot(TransactionTestCase):
         )
 
         controller = BotController(self.bot.id)
-        metadata = controller.get_triggered_by_metadata({"triggered_by": {"uuid": "8:orgid:00000000-0000-0000-0000-000000000003", "name": "Test User"}})
+        metadata = controller.get_remover_metadata({"remover": {"uuid": "8:orgid:00000000-0000-0000-0000-000000000003", "name": "Test User"}})
 
-        self.assertNotIn("id", metadata["triggered_by"])
-        self.assertNotIn("is_host", metadata["triggered_by"])
+        self.assertIsNone(metadata["remover_is_host"])
 
     @patch.object(BotController, "cleanup")
     @patch.object(BotController, "save_debug_artifacts")
@@ -1702,16 +1697,15 @@ class TestTeamsBot(TransactionTestCase):
         controller = BotController(self.bot.id)
 
         # The adapter passes on the participant the meeting named when it told the bot it was gone.
-        controller.take_action_based_on_message_from_adapter({"message": BotAdapter.Messages.MEETING_ENDED, "triggered_by": {"uuid": participant.uuid, "name": "Test User"}})
+        controller.take_action_based_on_message_from_adapter({"message": BotAdapter.Messages.MEETING_ENDED, "remover": {"uuid": participant.uuid, "name": "Test User"}})
 
         meeting_ended_event = self.bot.bot_events.get(event_type=BotEventTypes.MEETING_ENDED)
         self.assertEqual(
-            meeting_ended_event.metadata["triggered_by"],
+            meeting_ended_event.metadata,
             {
-                "id": participant.object_id,
-                "name": "Test User",
-                "uuid": participant.uuid,
-                "user_uuid": None,
-                "is_host": True,
+                "remover_name": "Test User",
+                "remover_uuid": participant.uuid,
+                "remover_user_uuid": None,
+                "remover_is_host": True,
             },
         )

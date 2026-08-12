@@ -109,7 +109,7 @@ For webhooks triggered by `bot.state_change`, the `data` field contains:
 ### Knowing who removed the bot
 
 When a participant denies the bot's request to join, or removes the bot from the meeting,
-`event_metadata` contains a `triggered_by` object naming them:
+`event_metadata` contains `remover_` fields naming them:
 
 ```json
 {
@@ -119,25 +119,22 @@ When a participant denies the bot's request to join, or removes the bot from the
   "event_type": "meeting_ended",
   "event_sub_type": null,
   "event_metadata": {
-    "triggered_by": {
-      "id": "par_xxxxxxxxxxxxxxxx",
-      "name": "Test User",
-      "uuid": "8:orgid:00000000-0000-0000-0000-000000000001",
-      "user_uuid": null,
-      "is_host": true
-    }
+    "remover_name": "Test User",
+    "remover_uuid": "8:orgid:00000000-0000-0000-0000-000000000001",
+    "remover_user_uuid": null,
+    "remover_is_host": true
   }
 }
 ```
 
-The fields are the same as those of a participant returned by `GET /api/v1/bots/{object_id}/participants`.
+These are the same attributes reported for the speaker of a transcription utterance, for the participant of a participant event, and by `GET /api/v1/bots/{object_id}/participants`.
 
-A few things to know about this object:
+A few things to know about these fields:
 
 - Only Microsoft Teams reports who removed the bot. Google Meet and Zoom tell the bot that it was removed but not by whom.
-- `id` and `is_host` are only present when that participant was in the meeting with the bot. When the bot is denied from the lobby it never sees the meeting's participants, so only `name`, `uuid` and `user_uuid` are reported.
-- The object is absent whenever the bot was not told who was responsible. Its absence is not evidence that nobody removed the bot.
-- On a `meeting_ended` event, this object means a participant removed the bot, so the meeting itself may still be going.
+- `remover_user_uuid` and `remover_is_host` are null when that participant was not in the meeting with the bot. When the bot is denied from the lobby it never sees the meeting's participants, so only `remover_name` and `remover_uuid` are known.
+- The fields are absent whenever the bot was not told who was responsible. Their absence is not evidence that nobody removed the bot.
+- On a `meeting_ended` event, these fields mean a participant removed the bot, so the meeting itself may still be going.
 
 ### Using webhooks to know when the recording is available
 
