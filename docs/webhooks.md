@@ -106,7 +106,25 @@ For webhooks triggered by `bot.state_change`, the `data` field contains:
 }
 ```
 
+### Using webhooks to know when the recording is available
+
+The most common use case for webhooks is to be notified when the meeting has ended and the recording is available. You can do this by listening for the `post_processing_completed` event type.
+
+The data field will look like this
+
+```json
+{
+  "new_state": "ended",
+  "old_state": "post_processing",
+  "created_at": "2023-07-15T14:30:45.123456Z",
+  "event_type": "post_processing_completed",
+  "event_sub_type": null,
+}
+```
+
 ### Knowing who removed the bot
+
+This is only supported for Microsoft Teams. Google Meet and Zoom tell the bot that it was removed but not by whom.
 
 When a participant denies the bot's request to join, or removes the bot from the meeting,
 `event_metadata` contains `remover_` fields naming them:
@@ -127,30 +145,7 @@ When a participant denies the bot's request to join, or removes the bot from the
 }
 ```
 
-These are the same attributes reported for the speaker of a transcription utterance, for the participant of a participant event, and by `GET /api/v1/bots/{object_id}/participants`.
-
-A few things to know about these fields:
-
-- Only Microsoft Teams reports who removed the bot. Google Meet and Zoom tell the bot that it was removed but not by whom.
-- `remover_user_uuid` and `remover_is_host` are null when that participant was not in the meeting with the bot. When the bot is denied from the lobby it never sees the meeting's participants, so only `remover_name` and `remover_uuid` are known.
-- The fields are absent whenever the bot was not told who was responsible. Their absence is not evidence that nobody removed the bot.
-- On a `meeting_ended` event, these fields mean a participant removed the bot, so the meeting itself may still be going.
-
-### Using webhooks to know when the recording is available
-
-The most common use case for webhooks is to be notified when the meeting has ended and the recording is available. You can do this by listening for the `post_processing_completed` event type.
-
-The data field will look like this
-
-```json
-{
-  "new_state": "ended",
-  "old_state": "post_processing",
-  "created_at": "2023-07-15T14:30:45.123456Z",
-  "event_type": "post_processing_completed",
-  "event_sub_type": null,
-}
-```
+On a `meeting_ended` event, these fields mean a participant removed the bot, so the meeting itself may still be going.
 
 ### Payload for `transcript.update` trigger
 
