@@ -1,3 +1,23 @@
+// Make the page believe insertable streams are unavailable on receivers. Meet feature-detects this by
+// checking for RTCRtpReceiver.prototype.createEncodedStreams, so removing it forces the fallback path
+// used by browsers without insertable streams support.
+const hideReceiverCreateEncodedStreamsSupport = () => {
+    const receiverPrototype = window.RTCRtpReceiver?.prototype;
+
+    if (!receiverPrototype) {
+        return;
+    }
+
+    try {
+        delete receiverPrototype.createEncodedStreams;
+        console.log("RTCRtpReceiver.prototype.createEncodedStreams now reports as unsupported");
+    } catch (error) {
+        console.log("Failed to delete RTCRtpReceiver.prototype.createEncodedStreams", error);
+    }
+};
+
+hideReceiverCreateEncodedStreamsSupport();
+
 // Google Meet uses localstorage to store its preferences. We can use this to disable incoming video.
 const disableIncomingVideoViaLocalStorage = () => {
     const MEET_PREFERENCES_LOCAL_STORAGE_KEY = "meet-preferences";
