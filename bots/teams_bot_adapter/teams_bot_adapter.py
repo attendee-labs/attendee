@@ -56,7 +56,7 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
         teams_bot_login_should_be_used: bool,
         fetch_teams_bot_login_credentials_callback: Callable[[], dict],
         modify_dom_for_video_recording: bool,
-        teams_bot_identification_credentials: dict,
+        teams_bot_identification_credentials: dict | None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)

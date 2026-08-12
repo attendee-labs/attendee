@@ -236,7 +236,13 @@ class BotController:
         if not teams_bot_identification_credentials:
             return None
 
-        credentials = teams_bot_identification_credentials.get_credentials()
+        # These credentials are optional, so a failure to read them should not prevent the bot from joining
+        try:
+            credentials = teams_bot_identification_credentials.get_credentials()
+        except Exception as e:
+            logger.warning(f"Failed to read Teams bot identification credentials: {e}")
+            return None
+
         if not credentials:
             logger.warning("Teams bot identification credentials record exists but has no data")
             return None
