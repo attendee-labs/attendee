@@ -2,8 +2,8 @@ import base64
 import json
 import threading
 import time
-from urllib.parse import urlparse
 from unittest.mock import MagicMock, mock_open, patch
+from urllib.parse import urlparse
 
 from django.db import connection
 from django.test import TransactionTestCase, tag
