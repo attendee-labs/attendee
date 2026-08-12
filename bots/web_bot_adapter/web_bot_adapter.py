@@ -310,7 +310,10 @@ class WebBotAdapter(BotAdapter):
 
     def handle_remover_data(self, json_data):
         # A meeting status change names the participant who removed us when it knows who that was.
-        if not json_data.get("remover") or self.meeting_uuid_mismatch(json_data):
+        if not json_data.get("remover"):
+            return
+
+        if self.meeting_uuid_mismatch(json_data):
             return
 
         self.remover = json_data["remover"]
