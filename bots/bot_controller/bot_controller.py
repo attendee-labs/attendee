@@ -1985,11 +1985,11 @@ class BotController:
         if message.get("message") == BotAdapter.Messages.MEETING_ENDED:
             logger.info("Received message that meeting ended")
             self.flush_utterances()
-            event_metadata = self.get_remover_metadata(message)
             if self.bot_in_db.state == BotStates.LEAVING:
-                new_bot_event = BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.BOT_LEFT_MEETING, event_metadata=event_metadata)
+                # The bot decided to leave on its own, so naming a remover here would only muddy why it left.
+                new_bot_event = BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.BOT_LEFT_MEETING)
             else:
-                new_bot_event = BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.MEETING_ENDED, event_metadata=event_metadata)
+                new_bot_event = BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.MEETING_ENDED, event_metadata=self.get_remover_metadata(message))
 
             self.save_debug_artifacts(message, new_bot_event)
 

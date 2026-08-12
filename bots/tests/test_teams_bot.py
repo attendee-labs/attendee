@@ -1709,3 +1709,28 @@ class TestTeamsBot(TransactionTestCase):
                 "remover_is_host": True,
             },
         )
+
+    @patch.object(BotController, "cleanup")
+    @patch.object(BotController, "save_debug_artifacts")
+    @patch.object(BotController, "flush_utterances")
+    def test_bot_that_left_on_its_own_reports_no_remover(
+        self,
+        mock_flush_utterances,
+        mock_save_debug_artifacts,
+        mock_cleanup,
+    ):
+        """A bot already leaving decided to leave on its own, so its left meeting event names nobody."""
+        participant = Participant.objects.create(
+            bot=self.bot,
+            uuid="8:orgid:00000000-0000-0000-0000-000000000005",
+            full_name="Test User",
+            is_host=True,
+        )
+        self.bot.state = BotStates.LEAVING
+        self.bot.save()
+
+        controller = BotController(self.bot.id)
+        controller.take_action_based_on_message_from_adapter({"message": BotAdapter.Messages.MEETING_ENDED, "remover": {"uuid": participant.uuid, "name": "Test User"}})
+
+        bot_left_meeting_event = self.bot.bot_events.get(event_type=BotEventTypes.BOT_LEFT_MEETING)
+        self.assertNotIn("remover_name", bot_left_meeting_event.metadata or {})
