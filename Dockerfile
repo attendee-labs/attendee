@@ -49,11 +49,11 @@ RUN apt-get update  \
 # Install Chrome dependencies
 RUN apt-get install -y xvfb xauth x11-xkb-utils xfonts-100dpi xfonts-75dpi xfonts-scalable xfonts-cyrillic x11-apps libvulkan1 fonts-liberation xdg-utils wget
 # Install a specific version of Chrome.
-RUN wget -q http://dl.google.com/linux/chrome/deb/pool/main/g/google-chrome-stable/google-chrome-stable_144.0.7559.96-1_amd64.deb
-RUN apt-get install -y ./google-chrome-stable_144.0.7559.96-1_amd64.deb
+RUN wget -q http://dl.google.com/linux/chrome/deb/pool/main/g/google-chrome-stable/google-chrome-stable_150.0.7871.186-1_amd64.deb
+RUN apt-get install -y ./google-chrome-stable_150.0.7871.186-1_amd64.deb
 
 # Install a specific version of ChromeDriver.
-RUN wget -q https://storage.googleapis.com/chrome-for-testing-public/144.0.7559.96/linux64/chromedriver-linux64.zip \
+RUN wget -q https://storage.googleapis.com/chrome-for-testing-public/150.0.7871.186/linux64/chromedriver-linux64.zip \
     && unzip chromedriver-linux64.zip \
     && mv chromedriver-linux64/chromedriver /usr/local/bin/chromedriver \
     && chmod +x /usr/local/bin/chromedriver \
