@@ -17,6 +17,7 @@ from django.utils import timezone
 from bots.automatic_leave_configuration import AutomaticLeaveConfiguration
 from bots.bot_adapter import BotAdapter
 from bots.bot_controller.bot_websocket_client_manager import BotWebsocketClientManager
+from bots.bot_controller.main_thread_executor import MainThreadExecutor
 from bots.bot_sso_utils import create_google_meet_sign_in_session
 from bots.bots_api_utils import BotCreationSource
 from bots.external_callback_utils import get_zoom_tokens
@@ -210,7 +211,10 @@ class BotController:
             modify_dom_for_video_recording=self.should_modify_dom_for_video_recording_for_web_bots(),
             google_meet_bot_login_is_available=self.google_meet_bot_login_is_available(),
             google_meet_bot_login_should_be_used=self.bot_in_db.google_meet_login_mode_is_always(),
-            create_google_meet_bot_login_session_callback=self.create_google_meet_bot_login_session,
+            # Guarantees db query is run on main thread, so no extra sql connection is added
+            create_google_meet_bot_login_session_callback=self.main_thread_executor.wraps(
+                self.create_google_meet_bot_login_session,
+            ),
             ui_interaction_mode=self.bot_in_db.google_meet_ui_interaction_mode(),
         )
 
@@ -275,7 +279,10 @@ class BotController:
             video_frame_size=self.bot_in_db.recording_dimensions(),
             teams_bot_login_is_available=self.teams_bot_login_is_available(),
             teams_bot_login_should_be_used=self.bot_in_db.teams_login_mode_is_always(),
-            fetch_teams_bot_login_credentials_callback=self.retrieve_teams_bot_login_credentials,
+            # Guarantees db query is run on main thread, so no extra sql connection is added
+            fetch_teams_bot_login_credentials_callback=self.main_thread_executor.wraps(
+                self.retrieve_teams_bot_login_credentials,
+            ),
             record_chat_messages_when_paused=self.bot_in_db.record_chat_messages_when_paused(),
             record_participant_speech_start_stop_events=self.bot_in_db.record_participant_speech_start_stop_events(),
             disable_incoming_video=self.disable_incoming_video_for_web_bots(),
@@ -724,6 +731,8 @@ class BotController:
         )
 
         self.pipeline_configuration = self.get_pipeline_configuration()
+
+        self.main_thread_executor = MainThreadExecutor()
 
     def get_pipeline_configuration(self):
         if self.bot_in_db.rtmp_destination_url():
