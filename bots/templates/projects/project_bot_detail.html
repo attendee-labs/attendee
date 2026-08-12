@@ -323,6 +323,12 @@
                                                 target="_blank">
                                                 Download MHTML
                                             </a>
+                                        {% elif screenshot.file.name|stringformat:"s"|slice:"-4:" == ".log" %}
+                                            <a href="{{ screenshot.url }}" 
+                                                class="btn btn-outline-secondary mb-2" 
+                                                target="_blank">
+                                                Download Logs
+                                            </a>
                                         {% else %}
                                             <img src="{{ screenshot.url }}" 
                                                 class="img-fluid mb-2" 
