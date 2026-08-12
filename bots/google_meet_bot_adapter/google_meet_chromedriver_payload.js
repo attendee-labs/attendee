@@ -1,3 +1,126 @@
+// Google Meet uses localstorage to store its preferences. We can use this to disable incoming video.
+const disableIncomingVideoViaLocalStorage = () => {
+    const MEET_PREFERENCES_LOCAL_STORAGE_KEY = "meet-preferences";
+
+    // It's a protobuf. The only non-null field we need to write is the nested field at index 8, 5.
+    // This controls the video receive resolution. Setting it to 1 will disable incoming video.
+    const preferencesArray = Array(9).fill(null);
+    preferencesArray[8] = Array(6).fill(null);
+    preferencesArray[8][5] = 1;
+    
+    // You need to stringify twice to get a quoted string.
+    const DISABLED_INCOMING_VIDEO_PREFERENCES = JSON.stringify(JSON.stringify(preferencesArray));
+
+    try {
+        localStorage.setItem(MEET_PREFERENCES_LOCAL_STORAGE_KEY, DISABLED_INCOMING_VIDEO_PREFERENCES);
+        console.log("Disabled incoming video via setting localstorage");
+    } catch (error) {
+        // localStorage is unavailable in opaque origins, which this script also runs in
+        console.log("Failed to disable incoming video via setting localstorage", error);
+    }
+};
+
+if (window.googleMeetInitialData.disableIncomingVideo) {
+    disableIncomingVideoViaLocalStorage();
+}
+
+const handleVideoTrackForRealTimePerParticipantVideo = async ({ track, streams }) => {
+    try {
+        const firstStreamId = streams?.[0]?.id;
+
+        if (!firstStreamId)
+            return;
+
+        const userForTrack = window.userManager?.getUserByStreamId(firstStreamId);
+
+        if (!userForTrack)
+            return;
+
+        const isScreenShare = !!userForTrack.parentDeviceId;
+        const participantId = userForTrack.parentDeviceId || userForTrack.deviceId;
+
+        if (!participantId)
+            return;
+
+        const videoConfig = window.initialData.perParticipantRealtimeVideoConfiguration;
+        const sourceConfig = isScreenShare ? videoConfig.screenshare_configuration : videoConfig.webcam_configuration;
+
+        if (!sourceConfig.enabled)
+            return;
+
+        videoTrackManager.upsertVideoTrack(track, firstStreamId, isScreenShare);
+        
+        track.addEventListener("ended", () => {
+            console.log("Video track ended:", track.id);
+            videoTrackManager.deleteVideoTrack(track);
+        });
+
+        const processor = new MediaStreamTrackProcessor({ track });
+        const reader = processor.readable.getReader();
+
+        const desiredFPS = sourceConfig.framerate;
+        const frameIntervalMs = 1000 / desiredFPS;
+        let lastSentAt = 0;
+
+        const targetWidth = sourceConfig.width;
+        const targetHeight = sourceConfig.height;
+        const jpegQuality = sourceConfig.jpeg_quality / 100;
+        const canvas = document.createElement("canvas");
+        canvas.width = targetWidth;
+        canvas.height = targetHeight;
+        const ctx = canvas.getContext("2d");
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = "high";
+
+        while (true) {
+            const { value: frame, done } = await reader.read();
+            if (done) break;
+            if (!frame) continue;
+
+            try {
+                const now = performance.now();
+                const shouldSend = now - lastSentAt >= frameIntervalMs;
+
+                if (!shouldSend) continue;
+
+                const srcW = frame.displayWidth;
+                const srcH = frame.displayHeight;
+                if (!srcW || !srcH) continue;
+
+                const srcAspect = srcW / srcH;
+                const targetAspect = targetWidth / targetHeight;
+
+                let drawW, drawH;
+                if (srcAspect > targetAspect) {
+                    drawW = targetWidth;
+                    drawH = Math.round(targetWidth / srcAspect);
+                } else {
+                    drawH = targetHeight;
+                    drawW = Math.round(targetHeight * srcAspect);
+                }
+
+                const offsetX = Math.round((targetWidth - drawW) / 2);
+                const offsetY = Math.round((targetHeight - drawH) / 2);
+
+                ctx.fillStyle = "black";
+                ctx.fillRect(0, 0, targetWidth, targetHeight);
+                ctx.drawImage(frame, 0, 0, srcW, srcH, offsetX, offsetY, drawW, drawH);
+
+                const base64 = canvas.toDataURL("image/jpeg", jpegQuality).split(",", 2)[1];
+                window.ws?.sendPerParticipantVideo(participantId, isScreenShare, base64);
+
+                lastSentAt = now;
+            } catch (err) {
+                console.error("Error processing frame:", err);
+            } finally {
+                frame.close();
+            }
+        }
+    } catch (err) {
+        console.error("Error setting up video interceptor:", err);
+    }
+};
+
 function sendChatMessage(text) {
     
     // First try to find the chat input textarea
@@ -26,6 +149,105 @@ function sendChatMessage(text) {
     chatInput.dispatchEvent(enterEvent);
     
     return true;
+}
+
+class ParticipantSpeechStartStopManager {
+    constructor() {
+        // Tracks the confirmed speaking state (true = speaking, false = not speaking)
+        this.participantSpeechStartStopMap = new Map();
+        // Tracks consecutive samples above/below threshold per participant
+        // Positive values = consecutive samples above threshold
+        // Negative values = consecutive samples below threshold
+        this.participantHysteresisCounters = new Map();
+        // Tracks the timestamp when the current streak (speaking or silent) began
+        // so the event timestamp reflects the true start of the transition
+        this.participantStreakStartTimes = new Map();
+
+        // Number of consecutive samples above threshold required to trigger speech start
+        this.startThresholdSamples = 1;
+        // Number of consecutive samples below threshold required to trigger speech stop
+        // At 500ms sample interval, 4 samples = 2 seconds of silence before stop
+        this.stopThresholdSamples = 4;
+    }
+
+    start() {
+        this.sampleVolumeLevelsInterval = setInterval(() => {
+            this.sampleVolumeLevels();
+        }, 250);
+    }
+
+    sendSpeechStartStopEvent(participantId, isSpeechStart, timestamp) {
+        window.ws?.sendJson({
+            type: 'ParticipantSpeechStartStopEvent',
+            participantId: participantId,
+            isSpeechStart: isSpeechStart,
+            timestamp: timestamp
+        });
+    }
+
+    sampleVolumeLevels() {
+        // Build a set of participant IDs currently speaking above the threshold
+        const currentlySpeaking = new Set();
+
+        for (const [receiver, contributingSources] of window.receiverManager.receiverMap) {
+            if (!contributingSources) continue;
+
+            for (const source of contributingSources) {
+                const audioLevel = source.audioLevel || 0;
+                if (audioLevel >= 0.01) {
+                    const user = window.userManager.getUserByStreamId(source.source.toString());
+                    if (user) {
+                        currentlySpeaking.add(user.deviceId);
+                    }
+                }
+            }
+        }
+
+        const now = Date.now();
+
+        // Update hysteresis counters and detect speech start/stop transitions
+        // First, handle participants currently above threshold
+        for (const participantId of currentlySpeaking) {
+            const counter = this.participantHysteresisCounters.get(participantId) || 0;
+            // Increment towards positive (speaking); reset to 1 if was negative
+            const newCounter = counter > 0 ? counter + 1 : 1;
+            this.participantHysteresisCounters.set(participantId, newCounter);
+
+            // Record the timestamp when this speaking streak began
+            if (newCounter === 1) {
+                this.participantStreakStartTimes.set(participantId, now);
+            }
+
+            const isSpeaking = this.participantSpeechStartStopMap.get(participantId) || false;
+            if (!isSpeaking && newCounter >= this.startThresholdSamples) {
+                const streakStart = this.participantStreakStartTimes.get(participantId) || now;
+                this.participantSpeechStartStopMap.set(participantId, true);
+                this.sendSpeechStartStopEvent(participantId, true, streakStart);
+            }
+        }
+
+        // Then, handle participants currently below threshold
+        for (const [participantId] of this.participantHysteresisCounters) {
+            if (currentlySpeaking.has(participantId)) continue;
+
+            const counter = this.participantHysteresisCounters.get(participantId) || 0;
+            // Decrement towards negative (silent); reset to -1 if was positive
+            const newCounter = counter < 0 ? counter - 1 : -1;
+            this.participantHysteresisCounters.set(participantId, newCounter);
+
+            // Record the timestamp when this silent streak began
+            if (newCounter === -1) {
+                this.participantStreakStartTimes.set(participantId, now);
+            }
+
+            const isSpeaking = this.participantSpeechStartStopMap.get(participantId) || false;
+            if (isSpeaking && Math.abs(newCounter) >= this.stopThresholdSamples) {
+                const streakStart = this.participantStreakStartTimes.get(participantId) || now;
+                this.participantSpeechStartStopMap.set(participantId, false);
+                this.sendSpeechStartStopEvent(participantId, false, streakStart);
+            }
+        }
+    }
 }
 
 class StyleManager {
@@ -328,7 +550,7 @@ class StyleManager {
             let botMinimizeButton = null;
             for (let i = 0; i < numAttempts; i++) {
                 await new Promise(resolve => setTimeout(resolve, 100));
-                botMinimizeButton = document.querySelector('li[aria-label="Minimize"]');
+                botMinimizeButton = document.querySelector('li[aria-label="Minimize"], li[aria-label="Minimise"]');
                 if (botMinimizeButton) {
                     break;
                 }
@@ -570,6 +792,10 @@ class StyleManager {
         //document.addEventListener('keydown', this.handleKeyDown.bind(this));
 
         this.startSilenceDetection();
+
+        if (window.initialData.recordParticipantSpeechStartStopEvents) {
+            window.participantSpeechStartStopManager?.start();
+        }
 
         console.log('Started StyleManager');
     }
@@ -924,7 +1150,8 @@ class WebSocketClient {
       VIDEO: 2,
       AUDIO: 3,
       ENCODED_MP4_CHUNK: 4,
-      PER_PARTICIPANT_AUDIO: 5
+      PER_PARTICIPANT_AUDIO: 5,
+      PER_PARTICIPANT_VIDEO: 6,
   };
 
   constructor() {
@@ -1158,6 +1385,50 @@ class WebSocketClient {
         this.ws.send(message.buffer);
     } catch (error) {
         console.error('Error sending WebSocket audio message:', error);
+    }
+  }
+
+  sendPerParticipantVideo(participantId, isScreenShare, videoData) {
+    if (this.ws.readyState !== WebSocket.OPEN) {
+      console.error('WebSocket is not connected for per participant video send', this.ws.readyState);
+      return;
+    }
+
+    if (!this.mediaSendingEnabled) {
+      return;
+    }
+
+    try {
+        // Convert participantId to UTF-8 bytes
+        const participantIdBytes = new TextEncoder().encode(participantId);
+        
+        // Convert videoData string to UTF-8 bytes
+        const videoDataBytes = new TextEncoder().encode(videoData);
+        
+        // Create final message: type (4 bytes) + participantId length (1 byte) + 
+        // participantId bytes + isScreenShare (1 byte) + video data
+        const message = new Uint8Array(4 + 1 + participantIdBytes.length + 1 + videoDataBytes.length);
+        const dataView = new DataView(message.buffer);
+        
+        // Set message type (6 for PER_PARTICIPANT_VIDEO)
+        dataView.setInt32(0, WebSocketClient.MESSAGE_TYPES.PER_PARTICIPANT_VIDEO, true);
+        
+        // Set participantId length as uint8 (1 byte)
+        dataView.setUint8(4, participantIdBytes.length);
+        
+        // Copy participantId bytes
+        message.set(participantIdBytes, 5);
+        
+        // Set isScreenShare byte (0 = webcam, 1 = screenshare)
+        dataView.setUint8(5 + participantIdBytes.length, isScreenShare ? 1 : 0);
+        
+        // Copy video data after type, length, participantId, and isScreenShare
+        message.set(videoDataBytes, 5 + participantIdBytes.length + 1);
+        
+        // Send the binary message
+        this.ws.send(message.buffer);
+    } catch (error) {
+        console.error('Error sending WebSocket video message:', error);
     }
   }
 
@@ -1495,8 +1766,9 @@ const videoTrackManager = new VideoTrackManager(ws);
 const styleManager = new StyleManager();
 const receiverManager = new ReceiverManager();
 const chatMessageManager = new ChatMessageManager(ws);
+const participantSpeechStartStopManager = new ParticipantSpeechStartStopManager();
 let rtpReceiverInterceptor = null;
-if (window.initialData.sendPerParticipantAudio) {
+if (window.initialData.sendPerParticipantAudio || window.initialData.recordParticipantSpeechStartStopEvents) {
     rtpReceiverInterceptor = new RTCRtpReceiverInterceptor((receiver, result, ...args) => {
         receiverManager.updateContributingSources(receiver, result);
     });
@@ -1507,6 +1779,7 @@ window.userManager = userManager;
 window.styleManager = styleManager;
 window.receiverManager = receiverManager;
 window.chatMessageManager = chatMessageManager;
+window.participantSpeechStartStopManager = participantSpeechStartStopManager;
 window.sendChatMessage = sendChatMessage;
 // Create decoders for all message types
 const messageDecoders = {};
@@ -1885,6 +2158,9 @@ new RTCInterceptor({
             }
             if (event.track.kind === 'video') {
                 window.styleManager.addVideoTrack(event);
+                if (window.initialData.sendPerParticipantVideo) {
+                    handleVideoTrackForRealTimePerParticipantVideo(event);
+                }
             }
         });
 

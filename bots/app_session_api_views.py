@@ -15,7 +15,7 @@ from .app_session_api_utils import create_app_session
 from .app_session_serializers import AppSessionSerializer, CreateAppSessionSerializer
 from .authentication import ApiKeyAuthentication
 from .bots_api_utils import BotCreationSource, send_sync_command
-from .launch_bot_utils import launch_bot
+from .launch_bot_utils import launch_adhoc_bot_from_view
 from .models import (
     Bot,
     BotEventManager,
@@ -113,7 +113,7 @@ class AppSessionCreateView(APIView):
 
         # If this is a scheduled bot, we don't want to launch it yet.
         if app_session.state == BotStates.CONNECTING:
-            launch_bot(app_session)
+            launch_adhoc_bot_from_view(app_session)
 
         return Response(AppSessionSerializer(app_session).data, status=status.HTTP_201_CREATED)
 

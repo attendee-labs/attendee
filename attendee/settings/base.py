@@ -16,6 +16,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from attendee.sentry import init_sentry
+
 load_dotenv()
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -93,6 +95,7 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    "csp.middleware.CSPMiddleware",
     "allauth.account.middleware.AccountMiddleware",
 ]
 
@@ -161,16 +164,56 @@ STATIC_URL = "static/"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # Redis/Celery Configuration
-if os.getenv("DISABLE_REDIS_SSL"):
-    REDIS_CELERY_URL = os.getenv("REDIS_URL") + "?ssl_cert_reqs=none"
-else:
-    REDIS_CELERY_URL = os.getenv("REDIS_URL")
+redis_params = {}
+if os.getenv("DISABLE_REDIS_SSL"):  # backward compatibility
+    redis_params["ssl_cert_reqs"] = "none"
+elif os.getenv("REDIS_SSL_REQUIREMENTS"):
+    redis_params["ssl_cert_reqs"] = os.getenv("REDIS_SSL_REQUIREMENTS")
+redis_params_query_string = "&".join([f"{key}={value}" for key, value in redis_params.items()])
 
-CELERY_BROKER_URL = REDIS_CELERY_URL
-CELERY_RESULT_BACKEND = REDIS_CELERY_URL
+REDIS_URL_WITH_PARAMS = os.getenv("REDIS_URL") + ("?" + redis_params_query_string if redis_params_query_string else "")
+
+CELERY_BROKER_URL = REDIS_URL_WITH_PARAMS
+CELERY_RESULT_BACKEND = REDIS_URL_WITH_PARAMS
 CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
+CELERY_TASK_ROUTES = {
+    "bots.tasks.process_utterance_task.process_utterance": {
+        "queue": os.getenv("PROCESS_UTTERANCE_CELERY_QUEUE", "celery"),
+    },
+    "bots.tasks.process_utterance_group_for_async_transcription_task.process_utterance_group_for_async_transcription": {
+        "queue": os.getenv("PROCESS_UTTERANCE_CELERY_QUEUE", "celery"),
+    },
+    "bots.tasks.process_async_transcription_task.process_async_transcription": {
+        "queue": os.getenv("PROCESS_ASYNC_TRANSCRIPTION_CELERY_QUEUE", "celery"),
+    },
+    "bots.tasks.sync_calendar_task.sync_calendar": {
+        "queue": os.getenv("SYNC_CALENDAR_CELERY_QUEUE", "celery"),
+    },
+    "bots.tasks.launch_scheduled_bot_task.launch_scheduled_bot": {
+        "queue": os.getenv("LAUNCH_SCHEDULED_BOT_CELERY_QUEUE", "celery"),
+    },
+    "bots.tasks.launch_adhoc_bot_task.launch_adhoc_bot": {
+        "queue": os.getenv("LAUNCH_ADHOC_BOT_CELERY_QUEUE", "celery"),
+    },
+    "bots.tasks.deliver_webhook_task.deliver_webhook": {
+        "queue": os.getenv("DELIVER_WEBHOOK_CELERY_QUEUE", "celery"),
+    },
+}
+
+if os.getenv("LAUNCH_BOT_METHOD") != "kubernetes" and os.getenv("LAUNCH_BOT_METHOD") != "docker-compose-multi-host":
+    # This setting means that each celery worker process will be recreated after each task.
+    # Needed because latest Zoom SDK has segfault issue unless we recreate the process after each bot.
+    CELERY_WORKER_MAX_TASKS_PER_CHILD = 1
+
+if os.getenv("IS_A_BOT_POD", "false") == "true" and os.getenv("CONSERVE_BOT_POD_REDIS_CONNECTIONS", "false") == "true":
+    # Setting this to 1 means that bot pods keep one celery broker pool connection alive for the duration of the bot.
+    # Note: this results in 2 underlying Redis connections (one for commands, one for pub/sub).
+    # Setting this to 0 means that no dedicated redis connection is created.
+    # Instead bot pods will create and close a redis connection each time they need to execute a celery task.
+    CELERY_BROKER_POOL_LIMIT = int(os.getenv("BOT_POD_CELERY_BROKER_POOL_LIMIT", 1))
+    CELERY_TASK_IGNORE_RESULT = True
 
 REST_FRAMEWORK = {
     # YOUR SETTINGS
@@ -210,6 +253,12 @@ STORAGE_PROTOCOL = os.getenv("STORAGE_PROTOCOL", "s3")
 AWS_RECORDING_STORAGE_BUCKET_NAME = os.getenv("AWS_RECORDING_STORAGE_BUCKET_NAME")
 AZURE_RECORDING_STORAGE_CONTAINER_NAME = os.getenv("AZURE_RECORDING_STORAGE_CONTAINER_NAME")
 
+# Audio chunk storage settings
+USE_REMOTE_STORAGE_FOR_AUDIO_CHUNKS = os.getenv("USE_REMOTE_STORAGE_FOR_AUDIO_CHUNKS", "false") == "true"
+FALLBACK_TO_DB_STORAGE_FOR_AUDIO_CHUNKS_IF_REMOTE_STORAGE_FAILS = os.getenv("FALLBACK_TO_DB_STORAGE_FOR_AUDIO_CHUNKS_IF_REMOTE_STORAGE_FAILS", "false") == "true"
+AWS_AUDIO_CHUNK_STORAGE_BUCKET_NAME = os.getenv("AWS_AUDIO_CHUNK_STORAGE_BUCKET_NAME") or AWS_RECORDING_STORAGE_BUCKET_NAME
+AZURE_AUDIO_CHUNK_STORAGE_CONTAINER_NAME = os.getenv("AZURE_AUDIO_CHUNK_STORAGE_CONTAINER_NAME") or AZURE_RECORDING_STORAGE_CONTAINER_NAME
+
 if STORAGE_PROTOCOL == "azure":
     DEFAULT_STORAGE_BACKEND = {
         "BACKEND": "storages.backends.azure_storage.AzureStorage",
@@ -222,6 +271,9 @@ if STORAGE_PROTOCOL == "azure":
     }
     RECORDING_STORAGE_BACKEND = copy.deepcopy(DEFAULT_STORAGE_BACKEND)
     RECORDING_STORAGE_BACKEND["OPTIONS"]["azure_container"] = AZURE_RECORDING_STORAGE_CONTAINER_NAME
+
+    AUDIO_CHUNK_STORAGE_BACKEND = copy.deepcopy(DEFAULT_STORAGE_BACKEND)
+    AUDIO_CHUNK_STORAGE_BACKEND["OPTIONS"]["azure_container"] = AZURE_AUDIO_CHUNK_STORAGE_CONTAINER_NAME
 else:
     DEFAULT_STORAGE_BACKEND = {
         "BACKEND": "storages.backends.s3.S3Storage",
@@ -235,11 +287,15 @@ else:
     RECORDING_STORAGE_BACKEND = copy.deepcopy(DEFAULT_STORAGE_BACKEND)
     RECORDING_STORAGE_BACKEND["OPTIONS"]["bucket_name"] = AWS_RECORDING_STORAGE_BUCKET_NAME
 
+    AUDIO_CHUNK_STORAGE_BACKEND = copy.deepcopy(DEFAULT_STORAGE_BACKEND)
+    AUDIO_CHUNK_STORAGE_BACKEND["OPTIONS"]["bucket_name"] = AWS_AUDIO_CHUNK_STORAGE_BUCKET_NAME
+
 
 STORAGES = {
     "default": DEFAULT_STORAGE_BACKEND,
     "recordings": RECORDING_STORAGE_BACKEND,
     "bot_debug_screenshots": RECORDING_STORAGE_BACKEND,
+    "audio_chunks": AUDIO_CHUNK_STORAGE_BACKEND,
     "staticfiles": {
         "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
     },
@@ -253,8 +309,46 @@ CHARGE_CREDITS_FOR_BOTS = os.getenv("CHARGE_CREDITS_FOR_BOTS", "false") == "true
 BOT_POD_NAMESPACE = os.getenv("BOT_POD_NAMESPACE", "attendee")
 WEBPAGE_STREAMER_POD_NAMESPACE = os.getenv("WEBPAGE_STREAMER_POD_NAMESPACE", "attendee-webpage-streamer")
 REQUIRE_HTTPS_WEBHOOKS = os.getenv("REQUIRE_HTTPS_WEBHOOKS", "true") == "true"
+REQUIRE_PUBLIC_WEBHOOK_URLS = os.getenv("REQUIRE_PUBLIC_WEBHOOK_URLS", "false") == "true"
+SHOW_CATEGORY_SELECTOR_IN_USAGE_DASHBOARD = os.getenv("SHOW_CATEGORY_SELECTOR_IN_USAGE_DASHBOARD", "false") == "true"
 REQUIRE_STRING_VALUES_IN_METADATA = os.getenv("REQUIRE_STRING_VALUES_IN_METADATA", "true") == "true"
 MAX_METADATA_LENGTH = int(os.getenv("MAX_METADATA_LENGTH", 1000))
 SITE_DOMAIN = os.getenv("SITE_DOMAIN", "app.attendee.dev")
 MASK_TRANSCRIPT_IN_LOGS = os.getenv("MASK_TRANSCRIPT_IN_LOGS", "false") == "true"
 ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME = os.getenv("ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME", "false") == "true"
+CUSTOM_BOT_POD_SPEC_TYPES = os.getenv("CUSTOM_BOT_POD_SPEC_TYPES", "").split(",") if os.getenv("CUSTOM_BOT_POD_SPEC_TYPES") else []
+GLOBAL_WEBHOOK_DELIVERIES_PER_SECOND_RATE_LIMIT = int(os.getenv("GLOBAL_WEBHOOK_DELIVERIES_PER_SECOND_RATE_LIMIT")) if os.getenv("GLOBAL_WEBHOOK_DELIVERIES_PER_SECOND_RATE_LIMIT") else None
+LOG_BOT_STATE_CHANGES = os.getenv("LOG_BOT_STATE_CHANGES", "false") == "true"
+LAUNCH_ADHOC_BOTS_ASYNC = os.getenv("LAUNCH_ADHOC_BOTS_ASYNC", "false") == "true"
+SHOW_TEAMS_BOT_IDENTIFICATION_CREDENTIALS = os.getenv("SHOW_TEAMS_BOT_IDENTIFICATION_CREDENTIALS", "false") == "true"
+
+STORE_INFRASTRUCTURE_INFORMATION_IN_BOT_EVENT_METADATA = os.getenv("STORE_INFRASTRUCTURE_INFORMATION_IN_BOT_EVENT_METADATA", "true") == "true"
+
+CONCURRENT_BOTS_LIMIT = int(os.getenv("CONCURRENT_BOTS_LIMIT", 2500))
+
+MAILGUN_VALIDATION_API_KEY = os.getenv("MAILGUN_VALIDATION_API_KEY")
+BYPASS_MAILGUN_VALIDATION_SUBSTRING = os.getenv("BYPASS_MAILGUN_VALIDATION_SUBSTRING")
+
+# After the bots recording exceeds this size, we will degrade the video recording to black to conserve storage space.
+BOT_RECORDING_VIDEO_DEGRADE_THRESHOLD_BYTES = int(os.getenv("BOT_RECORDING_VIDEO_DEGRADE_THRESHOLD_BYTES")) if os.getenv("BOT_RECORDING_VIDEO_DEGRADE_THRESHOLD_BYTES") else None
+
+# Content Security Policy
+if os.getenv("ENABLE_CSP", "false") == "true":
+    _csp_media_src = [d for d in os.getenv("CSP_MEDIA_SRC", "").split(",") if d]
+    CONTENT_SECURITY_POLICY = {
+        "DIRECTIVES": {
+            "default-src": ["'self'"],
+            "script-src": ["'self'", "'unsafe-inline'", "https://unpkg.com", "https://cdn.jsdelivr.net"],
+            "style-src": ["'self'", "'unsafe-inline'", "https://cdn.jsdelivr.net"],
+            "font-src": ["'self'", "https://cdn.jsdelivr.net"],
+            "img-src": ["'self'", "data:"] + _csp_media_src,
+            "media-src": ["'self'"] + _csp_media_src,
+            "connect-src": ["'self'", "https://cdn.jsdelivr.net"],
+            "frame-src": ["https://www.loom.com"],
+            "base-uri": ["'self'"],
+            "form-action": ["'self'", "https://*.stripe.com"],
+        },
+    }
+
+# Initialize Sentry (only if SENTRY_DSN is set)
+init_sentry()

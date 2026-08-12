@@ -11,29 +11,35 @@ from drf_spectacular.utils import (
     extend_schema_field,
 )
 
-
-@extend_schema_field(
-    {
-        "type": "object",
-        "properties": {
-            "meeting_uuid": {
-                "type": "string",
-                "description": "The UUID of the Zoom meeting",
-            },
-            "rtms_stream_id": {
-                "type": "string",
-                "description": "The RTMS stream ID for the Zoom meeting",
-            },
-            "server_urls": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "List of server URLs for the RTMS connection",
-            },
+ZOOM_RTMS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "meeting_uuid": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The UUID of the Zoom meeting",
         },
-        "required": ["meeting_uuid", "rtms_stream_id", "server_urls"],
-        "additionalProperties": False,
-    }
-)
+        "rtms_stream_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The RTMS stream ID for the Zoom meeting",
+        },
+        "server_urls": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The server URL for the RTMS connection",
+        },
+        "operator_id": {
+            "type": "string",
+            "description": "The ID of the user who started the RTMS stream",
+        },
+    },
+    "required": ["meeting_uuid", "rtms_stream_id", "server_urls"],
+    "additionalProperties": False,
+}
+
+
+@extend_schema_field(ZOOM_RTMS_SCHEMA)
 class ZoomRTMSJSONField(serializers.JSONField):
     pass
 
@@ -46,18 +52,6 @@ class CreateAppSessionSerializer(CreateBotSerializer):
 
     zoom_rtms = ZoomRTMSJSONField(help_text="Zoom RTMS configuration containing meeting UUID, stream ID, and server URLs", required=True)
 
-    ZOOM_RTMS_SCHEMA = {
-        "type": "object",
-        "properties": {
-            "meeting_uuid": {"type": "string"},
-            "rtms_stream_id": {"type": "string"},
-            "server_urls": {"type": "string"},
-            "operator_id": {"type": "string"},
-        },
-        "required": ["meeting_uuid", "rtms_stream_id", "server_urls"],
-        "additionalProperties": False,
-    }
-
     class Meta(BotSerializer.Meta):
         fields = [field for field in BotSerializer.Meta.fields if field not in ["name", "meeting_url", "join_at"]] + ["zoom_rtms"]
 
@@ -66,7 +60,7 @@ class CreateAppSessionSerializer(CreateBotSerializer):
             raise serializers.ValidationError("zoom_rtms is required")
 
         try:
-            jsonschema.validate(instance=value, schema=self.ZOOM_RTMS_SCHEMA)
+            jsonschema.validate(instance=value, schema=ZOOM_RTMS_SCHEMA)
         except jsonschema.exceptions.ValidationError as e:
             raise serializers.ValidationError(e.message)
 

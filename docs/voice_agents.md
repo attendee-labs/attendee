@@ -12,7 +12,7 @@ This makes it easy to integrate AI agents that work with both audio and video.
 
 ## Advantages of loading a webpage containing a voice agent
 
-While Attendee also supports voice agents via passing audio packets over [websockets](https://docs.attendee.dev/guides/realtime-audio-input-and-output), loading a webpage offers several advantages:
+While Attendee also supports voice agents via passing audio packets over [websockets](https://docs.attendee.dev/guides/realtimeaudio), loading a webpage offers several advantages:
 
 1. **Video support**  
    You can stream an avatar for the voice agent, in addition to audio.
@@ -38,6 +38,23 @@ To add a voice agent, supply a URL in the `voice_agent_settings` parameter when 
 ```
 
 The agent will be loaded once the bot joins the meeting and starts recording.
+
+## Screen sharing
+
+You can share a screen alongside your voice agent by adding `screenshare_url` to `voice_agent_settings`.
+
+
+```json
+{
+  "meeting_url": "https://meet.google.com/abc-def-ghi",
+  "bot_name": "Avatar Bot",
+  "voice_agent_settings": {
+    "url": "https://your-voice-agent-app.com?agent_id=1234567890",
+    "screenshare_url": "https://your-app.com/screen"
+  }
+}
+```
+The URL should point to a publicly accessible page that renders the content you want to share (e.g. a live browser view, dashboard, or canvas). Attendee will capture and stream that page as the bot's screen share in the meeting.
 
 ## Setting up your webpage to be loaded by Attendee
 

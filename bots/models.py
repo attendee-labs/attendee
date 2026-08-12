@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 import math
 import os
 import secrets
@@ -13,16 +14,17 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.files.storage import Storage, storages
 from django.db import models, transaction
-from django.db.models import Q
+from django.db.models import F, Q
 from django.db.utils import IntegrityError
 from django.utils import timezone
 from django.utils.crypto import get_random_string
 
 from accounts.models import Organization, User, UserRole
 from bots.bot_pod_creator.bot_pod_spec import BotPodSpecType
+from bots.storage import StorageAlias, download_blob_from_remote_storage, remote_storage_url
 from bots.webhook_utils import trigger_webhook
 
-# Create your models here.
+logger = logging.getLogger(__name__)
 
 
 class Project(models.Model):
@@ -34,6 +36,12 @@ class Project(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    concurrent_bots_limit_override = models.IntegerField(
+        null=True,
+        blank=True,
+        help_text="Per-project concurrent bots limit. If null, the global CONCURRENT_BOTS_LIMIT setting is used.",
+    )
 
     @classmethod
     def accessible_to(cls, user):
@@ -47,7 +55,9 @@ class Project(models.Model):
         return self.organization.users.filter(is_active=True).filter(Q(project_accesses__project=self) | Q(role=UserRole.ADMIN))
 
     def concurrent_bots_limit(self):
-        return int(os.getenv("CONCURRENT_BOTS_LIMIT", 2500))
+        if self.concurrent_bots_limit_override is not None:
+            return self.concurrent_bots_limit_override
+        return settings.CONCURRENT_BOTS_LIMIT
 
     def save(self, *args, **kwargs):
         if not self.object_id:
@@ -60,6 +70,7 @@ class Project(models.Model):
         return self.name
 
 
+# This model is deprecated in favor of BotLoginGroup. Kept here to maintain backwards compatibility.
 class GoogleMeetBotLoginGroup(models.Model):
     OBJECT_ID_PREFIX = "gbg_"
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="google_meet_bot_login_groups")
@@ -79,6 +90,7 @@ class GoogleMeetBotLoginGroup(models.Model):
         return f"{self.project.name} - {self.object_id}"
 
 
+# This model is deprecated in favor of BotLogin. Kept here to maintain backwards compatibility.
 class GoogleMeetBotLogin(models.Model):
     OBJECT_ID_PREFIX = "gbl_"
     group = models.ForeignKey(GoogleMeetBotLoginGroup, on_delete=models.CASCADE, related_name="google_meet_bot_logins")
@@ -134,6 +146,127 @@ class GoogleMeetBotLogin(models.Model):
         # Within a Google Meet Bot Login Group, we don't want to allow Google Meet Bot Logins with the same email
         constraints = [
             models.UniqueConstraint(fields=["group", "email"], name="unique_google_meet_bot_login_email"),
+        ]
+
+
+class BotLoginPlatform(models.TextChoices):
+    GOOGLE_MEET = "google_meet", "Google Meet"
+    TEAMS = "teams", "Teams"
+
+
+# This model replaces the deprecated GoogleMeetBotLoginGroup.
+class BotLoginGroup(models.Model):
+    OBJECT_ID_PREFIX = "blg_"
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="bot_login_groups")
+    object_id = models.CharField(max_length=32, unique=True, editable=False)
+
+    platform = models.CharField(max_length=32, choices=BotLoginPlatform.choices)
+    name = models.CharField(max_length=255)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def save(self, *args, **kwargs):
+        if not self.object_id:
+            # Generate a random 16-character string
+            random_string = "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(16))
+            self.object_id = f"{self.OBJECT_ID_PREFIX}{random_string}"
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.project.name} - {self.object_id}"
+
+    @classmethod
+    def is_valid_name(cls, name):
+        """
+        Validates that a bot login group name only contains alphanumeric characters,
+        spaces, or underscores. Returns True if valid, False otherwise.
+        """
+        if not name:
+            return False
+        if not all(c.isalnum() or c in (" ", "_") for c in name):
+            return False
+        # Disallow names that are entirely spaces and/or underscores (must contain at least one alphanumeric character)
+        if not any(c.isalnum() for c in name):
+            return False
+        return True
+
+    @classmethod
+    def first_available_login(cls, project, platform, group_name=None):
+        """
+        Returns the least recently used BotLogin for the specified project and platform.
+
+        - If a group_name is provided, only considers logins in that named group.
+        - If no group_name is given, selects the oldest group for that platform, and returns the first available login in it.
+
+        If no valid login is found, returns None.
+        """
+        groups = cls.objects.filter(project=project, platform=platform)
+        if group_name is not None:
+            groups = groups.filter(name=group_name)
+        group = groups.order_by("created_at", "id").first()
+        if group is None:
+            return None
+
+        available_login = group.bot_logins.order_by(F("last_used_at").asc(nulls_first=True), "id").first()
+        if available_login:
+            return available_login
+
+        return None
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["project", "platform", "name"], name="unique_bot_login_group_project_platform_name"),
+        ]
+
+
+# This model replaces the deprecated GoogleMeetBotLogin.
+class BotLogin(models.Model):
+    OBJECT_ID_PREFIX = "bl_"
+    group = models.ForeignKey(BotLoginGroup, on_delete=models.CASCADE, related_name="bot_logins")
+    object_id = models.CharField(max_length=32, unique=True, editable=False)
+
+    _encrypted_data = models.BinaryField(
+        null=True,
+        editable=False,  # Prevents editing through admin/forms
+    )
+
+    workspace_domain = models.CharField(max_length=255, null=True, blank=True)
+    email = models.CharField(max_length=255)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    is_active = models.BooleanField(default=True)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+
+    def set_credentials(self, credentials_dict):
+        """Encrypt and save credentials"""
+        f = Fernet(settings.CREDENTIALS_ENCRYPTION_KEY)
+        json_data = json.dumps(credentials_dict)
+        self._encrypted_data = f.encrypt(json_data.encode())
+        self.save()
+
+    def get_credentials(self):
+        """Decrypt and return credentials"""
+        if not self._encrypted_data:
+            return None
+        f = Fernet(settings.CREDENTIALS_ENCRYPTION_KEY)
+        decrypted_data = f.decrypt(bytes(self._encrypted_data))
+        return json.loads(decrypted_data.decode())
+
+    def save(self, *args, **kwargs):
+        if not self.object_id:
+            # Generate a random 16-character string
+            random_string = "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(16))
+            self.object_id = f"{self.OBJECT_ID_PREFIX}{random_string}"
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.email} - {self.object_id}"
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["group", "email"], name="unique_bot_login_email"),
         ]
 
 
@@ -382,7 +515,7 @@ class CalendarEvent(models.Model):
 
     platform_uuid = models.CharField(max_length=1024)
 
-    meeting_url = models.CharField(max_length=511, null=True, blank=True)
+    meeting_url = models.CharField(max_length=2048, null=True, blank=True)
 
     start_time = models.DateTimeField(db_index=True)
     end_time = models.DateTimeField(db_index=True)
@@ -585,8 +718,17 @@ class TranscriptionSettings:
     def assemblyai_keyterms_prompt(self):
         return self._settings.get("assembly_ai", {}).get("keyterms_prompt", None)
 
+    def assemblyai_custom_spelling(self):
+        return self._settings.get("assembly_ai", {}).get("custom_spelling", None)
+
+    def assemblyai_prompt(self):
+        return self._settings.get("assembly_ai", {}).get("prompt", None)
+
     def assemblyai_speech_model(self):
         return self._settings.get("assembly_ai", {}).get("speech_model", None)
+
+    def assemblyai_speech_models(self):
+        return self._settings.get("assembly_ai", {}).get("speech_models", None)
 
     def assemblyai_speaker_labels(self):
         return self._settings.get("assembly_ai", {}).get("speaker_labels", False)
@@ -614,6 +756,9 @@ class TranscriptionSettings:
     def sarvam_model(self):
         return self._settings.get("sarvam", {}).get("model", None)
 
+    def sarvam_mode(self):
+        return self._settings.get("sarvam", {}).get("mode", None)
+
     def elevenlabs_model_id(self):
         return self._settings.get("elevenlabs", {}).get("model_id", "scribe_v1")
 
@@ -625,6 +770,12 @@ class TranscriptionSettings:
 
     def custom_async_additional_props(self):
         return self._settings.get("custom_async", {})
+
+    def custom_async_v2_form_data(self):
+        return self._settings.get("custom_async_v2", {}).get("form_data", {})
+
+    def custom_async_v2_headers(self):
+        return self._settings.get("custom_async_v2", {}).get("headers", {})
 
     def deepgram_language(self):
         return self._settings.get("deepgram", {}).get("language", None)
@@ -662,6 +813,18 @@ class TranscriptionSettings:
     def deepgram_replace_settings(self):
         return self._settings.get("deepgram", {}).get("replace", [])
 
+    def deepgram_mip_opt_out(self):
+        """https://developers.deepgram.com/docs/the-deepgram-model-improvement-partnership-program#want-to-opt-out"""
+        return os.getenv("DEEPGRAM_MIP_OPT_OUT", "true") == "true"
+
+    def deepgram_base_url(self):
+        if os.getenv("DEEPGRAM_BASE_URL"):
+            return os.getenv("DEEPGRAM_BASE_URL")
+        use_eu_server = self._settings.get("deepgram", {}).get("use_eu_server", False)
+        if use_eu_server:
+            return "https://api.eu.deepgram.com"
+        return None
+
     def kyutai_server_url(self):
         return self._settings.get("kyutai", {}).get("server_url", None)
 
@@ -686,7 +849,7 @@ class Bot(models.Model):
     project = models.ForeignKey(Project, on_delete=models.PROTECT, related_name="bots")
 
     name = models.CharField(max_length=255, default="My bot")
-    meeting_url = models.CharField(max_length=511)
+    meeting_url = models.CharField(max_length=2048)
     meeting_uuid = models.CharField(max_length=511, null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
@@ -758,7 +921,14 @@ class Bot(models.Model):
                 continue
 
     @property
-    def bot_pod_spec_type(self) -> BotPodSpecType:
+    def bot_pod_spec_type(self) -> str:
+        # Check if a custom bot pod spec type is specified in kubernetes_settings.
+        # If so, it overrides the normal logic for determining the bot pod spec type.
+        kubernetes_settings = self.settings.get("kubernetes_settings") or {}
+        custom_bot_pod_spec_type = kubernetes_settings.get("bot_pod_spec_type", None)
+        if custom_bot_pod_spec_type:
+            return custom_bot_pod_spec_type
+
         # If join_at is greater than SCHEDULED_BOT_POD_SPEC_MARGIN_SECONDS seconds into the future, use the scheduled pod spec
         scheduled_bot_pod_spec_margin_seconds = int(os.getenv("SCHEDULED_BOT_POD_SPEC_MARGIN_SECONDS", 120))
         if self.join_at and self.join_at - timedelta(seconds=scheduled_bot_pod_spec_margin_seconds) > timezone.now():
@@ -826,11 +996,20 @@ class Bot(models.Model):
     def google_meet_login_mode_is_always(self):
         return self.settings.get("google_meet_settings", {}).get("login_mode", "always") == "always"
 
+    def google_meet_ui_interaction_mode(self):
+        return self.settings.get("google_meet_settings", {}).get("ui_interaction_mode", "humanized")
+
+    def google_meet_login_group_name(self):
+        return self.settings.get("google_meet_settings", {}).get("login_group_name")
+
     def teams_use_bot_login(self):
         return self.settings.get("teams_settings", {}).get("use_login", False)
 
     def teams_login_mode_is_always(self):
         return self.settings.get("teams_settings", {}).get("login_mode", "always") == "always"
+
+    def teams_login_group_name(self):
+        return self.settings.get("teams_settings", {}).get("login_group_name")
 
     def use_zoom_web_adapter(self):
         return self.settings.get("zoom_settings", {}).get("sdk", "native") == "web"
@@ -861,6 +1040,31 @@ class Bot(models.Model):
         websocket_settings = self.settings.get("websocket_settings") or {}
         websocket_audio_settings = websocket_settings.get("audio") or {}
         return websocket_audio_settings.get("sample_rate", 16000)
+
+    def websocket_per_participant_audio_url(self):
+        websocket_settings = self.settings.get("websocket_settings") or {}
+        websocket_per_participant_audio_settings = websocket_settings.get("per_participant_audio") or {}
+        return websocket_per_participant_audio_settings.get("url")
+
+    def websocket_per_participant_audio_sample_rate(self):
+        websocket_settings = self.settings.get("websocket_settings") or {}
+        websocket_per_participant_audio_settings = websocket_settings.get("per_participant_audio") or {}
+        return websocket_per_participant_audio_settings.get("sample_rate", 16000)
+
+    def websocket_per_participant_video_url(self):
+        websocket_settings = self.settings.get("websocket_settings") or {}
+        websocket_per_participant_video_settings = websocket_settings.get("per_participant_video") or {}
+        return websocket_per_participant_video_settings.get("url")
+
+    def websocket_per_participant_video_webcam_resolution(self):
+        websocket_settings = self.settings.get("websocket_settings") or {}
+        websocket_per_participant_video_settings = websocket_settings.get("per_participant_video") or {}
+        return websocket_per_participant_video_settings.get("webcam_resolution", "360p")
+
+    def websocket_per_participant_video_screenshare_resolution(self):
+        websocket_settings = self.settings.get("websocket_settings") or {}
+        websocket_per_participant_video_settings = websocket_settings.get("per_participant_video") or {}
+        return websocket_per_participant_video_settings.get("screenshare_resolution", "360p")
 
     def voice_agent_url(self):
         voice_agent_settings = self.settings.get("voice_agent_settings", {}) or {}
@@ -910,6 +1114,12 @@ class Bot(models.Model):
         if recording_settings is None:
             recording_settings = {}
         return recording_settings.get("record_async_transcription_audio_chunks", False)
+
+    def record_participant_speech_start_stop_events(self):
+        recording_settings = self.settings.get("recording_settings", {})
+        if recording_settings is None:
+            recording_settings = {}
+        return recording_settings.get("record_participant_speech_start_stop_events", False)
 
     def recording_type(self):
         # Recording type is derived from the recording format
@@ -1167,6 +1377,8 @@ class BotEventTypes(models.IntegerChoices):
 class RealtimeTriggerTypes(models.IntegerChoices):
     MIXED_AUDIO_CHUNK = 101, "Mixed audio chunk"
     BOT_OUTPUT_AUDIO_CHUNK = 102, "Bot output audio chunk"
+    PER_PARTICIPANT_AUDIO_CHUNK = 103, "Per participant audio chunk"
+    PER_PARTICIPANT_VIDEO_FRAME = 104, "Per participant video frame"
 
     @classmethod
     def type_to_api_code(cls, value):
@@ -1174,6 +1386,8 @@ class RealtimeTriggerTypes(models.IntegerChoices):
         mapping = {
             cls.MIXED_AUDIO_CHUNK: "realtime_audio.mixed",
             cls.BOT_OUTPUT_AUDIO_CHUNK: "realtime_audio.bot_output",
+            cls.PER_PARTICIPANT_AUDIO_CHUNK: "realtime_audio.per_participant",
+            cls.PER_PARTICIPANT_VIDEO_FRAME: "realtime_video.per_participant",
         }
         return mapping.get(value)
 
@@ -1228,6 +1442,9 @@ class BotEventSubTypes(models.IntegerChoices):
     LEAVE_REQUESTED_AUTO_LEAVE_COULD_NOT_ENABLE_CLOSED_CAPTIONS = 26, "Leave requested - Auto leave could not enable closed captions"
     COULD_NOT_JOIN_MEETING_AUTHORIZED_USER_NOT_IN_MEETING_TIMEOUT_EXCEEDED = 27, "Bot could not join meeting - Authorized user not in meeting timeout exceeded. See https://developers.zoom.us/blog/transition-to-obf-token-meetingsdk-apps/"
     COULD_NOT_JOIN_MEETING_BLOCKED_BY_CAPTCHA = 28, "Bot could not join meeting - Blocked by captcha (Verification challenge)."
+    BOT_RECORDING_PERMISSION_DENIED_WEBINAR_ATTENDEE_NEEDS_PANELIST_PROMOTION = 29, "Bot recording permission denied - Bot joined webinar as attendee and needs to be promoted to panelist to record"
+    COULD_NOT_JOIN_MEETING_ZOOM_APP_CANNOT_JOIN_ANONYMOUSLY = 30, "Bot could not join Zoom meeting - Zoom app cannot join anonymously. To fix pass OBF or ZAK token. See https://docs.attendee.dev/guides/zoom/zoomoauth"
+    FATAL_ERROR_GLOBAL_RUNTIME_TIMEOUT = 31, "Fatal error - Global runtime timeout"
 
     @classmethod
     def sub_type_to_api_code(cls, value):
@@ -1261,6 +1478,9 @@ class BotEventSubTypes(models.IntegerChoices):
             cls.LEAVE_REQUESTED_AUTO_LEAVE_COULD_NOT_ENABLE_CLOSED_CAPTIONS: "auto_leave_could_not_enable_closed_captions",
             cls.COULD_NOT_JOIN_MEETING_AUTHORIZED_USER_NOT_IN_MEETING_TIMEOUT_EXCEEDED: "authorized_user_not_in_meeting_timeout_exceeded",
             cls.COULD_NOT_JOIN_MEETING_BLOCKED_BY_CAPTCHA: "blocked_by_captcha",
+            cls.BOT_RECORDING_PERMISSION_DENIED_WEBINAR_ATTENDEE_NEEDS_PANELIST_PROMOTION: "webinar_attendee_needs_panelist_promotion",
+            cls.COULD_NOT_JOIN_MEETING_ZOOM_APP_CANNOT_JOIN_ANONYMOUSLY: "zoom_app_cannot_join_anonymously",
+            cls.FATAL_ERROR_GLOBAL_RUNTIME_TIMEOUT: "global_runtime_timeout",
         }
         return mapping.get(value)
 
@@ -1299,9 +1519,9 @@ class BotEvent(models.Model):
         ordering = ["created_at"]
         constraints = [
             models.CheckConstraint(
-                check=(
+                condition=(
                     # For FATAL_ERROR event type, must have one of the valid event subtypes
-                    (Q(event_type=BotEventTypes.FATAL_ERROR) & (Q(event_sub_type=BotEventSubTypes.FATAL_ERROR_PROCESS_TERMINATED) | Q(event_sub_type=BotEventSubTypes.FATAL_ERROR_ATTENDEE_INTERNAL_ERROR) | Q(event_sub_type=BotEventSubTypes.FATAL_ERROR_OUT_OF_CREDITS) | Q(event_sub_type=BotEventSubTypes.FATAL_ERROR_RTMP_CONNECTION_FAILED) | Q(event_sub_type=BotEventSubTypes.FATAL_ERROR_UI_ELEMENT_NOT_FOUND) | Q(event_sub_type=BotEventSubTypes.FATAL_ERROR_HEARTBEAT_TIMEOUT) | Q(event_sub_type=BotEventSubTypes.FATAL_ERROR_BOT_NOT_LAUNCHED)))
+                    (Q(event_type=BotEventTypes.FATAL_ERROR) & (Q(event_sub_type=BotEventSubTypes.FATAL_ERROR_PROCESS_TERMINATED) | Q(event_sub_type=BotEventSubTypes.FATAL_ERROR_ATTENDEE_INTERNAL_ERROR) | Q(event_sub_type=BotEventSubTypes.FATAL_ERROR_OUT_OF_CREDITS) | Q(event_sub_type=BotEventSubTypes.FATAL_ERROR_RTMP_CONNECTION_FAILED) | Q(event_sub_type=BotEventSubTypes.FATAL_ERROR_UI_ELEMENT_NOT_FOUND) | Q(event_sub_type=BotEventSubTypes.FATAL_ERROR_HEARTBEAT_TIMEOUT) | Q(event_sub_type=BotEventSubTypes.FATAL_ERROR_GLOBAL_RUNTIME_TIMEOUT) | Q(event_sub_type=BotEventSubTypes.FATAL_ERROR_BOT_NOT_LAUNCHED)))
                     |
                     # For COULD_NOT_JOIN event type, must have one of the valid event subtypes
                     (
@@ -1320,6 +1540,7 @@ class BotEvent(models.Model):
                             | Q(event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_REQUEST_TO_JOIN_DENIED)
                             | Q(event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_MEETING_NOT_FOUND)
                             | Q(event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_BLOCKED_BY_CAPTCHA)
+                            | Q(event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_ZOOM_APP_CANNOT_JOIN_ANONYMOUSLY)
                         )
                     )
                     |
@@ -1327,7 +1548,7 @@ class BotEvent(models.Model):
                     (Q(event_type=BotEventTypes.LEAVE_REQUESTED) & (Q(event_sub_type=BotEventSubTypes.LEAVE_REQUESTED_USER_REQUESTED) | Q(event_sub_type=BotEventSubTypes.LEAVE_REQUESTED_AUTO_LEAVE_SILENCE) | Q(event_sub_type=BotEventSubTypes.LEAVE_REQUESTED_AUTO_LEAVE_ONLY_PARTICIPANT_IN_MEETING) | Q(event_sub_type=BotEventSubTypes.LEAVE_REQUESTED_AUTO_LEAVE_MAX_UPTIME_EXCEEDED) | Q(event_sub_type=BotEventSubTypes.LEAVE_REQUESTED_AUTO_LEAVE_COULD_NOT_ENABLE_CLOSED_CAPTIONS) | Q(event_sub_type__isnull=True)))
                     |
                     # For BOT_RECORDING_PERMISSION_DENIED event type, must have one of the valid event subtypes
-                    (Q(event_type=BotEventTypes.BOT_RECORDING_PERMISSION_DENIED) & (Q(event_sub_type=BotEventSubTypes.BOT_RECORDING_PERMISSION_DENIED_HOST_DENIED_PERMISSION) | Q(event_sub_type=BotEventSubTypes.BOT_RECORDING_PERMISSION_DENIED_REQUEST_TIMED_OUT) | Q(event_sub_type=BotEventSubTypes.BOT_RECORDING_PERMISSION_DENIED_HOST_CLIENT_CANNOT_GRANT_PERMISSION)))
+                    (Q(event_type=BotEventTypes.BOT_RECORDING_PERMISSION_DENIED) & (Q(event_sub_type=BotEventSubTypes.BOT_RECORDING_PERMISSION_DENIED_HOST_DENIED_PERMISSION) | Q(event_sub_type=BotEventSubTypes.BOT_RECORDING_PERMISSION_DENIED_REQUEST_TIMED_OUT) | Q(event_sub_type=BotEventSubTypes.BOT_RECORDING_PERMISSION_DENIED_HOST_CLIENT_CANNOT_GRANT_PERMISSION) | Q(event_sub_type=BotEventSubTypes.BOT_RECORDING_PERMISSION_DENIED_WEBINAR_ATTENDEE_NEEDS_PANELIST_PROMOTION)))
                     |
                     # For all other events, event_sub_type must be null
                     (~Q(event_type=BotEventTypes.FATAL_ERROR) & ~Q(event_type=BotEventTypes.COULD_NOT_JOIN) & ~Q(event_type=BotEventTypes.LEAVE_REQUESTED) & Q(event_sub_type__isnull=True))
@@ -1802,6 +2023,22 @@ class BotEventManager:
                         },
                     )
 
+                    # If we are configured to log bot state changes, log it
+                    if settings.LOG_BOT_STATE_CHANGES:
+                        logger.info(
+                            "Bot state change",
+                            extra={
+                                "bot_id": bot.object_id,
+                                "bot_metadata": bot.metadata,
+                                "event_type": BotEventTypes.type_to_api_code(event_type),
+                                "event_sub_type": BotEventSubTypes.sub_type_to_api_code(event_sub_type),
+                                "event_metadata": event_metadata,
+                                "old_state": BotStates.state_to_api_code(old_state),
+                                "new_state": BotStates.state_to_api_code(bot.state),
+                                "created_at": event.created_at.isoformat(),
+                            },
+                        )
+
                     return event
 
             except RecordModifiedError:
@@ -1830,6 +2067,7 @@ class BotLogEntryLevels(models.IntegerChoices):
 class BotLogEntryTypes(models.IntegerChoices):
     UNCATEGORIZED = 0, "Uncategorized"
     COULD_NOT_ENABLE_CLOSED_CAPTIONS = 1, "Could not enable closed captions"
+    WEBINAR_PANELIST_PROMOTION = 2, "Webinar panelist promotion"
 
     @classmethod
     def type_to_api_code(cls, value):
@@ -1837,6 +2075,7 @@ class BotLogEntryTypes(models.IntegerChoices):
         mapping = {
             cls.UNCATEGORIZED: "uncategorized",
             cls.COULD_NOT_ENABLE_CLOSED_CAPTIONS: "could_not_enable_closed_captions",
+            cls.WEBINAR_PANELIST_PROMOTION: "webinar_panelist_promotion",
         }
         return mapping.get(value)
 
@@ -1916,7 +2155,9 @@ class Participant(models.Model):
 class ParticipantEventTypes(models.IntegerChoices):
     JOIN = 1, "Join"
     LEAVE = 2, "Leave"
-    UPDATE = 5, "Update"  # Leave space for possible speech start / stop events
+    SPEECH_START = 3, "Speech Start"
+    SPEECH_STOP = 4, "Speech Stop"
+    UPDATE = 5, "Update"
 
     @classmethod
     def type_to_api_code(cls, value):
@@ -1924,6 +2165,8 @@ class ParticipantEventTypes(models.IntegerChoices):
         mapping = {
             cls.JOIN: "join",
             cls.LEAVE: "leave",
+            cls.SPEECH_START: "speech_start",
+            cls.SPEECH_STOP: "speech_stop",
             cls.UPDATE: "update",
         }
         return mapping.get(value)
@@ -2022,6 +2265,7 @@ class TranscriptionProviders(models.IntegerChoices):
     ELEVENLABS = 7, "ElevenLabs"
     KYUTAI = 8, "Kyutai"
     CUSTOM_ASYNC = 9, "Custom Async"
+    CUSTOM_ASYNC_V2 = 10, "Custom Async v2"
 
 
 class RecordingStorage(Storage):
@@ -2304,7 +2548,7 @@ class AsyncTranscription(models.Model):
 
     @property
     def use_grouped_utterances(self):
-        return self.transcription_provider == TranscriptionProviders.ASSEMBLY_AI
+        return self.transcription_provider in [TranscriptionProviders.ASSEMBLY_AI, TranscriptionProviders.DEEPGRAM]
 
 
 class AsyncTranscriptionManager:
@@ -2367,6 +2611,10 @@ class AsyncTranscriptionManager:
         cls.delivery_webhook(async_transcription)
 
 
+# If is_blob_stored_remotely is True:
+# If audio_blob_remote_file is null and blob_upload_failure_data is null: audio blob is in process of being uploaded
+# If audio_blob_remote_file is not null and blob_upload_failure_data is null: audio blob is uploaded successfully
+# If audio_blob_remote_file is null and blob_upload_failure_data is not null: audio blob upload failed
 class AudioChunk(models.Model):
     class Sources(models.IntegerChoices):
         PER_PARTICIPANT_AUDIO = 1, "Per Participant Audio"
@@ -2378,6 +2626,12 @@ class AudioChunk(models.Model):
 
     recording = models.ForeignKey(Recording, on_delete=models.CASCADE, related_name="audio_chunks")
     audio_blob = models.BinaryField()
+    audio_blob_remote_file = models.FileField(storage=StorageAlias("audio_chunks"), null=True, blank=True)
+    is_blob_stored_remotely = models.BooleanField(
+        default=False,
+        db_default=False,
+    )
+    blob_upload_failure_data = models.JSONField(null=True, default=None)
     audio_format = models.IntegerField(choices=AudioFormat.choices, default=AudioFormat.PCM)
     timestamp_ms = models.BigIntegerField()
     duration_ms = models.IntegerField()
@@ -2387,6 +2641,22 @@ class AudioChunk(models.Model):
 
     source = models.IntegerField(choices=Sources.choices, default=Sources.PER_PARTICIPANT_AUDIO)
     participant = models.ForeignKey(Participant, on_delete=models.PROTECT, related_name="audio_chunks")
+
+    def get_audio_data(self) -> memoryview:
+        if self.is_blob_stored_remotely:
+            if not self.audio_blob_remote_file:
+                return memoryview(b"")
+            return self.download_audio_blob_from_remote_storage()
+        return self.audio_blob
+
+    def download_audio_blob_from_remote_storage(self, max_retries=3):
+        return download_blob_from_remote_storage(remote_storage_url(self.audio_blob_remote_file), max_retries)
+
+    def clear_audio_data(self):
+        if self.is_blob_stored_remotely:
+            self.audio_blob_remote_file.delete()
+        self.audio_blob = b""
+        self.save()
 
 
 class Utterance(models.Model):
@@ -2433,7 +2703,7 @@ class Utterance(models.Model):
     # on the utterance model and not using the separate audio chunk model.
     def get_audio_blob(self):
         if self.audio_chunk:
-            return self.audio_chunk.audio_blob
+            return self.audio_chunk.get_audio_data()
         return self.audio_blob
 
     def get_sample_rate(self):
@@ -2463,10 +2733,11 @@ class Credentials(models.Model):
         OPENAI = 5, "OpenAI"
         ASSEMBLY_AI = 6, "Assembly AI"
         SARVAM = 7, "Sarvam"
-        TEAMS_BOT_LOGIN = 8, "Teams Bot Login"
+        TEAMS_BOT_LOGIN = 8, "Teams Bot Login"  # Deprecrated in favor of BotLogin
         EXTERNAL_MEDIA_STORAGE = 9, "External Media Storage"
         ELEVENLABS = 10, "ElevenLabs"
         KYUTAI = 11, "Kyutai"
+        TEAMS_BOT_IDENTIFICATION_CREDENTIALS = 12, "Teams Bot Identification Credentials"
 
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="credentials")
     credential_type = models.IntegerField(choices=CredentialTypes.choices, null=False)
@@ -2508,6 +2779,7 @@ class MediaBlob(models.Model):
     VALID_VIDEO_CONTENT_TYPES = []
     VALID_IMAGE_CONTENT_TYPES = [
         ("image/png", "PNG Image"),
+        ("image/jpeg", "JPEG Image"),
     ]
 
     OBJECT_ID_PREFIX = "blob_"
@@ -2610,6 +2882,7 @@ class BotMediaRequest(models.Model):
     media_url = models.URLField(null=True, blank=True)
 
     loop = models.BooleanField(default=False, db_default=False)
+    mute_video = models.BooleanField(default=False, db_default=False)
 
     media_blob = models.ForeignKey(
         MediaBlob,
@@ -2827,6 +3100,7 @@ class WebhookTriggerTypes(models.IntegerChoices):
     ASYNC_TRANSCRIPTION_STATE_CHANGE = 7, "Async Transcription State Change"
     ZOOM_OAUTH_CONNECTION_STATE_CHANGE = 8, "Zoom OAuth Connection State Change"
     BOT_LOGS_UPDATE = 9, "Bot Logs Update"
+    PARTICIPANT_EVENTS_SPEECH_START_STOP = 10, "Participant Speech Start/Stop"
     # add other event types here
 
     @classmethod
@@ -2842,6 +3116,7 @@ class WebhookTriggerTypes(models.IntegerChoices):
             cls.ASYNC_TRANSCRIPTION_STATE_CHANGE: "async_transcription.state_change",
             cls.ZOOM_OAUTH_CONNECTION_STATE_CHANGE: "zoom_oauth_connection.state_change",
             cls.BOT_LOGS_UPDATE: "bot_logs.update",
+            cls.PARTICIPANT_EVENTS_SPEECH_START_STOP: "participant_events.speech_start_stop",
         }
 
     @classmethod
@@ -2873,7 +3148,7 @@ class WebhookSubscription(models.Model):
             self.object_id = f"{self.OBJECT_ID_PREFIX}{random_string}"
         super().save(*args, **kwargs)
 
-    url = models.URLField()
+    url = models.URLField(max_length=2048)
     triggers = models.JSONField(default=default_triggers)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)

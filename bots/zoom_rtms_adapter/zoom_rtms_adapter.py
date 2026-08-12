@@ -438,7 +438,7 @@ class RTMSClient:
 
                     handshake["media_params"] = {
                         "audio": {
-                            "content_type": 1,
+                            "content_type": 2,
                             "sample_rate": 1,
                             "channel": 1,
                             "codec": 1,
@@ -446,6 +446,7 @@ class RTMSClient:
                             "send_rate": 100,
                         },
                         "video": {
+                            "content_type": 3,
                             "codec": 7,  # H264
                             "resolution": video_resolution_for_media_params,  # HD
                             "fps": 15,
@@ -923,7 +924,7 @@ class ZoomRTMSAdapter(BotAdapter):
 
     # ------------------------------------------------------------- control API
 
-    def send_raw_image(self, png_image_bytes):
+    def send_raw_image(self, image_bytes):
         # Not currently supported for Zoom RTMS receive-only mode
         return
 
@@ -954,8 +955,8 @@ class ZoomRTMSAdapter(BotAdapter):
     def is_sent_video_still_playing(self):
         return False
 
-    def send_video(self, video_url, loop=False):
-        logger.info(f"send_video called with video_url = {video_url}, loop = {loop}. This is not supported for Zoom RTMS adapter")
+    def send_video(self, video_url, loop=False, mute_video=False):
+        logger.info(f"send_video called with video_url = {video_url}, loop = {loop}, mute_video = {mute_video}. This is not supported for Zoom RTMS adapter")
         return
 
     def get_first_buffer_timestamp_ms_offset(self):

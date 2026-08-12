@@ -2,9 +2,9 @@
 
 Attendee's managed Zoom OAuth feature gives your Zoom Bots additional capabilities by generating certain Zoom SDK tokens when they join meetings. Currently, two token types are supported:
 - *Local Recording Token*: Lets the bot record meetings without asking permission from the host
-- *Onbehalf Token*: Associates the bot with the user it is joining the meeting on behalf of. After February 23, 2026, all bots joining *external* meetings will be required to use this token. See [here](https://developers.zoom.us/blog/transition-to-obf-token-meetingsdk-apps/) for the official announcement from Zoom.
+- *Onbehalf Token*: Associates the bot with the user it is joining the meeting on behalf of. After March 2, 2026, all bots joining *external* meetings will be required to use this token. See [here](https://developers.zoom.us/blog/transition-to-obf-token-meetingsdk-apps/) for the official announcement from Zoom.
 
-Attendee will store your users' Zoom OAuth credentials and use them to generate these tokens. If you'd prefer to manage the credentials yourself and pass the raw tokens to Attendee instead, use the `callback_settings.zoom_tokens_url` parameter when calling the `POST /api/v1/bots` [endpoint](https://docs.attendee.dev/api-reference#tag/bots/post/api/v1/bots).
+Attendee will store your users' Zoom OAuth credentials and use them to generate these tokens. If you'd prefer to manage the credentials yourself and pass the raw tokens to Attendee instead, use the `callback_settings.zoom_tokens_url` parameter when calling the `POST /api/v1/bots` [endpoint](https://docs.attendee.dev/api-reference/tag/bots/post/api/v1/bots).
 
 The guide below walks through how to set up Attendee-managed Zoom OAuth in your app. For a reference implementation, see the [Attendee Managed Zoom OAuth Example](https://github.com/attendee-labs/managed-zoom-oauth-example).
 
@@ -18,7 +18,7 @@ When a user authorizes your Zoom app through OAuth:
 
 ## Create a Zoom App
 
-You'll need to create a Zoom OAuth App that your users will authorize. We recommend creating separate apps for development and production. You will need to choose whether you want to use the local recording token or the onbehalf token or both. Since the onbehalf token will be required after February 23, 2026, we highly recommend you use it. The local recording token is only needed if your bots are recording meetings and you want to record meetings without asking permission from the host.
+You'll need to create a Zoom OAuth App that your users will authorize. We recommend creating separate apps for development and production. You will need to choose whether you want to use the local recording token or the onbehalf token or both. Since the onbehalf token will be required after March 2, 2026, we highly recommend you use it. The local recording token is only needed if your bots are recording meetings and you want to record meetings without asking permission from the host.
 
 1. Go to the [Zoom Developer Portal](https://marketplace.zoom.us/user/build) and create a new General app.
 2. On the sidebar select 'Basic Information'.
@@ -73,8 +73,8 @@ Follow these steps:
 
 1. Add an `auth` endpoint that your application will use to redirect users to the OAuth flow.
 2. Add a `callback` endpoint that your application will use to handle the OAuth callback.
-3. In your callback endpoint, you'll take the access code and make a [POST /zoom_oauth_connections](https://docs.attendee.dev/api-reference#tag/zoom-oauth-connections/post/api/v1/zoom_oauth_connections) request to the Attendee API to create a new Zoom OAuth connection for the user who just authorized your application.
-5. After you make the API request to Attendee, you'll receive a [Zoom OAuth connection object](https://docs.attendee.dev/api-reference#model/zoom-oauth-connection) in the response. Save this object to your database and associate it with the user who just authorized your application.
+3. In your callback endpoint, you'll take the access code and make a [POST /zoom_oauth_connections](https://docs.attendee.dev/api-reference/tag/zoom-oauth-connections/post/api/v1/zoom_oauth_connections) request to the Attendee API to create a new Zoom OAuth connection for the user who just authorized your application.
+5. After you make the API request to Attendee, you'll receive a [Zoom OAuth connection object](https://docs.attendee.dev/api-reference/model/ZoomOAuthConnection) in the response. Save this object to your database and associate it with the user who just authorized your application.
 
 See the `/zoom_oauth_callback` route in the [example app](https://github.com/attendee-labs/managed-zoom-oauth-example/blob/main/server.js) for an example implementation of these steps.
 
@@ -92,13 +92,13 @@ See the `/attendee-webhook` route in the [example app](https://github.com/attend
 
 ## FAQ
 
-### Will my Zoom app stop working after February 23, 2026, if we don't use the onbehalf token?
+### Will my Zoom app stop working after March 2, 2026, if we don't use the onbehalf token?
 
 Yes, this is Zoom's [official deadline](https://developers.zoom.us/blog/transition-to-obf-token-meetingsdk-apps/). However, Attendee is in contact with Zoom and can request extensions for individual apps that are using Attendee. Please reach out on Slack if you need help getting an extension. Note that if your bot only joins meetings within your Zoom account, you don't need to use the onbehalf token.
 
 ### Why can't I delete the Zoom OAuth App credentials?
 
-We don't allow you to delete the Zoom OAuth App credentials if there are any Zoom OAuth connections associated with it. You will need to intentionally delete all the associated Zoom OAuth connections first. You can do this by [listing](https://docs.attendee.dev/api-reference#tag/zoom-oauth-connections/get/api/v1/zoom_oauth_connections) all the associated Zoom OAuth connections and then [deleting](https://docs.attendee.dev/api-reference#tag/zoom-oauth-connections/delete/api/v1/zoom_oauth_connections/{object_id}) them one by one.
+We don't allow you to delete the Zoom OAuth App credentials if there are any Zoom OAuth connections associated with it. You will need to intentionally delete all the associated Zoom OAuth connections first. You can do this by [listing](https://docs.attendee.dev/api-reference/tag/zoom-oauth-connections/get/api/v1/zoom_oauth_connections) all the associated Zoom OAuth connections and then [deleting](https://docs.attendee.dev/api-reference/tag/zoom-oauth-connections/delete/api/v1/zoom_oauth_connections/object_id) them one by one.
 
 ### What happens if the onbehalf token user is not in the meeting when the bot joins?
 

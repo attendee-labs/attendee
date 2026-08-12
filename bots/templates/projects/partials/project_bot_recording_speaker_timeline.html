@@ -1,0 +1,27 @@
+{% if speaker_timeline %}
+    <div class="speaker-timeline-wrapper">
+        <div class="speaker-timeline-chart">
+            <div style="display: flex">
+                <div class="speaker-timeline-labels">
+                    {% for participant in speaker_timeline %}
+                        <div class="speaker-timeline-label" title="{{ participant.name }}">{{ participant.name }}</div>
+                    {% endfor %}
+                </div>
+                <div class="speaker-timeline-tracks">
+                    {% for participant in speaker_timeline %}
+                        <div class="speaker-timeline-track">
+                            {% for interval in participant.intervals %}
+                                <div class="speaker-timeline-bar"
+                                     style="background-color: {{ participant.color }}"
+                                     data-start-ms="{{ interval.start_ms }}"
+                                     {% if interval.end_ms != None %}data-end-ms="{{ interval.end_ms }}"{% endif %}>
+                                </div>
+                            {% endfor %}
+                        </div>
+                    {% endfor %}
+                    <div class="speaker-timeline-playhead"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+{% endif %}

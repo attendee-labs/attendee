@@ -2,13 +2,13 @@ from datetime import timedelta
 from unittest.mock import patch
 
 from django.core.exceptions import ValidationError
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.utils import timezone
 
 from accounts.models import Organization
-from bots.bots_api_utils import BotCreationSource, build_site_url, create_bot, create_webhook_subscription, validate_bot_concurrency_limit, validate_meeting_url_and_credentials
+from bots.bots_api_utils import BotCreationSource, build_internal_site_url, build_site_url, create_bot, create_webhook_subscription, patch_bot, validate_bot_concurrency_limit, validate_meeting_url_and_credentials
 from bots.calendars_api_utils import create_calendar
-from bots.models import Bot, BotEventManager, BotEventTypes, BotStates, CalendarEvent, CalendarPlatform, Project, TranscriptionProviders, WebhookSubscription, WebhookTriggerTypes, ZoomOAuthApp
+from bots.models import Bot, BotEventManager, BotEventTypes, BotLoginGroup, BotLoginPlatform, BotStates, CalendarEvent, CalendarPlatform, Project, TranscriptionProviders, WebhookSubscription, WebhookTriggerTypes, ZoomOAuthApp
 
 
 class TestBuildSiteUrl(TestCase):
@@ -43,6 +43,30 @@ class TestBuildSiteUrl(TestCase):
         mock_settings.SITE_DOMAIN = "production.example.com"
         result = build_site_url("/callback")
         self.assertEqual(result, "http://localhost:9000/callback")
+
+    @patch("bots.bots_api_utils.settings")
+    @patch.dict("os.environ", {"INTERNAL_SITE_DOMAIN": "attendee-app.ai.svc.cluster.local:8000"}, clear=True)
+    def test_build_internal_site_url_uses_internal_domain_over_http(self, mock_settings):
+        """Test that internal callbacks target INTERNAL_SITE_DOMAIN over http."""
+        mock_settings.SITE_DOMAIN = "production.example.com"
+        result = build_internal_site_url("/cookie")
+        self.assertEqual(result, "http://attendee-app.ai.svc.cluster.local:8000/cookie")
+
+    @patch("bots.bots_api_utils.settings")
+    @patch.dict("os.environ", {"INTERNAL_SITE_DOMAIN": "attendee-app.ai.svc.cluster.local:8000", "EXTERNAL_WEBHOOK_SITE_DOMAIN": "external.example.com"}, clear=True)
+    def test_build_site_url_external_ignores_internal_domain(self, mock_settings):
+        """Test that external (default) URLs are unaffected by INTERNAL_SITE_DOMAIN."""
+        mock_settings.SITE_DOMAIN = "production.example.com"
+        result = build_site_url("/webhook")
+        self.assertEqual(result, "https://external.example.com/webhook")
+
+    @patch("bots.bots_api_utils.settings")
+    @patch.dict("os.environ", {"EXTERNAL_WEBHOOK_SITE_DOMAIN": "external.example.com"}, clear=True)
+    def test_build_internal_site_url_falls_back_to_external_domain_when_unset(self, mock_settings):
+        """Test that internal callbacks fall back to the external domain when INTERNAL_SITE_DOMAIN is unset."""
+        mock_settings.SITE_DOMAIN = "production.example.com"
+        result = build_internal_site_url("/cookie")
+        self.assertEqual(result, "https://external.example.com/cookie")
 
 
 class TestValidateMeetingUrlAndCredentials(TestCase):
@@ -108,6 +132,20 @@ class TestCreateBot(TestCase):
         self.assertEqual(bot.meeting_url, teams_url_normalized)
         self.assertIsNone(error)
 
+    def test_create_teams_bot_with_login_group_name(self):
+        BotLoginGroup.objects.create(project=self.project, platform=BotLoginPlatform.TEAMS, name="Acme Teams")
+        bot, error = create_bot(data={"meeting_url": "https://teams.microsoft.com/meet/123?p=123", "bot_name": "Test Bot", "teams_settings": {"use_login": True, "login_group_name": "Acme Teams"}}, source=BotCreationSource.API, project=self.project)
+        self.assertIsNotNone(bot)
+        self.assertIsNone(error)
+        self.assertEqual(bot.settings["teams_settings"]["login_group_name"], "Acme Teams")
+
+    def test_create_bot_with_login_group_name(self):
+        BotLoginGroup.objects.create(project=self.project, platform=BotLoginPlatform.GOOGLE_MEET, name="Acme Support")
+        bot, error = create_bot(data={"meeting_url": "https://meet.google.com/abc-defg-hij", "bot_name": "Test Bot", "google_meet_settings": {"use_login": True, "login_group_name": "Acme Support"}}, source=BotCreationSource.API, project=self.project)
+        self.assertIsNotNone(bot)
+        self.assertIsNone(error)
+        self.assertEqual(bot.settings["google_meet_settings"]["login_group_name"], "Acme Support")
+
     def test_create_bot_with_explicit_transcription_settings(self):
         """Test creating bots with explicit transcription settings for different providers and meeting types"""
 
@@ -137,6 +175,15 @@ class TestCreateBot(TestCase):
         self.assertEqual(events.count(), 1)
         self.assertEqual(events.first().metadata["source"], BotCreationSource.API)
         self.assertEqual(events.first().event_type, BotEventTypes.JOIN_REQUESTED)
+
+    def test_create_bot_with_jpeg_image(self):
+        jpeg_b64 = "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAABAAEDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwDi6KKK+ZP3E//Z"
+        bot, error = create_bot(data={"meeting_url": "https://teams.microsoft.com/meet/123?p=123", "bot_name": "Test Bot JPEG", "bot_image": {"type": "image/jpeg", "data": jpeg_b64}}, source=BotCreationSource.API, project=self.project)
+        self.assertIsNotNone(bot)
+        self.assertIsNotNone(bot.recordings.first())
+        self.assertIsNotNone(bot.media_requests.first())
+        self.assertIsNone(error)
+        self.assertEqual(bot.media_requests.first().media_blob.content_type, "image/jpeg")
 
     def test_create_bot_with_valid_redaction_settings(self):
         """Test creating a bot with valid redaction settings."""
@@ -221,6 +268,38 @@ class TestCreateBot(TestCase):
         self.assertEqual(deepgram_settings["model"], "nova-2")
         self.assertEqual(deepgram_settings["keywords"], ["meeting", "agenda"])
 
+    def test_create_bot_with_sarvam_saaras_v3_and_mode(self):
+        """Test creating a bot with valid Sarvam saaras:v3 model and mode."""
+        bot, error = create_bot(
+            data={"meeting_url": "https://meet.google.com/sarvam-v3-test", "bot_name": "Test Bot", "transcription_settings": {"sarvam": {"model": "saaras:v3", "mode": "translate"}}},
+            source=BotCreationSource.API,
+            project=self.project,
+        )
+        self.assertIsNotNone(bot)
+        self.assertIsNone(error)
+        self.assertEqual(bot.transcription_settings.sarvam_model(), "saaras:v3")
+        self.assertEqual(bot.transcription_settings.sarvam_mode(), "translate")
+
+    def test_create_bot_with_sarvam_saarika_and_mode_succeeds(self):
+        """Test that creating a bot with Sarvam Saarika model and mode succeeds (validation removed)."""
+        bot, error = create_bot(
+            data={"meeting_url": "https://meet.google.com/sarvam-saarika-test", "bot_name": "Test Bot", "transcription_settings": {"sarvam": {"model": "saarika:v2.5", "mode": "translate"}}},
+            source=BotCreationSource.API,
+            project=self.project,
+        )
+        self.assertIsNotNone(bot)
+        self.assertIsNone(error)
+
+    def test_create_bot_with_sarvam_mode_without_model_succeeds(self):
+        """Test that creating a bot with Sarvam mode but no model succeeds (validation removed)."""
+        bot, error = create_bot(
+            data={"meeting_url": "https://meet.google.com/sarvam-no-model-test", "bot_name": "Test Bot", "transcription_settings": {"sarvam": {"mode": "translate"}}},
+            source=BotCreationSource.API,
+            project=self.project,
+        )
+        self.assertIsNotNone(bot)
+        self.assertIsNone(error)
+
     def test_create_bot_with_google_meet_url_with_http(self):
         bot, error = create_bot(data={"meeting_url": "http://meet.google.com/abc-defg-hij", "bot_name": "Test Bot"}, source=BotCreationSource.DASHBOARD, project=self.project)
         self.assertIsNotNone(bot)
@@ -251,7 +330,16 @@ class TestCreateBot(TestCase):
         self.assertIsNotNone(error)
         bot_image_errors = error["bot_image"]["non_field_errors"]
         error_message = str(bot_image_errors[0])
-        self.assertEqual(error_message, "Data is not a valid PNG image. This site can generate base64 encoded PNG images to test with: https://png-pixel.com")
+        self.assertEqual(error_message, "Data is not a valid png image.")
+
+    def test_create_bot_with_invalid_jpeg_image(self):
+        bot, error = create_bot(data={"meeting_url": "https://meet.google.com/abc-defg-hij", "bot_name": "Test Bot", "bot_image": {"type": "image/jpeg", "data": "iVBORw0KGgoAAAANSUhEUgAAAAE="}}, source=BotCreationSource.API, project=self.project)
+        self.assertIsNone(bot)
+        self.assertEqual(Bot.objects.count(), 0)
+        self.assertIsNotNone(error)
+        bot_image_errors = error["bot_image"]["non_field_errors"]
+        error_message = str(bot_image_errors[0])
+        self.assertEqual(error_message, "Data is not a valid jpeg image.")
 
     def test_with_too_many_webhooks(self):
         bot, error = create_bot(data={"meeting_url": "https://meet.google.com/abc-defg-hij", "bot_name": "Test Bot", "webhooks": [{"url": "https://example.com", "triggers": ["bot.state_change"]}, {"url": "https://example2.com", "triggers": ["bot.state_change"]}, {"url": "https://example3.com", "triggers": ["bot.state_change"]}]}, source=BotCreationSource.API, project=self.project)
@@ -372,6 +460,50 @@ class TestCreateBot(TestCase):
         self.assertIsNotNone(bot2)
         self.assertIsNone(error2)
         self.assertEqual(Bot.objects.count(), 2)
+
+
+class TestCreateBotWhenOutOfCredits(TestCase):
+    OUT_OF_CREDITS_ERROR = {"error": "Organization has run out of credits. Please add more credits in the Account -> Billing page."}
+
+    def setUp(self):
+        self.organization = Organization.objects.create(name="Test Organization")
+        self.project = Project.objects.create(name="Test Project", organization=self.organization)
+
+    def test_create_bot_out_of_credits_without_autopay(self):
+        """Test that an organization without autopay is rejected once its balance drops below -1 credit."""
+        self.organization.centicredits = -200
+        self.organization.save()
+        self.assertFalse(self.organization.has_working_autopay())
+        self.assertTrue(self.organization.out_of_credits())
+
+        bot, error = create_bot(data={"meeting_url": "https://meet.google.com/abc-defg-hij", "bot_name": "Test Bot"}, source=BotCreationSource.API, project=self.project)
+        self.assertIsNone(bot)
+        self.assertEqual(Bot.objects.count(), 0)
+        self.assertEqual(error, self.OUT_OF_CREDITS_ERROR)
+
+    def test_create_bot_out_of_credits_with_autopay(self):
+        """Test that an organization with working autopay gets extra leeway, but is still rejected below -25 credits."""
+        self.organization.autopay_enabled = True
+        self.organization.autopay_stripe_customer_id = "cus_test123"
+        self.organization.centicredits = -200
+        self.organization.save()
+        self.assertTrue(self.organization.has_working_autopay())
+        self.assertFalse(self.organization.out_of_credits())
+
+        # Within the autopay leeway, so bot creation still succeeds
+        bot, error = create_bot(data={"meeting_url": "https://meet.google.com/abc-defg-hij", "bot_name": "Test Bot"}, source=BotCreationSource.API, project=self.project)
+        self.assertIsNotNone(bot)
+        self.assertIsNone(error)
+
+        # Past the autopay leeway, so bot creation is rejected
+        self.organization.centicredits = -3000
+        self.organization.save()
+        self.assertTrue(self.organization.out_of_credits())
+
+        bot, error = create_bot(data={"meeting_url": "https://meet.google.com/abc-defg-hij", "bot_name": "Test Bot 2"}, source=BotCreationSource.API, project=self.project)
+        self.assertIsNone(bot)
+        self.assertEqual(Bot.objects.count(), 1)
+        self.assertEqual(error, self.OUT_OF_CREDITS_ERROR)
 
 
 class TestCalendarIntegration(TestCase):
@@ -522,7 +654,7 @@ class TestPatchBot(TestCase):
 
         self.assertIsNone(updated_bot)
         self.assertIsNotNone(patch_error)
-        self.assertEqual(patch_error["error"], "Bot is in state joining but join_at, meeting_url, bot_name and bot_image can only be updated when in the scheduled state")
+        self.assertEqual(patch_error["error"], "Bot is in state joining but join_at, meeting_url, bot_name, bot_image and recording_settings can only be updated when in the scheduled state")
 
     def test_patch_bot_meeting_url_not_in_scheduled_state(self):
         """Test that patching a bot not in scheduled state fails."""
@@ -806,6 +938,90 @@ class TestPatchBot(TestCase):
             "New image request should have a different ID than the original",
         )
 
+    def test_patch_bot_with_jpeg_image(self):
+        """Test that patching with a JPEG bot_image works."""
+        from bots.bots_api_utils import patch_bot
+        from bots.models import BotMediaRequestMediaTypes
+
+        future_time = timezone.now() + timedelta(hours=1)
+        bot, error = create_bot(
+            data={
+                "meeting_url": "https://meet.google.com/abc-defg-hij",
+                "bot_name": "Original Name",
+                "join_at": future_time.isoformat(),
+            },
+            source=BotCreationSource.API,
+            project=self.project,
+        )
+        self.assertIsNotNone(bot)
+
+        jpeg_b64 = "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAABAAEDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwDi6KKK+ZP3E//Z"
+        updated_bot, patch_error = patch_bot(
+            bot,
+            {"bot_image": {"type": "image/jpeg", "data": jpeg_b64}},
+        )
+        self.assertIsNotNone(updated_bot)
+        self.assertIsNone(patch_error)
+        self.assertTrue(
+            updated_bot.media_requests.filter(media_type=BotMediaRequestMediaTypes.IMAGE).exists(),
+        )
+        self.assertEqual(updated_bot.media_requests.filter(media_type=BotMediaRequestMediaTypes.IMAGE).first().media_blob.content_type, "image/jpeg")
+
+    def test_patch_bot_without_recording_settings_preserves_them(self):
+        """Test that patching a bot without specifying recording_settings does NOT change any of its recording settings."""
+        future_time = timezone.now() + timedelta(hours=1)
+        custom_recording_settings = {
+            "format": "mp3",
+            "view": "gallery_view",
+            "resolution": "720p",
+            "record_chat_messages_when_paused": True,
+            "record_async_transcription_audio_chunks": False,
+            "reserve_additional_storage": False,
+        }
+        bot, error = create_bot(
+            data={"meeting_url": "https://meet.google.com/abc-defg-hij", "bot_name": "Test Bot", "join_at": future_time.isoformat(), "recording_settings": custom_recording_settings},
+            source=BotCreationSource.API,
+            project=self.project,
+        )
+        self.assertIsNotNone(bot)
+        self.assertIsNone(error)
+        self.assertEqual(bot.state, BotStates.SCHEDULED)
+
+        # Patch only metadata and bot_name — do NOT include recording_settings
+        updated_bot, patch_error = patch_bot(bot, {"metadata": {"key": "value"}, "bot_name": "Updated Bot Name"})
+        self.assertIsNotNone(updated_bot)
+        self.assertIsNone(patch_error)
+        self.assertEqual(updated_bot.settings["recording_settings"], custom_recording_settings)
+        self.assertEqual(updated_bot.metadata, {"key": "value"})
+        self.assertEqual(updated_bot.name, "Updated Bot Name")
+
+    def test_patch_bot_with_recording_settings_updates_them(self):
+        """Test that patching a bot with recording_settings updates the recording settings."""
+        from bots.serializers import BOT_RECORDING_SETTINGS_DEFAULT_VALUES
+
+        future_time = timezone.now() + timedelta(hours=1)
+        custom_recording_settings = {
+            "format": "mp3",
+            "view": "gallery_view",
+            "resolution": "720p",
+            "record_chat_messages_when_paused": True,
+            "record_async_transcription_audio_chunks": False,
+            "reserve_additional_storage": False,
+        }
+        bot, error = create_bot(
+            data={"meeting_url": "https://meet.google.com/abc-defg-hij", "bot_name": "Test Bot", "join_at": future_time.isoformat(), "recording_settings": custom_recording_settings},
+            source=BotCreationSource.API,
+            project=self.project,
+        )
+        self.assertIsNotNone(bot)
+        self.assertIsNone(error)
+        self.assertEqual(bot.state, BotStates.SCHEDULED)
+
+        updated_bot, patch_error = patch_bot(bot, {"recording_settings": {"record_async_transcription_audio_chunks": True}})
+        self.assertIsNotNone(updated_bot)
+        self.assertIsNone(patch_error)
+        self.assertEqual(updated_bot.settings["recording_settings"], {**BOT_RECORDING_SETTINGS_DEFAULT_VALUES, "record_async_transcription_audio_chunks": True})
+
 
 class TestConcurrentBotLimit(TestCase):
     def setUp(self):
@@ -970,3 +1186,42 @@ class TestConcurrentBotLimit(TestCase):
         self.assertIsNotNone(bot)
         self.assertIsNone(error)
         mock_limit.assert_called()
+
+    @override_settings(CONCURRENT_BOTS_LIMIT=7)
+    def test_concurrent_bots_limit_falls_back_to_setting_when_override_is_null(self):
+        """When the per-project override is null, the global setting is used."""
+        self.assertIsNone(self.project.concurrent_bots_limit_override)
+        self.assertEqual(self.project.concurrent_bots_limit(), 7)
+
+    @override_settings(CONCURRENT_BOTS_LIMIT=7)
+    def test_concurrent_bots_limit_uses_override_when_set(self):
+        """When the per-project override is set, it takes precedence over the setting."""
+        self.project.concurrent_bots_limit_override = 2
+        self.project.save()
+        self.assertEqual(self.project.concurrent_bots_limit(), 2)
+
+    @override_settings(CONCURRENT_BOTS_LIMIT=100)
+    def test_validate_bot_concurrency_limit_uses_project_override(self):
+        """Validation should enforce the per-project override rather than the global setting."""
+        self.project.concurrent_bots_limit_override = 2
+        self.project.save()
+
+        # Under the override limit of 2 -> passes
+        Bot.objects.create(
+            project=self.project,
+            meeting_url="https://meet.google.com/override-0",
+            name="Override Bot 0",
+            state=BotStates.JOINED_RECORDING,
+        )
+        self.assertIsNone(validate_bot_concurrency_limit(self.project))
+
+        # At the override limit of 2 -> fails (even though global setting is 100)
+        Bot.objects.create(
+            project=self.project,
+            meeting_url="https://meet.google.com/override-1",
+            name="Override Bot 1",
+            state=BotStates.JOINED_RECORDING,
+        )
+        error = validate_bot_concurrency_limit(self.project)
+        self.assertIsNotNone(error)
+        self.assertEqual(error["error"], "You have exceeded the maximum number of concurrent bots (2) for your account. Please reach out to customer support to increase the limit.")

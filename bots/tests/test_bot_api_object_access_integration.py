@@ -405,6 +405,36 @@ class BotApiObjectAccessIntegrationTest(TransactionTestCase):
         response = self._make_authenticated_request("POST", f"/api/v1/bots/{self.bot_b.object_id}/output_image", self.api_key_a_plain, json.dumps(output_data))
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
+    def test_output_image_with_png(self):
+        """Test that PNG image output works for the output_image endpoint"""
+        png_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=="
+        output_data = {"type": "image/png", "data": png_b64}
+
+        response = self._make_authenticated_request("POST", f"/api/v1/bots/{self.bot_a.object_id}/output_image", self.api_key_a_plain, json.dumps(output_data))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_output_image_with_invalid_png(self):
+        """Test that invalid PNG data is rejected by the output_image endpoint"""
+        output_data = {"type": "image/png", "data": "bm90YXBuZw=="}
+
+        response = self._make_authenticated_request("POST", f"/api/v1/bots/{self.bot_a.object_id}/output_image", self.api_key_a_plain, json.dumps(output_data))
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_output_image_with_jpeg(self):
+        """Test that JPEG image output works for the output_image endpoint"""
+        jpeg_b64 = "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAABAAEDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwDi6KKK+ZP3E//Z"
+        output_data = {"type": "image/jpeg", "data": jpeg_b64}
+
+        response = self._make_authenticated_request("POST", f"/api/v1/bots/{self.bot_a.object_id}/output_image", self.api_key_a_plain, json.dumps(output_data))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_output_image_with_invalid_jpeg(self):
+        """Test that invalid JPEG data is rejected by the output_image endpoint"""
+        output_data = {"type": "image/jpeg", "data": "iVBORw0KGgoAAAANSUhEUgAAAAE="}
+
+        response = self._make_authenticated_request("POST", f"/api/v1/bots/{self.bot_a.object_id}/output_image", self.api_key_a_plain, json.dumps(output_data))
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
     # Tests for Output Video View (POST /api/bots/<object_id>/output_video)
     def test_output_video_access_control(self):
         """Test that video output requests respect project boundaries"""

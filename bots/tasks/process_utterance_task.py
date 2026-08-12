@@ -9,7 +9,7 @@ from celery import shared_task
 logger = logging.getLogger(__name__)
 
 from bots.models import Credentials, RecordingManager, TranscriptionFailureReasons, TranscriptionProviders, Utterance, WebhookTriggerTypes
-from bots.transcription_utils import get_transcription_via_assemblyai_from_mp3, is_retryable_failure
+from bots.transcription_utils import get_transcription_via_assemblyai_from_mp3, get_transcription_via_deepgram_from_audio_data, is_retryable_failure
 from bots.utils import pcm_to_mp3
 from bots.webhook_payloads import utterance_webhook_payload
 from bots.webhook_utils import trigger_webhook
@@ -63,6 +63,8 @@ def get_transcription(utterance):
             transcription, failure_data = get_transcription_via_elevenlabs(utterance)
         elif utterance.transcription_provider == TranscriptionProviders.CUSTOM_ASYNC:
             transcription, failure_data = get_transcription_via_custom_async(utterance)
+        elif utterance.transcription_provider == TranscriptionProviders.CUSTOM_ASYNC_V2:
+            transcription, failure_data = get_transcription_via_custom_async_v2(utterance)
         else:
             raise Exception(f"Unknown or streaming-only transcription provider: {utterance.transcription_provider}")
 
@@ -111,9 +113,7 @@ def process_utterance(self, utterance_id):
         # If the utterance has an associated audio chunk, clear the audio blob on the audio chunk.
         # If async transcription data is being saved, do NOT clear it, because we may use it later in an async transcription.
         if utterance.audio_chunk and not utterance.recording.bot.record_async_transcription_audio_chunks():
-            utterance_audio_chunk = utterance.audio_chunk
-            utterance_audio_chunk.audio_blob = b""
-            utterance_audio_chunk.save()
+            utterance.audio_chunk.clear_audio_data()
 
         utterance.transcription = transcription
         utterance.save()
@@ -240,58 +240,15 @@ def get_transcription_via_gladia(utterance):
 
 
 def get_transcription_via_deepgram(utterance):
-    from deepgram import (
-        DeepgramApiError,
-        DeepgramClient,
-        FileSource,
-        PrerecordedOptions,
+    return get_transcription_via_deepgram_from_audio_data(
+        identifier=f"utterance {utterance.id}",
+        transcription_settings=utterance.transcription_settings,
+        recording=utterance.recording,
+        retrieve_pcm_data_callback=lambda: (
+            utterance.get_audio_blob().tobytes(),
+            {"encoding": "linear16", "sample_rate": utterance.get_sample_rate()},
+        ),
     )
-
-    recording = utterance.recording
-    transcription_settings = utterance.transcription_settings
-    payload: FileSource = {
-        "buffer": utterance.get_audio_blob().tobytes(),
-    }
-
-    deepgram_model = transcription_settings.deepgram_model()
-
-    options = PrerecordedOptions(
-        model=deepgram_model,
-        smart_format=True,
-        language=transcription_settings.deepgram_language(),
-        detect_language=transcription_settings.deepgram_detect_language(),
-        keyterm=transcription_settings.deepgram_keyterms(),
-        keywords=transcription_settings.deepgram_keywords(),
-        encoding="linear16",  # for 16-bit PCM
-        sample_rate=utterance.get_sample_rate(),
-        redact=transcription_settings.deepgram_redaction_settings(),
-        replace=transcription_settings.deepgram_replace_settings(),
-    )
-
-    deepgram_credentials_record = recording.bot.project.credentials.filter(credential_type=Credentials.CredentialTypes.DEEPGRAM).first()
-    if not deepgram_credentials_record:
-        return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND}
-
-    deepgram_credentials = deepgram_credentials_record.get_credentials()
-    if not deepgram_credentials:
-        return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND}
-
-    deepgram = DeepgramClient(deepgram_credentials["api_key"])
-
-    try:
-        response = deepgram.listen.rest.v("1").transcribe_file(payload, options)
-    except DeepgramApiError as e:
-        original_error_json = json.loads(e.original_error)
-        if original_error_json.get("err_code") == "INVALID_AUTH":
-            return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_INVALID}
-        return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "error_code": original_error_json.get("err_code"), "error_json": original_error_json}
-
-    logger.info(f"Deepgram transcription complete with model {deepgram_model}")
-    alternatives = response.results.channels[0].alternatives
-    if len(alternatives) == 0:
-        logger.info(f"Deepgram transcription with model {deepgram_model} had no alternatives, returning empty transcription")
-        return {"transcript": "", "words": []}, None
-    return json.loads(alternatives[0].to_json()), None
 
 
 def get_transcription_via_openai(utterance):
@@ -405,6 +362,8 @@ def get_transcription_via_sarvam(utterance):
         data["language_code"] = transcription_settings.sarvam_language_code()
     if transcription_settings.sarvam_model():
         data["model"] = transcription_settings.sarvam_model()
+    if transcription_settings.sarvam_mode():
+        data["mode"] = transcription_settings.sarvam_mode()
 
     try:
         response = requests.post(base_url, headers=headers, files=files, data=data if data else None)
@@ -518,36 +477,19 @@ def get_transcription_via_elevenlabs(utterance):
         return None, {"reason": TranscriptionFailureReasons.INTERNAL_ERROR, "error": str(e)}
 
 
-def get_transcription_via_custom_async(utterance):
-    transcription_settings = utterance.transcription_settings
-
-    # Get the base URL from environment variable
+def _request_custom_async_transcription(utterance, headers, data):
     base_url = os.getenv("CUSTOM_ASYNC_TRANSCRIPTION_URL")
     if not base_url:
         return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND, "error": "CUSTOM_ASYNC_TRANSCRIPTION_URL environment variable not set"}
 
-    # Get additional properties from settings
-    additional_props = transcription_settings.custom_async_additional_props()
-
     payload_mp3 = pcm_to_mp3(utterance.get_audio_blob().tobytes(), sample_rate=utterance.get_sample_rate())
-
     files = {"audio": ("audio.mp3", payload_mp3, "audio/mpeg")}
 
-    # Add additional properties as form data
-    data = {}
-    for key, value in additional_props.items():
-        if isinstance(value, (dict, list)):
-            data[key] = json.dumps(value)
-        else:
-            data[key] = value
-
-    # Get timeout from environment or use default (120 retries like Gladia and AssemblyAI)
-    timeout = int(os.getenv("CUSTOM_ASYNC_TRANSCRIPTION_TIMEOUT", "120"))  # 120 seconds default timeout
+    timeout = int(os.getenv("CUSTOM_ASYNC_TRANSCRIPTION_TIMEOUT", "120"))
 
     try:
-        # Make the POST request to the custom transcription service
         logger.info(f"Sending audio to custom async service at {base_url}")
-        response = requests.post(base_url, files=files, data=data if data else None, timeout=timeout)
+        response = requests.post(base_url, files=files, data=data or None, headers=headers or None, timeout=timeout)
 
         if response.status_code == 401:
             return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_INVALID}
@@ -596,6 +538,19 @@ def get_transcription_via_custom_async(utterance):
     except (json.JSONDecodeError, ValueError) as e:
         logger.error(f"Custom async transcription response parsing failed: {str(e)}")
         return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "error": f"Invalid JSON response: {str(e)}"}
-    except Exception as e:
-        logger.error(f"Custom async transcription unexpected error: {str(e)}")
-        return None, {"reason": TranscriptionFailureReasons.INTERNAL_ERROR, "error": str(e)}
+
+
+def _serialize_form_data(form_data):
+    return {key: json.dumps(value) if isinstance(value, (dict, list)) else value for key, value in form_data.items()}
+
+
+def get_transcription_via_custom_async(utterance):
+    additional_props = utterance.transcription_settings.custom_async_additional_props()
+    data = _serialize_form_data(additional_props)
+    return _request_custom_async_transcription(utterance, headers={}, data=data)
+
+
+def get_transcription_via_custom_async_v2(utterance):
+    headers = utterance.transcription_settings.custom_async_v2_headers()
+    data = _serialize_form_data(utterance.transcription_settings.custom_async_v2_form_data())
+    return _request_custom_async_transcription(utterance, headers=headers, data=data)

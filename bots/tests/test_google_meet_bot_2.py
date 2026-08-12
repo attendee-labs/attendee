@@ -1,10 +1,13 @@
+import json
 import os
 import threading
 import time
+from types import SimpleNamespace
 from unittest.mock import MagicMock, call, patch
 
 import kubernetes
 from django.db import connection
+from django.test import tag
 from django.test.testcases import TransactionTestCase, override_settings
 from django.utils import timezone
 from selenium.common.exceptions import TimeoutException
@@ -17,11 +20,12 @@ from bots.models import (
     BotEventManager,
     BotEventSubTypes,
     BotEventTypes,
+    BotLogin,
+    BotLoginGroup,
+    BotLoginPlatform,
     BotStates,
     ChatMessage,
     Credentials,
-    GoogleMeetBotLogin,
-    GoogleMeetBotLoginGroup,
     Organization,
     Participant,
     ParticipantEvent,
@@ -79,6 +83,7 @@ from bots.web_bot_adapter.ui_methods import UiLoginRequiredException, UiRetryabl
         "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
     },
 )
+@tag("google_meet_tests")
 class TestGoogleMeetBot2(TransactionTestCase):
     @classmethod
     def setUpClass(cls):
@@ -90,6 +95,36 @@ class TestGoogleMeetBot2(TransactionTestCase):
         os.environ["CHARGE_CREDITS_FOR_BOTS"] = "false"
 
     def setUp(self):
+        # Mock element_to_be_clickable to always return a truthy mock element
+        patcher = patch("bots.google_meet_bot_adapter.google_meet_ui_methods.EC.element_to_be_clickable", return_value=MagicMock(return_value=MagicMock()))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+        # Mock humanized_navigate_to_and_click_element to avoid real interactions
+        patcher2 = patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.humanized_navigate_to_and_click_element", return_value=MagicMock())
+        patcher2.start()
+        self.addCleanup(patcher2.stop)
+
+        # Mock human_type to avoid real interactions
+        patcher3 = patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.human_type", return_value=MagicMock())
+        patcher3.start()
+        self.addCleanup(patcher3.stop)
+
+        # Mock verify_expected_audio_configuration
+        patcher4 = patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.verify_expected_audio_configuration", return_value=MagicMock())
+        patcher4.start()
+        self.addCleanup(patcher4.stop)
+
+        # Mock position_mouse_for_humanized_interaction to avoid real interactions
+        patcher5 = patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.position_mouse_for_humanized_interaction", return_value=MagicMock())
+        patcher5.start()
+        self.addCleanup(patcher5.stop)
+
+        # Mock human_copy_and_paste to avoid real interactions
+        patcher6 = patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.human_copy_and_paste", return_value=MagicMock())
+        patcher6.start()
+        self.addCleanup(patcher6.stop)
+
         # Recreate organization and project for each test
         self.organization = Organization.objects.create(name="Test Org")
         self.project = Project.objects.create(name="Test Project", organization=self.organization)
@@ -197,6 +232,80 @@ class TestGoogleMeetBot2(TransactionTestCase):
         fatal_error_event = self.bot.bot_events.filter(event_type=BotEventTypes.FATAL_ERROR, event_sub_type=BotEventSubTypes.FATAL_ERROR_HEARTBEAT_TIMEOUT).first()
         self.assertIsNone(fatal_error_event)
 
+    @patch("kubernetes.client.CoreV1Api")
+    @patch("kubernetes.config.load_incluster_config")
+    @patch("kubernetes.config.load_kube_config")
+    def test_terminate_bots_with_global_runtime_timeout(self, mock_load_kube_config, mock_load_incluster_config, MockCoreV1Api):
+        mock_k8s_api = MagicMock()
+        MockCoreV1Api.return_value = mock_k8s_api
+
+        mock_load_incluster_config.side_effect = kubernetes.config.config_exception.ConfigException("Mock ConfigException")
+
+        current_time = int(timezone.now().timestamp())
+        # Bot started over 30 hours ago (108001 seconds)
+        self.bot.first_heartbeat_timestamp = current_time - 200000
+        self.bot.last_heartbeat_timestamp = current_time
+        self.bot.state = BotStates.JOINED_RECORDING
+        self.bot.save()
+
+        with patch.dict(os.environ, {"LAUNCH_BOT_METHOD": "kubernetes"}):
+            from bots.management.commands.clean_up_bots_with_heartbeat_timeout_or_that_never_launched import Command
+
+            command = Command()
+            command.handle()
+
+        self.bot.refresh_from_db()
+
+        self.assertEqual(self.bot.state, BotStates.FATAL_ERROR)
+
+        fatal_error_event = self.bot.bot_events.filter(event_type=BotEventTypes.FATAL_ERROR, event_sub_type=BotEventSubTypes.FATAL_ERROR_GLOBAL_RUNTIME_TIMEOUT).first()
+        self.assertIsNotNone(fatal_error_event)
+        self.assertEqual(fatal_error_event.old_state, BotStates.JOINED_RECORDING)
+        self.assertEqual(fatal_error_event.new_state, BotStates.FATAL_ERROR)
+
+        pod_name = self.bot.k8s_pod_name()
+        mock_k8s_api.delete_namespaced_pod.assert_called_once_with(name=pod_name, namespace="attendee", grace_period_seconds=0)
+
+    def test_bots_within_global_runtime_timeout_not_terminated(self):
+        current_time = int(timezone.now().timestamp())
+        # Bot has been running for 1 hour (3600 seconds), well under the 108000 second default
+        self.bot.first_heartbeat_timestamp = current_time - 3600
+        self.bot.last_heartbeat_timestamp = current_time
+        self.bot.state = BotStates.JOINED_RECORDING
+        self.bot.save()
+
+        from bots.management.commands.clean_up_bots_with_heartbeat_timeout_or_that_never_launched import Command
+
+        command = Command()
+        command.handle()
+
+        self.bot.refresh_from_db()
+
+        self.assertEqual(self.bot.state, BotStates.JOINED_RECORDING)
+
+        fatal_error_event = self.bot.bot_events.filter(event_type=BotEventTypes.FATAL_ERROR, event_sub_type=BotEventSubTypes.FATAL_ERROR_GLOBAL_RUNTIME_TIMEOUT).first()
+        self.assertIsNone(fatal_error_event)
+
+    def test_bots_exceeding_global_runtime_timeout_in_post_meeting_state_not_terminated(self):
+        current_time = int(timezone.now().timestamp())
+        # Bot has been running for longer than the 108000 second default
+        self.bot.first_heartbeat_timestamp = current_time - 200000
+        self.bot.last_heartbeat_timestamp = current_time
+        self.bot.state = BotStates.ENDED
+        self.bot.save()
+
+        from bots.management.commands.clean_up_bots_with_heartbeat_timeout_or_that_never_launched import Command
+
+        command = Command()
+        command.handle()
+
+        self.bot.refresh_from_db()
+
+        self.assertEqual(self.bot.state, BotStates.ENDED)
+
+        fatal_error_event = self.bot.bot_events.filter(event_type=BotEventTypes.FATAL_ERROR, event_sub_type=BotEventSubTypes.FATAL_ERROR_GLOBAL_RUNTIME_TIMEOUT).first()
+        self.assertIsNone(fatal_error_event)
+
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
     @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
     @patch("bots.bot_controller.bot_controller.AzureFileUploader")
@@ -263,6 +372,30 @@ class TestGoogleMeetBot2(TransactionTestCase):
         mock_k8s_api = MagicMock()
         MockCoreV1Api.return_value = mock_k8s_api
 
+        # The pod was created but its container never started (stuck Pending with
+        # ImagePullBackOff) — this is the failure mode the diagnostics capture targets.
+        mock_k8s_api.read_namespaced_pod.return_value = SimpleNamespace(
+            status=SimpleNamespace(
+                phase="Pending",
+                reason=None,
+                message=None,
+                conditions=[SimpleNamespace(type="PodScheduled", status="True", reason=None, message=None)],
+                container_statuses=[
+                    SimpleNamespace(
+                        name="bot",
+                        ready=False,
+                        restart_count=0,
+                        state=SimpleNamespace(
+                            waiting=SimpleNamespace(reason="ImagePullBackOff", message="Back-off pulling image"),
+                            terminated=None,
+                            running=None,
+                        ),
+                    )
+                ],
+            )
+        )
+        mock_k8s_api.list_namespaced_event.return_value = SimpleNamespace(items=[SimpleNamespace(type="Warning", reason="Failed", message="Failed to pull image", count=3, last_timestamp=None)])
+
         # Set up config.load_incluster_config to raise ConfigException so load_kube_config gets called
         mock_load_incluster_config.side_effect = kubernetes.config.config_exception.ConfigException("Mock ConfigException")
 
@@ -297,6 +430,45 @@ class TestGoogleMeetBot2(TransactionTestCase):
         # Verify Kubernetes pod deletion was attempted with the correct pod name
         pod_name = self.bot.k8s_pod_name()
         mock_k8s_api.delete_namespaced_pod.assert_called_once_with(name=pod_name, namespace="attendee", grace_period_seconds=0)
+
+        # Verify the launch failure was captured into the event metadata so it's diagnosable
+        diagnostics = json.loads(fatal_error_event.metadata["infrastructure_information"])
+        self.assertTrue(diagnostics["pod_found"])
+        self.assertEqual(diagnostics["phase"], "Pending")
+        self.assertEqual(diagnostics["container_statuses"][0]["reason"], "ImagePullBackOff")
+        self.assertEqual(diagnostics["events"][0]["reason"], "Failed")
+
+    @patch("kubernetes.client.CoreV1Api")
+    @patch("kubernetes.config.load_incluster_config")
+    @patch("kubernetes.config.load_kube_config")
+    def test_terminate_bots_that_never_launched_when_pod_already_gone(self, mock_load_kube_config, mock_load_incluster_config, MockCoreV1Api):
+        # If the pod has already disappeared (e.g. node scaled down), diagnostics capture
+        # must still record the failure rather than blow up.
+        mock_k8s_api = MagicMock()
+        MockCoreV1Api.return_value = mock_k8s_api
+        mock_k8s_api.read_namespaced_pod.side_effect = kubernetes.client.ApiException(status=404)
+        mock_k8s_api.list_namespaced_event.return_value = SimpleNamespace(items=[])
+        mock_load_incluster_config.side_effect = kubernetes.config.config_exception.ConfigException("Mock ConfigException")
+
+        two_days_ago = timezone.now() - timezone.timedelta(days=2)
+        self.bot.first_heartbeat_timestamp = None
+        self.bot.last_heartbeat_timestamp = None
+        self.bot.state = BotStates.JOINING
+        self.bot.created_at = two_days_ago
+        self.bot.save()
+
+        with patch.dict(os.environ, {"LAUNCH_BOT_METHOD": "kubernetes"}):
+            from bots.management.commands.clean_up_bots_with_heartbeat_timeout_or_that_never_launched import Command
+
+            Command().handle()
+
+        self.bot.refresh_from_db()
+        self.assertEqual(self.bot.state, BotStates.FATAL_ERROR)
+        fatal_error_event = self.bot.bot_events.filter(event_type=BotEventTypes.FATAL_ERROR, event_sub_type=BotEventSubTypes.FATAL_ERROR_BOT_NOT_LAUNCHED).first()
+        self.assertIsNotNone(fatal_error_event)
+        diagnostics = json.loads(fatal_error_event.metadata["infrastructure_information"])
+        self.assertFalse(diagnostics["pod_found"])
+        self.assertEqual(diagnostics["pod_read_error"], "not_found")
 
     def test_recent_bots_with_no_heartbeat_not_terminated(self):
         # Create a bot that was created 30 minutes ago but never launched
@@ -1443,8 +1615,8 @@ class TestGoogleMeetBot2(TransactionTestCase):
         """
 
         # Set up Google Meet bot login credentials
-        google_meet_bot_login_group = GoogleMeetBotLoginGroup.objects.create(project=self.project)
-        google_meet_bot_login = GoogleMeetBotLogin.objects.create(
+        google_meet_bot_login_group = BotLoginGroup.objects.create(project=self.project, platform=BotLoginPlatform.GOOGLE_MEET, name="Google Meet Group 1")
+        google_meet_bot_login = BotLogin.objects.create(
             group=google_meet_bot_login_group,
             workspace_domain="example.com",
             email="bot@example.com",
@@ -1594,3 +1766,237 @@ class TestGoogleMeetBot2(TransactionTestCase):
 
             # Close the database connection since we're in a thread
             connection.close()
+
+    @patch("bots.bot_controller.bot_controller.create_google_meet_sign_in_session", return_value="test-session-id")
+    def test_google_meet_signed_in_bot_uses_named_login_group(
+        self,
+        mock_create_google_meet_sign_in_session,
+    ):
+        first_group = BotLoginGroup.objects.create(
+            project=self.project,
+            platform=BotLoginPlatform.GOOGLE_MEET,
+            name="Primary Group",
+        )
+        first_group_login = BotLogin.objects.create(
+            group=first_group,
+            workspace_domain="primary.example.com",
+            email="primary@example.com",
+        )
+        first_group_login.set_credentials(
+            {
+                "cert": "primary-cert",
+                "private_key": "primary-private-key",
+            }
+        )
+
+        named_group = BotLoginGroup.objects.create(
+            project=self.project,
+            platform=BotLoginPlatform.GOOGLE_MEET,
+            name="Named Group",
+        )
+        named_group_login = BotLogin.objects.create(
+            group=named_group,
+            workspace_domain="named.example.com",
+            email="named@example.com",
+        )
+        named_group_login.set_credentials(
+            {
+                "cert": "named-cert",
+                "private_key": "named-private-key",
+            }
+        )
+
+        self.bot.settings = {
+            "google_meet_settings": {
+                "use_login": True,
+                "login_mode": "always",
+                "login_group_name": "Named Group",
+            }
+        }
+        self.bot.save()
+
+        controller = BotController(self.bot.id)
+        controller.per_participant_non_streaming_audio_input_manager = MagicMock()
+        controller.closed_caption_manager = MagicMock()
+        controller.screen_and_audio_recorder = None
+        adapter = controller.get_google_meet_bot_adapter()
+
+        self.assertTrue(adapter.google_meet_bot_login_is_available)
+        self.assertTrue(adapter.google_meet_bot_login_should_be_used)
+
+        login_session = controller.create_google_meet_bot_login_session()
+
+        self.assertEqual(
+            login_session,
+            {
+                "session_id": "test-session-id",
+                "login_email": "named@example.com",
+                "login_domain": "named.example.com",
+            },
+        )
+
+    @patch("bots.models.Bot.create_debug_recording", return_value=False)
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.AzureFileUploader")
+    @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.check_if_meeting_is_found", return_value=None)
+    @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.wait_for_host_if_needed", return_value=None)
+    @patch("time.time")
+    @patch("bots.tasks.deliver_webhook_task.deliver_webhook")
+    def test_bot_sends_speech_start_stop_participant_event_webhooks(
+        self,
+        mock_deliver_webhook,
+        mock_time,
+        mock_wait_for_host_if_needed,
+        mock_check_if_meeting_is_found,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+        mock_create_debug_recording,
+    ):
+        mock_deliver_webhook.return_value = None
+
+        self.webhook_subscription = WebhookSubscription.objects.create(
+            project=self.project,
+            url="https://example.com/webhook",
+            triggers=[
+                WebhookTriggerTypes.BOT_STATE_CHANGE,
+                WebhookTriggerTypes.PARTICIPANT_EVENTS_JOIN_LEAVE,
+                WebhookTriggerTypes.PARTICIPANT_EVENTS_SPEECH_START_STOP,
+            ],
+            is_active=True,
+        )
+
+        current_time = 1000.0
+        mock_time.return_value = current_time
+
+        self.recording.transcription_provider = TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM
+        self.recording.save()
+
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        mock_driver = create_mock_google_meet_driver()
+        MockChromeDriver.return_value = mock_driver
+
+        mock_display = MagicMock()
+        MockDisplay.return_value = mock_display
+
+        controller = BotController(self.bot.id)
+
+        bot_thread = threading.Thread(target=controller.run)
+        bot_thread.daemon = True
+        bot_thread.start()
+
+        def simulate_join_flow():
+            nonlocal current_time
+
+            # Simulate participants joining
+            bot_participant_data = {"deviceId": "bot1", "fullName": "Test Bot", "active": True, "isCurrentUser": True}
+            controller.adapter.handle_participant_update(bot_participant_data)
+
+            participant_data = {"deviceId": "user1", "fullName": "Test User", "active": True, "isCurrentUser": False}
+            controller.adapter.handle_participant_update(participant_data)
+
+            controller.adapter.last_audio_message_processed_time = current_time
+
+            time.sleep(3)
+
+            # Simulate speech start and stop events for the user participant
+            controller.adapter.handle_participant_speech_start_stop_event(
+                {
+                    "participantId": "user1",
+                    "isSpeechStart": True,
+                    "timestamp": int(current_time * 1000),
+                }
+            )
+
+            time.sleep(0.5)
+
+            controller.adapter.handle_participant_speech_start_stop_event(
+                {
+                    "participantId": "user1",
+                    "isSpeechStart": False,
+                    "timestamp": int(current_time * 1000) + 5000,
+                }
+            )
+
+            # Also simulate a speech event for the bot (should NOT produce a webhook)
+            controller.adapter.handle_participant_speech_start_stop_event(
+                {
+                    "participantId": "bot1",
+                    "isSpeechStart": True,
+                    "timestamp": int(current_time * 1000) + 6000,
+                }
+            )
+
+            time.sleep(1)
+
+            # Simulate participant leaving
+            participant_data = {"deviceId": "user1", "fullName": "Test User", "active": False, "isCurrentUser": False}
+            controller.adapter.handle_participant_update(participant_data)
+
+            # Trigger auto-leave
+            controller.adapter.only_one_participant_in_meeting_at = time.time() - 10000000000
+            time.sleep(4)
+
+            connection.close()
+
+        threading.Timer(2, simulate_join_flow).start()
+
+        bot_thread.join(timeout=15)
+
+        self.bot.refresh_from_db()
+        self.assertEqual(self.bot.state, BotStates.ENDED)
+
+        # Verify ParticipantEvent records for speech start/stop were created for the user
+        user_participant_events = ParticipantEvent.objects.filter(participant__bot=self.bot, participant__uuid="user1")
+        speech_start_event = user_participant_events.filter(event_type=ParticipantEventTypes.SPEECH_START).first()
+        self.assertIsNotNone(speech_start_event, "Expected a SPEECH_START participant event for the user")
+        self.assertEqual(speech_start_event.participant.full_name, "Test User")
+        self.assertEqual(speech_start_event.timestamp_ms, int(current_time * 1000))
+
+        speech_stop_event = user_participant_events.filter(event_type=ParticipantEventTypes.SPEECH_STOP).first()
+        self.assertIsNotNone(speech_stop_event, "Expected a SPEECH_STOP participant event for the user")
+        self.assertEqual(speech_stop_event.participant.full_name, "Test User")
+        self.assertEqual(speech_stop_event.timestamp_ms, int(current_time * 1000) + 5000)
+
+        # Verify that a SPEECH_START event was also created for the bot participant
+        bot_speech_events = ParticipantEvent.objects.filter(participant__bot=self.bot, participant__uuid="bot1", event_type=ParticipantEventTypes.SPEECH_START)
+        self.assertEqual(bot_speech_events.count(), 1, "Expected a SPEECH_START event for the bot participant")
+
+        # Verify webhook delivery attempts for speech start/stop
+        speech_webhook_attempts = WebhookDeliveryAttempt.objects.filter(
+            bot=self.bot,
+            webhook_trigger_type=WebhookTriggerTypes.PARTICIPANT_EVENTS_SPEECH_START_STOP,
+        )
+        # Only user events should trigger webhooks (bot events are suppressed)
+        self.assertEqual(speech_webhook_attempts.count(), 2, "Expected exactly 2 speech webhook delivery attempts (speech_start and speech_stop for the user)")
+
+        speech_start_webhook = speech_webhook_attempts.filter(payload__event_type="speech_start").first()
+        self.assertIsNotNone(speech_start_webhook)
+        self.assertEqual(speech_start_webhook.payload["participant_name"], "Test User")
+        self.assertEqual(speech_start_webhook.payload["participant_uuid"], "user1")
+        self.assertEqual(speech_start_webhook.payload["timestamp_ms"], int(current_time * 1000))
+
+        speech_stop_webhook = speech_webhook_attempts.filter(payload__event_type="speech_stop").first()
+        self.assertIsNotNone(speech_stop_webhook)
+        self.assertEqual(speech_stop_webhook.payload["participant_name"], "Test User")
+        self.assertEqual(speech_stop_webhook.payload["participant_uuid"], "user1")
+        self.assertEqual(speech_stop_webhook.payload["timestamp_ms"], int(current_time * 1000) + 5000)
+
+        # Verify that no speech webhook was created for the bot participant
+        bot_speech_webhooks = speech_webhook_attempts.filter(payload__participant_uuid="bot1")
+        self.assertEqual(bot_speech_webhooks.count(), 0, "Expected no speech webhooks for the bot participant")
+
+        # Verify join/leave webhooks were also created (ensuring speech events don't interfere)
+        join_leave_webhook_attempts = WebhookDeliveryAttempt.objects.filter(
+            bot=self.bot,
+            webhook_trigger_type=WebhookTriggerTypes.PARTICIPANT_EVENTS_JOIN_LEAVE,
+        )
+        self.assertGreater(join_leave_webhook_attempts.count(), 0, "Expected join/leave webhook delivery attempts")
+
+        controller.cleanup()
+        bot_thread.join(timeout=5)
+
+        connection.close()

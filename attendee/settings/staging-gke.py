@@ -7,7 +7,7 @@ from .base import *
 from .base import LOG_FORMATTERS
 
 DEBUG = False
-ALLOWED_HOSTS = ["*"]
+ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "*").split(",")
 
 DATABASES = {
     "default": dj_database_url.config(
@@ -15,6 +15,8 @@ DATABASES = {
         conn_max_age=600,
         conn_health_checks=True,
         ssl_require=True,
+        # Set to "true" behind a transaction-pooling pooler (PgBouncer, etc.).
+        disable_server_side_cursors=os.getenv("DISABLE_SERVER_SIDE_CURSORS", "false") == "true",
     ),
 }
 
@@ -31,18 +33,19 @@ SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True
 
-# No email on staging
-# EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
-# EMAIL_HOST = "smtp.mailgun.org"
-# EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER")
-# EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD")
-# EMAIL_PORT = 587
-# EMAIL_USE_TLS = True
-# DEFAULT_FROM_EMAIL = "noreply@mail.attendee.dev"
+# No email on staging by default
+if os.getenv("DISABLE_EMAIL", "true") != "true":
+    EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+    EMAIL_HOST = os.getenv("EMAIL_HOST", "smtp.mailgun.org")
+    EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER")
+    EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD")
+    EMAIL_PORT = 587
+    EMAIL_USE_TLS = True
+    DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "noreply@mail.attendee.dev")
 
 ADMINS = []
 
-SERVER_EMAIL = "noreply@mail.attendee.dev"
+SERVER_EMAIL = os.getenv("SERVER_EMAIL", "noreply@mail.attendee.dev")
 
 CSRF_TRUSTED_ORIGINS = os.getenv("CSRF_TRUSTED_ORIGINS", "https://*.attendee.dev").split(",")
 

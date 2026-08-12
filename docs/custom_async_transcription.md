@@ -93,23 +93,28 @@ Your service must return a JSON response with this structure:
 
 #### Usage example
 
-When creating a bot, specify the `custom_async` provider in `transcription_settings`:
+When creating a bot, specify the `custom_async_v2` provider in `transcription_settings`:
 
 ```json
 {
   "meeting_url": "https://zoom.us/j/123456789",
   "bot_name": "My Bot",
   "transcription_settings": {
-    "custom_async": {
-      "language": "fr-FR",
-      "model": "whisper-large-v3",
-      "custom_param": "any_value"
+    "custom_async_v2": {
+      "headers": {
+        "X-Custom-Header": "value"
+      },
+      "form_data": {
+        "language": "fr-FR",
+        "model": "whisper-large-v3",
+        "custom_param": "any_value"
+      }
     }
   }
 }
 ```
 
-All properties inside `custom_async` will be sent as form data to your service along with the audio file. You can add any custom parameters your service needs.
+Entries under `headers` are sent as HTTP request headers (e.g. for auth tokens), and entries under `form_data` are sent as multipart form fields alongside the audio file. You can add any custom parameters your service needs.
 
 **Minimal example (no custom parameters):**
 
@@ -118,7 +123,7 @@ All properties inside `custom_async` will be sent as form data to your service a
   "meeting_url": "https://zoom.us/j/123456789",
   "bot_name": "My Bot",
   "transcription_settings": {
-    "custom_async": {}
+    "custom_async_v2": {}
   }
 }
 ```

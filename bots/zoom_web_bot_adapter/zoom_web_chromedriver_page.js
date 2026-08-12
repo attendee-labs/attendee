@@ -186,6 +186,8 @@ function startMeeting(signature) {
         */
         for (const activeSpeaker of data) {
             window.dominantSpeakerManager.addCaptionAudioTime(Date.now(), activeSpeaker.userId);
+            if (window.initialData.recordParticipantSpeechStartStopEvents)
+                window.participantSpeechStartStopManager?.addActiveSpeaker(activeSpeaker.userId);
         }
         // Use active speaker events to determine if we are silent or not
         window.ws.sendJson({
@@ -215,6 +217,20 @@ function startMeeting(signature) {
     ZoomMtg.inMeetingServiceListener('onMeetingStatus', function (data) {
         console.log('onMeetingStatus', data);
 
+        // Purely for logging purposes, doesn't trigger anything
+        window.ws?.sendJson({
+            type: 'ZoomWebMeetingStatusChange',
+            statusChangeData: data,
+        });
+
+        // The 4017 code indicates that we are not able to enter the meeting because the OBF token user is not present
+        if (data.errorCode == 4017)
+        {
+            userEncounteredOnBehalfTokenUserNotInMeetingError = true;
+            console.log('handleJoinFailureFromConsoleIntercept: user encountered onbehalf token user not in meeting error');
+            return;
+        }
+
         // 3 means disconnected
         if (data.meetingStatus === 3) {
             // Only send the message if we've got into the meeting
@@ -226,6 +242,7 @@ function startMeeting(signature) {
         }
     });
 
+    /* Disabled because we are using the redux interceptor instead
     ZoomMtg.inMeetingServiceListener('onReceiveTranscriptionMsg', function (item) {
         console.log('onReceiveTranscriptionMsg', item);
 
@@ -252,6 +269,7 @@ function startMeeting(signature) {
 
         transcriptMessageFinalizationManager.addMessage(item);
     });
+    */
 
     ZoomMtg.inMeetingServiceListener('onReceiveChatMsg', function (chatMessage) {
         console.log('onReceiveChatMsg', chatMessage);

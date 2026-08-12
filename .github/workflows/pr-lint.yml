@@ -1,0 +1,127 @@
+name: 'Lint PR'
+
+on:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - edited
+      - synchronize
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  main:
+    name: Validate PR title + version.json
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate PR title (Conventional Commits)
+        uses: amannn/action-semantic-pull-request@v6
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node (for version check script)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Fetch base branch (for version.json on main/base)
+        run: |
+          git fetch origin "${{ github.base_ref }}" --depth=1
+
+      - name: Validate version.json matches expected bump from PR title
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          node <<'NODE'
+          const fs = require("fs");
+          const { execSync } = require("child_process");
+
+          function die(msg) {
+            console.error("\n❌ " + msg + "\n");
+            process.exit(1);
+          }
+
+          function parseSemver(v) {
+            const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(v);
+            if (!m) die(`Version "${v}" is not plain SemVer (X.Y.Z).`);
+            return { major: +m[1], minor: +m[2], patch: +m[3] };
+          }
+
+          function bump(v, level) {
+            const { major, minor, patch } = parseSemver(v);
+            if (level === "major") return `${major + 1}.0.0`;
+            if (level === "minor") return `${major}.${minor + 1}.0`;
+            if (level === "patch") return `${major}.${minor}.${patch + 1}`;
+            if (level === "none")  return `${major}.${minor}.${patch}`;
+            die(`Unknown bump level: ${level}`);
+          }
+
+          const title = process.env.PR_TITLE || "";
+          const baseRef = process.env.BASE_REF || "main";
+
+          // Conventional Commits header in PR title:
+          //   type(scope)!: subject
+          //   type!: subject
+          //   type: subject
+          const m = /^([a-zA-Z]+)(\([^)]+\))?(!)?:/.exec(title);
+          if (!m) die(`PR title is not Conventional Commits: "${title}"`);
+
+          const type = m[1].toLowerCase();
+          const breaking = !!m[3];
+
+          // Map PR title -> expected bump
+          // Adjust if you want different semantics.
+          let level = "none";
+          if (breaking) level = "major";
+          else if (type === "feat") level = "minor";
+          else if (["fix", "perf"].includes(type)) level = "patch";
+
+          let baseJsonRaw;
+          try {
+            baseJsonRaw = execSync(`git show origin/${baseRef}:version.json`, { encoding: "utf8" });
+          } catch {
+            die(`Could not read version.json from base branch "${baseRef}".`);
+          }
+
+          let baseVersion, prVersion;
+          try {
+            baseVersion = JSON.parse(baseJsonRaw).version;
+          } catch {
+            die(`Base branch version.json invalid or missing "version".`);
+          }
+
+          try {
+            prVersion = JSON.parse(fs.readFileSync("version.json", "utf8")).version;
+          } catch {
+            die(`PR version.json invalid or missing "version".`);
+          }
+
+          if (typeof baseVersion !== "string") die(`Base "version" must be a string.`);
+          if (typeof prVersion !== "string") die(`PR "version" must be a string.`);
+
+          const expected = bump(baseVersion, level);
+
+          if (prVersion !== expected) {
+            die(
+              [
+                `version.json mismatch`,
+                `Base (${baseRef}) version: ${baseVersion}`,
+                `PR title: ${title}`,
+                `Computed bump: ${level}`,
+                `Expected: ${expected}`,
+                `Actual:   ${prVersion}`,
+              ].join("\n")
+            );
+          }
+
+          console.log(`✅ version.json OK: ${prVersion} (base ${baseVersion}, bump ${level})`);
+          NODE

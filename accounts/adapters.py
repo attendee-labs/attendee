@@ -1,9 +1,57 @@
+import logging
+from urllib.parse import urlsplit, urlunsplit
+
+import requests
 from allauth.account.adapter import DefaultAccountAdapter
+from django.conf import settings
 from django.contrib.auth import login
+from django.core.exceptions import ValidationError
 from django.urls import reverse
+
+logger = logging.getLogger(__name__)
+
+
+def validate_email_with_mailgun(email: str) -> None:
+    if settings.BYPASS_MAILGUN_VALIDATION_SUBSTRING and settings.BYPASS_MAILGUN_VALIDATION_SUBSTRING in email:
+        return
+
+    try:
+        response = requests.post(
+            "https://api.mailgun.net/v4/address/validate",
+            auth=("api", settings.MAILGUN_VALIDATION_API_KEY),
+            data={"address": email},
+            params={"provider_lookup": "true"},
+            timeout=(3, 15),  # connect timeout, read timeout,
+        )
+        response.raise_for_status()
+        validation = response.json()
+    except Exception as exc:
+        logger.warning(
+            f"Mailgun email validation failed for email {email}",
+            exc_info=exc,
+        )
+        return
+
+    logger.info(f"Mailgun email validation response for email {email}: {validation}")
+
+    if validation.get("is_disposable_address"):
+        raise ValidationError("Please use a permanent email address.")
+
+    result = validation.get("result")
+
+    if result in {"undeliverable", "do_not_send", "unknown"}:
+        raise ValidationError("This email address does not appear to be valid.")
 
 
 class StandardAccountAdapter(DefaultAccountAdapter):
+    def clean_email(self, email: str) -> str:
+        email = super().clean_email(email)
+
+        if settings.MAILGUN_VALIDATION_API_KEY:
+            validate_email_with_mailgun(email)
+
+        return email
+
     def get_email_verification_redirect_url(self, email_address):
         user = email_address.user
         if getattr(user, "invited_by", None):
@@ -26,6 +74,37 @@ class StandardAccountAdapter(DefaultAccountAdapter):
             login(request, user, backend="django.contrib.auth.backends.ModelBackend")
 
         return confirm_email_response
+
+    # Ensure we use settings.SITE_DOMAIN for the URLs in emails
+    def _use_site_domain(self, url):
+        try:
+            parsed = urlsplit(url)
+        except ValueError:
+            return url
+
+        # Anything without both a scheme and a host isn't an absolute URL we can
+        # swap the domain on, and rewriting it would corrupt the original value.
+        if not parsed.scheme or not parsed.netloc:
+            return url
+
+        return urlunsplit(
+            (
+                parsed.scheme,
+                settings.SITE_DOMAIN,
+                parsed.path,
+                parsed.query,
+                parsed.fragment,
+            )
+        )
+
+    def send_mail(self, template_prefix, email, context):
+        context = context.copy()
+
+        for key, value in context.items():
+            if key.endswith("_url") and isinstance(value, str):
+                context[key] = self._use_site_domain(value)
+
+        return super().send_mail(template_prefix, email, context)
 
 
 class NoNewUsersAccountAdapter(StandardAccountAdapter):

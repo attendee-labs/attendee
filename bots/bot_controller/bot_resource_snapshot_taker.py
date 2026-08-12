@@ -1,5 +1,7 @@
 import datetime
 import logging
+import threading
+import urllib.request
 from collections import defaultdict
 
 from django.utils import timezone
@@ -12,9 +14,9 @@ logger = logging.getLogger(__name__)
 from pathlib import Path
 
 
-def get_db_connection_count(db_port: int = 5432) -> int:
+def _get_established_connection_count(port: int) -> int:
     """
-    Count established TCP connections to the specified port (default: PostgreSQL 5432).
+    Count established TCP connections to the specified remote port.
 
     Reads from /proc/net/tcp and /proc/net/tcp6 to count connections without
     requiring the psutil dependency.
@@ -24,7 +26,7 @@ def get_db_connection_count(db_port: int = 5432) -> int:
     where rem_address is hex IP:PORT and st is connection state (01 = ESTABLISHED).
     """
     count = 0
-    db_port_hex = format(db_port, "04X")  # 5432 -> "1538"
+    port_hex = format(port, "04X")
 
     for tcp_file in [Path("/proc/net/tcp"), Path("/proc/net/tcp6")]:
         try:
@@ -42,12 +44,20 @@ def get_db_connection_count(db_port: int = 5432) -> int:
                     if ":" in rem_address:
                         rem_port = rem_address.split(":")[1].upper()
                         # State 01 = ESTABLISHED
-                        if rem_port == db_port_hex and state == "01":
+                        if rem_port == port_hex and state == "01":
                             count += 1
         except (FileNotFoundError, PermissionError):
             continue
 
     return count
+
+
+def get_db_connection_count(db_port: int = 5432) -> int:
+    return _get_established_connection_count(db_port)
+
+
+def get_redis_connection_count(redis_port: int = 6379) -> int:
+    return _get_established_connection_count(redis_port)
 
 
 def get_process_memory_list():
@@ -210,6 +220,72 @@ def pod_cpu_millicores(window_seconds: int, u0: int, u1: int) -> int:
     return int(delta_mcore_seconds / window_seconds)  # average over the window
 
 
+def get_network_interface_stats() -> dict:
+    stats = {
+        "rx_bytes": 0,
+        "rx_packets": 0,
+        "rx_dropped": 0,
+        "rx_errors": 0,
+        "tx_bytes": 0,
+        "tx_packets": 0,
+        "tx_dropped": 0,
+        "tx_errors": 0,
+    }
+
+    with open("/proc/net/dev", "r", encoding="ascii") as f:
+        for line in f:
+            if ":" not in line:
+                continue
+
+            iface, values = line.split(":", 1)
+            iface = iface.strip()
+            if iface == "lo":
+                continue
+
+            parts = values.split()
+            if len(parts) < 16:
+                continue
+
+            try:
+                stats["rx_bytes"] += int(parts[0])
+                stats["rx_packets"] += int(parts[1])
+                stats["rx_errors"] += int(parts[2])
+                stats["rx_dropped"] += int(parts[3])
+                stats["tx_bytes"] += int(parts[8])
+                stats["tx_packets"] += int(parts[9])
+                stats["tx_errors"] += int(parts[10])
+                stats["tx_dropped"] += int(parts[11])
+            except ValueError:
+                # Ignore malformed lines
+                continue
+
+    return stats
+
+
+def compute_network_deltas(prev: dict, curr: dict, elapsed_seconds: float) -> dict:
+    if elapsed_seconds <= 0:
+        raise ValueError("elapsed_seconds must be > 0")
+
+    def delta(key: str) -> int:
+        return max(0, curr[key] - prev[key])
+
+    return {
+        "rx_bytes_per_sec": delta("rx_bytes") / elapsed_seconds,
+        "rx_packets_per_sec": delta("rx_packets") / elapsed_seconds,
+        "tx_bytes_per_sec": delta("tx_bytes") / elapsed_seconds,
+        "tx_packets_per_sec": delta("tx_packets") / elapsed_seconds,
+        "rx_dropped_delta": delta("rx_dropped"),
+        "rx_errors_delta": delta("rx_errors"),
+        "tx_dropped_delta": delta("tx_dropped"),
+        "tx_errors_delta": delta("tx_errors"),
+    }
+
+
+def get_public_ip() -> str:
+    with urllib.request.urlopen("https://checkip.amazonaws.com", timeout=3) as resp:
+        return resp.read().decode().strip()
+
+
 class BotResourceSnapshotTaker:
     """
     A class to handle taking snapshots of bot resource usage (CPU, RAM).
@@ -226,6 +302,20 @@ class BotResourceSnapshotTaker:
         self._last_snapshot_time = timezone.now()
         self._first_cpu_usage_millicores = None
         self._first_cpu_usage_sample_time = None
+        self._first_network_stats = None
+        self._first_network_sample_time = None
+        self._is_first_snapshot = True
+        self._public_ip = None
+
+        if self.bot.save_resource_snapshots():
+            # It will make an API call to get the public IP, and we don't want to block the main thread on that.
+            threading.Thread(target=self._fetch_public_ip, daemon=True).start()
+
+    def _fetch_public_ip(self):
+        try:
+            self._public_ip = get_public_ip()
+        except Exception as e:
+            logger.warning(f"Could not get public IP for bot {self.bot.object_id}: {e}. Continuing...")
 
     def save_snapshot_if_needed(self):
         if not self.bot.save_resource_snapshots():
@@ -241,6 +331,12 @@ class BotResourceSnapshotTaker:
             except Exception as e:
                 logger.error(f"Error getting first cpu usage for bot {self.bot.object_id}: {e}")
                 return
+
+            try:
+                self._first_network_stats = get_network_interface_stats()
+                self._first_network_sample_time = now
+            except Exception as e:
+                logger.error(f"Error getting first network stats for bot {self.bot.object_id}: {e}")
 
         # Don't take a snapshot if it's been less than 1 minutes since the last snapshot.
         if (now - self._last_snapshot_time) < datetime.timedelta(minutes=1):
@@ -269,6 +365,18 @@ class BotResourceSnapshotTaker:
                 logger.error(f"Error getting second cpu usage for bot {self.bot.object_id}: {e}")
                 return
 
+        # Network deltas
+        network_delta = None
+        if self._first_network_stats is not None:
+            try:
+                current_network_stats = get_network_interface_stats()
+                elapsed = (now - self._first_network_sample_time).total_seconds()
+                network_delta = compute_network_deltas(self._first_network_stats, current_network_stats, elapsed)
+                self._first_network_stats = None
+                self._first_network_sample_time = None
+            except Exception as e:
+                logger.error(f"Error getting network delta for bot {self.bot.object_id}: {e}")
+
         if ram_usage_megabytes is None or cpu_usage_millicores_delta_per_second is None:
             logger.error(f"Error getting resource usage for bot {self.bot.object_id}: {ram_usage_megabytes} or {cpu_usage_millicores_delta_per_second} was None")
             return
@@ -285,12 +393,24 @@ class BotResourceSnapshotTaker:
         except Exception as e:
             logger.error(f"Error getting db connection count for bot {self.bot.object_id}: {e}. Continuing...")
 
+        redis_connection_count = None
+        try:
+            redis_connection_count = get_redis_connection_count()
+        except Exception as e:
+            logger.error(f"Error getting redis connection count for bot {self.bot.object_id}: {e}. Continuing...")
+
         snapshot_data = {
             "ram_usage_megabytes": ram_usage_megabytes,
             "cpu_usage_millicores": cpu_usage_millicores_delta_per_second,
             "processes": processes,
             "db_connection_count": db_connection_count,
+            "redis_connection_count": redis_connection_count,
+            "network": network_delta,
         }
+
+        if self._is_first_snapshot and self._public_ip is not None:
+            snapshot_data["public_ip"] = self._public_ip
+        self._is_first_snapshot = False
 
         BotResourceSnapshot.objects.create(bot=self.bot, data=snapshot_data)
 

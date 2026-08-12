@@ -5,12 +5,13 @@ import time
 from unittest.mock import MagicMock, mock_open, patch
 
 from django.db import connection
-from django.test import TransactionTestCase
+from django.test import TransactionTestCase, tag
+from selenium.common.exceptions import TimeoutException
 
 from bots.bot_controller.bot_controller import BotController
 from bots.bots_api_views import send_sync_command
-from bots.models import Bot, BotChatMessageRequest, BotChatMessageRequestStates, BotChatMessageToOptions, BotEventManager, BotEventSubTypes, BotEventTypes, BotMediaRequest, BotMediaRequestMediaTypes, BotMediaRequestStates, BotStates, Credentials, MediaBlob, Organization, Project, Recording, RecordingStates, RecordingTypes, TranscriptionProviders, TranscriptionTypes
-from bots.teams_bot_adapter.teams_ui_methods import TeamsUIMethods, UiTeamsBlockingUsException
+from bots.models import Bot, BotChatMessageRequest, BotChatMessageRequestStates, BotChatMessageToOptions, BotEventManager, BotEventSubTypes, BotEventTypes, BotLogin, BotLoginGroup, BotLoginPlatform, BotMediaRequest, BotMediaRequestMediaTypes, BotMediaRequestStates, BotStates, MediaBlob, Organization, Project, Recording, RecordingStates, RecordingTypes, TranscriptionProviders, TranscriptionTypes
+from bots.teams_bot_adapter.teams_ui_methods import TeamsUIMethods, UiTeamsBlockingUsException, UiWaitingRoomTransitionFailedException
 from bots.web_bot_adapter.ui_methods import UiLoginRequiredException
 
 
@@ -30,6 +31,7 @@ def create_mock_teams_driver():
     return mock_driver
 
 
+@tag("teams_tests")
 class TestTeamsBot(TransactionTestCase):
     def setUp(self):
         # Recreate organization and project for each test
@@ -535,13 +537,17 @@ class TestTeamsBot(TransactionTestCase):
             exception_to_raise: The exception instance to raise on first join attempt
         """
         # Set up Teams bot login credentials
-        teams_credentials = Credentials.objects.create(
+        teams_bot_login_group, _ = BotLoginGroup.objects.get_or_create(
             project=self.project,
-            credential_type=Credentials.CredentialTypes.TEAMS_BOT_LOGIN,
+            platform=BotLoginPlatform.TEAMS,
+            defaults={"name": "Teams Bot Login Group"},
         )
-        teams_credentials.set_credentials(
+        teams_bot_login, _ = BotLogin.objects.get_or_create(
+            group=teams_bot_login_group,
+            email="testbot@example.com",
+        )
+        teams_bot_login.set_credentials(
             {
-                "username": "testbot@example.com",
                 "password": "testpassword123",
             }
         )
@@ -574,7 +580,7 @@ class TestTeamsBot(TransactionTestCase):
         def mock_fill_out_name_input(*args, **kwargs):
             """Mock that raises an exception only on first join attempt.
 
-            When teams_bot_login_credentials are available and teams_bot_login_should_be_used is False,
+            When teams_bot_login_is_available is True and teams_bot_login_should_be_used is False,
             attempt_to_join_meeting() wraps this and converts ANY exception to UiLoginRequiredException.
             """
             fill_out_name_input_call_count[0] += 1
@@ -649,9 +655,6 @@ class TestTeamsBot(TransactionTestCase):
             # Verify that teams_bot_login_should_be_used was set to True after the first failed attempt
             self.assertTrue(controller.adapter.teams_bot_login_should_be_used, "Expected teams_bot_login_should_be_used to be True after retry")
 
-            # Verify that teams_bot_login_credentials was available
-            self.assertIsNotNone(controller.adapter.teams_bot_login_credentials, "Expected teams_bot_login_credentials to be set")
-
             # Verify that the recording was finished
             self.recording.refresh_from_db()
             self.assertEqual(self.recording.state, RecordingStates.COMPLETE)
@@ -695,6 +698,366 @@ class TestTeamsBot(TransactionTestCase):
             MockDisplay=MockDisplay,
             MockSaveDebugRecording=MockSaveDebugRecording,
         )
+
+    @patch("bots.bot_controller.bot_controller.BotController.save_debug_recording", return_value=None)
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
+    def test_captcha_triggers_login_retry_in_only_if_required_mode(
+        self,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+        MockSaveDebugRecording,
+    ):
+        """Test that a bot with login_mode='only_if_required' retries with login
+        when a captcha is detected during the show-more-button / waiting room phase.
+
+        This exercises the real check_if_blocked_by_captcha() logic that raises
+        UiLoginRequiredException instead of UiBlockedByCaptchaException when
+        login credentials are available but not yet being used. The real
+        click_show_more_button loop, look_for_sign_in_required_element, and
+        check_if_blocked_by_captcha methods all run unmocked — only
+        find_element_by_selector and WebDriverWait are controlled.
+
+        Flow:
+        1. First join attempt: WebDriverWait times out in click_show_more_button
+        2. look_for_sign_in_required_element runs — find_element_by_selector returns None
+        3. check_if_blocked_by_captcha runs — find_element_by_selector returns a captcha element
+        4. Credentials available + login not active → raises UiLoginRequiredException
+        5. Exception caught in repeatedly_attempt_to_join_meeting
+        6. should_retry_joining_meeting_that_requires_login_by_logging_in() returns True
+        7. teams_bot_login_should_be_used flag is set to True
+        8. Second join attempt: login_to_microsoft_account is called,
+           WebDriverWait finds the show-more button, join succeeds
+        """
+        # Set up Teams bot login credentials
+        teams_bot_login_group, _ = BotLoginGroup.objects.get_or_create(
+            project=self.project,
+            platform=BotLoginPlatform.TEAMS,
+            defaults={"name": "Teams Bot Login Group"},
+        )
+        teams_bot_login, _ = BotLogin.objects.get_or_create(
+            group=teams_bot_login_group,
+            email="testbot@example.com",
+        )
+        teams_bot_login.set_credentials(
+            {
+                "password": "testpassword123",
+            }
+        )
+
+        # Configure bot to use login with only_if_required mode
+        self.bot.settings = {
+            "teams_settings": {
+                "use_login": True,
+                "login_mode": "only_if_required",
+            },
+            "recording_settings": {"format": "none"},
+        }
+        self.bot.save()
+
+        # Configure the mock uploader
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        # Mock the Chrome driver
+        mock_driver = create_mock_teams_driver()
+        MockChromeDriver.return_value = mock_driver
+
+        # Mock virtual display
+        mock_display = MagicMock()
+        MockDisplay.return_value = mock_display
+
+        # Control WebDriverWait.until: first call (first join attempt) times out so the
+        # captcha check path runs; second call (retry after login) finds the button.
+        webdriverwait_until_call_count = [0]
+
+        def create_mock_webdriverwait(*args, **kwargs):
+            mock_wait = MagicMock()
+
+            def mock_until(*args, **kwargs):
+                webdriverwait_until_call_count[0] += 1
+                if webdriverwait_until_call_count[0] <= 1:
+                    raise TimeoutException("Mocked timeout")
+                return MagicMock()
+
+            mock_wait.until = mock_until
+            return mock_wait
+
+        def mock_find_element_by_selector(by, selector):
+            """Return a truthy element only for the captcha XPath so that
+            check_if_blocked_by_captcha's real logic fires while
+            look_for_sign_in_required_element sees nothing.
+            """
+            if "Verify you're a real person" in selector:
+                return MagicMock()
+            return None
+
+        with (
+            patch.object(TeamsUIMethods, "fill_out_name_input", return_value=None),
+            patch.object(TeamsUIMethods, "turn_off_media_inputs", return_value=None),
+            patch.object(TeamsUIMethods, "locate_element", return_value=MagicMock()),
+            patch.object(TeamsUIMethods, "click_element", return_value=None),
+            patch("bots.teams_bot_adapter.teams_ui_methods.WebDriverWait", side_effect=create_mock_webdriverwait),
+            patch.object(TeamsUIMethods, "find_element_by_selector", side_effect=mock_find_element_by_selector),
+            patch.object(TeamsUIMethods, "click_captions_button", return_value=None),
+            patch.object(TeamsUIMethods, "set_layout", return_value=None),
+            patch.object(TeamsUIMethods, "disable_incoming_video_in_ui", return_value=None),
+            patch("bots.web_bot_adapter.web_bot_adapter.WebBotAdapter.ready_to_show_bot_image", return_value=None),
+            patch.object(TeamsUIMethods, "login_to_microsoft_account", return_value=None) as mock_login,
+        ):
+            # Create bot controller
+            controller = BotController(self.bot.id)
+
+            # Run the bot in a separate thread since it has an event loop
+            bot_thread = threading.Thread(target=controller.run)
+            bot_thread.daemon = True
+            bot_thread.start()
+
+            def simulate_join_flow():
+                # Sleep to allow initialization and join attempts
+                time.sleep(1)
+
+                # Add participants to keep the bot in the meeting
+                controller.adapter.participants_info["user1"] = {"deviceId": "user1", "fullName": "Test User", "active": True, "isCurrentUser": False}
+
+                # Let the bot run for a bit to "record"
+                time.sleep(1)
+
+                # Trigger auto-leave
+                controller.adapter.only_one_participant_in_meeting_at = time.time() - 10000000000
+                time.sleep(1)
+
+                # Clean up connections in thread
+                connection.close()
+
+            # Run join flow simulation after a short delay
+            threading.Timer(2, simulate_join_flow).start()
+
+            # Give the bot some time to process
+            bot_thread.join(timeout=20)
+
+            time.sleep(1.25)
+
+            # Refresh the bot from the database
+            self.bot.refresh_from_db()
+
+            # Assert that the bot is in the ENDED state
+            self.assertEqual(self.bot.state, BotStates.ENDED)
+
+            # Verify that login was attempted (should be called once on the retry)
+            self.assertEqual(mock_login.call_count, 1, "Expected login_to_microsoft_account to be called once during retry")
+
+            # Verify that teams_bot_login_should_be_used was set to True after the first failed attempt
+            self.assertTrue(controller.adapter.teams_bot_login_should_be_used, "Expected teams_bot_login_should_be_used to be True after retry")
+
+            # Verify that the recording was finished
+            self.recording.refresh_from_db()
+            self.assertEqual(self.recording.state, RecordingStates.COMPLETE)
+
+            # Cleanup
+            controller.cleanup()
+            bot_thread.join(timeout=5)
+
+            # Close the database connection since we're in a thread
+            connection.close()
+
+    def test_get_teams_signed_in_bot_uses_named_login_group(self):
+        first_group = BotLoginGroup.objects.create(project=self.project, platform=BotLoginPlatform.TEAMS, name="Primary Group")
+        first_group_login = BotLogin.objects.create(group=first_group, email="primary@example.com")
+        first_group_login.set_credentials({"password": "primary-password"})
+
+        named_group = BotLoginGroup.objects.create(project=self.project, platform=BotLoginPlatform.TEAMS, name="Named Group")
+        named_group_login = BotLogin.objects.create(group=named_group, email="named@example.com")
+        named_group_login.set_credentials({"password": "named-group-password"})
+
+        self.bot.settings = {
+            "teams_settings": {
+                "use_login": True,
+                "login_mode": "always",
+                "login_group_name": "Named Group",
+            },
+            "recording_settings": {"format": "none"},
+        }
+        self.bot.save()
+
+        controller = BotController(self.bot.id)
+        controller.per_participant_non_streaming_audio_input_manager = MagicMock()
+        controller.closed_caption_manager = MagicMock()
+        controller.screen_and_audio_recorder = None
+        adapter = controller.get_teams_bot_adapter()
+
+        self.assertTrue(adapter.teams_bot_login_is_available)
+        self.assertTrue(adapter.teams_bot_login_should_be_used)
+        self.assertEqual(
+            adapter.fetch_teams_bot_login_credentials_callback(),
+            {"username": "named@example.com", "password": "named-group-password"},
+        )
+
+    @patch("bots.bot_controller.bot_controller.BotController.save_debug_recording", return_value=None)
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
+    def test_disable_light_experience_redirect_triggers_join_retry(
+        self,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+        MockSaveDebugRecording,
+    ):
+        """Test that a 'lightExperience=false' redirect during the first join attempt
+        causes the bot to quit the driver, retry, and successfully join on the second attempt.
+
+        This exercises the real retry logic in repeatedly_attempt_to_join_meeting(),
+        attempt_to_join_meeting(), and the real monitor_for_disable_light_experience_redirect()
+        background thread by mocking at a low level (the individual UI navigation steps).
+
+        Flow:
+        1. First join attempt: driver.current_url contains 'lightExperience=false'
+        2. The real monitor_for_disable_light_experience_redirect thread detects it,
+           sets had_disable_light_experience_redirect=True, and quits the driver
+        3. fill_out_name_input observes the quit (redirect flag) and raises a retryable exception
+           (simulating the join failing because the driver was quit)
+        4. Exception caught in repeatedly_attempt_to_join_meeting -> retry
+        5. wait_for_page_url_to_stabilize runs on the retry because the redirect flag is set
+        6. Second join attempt runs the real fill_out_name_input (against a stubbed name
+           input element) and succeeds, and the bot records until auto-leave
+        """
+        # Use a "none" recording format to keep the test lightweight. The bot name contains
+        # "Notetaker" so the real fill_out_name_input has a keyword to cyrillicize.
+        self.bot.name = "Test Notetaker Bot"
+        self.bot.settings = {"recording_settings": {"format": "none"}}
+        self.bot.save()
+
+        # Configure the mock uploader
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        # Mock the Chrome driver. The URL contains lightExperience=false so the real
+        # monitor thread detects the redirect on the first join attempt.
+        mock_driver = create_mock_teams_driver()
+        mock_driver.current_url = "https://teams.microsoft.com/meet/123123213?p=123123213&lightExperience=false"
+        MockChromeDriver.return_value = mock_driver
+
+        # Mock virtual display
+        mock_display = MagicMock()
+        MockDisplay.return_value = mock_display
+
+        # Track calls to fill_out_name_input to control which join attempt we're on
+        fill_out_name_input_call_count = [0]
+
+        # The real fill_out_name_input runs on the successful retry so we can inspect the
+        # name it types into this stubbed name input element.
+        real_fill_out_name_input = TeamsUIMethods.fill_out_name_input
+        mock_name_input = MagicMock()
+
+        def mock_fill_out_name_input(*args, **kwargs):
+            """Fail the first join attempt once the redirect is detected, succeed thereafter.
+
+            On the first attempt, we wait for the real monitor thread to detect the
+            lightExperience=false redirect (which sets had_disable_light_experience_redirect
+            and quits the driver), then raise a retryable exception to simulate the join
+            failing because the driver was quit out from under us.
+            """
+            fill_out_name_input_call_count[0] += 1
+
+            if fill_out_name_input_call_count[0] <= 1:
+                # Wait for the monitor thread to detect the redirect and quit the driver
+                deadline = time.time() + 5
+                while time.time() < deadline and not controller.adapter.had_disable_light_experience_redirect:
+                    time.sleep(0.05)
+                raise UiWaitingRoomTransitionFailedException("Driver was quit due to light experience redirect", "fill_out_name_input")
+
+            # Second attempt: the driver has been reinitialized, so run the real
+            # implementation with the name input lookup stubbed out
+            with patch("bots.teams_bot_adapter.teams_ui_methods.WebDriverWait") as mock_name_input_wait:
+                mock_name_input_wait.return_value.until.return_value = mock_name_input
+                return real_fill_out_name_input(controller.adapter)
+
+        # Spy on wait_for_page_url_to_stabilize so we can verify it runs on the retry
+        # (and to avoid its real multi-second stabilization polling loop).
+        with (
+            patch.object(TeamsUIMethods, "fill_out_name_input", side_effect=mock_fill_out_name_input),
+            patch.object(TeamsUIMethods, "wait_for_page_url_to_stabilize", return_value=None) as mock_wait_for_page_url_to_stabilize,
+            patch.object(TeamsUIMethods, "turn_off_media_inputs", return_value=None),
+            patch.object(TeamsUIMethods, "locate_element", return_value=MagicMock()),
+            patch.object(TeamsUIMethods, "click_element", return_value=None),
+            patch.object(TeamsUIMethods, "click_show_more_button", return_value=None),
+            patch.object(TeamsUIMethods, "click_captions_button", return_value=None),
+            patch.object(TeamsUIMethods, "set_layout", return_value=None),
+            patch.object(TeamsUIMethods, "disable_incoming_video_in_ui", return_value=None),
+            patch("bots.web_bot_adapter.web_bot_adapter.WebBotAdapter.ready_to_show_bot_image", return_value=None),
+        ):
+            # Create bot controller
+            controller = BotController(self.bot.id)
+
+            # Run the bot in a separate thread since it has an event loop
+            bot_thread = threading.Thread(target=controller.run)
+            bot_thread.daemon = True
+            bot_thread.start()
+
+            def simulate_join_flow():
+                # Sleep to allow initialization and join attempts
+                time.sleep(1)
+
+                # Add participants to keep the bot in the meeting
+                controller.adapter.participants_info["user1"] = {"deviceId": "user1", "fullName": "Test User", "active": True, "isCurrentUser": False}
+
+                # Let the bot run for a bit to "record"
+                time.sleep(1)
+
+                # Trigger auto-leave
+                controller.adapter.only_one_participant_in_meeting_at = time.time() - 10000000000
+                time.sleep(1)
+
+                # Clean up connections in thread
+                connection.close()
+
+            # Run join flow simulation after a short delay
+            threading.Timer(2, simulate_join_flow).start()
+
+            # Give the bot some time to process
+            bot_thread.join(timeout=20)
+
+            time.sleep(1.25)
+
+            # Refresh the bot from the database
+            self.bot.refresh_from_db()
+
+            # Assert that the bot is in the ENDED state
+            self.assertEqual(self.bot.state, BotStates.ENDED)
+
+            # Verify that the redirect was detected and recorded by the monitor thread
+            self.assertTrue(controller.adapter.had_disable_light_experience_redirect, "Expected had_disable_light_experience_redirect to be True after the redirect was detected")
+
+            # Verify the monitor quit the driver to trigger the retry
+            self.assertTrue(mock_driver.quit.called, "Expected the driver to be quit after the light experience redirect was detected")
+
+            # Verify fill_out_name_input was called twice - once for the failed first
+            # attempt and once for the successful retry
+            self.assertEqual(fill_out_name_input_call_count[0], 2, "Expected fill_out_name_input to be called twice - once for the initial failure and once for the retry")
+
+            # Verify wait_for_page_url_to_stabilize ran on the retry (once per join attempt)
+            self.assertEqual(mock_wait_for_page_url_to_stabilize.call_count, 2, "Expected wait_for_page_url_to_stabilize to be called once per join attempt")
+
+            # Verify the name typed into the prejoin name input had the "notetaker" keyword
+            # cyrillicized, with the rest of the display name left alone
+            mock_name_input.send_keys.assert_called_once_with("Test N\u043et\u0435t\u0430k\u0435r Bot")
+            typed_name = mock_name_input.send_keys.call_args[0][0]
+            self.assertNotEqual(typed_name, self.bot.name, "Expected the typed display name to differ from the raw bot name")
+            self.assertNotIn("notetaker", typed_name.lower(), "Expected the typed display name to no longer match a 'notetaker' keyword search")
+
+            # Verify that the recording was finished
+            self.recording.refresh_from_db()
+            self.assertEqual(self.recording.state, RecordingStates.COMPLETE)
+
+            # Cleanup
+            controller.cleanup()
+            bot_thread.join(timeout=5)
+
+            # Close the database connection since we're in a thread
+            connection.close()
 
     @patch.dict("os.environ", {"ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME": "true"})
     @patch("bots.web_bot_adapter.web_bot_adapter.settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME", True)
@@ -798,6 +1161,274 @@ class TestTeamsBot(TransactionTestCase):
             # Verify the exception message contains the blocked domain
             self.assertIn("Domain allow list violation detected", str(context.exception))
             self.assertIn("badmicrosoft.com", str(context.exception))
+
+            # Clean up: simulate meeting ending to trigger cleanup
+            controller.adapter.left_meeting = True
+            controller.adapter.send_message_callback({"message": controller.adapter.Messages.MEETING_ENDED})
+            time.sleep(1)
+
+            # Now wait for the thread to finish naturally
+            bot_thread.join(timeout=5)
+
+            # If thread is still running after timeout, that's a problem to report
+            if bot_thread.is_alive():
+                print("WARNING: Bot thread did not terminate properly after cleanup")
+
+            # Close the database connection since we're in a thread
+            connection.close()
+
+    @patch("bots.bot_controller.bot_controller.settings.BOT_RECORDING_VIDEO_DEGRADE_THRESHOLD_BYTES", 100)
+    @patch("bots.bot_controller.screen_and_audio_recorder.subprocess.Popen")
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
+    def test_recording_video_degraded_when_file_size_exceeds_threshold(
+        self,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+        MockRecorderPopen,
+    ):
+        """Test that the main loop degrades the video recording once the recording file
+        size exceeds BOT_RECORDING_VIDEO_DEGRADE_THRESHOLD_BYTES.
+
+        This exercises the real degrade_recording_if_file_size_exceeded() logic that is
+        invoked from on_main_loop_timeout(). subprocess.Popen inside the recorder is mocked
+        so no real ffmpeg/xterm processes are spawned, and the recording file is written
+        directly so we control its size.
+
+        Flow:
+        1. Bot joins meeting and a ScreenAndAudioRecorder is created.
+        2. A recording file larger than the (patched, small) threshold is written to disk.
+        3. The file-size check throttle is reset so the check runs on the next main loop tick.
+        4. The main loop detects the oversized file and degrades the recording, covering the
+           screen with a black xterm and setting video_degraded=True (permanently).
+        """
+        # Configure the mock uploader
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        # Mock the Chrome driver
+        mock_driver = create_mock_teams_driver()
+        MockChromeDriver.return_value = mock_driver
+
+        # Mock virtual display
+        mock_display = MagicMock()
+        MockDisplay.return_value = mock_display
+
+        # subprocess.Popen inside the recorder is mocked so ffmpeg (start_recording) and the
+        # degradation xterm are never actually spawned.
+        MockRecorderPopen.return_value = MagicMock()
+
+        # Create bot controller
+        controller = BotController(self.bot.id)
+
+        # Mock the attempt_to_join_meeting to succeed immediately
+        with patch("bots.teams_bot_adapter.teams_ui_methods.TeamsUIMethods.attempt_to_join_meeting") as mock_attempt_to_join:
+            mock_attempt_to_join.return_value = None  # Successful join
+
+            # Run the bot in a separate thread since it has an event loop
+            bot_thread = threading.Thread(target=controller.run)
+            bot_thread.daemon = True
+            bot_thread.start()
+
+            # Wait for the bot to join and the screen/audio recorder to be created
+            time.sleep(3)
+
+            recorder = controller.screen_and_audio_recorder
+            self.assertIsNotNone(recorder, "A screen and audio recorder should be created for an audio+video recording")
+
+            # The recording should not be degraded yet
+            self.assertFalse(recorder.video_degraded, "Recording should not be degraded before the file exceeds the threshold")
+
+            # Write a recording file larger than the patched threshold (100 bytes)
+            with open(recorder.file_location, "wb") as recording_file:
+                recording_file.write(b"\x00" * 1000)
+
+            # Reset the check throttle so the size check runs on the next main loop tick
+            # (degrade_recording_if_file_size_exceeded only checks once every 60 seconds)
+            recorder.last_recording_file_size_check_time = time.time() - 61
+
+            # Give the main loop (runs every 100ms) time to detect the oversized file
+            time.sleep(1)
+
+            # Verify the recording was degraded
+            self.assertTrue(recorder.video_degraded, "Recording should be degraded after the file exceeds the threshold")
+            self.assertIsNotNone(recorder.video_degradation_xterm_proc, "A black xterm process should be spawned to degrade the video")
+
+            # Clean up: simulate meeting ending to trigger cleanup
+            controller.adapter.left_meeting = True
+            controller.adapter.send_message_callback({"message": controller.adapter.Messages.MEETING_ENDED})
+            time.sleep(1)
+
+            # Now wait for the thread to finish naturally
+            bot_thread.join(timeout=5)
+
+            # If thread is still running after timeout, that's a problem to report
+            if bot_thread.is_alive():
+                print("WARNING: Bot thread did not terminate properly after cleanup")
+
+            # Close the database connection since we're in a thread
+            connection.close()
+
+    @patch.dict("os.environ", {"USE_REMOTE_STORAGE_FOR_AUDIO_CHUNKS": "true", "FALLBACK_TO_DB_STORAGE_FOR_AUDIO_CHUNKS_IF_REMOTE_STORAGE_FAILS": "true"})
+    @patch("bots.bot_controller.bot_controller.settings.USE_REMOTE_STORAGE_FOR_AUDIO_CHUNKS", True)
+    @patch("bots.bot_controller.bot_controller.settings.FALLBACK_TO_DB_STORAGE_FOR_AUDIO_CHUNKS_IF_REMOTE_STORAGE_FAILS", True)
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
+    def test_audio_chunk_remote_storage_with_fallback_to_db(
+        self,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+    ):
+        """
+        Test that audio chunks can be uploaded to remote storage, and if an upload fails,
+        the system falls back to DB storage when FALLBACK_TO_DB_STORAGE_FOR_AUDIO_CHUNKS_IF_REMOTE_STORAGE_FAILS is enabled.
+
+        Flow:
+        1. Bot joins meeting with remote audio chunk storage enabled
+        2. First audio chunk upload fails (simulated error)
+        3. System falls back to storing audio in database
+        4. Utterance is still created and processed successfully
+        5. Second audio chunk upload succeeds
+        6. Verify both chunks result in processed utterances
+        """
+        from bots.models import AudioChunk, Participant, Utterance
+
+        # Configure the mock uploader
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        # Mock the Chrome driver
+        mock_driver = create_mock_teams_driver()
+        MockChromeDriver.return_value = mock_driver
+
+        # Mock virtual display
+        mock_display = MagicMock()
+        MockDisplay.return_value = mock_display
+
+        # Create bot controller
+        controller = BotController(self.bot.id)
+
+        # Track upload attempts
+        upload_attempt_count = [0]
+
+        def mock_upload_one(filename: str, data: bytes) -> str:
+            """Mock upload that fails on first attempt, succeeds on second."""
+            upload_attempt_count[0] += 1
+            if upload_attempt_count[0] == 1:
+                # First upload fails
+                raise Exception("Simulated S3 upload failure")
+            # Subsequent uploads succeed
+            return filename
+
+        # Mock the attempt_to_join_meeting to succeed immediately
+        with patch("bots.teams_bot_adapter.teams_ui_methods.TeamsUIMethods.attempt_to_join_meeting") as mock_attempt_to_join:
+            mock_attempt_to_join.return_value = None  # Successful join
+
+            # Run the bot in a separate thread since it has an event loop
+            bot_thread = threading.Thread(target=controller.run)
+            bot_thread.daemon = True
+            bot_thread.start()
+
+            # Wait for the bot to join
+            time.sleep(2)
+
+            # Mock the audio chunk uploader's _upload_one method
+            with patch.object(controller.audio_chunk_uploader, "_upload_one", side_effect=mock_upload_one):
+                # Simulate two audio chunks being received
+                test_audio_data_1 = b"\x00\x01\x02\x03" * 1000  # 4KB of test audio data
+                test_audio_data_2 = b"\x04\x05\x06\x07" * 1000  # Different test audio data
+
+                # Send first audio chunk (this will fail to upload)
+                # The process_individual_audio_chunk will create the participant automatically
+                controller.process_individual_audio_chunk(
+                    {
+                        "audio_data": test_audio_data_1,
+                        "timestamp_ms": 1000,
+                        "duration_ms": 500,
+                        "sample_rate": 16000,
+                        "participant_uuid": "test_device_123",
+                        "participant_user_uuid": None,
+                        "participant_full_name": "Test Participant",
+                        "participant_is_the_bot": False,
+                        "participant_is_host": False,
+                    }
+                )
+
+                # Give time for the upload to be queued and fail
+                time.sleep(0.5)
+
+                # Process uploads to trigger the failure callback
+                controller.audio_chunk_uploader.process_uploads()
+
+                # Wait for fallback processing
+                time.sleep(0.5)
+
+                # Get the participant that was created by process_individual_audio_chunk
+                participant = Participant.objects.get(bot=self.bot, uuid="test_device_123")
+
+                # Verify first audio chunk fallback to DB
+                first_audio_chunk = AudioChunk.objects.filter(participant=participant).first()
+                self.assertIsNotNone(first_audio_chunk, "First audio chunk should be created")
+                self.assertFalse(first_audio_chunk.is_blob_stored_remotely, "First chunk should not be stored remotely")
+                self.assertIsNotNone(first_audio_chunk.blob_upload_failure_data, "First chunk should have failure data")
+                self.assertEqual(first_audio_chunk.blob_upload_failure_data.get("exception_type"), "Exception")
+                self.assertIn("Simulated S3 upload failure", first_audio_chunk.blob_upload_failure_data.get("error"))
+                self.assertEqual(bytes(first_audio_chunk.audio_blob), test_audio_data_1, "First chunk audio should be stored in DB")
+
+                # Verify that an utterance was created for the first chunk despite the upload failure
+                first_utterance = Utterance.objects.filter(audio_chunk=first_audio_chunk).first()
+                self.assertIsNotNone(first_utterance, "Utterance should be created for first chunk despite upload failure")
+                self.assertEqual(first_utterance.participant, participant)
+
+                # Send second audio chunk (this will succeed)
+                controller.process_individual_audio_chunk(
+                    {
+                        "audio_data": test_audio_data_2,
+                        "timestamp_ms": 2000,
+                        "duration_ms": 500,
+                        "sample_rate": 16000,
+                        "participant_uuid": "test_device_123",
+                        "participant_user_uuid": None,
+                        "participant_full_name": "Test Participant",
+                        "participant_is_the_bot": False,
+                        "participant_is_host": False,
+                    }
+                )
+
+                # Give time for the upload to complete
+                time.sleep(0.5)
+
+                # Process uploads to trigger the success callback
+                controller.audio_chunk_uploader.process_uploads()
+
+                # Wait for processing
+                time.sleep(0.5)
+
+                # Verify second audio chunk was uploaded successfully
+                second_audio_chunk = AudioChunk.objects.filter(participant=participant).order_by("created_at").last()
+                self.assertIsNotNone(second_audio_chunk, "Second audio chunk should be created")
+                self.assertTrue(second_audio_chunk.is_blob_stored_remotely, "Second chunk should be stored remotely")
+                self.assertIsNone(second_audio_chunk.blob_upload_failure_data, "Second chunk should not have failure data")
+                self.assertTrue(second_audio_chunk.audio_blob_remote_file, "Second chunk should have remote file reference")
+
+                # Verify that an utterance was created for the second chunk
+                second_utterance = Utterance.objects.filter(audio_chunk=second_audio_chunk).first()
+                self.assertIsNotNone(second_utterance, "Utterance should be created for second chunk")
+                self.assertEqual(second_utterance.participant, participant)
+
+                # Verify that both uploads were attempted
+                self.assertEqual(upload_attempt_count[0], 2, "Should have attempted two uploads")
+
+                # Verify total audio chunks and utterances
+                total_chunks = AudioChunk.objects.filter(participant=participant).count()
+                self.assertEqual(total_chunks, 2, "Should have exactly two audio chunks")
+
+                total_utterances = Utterance.objects.filter(participant=participant).count()
+                self.assertEqual(total_utterances, 2, "Should have exactly two utterances")
 
             # Clean up: simulate meeting ending to trigger cleanup
             controller.adapter.left_meeting = True

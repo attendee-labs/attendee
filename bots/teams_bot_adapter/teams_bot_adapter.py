@@ -1,7 +1,9 @@
 import json
 import logging
+import os
 import re
 import subprocess
+from typing import Callable
 
 from django.conf import settings
 from selenium.webdriver.common.keys import Keys
@@ -49,18 +51,26 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
         self,
         *args,
         teams_closed_captions_language: str | None,
-        teams_bot_login_credentials: dict | None,
+        teams_bot_login_is_available: bool,
         teams_bot_login_should_be_used: bool,
+        fetch_teams_bot_login_credentials_callback: Callable[[], dict],
+        modify_dom_for_video_recording: bool,
+        fetch_teams_bot_identification_token_callback: Callable[[], str | None],
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
         self.teams_closed_captions_language = teams_closed_captions_language
-        self.teams_bot_login_credentials = teams_bot_login_credentials
-        self.teams_bot_login_should_be_used = teams_bot_login_should_be_used and teams_bot_login_credentials
+        self.teams_bot_login_is_available = teams_bot_login_is_available
+        self.teams_bot_login_should_be_used = teams_bot_login_should_be_used and teams_bot_login_is_available
+        self.fetch_teams_bot_login_credentials_callback = fetch_teams_bot_login_credentials_callback
+        self.modify_dom_for_video_recording = modify_dom_for_video_recording
+        self.fetch_teams_bot_identification_token_callback = fetch_teams_bot_identification_token_callback
+        self.should_log_network_requests = False
+        self.had_disable_light_experience_redirect = False
 
     def should_retry_joining_meeting_that_requires_login_by_logging_in(self):
         # If we don't have the ability to login, we can't retry
-        if not self.teams_bot_login_credentials:
+        if not self.teams_bot_login_is_available:
             logger.info("Meeting requires login, but Teams bot login credentials are not available, so we can't retry")
             return False
 
@@ -74,8 +84,8 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
         logger.info("Meeting requires login and Teams bot login credentials are available, so we will retry by logging in")
         return True
 
-    def get_chromedriver_payload_file_name(self):
-        return "teams_bot_adapter/teams_chromedriver_payload.js"
+    def get_chromedriver_payload_file_names(self):
+        return ["teams_bot_adapter/teams_chromedriver_payload.js"]
 
     def get_websocket_port(self):
         return 8097
@@ -85,9 +95,9 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
         logger.info(f"is_sent_video_still_playing result = {result}")
         return result
 
-    def send_video(self, video_url, loop=False):
-        logger.info(f"send_video called with video_url = {video_url}, loop = {loop}")
-        self.driver.execute_script(f"window.botOutputManager.playVideoWithBlobUrl({json.dumps(video_url)}, {json.dumps(loop)})")
+    def send_video(self, video_url, loop=False, mute_video=False):
+        logger.info(f"send_video called with video_url = {video_url}, loop = {loop}, mute_video = {mute_video}")
+        self.driver.execute_script(f"window.botOutputManager.playVideoWithBlobUrl({json.dumps(video_url)}, {json.dumps(loop)}, {json.dumps(mute_video)})")
 
     def send_chat_message(self, text, to_user_uuid):
         chatInput = self.driver.execute_script('return document.querySelector(\'[aria-label="Type a message"], [placeholder="Type a message"]\')')
@@ -148,6 +158,16 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
 
     def subclass_specific_after_bot_joined_meeting(self):
         self.after_bot_can_record_meeting()
+
+    def subclass_specific_initial_data_code(self):
+        enforce_teams_closed_captions_language_timeout_seconds = int(os.getenv("ENFORCE_TEAMS_CLOSED_CAPTIONS_LANGUAGE_TIMEOUT_SECONDS", "0"))
+        return f"""
+            window.teamsInitialData = {{
+                shouldLogNetworkRequests: {"true" if self.should_log_network_requests else "false"},
+                modifyDomForVideoRecording: {"true" if self.modify_dom_for_video_recording else "false"},
+                enforceTeamsClosedCaptionsLanguageTimeoutSeconds: {enforce_teams_closed_captions_language_timeout_seconds}
+            }}
+        """
 
     def subclass_specific_chrome_policies(self):
         if not settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:

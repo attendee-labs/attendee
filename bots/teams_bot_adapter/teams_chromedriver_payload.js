@@ -1,3 +1,108 @@
+const handleVideoTrackForRealTimePerParticipantVideo = async ({ track, streams }) => {
+    try {
+        const firstStreamId = streams?.[0]?.id;
+
+        if (!firstStreamId)
+            return;
+
+        const mappingManager = virtualStreamToPhysicalStreamMappingManager;
+        const videoConfig = window.initialData.perParticipantRealtimeVideoConfiguration;
+
+        function createCanvasForSource(sourceConfig) {
+            const canvas = document.createElement("canvas");
+            canvas.width = sourceConfig.width;
+            canvas.height = sourceConfig.height;
+            const ctx = canvas.getContext("2d");
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = "high";
+            return { canvas, ctx };
+        }
+
+        const webcamCanvasContext = videoConfig.webcam_configuration.enabled ? createCanvasForSource(videoConfig.webcam_configuration) : null;
+        const screenshareCanvasContext = videoConfig.screenshare_configuration.enabled ? createCanvasForSource(videoConfig.screenshare_configuration) : null;
+
+        const maxFramerate = Math.max(videoConfig.webcam_configuration.framerate, videoConfig.screenshare_configuration.framerate);
+        if (maxFramerate <= 0)
+            return;
+        const minFrameIntervalMs = 1000 / maxFramerate;
+
+        const processor = new MediaStreamTrackProcessor({ track });
+        const reader = processor.readable.getReader();
+
+        let lastSentAt = 0;
+
+        while (true) {
+            const { value: frame, done } = await reader.read();
+            if (done) break;
+            if (!frame) continue;
+
+            try {
+                const now = performance.now();
+                if (now - lastSentAt < minFrameIntervalMs) continue;
+
+                const physicalStream = mappingManager.physicalStreamsByServerStreamId.get(firstStreamId);
+                const clientStreamId = physicalStream?.clientStreamId;
+                if (!clientStreamId) continue;        
+                
+                const virtualStreamId = mappingManager.physicalClientStreamIdToVirtualStreamIdMapping[clientStreamId.toString()];
+                if (!virtualStreamId) continue;
+        
+                const virtualStream = mappingManager.virtualStreams.get(virtualStreamId.toString());
+                if (!virtualStream?.participant?.id) continue;
+        
+                const participantId = virtualStream.participant.id;
+                const isScreenShare = !!virtualStream.isScreenShare;
+
+                const sourceConfig = isScreenShare ? videoConfig.screenshare_configuration : videoConfig.webcam_configuration;
+                if (!sourceConfig.enabled) continue;
+
+                if (now - lastSentAt < 1000 / sourceConfig.framerate) continue;
+
+                const { canvas, ctx } = isScreenShare ? screenshareCanvasContext : webcamCanvasContext;
+
+                const targetWidth = sourceConfig.width;
+                const targetHeight = sourceConfig.height;
+                const jpegQuality = sourceConfig.jpeg_quality / 100;
+
+                const srcW = frame.displayWidth;
+                const srcH = frame.displayHeight;
+                if (!srcW || !srcH) continue;
+
+                const srcAspect = srcW / srcH;
+                const targetAspect = targetWidth / targetHeight;
+
+                let drawW, drawH;
+                if (srcAspect > targetAspect) {
+                    drawW = targetWidth;
+                    drawH = Math.round(targetWidth / srcAspect);
+                } else {
+                    drawH = targetHeight;
+                    drawW = Math.round(targetHeight * srcAspect);
+                }
+
+                const offsetX = Math.round((targetWidth - drawW) / 2);
+                const offsetY = Math.round((targetHeight - drawH) / 2);
+
+                ctx.fillStyle = "black";
+                ctx.fillRect(0, 0, targetWidth, targetHeight);
+                ctx.drawImage(frame, 0, 0, srcW, srcH, offsetX, offsetY, drawW, drawH);
+
+                const base64 = canvas.toDataURL("image/jpeg", jpegQuality).split(",", 2)[1];
+                window.ws?.sendPerParticipantVideo(participantId, isScreenShare, base64);
+
+                lastSentAt = now;
+            } catch (err) {
+                console.error("Error processing frame:", err);
+            } finally {
+                frame.close();
+            }
+        }
+    } catch (err) {
+        console.error("Error setting up video interceptor:", err);
+    }
+};
+
+
 (() => {
     if (globalThis.__realConsole) return;
   
@@ -14,153 +119,138 @@
     };
   })();
 
-class StyleManager {
+  class MixedAudioStreamManager {
     constructor() {
-        this.audioContext = null;
         this.audioTracks = [];
-        this.silenceThreshold = 0.0;
-        this.silenceCheckInterval = null;
-        this.frameStyleElement = null;
-        this.frameAdjustInterval = null;
-        this.neededInteractionsInterval = null;
-
-        // Stream used which combines the audio tracks from the meeting. Does NOT include the bot's audio
         this.meetingAudioStream = null;
+        this.audioTracksToBeAdded = [];
+        this.audioContext = null;
+        this.destination = null;
+        this.seenTrackIds = new Set();
+        this.sourceNodes = [];
+
+        // Silence detection state
+        this.silenceThreshold = 0.0;
+        this.analyser = null;
+        this.audioDataArray = null;
+        this.mixedAudioTrack = null;
     }
 
-    addAudioTrack(audioTrack) {
-        this.audioTracks.push(audioTrack);
-        if (this.audioTracks.length > 1) {
+
+    addAudioStream(audioStream) {
+        const track = audioStream.getAudioTracks()[0];
+        if (track) {
+            this.addAudioTrack(track);
+        }
+    }
+
+    addAudioTrackFromTrackEvent(trackEvent) {
+        if (!trackEvent.track)
+            return;
+        const firstStreamId = trackEvent.streams[0]?.id;
+        // streamId must contain mainAudio in it, which means it's from Teams, not from a voice agent.
+        if (!firstStreamId?.includes('mainAudio')) {
             window.ws?.sendJson({
-                type: 'MultipleAudioTracksDetected',
-                numberOfTracks: this.audioTracks.length,
+                type: 'AudioTrackNotAddedToMeetingAudioStream',
+                trackId: trackEvent.track.id,
+                streams: trackEvent.streams?.map(stream => stream?.id),
             });
+            return;
         }
+        window.ws?.sendJson({
+            type: 'AudioTrackAddedToMeetingAudioStream',
+            trackId: trackEvent.track.id,
+            streams: trackEvent.streams?.map(stream => stream?.id),
+        });
+        this.addAudioTrack(trackEvent.track);
     }
 
-    checkAudioActivity() {
-        // Get audio data
-        this.analyser.getByteTimeDomainData(this.audioDataArray);
-        
-        // Calculate deviation from the center value (128)
-        let sumDeviation = 0;
-        for (let i = 0; i < this.audioDataArray.length; i++) {
-            // Calculate how much each sample deviates from the center (128)
-            sumDeviation += Math.abs(this.audioDataArray[i] - 128);
-        }
-        
-        const averageDeviation = sumDeviation / this.audioDataArray.length;
-        
-        // If average deviation is above threshold, we have audio activity
-        if (averageDeviation > this.silenceThreshold) {
-            window.ws.sendJson({
-                type: 'SilenceStatus',
-                isSilent: false
-            });
-        }
-    }
-
-    checkNeededInteractions() {
-        // Check if bot has been removed from the meeting
-        const removedFromMeetingElement = document.getElementById('calling-retry-screen-title');
-        if (removedFromMeetingElement && 
-            removedFromMeetingElement.textContent.includes("You've been removed from this meeting")) {
-            window.ws.sendJson({
-                type: 'MeetingStatusChange',
-                change: 'removed_from_meeting'
-            });
-            console.log('Bot was removed from meeting, sent notification');
+    addAudioTrack(track) {
+        if (!track || this.seenTrackIds.has(track.id)) {
+            return;
         }
 
-        // We need to open the chat window to be able to track messages
-        const chatButton = document.querySelector('button#chat-button');
-        if (chatButton && !this.chatButtonClicked) {
-            chatButton.click();
-            this.chatButtonClicked = true;
-            
-            // Wait until the chat input element appears in the DOM
-            this.waitForChatInputAndSendReadyMessage();
-        }
-    }
-
-    waitForChatInputAndSendReadyMessage() {
-        const checkForChatInput = () => {
-            const chatInput = document.querySelector('[aria-label="Type a message"], [placeholder="Type a message"]');
-            if (chatInput) {
-                // Chat input is now available, send the ready message
-                window.ws.sendJson({
-                    type: 'ChatStatusChange',
-                    change: 'ready_to_send'
+        // If start() already ran, patch the new track into the existing mix.
+        if (this.audioContext && this.destination) {
+            const mediaStream = new MediaStream([track]);
+            const source = this.audioContext.createMediaStreamSource(mediaStream);
+            source.connect(this.destination);
+            this.sourceNodes.push(source);
+            this.seenTrackIds.add(track.id);
+            if (this.seenTrackIds.size > 1) {
+                window.ws?.sendJson({
+                    type: 'MultipleAudioTracksDetected',
+                    numberOfTracks: this.seenTrackIds.size,
                 });
-                console.log('Chat input element found, ready to send messages');
-            } else {
-                // Chat input not found yet, check again in 500ms
-                setTimeout(checkForChatInput, 500);
             }
-        };
-        
-        // Start checking for the chat input element
-        checkForChatInput();
+        }
+        else {
+            this.audioTracksToBeAdded.push(track);
+        }
     }
 
-    startSilenceDetection() {
-         // Set up audio context and processing as before
-         this.audioContext = new AudioContext();
+    createStream() {
+        if (this.meetingAudioStream)
+            return;
+        this.audioContext = new AudioContext({ sampleRate: 48000 });
+        this.destination = this.audioContext.createMediaStreamDestination();
 
-         this.audioSources = this.audioTracks.map(track => {
-             const mediaStream = new MediaStream([track]);
-             return this.audioContext.createMediaStreamSource(mediaStream);
-         });
- 
-         // Create a destination node
-         const destination = this.audioContext.createMediaStreamDestination();
- 
-         // Connect all sources to the destination
-         this.audioSources.forEach(source => {
-             source.connect(destination);
-         });
- 
-         // Create analyzer and connect it to the destination
-         this.analyser = this.audioContext.createAnalyser();
-         this.analyser.fftSize = 256;
-         const bufferLength = this.analyser.frequencyBinCount;
-         this.audioDataArray = new Uint8Array(bufferLength);
- 
-         // Create a source from the destination's stream and connect it to the analyzer
-         const mixedSource = this.audioContext.createMediaStreamSource(destination.stream);
-         mixedSource.connect(this.analyser);
- 
-         this.mixedAudioTrack = destination.stream.getAudioTracks()[0];
+        this.audioTracksToBeAdded.forEach(track => this.addAudioTrack(track));
+
+        this.meetingAudioStream = this.destination.stream;
+
+        // Create a source from the destination's stream so that it actually plays
+        const mixedSource = this.audioContext.createMediaStreamSource(this.destination.stream);
+
+        // Set up an analyser on the mixed stream so we can detect silence
+        this.analyser = this.audioContext.createAnalyser();
+        this.analyser.fftSize = 256;
+        this.audioDataArray = new Uint8Array(this.analyser.frequencyBinCount);
+        mixedSource.connect(this.analyser);
+
+        this.mixedAudioTrack = this.destination.stream.getAudioTracks()[0];
 
         // Process and send mixed audio if enabled
         if (window.initialData.sendMixedAudio && this.mixedAudioTrack) {
             this.processMixedAudioTrack();
         }
 
-        // Clear any existing interval
-        if (this.silenceCheckInterval) {
-            clearInterval(this.silenceCheckInterval);
-        }
-                
-        if (this.neededInteractionsInterval) {
-            clearInterval(this.neededInteractionsInterval);
-        }
-                
-        // Check for audio activity every second
-        this.silenceCheckInterval = setInterval(() => {
-            this.checkAudioActivity();
-        }, 1000);
-
-        // Check for needed interactions every 5 seconds
-        this.neededInteractionsInterval = setInterval(() => {
-            this.checkNeededInteractions();
-        }, 5000);
-
-        this.meetingAudioStream = destination.stream;
+        window.ws?.sendJson({
+            type: 'MeetingAudioStreamCreated',
+            message: 'Meeting audio stream created',
+        });
     }
-    
+
     getMeetingAudioStream() {
+        this.createStream();
         return this.meetingAudioStream;
+    }
+
+    checkAudioActivity() {
+        if (!this.analyser || !this.audioDataArray) {
+            return;
+        }
+
+        // Get audio data
+        this.analyser.getByteTimeDomainData(this.audioDataArray);
+
+        // Calculate deviation from the center value (128)
+        let sumDeviation = 0;
+        for (let i = 0; i < this.audioDataArray.length; i++) {
+            // Calculate how much each sample deviates from the center (128)
+            sumDeviation += Math.abs(this.audioDataArray[i] - 128);
+        }
+
+        const averageDeviation = sumDeviation / this.audioDataArray.length;
+
+        // If average deviation is above threshold, we have audio activity
+        if (averageDeviation > this.silenceThreshold) {
+            window.ws.sendJson({
+                type: 'SilenceStatus',
+                isSilent: false
+            });
+            window.audioConnectionDiagnosticsManager?.recordNonSilenceFromSilenceDetection();
+        }
     }
 
     async processMixedAudioTrack() {
@@ -168,7 +258,7 @@ class StyleManager {
             // Create processor to get raw audio frames from the mixed audio track
             const processor = new MediaStreamTrackProcessor({ track: this.mixedAudioTrack });
             const generator = new MediaStreamTrackGenerator({ kind: 'audio' });
-            
+
             // Get readable stream of audio frames
             const readable = processor.readable;
             const writable = generator.writable;
@@ -191,13 +281,13 @@ class StyleManager {
                         const numChannels = frame.numberOfChannels;
                         const numSamples = frame.numberOfFrames;
                         const audioData = new Float32Array(numSamples);
-                        
+
                         // Copy data from each channel
                         // If multi-channel, average all channels together to create mono output
                         if (numChannels > 1) {
                             // Temporary buffer to hold each channel's data
                             const channelData = new Float32Array(numSamples);
-                            
+
                             // Sum all channels
                             for (let channel = 0; channel < numChannels; channel++) {
                                 frame.copyTo(channelData, { planeIndex: channel });
@@ -205,7 +295,7 @@ class StyleManager {
                                     audioData[i] += channelData[i];
                                 }
                             }
-                            
+
                             // Average by dividing by number of channels
                             for (let i = 0; i < numSamples; i++) {
                                 audioData[i] /= numChannels;
@@ -218,7 +308,7 @@ class StyleManager {
                         // Send mixed audio data via websocket
                         const timestamp = performance.now();
                         window.ws.sendMixedAudio(timestamp, audioData);
-                        
+
                         // Pass through the original frame
                         controller.enqueue(frame);
                     } catch (error) {
@@ -254,6 +344,148 @@ class StyleManager {
         } catch (error) {
             console.error('Error setting up mixed audio processor:', error);
         }
+    }
+}
+
+class StyleManager {
+    constructor() {
+        this.silenceCheckInterval = null;
+        this.frameStyleElement = null;
+        this.frameAdjustInterval = null;
+        this.neededInteractionsInterval = null;
+        this.fakeUserActivityInterval = null;
+
+        this.started = false;
+    }
+
+    checkAudioActivity() {
+        // Silence detection lives in MixedAudioStreamManager, which owns the mixed
+        // meeting audio stream and its analyser.
+        window.mixedAudioStreamManager?.checkAudioActivity();
+    }
+
+    // Prevents Teams from going into mode where it stops receiving chat messages
+    fakeUserActivity() {
+        const clientX = Math.random() * 500;
+        const clientY = Math.random() * 500;
+        document.body.dispatchEvent(new MouseEvent("mousemove", {
+            bubbles: true,
+            clientX: clientX,
+            clientY: clientY,
+          }));
+        window.ws?.sendJson({
+            type: 'FakeUserActivity',
+            activity: `mousemove: ${clientX}, ${clientY}`
+        });
+    }
+
+    checkNeededInteractions() {
+        // Check if bot has been removed from the meeting
+        const removedFromMeetingElement = document.getElementById('calling-retry-screen-title');
+        const removedFromMeetingTexts = [
+            "You've been removed from this meeting",
+            "Removed from the meeting"
+        ];
+        if (removedFromMeetingElement) {
+            for (const text of removedFromMeetingTexts) {
+                if (removedFromMeetingElement.textContent.includes(text)) {
+                    window.ws.sendJson({
+                        type: 'MeetingStatusChange',
+                        change: 'removed_from_meeting'
+                    });
+                    console.log('Bot was removed from meeting, sent notification');
+                    break;
+                }
+            }
+        }
+
+        // We need to open the chat window to be able to track messages
+        const chatButton = document.querySelector('button#chat-button');
+        if (chatButton && !this.chatButtonClicked) {
+            chatButton.click();
+            this.chatButtonClicked = true;
+            
+            // Wait until the chat input element appears in the DOM
+            this.waitForChatInputAndSendReadyMessage();
+        }
+
+        // Check for the Teams E2EE encryption error screen
+        const encryptionErrorScreen = document.querySelector(
+            '[data-tid="calling-e2ee-end-screen"]'
+        );
+
+        if (encryptionErrorScreen && !this.encryptionErrorReported) {
+            const screenText = encryptionErrorScreen.textContent || '';
+
+            if (screenText.includes('An encryption error occurred')) {
+                this.encryptionErrorReported = true;
+
+                window.ws.sendJson({
+                    type: 'MeetingStatusChange',
+                    change: 'post_join_encryption_error'
+                });
+            }
+        }
+    }
+
+    waitForChatInputAndSendReadyMessage() {
+        const checkForChatInput = () => {
+            const chatInput = document.querySelector('[aria-label="Type a message"], [placeholder="Type a message"]');
+            if (chatInput) {
+                // Chat input is now available, send the ready message
+                window.ws.sendJson({
+                    type: 'ChatStatusChange',
+                    change: 'ready_to_send'
+                });
+                console.log('Chat input element found, ready to send messages');
+            } else {
+                // Chat input not found yet, check again in 500ms
+                setTimeout(checkForChatInput, 500);
+            }
+        };
+        
+        // Start checking for the chat input element
+        checkForChatInput();
+    }
+
+    startSilenceDetection() {
+        // Ensure the mixed meeting audio stream (and its analyser) is set up. The
+        // audio graph and silence/mixed-audio analysis now live in MixedAudioStreamManager.
+        window.mixedAudioStreamManager?.getMeetingAudioStream();
+
+        // Clear any existing interval
+        if (this.silenceCheckInterval) {
+            clearInterval(this.silenceCheckInterval);
+        }
+                
+        if (this.neededInteractionsInterval) {
+            clearInterval(this.neededInteractionsInterval);
+        }
+                
+        if (this.fakeUserActivityInterval) {
+            clearInterval(this.fakeUserActivityInterval);
+        }
+
+        // Check for audio activity every second
+        this.silenceCheckInterval = setInterval(() => {
+            this.checkAudioActivity();
+        }, 1000);
+
+        // Check for needed interactions every 5 seconds
+        this.neededInteractionsInterval = setInterval(() => {
+            this.checkNeededInteractions();
+        }, 5000);
+
+        // Perform fake user activity every 4 minutes
+        this.fakeUserActivityInterval = setInterval(() => {
+            this.fakeUserActivity();
+        }, 240000);
+    }
+    
+    getMeetingAudioStream() {
+        if (!this.started)
+            return null;
+        return window.mixedAudioStreamManager?.getMeetingAudioStream();
     }
  
     makeMainVideoFillFrame = function() {
@@ -293,6 +525,15 @@ class StyleManager {
             [data-test-segment-type="central"], 
             [data-test-segment-type="central"] * {
                 pointer-events: auto !important;
+            }
+            /* break stacking contexts on every ancestor of the central pane */
+            :has([data-test-segment-type="central"]) {
+                transform: none !important;
+                will-change: auto !important;
+                filter: none !important;
+                contain: none !important;
+                isolation: auto !important;
+                perspective: none !important;
             }
         `;
         document.head.appendChild(style);
@@ -365,6 +606,11 @@ class StyleManager {
             this.neededInteractionsInterval = null;
         }
         
+        if (this.fakeUserActivityInterval) {
+            clearInterval(this.fakeUserActivityInterval);
+            this.fakeUserActivityInterval = null;
+        }
+        
         // Restore original frame layout
         this.restoreOriginalFrame();
         
@@ -372,8 +618,12 @@ class StyleManager {
     }
 
     start() {
+        this.started = true;
         this.startSilenceDetection();
-        this.makeMainVideoFillFrame();
+
+        if (window.teamsInitialData.modifyDomForVideoRecording) {
+            this.makeMainVideoFillFrame();
+        }
 
         console.log('Started StyleManager');
     }
@@ -386,18 +636,13 @@ class StyleManager {
 class DominantSpeakerManager {
     constructor() {
         this.dominantSpeakerStreamId = null;
-        this.captionAudioTimes = [];
         this.speechIntervalsPerParticipant = {};
+        this.captionSpeechIntervalsPerParticipant = {};
+        this.participantsWithReceiverIntervals = new Set();
     }
 
-    getLastSpeakerIdForTimestampMs(timestampMs) {
-        // Find the caption audio times that are before timestampMs
-        const captionAudioTimesBeforeTimestampMs = this.captionAudioTimes.filter(captionAudioTime => captionAudioTime.timestampMs <= timestampMs);
-        if (captionAudioTimesBeforeTimestampMs.length === 0) {
-            return null;
-        }
-        // Return the caption audio time with the highest timestampMs
-        return captionAudioTimesBeforeTimestampMs.reduce((max, captionAudioTime) => captionAudioTime.timestampMs > max.timestampMs ? captionAudioTime : max).speakerId;
+    hasReceiverBasedIntervals(speakerId) {
+        return this.participantsWithReceiverIntervals.has(speakerId);
     }
 
     getSpeakerIdForTimestampMsUsingSpeechIntervals(timestampMs) {
@@ -431,7 +676,29 @@ class DominantSpeakerManager {
                 });
             }
         }
-        
+
+        // Give caption-based intervals equal weight by adding their active speakers to the
+        // same candidate list used for receiver-based intervals.
+        for (const [speakerId, intervals] of Object.entries(this.captionSpeechIntervalsPerParticipant)) {
+            let timestampMsOfLastStart = null;
+
+            for (const interval of intervals) {
+                const endMs = interval.endMs == null ? Infinity : interval.endMs;
+                if (interval.startMs <= timestampMs && timestampMs <= endMs) {
+                    if (timestampMsOfLastStart === null || interval.startMs < timestampMsOfLastStart)
+                        timestampMsOfLastStart = interval.startMs;
+                }
+            }
+
+            if (timestampMsOfLastStart !== null) {
+                const existingSpeaker = speakersAtTimestamp.find(speaker => speaker.speakerId === speakerId);
+                if (existingSpeaker)
+                    existingSpeaker.timestampMsOfLastStart = Math.min(existingSpeaker.timestampMsOfLastStart, timestampMsOfLastStart);
+                else
+                    speakersAtTimestamp.push({speakerId, timestampMsOfLastStart});
+            }
+        }
+
         if (speakersAtTimestamp.length === 0)
             return null;
 
@@ -440,15 +707,7 @@ class DominantSpeakerManager {
 
         // If there were multiple speakers in this interval, we need a "tie breaker"
 
-        // If we have captions, then look at the participant for the last caption audio time
-        if (this.captionAudioTimes.length > 0)
-        {
-            const participantForLastCaptionAudioTime = this.getLastSpeakerIdForTimestampMs(timestampMs);
-            if (participantForLastCaptionAudioTime && speakersAtTimestamp.some(speaker => speaker.speakerId === participantForLastCaptionAudioTime))
-                return participantForLastCaptionAudioTime;
-        }
-
-        // Otherwise use the the speaker with the earliest timestampMsOfLastStart
+        // Use the the speaker with the earliest timestampMsOfLastStart
         return speakersAtTimestamp.reduce((min, speaker) => speaker.timestampMsOfLastStart < min.timestampMsOfLastStart ? speaker : min).speakerId;
 
         // Otherwise use the speaker with the highest timestampMsOfLastStart (Not using)
@@ -459,6 +718,7 @@ class DominantSpeakerManager {
         if (!this.speechIntervalsPerParticipant[speakerId])
             this.speechIntervalsPerParticipant[speakerId] = [];
 
+        this.participantsWithReceiverIntervals.add(speakerId);
         this.speechIntervalsPerParticipant[speakerId].push({type: 'start', timestampMs: timestampMs});
 
         // Not going to send this to server for now.
@@ -487,11 +747,20 @@ class DominantSpeakerManager {
         */
     }
 
-    addCaptionAudioTime(timestampMs, speakerId) {
-        this.captionAudioTimes.push({
-            timestampMs: timestampMs,
-            speakerId: speakerId
-        });
+    // Inserts or updates a caption-based speech interval identified by intervalId.
+    upsertSpeechInterval(intervalId, startMs, endMs, speakerId) {
+        if (!this.captionSpeechIntervalsPerParticipant[speakerId])
+            this.captionSpeechIntervalsPerParticipant[speakerId] = [];
+
+        const intervals = this.captionSpeechIntervalsPerParticipant[speakerId];
+        const existingInterval = intervalId != null ? intervals.find(interval => interval.id === intervalId) : null;
+
+        if (existingInterval) {
+            existingInterval.startMs = startMs;
+            existingInterval.endMs = endMs;
+        } else {
+            intervals.push({id: intervalId, startMs: startMs, endMs: endMs});
+        }
     }
 
     setDominantSpeakerStreamId(dominantSpeakerStreamId) {
@@ -500,6 +769,61 @@ class DominantSpeakerManager {
 
     getDominantSpeaker() {
         return virtualStreamToPhysicalStreamMappingManager.virtualStreamIdToParticipant(this.dominantSpeakerStreamId);
+    }
+}
+
+// Receives events from other parts of the payload and determines whether the audio
+// connection appears to be in an inconsistent state. If we've observed active speaker
+// activity (which implies people are talking) but have never received any non-silent
+// audio, it's likely the audio connection is broken and we surface a warning.
+class AudioConnectionDiagnosticsManager {
+    constructor(checkIntervalMs = 60000) {
+        this.checkIntervalMs = checkIntervalMs;
+        this.hasEncounteredNonSilenceFromSilenceDetection = false;
+        this.numberOfChecksWithUnMutedParticipant = 0;
+        this.hasSentInconsistencyWarning = false;
+        this.intervalId = null;
+        this.lastUpdate = null;
+    }
+
+    start() {
+        if (this.intervalId !== null)
+            return;
+
+        this.intervalId = setInterval(() => this.check(), this.checkIntervalMs);
+    }
+
+    stop() {
+        if (this.intervalId === null)
+            return;
+
+        clearInterval(this.intervalId);
+        this.intervalId = null;
+    }
+
+    recordNonSilenceFromSilenceDetection() {
+        this.hasEncounteredNonSilenceFromSilenceDetection = true;
+    }
+
+    recordUnMutedParticipant() {
+        this.numberOfChecksWithUnMutedParticipant++;
+    }
+
+    check() {
+        if (!window.ws?.mediaSendingEnabled)
+            return;
+
+        if (window.callManager?.getUnmutedParticipantIds()?.length) {
+            this.recordUnMutedParticipant();
+        }
+
+        if (this.numberOfChecksWithUnMutedParticipant > 5 && !this.hasEncounteredNonSilenceFromSilenceDetection && !this.hasSentInconsistencyWarning) {
+            this.hasSentInconsistencyWarning = true;
+            window.ws?.sendJson({
+                type: 'AudioConnectionDiagnosticsWarning',
+                message: `Observed unmuted participants across ${this.numberOfChecksWithUnMutedParticipant} checks but never received any non-silent audio`
+            });
+        }
     }
 }
 
@@ -939,6 +1263,16 @@ class ChatMessageManager {
                 return;
             if (!chatMessage.originalArrivalTime)
                 return;
+            // messageTypes we care about are: RichText, RichText/Html, Text, RichText/Sms
+            const allowedMessageTypes = ['RichText', 'RichText/Html', 'Text', 'RichText/Sms'];
+            if (!allowedMessageTypes.includes(chatMessage.messageType))
+            {
+                window.ws.sendJson({
+                    type: 'chatMessageHadWrongMessageTypeError',
+                    chatMessage: chatMessage,
+                });
+                return;
+            }
             if (!this.isNewOrUpdatedChatMessage(chatMessage))
                 return;
 
@@ -955,6 +1289,10 @@ class ChatMessageManager {
         }
         catch (error) {
             console.error('Error in handleChatMessage', error);
+            this.ws?.sendJson({
+                type: 'ErrorInHandleChatMessage',
+                message: error.message
+            });
         }
     }
 }
@@ -1117,7 +1455,8 @@ class WebSocketClient {
         VIDEO: 2,  // Reserved for future use
         AUDIO: 3,   // Reserved for future use
         ENCODED_MP4_CHUNK: 4,
-        PER_PARTICIPANT_AUDIO: 5
+        PER_PARTICIPANT_AUDIO: 5,
+        PER_PARTICIPANT_VIDEO: 6,
     };
   
     constructor() {
@@ -1260,6 +1599,50 @@ class WebSocketClient {
             type: 'CaptionUpdate',
             caption: item
         });
+    }
+
+    sendPerParticipantVideo(participantId, isScreenShare, videoData) {
+        if (this.ws.readyState !== originalWebSocket.OPEN) {
+            realConsole?.error('WebSocket is not connected for per participant video send', this.ws.readyState);
+            return;
+        }
+
+        if (!this.mediaSendingEnabled) {
+            return;
+        }
+
+        try {
+            // Convert participantId to UTF-8 bytes
+            const participantIdBytes = new TextEncoder().encode(participantId);
+            
+            // Convert videoData string to UTF-8 bytes
+            const videoDataBytes = new TextEncoder().encode(videoData);
+            
+            // Create final message: type (4 bytes) + participantId length (1 byte) + 
+            // participantId bytes + isScreenShare (1 byte) + video data
+            const message = new Uint8Array(4 + 1 + participantIdBytes.length + 1 + videoDataBytes.length);
+            const dataView = new DataView(message.buffer);
+            
+            // Set message type (6 for PER_PARTICIPANT_VIDEO)
+            dataView.setInt32(0, WebSocketClient.MESSAGE_TYPES.PER_PARTICIPANT_VIDEO, true);
+            
+            // Set participantId length as uint8 (1 byte)
+            dataView.setUint8(4, participantIdBytes.length);
+            
+            // Copy participantId bytes
+            message.set(participantIdBytes, 5);
+            
+            // Set isScreenShare byte (0 = webcam, 1 = screenshare)
+            dataView.setUint8(5 + participantIdBytes.length, isScreenShare ? 1 : 0);
+            
+            // Copy video data after type, length, participantId, and isScreenShare
+            message.set(videoDataBytes, 5 + participantIdBytes.length + 1);
+            
+            // Send the binary message
+            this.ws.send(message.buffer);
+        } catch (error) {
+            console.error('Error sending WebSocket video message:', error);
+        }
     }
 
     sendMixedAudio(timestamp, audioData) {
@@ -1564,8 +1947,12 @@ function handleConversationEnd(eventDataObject) {
     realConsole?.log('handleConversationEnd, eventDataObjectBody', eventDataObjectBody);
     window.ws?.sendJson({
         type: 'ConversationEndPayload',
-        body: eventDataObjectBody
+        body: eventDataObjectBody,
+        headers: eventDataObject?.headers,
+        currentCallId: window.callManager?.getCallId()
     });
+
+    const meetingId = extractCallIdFromEventDataObject(eventDataObject);
 
     const subCode = eventDataObjectBody?.subCode;
     const subCodeValueForDeniedRequestToJoin = 5854;
@@ -1576,7 +1963,8 @@ function handleConversationEnd(eventDataObject) {
         // For now this won't do anything, but good to have it in our logs. In the future, this should probably be the source of truth for these things, instead of the UI inspection.
         window.ws?.sendJson({
             type: 'MeetingStatusChange',
-            change: 'request_to_join_denied'
+            change: 'request_to_join_denied',
+            meetingId: meetingId
         });
         return;
     }
@@ -1586,7 +1974,8 @@ function handleConversationEnd(eventDataObject) {
         // For now this won't do anything, but good to have it in our logs. In the future, this should probably be the source of truth for these things, instead of the UI inspection.
         window.ws?.sendJson({
             type: 'MeetingStatusChange',
-            change: 'anonymous_join_disabled_for_tenant_by_policy'
+            change: 'anonymous_join_disabled_for_tenant_by_policy',
+            meetingId: meetingId
         });
         return;
     }
@@ -1594,7 +1983,8 @@ function handleConversationEnd(eventDataObject) {
     realConsole?.log('handleConversationEnd, sending meeting ended message');
     window.ws?.sendJson({
         type: 'MeetingStatusChange',
-        change: 'meeting_ended'
+        change: 'meeting_ended',
+        meetingId: meetingId
     });
 }
 
@@ -1638,6 +2028,15 @@ class ParticipantSpeakingStateMachine {
         this.samples = [];
     }
 
+    sendSpeechStartStopEvent(participantId, isSpeechStart, timestamp) {
+        window.ws?.sendJson({
+            type: 'ParticipantSpeechStartStopEvent',
+            participantId: participantId,
+            isSpeechStart: isSpeechStart,
+            timestamp: timestamp
+        });
+    }
+
     addSample(sample) {
         this.samples.push(sample);
 
@@ -1661,9 +2060,13 @@ class ParticipantSpeakingStateMachine {
         if (previousState == 'NOT_SPEAKING' && this.state == 'SPEAKING') {
             realConsole?.log('SPEAKING: adding speech start for participant', this.participantId);
             dominantSpeakerManager.addSpeechIntervalStart(firstOfLastFiveSamplesTimestamp, this.participantId);
+            if (window.initialData.recordParticipantSpeechStartStopEvents)
+                this.sendSpeechStartStopEvent(this.participantId, true, firstOfLastFiveSamplesTimestamp);
         } else if (previousState == 'SPEAKING' && this.state == 'NOT_SPEAKING') {
             realConsole?.log('NOT_SPEAKING: adding speech stop for participant', this.participantId);
             dominantSpeakerManager.addSpeechIntervalEnd(firstOfLastFiveSamplesTimestamp - 100, this.participantId);
+            if (window.initialData.recordParticipantSpeechStartStopEvents)
+                this.sendSpeechStartStopEvent(this.participantId, false, firstOfLastFiveSamplesTimestamp - 100);
         }
     }
 }
@@ -1685,6 +2088,9 @@ class ReceiverManager {
     }
 
     pollReceivers() {
+        const speakingParticipantIds = new Set();
+        const currentTime = Date.now();
+
         for (const [receiver, isActive] of this.receiverMap) {
             const contributingSources = receiver.getContributingSources();
 
@@ -1700,24 +2106,23 @@ class ReceiverManager {
             if (!isActive)
                 continue;
 
-            const currentTime = Date.now();
-            const recentContributingSources = contributingSources.filter(contributingSource => currentTime - contributingSource.timestamp <= 50);
-            const speakingParticipantIds = window.callManager?.getSpeakingParticipantIds(recentContributingSources) || [];
-
-            for (const speakingParticipantId of speakingParticipantIds) {
-                if (!this.participantSpeakingStateMachineMap.has(speakingParticipantId)) {
-                    this.participantSpeakingStateMachineMap.set(speakingParticipantId, new ParticipantSpeakingStateMachine(speakingParticipantId));
-                }
-            }
-
-            // Now iterate through the participantSpeakingStateMachineMap and update the isSpeaking state for each participant
-            for (const [participantId, participantSpeakingStateMachine] of this.participantSpeakingStateMachineMap) {
-                participantSpeakingStateMachine.addSample({
-                    isSpeaking: speakingParticipantIds.has(participantId),
-                    timestamp: currentTime
+            if (receiver.track?.readyState === 'ended') {
+                this.receiverMap.set(receiver, false);
+                window.ws?.sendJson({
+                    type: 'ReceiverManagerUpdate',
+                    update: "setReceiverInactive",
+                    receiverTrackId: receiver.track?.id
                 });
+                continue;
             }
-            
+
+            const recentContributingSources = contributingSources.filter(contributingSource => currentTime - contributingSource.timestamp <= 50);
+            const receiverSpeakingParticipantIds = window.callManager?.getSpeakingParticipantIds(recentContributingSources) || [];
+
+            for (const speakingParticipantId of receiverSpeakingParticipantIds) {
+                speakingParticipantIds.add(speakingParticipantId);
+            }
+
             /*
             {
     "rtpTimestamp": 506968569,
@@ -1725,6 +2130,20 @@ class ReceiverManager {
     "timestamp": 1759288487277
 }
             */
+        }
+
+        for (const speakingParticipantId of speakingParticipantIds) {
+            if (!this.participantSpeakingStateMachineMap.has(speakingParticipantId)) {
+                this.participantSpeakingStateMachineMap.set(speakingParticipantId, new ParticipantSpeakingStateMachine(speakingParticipantId));
+            }
+        }
+
+        // Now iterate through the participantSpeakingStateMachineMap and update the isSpeaking state for each participant
+        for (const [participantId, participantSpeakingStateMachine] of this.participantSpeakingStateMachineMap) {
+            participantSpeakingStateMachine.addSample({
+                isSpeaking: speakingParticipantIds.has(participantId),
+                timestamp: currentTime
+            });
         }
     }
 
@@ -1752,8 +2171,15 @@ window.chatMessageManager = chatMessageManager;
 const virtualStreamToPhysicalStreamMappingManager = new VirtualStreamToPhysicalStreamMappingManager();
 const dominantSpeakerManager = new DominantSpeakerManager();
 
+const audioConnectionDiagnosticsManager = new AudioConnectionDiagnosticsManager();
+window.audioConnectionDiagnosticsManager = audioConnectionDiagnosticsManager;
+audioConnectionDiagnosticsManager.start();
+
 const styleManager = new StyleManager();
 window.styleManager = styleManager;
+
+const mixedAudioStreamManager = new MixedAudioStreamManager();
+window.mixedAudioStreamManager = mixedAudioStreamManager;
 
 const receiverManager = new ReceiverManager();
 window.receiverManager = receiverManager;
@@ -1805,17 +2231,23 @@ class UtteranceIdGenerator {
 
 const utteranceIdGenerator = new UtteranceIdGenerator();
 
-window.captureDominantSpeakerViaCaptions = false;
-
 const processClosedCaptionData = (item) => {
     realConsole?.log('processClosedCaptionData', item);
 
-    // If we're collecting per participant audio, we actually need the caption data because it's the most accurate
-    // way to estimate when someone started speaking.
-    if (window.initialData.sendPerParticipantAudio && window.captureDominantSpeakerViaCaptions)
+    // Stable id reused across all partial/final updates for this utterance.
+    const captionId = utteranceIdGenerator.next(item.userId, item.isFinal);
+
+    // Stop adding caption-based intervals for a participant once receiver-based intervals exist.
+    if (window.initialData.sendPerParticipantAudio && !dominantSpeakerManager.hasReceiverBasedIntervals(item.userId) && item.timestampAudioSent && item.duration)
     {
-        const timeStampAudioSentUnixMs = convertTimestampAudioSentToUnixTimeMs(item.timestampAudioSent);
-        dominantSpeakerManager.addCaptionAudioTime(timeStampAudioSentUnixMs, item.userId);
+        const startMs = convertTimestampAudioSentToUnixTimeMs(item.timestampAudioSent);
+        const durationMs = Math.floor(item.duration / 1e4);
+        // log that we upserted a caption-based speech interval for participant item.userId
+        window.ws?.sendJson({
+            type: 'LogUpsertedCaptionBasedSpeechInterval',
+            message: `Upserted caption-based speech interval for participant ${item.userId}`
+        });
+        dominantSpeakerManager.upsertSpeechInterval(captionId, startMs, startMs + durationMs, item.userId);
     }
 
     // If we don't need the captions, we can leave.
@@ -1830,7 +2262,7 @@ const processClosedCaptionData = (item) => {
 
     const itemConverted = {
         deviceId: item.userId,
-        captionId: utteranceIdGenerator.next(item.userId, item.isFinal),
+        captionId: captionId,
         text: item.text,
         audioTimestamp: item.timestampAudioSent,
         isFinal: item.isFinal
@@ -2321,6 +2753,162 @@ const handleVideoTrack = async (event) => {
 new RTCInterceptor({
     onPeerConnectionCreate: (peerConnection) => {
         realConsole?.log('New RTCPeerConnection created:', peerConnection);
+
+        // Unique id so downstream consumers can tell which peer connection a
+        // given stats/state message belongs to (Teams creates several).
+        const peerConnectionId = (crypto?.randomUUID?.() ?? `pc-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+
+        const peerConnectionCreatedAt = performance.now();
+        let peerConnectionStateSequence = 0;
+
+        const getDescriptionSummary = (description) => {
+            if (!description) {
+                return null;
+            }
+
+            return {
+                type: description.type,
+                // Avoid sending the entire SDP unless you specifically need it.
+                sdpLength: description.sdp?.length ?? 0,
+            };
+        };
+
+        // Pull the DTLS/ICE transport state out of getStats() so we can prove,
+        // directly from the transport layer, when the DTLS handshake actually
+        // completes. connectionState is an aggregate of ICE + DTLS, so when it
+        // flips to 'connected' while iceConnectionState was already 'connected',
+        // the deciding factor is almost always the DTLS handshake finishing
+        // (dtlsState: connecting -> connected). Capturing dtlsState here lets us
+        // confirm that transition rather than infer it.
+        const getTransportStats = async () => {
+            try {
+                const stats = await peerConnection.getStats();
+                const transports = [];
+                const candidatePairsById = new Map();
+
+                stats.forEach((report) => {
+                    if (report.type === 'candidate-pair') {
+                        candidatePairsById.set(report.id, report);
+                    }
+                });
+
+                stats.forEach((report) => {
+                    if (report.type !== 'transport') {
+                        return;
+                    }
+
+                    const selectedPair =
+                        report.selectedCandidatePairId != null
+                            ? candidatePairsById.get(
+                                  report.selectedCandidatePairId
+                              )
+                            : null;
+
+                    transports.push({
+                        // The two fields that actually prove the handshake:
+                        // dtlsState transitions connecting -> connected when the
+                        // DTLS handshake finishes; iceState should already be
+                        // 'connected' before that happens.
+                        dtlsState: report.dtlsState,
+                        iceState: report.iceState,
+
+                        // Extra context that only exists once DTLS negotiates.
+                        dtlsRole: report.dtlsRole,
+                        dtlsCipher: report.dtlsCipher,
+                        srtpCipher: report.srtpCipher,
+                        tlsVersion: report.tlsVersion,
+
+                        selectedCandidatePairId: report.selectedCandidatePairId,
+                        selectedCandidatePair: selectedPair
+                            ? {
+                                  state: selectedPair.state,
+                                  nominated: selectedPair.nominated,
+                                  currentRoundTripTime:
+                                      selectedPair.currentRoundTripTime,
+                              }
+                            : null,
+                    });
+                });
+
+                return transports;
+            } catch (error) {
+                realConsole?.log('getTransportStats error', error);
+                return { error: error?.message ?? String(error) };
+            }
+        };
+
+        const sendPeerConnectionState = async (eventName) => {
+            // Capture the synchronous state first so it reflects the exact moment
+            // the event fired, before we await the (async) transport stats.
+            const snapshot = {
+                type: 'WebRTCPeerConnectionStateChanged',
+                peerConnectionId,
+                eventName,
+                sequence: ++peerConnectionStateSequence,
+                elapsedMsSincePeerConnectionCreated: Math.round(
+                    performance.now() - peerConnectionCreatedAt
+                ),
+
+                connectionState: peerConnection.connectionState,
+                iceConnectionState: peerConnection.iceConnectionState,
+                iceGatheringState: peerConnection.iceGatheringState,
+                signalingState: peerConnection.signalingState,
+
+                localDescription: getDescriptionSummary(
+                    peerConnection.localDescription
+                ),
+                remoteDescription: getDescriptionSummary(
+                    peerConnection.remoteDescription
+                ),
+                currentLocalDescription: getDescriptionSummary(
+                    peerConnection.currentLocalDescription
+                ),
+                currentRemoteDescription: getDescriptionSummary(
+                    peerConnection.currentRemoteDescription
+                ),
+                pendingLocalDescription: getDescriptionSummary(
+                    peerConnection.pendingLocalDescription
+                ),
+                pendingRemoteDescription: getDescriptionSummary(
+                    peerConnection.pendingRemoteDescription
+                ),
+            };
+
+            // transports[].dtlsState is what lets you distinguish a DTLS-driven
+            // connectionState change (dtlsState connecting -> connected) from an
+            // ICE-driven one. This is the direct proof of the DTLS handshake.
+            snapshot.transports = await getTransportStats();
+
+            window.ws?.sendJson(snapshot);
+        };
+
+        // Initial snapshot.
+        sendPeerConnectionState('created');
+
+        const peerConnectionStateEventNames = [
+            'connectionstatechange',
+            'iceconnectionstatechange',
+            'icegatheringstatechange',
+            'signalingstatechange',
+            'negotiationneeded',
+        ];
+
+        for (const eventName of peerConnectionStateEventNames) {
+            peerConnection.addEventListener(eventName, () => {
+                sendPeerConnectionState(eventName);
+
+                if (
+                    eventName === 'connectionstatechange' &&
+                    (
+                        peerConnection.connectionState === 'closed' ||
+                        peerConnection.connectionState === 'failed'
+                    )
+                ) {
+                    clearInterval(receivePathStatsInterval);
+                }
+            });
+        }
+
         peerConnection.addEventListener('datachannel', (event) => {
             realConsole?.log('datachannel', event);
             realConsole?.log('datachannel label', event.channel.label);
@@ -2348,13 +2936,20 @@ new RTCInterceptor({
             // We need to capture every audio track in the meeting,
             // but we don't need to do anything with the video tracks
             if (event.track?.kind === 'audio') {
-                window.styleManager.addAudioTrack(event.track);
+                window.mixedAudioStreamManager?.addAudioTrackFromTrackEvent(event);
                 if (window.initialData.sendPerParticipantAudio) {
                     handleAudioTrack(event);
+                }
+                else if (window.initialData.recordParticipantSpeechStartStopEvents) {
+                    // If we are not recording per participant audio but we need speech start events, then we only need to track the receiver.
+                    window.receiverManager?.addReceiver(event.receiver);
                 }
             }
             if (event.track?.kind === 'video') {
                 window.styleManager.addVideoTrack(event);
+                if (window.initialData.sendPerParticipantVideo) {
+                    handleVideoTrackForRealTimePerParticipantVideo(event);
+                }
             }
         });
 
@@ -2425,6 +3020,136 @@ new RTCInterceptor({
                 //console.log('ICE Candidate:', event.candidate);
             }
         });
+
+        // Periodically collect and report WebRTC receive-path stats for this peer connection
+        const collectReceivePathStats = async (pc) => {
+            // close() does not fire connectionstatechange, so guard here to stop
+            // reporting (and leaking the interval) once the PC is gone.
+            if (pc.connectionState === 'closed' || pc.connectionState === 'failed') {
+                window.ws?.sendJson({
+                    type: 'WebRTCConnectionStateChanged',
+                    peerConnectionId,
+                    connectionState: pc.connectionState,
+                });
+                clearInterval(receivePathStatsInterval);
+                return;
+            }
+            try {
+                const stats = await pc.getStats();
+
+                let selectedPair;
+                let localCandidate;
+                let remoteCandidate;
+                const inboundAudio = [];
+                const dataChannels = [];
+                const transports = [];
+
+                for (const report of stats.values()) {
+                    if (report.type === 'transport') {
+                        transports.push({
+                            id: report.id,
+                            dtlsState: report.dtlsState,
+                            iceState: report.iceState,
+                            iceRole: report.iceRole,
+                            selectedCandidatePairId: report.selectedCandidatePairId,
+                            bytesSent: report.bytesSent,
+                            bytesReceived: report.bytesReceived,
+                            packetsSent: report.packetsSent,
+                            packetsReceived: report.packetsReceived,
+                        });
+                    }
+
+                    if (report.type === "candidate-pair" && report.selected) {
+                        selectedPair = report;
+                    }
+
+                    if (report.type === "local-candidate") {
+                        localCandidate ??= report;
+                    }
+
+                    if (report.type === "remote-candidate") {
+                        remoteCandidate ??= report;
+                    }
+
+                    if (report.type === "inbound-rtp" && report.kind === "audio") {
+                        inboundAudio.push({
+                            ssrc: report.ssrc,
+                            bytesReceived: report.bytesReceived,
+                            packetsReceived: report.packetsReceived,
+                            packetsLost: report.packetsLost,
+                            jitter: report.jitter,
+                        });
+                    }
+
+                    if (report.type === "data-channel") {
+                        dataChannels.push({
+                            label: report.label,
+                            state: report.state,
+                            messagesReceived: report.messagesReceived,
+                            bytesReceived: report.bytesReceived,
+                            messagesSent: report.messagesSent,
+                        });
+                    }
+                }
+
+                window.ws?.sendJson({
+                    type: "WebRTCReceivePathStats",
+                    peerConnectionId,
+
+                    connectionState: pc.connectionState,
+                    iceConnectionState: pc.iceConnectionState,
+                    iceGatheringState: pc.iceGatheringState,
+                    signalingState: pc.signalingState,
+
+                    hasLocalDescription: !!pc.localDescription,
+                    hasRemoteDescription: !!pc.remoteDescription,
+
+                    currentLocalDescriptionType:
+                        pc.currentLocalDescription?.type ?? null,
+                    currentRemoteDescriptionType:
+                        pc.currentRemoteDescription?.type ?? null,
+                    pendingLocalDescriptionType:
+                        pc.pendingLocalDescription?.type ?? null,
+                    pendingRemoteDescriptionType:
+                        pc.pendingRemoteDescription?.type ?? null,
+
+                    selectedPair: selectedPair && {
+                        state: selectedPair.state,
+                        nominated: selectedPair.nominated,
+                        bytesSent: selectedPair.bytesSent,
+                        bytesReceived: selectedPair.bytesReceived,
+                        currentRoundTripTime: selectedPair.currentRoundTripTime,
+                        localCandidateId: selectedPair.localCandidateId,
+                        remoteCandidateId: selectedPair.remoteCandidateId,
+                    },
+                    localCandidate: localCandidate && {
+                        candidateType: localCandidate.candidateType,
+                        protocol: localCandidate.protocol,
+                        address: localCandidate.address,
+                        port: localCandidate.port,
+                    },
+                    remoteCandidate: remoteCandidate && {
+                        candidateType: remoteCandidate.candidateType,
+                        protocol: remoteCandidate.protocol,
+                        address: remoteCandidate.address,
+                        port: remoteCandidate.port,
+                    },
+                    transports,
+                    inboundAudio,
+                    dataChannels,
+                });
+            } catch (error) {
+                window.ws?.sendJson({
+                    type: "WebRTCReceivePathStatsError",
+                    peerConnectionId,
+                    error: error?.message ?? String(error),
+                });
+            }
+        };
+
+        const receivePathStatsInterval = setInterval(() => {
+            collectReceivePathStats(peerConnection);
+        }, 60000);
     },
     onDataChannelCreate: (dataChannel, peerConnection) => {
         realConsole?.log('New DataChannel created:', dataChannel);
@@ -2705,22 +3430,31 @@ window.botOutputManager = botOutputManager;
 (function () {
     const _bind = Function.prototype.bind;
     Function.prototype.bind = function (thisArg, ...args) {
-      if (this.name === 'onMessageReceived') {
-        const bound = _bind.apply(this, [thisArg, ...args]);
-        return function (...callArgs) {
-          const eventData = callArgs[0];
-          if (eventData?.data?.chatServiceBatchEvent?.[0]?.message)
-          {
-            const message = eventData.data.chatServiceBatchEvent[0].message;
-            realConsole?.log('chatMessage', message);
-            window.chatMessageManager?.handleChatMessage(message);
-          }
-          return bound.apply(this, callArgs);
-        };
-      }
-      return _bind.apply(this, [thisArg, ...args]);
+        if (this.name === 'onMessageReceived') {
+            const bound = _bind.apply(this, [thisArg, ...args]);
+            return function (...callArgs) {
+                const eventData = callArgs[0];
+                if (eventData?.data?.chatServiceBatchEvent)
+                {
+                    const batchEvents = eventData.data.chatServiceBatchEvent;
+                    if (Array.isArray(batchEvents))
+                    {
+                        for (const event of batchEvents) 
+                        {
+                            if (event?.message)
+                            {
+                                realConsole?.log('chatMessage', event.message);
+                                window.chatMessageManager?.handleChatMessage(event.message);
+                            }
+                        }
+                    }
+                }
+                return bound.apply(this, callArgs);
+            };
+        }
+        return _bind.apply(this, [thisArg, ...args]);
     };
-  })();
+})();
 
 class CallManager {
     constructor() {
@@ -2770,6 +3504,49 @@ class CallManager {
         // return this.activeCall.currentUserSkypeIdentity?.id;
     }
 
+    disableVideoEffects() {
+        try {
+            this.setActiveCall();
+            if (!this.activeCall) {
+                return false;
+            }
+
+            const videoEffectManager = this.activeCall?.mediaAgent?.deviceManager?.effectsManagerInternal?.videoEffectManager;
+            if (!videoEffectManager) {
+                return false;
+            }
+
+            if (!videoEffectManager.__attendeeIsEffectEnabledPatched) {
+                Object.defineProperty(videoEffectManager, "isEffectEnabled", {
+                    get() {
+                        return false;
+                    },
+                    configurable: true,
+                });
+                videoEffectManager.__attendeeIsEffectEnabledPatched = true;
+            }
+            return true;
+        } catch (error) {
+            return false;
+        }
+    }
+
+    getUnmutedParticipantIds() {
+        this.setActiveCall();
+        if (!this.activeCall) {
+            return [];
+        }
+        if (!this.activeCall.participants) {
+            return [];
+        }
+        const unmutedParticipantIds = new Set();
+        this.activeCall.participants.forEach(participant => {
+            if (participant.isServerMuted === false && participant.displayName) {
+                unmutedParticipantIds.add(participant.id);
+            }
+        });
+        return Array.from(unmutedParticipantIds);
+    }
 
     getSpeakingParticipantIds(contributingSources) {
         this.setActiveCall();
@@ -2879,17 +3656,32 @@ class CallManager {
                     // Only do it if the interval is not already set
                     if (this.closedCaptionLanguageInterval)
                         return;
+                    // Check every 15 seconds whether the closed caption language is still the desired language
+                    // If it is not and we are within the enforcement window, then set the closed caption language to the desired language
+                    this.closedCaptionLanguageIntervalStartTime = Date.now();
                     this.closedCaptionLanguageInterval = setInterval(() => {
                         if (this.activeCall && this.activeCall.getClosedCaptionsLanguage) {
-                            if (this.activeCall.getClosedCaptionsLanguage() !== this.closedCaptionLanguage) {
+                            const currentLanguage = this.activeCall.getClosedCaptionsLanguage();
+                            if (currentLanguage !== this.closedCaptionLanguage) {
+                                const enforcementTimeoutSeconds = window.teamsInitialData.enforceTeamsClosedCaptionsLanguageTimeoutSeconds || 0;
+                                const elapsedSeconds = (Date.now() - this.closedCaptionLanguageIntervalStartTime) / 1000;
+                                const withinEnforcementWindow = elapsedSeconds < enforcementTimeoutSeconds;
+
                                 window.ws?.sendJson({
                                     type: "closedCaptionsLanguageMismatch",
                                     desiredLanguage: this.closedCaptionLanguage,
-                                    currentLanguage: this.activeCall.getClosedCaptionsLanguage()
+                                    currentLanguage: currentLanguage,
+                                    elapsedSeconds: elapsedSeconds,
+                                    enforcementTimeoutSeconds: enforcementTimeoutSeconds,
+                                    willEnforce: withinEnforcementWindow
                                 });
+
+                                if (withinEnforcementWindow) {
+                                    this.activeCall.setClosedCaptionsLanguage(this.closedCaptionLanguage);
+                                }
                             }
                         }
-                    }, 60000);
+                    }, 15000);
                 }
             }, 10000);
             return true;
@@ -2900,3 +3692,305 @@ class CallManager {
 
 const callManager = new CallManager();
 window.callManager = callManager;
+
+if (window.teamsInitialData?.shouldLogNetworkRequests) {
+    
+(function installFetchAndXhrNetworkInterceptor() {
+    if (window.__attendeeNetworkInterceptorInstalled) {
+      return;
+    }
+    window.__attendeeNetworkInterceptorInstalled = true;
+    
+    let enabled = false;
+    let interceptorStarted = false;
+    let nextRequestId = 1;
+  
+    function nowMs() {
+      return Math.round(performance.timeOrigin + performance.now());
+    }
+  
+    function safeSendJson(payload) {
+      try {
+        window.ws?.sendJson({
+          type: "NetworkRequest",
+          ...payload,
+        });
+      } catch (err) {
+        // Never let logging interfere with the page.
+      }
+    }
+  
+    function truncateForLog(value, maxChars) {
+      if (value == null) {
+        return "";
+      }
+  
+      const str = String(value);
+      if (str.length <= maxChars) {
+        return str;
+      }
+  
+      return str.slice(0, maxChars);
+    }
+  
+    function normalizeFetchUrl(input) {
+      try {
+        if (typeof input === "string") {
+          return input;
+        }
+  
+        if (input instanceof URL) {
+          return input.toString();
+        }
+  
+        if (input instanceof Request) {
+          return input.url;
+        }
+  
+        return String(input);
+      } catch (err) {
+        return "<unknown>";
+      }
+    }
+  
+    function normalizeFetchMethod(input, init) {
+      try {
+        if (init?.method) {
+          return String(init.method).toUpperCase();
+        }
+  
+        if (input instanceof Request && input.method) {
+          return String(input.method).toUpperCase();
+        }
+  
+        return "GET";
+      } catch (err) {
+        return "GET";
+      }
+    }
+  
+    async function readResponsePreview(response, maxChars) {
+      try {
+        const clone = response.clone();
+  
+        // Use streaming when available so we do not need to buffer an entire large response.
+        if (clone.body?.getReader) {
+          const reader = clone.body.getReader();
+          const decoder = new TextDecoder("utf-8", { fatal: false });
+  
+          let preview = "";
+          while (preview.length < maxChars) {
+            const { value, done } = await reader.read();
+            if (done) {
+              break;
+            }
+  
+            preview += decoder.decode(value, { stream: true });
+          }
+  
+          try {
+            await reader.cancel();
+          } catch (err) {}
+  
+          preview += decoder.decode();
+          return truncateForLog(preview, maxChars);
+        }
+  
+        // Fallback for older browsers / weird Response objects.
+        return truncateForLog(await clone.text(), maxChars);
+      } catch (err) {
+        return `<response body unavailable: ${err?.name || "Error"}: ${err?.message || String(err)}>`;
+      }
+    }
+  
+    window.startInterceptingFetchAndXhrRequests = function startInterceptingFetchAndXhrRequests(options = {}) {
+      if (interceptorStarted) {
+        return;
+      }
+        
+      interceptorStarted = true;
+      enabled = true;
+  
+      const originalFetch = window.fetch;
+      const originalXhrOpen = XMLHttpRequest.prototype.open;
+      const originalXhrSend = XMLHttpRequest.prototype.send;
+      const originalXhrSetRequestHeader = XMLHttpRequest.prototype.setRequestHeader;
+
+      const maxResponseChars = Number.isFinite(options.maxResponseChars)
+        ? options.maxResponseChars
+        : 500;
+  
+      safeSendJson({
+        event: "network_interceptor_started",
+        timestampMs: nowMs(),
+        maxResponseChars,
+      });
+  
+      window.fetch = function interceptedFetch(input, init) {
+        if (!enabled) {
+          return originalFetch.apply(this, arguments);
+        }
+  
+        const requestId = nextRequestId++;
+        const startedAtMs = nowMs();
+        const url = normalizeFetchUrl(input);
+        const method = normalizeFetchMethod(input, init);
+  
+        let fetchPromise;
+        try {
+          fetchPromise = originalFetch.apply(this, arguments);
+        } catch (err) {
+          safeSendJson({
+            event: "request_failed",
+            requestId,
+            requestType: "fetch",
+            method,
+            url,
+            startedAtMs,
+            finishedAtMs: nowMs(),
+            errorName: err?.name,
+            errorMessage: err?.message || String(err),
+          });
+          throw err;
+        }
+  
+        return fetchPromise.then(
+          (response) => {
+            const finishedAtMs = nowMs();
+  
+            // Do this async and do not delay the page's fetch caller.
+            readResponsePreview(response, maxResponseChars).then((responsePreview) => {
+              safeSendJson({
+                event: "request_finished",
+                requestId,
+                requestType: "fetch",
+                method,
+                url,
+                status: response.status,
+                statusText: response.statusText,
+                ok: response.ok,
+                responseUrl: response.url,
+                contentType: response.headers?.get?.("content-type"),
+                startedAtMs,
+                finishedAtMs,
+                durationMs: finishedAtMs - startedAtMs,
+                responsePreview,
+              });
+            });
+  
+            return response;
+          },
+          (err) => {
+            safeSendJson({
+              event: "request_failed",
+              requestId,
+              requestType: "fetch",
+              method,
+              url,
+              startedAtMs,
+              finishedAtMs: nowMs(),
+              errorName: err?.name,
+              errorMessage: err?.message || String(err),
+            });
+            throw err;
+          }
+        );
+      };
+  
+      XMLHttpRequest.prototype.open = function interceptedXhrOpen(method, url) {
+        this.__attendeeNetworkLog = {
+          requestId: nextRequestId++,
+          requestType: "xhr",
+          method: method ? String(method).toUpperCase() : "GET",
+          url: url ? String(url) : "<unknown>",
+          startedAtMs: null,
+          requestHeaders: {},
+        };
+  
+        return originalXhrOpen.apply(this, arguments);
+      };
+  
+      XMLHttpRequest.prototype.setRequestHeader = function interceptedXhrSetRequestHeader(name, value) {
+        try {
+          if (this.__attendeeNetworkLog) {
+            this.__attendeeNetworkLog.requestHeaders[String(name)] = String(value);
+          }
+        } catch (err) {}
+  
+        return originalXhrSetRequestHeader.apply(this, arguments);
+      };
+  
+      XMLHttpRequest.prototype.send = function interceptedXhrSend() {
+        if (!enabled || !this.__attendeeNetworkLog) {
+          return originalXhrSend.apply(this, arguments);
+        }
+  
+        const metadata = this.__attendeeNetworkLog;
+        metadata.startedAtMs = nowMs();
+  
+        this.addEventListener("loadend", function onXhrLoadEnd() {
+          const finishedAtMs = nowMs();
+  
+          let responsePreview = "";
+          try {
+            // responseText throws unless responseType is "" or "text".
+            if (this.responseType === "" || this.responseType === "text") {
+              responsePreview = truncateForLog(this.responseText, maxResponseChars);
+            } else {
+              responsePreview = `<non-text responseType: ${this.responseType}>`;
+            }
+          } catch (err) {
+            responsePreview = `<response body unavailable: ${err?.name || "Error"}: ${err?.message || String(err)}>`;
+          }
+  
+          let responseUrl = metadata.url;
+          try {
+            responseUrl = this.responseURL || metadata.url;
+          } catch (err) {}
+  
+          let contentType = null;
+          try {
+            contentType = this.getResponseHeader("content-type");
+          } catch (err) {}
+  
+          safeSendJson({
+            event: "request_finished",
+            requestId: metadata.requestId,
+            requestType: "xhr",
+            method: metadata.method,
+            url: metadata.url,
+            status: this.status,
+            statusText: this.statusText,
+            ok: this.status >= 200 && this.status < 300,
+            responseUrl,
+            contentType,
+            startedAtMs: metadata.startedAtMs,
+            finishedAtMs,
+            durationMs: finishedAtMs - metadata.startedAtMs,
+            responsePreview,
+          });
+        });
+  
+        try {
+          return originalXhrSend.apply(this, arguments);
+        } catch (err) {
+          safeSendJson({
+            event: "request_failed",
+            requestId: metadata.requestId,
+            requestType: "xhr",
+            method: metadata.method,
+            url: metadata.url,
+            startedAtMs: metadata.startedAtMs,
+            finishedAtMs: nowMs(),
+            errorName: err?.name,
+            errorMessage: err?.message || String(err),
+          });
+          throw err;
+        }
+      };
+    };
+  })();
+
+
+    window.startInterceptingFetchAndXhrRequests({ maxResponseChars: 500 });
+  }

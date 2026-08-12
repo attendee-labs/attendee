@@ -1,24 +1,50 @@
+import hashlib
+import json
 import logging
 import os
+import random
+import subprocess
 import time
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, quote, urlencode, urlparse, urlunparse
 
+import redis
 import requests
 from django.conf import settings
-from selenium.common.exceptions import ElementNotInteractableException, NoSuchElementException, TimeoutException
+from selenium.common.exceptions import ElementNotInteractableException, NoSuchElementException, StaleElementReferenceException, TimeoutException
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
 from bots.bot_sso_utils import get_google_meet_set_cookie_url
+from bots.google_meet_bot_adapter.okta_authenticator import OktaAuthenticator, OktaSessionError
 from bots.models import RecordingViews
 from bots.web_bot_adapter.ui_methods import UiCouldNotClickElementException, UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableExpectedException
+
+from .mocap_manager import MocapManager
 
 logger = logging.getLogger(__name__)
 
 
+def mask_url_query_param_values(url, mask="***"):
+    """Return the URL with each query parameter's value replaced by a mask, preserving the param keys."""
+    parsed_url = urlparse(url)
+    masked_query = urlencode([(key, mask) for key, _ in parse_qsl(parsed_url.query, keep_blank_values=True)])
+    return urlunparse(parsed_url._replace(query=masked_query, params="", fragment=""))
+
+
 class UiGoogleBlockingUsException(UiRetryableExpectedException):
+    def __init__(self, message, step=None, inner_exception=None):
+        super().__init__(message, step, inner_exception)
+
+
+class UiGoogleWrongAudioConfigurationException(UiRetryableExpectedException):
+    def __init__(self, message, step=None, inner_exception=None):
+        super().__init__(message, step, inner_exception)
+
+
+class UiMocapSequenceNotAvailableException(UiRetryableExpectedException):
     def __init__(self, message, step=None, inner_exception=None):
         super().__init__(message, step, inner_exception)
 
@@ -30,7 +56,7 @@ class GoogleMeetUIMethods:
             return element
         except Exception as e:
             # Take screenshot when any exception occurs
-            logger.warning(f"Exception raised in locate_element for {step}")
+            logger.warning(f"Exception raised in locate_element for {step}. Exception type = {type(e)}")
             raise UiCouldNotLocateElementException(f"Exception raised in locate_element for {step}", step, e)
 
     def find_element_by_selector(self, selector_type, selector):
@@ -71,6 +97,16 @@ class GoogleMeetUIMethods:
             logger.warning(f"Error occurred when clicking element for step {step}, will retry. Exception class name was {e.__class__.__name__}")
             raise UiCouldNotClickElementException("Error occurred when clicking element", step, e)
 
+    def click_element_with_fallback_to_forceful_click(self, element, step):
+        try:
+            self.click_element(element, step)
+        except UiCouldNotClickElementException as e:
+            if isinstance(e.inner_exception, ElementNotInteractableException):
+                logger.warning(f"Element was not interactable for step {step}, falling back to forceful click")
+                self.click_element_forcefully(element, step)
+            else:
+                raise
+
     # If the meeting you're about to join is being recorded, gmeet makes you click an additional button after you're admitted to the meeting
     def click_this_meeting_is_being_recorded_join_now_button(self, step):
         this_meeting_is_being_recorded_join_now_button = self.find_element_by_selector(By.XPATH, '//button[.//span[text()="Join now"]]')
@@ -90,6 +126,18 @@ class GoogleMeetUIMethods:
         if cannot_join_element:
             # This means google is blocking us for whatever reason, but we can retry
             element_text = cannot_join_element.text
+
+            # We need to track how many times this has happened so far.
+            self.number_of_times_blocked_by_google += 1
+
+            # If we have the ability to login, but we aren't using it, then we should raise an error that login is required.
+            # Logging in will get us unblocked.
+            if self.google_meet_bot_login_is_available and not self.google_meet_bot_login_should_be_used:
+                if self.number_of_times_blocked_by_google > 1:
+                    logger.warning("Google is blocking us for whatever reason and we have the ability to login but we aren't using it, so we should raise a UiLoginRequiredException. Logging in will get us unblocked.")
+                    raise UiLoginRequiredException("Login required to get around blocking", step)
+                logger.warning(f"Google is blocking us for whatever reason and we have the ability to login. So far it has only happened {self.number_of_times_blocked_by_google} times, so we will simply retry.")
+
             logger.warning(f"Google is blocking us for whatever reason, but we can retry. Element text: '{element_text}'. Raising UiGoogleBlockingUsException")
             raise UiGoogleBlockingUsException("You can't join this video call", step)
 
@@ -142,26 +190,60 @@ class GoogleMeetUIMethods:
     def turn_off_media_inputs(self):
         logger.info("Waiting for the microphone button...")
         MICROPHONE_BUTTON_SELECTOR = 'div[aria-label="Turn off microphone"], button[aria-label="Turn off microphone"]'
-        microphone_button = self.locate_element(
-            step="turn_off_microphone_button",
-            condition=EC.presence_of_element_located((By.CSS_SELECTOR, MICROPHONE_BUTTON_SELECTOR)),
-            wait_time_seconds=6,
-        )
-        logger.info("Clicking the microphone button...")
-        self.click_element(microphone_button, "turn_off_microphone_button")
+        MICROPHONE_BUTTON_ON_SELECTOR = 'div[aria-label="Turn on microphone"], button[aria-label="Turn on microphone"]'
 
-        logger.info("Waiting for the camera button...")
         CAMERA_BUTTON_SELECTOR = 'div[aria-label="Turn off camera"], button[aria-label="Turn off camera"]'
-        camera_button = self.locate_element(
-            step="turn_off_camera_button",
-            condition=EC.presence_of_element_located((By.CSS_SELECTOR, CAMERA_BUTTON_SELECTOR)),
-            wait_time_seconds=6,
-        )
-        logger.info("Clicking the camera button...")
-        self.click_element(camera_button, "turn_off_camera_button")
+        CAMERA_BUTTON_ON_SELECTOR = 'div[aria-label="Turn on camera"], button[aria-label="Turn on camera"]'
+
+        for attempt in range(5):
+            microphone_button = self.locate_element(
+                step="turn_off_microphone_button",
+                condition=EC.element_to_be_clickable((By.CSS_SELECTOR, MICROPHONE_BUTTON_SELECTOR)),
+                wait_time_seconds=6,
+            )
+            logger.info("Clicking the microphone button...")
+            if self.ui_interaction_mode == "humanized":
+                self.humanized_navigate_to_and_click_element(microphone_button)
+            else:
+                self.click_element(microphone_button, "turn_off_microphone_button")
+
+            # Wait for confirmation that microphone is off
+            try:
+                self.locate_element(
+                    step="wait_for_microphone_to_be_off",
+                    condition=EC.element_to_be_clickable((By.CSS_SELECTOR, MICROPHONE_BUTTON_ON_SELECTOR)),
+                    wait_time_seconds=2,
+                )
+                break
+            except:
+                logger.warning("Microphone button did not seem to be turned off. Retrying...")
+
+        for attempt in range(5):
+            logger.info("Waiting for the camera button...")
+            camera_button = self.locate_element(
+                step="turn_off_camera_button",
+                condition=EC.element_to_be_clickable((By.CSS_SELECTOR, CAMERA_BUTTON_SELECTOR)),
+                wait_time_seconds=6,
+            )
+            logger.info("Clicking the camera button...")
+            if self.ui_interaction_mode == "humanized":
+                self.humanized_navigate_to_and_click_element(camera_button)
+            else:
+                self.click_element(camera_button, "turn_off_camera_button")
+
+            # Wait for confirmation that camera is off
+            try:
+                self.locate_element(
+                    step="wait_for_camera_to_be_off",
+                    condition=EC.element_to_be_clickable((By.CSS_SELECTOR, CAMERA_BUTTON_ON_SELECTOR)),
+                    wait_time_seconds=2,
+                )
+                break
+            except:
+                logger.warning("Camera button did not seem to be turned off. Retrying...")
 
     def join_now_button_selector(self):
-        return '//button[.//span[text()="Ask to join" or text()="Join now" or text()="Join the call now"]]'
+        return '//button[.//span[text()="Ask to join" or text()="Join now" or text()="Join the call now" or text()="Join anyway" or text()="Join here too"]]'
 
     def check_for_failed_logged_in_bot_attempt(self):
         if not self.google_meet_bot_login_session:
@@ -176,7 +258,212 @@ class GoogleMeetUIMethods:
         return False
 
     def retrieve_name_input_element(self):
-        return WebDriverWait(self.driver, 1).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'input[type="text"][aria-label="Your name"]')))
+        return WebDriverWait(self.driver, 1).until(EC.element_to_be_clickable((By.CSS_SELECTOR, 'input[type="text"][aria-label="Your name"]')))
+
+    UNSHIFTED_PUNCTUATION = {
+        "-": "minus",
+        "=": "equal",
+        "[": "bracketleft",
+        "]": "bracketright",
+        "\\": "backslash",
+        ";": "semicolon",
+        "'": "apostrophe",
+        ",": "comma",
+        ".": "period",
+        "/": "slash",
+        "`": "grave",
+    }
+
+    SHIFTED_PUNCTUATION = {
+        "~": "grave",
+        "!": "1",
+        "@": "2",
+        "#": "3",
+        "$": "4",
+        "%": "5",
+        "^": "6",
+        "&": "7",
+        "*": "8",
+        "(": "9",
+        ")": "0",
+        "_": "minus",
+        "+": "equal",
+        "{": "bracketleft",
+        "}": "bracketright",
+        "|": "backslash",
+        ":": "semicolon",
+        '"': "apostrophe",
+        "<": "comma",
+        ">": "period",
+        "?": "slash",
+    }
+
+    def _x11_type_char(self, char):
+        needs_shift = char.isupper() or char in self.SHIFTED_PUNCTUATION
+
+        if char in self.SHIFTED_PUNCTUATION:
+            base = self.SHIFTED_PUNCTUATION[char]
+        elif char in self.UNSHIFTED_PUNCTUATION:
+            base = self.UNSHIFTED_PUNCTUATION[char]
+        elif char.isupper():
+            base = char.lower()
+        else:
+            base = char
+
+        if needs_shift:
+            self.x11_input.key_press("Shift")
+        self.x11_input.key_press(base)
+        self.x11_input.key_release(base)
+        if needs_shift:
+            self.x11_input.key_release("Shift")
+
+    def human_type(self, text):
+        self.ensure_x11_input()
+
+        for i, char in enumerate(text):
+            if i == 0:
+                time.sleep(random.uniform(0.15, 0.35))
+
+            self._x11_type_char(char)
+
+            time.sleep(random.uniform(0.24, 0.48))
+
+    def human_copy_and_paste(self, text):
+        self.ensure_x11_input()
+
+        subprocess.run(
+            ["xclip", "-selection", "clipboard"],
+            input=text.encode("utf-8"),
+            check=True,
+        )
+
+        time.sleep(random.uniform(0.15, 0.35))
+
+        self.x11_input.key_press("Control")
+        self.x11_input.key_press("v")
+        self.x11_input.key_release("v")
+        self.x11_input.key_release("Control")
+
+    def ensure_x11_input(self):
+        if not hasattr(self, "x11_input"):
+            from bots.web_bot_adapter.x11_input import X11Input
+
+            self.x11_input = X11Input()
+
+    def ensure_mocap_manager(self):
+        if not hasattr(self, "mocap_manager"):
+            self.mocap_manager = MocapManager(video_frame_size=self.video_frame_size)
+
+    def humanized_navigate_to_and_click_element(self, element):
+        self.ensure_x11_input()
+        self.ensure_mocap_manager()
+
+        metrics = self.driver.execute_script(
+            """
+            const el = arguments[0];
+            const r = el.getBoundingClientRect();
+            return {
+                left: r.left,
+                top: r.top,
+                width: r.width,
+                height: r.height,
+                screenX: window.screenX,
+                screenY: window.screenY,
+                dpr: window.devicePixelRatio || 1
+            };
+            """,
+            element,
+        )
+
+        if not metrics:
+            raise RuntimeError("No metrics returned from execute_script")
+
+        left = float(metrics["left"])
+        top = float(metrics["top"])
+        width = float(metrics["width"])
+        height = float(metrics["height"])
+        screen_x = float(metrics["screenX"])
+        screen_y = float(metrics["screenY"])
+        dpr = float(metrics["dpr"])
+
+        if width <= 0 or height <= 0:
+            raise RuntimeError(f"Element has invalid size: {width}x{height}")
+
+        # Clickable rect: half the width and half the height, centered
+        inset_x = 0
+        inset_y = 0
+        clickable_css_left = left + inset_x
+        clickable_css_right = left + width - inset_x
+        clickable_css_top = top + inset_y
+        clickable_css_bottom = top + height - inset_y
+
+        rect_left = int(round((screen_x + clickable_css_left) * dpr))
+        rect_top = int(round((screen_y + clickable_css_top) * dpr))
+        rect_right = int(round((screen_x + clickable_css_right) * dpr))
+        rect_bottom = int(round((screen_y + clickable_css_bottom) * dpr))
+
+        ptr = self.x11_input.root.query_pointer()._data
+        current_x = int(ptr["root_x"])
+        current_y = int(ptr["root_y"])
+
+        logger.info(f"humanized interaction: mouse at ({current_x},{current_y}), clickable rect [({rect_left},{rect_top})-({rect_right},{rect_bottom})]")
+
+        seq = None
+        num_seq_attempts = 10
+        for attempt in range(num_seq_attempts):
+            seq = self.mocap_manager.find_random_sequence_landing_in_rect(current_x, current_y, rect_left, rect_top, rect_right, rect_bottom)
+
+            # If we have hit dead ends 2 times in the past, we will stretch the mocap path to fit the desired endpoint
+            if self.number_of_times_mocap_sequence_not_available > 1 and seq is None:
+                logger.warning(f"No mocap sequence lands inside clickable rect from ({current_x},{current_y}) to [({rect_left},{rect_top})-({rect_right},{rect_bottom})]. Stretching and rotating the mocap path to fit the desired endpoint.")
+                seq = self.mocap_manager.find_random_sequence_landing_in_rect_with_stretch_and_rotation_allowed(current_x, current_y, rect_left, rect_top, rect_right, rect_bottom)
+
+            if seq is None:
+                self.number_of_times_mocap_sequence_not_available += 1
+                # This will trigger a retry
+                raise UiMocapSequenceNotAvailableException(f"No mocap sequence lands inside clickable rect from ({current_x},{current_y}) to [({rect_left},{rect_top})-({rect_right},{rect_bottom})]")
+
+            endpoint_monitor_x = current_x + seq.total_dx
+            endpoint_monitor_y = current_y + seq.total_dy
+            endpoint_page_x = endpoint_monitor_x / dpr - screen_x
+            endpoint_page_y = endpoint_monitor_y / dpr - screen_y
+
+            is_element_at_endpoint = self.driver.execute_script(
+                """
+                var el = document.elementFromPoint(arguments[0], arguments[1]);
+                var expected = arguments[2];
+                return !!el && (el === expected || expected.contains(el));
+                """,
+                endpoint_page_x,
+                endpoint_page_y,
+                element,
+            )
+
+            if is_element_at_endpoint:
+                break
+
+            logger.info(f"humanized interaction: endpoint page coords ({endpoint_page_x:.1f}, {endpoint_page_y:.1f}) not on target element, retrying (attempt {attempt + 1}/{num_seq_attempts})")
+        else:
+            raise RuntimeError(f"Could not find mocap sequence landing on target element after {num_seq_attempts} attempts")
+
+        logger.info(f"humanized interaction: selected sequence with {len(seq.movements)} movements, total_dx={seq.total_dx}, total_dy={seq.total_dy}")
+
+        for move in seq.movements:
+            dt = move.get("dt", 0)
+            if dt > 0:
+                time.sleep(dt)
+            dx = move.get("dx", 0)
+            dy = move.get("dy", 0)
+            if dx or dy:
+                self.x11_input.move_rel(dx, dy)
+
+        if seq.click_down_dt > 0:
+            time.sleep(seq.click_down_dt)
+        self.x11_input.button_press("left")
+
+        if seq.click_up_dt > 0:
+            time.sleep(seq.click_up_dt)
+        self.x11_input.button_release("left")
 
     def fill_out_name_input(self):
         num_attempts_to_look_for_name_input = 30
@@ -186,7 +473,13 @@ class GoogleMeetUIMethods:
                 name_input = self.retrieve_name_input_element()
                 self.check_for_failed_logged_in_bot_attempt()
                 logger.info("name input found")
-                name_input.send_keys(self.display_name)
+                if self.ui_interaction_mode == "humanized":
+                    self.humanized_navigate_to_and_click_element(name_input)
+                    logger.info("Name input clicked")
+                    self.human_copy_and_paste(self.display_name)
+                    logger.info("Name input filled out")
+                else:
+                    name_input.send_keys(self.display_name)
                 return
             except TimeoutException as e:
                 self.look_for_blocked_element("name_input")
@@ -201,12 +494,12 @@ class GoogleMeetUIMethods:
                     logger.warning("Could not find name input. Timed out. Raising UiCouldNotLocateElementException")
                     raise UiCouldNotLocateElementException("Could not find name input. Timed out.", "name_input", e)
 
-            except ElementNotInteractableException as e:
-                logger.warning("Name input is not interactable. Going to try again.")
-                last_check_non_interactable = attempt_to_look_for_name_input_index == num_attempts_to_look_for_name_input - 1
-                if last_check_non_interactable:
-                    logger.warning("Could not find name input. Non interactable. Raising UiCouldNotLocateElementException")
-                    raise UiCouldNotLocateElementException("Could not find name input. Non interactable.", "name_input", e)
+            except (ElementNotInteractableException, StaleElementReferenceException) as e:
+                logger.warning(f"Name input is not interactable or stale. Exception type: {type(e)}. Going to try again.")
+                last_check_non_interactable_or_stale = attempt_to_look_for_name_input_index == num_attempts_to_look_for_name_input - 1
+                if last_check_non_interactable_or_stale:
+                    logger.warning(f"Could not find name input. Non interactable or stale. Exception type: {type(e)}. Raising UiCouldNotLocateElementException")
+                    raise UiCouldNotLocateElementException("Could not find name input. Non interactable or stale.", "name_input", e)
 
             except UiLoginAttemptFailedException as e:
                 raise e
@@ -216,7 +509,7 @@ class GoogleMeetUIMethods:
                 raise UiCouldNotLocateElementException("Could not find name input. Unknown error.", "name_input", e)
 
     def click_captions_button(self):
-        num_attempts_to_look_for_captions_button = 600
+        num_attempts_to_look_for_captions_button = self.automatic_leave_configuration.waiting_room_timeout_seconds * 2
         logger.info("Waiting for captions button...")
         waiting_room_timeout_started_at = time.time()
         for attempt_to_look_for_captions_button_index in range(num_attempts_to_look_for_captions_button):
@@ -262,7 +555,14 @@ class GoogleMeetUIMethods:
                 )
 
     def check_if_meeting_is_found(self):
-        meeting_not_found_element = self.find_element_by_selector(By.XPATH, '//*[contains(text(), "Check your meeting code") or contains(text(), "Invalid video call name") or contains(text(), "Your meeting code has expired")]')
+        meeting_not_found_texts = [
+            "Check your meeting code",
+            "Invalid video call name",
+            "Your meeting code has expired",
+            "The meeting code you entered doesn’t work",
+        ]
+        meeting_not_found_xpath = "//*[" + " or ".join(f'contains(text(), "{text}")' for text in meeting_not_found_texts) + "]"
+        meeting_not_found_element = self.find_element_by_selector(By.XPATH, meeting_not_found_xpath)
         if meeting_not_found_element:
             logger.warning("Meeting not found. Raising UiMeetingNotFoundException")
             raise UiMeetingNotFoundException("Meeting not found", "check_if_meeting_is_found")
@@ -329,28 +629,35 @@ class GoogleMeetUIMethods:
         logger.info("Waiting for the close button")
         close_button = self.locate_element(
             step="close_button_for_language_selection",
-            condition=EC.presence_of_element_located((By.CSS_SELECTOR, 'button[aria-label="Close dialog"]')),
+            condition=EC.presence_of_element_located((By.CSS_SELECTOR, 'button[aria-label="Close dialog"], button[aria-label="Close dialogue"]')),
             wait_time_seconds=6,
         )
         logger.info("Clicking the close button")
         self.click_element(close_button, "close_button")
 
     def disable_incoming_video_in_ui(self):
+        # First check if incoming video is already disabled. This is what we expect because
+        # we are disabling it via setting localstorage.
+        incoming_video_is_set_to_audio_only_element = self.find_element_by_selector(By.XPATH, '//*[contains(text(), "Incoming video is set to audio only")]')
+        if incoming_video_is_set_to_audio_only_element:
+            logger.info("No need to disable incoming video via the UI. It is already disabled.")
+            return
+
         logger.info("Disabling incoming video")
         logger.info("Waiting for the more options button...")
         MORE_OPTIONS_BUTTON_SELECTOR = 'button[jsname="NakZHc"][aria-label="More options"]'
         more_options_button = self.locate_element(
-            step="more_options_button_for_language_selection",
-            condition=EC.presence_of_element_located((By.CSS_SELECTOR, MORE_OPTIONS_BUTTON_SELECTOR)),
+            step="disable_incoming_video:more_options_button",
+            condition=EC.element_to_be_clickable((By.CSS_SELECTOR, MORE_OPTIONS_BUTTON_SELECTOR)),
             wait_time_seconds=6,
         )
-        logger.info("Clicking the more options button...")
-        self.click_element(more_options_button, "disable_incoming_video:more_options_button")
+        logger.info("Forcefully clicking the more options button...")
+        self.click_element_forcefully(more_options_button, "disable_incoming_video:more_options_button")
 
         logger.info("Waiting for the settings list item...")
         settings_list_item = self.locate_element(
-            step="settings_list_item",
-            condition=EC.presence_of_element_located((By.XPATH, '//li[.//span[text()="Settings"]]')),
+            step="disable_incoming_video:settings_list_item",
+            condition=EC.element_to_be_clickable((By.XPATH, '//li[.//span[text()="Settings"]]')),
             wait_time_seconds=6,
         )
         logger.info("Clicking the settings list item...")
@@ -359,7 +666,7 @@ class GoogleMeetUIMethods:
         logger.info("Waiting for the video button...")
         video_button = self.locate_element(
             step="video_button",
-            condition=EC.presence_of_element_located((By.CSS_SELECTOR, 'button[aria-label="Video"]')),
+            condition=EC.element_to_be_clickable((By.CSS_SELECTOR, 'button[aria-label="Video"]')),
             wait_time_seconds=6,
         )
         logger.info("Clicking the video button...")
@@ -379,7 +686,7 @@ class GoogleMeetUIMethods:
         logger.info("Waiting for the close button")
         close_button = self.locate_element(
             step="close_button",
-            condition=EC.presence_of_element_located((By.CSS_SELECTOR, '[aria-modal="true"] button[aria-label="Close dialog"]')),
+            condition=EC.element_to_be_clickable((By.CSS_SELECTOR, '[aria-modal="true"] button[aria-label="Close dialog"], [aria-modal="true"] button[aria-label="Close dialogue"]')),
             wait_time_seconds=6,
         )
         logger.info("Clicking the close button")
@@ -398,6 +705,36 @@ class GoogleMeetUIMethods:
                 if last_attempt:
                     raise e
                 logger.warning(f"Error setting layout: {e}. Retrying. Attempt #{attempt_index}...")
+
+                self.reset_attempt_to_set_layout()
+
+    def reset_attempt_to_set_layout(self):
+        # Check if there is a modal with a close button. If so click it.
+
+        logger.info("Looking for a modal with a close button")
+        close_button_selector = '[aria-modal="true"] button[aria-label="Close"]'
+        for attempt in range(5):
+            try:
+                close_button = WebDriverWait(self.driver, 1).until(EC.element_to_be_clickable((By.CSS_SELECTOR, close_button_selector)))
+                logger.info("Found it. Clicking the close button")
+                close_button.click()
+                break
+            except ElementNotInteractableException as e:
+                logger.warning(f"Modal close button not interactable (attempt {attempt + 1}/5): {e}. Retrying...")
+            except Exception as e:
+                logger.warning(f"No modal with a close button found: {e}. Continuing...")
+                break
+
+        logger.info("Sending a click to the body element to close any menus")
+        try:
+            body_element = self.locate_element(
+                step="body_element",
+                condition=EC.presence_of_element_located((By.TAG_NAME, "body")),
+                wait_time_seconds=1,
+            )
+            self.click_element(body_element, "body_element")
+        except Exception as e:
+            logger.warning(f"Error sending a click to the body element to close any menus: {e}. Continuing...")
 
     def attempt_to_set_layout(self, layout_to_select):
         logger.info("Begin setting layout. Waiting for the more options button...")
@@ -433,7 +770,7 @@ class GoogleMeetUIMethods:
             logger.info("Waiting for the 'Sidebar' label element")
             sidebar_label = self.locate_element(
                 step="sidebar_label",
-                condition=EC.presence_of_element_located((By.XPATH, '//label[.//span[text()="Sidebar"]]')),
+                condition=EC.element_to_be_clickable((By.XPATH, '//label[.//span[text()="Sidebar"]]')),
                 wait_time_seconds=6,
             )
             logger.info("Clicking the 'Sidebar' label element")
@@ -515,6 +852,24 @@ class GoogleMeetUIMethods:
                 logger.warning(f"Error logging in to Google Meet account. Clearing cookies and retrying... Attempts remaining: {num_attempts - attempt_index - 1}")
                 self.driver.delete_all_cookies()
 
+    def sign_in_to_gsuite_with_specific_email(self):
+        logger.info("Signing in to GSuite with specific email")
+        logger.info("Navigating to http://accounts.google.com/")
+        self.driver.get("http://accounts.google.com/")
+
+        # Then you need to fill in the email input
+        logger.info("Filling in the email input...")
+        # Look for input type = email and fill it in
+        session_email = self.google_meet_bot_login_session.get("login_email")
+        email_input = self.locate_element(step="email_input_for_google_account_sign_in", condition=EC.element_to_be_clickable((By.CSS_SELECTOR, 'input[type="email"], input[aria-label="Email or phone"], input#identifierId')), wait_time_seconds=10)
+        email_input.send_keys(session_email)
+
+        # Press the enter key to submit the email input
+        email_input.send_keys(Keys.ENTER)
+
+        logger.info("Login attempted, waiting for redirect...")
+        logger.info(f"Current URL: {self.driver.current_url}")
+
     # This is safer because it prevents the browser from navigating to an untrusted url.
     # It is a bit less robust though and requires SITE_DOMAIN to be set correctly.
     # So not making it the default, as self-hosters don't need it.
@@ -549,15 +904,190 @@ class GoogleMeetUIMethods:
         logger.info(f"Navigating to gmail domain url: {gmail_domain_url}")
         self.driver.get(gmail_domain_url)
 
+    def login_to_google_meet_account_with_okta(self):
+        self.establish_okta_session()
+
+        google_login_url = f"https://www.google.com/a/{os.getenv('OKTA_BOT_LOGIN_GOOGLE_DOMAIN')}/ServiceLogin?service=mail"
+        logger.info(f"Navigating to domain-specific Google ServiceLogin: {google_login_url}")
+        self.driver.get(google_login_url)
+
+        # Wait for cookies indicating that we have logged in successfully
+        start_waiting_at = time.time()
+        saml_continue_clicked = False
+        while not self.has_google_cookies_that_indicate_logged_in(self.driver):
+            time.sleep(1)
+            logger.info(f"Waiting for Google auth cookies. Current URL: {self.driver.current_url}")
+
+            # Google shows a SAML "confirm account" speedbump that requires clicking "Continue"
+            if "speedbump/samlconfirmaccount" in self.driver.current_url and not saml_continue_clicked:
+                try:
+                    continue_button = WebDriverWait(self.driver, 10).until(EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Continue')] | //input[@type='submit'] | //div[@role='button'][contains(., 'Continue')]")))
+                    continue_button.click()
+                    saml_continue_clicked = True
+                    logger.info("Clicked SAML confirm account Continue button")
+                except Exception as e:
+                    logger.warning(f"Could not click SAML Continue button: {e}")
+
+            if time.time() - start_waiting_at > 60:
+                logger.warning(f"Login timed out after 60s. Current URL: {self.driver.current_url}")
+                # The cached Okta session may be invalid (e.g. revoked server-side). Evict it
+                # so the next attempt regenerates instead of reusing a likely-bad cookie.
+                self._clear_cached_okta_session()
+                # Save a screenshot so we can see why the login failed
+                self.send_screenshot_and_mhtml_file_message()
+                raise UiLoginAttemptFailedException("No Google auth cookies were present", "login_to_google_meet_account_with_okta")
+
+        logger.info(f"Google login complete. URL: {self.driver.current_url}")
+
+        # Set login session so we skip name input downstream
+        self.google_meet_bot_login_session = {"login_type": "okta"}
+
+    def _okta_session_redis_key(self):
+        domain = os.getenv("OKTA_BOT_LOGIN_DOMAIN", "")
+        username = os.getenv("OKTA_BOT_LOGIN_USERNAME", "")
+        totp_secret = os.getenv("OKTA_BOT_LOGIN_TOTP_SECRET", "")
+        fingerprint = hashlib.sha256(f"{domain}|{username}|{totp_secret}".encode()).hexdigest()
+        return f"okta_session_cookie:{fingerprint}"
+
+    def _clear_cached_okta_session(self, redis_client=None):
+        """Remove the cached Okta session cookie and its usage counter from redis."""
+        try:
+            if redis_client is None:
+                redis_client = redis.from_url(settings.REDIS_URL_WITH_PARAMS)
+            cookie_key = self._okta_session_redis_key()
+            redis_client.delete(cookie_key, f"{cookie_key}:uses")
+        except Exception as e:
+            logger.warning(f"Failed to clear cached Okta session from redis: {e}")
+
+    def establish_okta_session(self):
+        """Sets the Okta sid cookie. First looks in redis to see if one has already been set or is being set. If not, creates one.
+
+        Cached cookies are also expired after being used MAX_OKTA_SESSION_USES times to limit the blast radius if Okta invalidates the session early.
+        """
+        redis_client = redis.from_url(settings.REDIS_URL_WITH_PARAMS)
+        cookie_key = self._okta_session_redis_key()
+        usage_key = f"{cookie_key}:uses"
+        lock_key = f"{cookie_key}:lock"
+
+        okta_domain = os.getenv("OKTA_BOT_LOGIN_DOMAIN")
+        # Lock TTL must comfortably exceed the worst-case TOTP+navigation flow.
+        lock_ttl_seconds = 120
+        # Total time to wait for another bot to finish before giving up.
+        max_wait_seconds = 180
+        poll_interval_seconds = 3
+        max_okta_session_uses = int(os.getenv("OKTA_BOT_LOGIN_MAX_SESSION_USES", "20"))
+        deadline = time.time() + max_wait_seconds
+
+        while True:
+            cookie_data_raw = redis_client.get(cookie_key)
+            # If cookie is in redis, inject it into the driver
+            if cookie_data_raw:
+                # Atomically increment the usage counter so concurrent bots agree on use count.
+                use_count = redis_client.incr(usage_key)
+                if use_count > max_okta_session_uses:
+                    logger.info(f"Cached Okta session cookie has been used {use_count - 1} times (limit {max_okta_session_uses}). Discarding and regenerating.")
+                    self._clear_cached_okta_session(redis_client)
+                    continue
+
+                try:
+                    cookie_data = json.loads(cookie_data_raw)
+                    logger.info(f"Found Okta session cookie in redis (use {use_count}/{max_okta_session_uses}). Injecting into driver.")
+                    self.driver.get(f"https://{okta_domain}/")
+                    self.driver.add_cookie(
+                        {
+                            "name": "sid",
+                            "value": cookie_data["value"],
+                            "domain": okta_domain,
+                            "path": "/",
+                            "secure": True,
+                        },
+                    )
+                    return
+                except Exception as e:
+                    logger.warning(f"Failed to use cached Okta cookie from redis ({e}). Will regenerate.")
+                    self._clear_cached_okta_session(redis_client)
+
+            # If no cookie in redis, acquire a lock to generate one.
+            lock_acquired = redis_client.set(lock_key, "1", nx=True, ex=lock_ttl_seconds)
+            if lock_acquired:
+                try:
+                    logger.info("Acquired lock to generate Okta session. Running TOTP flow.")
+                    self.save_valid_okta_session_token_in_redis()
+                    return
+                finally:
+                    redis_client.delete(lock_key)
+
+            if time.time() >= deadline:
+                raise OktaSessionError(f"Timed out after {max_wait_seconds}s waiting for another bot to generate the Okta session.")
+
+            logger.info(f"Another bot is generating the Okta session. Waiting {poll_interval_seconds}s before retrying.")
+            time.sleep(poll_interval_seconds)
+
+    def save_valid_okta_session_token_in_redis(self):
+        okta_domain = os.getenv("OKTA_BOT_LOGIN_DOMAIN")
+        okta_authenticator = OktaAuthenticator(
+            okta_domain=okta_domain,
+            username=os.getenv("OKTA_BOT_LOGIN_USERNAME"),
+            password=os.getenv("OKTA_BOT_LOGIN_PASSWORD"),
+            totp_secret=os.getenv("OKTA_BOT_LOGIN_TOTP_SECRET"),
+        )
+        session_token = okta_authenticator.authenticate()
+
+        redirect_url = quote(f"https://{okta_domain}", safe="")
+        url = f"https://{okta_domain}/login/sessionCookieRedirect?token={session_token}&redirectUrl={redirect_url}"
+
+        logger.info("Navigating to Okta sessionCookieRedirect")
+        self.driver.get(url)
+
+        # Wait for the sid cookie to appear
+        start = time.time()
+        timeout = 30
+        while True:
+            cookies = self.driver.get_cookies()
+            cookie_names = {c.get("name") for c in cookies if c.get("name")}
+            if "sid" in cookie_names:
+                logger.info("Okta session cookie (sid) established")
+                sid_cookie = next((c for c in cookies if c.get("name") == "sid"), None)
+                if not sid_cookie:
+                    raise OktaSessionError("Okta 'sid' cookie was reported present but could not be retrieved from the driver.")
+                try:
+                    redis_client = redis.from_url(settings.REDIS_URL_WITH_PARAMS)
+                    cookie_key = self._okta_session_redis_key()
+                    # Cache for 30 minutes; well below typical Okta session lifetime so we never serve a stale cookie.
+                    redis_client.setex(cookie_key, 60 * 30, json.dumps(sid_cookie))
+                    # Reset the usage counter so it tracks uses of this freshly minted cookie only.
+                    redis_client.delete(f"{cookie_key}:uses")
+                    logger.info("Okta session cookie cached in redis")
+                except Exception as e:
+                    raise OktaSessionError(f"Failed to cache Okta session cookie in redis: {e}") from e
+                return
+            if time.time() - start > timeout:
+                logger.error(f"Okta session cookie not found after {timeout}s. Cookies present: {cookie_names}")
+                raise OktaSessionError(f"Failed to establish Okta browser session. No 'sid' cookie after {timeout}s. Ensure {okta_domain} is a trusted origin in Okta Admin.")
+            time.sleep(1)
+
     def login_to_google_meet_account(self):
+        if os.getenv("USE_OKTA_LOGIN_FOR_SIGNED_IN_GOOGLE_MEET_BOTS", "false") == "true":
+            try:
+                self.login_to_google_meet_account_with_okta()
+                return
+            except Exception:
+                logger.exception("Error logging in to Google Meet account with Okta. Continuing with regular login flow.")
+
         self.google_meet_bot_login_session = self.create_google_meet_bot_login_session_callback()
         logger.info("Logging in to Google Meet account")
         session_id = self.google_meet_bot_login_session.get("session_id")
         google_meet_set_cookie_url = get_google_meet_set_cookie_url(session_id)
-        logger.info(f"Navigating to Google Meet set cookie URL: {google_meet_set_cookie_url}")
+        logger.info(f"Navigating to Google Meet set cookie URL: {mask_url_query_param_values(google_meet_set_cookie_url)}")
         self.driver.get(google_meet_set_cookie_url)
 
-        self.navigate_to_gmail_domain_url()
+        # There's two ways you can login to Google. You can type in a specific email or you can go to this
+        # special url for the whole domain
+        # The two ways have different tradeoffs, for now we'll decide which one to use based on an env var
+        if os.getenv("USE_SPECIFIC_EMAIL_FOR_SIGNED_IN_GOOGLE_MEET_BOTS", "false") == "true":
+            self.sign_in_to_gsuite_with_specific_email()
+        else:
+            self.navigate_to_gmail_domain_url()
 
         # Wait for cookies indicating that we have logged in successfully
         start_waiting_at = time.time()
@@ -591,12 +1121,26 @@ class GoogleMeetUIMethods:
         logger.warning(f"Cookie names: {names}. Any Google auth cookies present: {any_google_auth_cookies_present}.")
         return any_google_auth_cookies_present
 
+    def position_mouse_for_humanized_interaction(self):
+        self.ensure_x11_input()
+        self.ensure_mocap_manager()
+
+        position = self.mocap_manager.get_initial_mouse_position()
+        if position is None:
+            return
+
+        self.x11_input.move_abs(*position)
+        logger.info(f"Positioned mouse at {position}")
+
     # returns nothing if succeeded, raises an exception if failed
     def attempt_to_join_meeting(self):
         if self.google_meet_bot_login_is_available and self.google_meet_bot_login_should_be_used:
             self.login_to_google_meet_account_with_retries()
 
         layout_to_select = self.get_layout_to_select()
+
+        if self.ui_interaction_mode == "humanized":
+            self.position_mouse_for_humanized_interaction()
 
         self.driver.get(self.meeting_url)
 
@@ -619,6 +1163,8 @@ class GoogleMeetUIMethods:
 
         self.turn_off_media_inputs()
 
+        self.verify_expected_audio_configuration()
+
         logger.info("Waiting for the 'Ask to join' or 'Join now' button...")
         join_button = self.locate_element(
             step="join_button",
@@ -626,13 +1172,17 @@ class GoogleMeetUIMethods:
             wait_time_seconds=60,
         )
         logger.info("Clicking the join button...")
-        self.click_element(join_button, "join_button")
+        if self.ui_interaction_mode == "humanized":
+            self.humanized_navigate_to_and_click_element(join_button)
+        else:
+            self.click_element_with_fallback_to_forceful_click(join_button, "join_button")
 
         self.click_captions_button()
 
         self.wait_for_host_if_needed()
 
-        self.set_layout(layout_to_select)
+        if not self.disable_incoming_video:
+            self.set_layout(layout_to_select)
 
         if self.disable_incoming_video:
             self.disable_incoming_video_in_ui()
@@ -644,6 +1194,21 @@ class GoogleMeetUIMethods:
             self.turn_off_reactions()
 
         self.ready_to_show_bot_image()
+
+    def verify_expected_audio_configuration(self):
+        # Just in case we don't want to run this check anymore, we'll have an env var to bypass it.
+        if os.getenv("VERIFY_EXPECTED_AUDIO_CONFIGURATION_FOR_GOOGLE_MEET_BOT", "true") == "false":
+            return
+
+        audio_elements = self.driver.find_elements(By.CSS_SELECTOR, "audio")
+        logger.info(f"{len(audio_elements)} audio elements are present")
+
+        # Google Meet is testing an alternate way of orchestrating audio. If no audio elements are present
+        # then we've hit this case and should raise an exception, so that we retry. We will most likely get the
+        # standard configuration after a retry, it's a random ab test.
+        if len(audio_elements) == 0:
+            logger.info("audio elements are not present. Raising UiGoogleWrongAudioConfigurationException")
+            raise UiGoogleWrongAudioConfigurationException("audio elements are not present", "verify_audio_elements_are_present")
 
     def scroll_element_into_view(self, element, step):
         try:
@@ -695,7 +1260,7 @@ class GoogleMeetUIMethods:
         logger.info("Waiting for the close button")
         close_button = self.locate_element(
             step="close_button_for_language_selection",
-            condition=EC.presence_of_element_located((By.CSS_SELECTOR, 'button[aria-label="Close dialog"]')),
+            condition=EC.presence_of_element_located((By.CSS_SELECTOR, 'button[aria-label="Close dialog"], button[aria-label="Close dialogue"]')),
             wait_time_seconds=6,
         )
         logger.info("Clicking the close button")

@@ -1,4 +1,6 @@
 import io
+import logging
+import re
 
 import cv2
 import numpy as np
@@ -7,8 +9,79 @@ from pydub import AudioSegment
 from .meeting_url_utils import meeting_type_from_url
 from .models import (
     MeetingTypes,
+    ParticipantEvent,
+    ParticipantEventTypes,
     TranscriptionProviders,
 )
+from .templatetags.bot_filters import participant_color as compute_participant_color
+
+logger = logging.getLogger(__name__)
+
+# Latin characters that have a visually identical Cyrillic counterpart.
+LATIN_TO_CYRILLIC_HOMOGLYPHS = {
+    "a": "а",
+    "c": "с",
+    "e": "е",
+    "i": "і",
+    "j": "ј",
+    "o": "о",
+    "p": "р",
+    "s": "ѕ",
+    "x": "х",
+    "y": "у",
+    "A": "А",
+    "B": "В",
+    "C": "С",
+    "E": "Е",
+    "H": "Н",
+    "I": "І",
+    "J": "Ј",
+    "K": "К",
+    "M": "М",
+    "O": "О",
+    "P": "Р",
+    "S": "Ѕ",
+    "T": "Т",
+    "X": "Х",
+    "Y": "У",
+}
+
+
+def cyrillicize_keywords_in_string(string: str, keywords: list[str]) -> str:
+    """
+    Replace the Latin characters of any occurrence of the given keywords with visually
+    identical Cyrillic characters, so the text reads the same to a human but no longer
+    matches a keyword search.
+
+    Keyword matching is case insensitive and the case of the original string is preserved.
+    Characters without a Cyrillic look-alike are left untouched.
+    """
+    if not string or not keywords:
+        return string
+
+    # Longest first so that a keyword that contains another one wins the match.
+    sorted_keywords = sorted((keyword for keyword in keywords if keyword), key=len, reverse=True)
+    if not sorted_keywords:
+        return string
+
+    pattern = re.compile("|".join(re.escape(keyword) for keyword in sorted_keywords), re.IGNORECASE)
+
+    def cyrillicize_match(match: re.Match) -> str:
+        return "".join(LATIN_TO_CYRILLIC_HOMOGLYPHS.get(character, character) for character in match.group(0))
+
+    return pattern.sub(cyrillicize_match, string)
+
+
+def select_from_comma_separated_list_with_wrapping_index(comma_separated_list: str, index: int) -> str | None:
+    """
+    Select a element from a comma separated list by index with wrapping.
+    """
+    if not comma_separated_list:
+        return None
+    elements = comma_separated_list.split(",")
+    if len(elements) == 0:
+        return None
+    return elements[index % len(elements)]
 
 
 def pcm_to_mp3(
@@ -270,21 +343,20 @@ def scale_i420(frame, frame_size, new_size):
     return np.concatenate([final_y.flatten(), final_u.flatten(), final_v.flatten()]).astype(np.uint8).tobytes()
 
 
-def png_to_yuv420_frame(png_bytes: bytes) -> tuple:
+def image_to_yuv420_frame(image_bytes: bytes) -> tuple:
     """
-    Convert PNG image bytes to YUV420 (I420) format without resizing,
+    Convert image bytes (PNG, JPEG, etc.) to YUV420 (I420) format without resizing,
     and return the dimensions of the resulting image. The conversion does not work unless the
     image dimensions are even, so the image is cropped slightly to make the dimensions even.
 
     Args:
-        png_bytes (bytes): Input PNG image as bytes
+        image_bytes (bytes): Input image as bytes (any format supported by OpenCV)
 
     Returns:
         tuple: (YUV420 formatted frame data, width, height)
     """
-    # Convert PNG bytes to numpy array
-    png_array = np.frombuffer(png_bytes, np.uint8)
-    bgr_frame = cv2.imdecode(png_array, cv2.IMREAD_COLOR)
+    img_array = np.frombuffer(image_bytes, np.uint8)
+    bgr_frame = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
 
     # Get original dimensions
     height, width = bgr_frame.shape[:2]
@@ -310,6 +382,10 @@ def png_to_yuv420_frame(png_bytes: bytes) -> tuple:
 
     # Return frame data and dimensions
     return yuv_frame.tobytes(), width, height
+
+
+# Backward-compatible alias
+png_to_yuv420_frame = image_to_yuv420_frame
 
 
 def utterance_words(utterance, offset=0.0):
@@ -479,6 +555,8 @@ def transcription_provider_from_bot_creation_data(data):
         return TranscriptionProviders.KYUTAI
     elif "custom_async" in settings:
         return TranscriptionProviders.CUSTOM_ASYNC
+    elif "custom_async_v2" in settings:
+        return TranscriptionProviders.CUSTOM_ASYNC_V2
     elif "meeting_closed_captions" in settings:
         return TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM
 
@@ -506,6 +584,71 @@ def generate_async_transcriptions_json_for_bot_detail_view(recording):
     return async_transcriptions_data
 
 
+def generate_speaker_timeline_for_bot_detail_view(recording):
+    """Generate speaker timeline data (speech intervals per participant) for a recording."""
+
+    first_buffer_ms = recording.first_buffer_timestamp_ms
+    if not first_buffer_ms:
+        return []
+
+    speech_events = (
+        ParticipantEvent.objects.filter(
+            participant__bot=recording.bot,
+            event_type__in=[ParticipantEventTypes.SPEECH_START, ParticipantEventTypes.SPEECH_STOP],
+        )
+        .select_related("participant")
+        .order_by("timestamp_ms")
+    )
+
+    if not speech_events.exists():
+        return []
+
+    # Group events by participant
+    participants_data = {}
+    for event in speech_events:
+        pid = event.participant.uuid
+        if pid not in participants_data:
+            participants_data[pid] = {
+                "name": event.participant.full_name or event.participant.uuid,
+                "color": compute_participant_color(event.participant.uuid),
+                "events": [],
+            }
+
+        relative_ms = event.timestamp_ms - first_buffer_ms
+        participants_data[pid]["events"].append(
+            {
+                "type": "start" if event.event_type == ParticipantEventTypes.SPEECH_START else "stop",
+                "ms": relative_ms,
+            }
+        )
+
+    # Build intervals from start/stop pairs
+    result = []
+    for pid, data in participants_data.items():
+        intervals = []
+        current_start = None
+        for evt in data["events"]:
+            if evt["type"] == "start":
+                current_start = evt["ms"]
+            elif evt["type"] == "stop" and current_start is not None:
+                intervals.append({"start_ms": current_start, "end_ms": evt["ms"]})
+                current_start = None
+        # If there's a dangling start with no stop, leave end_ms null (JS will use video duration)
+        if current_start is not None:
+            intervals.append({"start_ms": current_start, "end_ms": None})
+
+        if intervals:
+            result.append(
+                {
+                    "name": data["name"],
+                    "color": data["color"],
+                    "intervals": intervals,
+                }
+            )
+
+    return result
+
+
 def generate_recordings_json_for_bot_detail_view(bot):
     # Process recordings and utterances
     recordings_data = []
@@ -519,6 +662,7 @@ def generate_recordings_json_for_bot_detail_view(bot):
             "failed_utterances": generate_failed_utterance_json_for_bot_detail_view(recording),
         }
         async_transcriptions = generate_async_transcriptions_json_for_bot_detail_view(recording)
+        speaker_timeline = generate_speaker_timeline_for_bot_detail_view(recording)
         recordings_data.append(
             {
                 "state": recording.state,
@@ -528,6 +672,7 @@ def generate_recordings_json_for_bot_detail_view(bot):
                     realtime_transcription,
                     *async_transcriptions,
                 ],
+                "speaker_timeline": speaker_timeline,
             }
         )
 
@@ -545,16 +690,180 @@ def is_valid_png(image_data: bytes) -> bool:
         bool: True if the data is a valid PNG image, False otherwise
     """
     try:
-        # First check for the PNG signature (first 8 bytes)
         png_signature = b"\x89PNG\r\n\x1a\n"
         if not image_data.startswith(png_signature):
             return False
 
-        # Try to decode the image using OpenCV
         img_array = np.frombuffer(image_data, np.uint8)
         img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
 
-        # If img is None, the decoding failed
         return img is not None
     except Exception:
         return False
+
+
+def is_valid_jpeg(image_data: bytes) -> bool:
+    """
+    Validates whether the provided bytes data is a valid JPEG image.
+
+    Args:
+        image_data (bytes): The image data to validate
+
+    Returns:
+        bool: True if the data is a valid JPEG image, False otherwise
+    """
+    try:
+        jpeg_signature = b"\xff\xd8\xff"
+        if not image_data.startswith(jpeg_signature):
+            return False
+
+        img_array = np.frombuffer(image_data, np.uint8)
+        img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+
+        return img is not None
+    except Exception:
+        return False
+
+
+def is_valid_image(image_data: bytes, content_type: str) -> bool:
+    """
+    Validates whether the provided bytes data is a valid image of the given content type.
+
+    Args:
+        image_data (bytes): The image data to validate
+        content_type (str): The MIME type, e.g. "image/png" or "image/jpeg"
+
+    Returns:
+        bool: True if the data is a valid image matching the content type, False otherwise
+    """
+    validators = {
+        "image/png": is_valid_png,
+        "image/jpeg": is_valid_jpeg,
+    }
+    validator = validators.get(content_type)
+    if validator is None:
+        return False
+    return validator(image_data)
+
+
+"""
+Split transcript utterances at turn-taking boundaries.
+
+When one speaker pauses and another speaker talks during that pause,
+split the first speaker's utterance at the pause point. This produces
+cleaner turn-by-turn conversation ordering.
+"""
+
+import bisect
+import copy
+from typing import Any
+
+
+def split_utterances_on_turn_taking(
+    utterances: list[dict[str, Any]],
+    min_pause_ms: int = 300,
+    slack_ms: int = 60,
+) -> list[dict[str, Any]]:
+    # Check if any utterances do not have words. If so return the original input
+    for u in utterances:
+        if "words" not in u["transcription"]:
+            logger.warning("Utterance does not have words. Skipping split on turn taking.")
+            return utterances
+
+    # Step 1: Convert every word to absolute (epoch) milliseconds
+    # so we can compare across speakers on a shared timeline.
+    all_word_events: list[tuple[int, str]] = []  # (abs_start_ms, speaker_uuid)
+    enriched = []
+
+    for u in utterances:
+        t0 = int(u["timestamp_ms"])
+        speaker = u["speaker_uuid"]
+        words = u["transcription"]["words"]
+
+        abs_words = []
+        for w in words:
+            abs_start = t0 + int(round(float(w["start"]) * 1000))
+            abs_end = t0 + int(round(float(w["end"]) * 1000))
+            abs_words.append({**w, "_abs_start": abs_start, "_abs_end": abs_end})
+            all_word_events.append((abs_start, speaker))
+
+        enriched.append({"utterance": u, "speaker": speaker, "abs_words": abs_words})
+
+    # Sort word events for fast range queries
+    all_word_events.sort()
+    event_times = [t for t, _ in all_word_events]
+
+    # Step 2: For each utterance, find internal pauses where another
+    # speaker is talking, and split at those points.
+    results = []
+
+    for item in enriched:
+        u = item["utterance"]
+        speaker = item["speaker"]
+        abs_words = item["abs_words"]
+
+        # Walk consecutive word pairs looking for split points
+        segments: list[list[dict]] = []
+        current_segment: list[dict] = [abs_words[0]]
+
+        for i in range(len(abs_words) - 1):
+            gap_ms = abs_words[i + 1]["_abs_start"] - abs_words[i]["_abs_end"]
+
+            if gap_ms >= min_pause_ms and _other_speaker_in_range_for_split_utterances_on_turn_taking(
+                event_times,
+                all_word_events,
+                start=abs_words[i]["_abs_end"] - slack_ms,
+                end=abs_words[i + 1]["_abs_start"] + slack_ms,
+                exclude_speaker=speaker,
+            ):
+                segments.append(current_segment)
+                current_segment = []
+
+            current_segment.append(abs_words[i + 1])
+
+        segments.append(current_segment)
+
+        # Step 3: Convert each segment back into an utterance
+        for seg_words in segments:
+            results.append(_make_utterance_for_split_utterances_on_turn_taking(u, seg_words))
+
+    results.sort(key=lambda u: (u["timestamp_ms"], u["speaker_uuid"]))
+    return results
+
+
+def _other_speaker_in_range_for_split_utterances_on_turn_taking(
+    event_times: list[int],
+    word_events: list[tuple[int, str]],
+    start: int,
+    end: int,
+    exclude_speaker: str,
+) -> bool:
+    """Check if any other speaker has a word starting in [start, end]."""
+    lo = bisect.bisect_left(event_times, start)
+    hi = bisect.bisect_right(event_times, end)
+    return any(word_events[i][1] != exclude_speaker for i in range(lo, hi))
+
+
+def _make_utterance_for_split_utterances_on_turn_taking(
+    original: dict[str, Any],
+    abs_words: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Build a new utterance from a slice of absolute-timed words."""
+    seg_start = abs_words[0]["_abs_start"]
+    seg_end = abs_words[-1]["_abs_end"]
+
+    # Re-normalize word times relative to the new segment start
+    clean_words = []
+    for w in abs_words:
+        cleaned = {k: v for k, v in w.items() if not k.startswith("_abs_")}
+        cleaned["start"] = (w["_abs_start"] - seg_start) / 1000.0
+        cleaned["end"] = (w["_abs_end"] - seg_start) / 1000.0
+        clean_words.append(cleaned)
+
+    transcript = " ".join(w.get("punctuated_word") or w.get("word") for w in clean_words)
+
+    out = copy.deepcopy(original)
+    out["timestamp_ms"] = seg_start
+    out["duration_ms"] = seg_end - seg_start
+    out["transcription"] = {"words": clean_words, "transcript": transcript}
+    return out
