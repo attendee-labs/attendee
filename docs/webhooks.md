@@ -109,7 +109,7 @@ For webhooks triggered by `bot.state_change`, the `data` field contains:
 ### Knowing who removed the bot
 
 When a participant denies the bot's request to join, or removes the bot from the meeting,
-`event_metadata` contains a `bot_removed_by` object naming them:
+`event_metadata` contains a `triggered_by` object naming them:
 
 ```json
 {
@@ -119,7 +119,7 @@ When a participant denies the bot's request to join, or removes the bot from the
   "event_type": "meeting_ended",
   "event_sub_type": null,
   "event_metadata": {
-    "bot_removed_by": {
+    "triggered_by": {
       "id": "par_xxxxxxxxxxxxxxxx",
       "name": "Test User",
       "uuid": "8:orgid:00000000-0000-0000-0000-000000000001",

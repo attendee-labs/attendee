@@ -1932,7 +1932,7 @@ function handleRosterUpdate(eventDataObject) {
 // A conversation end message names its sender when a participant ended the conversation for us,
 // by removing us from the meeting or from the lobby. It has no sender when the conversation
 // ended on its own, and names us when we left on our own.
-function removedByFromConversationEndSender(sender) {
+function triggeredByFromConversationEndSender(sender) {
     if (!sender?.id) {
         return null;
     }
@@ -1971,7 +1971,7 @@ function handleConversationEnd(eventDataObject) {
     });
 
     const meetingId = extractCallIdFromEventDataObject(eventDataObject);
-    const removedBy = removedByFromConversationEndSender(eventDataObjectBody?.sender);
+    const triggeredBy = triggeredByFromConversationEndSender(eventDataObjectBody?.sender);
 
     const subCode = eventDataObjectBody?.subCode;
     const subCodeValueForDeniedRequestToJoin = 5854;
@@ -1984,7 +1984,7 @@ function handleConversationEnd(eventDataObject) {
             type: 'MeetingStatusChange',
             change: 'request_to_join_denied',
             meetingId: meetingId,
-            removedBy: removedBy
+            triggeredBy: triggeredBy
         });
         return;
     }
@@ -2005,7 +2005,7 @@ function handleConversationEnd(eventDataObject) {
         type: 'MeetingStatusChange',
         change: 'meeting_ended',
         meetingId: meetingId,
-        removedBy: removedBy
+        triggeredBy: triggeredBy
     });
 }
 
