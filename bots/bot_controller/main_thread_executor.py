@@ -39,7 +39,7 @@ class MainThreadExecutor:
             raise outcome["error"]
         return outcome["value"]
 
-    def wraps(self, func, timeout_seconds=60):
+    def wraps(self, func, timeout_seconds=120):
         @functools.wraps(func)
         def wrapped(*args, **kwargs):
             return self.run(func, *args, timeout_seconds=timeout_seconds, **kwargs)
