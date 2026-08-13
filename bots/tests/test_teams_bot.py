@@ -1,17 +1,23 @@
 import base64
 import json
+import logging
+import os
+import tempfile
 import threading
 import time
+from logging.handlers import RotatingFileHandler
 from unittest.mock import MagicMock, mock_open, patch
 from urllib.parse import urlparse
 
+from django.conf import settings
+from django.core.files.storage import InMemoryStorage
 from django.db import connection
 from django.test import TransactionTestCase, tag
 from selenium.common.exceptions import TimeoutException
 
 from bots.bot_controller.bot_controller import BotController
 from bots.bots_api_views import send_sync_command
-from bots.models import Bot, BotChatMessageRequest, BotChatMessageRequestStates, BotChatMessageToOptions, BotEventManager, BotEventSubTypes, BotEventTypes, BotLogin, BotLoginGroup, BotLoginPlatform, BotMediaRequest, BotMediaRequestMediaTypes, BotMediaRequestStates, BotStates, Credentials, MediaBlob, Organization, Project, Recording, RecordingStates, RecordingTypes, TranscriptionProviders, TranscriptionTypes
+from bots.models import Bot, BotChatMessageRequest, BotChatMessageRequestStates, BotChatMessageToOptions, BotDebugScreenshot, BotEventManager, BotEventSubTypes, BotEventTypes, BotLogin, BotLoginGroup, BotLoginPlatform, BotMediaRequest, BotMediaRequestMediaTypes, BotMediaRequestStates, BotStates, Credentials, MediaBlob, Organization, Project, Recording, RecordingStates, RecordingTypes, TranscriptionProviders, TranscriptionTypes
 from bots.teams_bot_adapter.teams_ui_methods import TeamsUIMethods, UiTeamsBlockingUsException, UiWaitingRoomTransitionFailedException
 from bots.web_bot_adapter.ui_methods import UiLoginRequiredException
 
@@ -1512,3 +1518,96 @@ class TestTeamsBot(TransactionTestCase):
 
             # Close the database connection since we're in a thread
             connection.close()
+
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
+    def test_bot_pod_logs_are_attached_to_last_bot_event(
+        self,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+    ):
+        """
+        Test that when SAVE_BOT_LOGS_TO_DASHBOARD is enabled on a bot pod, the logs the bot
+        writes while it runs are attached to its last event as a debug file.
+
+        The rotating file handler is added to the root logger here rather than through
+        settings.LOGGING, because logging config is only applied at process startup.
+
+        Flow:
+        1. The root logger writes to a temp file, like a bot pod with log saving enabled.
+        2. The bot joins the meeting, then the meeting ends and cleanup runs.
+        3. Cleanup flushes the log handlers and attaches the log file to the bot's last event.
+        4. The attached file contains the logs the bot emitted during the run.
+        """
+        # Configure the mock uploader
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        # Mock the Chrome driver
+        mock_driver = create_mock_teams_driver()
+        MockChromeDriver.return_value = mock_driver
+
+        # Mock virtual display
+        mock_display = MagicMock()
+        MockDisplay.return_value = mock_display
+
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        log_file_path = os.path.join(temp_dir.name, "bot_pod_logs.log")
+
+        # Same handler a bot pod gets from settings.LOG_HANDLERS["bot_pod_log_file"]
+        log_file_handler = RotatingFileHandler(log_file_path, maxBytes=settings.BOT_POD_LOG_FILE_MAX_BYTES // 2, backupCount=1)
+        root_logger = logging.getLogger()
+        root_logger.addHandler(log_file_handler)
+        self.addCleanup(log_file_handler.close)
+        self.addCleanup(root_logger.removeHandler, log_file_handler)
+
+        # Create bot controller
+        controller = BotController(self.bot.id)
+
+        with (
+            patch("bots.bot_controller.bot_controller.settings.IS_A_BOT_POD", True),
+            patch("bots.bot_controller.bot_controller.settings.SAVE_BOT_LOGS_TO_DASHBOARD", True),
+            patch("bots.bot_controller.bot_controller.settings.BOT_POD_LOG_FILE_PATH", log_file_path),
+            # Keep the debug file in memory so the test doesn't upload to the real storage backend
+            patch.object(BotDebugScreenshot._meta.get_field("file"), "storage", InMemoryStorage()),
+            patch("bots.teams_bot_adapter.teams_ui_methods.TeamsUIMethods.attempt_to_join_meeting", return_value=None),
+        ):
+            # Run the bot in a separate thread since it has an event loop
+            bot_thread = threading.Thread(target=controller.run)
+            bot_thread.daemon = True
+            bot_thread.start()
+
+            # Wait for the bot to join and log its startup messages
+            time.sleep(3)
+
+            # Simulate meeting ending to trigger cleanup, which is what saves the logs
+            controller.adapter.left_meeting = True
+            controller.adapter.send_message_callback({"message": controller.adapter.Messages.MEETING_ENDED})
+            time.sleep(1)
+
+            # Now wait for the thread to finish naturally
+            bot_thread.join(timeout=10)
+
+            # If thread is still running after timeout, that's a problem to report
+            if bot_thread.is_alive():
+                print("WARNING: Bot thread did not terminate properly after cleanup")
+
+            # Close the database connection since we're in a thread
+            connection.close()
+
+            self.assertTrue(os.path.exists(log_file_path), "The bot pod should have written its logs to the log file")
+
+            saved_log_files = list(BotDebugScreenshot.objects.filter(bot_event__bot=self.bot, file__startswith="bot_logs_part_").order_by("created_at"))
+            self.assertEqual(len(saved_log_files), 1, "The bot pod's logs should be saved as a single debug file")
+
+            saved_log_file = saved_log_files[0]
+            self.assertIn("bot_logs_part_1_", saved_log_file.file.name)
+
+            with saved_log_file.file.open("rb") as f:
+                saved_logs = f.read().decode()
+
+            self.assertIn("take_action_based_on_bot_in_db - JOINING", saved_logs, "The saved logs should contain the messages logged while the bot was joining")
+            self.assertIn("Telling adapter to leave meeting...", saved_logs, "The saved logs should contain the messages logged during cleanup")

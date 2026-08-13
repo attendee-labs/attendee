@@ -689,6 +689,8 @@ class BotController:
         if self.audio_chunk_uploader:
             self.audio_chunk_uploader.shutdown()
 
+        self.save_bot_pod_logs()
+
         if self.bot_in_db.state == BotStates.POST_PROCESSING:
             self.wait_until_all_utterances_are_terminated()
             BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.POST_PROCESSING_COMPLETED)
@@ -1685,6 +1687,41 @@ class BotController:
             with open(BotAdapter.DEBUG_RECORDING_FILE_PATH, "rb") as f:
                 debug_screenshot.file.save(f"debug_screen_recording_{debug_screenshot.object_id}.mp4", f, save=True)
             logger.info(f"Saved debug recording with ID {debug_screenshot.object_id}")
+
+    def save_bot_pod_logs(self):
+        try:
+            self.save_bot_pod_logs_with_no_error_handling()
+        except Exception:
+            logger.exception("Error saving bot pod logs")
+
+    def save_bot_pod_logs_with_no_error_handling(self):
+        if not settings.IS_A_BOT_POD:
+            return
+
+        if not settings.SAVE_BOT_LOGS_TO_DASHBOARD:
+            logger.info("Bot pod logs are not being saved to dashboard, not saving")
+            return
+
+        for handler in logging.getLogger().handlers:
+            handler.flush()
+
+        log_file_path = settings.BOT_POD_LOG_FILE_PATH
+        # The rotated file holds the older half of the logs once the size cap has been hit.
+        log_file_paths_in_order = [path for path in [f"{log_file_path}.1", log_file_path] if os.path.exists(path)]
+        if not log_file_paths_in_order:
+            logger.info(f"Bot pod log file at {log_file_path} does not exist, not saving")
+            return
+
+        last_bot_event = self.bot_in_db.last_bot_event()
+        if not last_bot_event:
+            logger.info("Bot has no events, not saving bot pod logs")
+            return
+
+        for part_number, path in enumerate(log_file_paths_in_order, start=1):
+            debug_screenshot = BotDebugScreenshot.objects.create(bot_event=last_bot_event)
+            with open(path, "rb") as f:
+                debug_screenshot.file.save(f"bot_logs_part_{part_number}_{debug_screenshot.object_id}.log", f, save=True)
+            logger.info(f"Saved bot pod logs from {path} with ID {debug_screenshot.object_id}")
 
     def on_message_from_websocket_audio(self, message_json: str):
         try:
