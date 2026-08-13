@@ -254,7 +254,7 @@ LOG_FORMATTERS = {
 # which is attached to the bot's last event as a debug artifact when the bot cleans up.
 SAVE_BOT_LOGS_TO_DASHBOARD = os.getenv("SAVE_BOT_LOGS_TO_DASHBOARD", "false") == "true"
 BOT_POD_LOG_FILE_PATH = os.getenv("BOT_POD_LOG_FILE_PATH", "/tmp/bot_pod_logs.log")
-BOT_POD_LOG_FILE_MAX_BYTES = int(os.getenv("BOT_POD_LOG_FILE_MAX_BYTES", 10 * 1024 * 1024))
+BOT_POD_LOG_FILE_MAX_BYTES = int(os.getenv("BOT_POD_LOG_FILE_MAX_BYTES", 25 * 1024 * 1024))
 
 # Log handlers - shared across environments
 LOG_HANDLERS = {
