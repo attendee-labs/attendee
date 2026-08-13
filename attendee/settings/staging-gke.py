@@ -1,22 +1,14 @@
 import os
 
-import dj_database_url
-
 from .base import *
 from .base import LOG_FORMATTERS, LOG_HANDLER_NAMES, LOG_HANDLERS
+from .db import default_database
 
 DEBUG = False
 ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "*").split(",")
 
 DATABASES = {
-    "default": dj_database_url.config(
-        env="DATABASE_URL",
-        conn_max_age=600,
-        conn_health_checks=True,
-        ssl_require=True,
-        # Set to "true" behind a transaction-pooling pooler (PgBouncer, etc.).
-        disable_server_side_cursors=os.getenv("DISABLE_SERVER_SIDE_CURSORS", "false") == "true",
-    ),
+    "default": default_database(ssl_require=True),
 }
 
 # PRESERVE CELERY TASKS IF WORKER IS SHUT DOWN
