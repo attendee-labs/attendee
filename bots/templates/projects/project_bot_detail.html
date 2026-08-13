@@ -312,32 +312,34 @@
                                 <div class="mt-2">
                                     <h6 class="text-muted mb-2">Debug Files:</h6>
                                     {% for screenshot in event.debug_screenshots.all %}
-                                        {% if screenshot.file.name|stringformat:"s"|slice:"-4:" == ".mp4" %}
-                                            <video class="img-fluid mb-2" controls style="max-width: 300px;">
-                                                <source src="{{ screenshot.url }}" type="video/mp4">
-                                                Your browser does not support the video tag.
-                                            </video>
-                                        {% elif screenshot.file.name|stringformat:"s"|slice:"-6:" == ".mhtml" %}
-                                            <a href="{{ screenshot.url }}" 
-                                                class="btn btn-outline-secondary mb-2" 
-                                                target="_blank">
-                                                Download MHTML
-                                            </a>
-                                        {% elif screenshot.file.name|stringformat:"s"|slice:"-4:" == ".log" %}
-                                            <a href="{{ screenshot.url }}" 
-                                                class="btn btn-outline-secondary mb-2" 
-                                                target="_blank">
-                                                Download Logs
-                                            </a>
-                                        {% else %}
-                                            <img src="{{ screenshot.url }}" 
-                                                class="img-fluid mb-2" 
-                                                alt="Debug Screenshot"
-                                                style="max-width: 300px;">
-                                        {% endif %}
-                                        {% if screenshot.metadata %}
-                                            <pre class="small">{{ screenshot.metadata|pprint }}</pre>
-                                        {% endif %}
+                                        <div class="mb-2">
+                                            {% if screenshot.file.name|stringformat:"s"|slice:"-4:" == ".mp4" %}
+                                                <video class="img-fluid d-block" controls style="max-width: 300px;">
+                                                    <source src="{{ screenshot.url }}" type="video/mp4">
+                                                    Your browser does not support the video tag.
+                                                </video>
+                                            {% elif screenshot.file.name|stringformat:"s"|slice:"-6:" == ".mhtml" %}
+                                                <a href="{{ screenshot.url }}" 
+                                                    class="btn btn-outline-secondary" 
+                                                    target="_blank">
+                                                    Download MHTML
+                                                </a>
+                                            {% elif screenshot.file.name|stringformat:"s"|slice:"-4:" == ".log" %}
+                                                <a href="{{ screenshot.url }}" 
+                                                    class="btn btn-outline-secondary" 
+                                                    target="_blank">
+                                                    Download Logs
+                                                </a>
+                                            {% else %}
+                                                <img src="{{ screenshot.url }}" 
+                                                    class="img-fluid d-block" 
+                                                    alt="Debug Screenshot"
+                                                    style="max-width: 300px;">
+                                            {% endif %}
+                                            {% if screenshot.metadata %}
+                                                <pre class="small mt-2 mb-0">{{ screenshot.metadata|pprint }}</pre>
+                                            {% endif %}
+                                        </div>
                                     {% endfor %}
                                 </div>
                             {% endif %}

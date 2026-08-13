@@ -1718,7 +1718,7 @@ class BotController:
             return
 
         for part_number, path in enumerate(log_file_paths_in_order, start=1):
-            debug_screenshot = BotDebugScreenshot.objects.create(bot_event=last_bot_event, metadata={"log_file_part": part_number, "log_file_parts": len(log_file_paths_in_order)})
+            debug_screenshot = BotDebugScreenshot.objects.create(bot_event=last_bot_event)
             with open(path, "rb") as f:
                 debug_screenshot.file.save(f"bot_logs_part_{part_number}_{debug_screenshot.object_id}.log", f, save=True)
             logger.info(f"Saved bot pod logs from {path} with ID {debug_screenshot.object_id}")
