@@ -1972,7 +1972,15 @@ class BotController:
             logger.info("Received message that meeting ended")
             self.flush_utterances()
             if self.bot_in_db.state == BotStates.LEAVING:
-                new_bot_event = BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.BOT_LEFT_MEETING)
+                last_bot_event = self.bot_in_db.last_bot_event()
+                if last_bot_event and last_bot_event.old_state in [BotStates.WAITING_ROOM, BotStates.JOINING]:
+                    new_bot_event = BotEventManager.create_event(
+                        bot=self.bot_in_db,
+                        event_type=BotEventTypes.COULD_NOT_JOIN,
+                        event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_LEAVE_REQUESTED_BEFORE_JOINING,
+                    )
+                else:
+                    new_bot_event = BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.BOT_LEFT_MEETING)
             else:
                 new_bot_event = BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.MEETING_ENDED)
 
