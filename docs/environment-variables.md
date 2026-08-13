@@ -170,7 +170,7 @@ This document lists all supported environment variables for the Attendee applica
 | `ATTENDEE_LOG_FORMAT` | String | (None) | Log format type: use `json` for JSON structured logs or leave empty for plain text. When `None`, default formatter is used. |
 | `SAVE_BOT_LOGS_TO_DASHBOARD` | Boolean | `false` | When `true` and `IS_A_BOT_POD` is `true`, the bot pod writes its application logs to a file and attaches them to the bot's last event as a debug file, viewable in the dashboard. |
 | `BOT_POD_LOG_FILE_PATH` | String | `/tmp/bot_pod_logs.log` | Path the bot pod writes its application logs to when `SAVE_BOT_LOGS_TO_DASHBOARD` is enabled. |
-| `BOT_POD_LOG_FILE_MAX_BYTES` | Integer | `104857600` | Maximum size (100 MB) of the saved bot pod log file. Once reached, the oldest logs are dropped. |
+| `BOT_POD_LOG_FILE_MAX_BYTES` | Integer | `26214400` | Maximum size of the saved bot pod log file. Once reached, the oldest logs are dropped. |
 
 ---
 
