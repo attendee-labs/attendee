@@ -204,6 +204,22 @@ class TestBotDataDeletion(TransactionTestCase):
         self.assertEqual(AudioChunk.objects.filter(recording__bot=self.bot1).count(), 1)
         self.assertEqual(Utterance.objects.filter(recording__bot=self.bot1).count(), 1)
 
+    def test_delete_data_deletes_recording_and_debug_files_from_storage(self):
+        """Test that delete_data deletes the bot's recording and debug files from storage"""
+        self.delete_mock.reset_mock()
+
+        self.bot1.delete_data()
+
+        deleted_file_owners = {(type(call.args[0].instance), call.args[0].instance.pk) for call in self.delete_mock.call_args_list}
+        self.assertEqual(self.delete_mock.call_count, 2)
+        self.assertEqual(
+            deleted_file_owners,
+            {
+                (Recording, self.recording1.pk),
+                (BotDebugScreenshot, self.screenshot1.pk),
+            },
+        )
+
     def test_delete_data_multiple_recordings(self):
         """Test that delete_data deletes data from multiple recordings"""
         # Create another recording for bot1

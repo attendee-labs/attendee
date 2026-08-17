@@ -878,7 +878,11 @@ class Bot(models.Model):
 
         with transaction.atomic():
             # Delete all debug screenshots from bot events
-            BotDebugScreenshot.objects.filter(bot_event__bot=self).delete()
+            debug_screenshots = BotDebugScreenshot.objects.filter(bot_event__bot=self)
+            for debug_screenshot in debug_screenshots:
+                if debug_screenshot.file and debug_screenshot.file.name:
+                    debug_screenshot.file.delete()
+            debug_screenshots.delete()
 
             # Delete all utterances and recording files for each recording
             for recording in self.recordings.all():
