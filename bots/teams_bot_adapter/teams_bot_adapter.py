@@ -5,6 +5,7 @@ import re
 import subprocess
 from typing import Callable
 
+import requests
 from django.conf import settings
 from selenium.webdriver.common.keys import Keys
 
@@ -55,7 +56,7 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
         teams_bot_login_should_be_used: bool,
         fetch_teams_bot_login_credentials_callback: Callable[[], dict],
         modify_dom_for_video_recording: bool,
-        fetch_teams_bot_identification_token_callback: Callable[[], str | None],
+        teams_bot_identification_credentials: dict | None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -64,7 +65,7 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
         self.teams_bot_login_should_be_used = teams_bot_login_should_be_used and teams_bot_login_is_available
         self.fetch_teams_bot_login_credentials_callback = fetch_teams_bot_login_credentials_callback
         self.modify_dom_for_video_recording = modify_dom_for_video_recording
-        self.fetch_teams_bot_identification_token_callback = fetch_teams_bot_identification_token_callback
+        self.teams_bot_identification_credentials = teams_bot_identification_credentials
         self.should_log_network_requests = False
         self.had_disable_light_experience_redirect = False
 
@@ -188,3 +189,41 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
                 "!live.com",
             ],
         }
+
+    def get_teams_bot_identification_token(self):
+        credentials = self.teams_bot_identification_credentials
+        if not credentials:
+            return None
+
+        tenant_id = credentials.get("tenant_id")
+        client_id = credentials.get("client_id")
+        client_secret = credentials.get("client_secret")
+        if not all([tenant_id, client_id, client_secret]):
+            logger.warning("Teams bot identification credentials are missing tenant_id, client_id, or client_secret")
+            return None
+
+        # The token is only valid for ~1 hour, so it must be minted right before the bot joins.
+        try:
+            response = requests.post(
+                f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token",
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                data={
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "scope": "https://ic3.teams.office.com/.default",
+                    "grant_type": "client_credentials",
+                },
+                timeout=30,
+            )
+            response.raise_for_status()
+        except Exception as e:
+            logger.error(f"Failed to fetch Teams bot identification token: {e}")
+            return None
+
+        token = response.json().get("access_token")
+        if not token:
+            logger.error("Teams bot identification token response did not contain an access_token")
+            return None
+
+        logger.info("Successfully fetched Teams bot identification token")
+        return token

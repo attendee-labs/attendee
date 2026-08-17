@@ -1,16 +1,23 @@
 import base64
 import json
+import logging
+import os
+import tempfile
 import threading
 import time
+from logging.handlers import RotatingFileHandler
 from unittest.mock import MagicMock, mock_open, patch
+from urllib.parse import urlparse
 
+from django.conf import settings
+from django.core.files.storage import InMemoryStorage
 from django.db import connection
 from django.test import TransactionTestCase, tag
 from selenium.common.exceptions import TimeoutException
 
 from bots.bot_controller.bot_controller import BotController
 from bots.bots_api_views import send_sync_command
-from bots.models import Bot, BotChatMessageRequest, BotChatMessageRequestStates, BotChatMessageToOptions, BotEventManager, BotEventSubTypes, BotEventTypes, BotLogin, BotLoginGroup, BotLoginPlatform, BotMediaRequest, BotMediaRequestMediaTypes, BotMediaRequestStates, BotStates, MediaBlob, Organization, Project, Recording, RecordingStates, RecordingTypes, TranscriptionProviders, TranscriptionTypes
+from bots.models import Bot, BotChatMessageRequest, BotChatMessageRequestStates, BotChatMessageToOptions, BotDebugScreenshot, BotEventManager, BotEventSubTypes, BotEventTypes, BotLogin, BotLoginGroup, BotLoginPlatform, BotMediaRequest, BotMediaRequestMediaTypes, BotMediaRequestStates, BotStates, Credentials, MediaBlob, Organization, Project, Recording, RecordingStates, RecordingTypes, TranscriptionProviders, TranscriptionTypes
 from bots.teams_bot_adapter.teams_ui_methods import TeamsUIMethods, UiTeamsBlockingUsException, UiWaitingRoomTransitionFailedException
 from bots.web_bot_adapter.ui_methods import UiLoginRequiredException
 
@@ -913,19 +920,57 @@ class TestTeamsBot(TransactionTestCase):
         attempt_to_join_meeting(), and the real monitor_for_disable_light_experience_redirect()
         background thread by mocking at a low level (the individual UI navigation steps).
 
+        Because the real attempt_to_join_meeting() runs twice, this also exercises the real
+        get_teams_bot_identification_token() / meeting_url_with_identification_token() logic:
+        a Teams bot identification token is minted from the project credentials and attached
+        to the meeting URL as a fragment before each join attempt.
+
         Flow:
-        1. First join attempt: driver.current_url contains 'lightExperience=false'
+        1. First join attempt: a fresh identification token is minted and attached to the
+           meeting URL that is passed to driver.get(), and driver.current_url contains
+           'lightExperience=false'
         2. The real monitor_for_disable_light_experience_redirect thread detects it,
            sets had_disable_light_experience_redirect=True, and quits the driver
         3. fill_out_name_input observes the quit (redirect flag) and raises a retryable exception
            (simulating the join failing because the driver was quit)
         4. Exception caught in repeatedly_attempt_to_join_meeting -> retry
         5. wait_for_page_url_to_stabilize runs on the retry because the redirect flag is set
-        6. Second join attempt succeeds and the bot records until auto-leave
+        6. Second join attempt mints a second identification token, then runs the real
+           fill_out_name_input (against a stubbed name input element) and succeeds, and the
+           bot records until auto-leave
         """
-        # Use a "none" recording format to keep the test lightweight
+        # Use a "none" recording format to keep the test lightweight. The bot name contains
+        # "Notetaker" so the real fill_out_name_input has a keyword to cyrillicize.
+        self.bot.name = "Test Notetaker Bot"
         self.bot.settings = {"recording_settings": {"format": "none"}}
         self.bot.save()
+
+        # Teams bot identification credentials, so the real get_teams_bot_identification_token()
+        # mints a token instead of returning None
+        teams_bot_identification_credentials = Credentials.objects.create(
+            project=self.project,
+            credential_type=Credentials.CredentialTypes.TEAMS_BOT_IDENTIFICATION_CREDENTIALS,
+        )
+        teams_bot_identification_credentials.set_credentials(
+            {
+                "tenant_id": "test-tenant-id",
+                "client_id": "test-client-id",
+                "client_secret": "test-client-secret",
+            }
+        )
+
+        # Record the token requests the adapter makes and hand back a distinct token each
+        # time, so we can verify a fresh token is minted per join attempt.
+        identification_token_requests = []
+
+        def mock_identification_token_post(*args, **kwargs):
+            url = args[0] if args else kwargs.get("url")
+            mock_response = MagicMock()
+            hostname = urlparse(url).hostname.lower() if url and urlparse(url).hostname else None
+            if hostname and (hostname == "login.microsoftonline.com" or hostname.endswith(".login.microsoftonline.com")):
+                identification_token_requests.append({"url": url, "data": kwargs.get("data")})
+                mock_response.json.return_value = {"access_token": f"test-identification-token-{len(identification_token_requests)}"}
+            return mock_response
 
         # Configure the mock uploader
         mock_uploader = create_mock_file_uploader()
@@ -944,6 +989,11 @@ class TestTeamsBot(TransactionTestCase):
         # Track calls to fill_out_name_input to control which join attempt we're on
         fill_out_name_input_call_count = [0]
 
+        # The real fill_out_name_input runs on the successful retry so we can inspect the
+        # name it types into this stubbed name input element.
+        real_fill_out_name_input = TeamsUIMethods.fill_out_name_input
+        mock_name_input = MagicMock()
+
         def mock_fill_out_name_input(*args, **kwargs):
             """Fail the first join attempt once the redirect is detected, succeed thereafter.
 
@@ -961,8 +1011,11 @@ class TestTeamsBot(TransactionTestCase):
                     time.sleep(0.05)
                 raise UiWaitingRoomTransitionFailedException("Driver was quit due to light experience redirect", "fill_out_name_input")
 
-            # Second attempt: the driver has been reinitialized, join succeeds
-            return None
+            # Second attempt: the driver has been reinitialized, so run the real
+            # implementation with the name input lookup stubbed out
+            with patch("bots.teams_bot_adapter.teams_ui_methods.WebDriverWait") as mock_name_input_wait:
+                mock_name_input_wait.return_value.until.return_value = mock_name_input
+                return real_fill_out_name_input(controller.adapter)
 
         # Spy on wait_for_page_url_to_stabilize so we can verify it runs on the retry
         # (and to avoid its real multi-second stabilization polling loop).
@@ -977,6 +1030,7 @@ class TestTeamsBot(TransactionTestCase):
             patch.object(TeamsUIMethods, "set_layout", return_value=None),
             patch.object(TeamsUIMethods, "disable_incoming_video_in_ui", return_value=None),
             patch("bots.web_bot_adapter.web_bot_adapter.WebBotAdapter.ready_to_show_bot_image", return_value=None),
+            patch("bots.teams_bot_adapter.teams_bot_adapter.requests.post", side_effect=mock_identification_token_post),
         ):
             # Create bot controller
             controller = BotController(self.bot.id)
@@ -1017,6 +1071,37 @@ class TestTeamsBot(TransactionTestCase):
             # Assert that the bot is in the ENDED state
             self.assertEqual(self.bot.state, BotStates.ENDED)
 
+            # Verify the identification credentials were read from the project and passed to the adapter
+            self.assertEqual(
+                controller.adapter.teams_bot_identification_credentials,
+                {"tenant_id": "test-tenant-id", "client_id": "test-client-id", "client_secret": "test-client-secret"},
+            )
+
+            # Verify a token was minted once per join attempt, since a token is only valid for
+            # about an hour and must be fetched right before the bot joins
+            self.assertEqual(len(identification_token_requests), 2, "Expected an identification token to be minted once per join attempt")
+            for identification_token_request in identification_token_requests:
+                self.assertEqual(identification_token_request["url"], "https://login.microsoftonline.com/test-tenant-id/oauth2/v2.0/token")
+                self.assertEqual(
+                    identification_token_request["data"],
+                    {
+                        "client_id": "test-client-id",
+                        "client_secret": "test-client-secret",
+                        "scope": "https://ic3.teams.office.com/.default",
+                        "grant_type": "client_credentials",
+                    },
+                )
+
+            # Verify each join attempt navigated to the meeting URL with its own token attached
+            navigated_urls = [call.args[0] for call in mock_driver.get.call_args_list]
+            self.assertEqual(
+                navigated_urls,
+                [
+                    f"{self.bot.meeting_url}#token=test-identification-token-1",
+                    f"{self.bot.meeting_url}#token=test-identification-token-2",
+                ],
+            )
+
             # Verify that the redirect was detected and recorded by the monitor thread
             self.assertTrue(controller.adapter.had_disable_light_experience_redirect, "Expected had_disable_light_experience_redirect to be True after the redirect was detected")
 
@@ -1029,6 +1114,13 @@ class TestTeamsBot(TransactionTestCase):
 
             # Verify wait_for_page_url_to_stabilize ran on the retry (once per join attempt)
             self.assertEqual(mock_wait_for_page_url_to_stabilize.call_count, 2, "Expected wait_for_page_url_to_stabilize to be called once per join attempt")
+
+            # Verify the name typed into the prejoin name input had the "notetaker" keyword
+            # cyrillicized, with the rest of the display name left alone
+            mock_name_input.send_keys.assert_called_once_with("Test N\u043et\u0435t\u0430k\u0435r Bot")
+            typed_name = mock_name_input.send_keys.call_args[0][0]
+            self.assertNotEqual(typed_name, self.bot.name, "Expected the typed display name to differ from the raw bot name")
+            self.assertNotIn("notetaker", typed_name.lower(), "Expected the typed display name to no longer match a 'notetaker' keyword search")
 
             # Verify that the recording was finished
             self.recording.refresh_from_db()
@@ -1426,3 +1518,96 @@ class TestTeamsBot(TransactionTestCase):
 
             # Close the database connection since we're in a thread
             connection.close()
+
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
+    def test_bot_pod_logs_are_attached_to_last_bot_event(
+        self,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+    ):
+        """
+        Test that when SAVE_BOT_LOGS_TO_DASHBOARD is enabled on a bot pod, the logs the bot
+        writes while it runs are attached to its last event as a debug file.
+
+        The rotating file handler is added to the root logger here rather than through
+        settings.LOGGING, because logging config is only applied at process startup.
+
+        Flow:
+        1. The root logger writes to a temp file, like a bot pod with log saving enabled.
+        2. The bot joins the meeting, then the meeting ends and cleanup runs.
+        3. Cleanup flushes the log handlers and attaches the log file to the bot's last event.
+        4. The attached file contains the logs the bot emitted during the run.
+        """
+        # Configure the mock uploader
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        # Mock the Chrome driver
+        mock_driver = create_mock_teams_driver()
+        MockChromeDriver.return_value = mock_driver
+
+        # Mock virtual display
+        mock_display = MagicMock()
+        MockDisplay.return_value = mock_display
+
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        log_file_path = os.path.join(temp_dir.name, "bot_pod_logs.log")
+
+        # Same handler a bot pod gets from settings.LOG_HANDLERS["bot_pod_log_file"]
+        log_file_handler = RotatingFileHandler(log_file_path, maxBytes=settings.BOT_POD_LOG_FILE_MAX_BYTES // 2, backupCount=1)
+        root_logger = logging.getLogger()
+        root_logger.addHandler(log_file_handler)
+        self.addCleanup(log_file_handler.close)
+        self.addCleanup(root_logger.removeHandler, log_file_handler)
+
+        # Create bot controller
+        controller = BotController(self.bot.id)
+
+        with (
+            patch("bots.bot_controller.bot_controller.settings.IS_A_BOT_POD", True),
+            patch("bots.bot_controller.bot_controller.settings.SAVE_BOT_LOGS_TO_DASHBOARD", True),
+            patch("bots.bot_controller.bot_controller.settings.BOT_POD_LOG_FILE_PATH", log_file_path),
+            # Keep the debug file in memory so the test doesn't upload to the real storage backend
+            patch.object(BotDebugScreenshot._meta.get_field("file"), "storage", InMemoryStorage()),
+            patch("bots.teams_bot_adapter.teams_ui_methods.TeamsUIMethods.attempt_to_join_meeting", return_value=None),
+        ):
+            # Run the bot in a separate thread since it has an event loop
+            bot_thread = threading.Thread(target=controller.run)
+            bot_thread.daemon = True
+            bot_thread.start()
+
+            # Wait for the bot to join and log its startup messages
+            time.sleep(3)
+
+            # Simulate meeting ending to trigger cleanup, which is what saves the logs
+            controller.adapter.left_meeting = True
+            controller.adapter.send_message_callback({"message": controller.adapter.Messages.MEETING_ENDED})
+            time.sleep(1)
+
+            # Now wait for the thread to finish naturally
+            bot_thread.join(timeout=10)
+
+            # If thread is still running after timeout, that's a problem to report
+            if bot_thread.is_alive():
+                print("WARNING: Bot thread did not terminate properly after cleanup")
+
+            # Close the database connection since we're in a thread
+            connection.close()
+
+            self.assertTrue(os.path.exists(log_file_path), "The bot pod should have written its logs to the log file")
+
+            saved_log_files = list(BotDebugScreenshot.objects.filter(bot_event__bot=self.bot, file__startswith="bot_logs_part_").order_by("created_at"))
+            self.assertEqual(len(saved_log_files), 1, "The bot pod's logs should be saved as a single debug file")
+
+            saved_log_file = saved_log_files[0]
+            self.assertIn("bot_logs_part_1_", saved_log_file.file.name)
+
+            with saved_log_file.file.open("rb") as f:
+                saved_logs = f.read().decode()
+
+            self.assertIn("take_action_based_on_bot_in_db - JOINING", saved_logs, "The saved logs should contain the messages logged while the bot was joining")
+            self.assertIn("Telling adapter to leave meeting...", saved_logs, "The saved logs should contain the messages logged during cleanup")

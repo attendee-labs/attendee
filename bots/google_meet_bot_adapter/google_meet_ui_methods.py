@@ -636,6 +636,13 @@ class GoogleMeetUIMethods:
         self.click_element(close_button, "close_button")
 
     def disable_incoming_video_in_ui(self):
+        # First check if incoming video is already disabled. This is what we expect because
+        # we are disabling it via setting localstorage.
+        incoming_video_is_set_to_audio_only_element = self.find_element_by_selector(By.XPATH, '//*[contains(text(), "Incoming video is set to audio only")]')
+        if incoming_video_is_set_to_audio_only_element:
+            logger.info("No need to disable incoming video via the UI. It is already disabled.")
+            return
+
         logger.info("Disabling incoming video")
         logger.info("Waiting for the more options button...")
         MORE_OPTIONS_BUTTON_SELECTOR = 'button[jsname="NakZHc"][aria-label="More options"]'
@@ -1174,7 +1181,8 @@ class GoogleMeetUIMethods:
 
         self.wait_for_host_if_needed()
 
-        self.set_layout(layout_to_select)
+        if not self.disable_incoming_video:
+            self.set_layout(layout_to_select)
 
         if self.disable_incoming_video:
             self.disable_incoming_video_in_ui()

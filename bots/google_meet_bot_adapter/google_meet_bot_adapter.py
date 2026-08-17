@@ -99,6 +99,7 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
                 livekitToken: {json.dumps(self.livekit_settings.get("token", ""))},
                 livekitParticipantIdentity: {json.dumps(self.livekit_settings.get("participant_identity") or None)},
                 livekitMatchParticipantOnPublishOnBehalf: {json.dumps(self.livekit_settings.get("match_participant_on_publish_on_behalf", True))},
+                disableIncomingVideo: {"true" if self.disable_incoming_video else "false"},
             }}
         """
 

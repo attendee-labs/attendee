@@ -1,5 +1,6 @@
 import io
 import logging
+import re
 
 import cv2
 import numpy as np
@@ -15,6 +16,60 @@ from .models import (
 from .templatetags.bot_filters import participant_color as compute_participant_color
 
 logger = logging.getLogger(__name__)
+
+# Latin characters that have a visually identical Cyrillic counterpart.
+LATIN_TO_CYRILLIC_HOMOGLYPHS = {
+    "a": "а",
+    "c": "с",
+    "e": "е",
+    "i": "і",
+    "j": "ј",
+    "o": "о",
+    "p": "р",
+    "s": "ѕ",
+    "x": "х",
+    "y": "у",
+    "A": "А",
+    "B": "В",
+    "C": "С",
+    "E": "Е",
+    "H": "Н",
+    "I": "І",
+    "J": "Ј",
+    "K": "К",
+    "M": "М",
+    "O": "О",
+    "P": "Р",
+    "S": "Ѕ",
+    "T": "Т",
+    "X": "Х",
+    "Y": "У",
+}
+
+
+def cyrillicize_keywords_in_string(string: str, keywords: list[str]) -> str:
+    """
+    Replace the Latin characters of any occurrence of the given keywords with visually
+    identical Cyrillic characters, so the text reads the same to a human but no longer
+    matches a keyword search.
+
+    Keyword matching is case insensitive and the case of the original string is preserved.
+    Characters without a Cyrillic look-alike are left untouched.
+    """
+    if not string or not keywords:
+        return string
+
+    # Longest first so that a keyword that contains another one wins the match.
+    sorted_keywords = sorted((keyword for keyword in keywords if keyword), key=len, reverse=True)
+    if not sorted_keywords:
+        return string
+
+    pattern = re.compile("|".join(re.escape(keyword) for keyword in sorted_keywords), re.IGNORECASE)
+
+    def cyrillicize_match(match: re.Match) -> str:
+        return "".join(LATIN_TO_CYRILLIC_HOMOGLYPHS.get(character, character) for character in match.group(0))
+
+    return pattern.sub(cyrillicize_match, string)
 
 
 def select_from_comma_separated_list_with_wrapping_index(comma_separated_list: str, index: int) -> str | None:

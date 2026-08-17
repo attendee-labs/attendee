@@ -10,6 +10,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
 from bots.models import RecordingViews
+from bots.utils import cyrillicize_keywords_in_string
 from bots.web_bot_adapter.ui_methods import UiBlockedByCaptchaException, UiCouldNotClickElementException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableException, UiRetryableExpectedException
 
 logger = logging.getLogger(__name__)
@@ -131,7 +132,11 @@ class TeamsUIMethods:
             try:
                 name_input = WebDriverWait(self.driver, 1).until(EC.presence_of_element_located((By.CSS_SELECTOR, '[data-tid="prejoin-display-name-input"]')))
                 logger.info("Name input found")
-                name_input.send_keys(self.display_name)
+                display_name_cyrillized = cyrillicize_keywords_in_string(
+                    self.display_name,
+                    keywords=["notetaker"],
+                )
+                name_input.send_keys(display_name_cyrillized)
                 return
             except TimeoutException as e:
                 self.look_for_microsoft_login_form_element("name_input")
@@ -407,7 +412,7 @@ class TeamsUIMethods:
             return "speaker"
 
     def meeting_url_with_identification_token(self):
-        token = self.fetch_teams_bot_identification_token_callback() if self.fetch_teams_bot_identification_token_callback else None
+        token = self.get_teams_bot_identification_token()
         if not token:
             return self.meeting_url
 

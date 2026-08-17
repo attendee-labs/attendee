@@ -1,10 +1,9 @@
 import os
-import sys
 
 import dj_database_url
 
 from .base import *
-from .base import LOG_FORMATTERS
+from .base import LOG_FORMATTERS, LOG_HANDLER_NAMES, LOG_HANDLERS
 
 DEBUG = False
 ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "*").split(",")
@@ -61,23 +60,17 @@ LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
     "formatters": LOG_FORMATTERS,
-    "handlers": {
-        "console": {
-            "class": "logging.StreamHandler",
-            "stream": sys.stdout,
-            "formatter": os.getenv("ATTENDEE_LOG_FORMAT"),  # `None` (default formatter) is the default
-        },
-    },
+    "handlers": LOG_HANDLERS,
     "root": {
-        "handlers": ["console"],
+        "handlers": LOG_HANDLER_NAMES,
         "level": os.getenv("ATTENDEE_LOG_LEVEL", "INFO"),
     },
     "loggers": {
         "django": {
-            "handlers": ["console"],
+            "handlers": LOG_HANDLER_NAMES,
             "level": os.getenv("ATTENDEE_LOG_LEVEL", "INFO"),
             "propagate": False,
         },
-        "xmlschema": {"level": "WARNING", "handlers": ["console"], "propagate": False},
+        "xmlschema": {"level": "WARNING", "handlers": LOG_HANDLER_NAMES, "propagate": False},
     },
 }
