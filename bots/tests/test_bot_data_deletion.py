@@ -54,7 +54,13 @@ class TestBotDataDeletion(TransactionTestCase):
         self.save_mock = self.save_patch.start()
 
         # Set side effects
-        self.delete_mock.side_effect = mock_file_field_delete_sets_name_to_none
+        self.deleted_file_names = []
+
+        def track_deleted_file_names(instance, save=True):
+            self.deleted_file_names.append(instance.name)
+            mock_file_field_delete_sets_name_to_none(instance, save=save)
+
+        self.delete_mock.side_effect = track_deleted_file_names
         self.save_mock.side_effect = mock_file_field_save
 
         # Create test organization
@@ -153,6 +159,8 @@ class TestBotDataDeletion(TransactionTestCase):
         self.assertEqual(Utterance.objects.filter(recording__bot=self.bot1).count(), 0)
         self.assertEqual(ChatMessage.objects.filter(bot=self.bot1).count(), 0)
         self.assertEqual(BotDebugScreenshot.objects.filter(bot_event__bot=self.bot1).count(), 0)
+        self.assertIn(self.screenshot1.file.name, self.deleted_file_names)
+        self.assertNotIn(self.screenshot2.file.name, self.deleted_file_names)
         self.assertEqual(ParticipantEvent.objects.filter(participant__bot=self.bot1).count(), 0)
         self.assertEqual(WebhookDeliveryAttempt.objects.filter(bot=self.bot1, webhook_trigger_type=WebhookTriggerTypes.BOT_STATE_CHANGE).count(), 3)
         self.assertEqual(WebhookDeliveryAttempt.objects.filter(bot=self.bot1, webhook_trigger_type=WebhookTriggerTypes.TRANSCRIPT_UPDATE).count(), 0)
