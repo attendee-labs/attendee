@@ -1,6 +1,8 @@
 from datetime import timedelta
 from unittest.mock import MagicMock, patch
 
+from django.core.files.base import ContentFile
+from django.core.files.storage import InMemoryStorage
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import TestCase
@@ -8,7 +10,7 @@ from django.utils import timezone
 
 from accounts.models import Organization
 from bots.cleanup_utils import cleanup_old_audio_chunks, cleanup_old_bot_resource_snapshots, cleanup_old_utterances
-from bots.models import AudioChunk, Bot, BotResourceSnapshot, BotStates, Participant, Project, Recording, RecordingStates, Utterance
+from bots.models import AudioChunk, Bot, BotDebugScreenshot, BotEvent, BotEventTypes, BotResourceSnapshot, BotStates, Participant, Project, Recording, RecordingStates, Utterance
 
 
 def _backdate(model, pk, when):
@@ -220,6 +222,53 @@ class CleanupOldDataCommandTestCase(CleanupFixturesMixin, TestCase):
         boom.assert_called_once()
         self.assertFalse(Utterance.objects.filter(pk=old_utterance.pk).exists())
         self.assertTrue(AudioChunk.objects.filter(pk=old_chunk.pk).exists())
+
+
+class CleanupDebugScreenshotsForDeletedBotsCommandTestCase(CleanupFixturesMixin, TestCase):
+    def test_deletes_screenshot_row_and_file_for_data_deleted_bot(self):
+        storage = InMemoryStorage()
+
+        with patch.object(BotDebugScreenshot._meta.get_field("file"), "storage", storage):
+            self.bot.state = BotStates.DATA_DELETED
+            self.bot.last_heartbeat_timestamp = int(self.now.timestamp())
+            self.bot.save(update_fields=["state", "last_heartbeat_timestamp"])
+            event = BotEvent.objects.create(
+                bot=self.bot,
+                old_state=BotStates.ENDED,
+                new_state=BotStates.DATA_DELETED,
+                event_type=BotEventTypes.DATA_DELETED,
+            )
+            screenshot = BotDebugScreenshot.objects.create(bot_event=event)
+            screenshot.file.save("debug.png", ContentFile(b"debug screenshot"))
+            file_name = screenshot.file.name
+
+            self.assertTrue(storage.exists(file_name))
+
+            call_command("cleanup_debug_screenshots_for_deleted_bots", "--lookback-days=7", "--batch-size=10")
+
+            self.assertFalse(BotDebugScreenshot.objects.filter(pk=screenshot.pk).exists())
+            self.assertFalse(storage.exists(file_name))
+
+    def test_keeps_screenshot_for_bot_without_deleted_data(self):
+        storage = InMemoryStorage()
+
+        with patch.object(BotDebugScreenshot._meta.get_field("file"), "storage", storage):
+            self.bot.last_heartbeat_timestamp = int(self.now.timestamp())
+            self.bot.save(update_fields=["last_heartbeat_timestamp"])
+            event = BotEvent.objects.create(
+                bot=self.bot,
+                old_state=BotStates.ENDED,
+                new_state=BotStates.ENDED,
+                event_type=BotEventTypes.BOT_JOINED_MEETING,
+            )
+            screenshot = BotDebugScreenshot.objects.create(bot_event=event)
+            screenshot.file.save("debug.png", ContentFile(b"debug screenshot"))
+            file_name = screenshot.file.name
+
+            call_command("cleanup_debug_screenshots_for_deleted_bots", "--lookback-days=7", "--batch-size=10")
+
+            self.assertTrue(BotDebugScreenshot.objects.filter(pk=screenshot.pk).exists())
+            self.assertTrue(storage.exists(file_name))
 
 
 class DeleteOldBotTranscriptsCommandTestCase(CleanupFixturesMixin, TestCase):

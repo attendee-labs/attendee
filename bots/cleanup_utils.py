@@ -33,9 +33,69 @@ they are called from:
 
 import logging
 
-from bots.models import AudioChunk, BotResourceSnapshot, Utterance
+from bots.models import AudioChunk, BotDebugScreenshot, BotResourceSnapshot, BotStates, Utterance
 
 logger = logging.getLogger(__name__)
+
+
+def cleanup_debug_screenshots_for_deleted_bots(*, since, batch_size, dry_run):
+    """
+    Delete BotDebugScreenshot rows (and their underlying files) that belong to
+    bots in the DATA_DELETED state.
+
+    These rows exist because a bot pod can upload a debug screenshot in the
+    window between Bot.delete_data() running and the pod being hard-killed.
+    DATA_DELETED is a terminal state, so any screenshot attached to such a bot
+    is garbage by definition; this sweep makes delete_data() eventually
+    consistent without any locking.
+
+    Also unlike the other helpers, rows are fetched as objects rather than
+    bare ids, because each row's storage blob must be deleted first. If a
+    blob deletion fails, the row is skipped (and retried on the next run)
+    so we never orphan a file.
+
+    Returns the number of screenshots deleted (or, for dry_run=True, the
+    number that would be deleted).
+    """
+    logger.info(f"[debug_screenshots] Finding debug screenshots for data-deleted bots active since {since.isoformat()}...")
+
+    candidates = BotDebugScreenshot.objects.filter(
+        bot_event__bot__state=BotStates.DATA_DELETED,
+        bot_event__bot__last_heartbeat_timestamp__gte=int(since.timestamp()),
+    )
+
+    if dry_run:
+        total = candidates.count()
+        logger.info(f"[debug_screenshots] [DRY RUN] Would delete {total} debug screenshots.")
+        return total
+
+    last_id = 0
+    total_deleted = 0
+    while True:
+        screenshots = list(candidates.filter(id__gt=last_id).order_by("id")[:batch_size])
+        if not screenshots:
+            break
+
+        # Advance past every row in this batch, including any we skip below.
+        # Skipped rows are retried on the next cron run rather than looping forever here.
+        last_id = screenshots[-1].id
+
+        deletable_ids = []
+        for screenshot in screenshots:
+            try:
+                if screenshot.file and screenshot.file.name:
+                    screenshot.file.delete()
+                deletable_ids.append(screenshot.id)
+            except Exception:
+                # Leave the row in place so the file is retried on the next run.
+                logger.exception(f"[debug_screenshots] Failed to delete file for screenshot {screenshot.object_id}, will retry next run.")
+
+        deleted, _ = BotDebugScreenshot.objects.filter(id__in=deletable_ids).delete()
+        total_deleted += deleted
+        logger.info(f"[debug_screenshots] Deleted {total_deleted} debug screenshots so far.")
+
+    logger.info(f"[debug_screenshots] Done. Deleted {total_deleted} debug screenshots.")
+    return total_deleted
 
 
 def cleanup_old_utterances(*, cutoff, batch_size, dry_run):
