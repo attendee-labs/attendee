@@ -57,11 +57,11 @@ def cleanup_debug_screenshots_for_deleted_bots(*, since, batch_size, dry_run):
     Returns the number of screenshots deleted (or, for dry_run=True, the
     number that would be deleted).
     """
-    logger.info(f"[debug_screenshots] Finding debug screenshots for data-deleted bots active since {since.isoformat()}...")
+    logger.info(f"[debug_screenshots] Finding debug screenshots for data-deleted bots updated since {since.isoformat()}...")
 
     candidates = BotDebugScreenshot.objects.filter(
         bot_event__bot__state=BotStates.DATA_DELETED,
-        bot_event__bot__last_heartbeat_timestamp__gte=int(since.timestamp()),
+        bot_event__bot__updated_at__gte=since,
     )
 
     if dry_run:
