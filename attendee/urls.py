@@ -67,6 +67,8 @@ urlpatterns += [
     path("api/v1/", include("bots.calendars_api_urls")),
     path("api/v1/", include("bots.zoom_oauth_connections_api_urls")),
     path("api/v1/", include("bots.app_session_api_urls")),
+    path("api/v1/", include("bots.account_api_urls")),
+    path("api/v1/", include("bots.recorder_sessions_api_urls")),
     path("api/v1/", include("bots.bots_api_urls")),
 ]
 

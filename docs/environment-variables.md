@@ -11,7 +11,8 @@ This document lists all supported environment variables for the Attendee applica
 5. [Authentication & Security](#authentication--security)
 6. [Redis & Celery](#redis--celery)
 7. [API & Rate Limiting](#api--rate-limiting)
-8. [Webhooks](#webhooks)
+8. [Desktop Recorder Sessions](#desktop-recorder-sessions)
+9. [Webhooks](#webhooks)
 9. [Bot Configuration](#bot-configuration)
 10. [Logging](#logging)
 11. [Sentry (Error Tracking)](#sentry-error-tracking)
@@ -130,6 +131,19 @@ This document lists all supported environment variables for the Attendee applica
 | `DISABLE_RATE_LIMITING` | Boolean | `false` | Disable API rate limiting. Set to `true` for testing. |
 | `MAX_METADATA_LENGTH` | Integer | `1000` | Maximum length (in characters) for metadata values. |
 | `REQUIRE_STRING_VALUES_IN_METADATA` | Boolean | `true` | Require metadata values to be strings. If `false`, allows nested objects. |
+
+---
+
+## Desktop Recorder Sessions
+
+Used by the desktop recorder SDK upload API (`/api/v1/recorder_sessions`). See [desktop_recorder_sdk.md](desktop_recorder_sdk.md). Requires `STORAGE_PROTOCOL=s3`.
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `RECORDER_UPLOAD_URL_EXPIRY_SECONDS` | Integer | `3600` | TTL of presigned multipart part-upload URLs. |
+| `RECORDER_MULTIPART_PART_SIZE_BYTES` | Integer | `8388608` (8 MB) | Part size guidance returned to the SDK for chunking uploads. |
+| `RECORDER_SESSION_ABANDON_TTL_MINUTES` | Integer | `120` | Idle time after which `clean_up_abandoned_recorder_sessions` expires a session and aborts its multipart upload. |
+| `RECORDER_MAX_UPLOAD_BYTES` | Integer | `5368709120` (5 GB) | Maximum accepted upload size; larger finalized uploads are rejected. |
 
 ---
 

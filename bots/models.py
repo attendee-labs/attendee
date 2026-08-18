@@ -673,6 +673,7 @@ class RecordingViews(models.TextChoices):
 class SessionTypes(models.IntegerChoices):
     BOT = 1, "Bot"
     APP_SESSION = 2, "App Session"
+    DESKTOP_RECORDING = 3, "Desktop Recording"
 
 
 class TranscriptionSettings:
@@ -1187,6 +1188,8 @@ class Bot(models.Model):
     def object_id_prefix(self):
         if self.session_type == SessionTypes.BOT:
             return "bot_"
+        elif self.session_type == SessionTypes.DESKTOP_RECORDING:
+            return "drec_"
         else:
             return "app_"
 
@@ -2477,6 +2480,95 @@ class RecordingManager:
     @classmethod
     def is_terminal_state(cls, state: int):
         return state == RecordingStates.COMPLETE or state == RecordingStates.FAILED
+
+
+class RecorderUploadStates(models.IntegerChoices):
+    CREATED = 1, "Created"  # Session created, S3 multipart upload initiated, awaiting parts
+    UPLOADING = 2, "Uploading"  # At least one part received
+    UPLOADED = 3, "Uploaded"  # Multipart completed, media object exists in storage
+    COMPLETE = 4, "Complete"  # Media attached to the recording; terminal success
+    FAILED = 5, "Failed"  # Terminal failure
+    EXPIRED = 6, "Expired"  # Abandoned/aborted; multipart upload cleaned up
+
+    @classmethod
+    def terminal_states(cls):
+        return [cls.COMPLETE, cls.FAILED, cls.EXPIRED]
+
+    @classmethod
+    def _get_mapping(cls):
+        return {
+            cls.CREATED: "created",
+            cls.UPLOADING: "uploading",
+            cls.UPLOADED: "uploaded",
+            cls.COMPLETE: "complete",
+            cls.FAILED: "failed",
+            cls.EXPIRED: "expired",
+        }
+
+    @classmethod
+    def state_to_api_code(cls, value):
+        return cls._get_mapping().get(value)
+
+
+class RecorderUpload(models.Model):
+    """
+    Tracks the upload lifecycle for a desktop recorder session (a Bot row with
+    session_type == DESKTOP_RECORDING). One-to-one with that Bot. The uploaded media
+    is attached to the Bot's default Recording on completion, so everything downstream
+    of Recording.file (storage, download) is reused.
+    """
+
+    OBJECT_ID_PREFIX = "rec_up_"
+    object_id = models.CharField(max_length=32, unique=True, editable=False)
+
+    bot = models.OneToOneField(Bot, on_delete=models.CASCADE, related_name="recorder_upload")
+    # Denormalized from bot.project so the deduplication uniqueness constraint can be enforced at the DB level.
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="recorder_uploads")
+
+    state = models.IntegerField(choices=RecorderUploadStates.choices, default=RecorderUploadStates.CREATED, null=False)
+
+    # Storage location + S3 multipart bookkeeping
+    s3_key = models.CharField(max_length=1024)
+    upload_id = models.CharField(max_length=1024, null=True, blank=True)
+    content_type = models.CharField(max_length=255)
+
+    bytes_expected = models.BigIntegerField(null=True, blank=True)
+    bytes_received = models.BigIntegerField(default=0, null=False)
+
+    # List of {"part_number": int, "etag": str, "size": int} confirmed by the client
+    parts = models.JSONField(default=list, null=False)
+
+    failure_data = models.JSONField(null=True, blank=True)
+
+    # deduplication_key is tracked here (not on Bot) so recorder sessions are fully
+    # decoupled from the Bot state machine.
+    deduplication_key = models.CharField(max_length=1024, null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    last_activity_at = models.DateTimeField(auto_now_add=True)
+    version = IntegerVersionField()
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["project", "deduplication_key"],
+                name="unique_recorder_upload_deduplication_key",
+                condition=~models.Q(state__in=[RecorderUploadStates.COMPLETE, RecorderUploadStates.FAILED, RecorderUploadStates.EXPIRED]) & models.Q(deduplication_key__isnull=False),
+            )
+        ]
+
+    def save(self, *args, **kwargs):
+        if not self.object_id:
+            random_string = "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(16))
+            self.object_id = f"{self.OBJECT_ID_PREFIX}{random_string}"
+        super().save(*args, **kwargs)
+
+    def is_terminal(self):
+        return self.state in RecorderUploadStates.terminal_states()
+
+    def __str__(self):
+        return f"RecorderUpload for {self.bot.object_id} ({RecorderUploadStates.state_to_api_code(self.state)})"
 
 
 class TranscriptionFailureReasons(models.TextChoices):
