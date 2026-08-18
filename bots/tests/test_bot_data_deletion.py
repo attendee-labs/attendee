@@ -1,7 +1,9 @@
+import threading
 import uuid
 from unittest.mock import PropertyMock, patch
 
 from django.core.files.base import ContentFile
+from django.db import close_old_connections
 from django.test import Client, TransactionTestCase
 from django.test.utils import override_settings
 from rest_framework import status
@@ -211,7 +213,9 @@ class TestBotDataDeletion(TransactionTestCase):
         self.bot1.delete_data()
 
         deleted_file_owners = {(type(call.args[0].instance), call.args[0].instance.pk) for call in self.delete_mock.call_args_list}
+        debug_file_delete_call = next(call for call in self.delete_mock.call_args_list if isinstance(call.args[0].instance, BotDebugScreenshot))
         self.assertEqual(self.delete_mock.call_count, 2)
+        self.assertEqual(debug_file_delete_call.kwargs, {"save": False})
         self.assertEqual(
             deleted_file_owners,
             {
@@ -219,6 +223,202 @@ class TestBotDataDeletion(TransactionTestCase):
                 (BotDebugScreenshot, self.screenshot1.pk),
             },
         )
+
+    def test_delete_data_is_idempotent(self):
+        """Test that retrying delete_data succeeds without creating another event"""
+        self.bot1.delete_data()
+        self.bot1.delete_data()
+
+        self.bot1.refresh_from_db()
+        self.assertEqual(self.bot1.state, BotStates.DATA_DELETED)
+        self.assertEqual(self.bot1.bot_events.filter(event_type=BotEventTypes.DATA_DELETED).count(), 1)
+
+    def test_debug_artifact_cannot_be_created_after_data_deletion(self):
+        """Test that cleanup cannot create a new artifact after delete_data succeeds"""
+        self.bot1.delete_data()
+        data_deleted_event = self.bot1.bot_events.get(event_type=BotEventTypes.DATA_DELETED)
+
+        with self.assertRaises(ValueError):
+            BotDebugScreenshot.create_with_file(
+                bot_event=data_deleted_event,
+                filename_template="late_debug_recording_{object_id}.mp4",
+                content=ContentFile(b"late debug recording"),
+            )
+
+        self.assertEqual(BotDebugScreenshot.objects.filter(bot_event__bot=self.bot1).count(), 0)
+
+    def test_direct_late_file_save_is_removed_after_data_deletion(self):
+        """Test that a stale artifact instance cannot leave a late-uploaded file behind"""
+        late_artifact = BotDebugScreenshot.objects.create(bot_event=self.event1)
+        self.bot1.delete_data()
+        self.delete_mock.reset_mock()
+
+        with self.assertRaises(ValueError):
+            late_artifact.file.save("late_debug_recording.mp4", ContentFile(b"late debug recording"))
+
+        self.assertEqual(self.delete_mock.call_count, 1)
+        self.assertEqual(self.delete_mock.call_args.kwargs, {"save": False})
+        self.assertFalse(BotDebugScreenshot.objects.filter(pk=late_artifact.pk).exists())
+
+    def test_delete_data_waits_for_in_progress_debug_upload(self):
+        """Test that artifact upload and deletion serialize on the bot row"""
+        upload_started = threading.Event()
+        release_upload = threading.Event()
+        deletion_finished = threading.Event()
+        thread_errors = []
+
+        def blocking_file_save(instance, name, content, save=True):
+            if name.startswith("concurrent_debug_recording_"):
+                upload_started.set()
+                if not release_upload.wait(timeout=5):
+                    raise TimeoutError("timed out waiting to release the test upload")
+            mock_file_field_save(instance, name, content, save=save)
+
+        self.save_mock.side_effect = blocking_file_save
+
+        def create_artifact():
+            close_old_connections()
+            try:
+                event = BotEvent.objects.get(pk=self.event1.pk)
+                BotDebugScreenshot.create_with_file(
+                    bot_event=event,
+                    filename_template="concurrent_debug_recording_{object_id}.mp4",
+                    content=ContentFile(b"concurrent debug recording"),
+                )
+            except Exception as exc:
+                thread_errors.append(exc)
+            finally:
+                close_old_connections()
+
+        def delete_data():
+            close_old_connections()
+            try:
+                Bot.objects.get(pk=self.bot1.pk).delete_data()
+            except Exception as exc:
+                thread_errors.append(exc)
+            finally:
+                deletion_finished.set()
+                close_old_connections()
+
+        artifact_thread = threading.Thread(target=create_artifact)
+        artifact_thread.start()
+        self.assertTrue(upload_started.wait(timeout=5))
+
+        deletion_thread = threading.Thread(target=delete_data)
+        deletion_thread.start()
+        self.assertFalse(deletion_finished.wait(timeout=0.2))
+
+        release_upload.set()
+        artifact_thread.join(timeout=5)
+        deletion_thread.join(timeout=5)
+
+        self.assertFalse(artifact_thread.is_alive())
+        self.assertFalse(deletion_thread.is_alive())
+        self.assertEqual(thread_errors, [])
+        self.bot1.refresh_from_db()
+        self.assertEqual(self.bot1.state, BotStates.DATA_DELETED)
+        self.assertFalse(BotDebugScreenshot.objects.filter(bot_event__bot=self.bot1).exists())
+
+    def test_debug_upload_waits_for_deletion_and_is_rejected(self):
+        """Test that an upload waiting behind deletion observes DATA_DELETED"""
+        deletion_holds_lock = threading.Event()
+        release_deletion = threading.Event()
+        upload_finished = threading.Event()
+        upload_rejected = threading.Event()
+        thread_errors = []
+
+        def blocking_file_delete(instance, save=True):
+            if isinstance(instance.instance, BotDebugScreenshot) and not deletion_holds_lock.is_set():
+                deletion_holds_lock.set()
+                if not release_deletion.wait(timeout=5):
+                    raise TimeoutError("timed out waiting to release deletion")
+            mock_file_field_delete_sets_name_to_none(instance, save=save)
+
+        self.delete_mock.side_effect = blocking_file_delete
+
+        def delete_data():
+            close_old_connections()
+            try:
+                Bot.objects.get(pk=self.bot1.pk).delete_data()
+            except Exception as exc:
+                thread_errors.append(exc)
+            finally:
+                close_old_connections()
+
+        def create_artifact():
+            close_old_connections()
+            try:
+                event = BotEvent.objects.get(pk=self.event1.pk)
+                BotDebugScreenshot.create_with_file(
+                    bot_event=event,
+                    filename_template="too_late_debug_recording_{object_id}.mp4",
+                    content=ContentFile(b"too late debug recording"),
+                )
+            except ValueError:
+                upload_rejected.set()
+            except Exception as exc:
+                thread_errors.append(exc)
+            finally:
+                upload_finished.set()
+                close_old_connections()
+
+        deletion_thread = threading.Thread(target=delete_data)
+        deletion_thread.start()
+        self.assertTrue(deletion_holds_lock.wait(timeout=5))
+
+        artifact_thread = threading.Thread(target=create_artifact)
+        artifact_thread.start()
+        self.assertFalse(upload_finished.wait(timeout=0.2))
+
+        release_deletion.set()
+        deletion_thread.join(timeout=5)
+        artifact_thread.join(timeout=5)
+
+        self.assertFalse(deletion_thread.is_alive())
+        self.assertFalse(artifact_thread.is_alive())
+        self.assertEqual(thread_errors, [])
+        self.assertTrue(upload_rejected.is_set())
+        self.bot1.refresh_from_db()
+        self.assertEqual(self.bot1.state, BotStates.DATA_DELETED)
+        self.assertFalse(BotDebugScreenshot.objects.filter(bot_event__bot=self.bot1).exists())
+
+    def test_delete_data_can_retry_after_storage_failure(self):
+        """Test that a partial storage failure rolls back database changes and can be retried"""
+        failed_once = False
+
+        def fail_recording_delete_once(instance, save=True):
+            nonlocal failed_once
+            if isinstance(instance.instance, Recording) and not failed_once:
+                failed_once = True
+                raise OSError("storage unavailable")
+            mock_file_field_delete_sets_name_to_none(instance, save=save)
+
+        self.delete_mock.side_effect = fail_recording_delete_once
+        with self.assertRaises(OSError):
+            self.bot1.delete_data()
+
+        self.bot1.refresh_from_db()
+        self.screenshot1.refresh_from_db()
+        self.assertEqual(self.bot1.state, BotStates.ENDED)
+        self.assertTrue(self.screenshot1.file)
+        self.assertTrue(Participant.objects.filter(bot=self.bot1).exists())
+
+        self.delete_mock.side_effect = mock_file_field_delete_sets_name_to_none
+        self.bot1.delete_data()
+        self.bot1.refresh_from_db()
+        self.assertEqual(self.bot1.state, BotStates.DATA_DELETED)
+        self.assertFalse(BotDebugScreenshot.objects.filter(bot_event__bot=self.bot1).exists())
+
+    def test_delete_data_removes_debug_rows_without_files(self):
+        """Test that empty debug artifact rows are removed without a storage call"""
+        empty_artifact = BotDebugScreenshot.objects.create(bot_event=self.event1)
+        self.delete_mock.reset_mock()
+
+        self.bot1.delete_data()
+
+        deleted_file_owners = {(type(call.args[0].instance), call.args[0].instance.pk) for call in self.delete_mock.call_args_list}
+        self.assertNotIn((BotDebugScreenshot, empty_artifact.pk), deleted_file_owners)
+        self.assertFalse(BotDebugScreenshot.objects.filter(pk=empty_artifact.pk).exists())
 
     def test_delete_data_multiple_recordings(self):
         """Test that delete_data deletes data from multiple recordings"""

@@ -872,17 +872,27 @@ class Bot(models.Model):
     session_type = models.IntegerField(choices=SessionTypes.choices, default=SessionTypes.BOT, db_default=SessionTypes.BOT, null=False)
 
     def delete_data(self):
-        # Check if bot is in a state where the data deleted event can be created
-        if not BotEventManager.event_can_be_created_for_state(BotEventTypes.DATA_DELETED, self.state):
-            raise ValueError("Bot is not in a state where the data deleted event can be created")
-
+        # Object storage operations cannot roll back with the database. A
+        # failure leaves the bot in its previous state, and supported storage
+        # backends make deletes idempotent so a retry converges safely.
         with transaction.atomic():
+            # Serialize data deletion with debug artifact creation. This prevents
+            # cleanup from uploading a new artifact after the deletion sweep.
+            # The lock intentionally spans storage I/O: delete_data must not
+            # report success while a cleanup upload for the same bot is active.
+            Bot.objects.select_for_update().only("pk").get(pk=self.pk)
+            self.refresh_from_db()
+
+            data_was_already_deleted = self.state == BotStates.DATA_DELETED
+            if not data_was_already_deleted and not BotEventManager.event_can_be_created_for_state(BotEventTypes.DATA_DELETED, self.state):
+                raise ValueError("Bot is not in a state where the data deleted event can be created")
+
             # Delete all debug screenshots from bot events
-            debug_screenshots = BotDebugScreenshot.objects.filter(bot_event__bot=self)
+            debug_screenshots = list(BotDebugScreenshot.objects.filter(bot_event__bot=self).only("pk", "file"))
             for debug_screenshot in debug_screenshots:
                 if debug_screenshot.file and debug_screenshot.file.name:
-                    debug_screenshot.file.delete()
-            debug_screenshots.delete()
+                    debug_screenshot.file.delete(save=False)
+            BotDebugScreenshot.objects.filter(pk__in=[debug_screenshot.pk for debug_screenshot in debug_screenshots]).delete()
 
             # Delete all utterances and recording files for each recording
             for recording in self.recordings.all():
@@ -904,7 +914,8 @@ class Bot(models.Model):
             webhook_delivery_attempts_with_sensitive_data = self.webhook_delivery_attempts.exclude(webhook_trigger_type=WebhookTriggerTypes.BOT_STATE_CHANGE)
             webhook_delivery_attempts_with_sensitive_data.delete()
 
-            BotEventManager.create_event(bot=self, event_type=BotEventTypes.DATA_DELETED)
+            if not data_was_already_deleted:
+                BotEventManager.create_event(bot=self, event_type=BotEventTypes.DATA_DELETED)
 
     def set_heartbeat(self):
         retry_count = 0
@@ -3039,12 +3050,45 @@ class BotDebugScreenshot(models.Model):
     file = models.FileField(storage=BotDebugScreenshotStorage())
     created_at = models.DateTimeField(auto_now_add=True)
 
-    def save(self, *args, **kwargs):
+    @classmethod
+    def create_with_file(cls, *, bot_event, filename_template, content):
+        """Create a debug artifact while serialized with bot data deletion."""
+        with transaction.atomic():
+            bot = Bot.objects.select_for_update().only("state", "object_id").get(pk=bot_event.bot_id)
+            if bot.state == BotStates.DATA_DELETED:
+                raise ValueError(f"Cannot create a debug artifact after data was deleted for bot {bot.object_id}")
+
+            # The bot lock is already held for this complete operation, so use
+            # the unguarded model save to avoid redundant SELECT FOR UPDATEs.
+            artifact = cls(bot_event=bot_event)
+            artifact._save_without_data_deletion_guard()
+            artifact.file.save(filename_template.format(object_id=artifact.object_id), content, save=False)
+            artifact._save_without_data_deletion_guard(update_fields=["file"])
+            return artifact
+
+    def _save_without_data_deletion_guard(self, *args, **kwargs):
         if not self.object_id:
             # Generate a random 16-character string
             random_string = "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(16))
             self.object_id = f"{self.OBJECT_ID_PREFIX}{random_string}"
         super().save(*args, **kwargs)
+
+    def save(self, *args, **kwargs):
+        with transaction.atomic():
+            if "bot_event" in self._state.fields_cache:
+                bot_id = self.bot_event.bot_id
+            else:
+                bot_id = BotEvent.objects.values_list("bot_id", flat=True).get(pk=self.bot_event_id)
+
+            bot = Bot.objects.select_for_update().only("state", "object_id").get(pk=bot_id)
+            if bot.state == BotStates.DATA_DELETED:
+                # FieldFile.save() uploads before saving the model. Delete that
+                # just-uploaded object when a direct caller races with deletion.
+                if self.file and self.file.name and self.file._committed:
+                    self.file.delete(save=False)
+                raise ValueError(f"Cannot save a debug artifact after data was deleted for bot {bot.object_id}")
+
+            self._save_without_data_deletion_guard(*args, **kwargs)
 
     @property
     def url(self):

@@ -1681,11 +1681,13 @@ class BotController:
         # Find the bot's last event
         last_bot_event = self.bot_in_db.last_bot_event()
         if last_bot_event:
-            debug_screenshot = BotDebugScreenshot.objects.create(bot_event=last_bot_event)
-
             # Save the file directly from the file path
             with open(BotAdapter.DEBUG_RECORDING_FILE_PATH, "rb") as f:
-                debug_screenshot.file.save(f"debug_screen_recording_{debug_screenshot.object_id}.mp4", f, save=True)
+                debug_screenshot = BotDebugScreenshot.create_with_file(
+                    bot_event=last_bot_event,
+                    filename_template="debug_screen_recording_{object_id}.mp4",
+                    content=f,
+                )
             logger.info(f"Saved debug recording with ID {debug_screenshot.object_id}")
 
     def save_bot_pod_logs(self):
@@ -1718,9 +1720,12 @@ class BotController:
             return
 
         for part_number, path in enumerate(log_file_paths_in_order, start=1):
-            debug_screenshot = BotDebugScreenshot.objects.create(bot_event=last_bot_event)
             with open(path, "rb") as f:
-                debug_screenshot.file.save(f"bot_logs_part_{part_number}_{debug_screenshot.object_id}.log", f, save=True)
+                debug_screenshot = BotDebugScreenshot.create_with_file(
+                    bot_event=last_bot_event,
+                    filename_template=f"bot_logs_part_{part_number}_{{object_id}}.log",
+                    content=f,
+                )
             logger.info(f"Saved bot pod logs from {path} with ID {debug_screenshot.object_id}")
 
     def on_message_from_websocket_audio(self, message_json: str):
@@ -1761,16 +1766,13 @@ class BotController:
                 logger.warning(f"Warning: Screenshot file at {message.get('screenshot_path')} does not exist, not saving")
                 return
 
-            # Create debug screenshot
-            debug_screenshot = BotDebugScreenshot.objects.create(bot_event=new_bot_event)
-
             # Read the file content from the path
             with open(message.get("screenshot_path"), "rb") as f:
                 screenshot_content = f.read()
-                debug_screenshot.file.save(
-                    f"debug_screenshot_{debug_screenshot.object_id}.png",
-                    ContentFile(screenshot_content),
-                    save=True,
+                BotDebugScreenshot.create_with_file(
+                    bot_event=new_bot_event,
+                    filename_template="debug_screenshot_{object_id}.png",
+                    content=ContentFile(screenshot_content),
                 )
 
         if mhtml_file_available:
@@ -1778,15 +1780,12 @@ class BotController:
                 logger.warning(f"Warning: MHTML file at {message.get('mhtml_file_path')} does not exist, not saving")
                 return
 
-            # Create debug screenshot
-            mhtml_debug_screenshot = BotDebugScreenshot.objects.create(bot_event=new_bot_event)
-
             with open(message.get("mhtml_file_path"), "rb") as f:
                 mhtml_content = f.read()
-                mhtml_debug_screenshot.file.save(
-                    f"debug_screenshot_{mhtml_debug_screenshot.object_id}.mhtml",
-                    ContentFile(mhtml_content),
-                    save=True,
+                BotDebugScreenshot.create_with_file(
+                    bot_event=new_bot_event,
+                    filename_template="debug_screenshot_{object_id}.mhtml",
+                    content=ContentFile(mhtml_content),
                 )
 
     def take_action_based_on_message_from_adapter(self, message):
@@ -1926,28 +1925,22 @@ class BotController:
             logger.info(f"Created bot event for #{self.bot_in_db.object_id} for UI element not found. Exception info: {message}")
 
             if screenshot_available:
-                # Create debug screenshot
-                debug_screenshot = BotDebugScreenshot.objects.create(bot_event=new_bot_event)
-
                 # Read the file content from the path
                 with open(message.get("screenshot_path"), "rb") as f:
                     screenshot_content = f.read()
-                    debug_screenshot.file.save(
-                        f"debug_screenshot_{debug_screenshot.object_id}.png",
-                        ContentFile(screenshot_content),
-                        save=True,
+                    BotDebugScreenshot.create_with_file(
+                        bot_event=new_bot_event,
+                        filename_template="debug_screenshot_{object_id}.png",
+                        content=ContentFile(screenshot_content),
                     )
 
             if mhtml_file_available:
-                # Create debug screenshot
-                mhtml_debug_screenshot = BotDebugScreenshot.objects.create(bot_event=new_bot_event)
-
                 with open(message.get("mhtml_file_path"), "rb") as f:
                     mhtml_content = f.read()
-                    mhtml_debug_screenshot.file.save(
-                        f"debug_screenshot_{mhtml_debug_screenshot.object_id}.mhtml",
-                        ContentFile(mhtml_content),
-                        save=True,
+                    BotDebugScreenshot.create_with_file(
+                        bot_event=new_bot_event,
+                        filename_template="debug_screenshot_{object_id}.mhtml",
+                        content=ContentFile(mhtml_content),
                     )
 
             self.cleanup()
