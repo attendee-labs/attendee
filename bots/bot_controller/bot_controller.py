@@ -1795,6 +1795,11 @@ class BotController:
         if not remover:
             return None
 
+        # Ensure minimal attributes are present
+        if not remover.get("name") or not remover.get("uuid"):
+            logger.warning(f"Warning: Remover metadata is missing name or uuid: {remover}")
+            return None
+
         # The bot has no record of the participant when it never saw the meeting's roster, as when it is denied from the lobby.
         participant = Participant.objects.filter(bot=self.bot_in_db, uuid=remover["uuid"]).first()
         if participant is None:
