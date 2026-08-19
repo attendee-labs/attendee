@@ -33,9 +33,15 @@ This document lists all supported environment variables for the Attendee applica
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `DATABASE_URL` | String | **Required** | PostgreSQL database connection URL (format: `postgresql://user:password@host:port/database`). |
+| `DATABASE_URL` | String | **Required*** | PostgreSQL database connection URL (format: `postgresql://user:password@host:port/database`). Takes precedence over the individual `POSTGRES_*` variables below. |
 | `POSTGRES_SSL_REQUIRE` | Boolean | `true` | Require SSL/TLS connection to PostgreSQL. Set to `false` for local development. |
-| `POSTGRES_HOST` | String | `localhost` | PostgreSQL host for development environments. Only used if not specified in `DATABASE_URL`. |
+| `POSTGRES_HOST` | String | `localhost` | PostgreSQL host. Alternative to `DATABASE_URL` together with the other `POSTGRES_*` variables; also used for development environments. |
+| `POSTGRES_PORT` | String | `5432` | PostgreSQL port. Only used when connecting via the `POSTGRES_*` variables. |
+| `POSTGRES_DB` | String | — | PostgreSQL database name. Required when connecting via the `POSTGRES_*` variables. |
+| `POSTGRES_USER` | String | — | PostgreSQL user. Required when connecting via the `POSTGRES_*` variables. |
+| `POSTGRES_PASSWORD` | String | — | PostgreSQL password. Only used when connecting via the `POSTGRES_*` variables. |
+
+\* Either `DATABASE_URL` or the set of `POSTGRES_HOST`, `POSTGRES_DB` and `POSTGRES_USER` (plus `POSTGRES_PASSWORD`/`POSTGRES_PORT` as needed) must be provided.
 
 ---
 
