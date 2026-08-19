@@ -877,30 +877,40 @@ class Bot(models.Model):
             raise ValueError("Bot is not in a state where the data deleted event can be created")
 
         with transaction.atomic():
-            # Delete all debug screenshots from bot events
-            BotDebugScreenshot.objects.filter(bot_event__bot=self).delete()
-
-            # Delete all utterances and recording files for each recording
-            for recording in self.recordings.all():
-                # Delete all audio chunks and utterances first
-                recording.audio_chunks.all().delete()
-                recording.utterances.all().delete()
-
-                # Delete the actual recording file if it exists
-                if recording.file and recording.file.name:
-                    recording.file.delete()
-
-            # Delete all participants
-            self.participants.all().delete()
-
-            # Delete all chat messages
-            self.chat_messages.all().delete()
-
-            # Delete all webhook delivery attempts that have a trigger other than BOT_STATE_CHANGE, since these contain sensitive data
-            webhook_delivery_attempts_with_sensitive_data = self.webhook_delivery_attempts.exclude(webhook_trigger_type=WebhookTriggerTypes.BOT_STATE_CHANGE)
-            webhook_delivery_attempts_with_sensitive_data.delete()
+            self.ensure_data_deleted()
 
             BotEventManager.create_event(bot=self, event_type=BotEventTypes.DATA_DELETED)
+
+    # This method performs the actual delete queries for the delete_data operation.
+    # It does not set the bot's state to DATA_DELETED.
+    # It is also used by the finalize_bot_data_deletion management command to finalize the deletion process.
+    def ensure_data_deleted(self):
+        # Delete all debug screenshots from bot events
+        debug_screenshots = BotDebugScreenshot.objects.filter(bot_event__bot=self)
+        for debug_screenshot in debug_screenshots:
+            if debug_screenshot.file and debug_screenshot.file.name:
+                debug_screenshot.file.delete()
+        debug_screenshots.delete()
+
+        # Delete all utterances and recording files for each recording
+        for recording in self.recordings.all():
+            # Delete all audio chunks and utterances first
+            recording.audio_chunks.all().delete()
+            recording.utterances.all().delete()
+
+            # Delete the actual recording file if it exists
+            if recording.file and recording.file.name:
+                recording.file.delete()
+
+        # Delete all participants
+        self.participants.all().delete()
+
+        # Delete all chat messages
+        self.chat_messages.all().delete()
+
+        # Delete all webhook delivery attempts that have a trigger other than BOT_STATE_CHANGE, since these contain sensitive data
+        webhook_delivery_attempts_with_sensitive_data = self.webhook_delivery_attempts.exclude(webhook_trigger_type=WebhookTriggerTypes.BOT_STATE_CHANGE)
+        webhook_delivery_attempts_with_sensitive_data.delete()
 
     def set_heartbeat(self):
         retry_count = 0
