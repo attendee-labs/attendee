@@ -306,7 +306,7 @@
                                 <span class="badge bg-primary">{{ event.get_new_state_display }}</span>
                             </p>
                             {% if event.metadata %}
-                                <pre class="small mt-3"><span class="small">metadata: </span>{{ event.metadata|pprint }}</pre>
+                                <pre class="small mt-3"><span class="small">metadata: </span>{{ event.metadata|pretty_json }}</pre>
                             {% endif %}
                             {% if event.debug_screenshots.all %}
                                 <div class="mt-2">
@@ -337,7 +337,7 @@
                                                     style="max-width: 300px;">
                                             {% endif %}
                                             {% if screenshot.metadata %}
-                                                <pre class="small mt-2 mb-0">{{ screenshot.metadata|pprint }}</pre>
+                                                <pre class="small mt-2 mb-0">{{ screenshot.metadata|pretty_json }}</pre>
                                             {% endif %}
                                         </div>
                                     {% endfor %}

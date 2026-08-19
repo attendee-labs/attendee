@@ -1,4 +1,5 @@
 import hashlib
+import json
 from datetime import datetime
 
 from django import template
@@ -71,6 +72,20 @@ def epoch_to_datetime(value):
         return datetime.fromtimestamp(float(value))
     except (ValueError, TypeError, OSError):
         return None
+
+
+@register.filter
+def pretty_json(value):
+    """Format a value as indented JSON for display."""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (ValueError, TypeError):
+            return value
+    try:
+        return json.dumps(value, indent=2, sort_keys=True, default=str)
+    except (TypeError, ValueError):
+        return value
 
 
 @register.filter
