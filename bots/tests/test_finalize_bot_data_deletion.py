@@ -1,13 +1,12 @@
+from datetime import timedelta
 from unittest.mock import patch
 
-from django.core.files.base import ContentFile
-from django.core.files.storage import InMemoryStorage
 from django.core.management import call_command
 from django.test import TestCase
 from django.utils import timezone
 
 from accounts.models import Organization
-from bots.models import Bot, BotDebugScreenshot, BotEvent, BotEventTypes, BotStates, Project
+from bots.models import Bot, BotStates, Project
 
 
 class FinalizeBotDataDeletionCommandTestCase(TestCase):
@@ -17,47 +16,28 @@ class FinalizeBotDataDeletionCommandTestCase(TestCase):
         self.bot = Bot.objects.create(project=project, name="Data Deletion Bot", meeting_url="https://test.com/meeting", state=BotStates.ENDED)
         self.now = timezone.now()
 
-    def test_deletes_screenshot_row_and_file_for_data_deleted_bot(self):
-        storage = InMemoryStorage()
+    def test_ensures_data_deleted_for_recent_data_deleted_bot(self):
+        self.bot.state = BotStates.DATA_DELETED
+        self.bot.save(update_fields=["state"])
 
-        with patch.object(BotDebugScreenshot._meta.get_field("file"), "storage", storage):
-            self.bot.state = BotStates.DATA_DELETED
-            self.bot.last_heartbeat_timestamp = int(self.now.timestamp())
-            self.bot.save(update_fields=["state", "last_heartbeat_timestamp"])
-            event = BotEvent.objects.create(
-                bot=self.bot,
-                old_state=BotStates.ENDED,
-                new_state=BotStates.DATA_DELETED,
-                event_type=BotEventTypes.DATA_DELETED,
-            )
-            screenshot = BotDebugScreenshot.objects.create(bot_event=event)
-            screenshot.file.save("debug.png", ContentFile(b"debug screenshot"))
-            file_name = screenshot.file.name
+        with patch.object(Bot, "ensure_data_deleted", autospec=True) as ensure_data_deleted:
+            call_command("finalize_bot_data_deletion", "--lookback-hours=24", "--batch-size=10")
 
-            self.assertTrue(storage.exists(file_name))
+        ensure_data_deleted.assert_called_once()
+        self.assertEqual(ensure_data_deleted.call_args.args[0].pk, self.bot.pk)
 
-            call_command("finalize_bot_data_deletion", "--lookback-days=7", "--batch-size=10")
+    def test_ignores_bot_not_in_data_deleted_state(self):
+        with patch.object(Bot, "ensure_data_deleted", autospec=True) as ensure_data_deleted:
+            call_command("finalize_bot_data_deletion", "--lookback-hours=24", "--batch-size=10")
 
-            self.assertFalse(BotDebugScreenshot.objects.filter(pk=screenshot.pk).exists())
-            self.assertFalse(storage.exists(file_name))
+        ensure_data_deleted.assert_not_called()
 
-    def test_keeps_screenshot_for_bot_without_deleted_data(self):
-        storage = InMemoryStorage()
+    def test_ignores_data_deleted_bot_outside_lookback_window(self):
+        self.bot.state = BotStates.DATA_DELETED
+        self.bot.save(update_fields=["state"])
+        Bot.objects.filter(pk=self.bot.pk).update(updated_at=self.now - timedelta(hours=25))
 
-        with patch.object(BotDebugScreenshot._meta.get_field("file"), "storage", storage):
-            self.bot.last_heartbeat_timestamp = int(self.now.timestamp())
-            self.bot.save(update_fields=["last_heartbeat_timestamp"])
-            event = BotEvent.objects.create(
-                bot=self.bot,
-                old_state=BotStates.ENDED,
-                new_state=BotStates.ENDED,
-                event_type=BotEventTypes.BOT_JOINED_MEETING,
-            )
-            screenshot = BotDebugScreenshot.objects.create(bot_event=event)
-            screenshot.file.save("debug.png", ContentFile(b"debug screenshot"))
-            file_name = screenshot.file.name
+        with patch.object(Bot, "ensure_data_deleted", autospec=True) as ensure_data_deleted:
+            call_command("finalize_bot_data_deletion", "--lookback-hours=24", "--batch-size=10")
 
-            call_command("finalize_bot_data_deletion", "--lookback-days=7", "--batch-size=10")
-
-            self.assertTrue(BotDebugScreenshot.objects.filter(pk=screenshot.pk).exists())
-            self.assertTrue(storage.exists(file_name))
+        ensure_data_deleted.assert_not_called()
