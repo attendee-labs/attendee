@@ -16,7 +16,7 @@ class Command(BaseCommand):
         parser.add_argument(
             "--lookback-hours",
             type=int,
-            default=24,
+            default=4,
             help="Only consider bots updated within this many hours.",
         )
         parser.add_argument(
