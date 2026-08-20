@@ -1929,6 +1929,41 @@ function handleRosterUpdate(eventDataObject) {
     }
 }
 
+const subCodeValueForDeniedRequestToJoin = 5854;
+const subCodeForAnonymousJoinDisabledForTenantByPolicy = 5723;
+const subCodeForRemovedFromConversationByAnotherParticipant = 5000;
+const subCodeForRemovedFromConversationByAnotherParticipantAlternate = 5300;
+
+// A conversation end message names its sender when a participant ended the conversation for us,
+// by removing us from the meeting or from the lobby. It has no sender when the conversation
+// ended on its own, and names us when we left on our own.
+function removerFromConversationEndSender(eventDataObjectBody) {
+    const subCodesForRemoval = [
+        subCodeForRemovedFromConversationByAnotherParticipant,
+        subCodeForRemovedFromConversationByAnotherParticipantAlternate,
+        subCodeValueForDeniedRequestToJoin
+    ];
+
+    if (!subCodesForRemoval.includes(eventDataObjectBody?.subCode)) {
+        return null;
+    }
+
+    const sender = eventDataObjectBody?.sender;
+
+    if (!sender?.id) {
+        return null;
+    }
+
+    if (sender.id === window.callManager?.getCurrentUserId()) {
+        return null;
+    }
+
+    return {
+        uuid: sender.id,
+        name: sender.displayName
+    };
+}
+
 function handleConversationEnd(eventDataObject) {
 
     let eventDataObjectBody = {};
@@ -1953,18 +1988,18 @@ function handleConversationEnd(eventDataObject) {
     });
 
     const meetingId = extractCallIdFromEventDataObject(eventDataObject);
+    const remover = removerFromConversationEndSender(eventDataObjectBody);
 
     const subCode = eventDataObjectBody?.subCode;
-    const subCodeValueForDeniedRequestToJoin = 5854;
-    const subCodeForAnonymousJoinDisabledForTenantByPolicy = 5723;
 
     if (subCode === subCodeValueForDeniedRequestToJoin)
     {
-        // For now this won't do anything, but good to have it in our logs. In the future, this should probably be the source of truth for these things, instead of the UI inspection.
+        // The UI inspection is still what tells us we were denied. This message only carries who denied us. In the future, this should probably be the source of truth for these things, instead of the UI inspection.
         window.ws?.sendJson({
             type: 'MeetingStatusChange',
             change: 'request_to_join_denied',
-            meetingId: meetingId
+            meetingId: meetingId,
+            remover: remover
         });
         return;
     }
@@ -1984,7 +2019,8 @@ function handleConversationEnd(eventDataObject) {
     window.ws?.sendJson({
         type: 'MeetingStatusChange',
         change: 'meeting_ended',
-        meetingId: meetingId
+        meetingId: meetingId,
+        remover: remover
     });
 }
 

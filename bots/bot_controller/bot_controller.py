@@ -1789,6 +1789,24 @@ class BotController:
                     save=True,
                 )
 
+    def get_remover_metadata(self, message):
+        """Event metadata naming the participant who removed the bot, when the meeting told us who it was."""
+        remover = message.get("remover")
+        if not remover:
+            return None
+
+        # Ensure minimal attributes are present
+        if not remover.get("name") or not remover.get("uuid"):
+            logger.warning(f"Warning: Remover metadata is missing name or uuid: {remover}")
+            return None
+
+        # The bot has no record of the participant when it never saw the meeting's roster, as when it is denied from the lobby.
+        participant = Participant.objects.filter(bot=self.bot_in_db, uuid=remover["uuid"]).first()
+        if participant is None:
+            return {"remover_name": remover["name"], "remover_uuid": remover["uuid"], "remover_user_uuid": None, "remover_is_host": None}
+
+        return {"remover_name": participant.full_name, "remover_uuid": participant.uuid, "remover_user_uuid": participant.user_uuid, "remover_is_host": participant.is_host}
+
     def take_action_based_on_message_from_adapter(self, message):
         if message.get("message") == BotAdapter.Messages.SAVE_SCREENSHOT_AND_MHTML_FILE:
             logger.info("Received message to save screenshot and mhtml file")
@@ -1811,6 +1829,7 @@ class BotController:
                 bot=self.bot_in_db,
                 event_type=BotEventTypes.COULD_NOT_JOIN,
                 event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_REQUEST_TO_JOIN_DENIED,
+                event_metadata=self.get_remover_metadata(message),
             )
             self.cleanup()
             return
@@ -1972,9 +1991,10 @@ class BotController:
             logger.info("Received message that meeting ended")
             self.flush_utterances()
             if self.bot_in_db.state == BotStates.LEAVING:
+                # The bot decided to leave on its own, so naming a remover here would only muddy why it left.
                 new_bot_event = BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.BOT_LEFT_MEETING)
             else:
-                new_bot_event = BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.MEETING_ENDED)
+                new_bot_event = BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.MEETING_ENDED, event_metadata=self.get_remover_metadata(message))
 
             self.save_debug_artifacts(message, new_bot_event)
 

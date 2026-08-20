@@ -102,6 +102,7 @@ For webhooks triggered by `bot.state_change`, the `data` field contains:
   "created_at": < The timestamp when the state change occurred >,
   "event_type": < The type of event that triggered the state change >,
   "event_sub_type": < The sub-type of event that triggered the state change >,
+  "event_metadata": < Extra details about the event, when there are any >,
 }
 ```
 
@@ -120,6 +121,31 @@ The data field will look like this
   "event_sub_type": null,
 }
 ```
+
+### Knowing who removed the bot
+
+This is only supported for Microsoft Teams. Google Meet and Zoom tell the bot that it was removed but not by whom.
+
+When a participant denies the bot's request to join, or removes the bot from the meeting,
+`event_metadata` contains `remover_` fields naming them:
+
+```json
+{
+  "new_state": "post_processing",
+  "old_state": "joined_recording",
+  "created_at": "2023-07-15T14:30:45.123456Z",
+  "event_type": "meeting_ended",
+  "event_sub_type": null,
+  "event_metadata": {
+    "remover_name": "Test User",
+    "remover_uuid": "8:orgid:00000000-0000-0000-0000-000000000001",
+    "remover_user_uuid": null,
+    "remover_is_host": true
+  }
+}
+```
+
+On a `meeting_ended` event, these fields mean a participant removed the bot, so the meeting itself may still be going.
 
 ### Payload for `transcript.update` trigger
 

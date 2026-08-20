@@ -844,6 +844,16 @@ class TranscriptionSettings:
 class Bot(models.Model):
     OBJECT_ID_PREFIX = "bot_"
 
+    # Top level keys in a bot event's metadata that hold personal data and must not survive a data deletion
+    SENSITIVE_EVENT_METADATA_KEYS = frozenset(
+        {
+            "remover_is_host",
+            "remover_name",
+            "remover_user_uuid",
+            "remover_uuid",
+        }
+    )
+
     object_id = models.CharField(max_length=32, unique=True, editable=False)
 
     project = models.ForeignKey(Project, on_delete=models.PROTECT, related_name="bots")
@@ -911,6 +921,28 @@ class Bot(models.Model):
         # Delete all webhook delivery attempts that have a trigger other than BOT_STATE_CHANGE, since these contain sensitive data
         webhook_delivery_attempts_with_sensitive_data = self.webhook_delivery_attempts.exclude(webhook_trigger_type=WebhookTriggerTypes.BOT_STATE_CHANGE)
         webhook_delivery_attempts_with_sensitive_data.delete()
+
+        # Wipe any sensitive metadata attributes from both bot_events metadata and webhook delivery attempt payloads for bot.state change trigger
+        for bot_event in self.bot_events.all():
+            metadata = bot_event.metadata
+            if not isinstance(metadata, dict):
+                continue
+            scrubbed_metadata = self.metadata_without_sensitive_keys(metadata)
+            if scrubbed_metadata != metadata:
+                BotEvent.objects.filter(id=bot_event.id).update(metadata=scrubbed_metadata)
+
+        for webhook_delivery_attempt in self.webhook_delivery_attempts.filter(webhook_trigger_type=WebhookTriggerTypes.BOT_STATE_CHANGE):
+            payload = webhook_delivery_attempt.payload or {}
+            event_metadata = payload.get("event_metadata")
+            if not isinstance(event_metadata, dict):
+                continue
+            scrubbed_metadata = self.metadata_without_sensitive_keys(event_metadata)
+            if scrubbed_metadata != event_metadata:
+                WebhookDeliveryAttempt.objects.filter(id=webhook_delivery_attempt.id).update(payload={**payload, "event_metadata": scrubbed_metadata})
+
+    @classmethod
+    def metadata_without_sensitive_keys(cls, metadata):
+        return {key: value for key, value in metadata.items() if key not in cls.SENSITIVE_EVENT_METADATA_KEYS}
 
     def set_heartbeat(self):
         retry_count = 0
