@@ -290,6 +290,35 @@ class BotController:
             teams_bot_identification_credentials=self.get_teams_bot_identification_credentials(),
         )
 
+    def get_jitsi_bot_adapter(self):
+        from bots.jitsi_bot_adapter import JitsiBotAdapter
+
+        return JitsiBotAdapter(
+            display_name=self.bot_in_db.name,
+            send_message_callback=self.on_message_from_adapter,
+            add_audio_chunk_callback=self.get_per_participant_audio_chunk_callback(),
+            meeting_url=self.bot_in_db.meeting_url,
+            add_video_frame_callback=None,
+            wants_any_video_frames_callback=None,
+            add_mixed_audio_chunk_callback=self.add_mixed_audio_chunk_callback if self.pipeline_configuration.websocket_stream_audio else None,
+            add_per_participant_video_frame_callback=self.add_per_participant_video_frame_callback if self.pipeline_configuration.websocket_stream_per_participant_video else None,
+            # Jitsi has no server-side closed captions (no Jigasi assumed), so no caption callback
+            upsert_caption_callback=None,
+            upsert_chat_message_callback=self.on_new_chat_message,
+            add_participant_event_callback=self.on_new_participant_event,
+            automatic_leave_configuration=self.automatic_leave_configuration,
+            per_participant_realtime_video_configuration=self.per_participant_realtime_video_configuration,
+            add_encoded_mp4_chunk_callback=None,
+            recording_view=self.bot_in_db.recording_view(),
+            should_create_debug_recording=self.bot_in_db.create_debug_recording(),
+            start_recording_screen_callback=self.screen_and_audio_recorder.start_recording if self.screen_and_audio_recorder else None,
+            stop_recording_screen_callback=self.screen_and_audio_recorder.stop_recording if self.screen_and_audio_recorder else None,
+            video_frame_size=self.bot_in_db.recording_dimensions(),
+            record_chat_messages_when_paused=self.bot_in_db.record_chat_messages_when_paused(),
+            disable_incoming_video=self.disable_incoming_video_for_web_bots(),
+            record_participant_speech_start_stop_events=self.bot_in_db.record_participant_speech_start_stop_events(),
+        )
+
     def get_zoom_oauth_credentials_via_credentials_record(self):
         zoom_oauth_credentials_record = self.bot_in_db.project.credentials.filter(credential_type=Credentials.CredentialTypes.ZOOM_OAUTH).first()
         if not zoom_oauth_credentials_record:
@@ -476,6 +505,8 @@ class BotController:
             return 48000
         elif meeting_type == MeetingTypes.TEAMS:
             return 48000
+        elif meeting_type == MeetingTypes.JITSI:
+            return 48000
 
     def mixed_audio_sample_rate(self):
         meeting_type = self.get_meeting_type()
@@ -490,6 +521,8 @@ class BotController:
             return 48000
         elif meeting_type == MeetingTypes.TEAMS:
             return 48000
+        elif meeting_type == MeetingTypes.JITSI:
+            return 48000
 
     def get_audio_format(self):
         meeting_type = self.get_meeting_type()
@@ -503,6 +536,8 @@ class BotController:
         elif meeting_type == MeetingTypes.GOOGLE_MEET:
             return GstreamerPipeline.AUDIO_FORMAT_FLOAT
         elif meeting_type == MeetingTypes.TEAMS:
+            return GstreamerPipeline.AUDIO_FORMAT_FLOAT
+        elif meeting_type == MeetingTypes.JITSI:
             return GstreamerPipeline.AUDIO_FORMAT_FLOAT
 
     def get_sleep_time_between_audio_output_chunks_seconds(self):
@@ -524,6 +559,8 @@ class BotController:
             return self.get_google_meet_bot_adapter()
         elif meeting_type == MeetingTypes.TEAMS:
             return self.get_teams_bot_adapter()
+        elif meeting_type == MeetingTypes.JITSI:
+            return self.get_jitsi_bot_adapter()
 
     def get_first_buffer_timestamp_ms(self):
         if self.screen_and_audio_recorder:
@@ -803,6 +840,8 @@ class BotController:
         elif meeting_type == MeetingTypes.GOOGLE_MEET:
             return False
         elif meeting_type == MeetingTypes.TEAMS:
+            return False
+        elif meeting_type == MeetingTypes.JITSI:
             return False
 
     def should_create_websocket_client_manager(self):

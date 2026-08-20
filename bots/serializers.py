@@ -1381,6 +1381,10 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
                 value = {"meeting_closed_captions": {}}
             elif meeting_type == MeetingTypes.TEAMS:
                 value = {"meeting_closed_captions": {}}
+            elif meeting_type == MeetingTypes.JITSI:
+                # Jitsi has no server-side captions (no Jigasi assumed) — this default means
+                # "no external transcription provider"; captions simply never arrive.
+                value = {"meeting_closed_captions": {}}
             else:
                 return None
 
