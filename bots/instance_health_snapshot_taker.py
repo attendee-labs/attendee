@@ -202,6 +202,10 @@ class InstanceHealthSnapshotTaker:
         records the others; a partial snapshot is more useful than none, and these
         numbers matter most when something is already broken.
         """
+        # Only take snapshot if the env var is set to true
+        if os.getenv("SAVE_INSTANCE_HEALTH_SNAPSHOTS", "false") != "true":
+            return
+
         # Monotonic rather than wall clock, since these are pure interval throttles.
         now = time.monotonic()
 
