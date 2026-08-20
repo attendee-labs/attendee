@@ -51,3 +51,9 @@ class JitsiBotAdapter(WebBotAdapter, JitsiUIMethods):
     def subclass_specific_after_bot_joined_meeting(self):
         # Jitsi has no recording permission concept — recording can start right away
         self.after_bot_can_record_meeting()
+
+    def add_subclass_specific_chrome_options(self, options):
+        # Newer Chrome blocks a public page (the Jitsi web app) from reaching ws://localhost
+        # (Local/Private Network Access checks); the payload needs exactly that to talk to
+        # the python side, so disable those checks for the bot's browser.
+        options.add_argument("--disable-features=LocalNetworkAccessChecks,PrivateNetworkAccessChecks")

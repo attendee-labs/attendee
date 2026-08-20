@@ -210,6 +210,10 @@ class JitsiUIMethods:
         raise UiCouldNotLocateElementException("Timed out waiting for the Jitsi conference to be joined", "conference_joined")
 
     def attempt_to_join_meeting(self):
+        # kMeet (unlike Google Meet) ships a strict connect-src CSP that would block the
+        # payload's ws://localhost:<port> connection to the python side. Bypass it via CDP.
+        self.driver.execute_cdp_cmd("Page.setBypassCSP", {"enabled": True})
+
         # startWithAudioMuted/startWithVideoMuted are jitsi config overrides carried in the
         # URL fragment — media stays off from the start, no DOM interaction needed. The
         # stored meeting_url is normalized without fragments, so this cannot double up.
