@@ -12,7 +12,7 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import models, transaction
 from django.db.models.fields.json import KeyTextTransform
 from django.db.models.functions import Cast
-from django.http import HttpResponse, QueryDict
+from django.http import Http404, HttpResponse, QueryDict
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.views import View
@@ -216,6 +216,7 @@ class ProjectUrlContextMixin:
         return {
             "project": project,
             "charge_credits_for_bots_setting": settings.CHARGE_CREDITS_FOR_BOTS,
+            "save_instance_health_snapshots_setting": settings.SAVE_INSTANCE_HEALTH_SNAPSHOTS,
             "user_projects": Project.accessible_to(self.request.user),
             "UserRole": UserRole,
             "debug_mode": True if settings.DEBUG else False,
@@ -1235,6 +1236,16 @@ class ProjectUsageView(AdminRequiredMixin, ProjectUrlContextMixin, View):
         context.update(get_usage_data(project, interval, measure, platform, category_set))
         context["show_category_selector"] = settings.SHOW_CATEGORY_SELECTOR_IN_USAGE_DASHBOARD
         return render(request, "projects/project_usage.html", context)
+
+
+class ProjectInstanceHealthView(AdminRequiredMixin, ProjectUrlContextMixin, View):
+    def get(self, request, object_id):
+        if not settings.SAVE_INSTANCE_HEALTH_SNAPSHOTS:
+            raise Http404("Instance health snapshots are not enabled.")
+
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
+        context = self.get_project_context(object_id, project)
+        return render(request, "projects/project_instance_health.html", context)
 
 
 class ProjectBillingView(AdminRequiredMixin, ProjectUrlContextMixin, ListView):
