@@ -71,7 +71,7 @@ QUEUE_TREND_MINIMUM_CHANGE_PERCENTAGE = 15
 # roster that replied until the silence has lasted this long. Two sampling intervals
 # leaves room for a sample taken after the deploy has settled, while still surfacing a
 # genuine outage within minutes.
-WORKER_SILENCE_CONFIRMED_AFTER_SECONDS = INSTANCE_HEALTH_CELERY_WORKER_STATS_INTERVAL_SECONDS * 2
+WORKER_SILENCE_CONFIRMED_AFTER_SECONDS = INSTANCE_HEALTH_CELERY_WORKER_STATS_INTERVAL_SECONDS * 4
 
 
 def _interval_label(seconds):
