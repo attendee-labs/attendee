@@ -1,5 +1,6 @@
 import base64
 import json
+import os
 import re
 from urllib.parse import parse_qs, unquote, urlparse, urlunparse
 
@@ -60,6 +61,16 @@ def domain_and_subdomain_from_url(url):
 def meeting_type_from_url(url):
     meeting_type, normalized_url = normalize_meeting_url(url)
     return meeting_type
+
+
+JITSI_MEETING_DOMAINS_DEFAULT = "meet.jit.si"
+
+
+def jitsi_meeting_domains():
+    # Jitsi is domainless, so the set of domains treated as Jitsi deployments is configurable.
+    # Read at call time (not import time) so it can be changed per environment / per test.
+    domains = os.getenv("JITSI_MEETING_DOMAINS", JITSI_MEETING_DOMAINS_DEFAULT)
+    return [domain.strip().lower() for domain in domains.split(",") if domain.strip()]
 
 
 def normalize_teams_url(conversation_id, message_id, tenant_id, organizer_id):
@@ -241,6 +252,18 @@ def normalize_meeting_url_raw(url):
                 # Create canonical URL format using the extracted domain
                 canonical_url = f"https://teams.{domain}/meet/{meeting_id}?p={passcode}"
                 return MeetingTypes.TEAMS, canonical_url
+
+    # Check if it's a Jitsi meeting URL. Jitsi is domainless, so we only match domains
+    # explicitly configured via JITSI_MEETING_DOMAINS (e.g. kmeet.infomaniak.com).
+    # This branch is last so the platforms above always take precedence.
+    if domain_and_subdomain:
+        jitsi_domain = domain_and_subdomain.lstrip(".").lower()
+        if jitsi_domain in jitsi_meeting_domains():
+            # Room name is the first path segment; query and #config fragments are dropped
+            jitsi_room_match = re.search(re.escape(jitsi_domain) + r"/([^/?#\s]+)", url, re.IGNORECASE)
+            if jitsi_room_match:
+                normalized_url = f"https://{jitsi_domain}/{jitsi_room_match.group(1)}"
+                return MeetingTypes.JITSI, normalized_url
 
     return None, None
 

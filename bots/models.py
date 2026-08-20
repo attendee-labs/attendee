@@ -585,6 +585,7 @@ class MeetingTypes(models.TextChoices):
     ZOOM = "zoom"
     GOOGLE_MEET = "google_meet"
     TEAMS = "teams"
+    JITSI = "jitsi"
 
 
 class BotStates(models.IntegerChoices):
@@ -1012,6 +1013,7 @@ class Bot(models.Model):
             MeetingTypes.GOOGLE_MEET: "GOOGLE_MEET",
             MeetingTypes.TEAMS: "TEAMS",
             MeetingTypes.ZOOM: "ZOOM",
+            MeetingTypes.JITSI: "JITSI",
         }.get(bot_meeting_type, "UNKNOWN")
 
         recording_mode_env_var_substring = {
