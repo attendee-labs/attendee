@@ -1055,6 +1055,9 @@ class Bot(models.Model):
     def teams_login_group_name(self):
         return self.settings.get("teams_settings", {}).get("login_group_name")
 
+    def jitsi_room_password(self):
+        return (self.settings.get("jitsi_settings") or {}).get("room_password")
+
     def use_zoom_web_adapter(self):
         return self.settings.get("zoom_settings", {}).get("sdk", "native") == "web"
 

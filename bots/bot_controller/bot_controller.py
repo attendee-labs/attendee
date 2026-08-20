@@ -317,6 +317,7 @@ class BotController:
             record_chat_messages_when_paused=self.bot_in_db.record_chat_messages_when_paused(),
             disable_incoming_video=self.disable_incoming_video_for_web_bots(),
             record_participant_speech_start_stop_events=self.bot_in_db.record_participant_speech_start_stop_events(),
+            jitsi_room_password=self.bot_in_db.jitsi_room_password(),
         )
 
     def get_zoom_oauth_credentials_via_credentials_record(self):
