@@ -79,7 +79,7 @@ INSTANCE_HEALTH_CELERY_WORKER_STATS_TIMEOUT_SECONDS = float(os.getenv("INSTANCE_
 # Pool sizing changes only when workers are deployed or restarted, so it is sampled
 # on a longer interval than the other metrics and attached to whichever snapshot
 # happens to be due when it is collected.
-INSTANCE_HEALTH_CELERY_WORKER_STATS_INTERVAL_SECONDS = int(os.getenv("INSTANCE_HEALTH_CELERY_WORKER_STATS_INTERVAL_SECONDS", "600"))
+INSTANCE_HEALTH_CELERY_WORKER_STATS_INTERVAL_SECONDS = int(os.getenv("INSTANCE_HEALTH_CELERY_WORKER_STATS_INTERVAL_SECONDS", "300"))
 
 # Background workers (autovacuum, walwriter, ...) appear in pg_stat_activity but do
 # not consume a max_connections slot, so they are excluded to keep the ratio honest.

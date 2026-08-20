@@ -1,4 +1,5 @@
 {% extends 'projects/sidebar.html' %}
+{% load bot_filters %}
 
 {% block content %}
 <div class="container mt-4">
@@ -15,7 +16,7 @@
     </div>
     <p class="text-muted mb-3">
         {% if latest_snapshot_at %}
-            Last snapshot {{ latest_snapshot_at|timesince }} ago.
+            Last snapshot {{ latest_snapshot_at|timesince_or_seconds }} ago.
         {% else %}
             No snapshots have been recorded yet. The scheduler writes one every {{ snapshot_interval_label }}.
         {% endif %}
@@ -48,7 +49,7 @@
                     <div class="small mt-2">
                         Peak <span class="fw-semibold">{{ connections.peak|default_if_none:"—" }}</span>{% if connections.peak_percentage %} ({{ connections.peak_percentage }}%){% endif %} in the last {{ window_label }}
                     </div>
-                    <div class="text-muted mt-1" style="font-size: 0.75rem;">Sampled every {{ connections.interval_label }}, last {{ connections.sampled_at|timesince }} ago</div>
+                    <div class="text-muted mt-1" style="font-size: 0.75rem;">Sampled every {{ connections.interval_label }}, last {{ connections.sampled_at|timesince_or_seconds }} ago</div>
                     {% else %}
                     <p class="text-muted small mb-0">Not collected.</p>
                     {% endif %}
@@ -64,7 +65,7 @@
                         <span class="fs-3 fw-semibold">{{ table_sizes.total_bytes|filesizeformat }}</span>
                         <span class="text-muted">across {{ table_sizes.table_count }} table{{ table_sizes.table_count|pluralize }}</span>
                     </div>
-                    <div class="text-muted mt-2" style="font-size: 0.75rem;">Sampled every {{ table_sizes.interval_label }}, last {{ table_sizes.sampled_at|timesince }} ago</div>
+                    <div class="text-muted mt-2" style="font-size: 0.75rem;">Sampled every {{ table_sizes.interval_label }}, last {{ table_sizes.sampled_at|timesince_or_seconds }} ago</div>
                     {% else %}
                     <p class="text-muted small mb-0">Not collected.</p>
                     {% endif %}
@@ -88,7 +89,7 @@
                         Averaging <span class="fw-semibold">{{ queues.trend.later_average }}</span> queued over the recent half of the {{ window_label }}, versus {{ queues.trend.earlier_average }} over the earlier half
                     </div>
                     {% endif %}
-                    <div class="text-muted mt-2" style="font-size: 0.75rem;">Sampled every {{ queues.interval_label }}, last {{ queues.sampled_at|timesince }} ago</div>
+                    <div class="text-muted mt-2" style="font-size: 0.75rem;">Sampled every {{ queues.interval_label }}, last {{ queues.sampled_at|timesince_or_seconds }} ago</div>
                     {% else %}
                     <p class="text-muted small mb-0">Not collected.</p>
                     {% endif %}
@@ -102,7 +103,7 @@
             <div class="card h-100">
                 <div class="card-header bg-white d-flex justify-content-between align-items-center">
                     <span class="fw-semibold">Celery Queue Depths</span>
-                    <span class="text-muted small">Sampled every {{ queues.interval_label }}, last {{ queues.sampled_at|timesince }} ago</span>
+                    <span class="text-muted small">Sampled every {{ queues.interval_label }}, last {{ queues.sampled_at|timesince_or_seconds }} ago</span>
                 </div>
                 <div class="card-body p-0">
                     {% if queues.rows %}
@@ -135,10 +136,19 @@
                 <div class="card-header bg-white d-flex justify-content-between align-items-center">
                     <span class="fw-semibold">Celery Workers</span>
                     {% if workers %}
-                    <span class="text-muted small">Sampled every {{ workers.interval_label }}, last {{ workers.sampled_at|timesince }} ago</span>
+                    <span class="text-muted small">Sampled every {{ workers.interval_label }}, last {{ workers.sampled_at|timesince_or_seconds }} ago</span>
                     {% endif %}
                 </div>
                 <div class="card-body p-0">
+                    {% if workers.replies_are_missing %}
+                    <div class="alert alert-warning small rounded-0 border-0 mb-0 d-flex align-items-center gap-2">
+                        {% if workers.rows %}
+                        No worker replied to the latest sample, which is normal for the first few minutes after a deploy. The roster below is the last one that did reply.
+                        {% else %}
+                        No workers replied, and none have replied within the last {{ workers.silence_grace_label }}.
+                        {% endif %}
+                    </div>
+                    {% endif %}
                     {% if workers.rows %}
                     <div class="table-responsive">
                         <table class="table table-sm mb-0 small">
@@ -146,8 +156,7 @@
                                 <tr class="text-muted">
                                     <th class="ps-3 fw-normal">Worker</th>
                                     <th class="text-end fw-normal">Concurrency</th>
-                                    <th class="text-end fw-normal">Alive</th>
-                                    <th class="text-end fw-normal pe-3">Prefetch</th>
+                                    <th class="text-end fw-normal pe-3">Alive</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -155,15 +164,14 @@
                                 <tr>
                                     <td class="ps-3 text-break">{{ worker.name }}</td>
                                     <td class="text-end">{{ worker.concurrency|default_if_none:"—" }}</td>
-                                    <td class="text-end">{{ worker.processes_alive|default_if_none:"—" }}</td>
-                                    <td class="text-end pe-3">{{ worker.prefetch_count|default_if_none:"—" }}</td>
+                                    <td class="text-end pe-3">{{ worker.processes_alive|default_if_none:"—" }}</td>
                                 </tr>
                                 {% endfor %}
                             </tbody>
                         </table>
                     </div>
-                    {% else %}
-                    <p class="text-muted small m-3">No workers replied.</p>
+                    {% elif not workers %}
+                    <p class="text-muted small m-3">Not collected.</p>
                     {% endif %}
                 </div>
             </div>
@@ -174,7 +182,7 @@
         <div class="card-header bg-white d-flex justify-content-between align-items-center">
             <span class="fw-semibold">Largest Tables</span>
             {% if table_sizes %}
-            <span class="text-muted small">Sampled every {{ table_sizes.interval_label }}, last {{ table_sizes.sampled_at|timesince }} ago</span>
+            <span class="text-muted small">Sampled every {{ table_sizes.interval_label }}, last {{ table_sizes.sampled_at|timesince_or_seconds }} ago</span>
             {% endif %}
         </div>
         <div class="card-body p-0">

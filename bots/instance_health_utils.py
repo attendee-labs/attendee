@@ -63,6 +63,16 @@ CONNECTION_DANGER_PERCENTAGE = 85
 QUEUE_TREND_MINIMUM_CHANGE = 2
 QUEUE_TREND_MINIMUM_CHANGE_PERCENTAGE = 15
 
+# How long every worker has to stay silent before the workers panel calls them gone
+# rather than restarting. Worker stats are collected by the scheduler, which samples
+# them as soon as it starts, so the first sample after a deploy is taken while the
+# workers are themselves restarting and comes back empty. That reading is
+# indistinguishable from a real outage on its own, so the panel keeps showing the last
+# roster that replied until the silence has lasted this long. Two sampling intervals
+# leaves room for a sample taken after the deploy has settled, while still surfacing a
+# genuine outage within minutes.
+WORKER_SILENCE_CONFIRMED_AFTER_SECONDS = INSTANCE_HEALTH_CELERY_WORKER_STATS_INTERVAL_SECONDS * 2
+
 
 def _interval_label(seconds):
     """Render a sampling interval the way an operator would say it: 30s, 10m, 1h."""
@@ -119,6 +129,20 @@ def _json_number(*path):
 
 def _as_int(value):
     return None if value is None else int(value)
+
+
+def _latest_worker_roster():
+    """Return (worker stats, sampled_at) from the most recent snapshot a worker replied to.
+
+    Snapshots that sampled worker stats and got no replies are skipped, so this is the
+    last census that actually described running workers however far back that is.
+    """
+    row = InstanceHealthSnapshot.objects.annotate(replies=_json_number("celery_worker_stats", "worker_count")).filter(replies__gt=0).order_by("-created_at").values_list("data", "created_at").first()
+    if row is None:
+        return None, None
+
+    data, created_at = row
+    return data["celery_worker_stats"], created_at
 
 
 def _peaks_over_window(cutoff, queue_names):
@@ -243,9 +267,24 @@ def _build_queues(queue_names, queue_depths, queue_peaks, trend, sampled_at):
     }
 
 
-def _build_workers(worker_stats, sampled_at):
+def _build_workers(worker_stats, sampled_at, now):
+    """Build the workers panel from the latest sample, falling back to the last one with replies.
+
+    Workers going quiet for a sample or two is what a deploy looks like, so the latest
+    sample coming back empty is not on its own enough to report that there are no
+    workers: see WORKER_SILENCE_CONFIRMED_AFTER_SECONDS. Within that grace period the
+    panel shows the last roster that replied instead, dated to when it was taken, and
+    flags that the current sample has nothing in it.
+    """
     if not worker_stats:
         return None
+
+    replies_are_missing = not worker_stats.get("workers")
+
+    if replies_are_missing:
+        roster, roster_at = _latest_worker_roster()
+        if roster is not None and (now - roster_at).total_seconds() <= WORKER_SILENCE_CONFIRMED_AFTER_SECONDS:
+            worker_stats, sampled_at = roster, roster_at
 
     workers = worker_stats.get("workers") or {}
     rows = [{"name": worker_name, **(stats or {})} for worker_name, stats in sorted(workers.items())]
@@ -256,6 +295,8 @@ def _build_workers(worker_stats, sampled_at):
         "worker_count": worker_stats.get("worker_count"),
         "total_concurrency": sum(row["concurrency"] for row in rows if row.get("concurrency")),
         "rows": rows,
+        "replies_are_missing": replies_are_missing,
+        "silence_grace_label": _interval_label(WORKER_SILENCE_CONFIRMED_AFTER_SECONDS),
         "sampled_at": sampled_at,
         "interval_label": _sampling_interval_label(INSTANCE_HEALTH_CELERY_WORKER_STATS_INTERVAL_SECONDS),
     }
@@ -323,6 +364,6 @@ def get_instance_health_data(window=DEFAULT_WINDOW):
         "snapshots_are_stale": latest_snapshot_at is not None and (now - latest_snapshot_at).total_seconds() > STALE_AFTER_SECONDS,
         "connections": _build_connections(connections, connections_peak, connections_at),
         "queues": _build_queues(queue_names, queue_depths, queue_peaks, queue_trend, queue_depths_at),
-        "workers": _build_workers(worker_stats, worker_stats_at),
+        "workers": _build_workers(worker_stats, worker_stats_at, now),
         "table_sizes": _build_table_sizes(table_sizes, table_sizes_at),
     }

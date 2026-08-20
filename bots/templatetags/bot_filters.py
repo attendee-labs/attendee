@@ -3,10 +3,25 @@ import json
 from datetime import datetime
 
 from django import template
+from django.utils import timezone
+from django.utils.timesince import timesince
 
 from bots.models import WebhookTriggerTypes
 
 register = template.Library()
+
+
+@register.filter
+def timesince_or_seconds(value, now=None):
+    """Like Django's timesince, but renders sub-minute gaps in seconds instead of "0 minutes"."""
+    if not value:
+        return ""
+    if now is None:
+        now = timezone.now() if timezone.is_aware(value) else datetime.now()
+    seconds = int((now - value).total_seconds())
+    if 0 <= seconds < 60:
+        return f"{seconds} second{'' if seconds == 1 else 's'}"
+    return timesince(value, now)
 
 
 @register.filter
