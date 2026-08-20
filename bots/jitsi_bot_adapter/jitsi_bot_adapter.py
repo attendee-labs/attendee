@@ -17,6 +17,10 @@ class JitsiBotAdapter(WebBotAdapter, JitsiUIMethods):
     environment variable (see bots/meeting_url_utils.py).
     """
 
+    def __init__(self, *args, jitsi_room_password: str | None = None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.jitsi_room_password = jitsi_room_password
+
     def get_chromedriver_payload_file_names(self):
         return ["jitsi_bot_adapter/jitsi_chromedriver_payload.js"]
 
