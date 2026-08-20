@@ -15,15 +15,21 @@
     </div>
     <p class="text-muted mb-3">
         {% if latest_snapshot_at %}
-            Last snapshot {{ latest_snapshot_at|timesince }} ago. {{ snapshot_count }} snapshot{{ snapshot_count|pluralize }} in the last {{ window_label }}. Each metric below reports its own sampling interval, since the more expensive ones are collected less often.
-            {% if snapshots_are_stale %}
-            <span class="badge bg-danger ms-1">Stale</span>
-            <span class="small">The scheduler has stopped reporting, so the values below describe the past.</span>
-            {% endif %}
+            Last snapshot {{ latest_snapshot_at|timesince }} ago.
         {% else %}
             No snapshots have been recorded yet. The scheduler writes one every {{ snapshot_interval_label }}.
         {% endif %}
     </p>
+
+    {% if snapshots_are_stale %}
+    <div class="alert alert-danger d-flex align-items-center gap-2 mb-3" role="alert">
+        <i class="bi bi-exclamation-triangle-fill fs-5"></i>
+        <div>
+            <span class="fw-semibold">Snapshots are stale.</span>
+            The scheduler has stopped reporting, so the values below describe the past.
+        </div>
+    </div>
+    {% endif %}
 
     <div class="row g-3 mb-3">
         <div class="col-md-4">
@@ -73,7 +79,15 @@
                     <div class="d-flex align-items-baseline gap-2">
                         <span class="fs-3 fw-semibold">{{ queues.total_depth }}</span>
                         <span class="text-muted">across {{ queues.rows|length }} queue{{ queues.rows|length|pluralize }}</span>
+                        {% if queues.trend %}
+                        <span class="badge bg-{{ queues.trend.status }} ms-auto"><i class="bi {{ queues.trend.icon }}"></i> {{ queues.trend.label }}</span>
+                        {% endif %}
                     </div>
+                    {% if queues.trend %}
+                    <div class="small mt-2">
+                        Averaging <span class="fw-semibold">{{ queues.trend.later_average }}</span> queued over the recent half of the {{ window_label }}, versus {{ queues.trend.earlier_average }} over the earlier half
+                    </div>
+                    {% endif %}
                     <div class="text-muted mt-2" style="font-size: 0.75rem;">Sampled every {{ queues.interval_label }}, last {{ queues.sampled_at|timesince }} ago</div>
                     {% else %}
                     <p class="text-muted small mb-0">Not collected.</p>

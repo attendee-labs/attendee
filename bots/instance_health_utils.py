@@ -18,9 +18,9 @@ Two properties of how snapshots are written drive everything here:
 import math
 from datetime import timedelta
 
-from django.db.models import FloatField, Max
+from django.db.models import Avg, FloatField, Max, Q, Value
 from django.db.models.fields.json import KeyTextTransform, KeyTransform
-from django.db.models.functions import Cast
+from django.db.models.functions import Cast, Coalesce
 from django.utils import timezone
 
 from .instance_health_snapshot_taker import (
@@ -54,6 +54,14 @@ STALE_AFTER_SECONDS = INSTANCE_HEALTH_SNAPSHOT_INTERVAL_SECONDS * 3
 # internal sessions, which is what makes 85% rather than 100% the danger line.
 CONNECTION_WARNING_PERCENTAGE = 70
 CONNECTION_DANGER_PERCENTAGE = 85
+
+# A backlog has to move by at least this much before it is called growing or draining
+# rather than steady. Both bars have to be cleared: the percentage alone would make a
+# queue that idles at one or two tasks look dramatic, and the absolute change alone
+# would call a move from 400 to 410 a trend. The absolute floor also absorbs the case
+# these averages are least suited to, an otherwise empty queue that took one burst.
+QUEUE_TREND_MINIMUM_CHANGE = 2
+QUEUE_TREND_MINIMUM_CHANGE_PERCENTAGE = 15
 
 
 def _interval_label(seconds):
@@ -127,6 +135,68 @@ def _peaks_over_window(cutoff, queue_names):
     return _as_int(peaks["connections"]), [_as_int(peaks[f"queue_{index}"]) for index in range(len(queue_names))]
 
 
+def _total_queue_depth_expression(queue_names):
+    """Expression summing every queue's depth within a single snapshot.
+
+    A queue that failed to be read is absent from the snapshot rather than recorded as
+    zero, and is counted as zero here so that one unreadable queue does not null out
+    the whole row's total.
+    """
+    terms = [Coalesce(_json_number("celery_queue_depths", queue_name), Value(0.0)) for queue_name in queue_names]
+
+    total = terms[0]
+    for term in terms[1:]:
+        total = total + term
+
+    return total
+
+
+def _queue_trend_over_window(cutoff, now, queue_names):
+    """Return how the backlog in the recent half of the window compares to the earlier half.
+
+    Each half is averaged rather than compared end to end because a queue depth is a
+    momentary reading: two individual snapshots can differ wildly while the backlog is
+    flat, so a first-versus-last comparison would report a trend out of noise.
+
+    Snapshots missing the metric entirely are excluded instead of being read as an
+    empty set of queues, which would otherwise pull a half's average toward zero.
+    """
+    if not queue_names:
+        return None
+
+    midpoint = cutoff + (now - cutoff) / 2
+    total_depth = _total_queue_depth_expression(queue_names)
+    was_collected = Q(data__has_key="celery_queue_depths")
+
+    averages = InstanceHealthSnapshot.objects.filter(created_at__gte=cutoff).aggregate(
+        earlier=Avg(total_depth, filter=was_collected & Q(created_at__lt=midpoint)),
+        later=Avg(total_depth, filter=was_collected & Q(created_at__gte=midpoint)),
+    )
+
+    earlier, later = averages["earlier"], averages["later"]
+
+    # Either half is empty on an instance that only started snapshotting partway
+    # through the window, which leaves nothing to compare against.
+    if earlier is None or later is None:
+        return None
+
+    change = later - earlier
+    change_percentage = abs(change) / earlier * 100 if earlier else None
+
+    if abs(change) < QUEUE_TREND_MINIMUM_CHANGE or (change_percentage is not None and change_percentage < QUEUE_TREND_MINIMUM_CHANGE_PERCENTAGE):
+        direction = {"label": "Steady", "status": "secondary", "icon": "bi-arrow-right"}
+    elif change > 0:
+        direction = {"label": "Growing", "status": "warning", "icon": "bi-arrow-up-right"}
+    else:
+        direction = {"label": "Draining", "status": "success", "icon": "bi-arrow-down-right"}
+
+    return {
+        "earlier_average": round(earlier, 1),
+        "later_average": round(later, 1),
+        **direction,
+    }
+
+
 def _build_connections(connections, peak, sampled_at):
     if not connections:
         return None
@@ -153,7 +223,7 @@ def _build_connections(connections, peak, sampled_at):
     }
 
 
-def _build_queues(queue_names, queue_depths, queue_peaks, sampled_at):
+def _build_queues(queue_names, queue_depths, queue_peaks, trend, sampled_at):
     depths = queue_depths or {}
     rows = [
         {
@@ -167,6 +237,7 @@ def _build_queues(queue_names, queue_depths, queue_peaks, sampled_at):
     return {
         "rows": rows,
         "total_depth": sum(depth for depth in depths.values() if depth is not None),
+        "trend": trend,
         "sampled_at": sampled_at,
         "interval_label": _sampling_interval_label(INSTANCE_HEALTH_SNAPSHOT_INTERVAL_SECONDS),
     }
@@ -240,6 +311,7 @@ def get_instance_health_data(window=DEFAULT_WINDOW):
     # as zero, so the set of queues is taken from the latest reading of it.
     queue_names = sorted(queue_depths or {})
     connections_peak, queue_peaks = _peaks_over_window(cutoff, queue_names)
+    queue_trend = _queue_trend_over_window(cutoff, now, queue_names)
 
     return {
         "window": window,
@@ -250,7 +322,7 @@ def get_instance_health_data(window=DEFAULT_WINDOW):
         "latest_snapshot_at": latest_snapshot_at,
         "snapshots_are_stale": latest_snapshot_at is not None and (now - latest_snapshot_at).total_seconds() > STALE_AFTER_SECONDS,
         "connections": _build_connections(connections, connections_peak, connections_at),
-        "queues": _build_queues(queue_names, queue_depths, queue_peaks, queue_depths_at),
+        "queues": _build_queues(queue_names, queue_depths, queue_peaks, queue_trend, queue_depths_at),
         "workers": _build_workers(worker_stats, worker_stats_at),
         "table_sizes": _build_table_sizes(table_sizes, table_sizes_at),
     }
