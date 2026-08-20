@@ -17,7 +17,10 @@ Cost notes, since the caller polls this on every cycle:
     locks and scans nothing, but it does a stat() per 1 GB file segment per fork,
     across each table, its TOAST relation and every index. That is usually tens of
     milliseconds, but can spike on a cold dentry cache or network storage, which is
-    why it is sampled on a longer interval than the other two.
+    why it is sampled on a longer interval.
+  * Celery worker stats cost a flat second, because inspect() blocks for its whole
+    timeout rather than returning once every worker has replied. Also sampled on a
+    longer interval, since pool sizing only changes on deploys and restarts.
 
 The scheduler also trims this table to a fixed retention window as it goes, so the
 snapshots stay bounded without depending on a separate cleanup job.
@@ -33,6 +36,7 @@ from django.conf import settings
 from django.db import connection, transaction
 from django.utils import timezone
 
+from attendee.celery import app as celery_app
 from bots.models import InstanceHealthSnapshot
 
 logger = logging.getLogger(__name__)
@@ -68,6 +72,15 @@ INSTANCE_HEALTH_SNAPSHOT_CLEANUP_MAX_BATCHES_PER_PASS = int(os.getenv("INSTANCE_
 # stalling the caller's loop.
 INSTANCE_HEALTH_METRIC_STATEMENT_TIMEOUT_MS = int(os.getenv("INSTANCE_HEALTH_METRIC_STATEMENT_TIMEOUT_MS", "2000"))
 
+# inspect() blocks for the full timeout collecting replies, so this is a fixed
+# cost added to every snapshot that samples worker stats. Keep it short.
+INSTANCE_HEALTH_CELERY_WORKER_STATS_TIMEOUT_SECONDS = float(os.getenv("INSTANCE_HEALTH_CELERY_WORKER_STATS_TIMEOUT_SECONDS", "1.0"))
+
+# Pool sizing changes only when workers are deployed or restarted, so it is sampled
+# on a longer interval than the other metrics and attached to whichever snapshot
+# happens to be due when it is collected.
+INSTANCE_HEALTH_CELERY_WORKER_STATS_INTERVAL_SECONDS = int(os.getenv("INSTANCE_HEALTH_CELERY_WORKER_STATS_INTERVAL_SECONDS", "600"))
+
 # Background workers (autovacuum, walwriter, ...) appear in pg_stat_activity but do
 # not consume a max_connections slot, so they are excluded to keep the ratio honest.
 CONNECTION_STATS_SQL = """
@@ -100,6 +113,27 @@ def _fetch_with_timeout(sql):
             cursor.execute("SELECT set_config('statement_timeout', %s, true)", [str(INSTANCE_HEALTH_METRIC_STATEMENT_TIMEOUT_MS)])
             cursor.execute(sql)
             return cursor.fetchall()
+
+
+def get_celery_worker_stats():
+    """Return per-worker pool concurrency as reported by the workers themselves.
+
+    A worker that fails to reply within the timeout is indistinguishable from a
+    worker that is down, so worker_count is a lower bound, not an exact census.
+    """
+
+    replies = celery_app.control.inspect(timeout=INSTANCE_HEALTH_CELERY_WORKER_STATS_TIMEOUT_SECONDS).stats() or {}
+
+    workers = {}
+    for worker_name, stats in replies.items():
+        pool = stats.get("pool") or {}
+        workers[worker_name] = {
+            "concurrency": pool.get("max-concurrency"),
+            "processes_alive": len(pool.get("processes") or []),
+            "prefetch_count": stats.get("prefetch_count"),
+        }
+
+    return {"worker_count": len(workers), "workers": workers}
 
 
 def get_celery_queue_depths(redis_client):
@@ -188,6 +222,7 @@ class InstanceHealthSnapshotTaker:
         self._redis_client = None
         self._last_snapshot_time = None
         self._last_table_size_sample_time = None
+        self._last_celery_worker_stats_sample_time = None
         self._last_cleanup_time = None
 
     def _get_redis_client(self):
@@ -203,7 +238,7 @@ class InstanceHealthSnapshotTaker:
         numbers matter most when something is already broken.
         """
         # Only take snapshot if the env var is set to true
-        if os.getenv("SAVE_INSTANCE_HEALTH_SNAPSHOTS", "false") != "true":
+        if not settings.SAVE_INSTANCE_HEALTH_SNAPSHOTS:
             return
 
         # Monotonic rather than wall clock, since these are pure interval throttles.
@@ -227,15 +262,24 @@ class InstanceHealthSnapshotTaker:
             logger.error(f"Error getting Celery queue depths: {e}. Continuing...")
             self._redis_client = None  # Reset connection on failure
 
+        if self._last_celery_worker_stats_sample_time is None or (now - self._last_celery_worker_stats_sample_time) >= INSTANCE_HEALTH_CELERY_WORKER_STATS_INTERVAL_SECONDS:
+            # Recorded up front so a failing collector can't turn into a retry loop.
+            self._last_celery_worker_stats_sample_time = now
+            try:
+                snapshot_data["celery_worker_stats"] = get_celery_worker_stats()
+            except Exception as e:
+                logger.error(f"Error getting Celery worker stats: {e}. Continuing...")
+
         try:
             snapshot_data["database_connections"] = get_database_connection_stats()
         except Exception as e:
             logger.error(f"Error getting database connection stats: {e}. Continuing...")
 
         if self._last_table_size_sample_time is None or (now - self._last_table_size_sample_time) >= INSTANCE_HEALTH_TABLE_SIZE_INTERVAL_SECONDS:
+            # Recorded up front so a failing collector can't turn into a retry loop.
+            self._last_table_size_sample_time = now
             try:
                 snapshot_data["database_table_sizes"] = get_database_table_sizes()
-                self._last_table_size_sample_time = now
             except Exception as e:
                 logger.error(f"Error getting database table sizes: {e}. Continuing...")
 
