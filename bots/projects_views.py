@@ -21,6 +21,7 @@ from django.views.generic import ListView
 from accounts.models import User, UserRole
 
 from .bots_api_utils import BotCreationSource, create_bot, create_webhook_subscription
+from .instance_health_utils import DEFAULT_WINDOW, get_instance_health_data
 from .launch_bot_utils import launch_adhoc_bot_from_view
 from .models import (
     ApiKey,
@@ -1245,6 +1246,7 @@ class ProjectInstanceHealthView(AdminRequiredMixin, ProjectUrlContextMixin, View
 
         project = get_project_for_user(user=request.user, project_object_id=object_id)
         context = self.get_project_context(object_id, project)
+        context.update(get_instance_health_data(request.GET.get("window", DEFAULT_WINDOW)))
         return render(request, "projects/project_instance_health.html", context)
 
 
