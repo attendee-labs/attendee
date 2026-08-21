@@ -1,0 +1,232 @@
+{% extends 'projects/sidebar.html' %}
+{% load bot_filters %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="d-flex justify-content-between align-items-center mb-1">
+        <h2 class="mb-0">Instance Health</h2>
+        <div class="d-flex gap-3 align-items-center">
+            <span class="text-muted small fw-semibold">Time period</span>
+            <div class="btn-group btn-group-sm">
+                {% for option in window_options %}
+                <a href="?window={{ option.key }}" class="btn {% if window == option.key %}btn-primary{% else %}btn-outline-primary{% endif %}">{{ option.label }}</a>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+    <p class="text-muted mb-3">
+        {% if latest_snapshot_at %}
+            Last snapshot {{ latest_snapshot_at|timesince_or_seconds }} ago.
+        {% else %}
+            No snapshots have been recorded yet. The scheduler writes one every {{ snapshot_interval_label }}.
+        {% endif %}
+    </p>
+
+    {% if snapshots_are_stale %}
+    <div class="alert alert-danger d-flex align-items-center gap-2 mb-3" role="alert">
+        <i class="bi bi-exclamation-triangle-fill fs-5"></i>
+        <div>
+            <span class="fw-semibold">Snapshots are stale.</span>
+            The scheduler has stopped reporting, so the values below describe the past.
+        </div>
+    </div>
+    {% endif %}
+
+    <div class="row g-3 mb-3">
+        <div class="col-md-4">
+            <div class="card h-100">
+                <div class="card-body">
+                    <h6 class="text-muted text-uppercase small mb-2">Database Connections</h6>
+                    {% if connections %}
+                    <div class="d-flex align-items-baseline gap-2">
+                        <span class="fs-3 fw-semibold">{{ connections.used }}</span>
+                        <span class="text-muted">/ {{ connections.max_connections }}</span>
+                        <span class="badge bg-{{ connections.status }} ms-auto">{{ connections.used_percentage }}%</span>
+                    </div>
+                    <div class="progress mt-2" style="height: 6px;">
+                        <div class="progress-bar bg-{{ connections.status }}" style="width: {{ connections.used_percentage }}%;"></div>
+                    </div>
+                    <div class="small mt-2">
+                        Peak <span class="fw-semibold">{{ connections.peak|default_if_none:"—" }}</span>{% if connections.peak_percentage %} ({{ connections.peak_percentage }}%){% endif %} in the last {{ window_label }}
+                    </div>
+                    <div class="text-muted mt-1" style="font-size: 0.75rem;">Sampled every {{ connections.interval_label }}, last {{ connections.sampled_at|timesince_or_seconds }} ago</div>
+                    {% else %}
+                    <p class="text-muted small mb-0">Not collected.</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card h-100">
+                <div class="card-body">
+                    <h6 class="text-muted text-uppercase small mb-2">Database Size</h6>
+                    {% if table_sizes %}
+                    <div class="d-flex align-items-baseline gap-2">
+                        <span class="fs-3 fw-semibold">{{ table_sizes.total_bytes|filesizeformat }}</span>
+                        <span class="text-muted">across {{ table_sizes.table_count }} table{{ table_sizes.table_count|pluralize }}</span>
+                    </div>
+                    {% if table_sizes.growth_since %}
+                    <div class="small mt-2">
+                        <span class="fw-semibold">{% if table_sizes.growth_bytes > 0 %}+{% endif %}{{ table_sizes.growth_bytes|filesizeformat }}</span>{% if table_sizes.growth_percentage != None %} ({{ table_sizes.growth_percentage|stringformat:"+.1f" }}%){% endif %} over the last {{ table_sizes.growth_since|timesince_or_seconds }}
+                    </div>
+                    {% endif %}
+                    <div class="text-muted mt-2" style="font-size: 0.75rem;">Sampled every {{ table_sizes.interval_label }}, last {{ table_sizes.sampled_at|timesince_or_seconds }} ago</div>
+                    {% else %}
+                    <p class="text-muted small mb-0">Not collected.</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card h-100">
+                <div class="card-body">
+                    <h6 class="text-muted text-uppercase small mb-2">Queued Celery Tasks</h6>
+                    {% if queues.rows %}
+                    <div class="d-flex align-items-baseline gap-2">
+                        <span class="fs-3 fw-semibold">{{ queues.total_depth }}</span>
+                        <span class="text-muted">across {{ queues.rows|length }} queue{{ queues.rows|length|pluralize }}</span>
+                        {% if queues.trend %}
+                        <span class="badge bg-{{ queues.trend.status }} ms-auto"><i class="bi {{ queues.trend.icon }}"></i> {{ queues.trend.label }}</span>
+                        {% endif %}
+                    </div>
+                    {% if queues.trend %}
+                    <div class="small mt-2">
+                        Averaging <span class="fw-semibold">{{ queues.trend.later_average }}</span> queued over the recent half of the {{ window_label }}, versus {{ queues.trend.earlier_average }} over the earlier half
+                    </div>
+                    {% endif %}
+                    <div class="text-muted mt-2" style="font-size: 0.75rem;">Sampled every {{ queues.interval_label }}, last {{ queues.sampled_at|timesince_or_seconds }} ago</div>
+                    {% else %}
+                    <p class="text-muted small mb-0">Not collected.</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-3">
+        <div class="col-lg-6">
+            <div class="card h-100">
+                <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                    <span class="fw-semibold">Celery Queue Depths</span>
+                    <span class="text-muted small">Sampled every {{ queues.interval_label }}, last {{ queues.sampled_at|timesince_or_seconds }} ago</span>
+                </div>
+                <div class="card-body p-0">
+                    {% if queues.rows %}
+                    <table class="table table-sm mb-0 small">
+                        <thead>
+                            <tr class="text-muted">
+                                <th class="ps-3 fw-normal">Queue</th>
+                                <th class="text-end fw-normal">Depth</th>
+                                <th class="text-end fw-normal pe-3" style="width: 90px;">Peak</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for queue in queues.rows %}
+                            <tr>
+                                <td class="ps-3">{{ queue.name }}</td>
+                                <td class="text-end fw-semibold {% if not queue.depth %}text-muted{% endif %}">{{ queue.depth|default_if_none:"—" }}</td>
+                                <td class="text-end text-muted pe-3">{{ queue.peak|default_if_none:"—" }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                    {% else %}
+                    <p class="text-muted small m-3">Not collected.</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-6">
+            <div class="card h-100">
+                <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                    <span class="fw-semibold">Celery Workers</span>
+                    {% if workers %}
+                    <span class="text-muted small">Sampled every {{ workers.interval_label }}, last {{ workers.sampled_at|timesince_or_seconds }} ago</span>
+                    {% endif %}
+                </div>
+                <div class="card-body p-0">
+                    {% if workers.replies_are_missing %}
+                    <div class="alert alert-warning small rounded-0 border-0 mb-0 d-flex align-items-center gap-2">
+                        {% if workers.rows %}
+                        No worker replied to the latest sample, which is normal for the first few minutes after a deploy. The roster below is the last one that did reply.
+                        {% else %}
+                        No workers replied, and none have replied within the last {{ workers.silence_grace_label }}.
+                        {% endif %}
+                    </div>
+                    {% endif %}
+                    {% if workers.rows %}
+                    <div class="table-responsive">
+                        <table class="table table-sm mb-0 small">
+                            <thead>
+                                <tr class="text-muted">
+                                    <th class="ps-3 fw-normal">Worker</th>
+                                    <th class="text-end fw-normal">Concurrency</th>
+                                    <th class="text-end fw-normal pe-3">Alive</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for worker in workers.rows %}
+                                <tr>
+                                    <td class="ps-3 text-break">{{ worker.name }}</td>
+                                    <td class="text-end">{{ worker.concurrency|default_if_none:"—" }}</td>
+                                    <td class="text-end pe-3">{{ worker.processes_alive|default_if_none:"—" }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% elif not workers %}
+                    <p class="text-muted small m-3">Not collected.</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card mb-4">
+        <div class="card-header bg-white d-flex justify-content-between align-items-center">
+            <span class="fw-semibold">Largest Tables</span>
+            {% if table_sizes %}
+            <span class="text-muted small">{% if table_sizes.growth_since %}Growth over the last {{ table_sizes.growth_since|timesince_rounded }}. {% endif %}Sampled every {{ table_sizes.interval_label }}, last {{ table_sizes.sampled_at|timesince_or_seconds }} ago</span>
+            {% endif %}
+        </div>
+        <div class="card-body p-0">
+            {% if table_sizes.rows %}
+            <table class="table table-sm mb-0 small">
+                <thead>
+                    <tr class="text-muted">
+                        <th class="ps-3 fw-normal">Table</th>
+                        <th></th>
+                        <th class="text-end fw-normal">Share</th>
+                        <th class="text-end fw-normal">Size</th>
+                        <th class="text-end fw-normal pe-3" colspan="2">Growth</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for table in table_sizes.rows %}
+                    <tr>
+                        <td class="ps-3">{{ table.name }}</td>
+                        <td style="width: 30%; vertical-align: middle;">
+                            <div class="progress" style="height: 5px;">
+                                <div class="progress-bar bg-secondary" style="width: {{ table.percentage }}%;"></div>
+                            </div>
+                        </td>
+                        <td class="text-end text-muted" style="width: 70px;">{{ table.percentage }}%</td>
+                        <td class="text-end fw-semibold" style="width: 110px;">{{ table.bytes|filesizeformat }}</td>
+                        {% if table_sizes.growth_since %}
+                        <td class="text-end text-muted" style="width: 80px;">{% if table.is_new %}new{% elif table.growth_percentage != None %}{{ table.growth_percentage|stringformat:"+.1f" }}%{% endif %}</td>
+                        <td class="text-end fw-semibold pe-3" style="width: 110px;">{% if table.growth_bytes > 0 %}+{% endif %}{{ table.growth_bytes|filesizeformat }}</td>
+                        {% else %}
+                        <td class="text-end text-muted pe-3" colspan="2" style="width: 190px;">—</td>
+                        {% endif %}
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <p class="text-muted small m-3">Not collected.</p>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}
