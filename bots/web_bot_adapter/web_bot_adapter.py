@@ -1102,7 +1102,7 @@ class WebBotAdapter(BotAdapter):
         # Call the JavaScript function to enqueue the PCM chunk
         self.driver.execute_script("window.botOutputManager.playPCMAudio(arguments[0], arguments[1]);", audio_data, sample_rate)
 
-    def send_chat_message(self, text, to_user_uuid):
+    def send_chat_message(self, text, to_user_uuid, pin=False):
         logger.info("send_chat_message not supported in web bots")
 
     # Sub-classes can override this to add class-specific initial data code

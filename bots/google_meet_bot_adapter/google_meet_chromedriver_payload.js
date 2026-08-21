@@ -121,34 +121,56 @@ const handleVideoTrackForRealTimePerParticipantVideo = async ({ track, streams }
     }
 };
 
-function sendChatMessage(text) {
-    
-    // First try to find the chat input textarea
-    let chatInput = document.querySelector('textarea[aria-label="Send a message"]');
-    
-    if (!chatInput) {
-        console.error('Chat input not found');
-        return false;
+async function waitForChatElement(getElement, timeoutMs = 5000) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+        const element = getElement();
+        if (element) {
+            return element;
+        }
+        await new Promise(resolve => setTimeout(resolve, 100));
     }
-    
-    // Type the message
+    return null;
+}
+
+async function sendChatMessage(text) {
+    const chatInput = document.querySelector('textarea[aria-label="Send a message"]');
+    if (!chatInput) {
+        return { sent: false, failure_stage: 'chat_input', failure_reason: 'chat_input_not_found' };
+    }
+
+    const existingMessageIds = new Set(
+        Array.from(document.querySelectorAll('[data-message-id]'))
+            .map(element => element.getAttribute('data-message-id'))
+            .filter(Boolean)
+    );
     chatInput.focus();
     chatInput.value = text;
-    
-    // Trigger input event to ensure the UI updates
     chatInput.dispatchEvent(new Event('input', { bubbles: true }));
-    
-    // Send Enter keypress to submit the message
-    const enterEvent = new KeyboardEvent('keydown', {
+    chatInput.dispatchEvent(new KeyboardEvent('keydown', {
         key: 'Enter',
         code: 'Enter',
         keyCode: 13,
         which: 13,
         bubbles: true
-    });
-    chatInput.dispatchEvent(enterEvent);
-    
-    return true;
+    }));
+
+    const sentMessage = await waitForChatElement(() =>
+        Array.from(document.querySelectorAll('[data-message-id]')).find(element => {
+            const messageId = element.getAttribute('data-message-id');
+            if (!messageId || existingMessageIds.has(messageId)) {
+                return false;
+            }
+            return Array.from(element.querySelectorAll('div'))
+                .some(descendant => descendant.textContent?.trim() === text);
+        }),
+        10000
+    );
+    if (!sentMessage) {
+        return { sent: false, failure_stage: 'send_acknowledgement', failure_reason: 'sent_message_not_observed' };
+    }
+
+    return { sent: true, message_id: sentMessage.getAttribute('data-message-id') };
 }
 
 class ParticipantSpeechStartStopManager {

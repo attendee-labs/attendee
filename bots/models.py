@@ -3036,7 +3036,7 @@ class BotChatMessageRequest(models.Model):
 
 class BotChatMessageRequestManager:
     @classmethod
-    def set_chat_message_request_sent(cls, chat_message_request: BotChatMessageRequest):
+    def set_chat_message_request_sent(cls, chat_message_request: BotChatMessageRequest, delivery_data=None):
         if chat_message_request.state == BotChatMessageRequestStates.SENT:
             return
         if chat_message_request.state != BotChatMessageRequestStates.ENQUEUED:
@@ -3044,15 +3044,21 @@ class BotChatMessageRequestManager:
 
         chat_message_request.state = BotChatMessageRequestStates.SENT
         chat_message_request.sent_at_timestamp_ms = int(timezone.now().timestamp() * 1000)
+        if delivery_data:
+            chat_message_request.additional_data = {
+                **chat_message_request.additional_data,
+                "delivery": delivery_data,
+            }
         chat_message_request.save()
 
     @classmethod
-    def set_chat_message_request_failed(cls, chat_message_request: BotChatMessageRequest):
+    def set_chat_message_request_failed(cls, chat_message_request: BotChatMessageRequest, failure_data=None):
         if chat_message_request.state == BotChatMessageRequestStates.FAILED:
             return
         if chat_message_request.state != BotChatMessageRequestStates.ENQUEUED:
             raise ValueError(f"Invalid state transition. Chat message request {chat_message_request.id} is in state {chat_message_request.get_state_display()}")
         chat_message_request.state = BotChatMessageRequestStates.FAILED
+        chat_message_request.failure_data = failure_data
         chat_message_request.save()
 
 

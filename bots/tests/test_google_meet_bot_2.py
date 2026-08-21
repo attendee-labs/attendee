@@ -14,6 +14,7 @@ from selenium.common.exceptions import TimeoutException
 
 from bots.bot_adapter import BotAdapter
 from bots.bot_controller import BotController
+from bots.google_meet_bot_adapter.google_meet_bot_adapter import GoogleMeetBotAdapter
 from bots.google_meet_bot_adapter.google_meet_ui_methods import GoogleMeetUIMethods
 from bots.models import (
     Bot,
@@ -44,6 +45,198 @@ from bots.models import (
 )
 from bots.tests.mock_data import create_mock_file_uploader, create_mock_google_meet_driver
 from bots.web_bot_adapter.ui_methods import UiLoginRequiredException, UiRetryableException
+
+
+class TestGoogleMeetChatMessagePinning(TransactionTestCase):
+    def test_send_chat_message_pins_acknowledged_message_id(self):
+        adapter = object.__new__(GoogleMeetBotAdapter)
+        adapter.driver = MagicMock()
+        adapter.driver.execute_async_script.return_value = {
+            "sent": True,
+            "message_id": "message-123",
+        }
+
+        with patch.object(adapter, "_pin_chat_message", return_value={"pinned": True}) as pin_chat_message:
+            result = adapter.send_chat_message("Important meeting link", None, pin=True)
+
+        args = adapter.driver.execute_async_script.call_args.args
+        self.assertEqual(args[1:], ("Important meeting link",))
+        pin_chat_message.assert_called_once_with("message-123", "Important meeting link")
+        self.assertEqual(result, {"sent": True, "message_id": "message-123", "pinned": True})
+
+    def test_send_chat_message_returns_acknowledgement_failure_without_pinning(self):
+        adapter = object.__new__(GoogleMeetBotAdapter)
+        adapter.driver = MagicMock()
+        adapter.driver.execute_async_script.return_value = {
+            "sent": False,
+            "failure_stage": "send_acknowledgement",
+            "failure_reason": "own_message_not_observed",
+        }
+
+        with patch.object(adapter, "_pin_chat_message") as pin_chat_message:
+            result = adapter.send_chat_message("Important meeting link", None, pin=True)
+
+        pin_chat_message.assert_not_called()
+        self.assertEqual(result["failure_reason"], "own_message_not_observed")
+
+    def test_send_chat_message_defers_missing_pin_action_until_host_joins(self):
+        adapter = object.__new__(GoogleMeetBotAdapter)
+        adapter.driver = MagicMock()
+        adapter.driver.execute_async_script.return_value = {
+            "sent": True,
+            "message_id": "message-123",
+        }
+        adapter.pending_chat_message_pin = None
+        adapter.participants_info = {}
+
+        with patch.object(
+            adapter,
+            "_pin_chat_message",
+            return_value={
+                "pinned": False,
+                "failure_stage": "pin",
+                "failure_reason": "pin_action_not_found",
+            },
+        ):
+            adapter.send_chat_message("Important meeting link", None, pin=True)
+
+        self.assertEqual(
+            adapter.pending_chat_message_pin,
+            {"message_id": "message-123", "text": "Important meeting link"},
+        )
+
+    def test_host_join_retries_deferred_pin_without_resending_message(self):
+        adapter = object.__new__(GoogleMeetBotAdapter)
+        adapter.driver = MagicMock()
+        adapter.pending_chat_message_pin = {
+            "message_id": "message-123",
+            "text": "Important meeting link",
+        }
+
+        with patch(
+            "bots.google_meet_bot_adapter.google_meet_bot_adapter.WebBotAdapter.handle_participant_update"
+        ) as handle_participant_update, patch.object(
+            adapter,
+            "_pin_chat_message",
+            return_value={"pinned": True, "message_id": "message-123"},
+        ) as pin_chat_message:
+            adapter.handle_participant_update({"active": True, "isHost": True})
+
+        handle_participant_update.assert_called_once_with({"active": True, "isHost": True})
+        pin_chat_message.assert_called_once_with("message-123", "Important meeting link")
+        self.assertIsNone(adapter.pending_chat_message_pin)
+        adapter.driver.execute_async_script.assert_not_called()
+
+    def test_non_host_join_does_not_retry_deferred_pin(self):
+        adapter = object.__new__(GoogleMeetBotAdapter)
+        adapter.pending_chat_message_pin = {
+            "message_id": "message-123",
+            "text": "Important meeting link",
+        }
+
+        with patch(
+            "bots.google_meet_bot_adapter.google_meet_bot_adapter.WebBotAdapter.handle_participant_update"
+        ), patch.object(adapter, "_pin_chat_message") as pin_chat_message:
+            adapter.handle_participant_update({"active": True, "isHost": False})
+
+        pin_chat_message.assert_not_called()
+        self.assertIsNotNone(adapter.pending_chat_message_pin)
+
+    def test_pin_chat_message_targets_exact_message_id(self):
+        adapter = object.__new__(GoogleMeetBotAdapter)
+        adapter.driver = MagicMock()
+        other_message = MagicMock()
+        other_message.get_attribute.return_value = "other-message"
+        target_message = MagicMock()
+        target_message.get_attribute.return_value = "message-123"
+        target_message.find_elements.side_effect = [[MagicMock()], []]
+        adapter.driver.find_elements.return_value = [other_message, target_message]
+
+        result = adapter._pin_chat_message("message-123", "Important meeting link", timeout_seconds=0.1)
+
+        self.assertTrue(result["pinned"])
+        self.assertEqual(result["message_id"], "message-123")
+        other_message.find_elements.assert_not_called()
+
+    def test_pin_chat_message_uses_browser_click_for_zero_size_pin_control(self):
+        adapter = object.__new__(GoogleMeetBotAdapter)
+        adapter.driver = MagicMock()
+        message = MagicMock()
+        message.get_attribute.return_value = "message-123"
+        pin_button = MagicMock()
+        unpin_button = MagicMock()
+
+        def find_message_controls(_, selector):
+            if "Unpin" in selector:
+                return [unpin_button] if pin_button_clicked else []
+            if "Pin message" in selector:
+                return [pin_button]
+            return []
+
+        pin_button_clicked = False
+
+        def execute_script(script, *args):
+            nonlocal pin_button_clicked
+            if script == "arguments[0].click();" and args[0] is pin_button:
+                pin_button_clicked = True
+
+        message.find_elements.side_effect = find_message_controls
+        adapter.driver.find_elements.side_effect = lambda _, selector: [] if selector == '[role="dialog"]' else [message]
+        adapter.driver.execute_script.side_effect = execute_script
+
+        result = adapter._pin_chat_message("message-123", "Important meeting link", timeout_seconds=0.5)
+
+        browser_clicks = [
+            call
+            for call in adapter.driver.execute_script.call_args_list
+            if call.args and call.args[0] == "arguments[0].click();"
+        ]
+        self.assertEqual(browser_clicks[0].args[1], pin_button)
+        pin_button.click.assert_not_called()
+        self.assertTrue(result["pinned"])
+
+    def test_pin_chat_message_falls_back_to_text_when_meet_replaces_message_id(self):
+        adapter = object.__new__(GoogleMeetBotAdapter)
+        adapter.driver = MagicMock()
+        message = MagicMock()
+        message.get_attribute.return_value = "replacement-message-id"
+        unpin_button = MagicMock()
+        message.find_elements.return_value = [unpin_button]
+        adapter.driver.find_elements.return_value = [message]
+        adapter.driver.execute_script.side_effect = [message, None]
+
+        result = adapter._pin_chat_message("temporary-message-id", "Important meeting link", timeout_seconds=0.1)
+
+        self.assertTrue(result["pinned"])
+        self.assertEqual(result["message_id"], "temporary-message-id")
+
+    def test_pin_chat_message_uses_pin_to_board_for_continuous_chat(self):
+        adapter = object.__new__(GoogleMeetBotAdapter)
+        adapter.driver = MagicMock()
+        message = MagicMock()
+        message.get_attribute.return_value = "message-123"
+        more_actions = MagicMock()
+        more_actions.is_displayed.return_value = True
+        message.find_elements.side_effect = [[], [], [], [], [], []]
+        pin_to_board = MagicMock()
+        pin_to_board.text = "Pin to board"
+        pin_to_board.is_displayed.return_value = True
+        unpin_from_board = MagicMock()
+        unpin_from_board.text = "Unpin from board"
+        unpin_from_board.is_displayed.return_value = True
+        adapter.driver.find_elements.side_effect = [
+            [message],
+            [more_actions],
+            [pin_to_board],
+            [message],
+            [more_actions],
+            [unpin_from_board],
+        ]
+
+        result = adapter._pin_chat_message("message-123", "Important meeting link", timeout_seconds=0.5)
+
+        self.assertTrue(result["pinned"])
+        self.assertEqual(result["pin_method"], "board")
 
 
 @override_settings(

@@ -107,6 +107,7 @@ def create_bot_chat_message_request(bot, chat_message_data):
             to_user_uuid=to_user_uuid,
             to=chat_message_data["to"],
             message=chat_message_data["message"],
+            additional_data={"pin": True} if chat_message_data.get("pin", False) else {},
         )
     except ValidationError as e:
         raise e

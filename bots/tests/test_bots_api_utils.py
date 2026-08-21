@@ -6,9 +6,10 @@ from django.test import TestCase, override_settings
 from django.utils import timezone
 
 from accounts.models import Organization
-from bots.bots_api_utils import BotCreationSource, build_internal_site_url, build_site_url, create_bot, create_webhook_subscription, patch_bot, validate_bot_concurrency_limit, validate_meeting_url_and_credentials
+from bots.bots_api_utils import BotCreationSource, build_internal_site_url, build_site_url, create_bot, create_bot_chat_message_request, create_webhook_subscription, patch_bot, validate_bot_concurrency_limit, validate_meeting_url_and_credentials
 from bots.calendars_api_utils import create_calendar
-from bots.models import Bot, BotEventManager, BotEventTypes, BotLoginGroup, BotLoginPlatform, BotStates, CalendarEvent, CalendarPlatform, Project, TranscriptionProviders, WebhookSubscription, WebhookTriggerTypes, ZoomOAuthApp
+from bots.models import Bot, BotChatMessageToOptions, BotEventManager, BotEventTypes, BotLoginGroup, BotLoginPlatform, BotStates, CalendarEvent, CalendarPlatform, Project, TranscriptionProviders, WebhookSubscription, WebhookTriggerTypes, ZoomOAuthApp
+from bots.serializers import BotChatMessageRequestSerializer
 
 
 class TestBuildSiteUrl(TestCase):
@@ -104,6 +105,47 @@ class TestCreateBot(TestCase):
         self.assertIsNotNone(bot)
         self.assertIsNotNone(bot.recordings.first())
         self.assertIsNone(error)
+
+    def test_chat_message_serializer_defaults_pin_to_false(self):
+        serializer = BotChatMessageRequestSerializer(data={"to": "everyone", "message": "Regular meeting message"})
+
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        self.assertEqual(serializer.validated_data["pin"], False)
+
+    def test_chat_message_serializer_accepts_pin(self):
+        serializer = BotChatMessageRequestSerializer(data={"to": "everyone", "message": "Important meeting link", "pin": True})
+
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        self.assertEqual(serializer.validated_data["pin"], True)
+
+    def test_create_pinned_bot_chat_message_request(self):
+        bot, error = create_bot(data={"meeting_url": "https://meet.google.com/abc-defg-hij", "bot_name": "Test Bot"}, source=BotCreationSource.API, project=self.project)
+        self.assertIsNone(error)
+
+        chat_message_request = create_bot_chat_message_request(
+            bot,
+            {
+                "to": BotChatMessageToOptions.EVERYONE,
+                "message": "Important meeting link",
+                "pin": True,
+            },
+        )
+
+        self.assertEqual(chat_message_request.additional_data, {"pin": True})
+
+    def test_unpinned_bot_chat_message_request_preserves_empty_additional_data(self):
+        bot, error = create_bot(data={"meeting_url": "https://meet.google.com/abc-defg-hij", "bot_name": "Test Bot"}, source=BotCreationSource.API, project=self.project)
+        self.assertIsNone(error)
+
+        chat_message_request = create_bot_chat_message_request(
+            bot,
+            {
+                "to": BotChatMessageToOptions.EVERYONE,
+                "message": "Regular meeting message",
+            },
+        )
+
+        self.assertEqual(chat_message_request.additional_data, {})
 
     def test_create_zoom_bot_with_default_settings(self):
         ZoomOAuthApp.objects.create(project=self.project, client_id="123")
