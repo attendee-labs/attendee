@@ -18,6 +18,7 @@ Two properties of how snapshots are written drive everything here:
 import math
 from datetime import timedelta
 
+from django.conf import settings
 from django.db.models import Avg, FloatField, Max, Q, Value
 from django.db.models.fields.json import KeyTextTransform, KeyTransform
 from django.db.models.functions import Cast, Coalesce
@@ -384,6 +385,19 @@ def _build_table_sizes(table_sizes, sampled_at, baseline, baseline_at):
         "sampled_at": sampled_at,
         "interval_label": _sampling_interval_label(INSTANCE_HEALTH_TABLE_SIZE_INTERVAL_SECONDS),
     }
+
+
+def user_can_view_instance_health(user):
+    """Whether the instance health dashboard exists for this user.
+
+    There is nothing to show unless snapshots are being written, and deployments can
+    narrow the dashboard to superusers even though the rest of the project pages are
+    open to any admin.
+    """
+    if not settings.SAVE_INSTANCE_HEALTH_SNAPSHOTS:
+        return False
+
+    return user.is_superuser or not settings.INSTANCE_HEALTH_ONLY_VIEWABLE_BY_SUPERUSERS
 
 
 def get_instance_health_data(window=DEFAULT_WINDOW):

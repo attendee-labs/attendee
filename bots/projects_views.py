@@ -21,7 +21,7 @@ from django.views.generic import ListView
 from accounts.models import User, UserRole
 
 from .bots_api_utils import BotCreationSource, create_bot, create_webhook_subscription
-from .instance_health_utils import DEFAULT_WINDOW, get_instance_health_data
+from .instance_health_utils import DEFAULT_WINDOW, get_instance_health_data, user_can_view_instance_health
 from .launch_bot_utils import launch_adhoc_bot_from_view
 from .models import (
     ApiKey,
@@ -217,7 +217,7 @@ class ProjectUrlContextMixin:
         return {
             "project": project,
             "charge_credits_for_bots_setting": settings.CHARGE_CREDITS_FOR_BOTS,
-            "save_instance_health_snapshots_setting": settings.SAVE_INSTANCE_HEALTH_SNAPSHOTS,
+            "can_view_instance_health": user_can_view_instance_health(self.request.user),
             "user_projects": Project.accessible_to(self.request.user),
             "UserRole": UserRole,
             "debug_mode": True if settings.DEBUG else False,
@@ -1241,8 +1241,8 @@ class ProjectUsageView(AdminRequiredMixin, ProjectUrlContextMixin, View):
 
 class ProjectInstanceHealthView(AdminRequiredMixin, ProjectUrlContextMixin, View):
     def get(self, request, object_id):
-        if not settings.SAVE_INSTANCE_HEALTH_SNAPSHOTS:
-            raise Http404("Instance health snapshots are not enabled.")
+        if not user_can_view_instance_health(request.user):
+            raise Http404("Instance health is not available.")
 
         project = get_project_for_user(user=request.user, project_object_id=object_id)
         context = self.get_project_context(object_id, project)
