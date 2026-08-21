@@ -302,12 +302,71 @@ def _build_workers(worker_stats, sampled_at, now):
     }
 
 
-def _build_table_sizes(table_sizes, sampled_at):
+def _table_sizes_baseline(cutoff, sampled_at):
+    """Return (table sizes, sampled_at) for the reading current sizes are compared against.
+
+    Growth is measured from the reading that was in force at the start of the window,
+    which is the last one taken before the cutoff rather than the first one taken
+    after it. Table sizes are sampled on an interval long enough that the narrower
+    windows often hold no second reading to compare against, and comparing the
+    earliest and latest readings inside the window would in any case understate the
+    growth by up to a whole sampling interval.
+
+    An instance whose readings all fall inside the window has no reading from before
+    the cutoff and falls back to its earliest one, which spans less than the window.
+    The panel dates the comparison from the returned timestamp rather than from the
+    window, so either way it reports the span it actually measured. A single reading
+    ever leaves nothing to compare against.
+    """
+    if sampled_at is None:
+        return None, None
+
+    earlier_readings = InstanceHealthSnapshot.objects.filter(data__has_key="database_table_sizes", created_at__lt=sampled_at).values_list("data", "created_at")
+    row = earlier_readings.filter(created_at__lt=cutoff).order_by("-created_at").first() or earlier_readings.order_by("created_at").first()
+    if row is None:
+        return None, None
+
+    data, created_at = row
+    return data["database_table_sizes"], created_at
+
+
+def _percentage_change(change, baseline_value):
+    """Percentage form of an absolute change, or None where there is no base to divide by.
+
+    A table that grew from nothing has no percentage: it is reported as new instead.
+    """
+    return round(change / baseline_value * 100, 1) if baseline_value else None
+
+
+def _table_size_row(table_name, size, total_bytes, baseline_tables):
+    """One row of the largest tables panel, with growth since the baseline reading.
+
+    baseline_tables is None when there is nothing to compare against, which leaves the
+    growth unreported rather than reported as zero. A table absent from a baseline that
+    does exist was created within the window, so all of its size is growth.
+    """
+    has_baseline = baseline_tables is not None
+    baseline_size = baseline_tables.get(table_name) if has_baseline else None
+
+    return {
+        "name": table_name,
+        "bytes": size,
+        "percentage": round(size / total_bytes * 100, 1) if total_bytes else 0,
+        "growth_bytes": size - (baseline_size or 0) if has_baseline else None,
+        "growth_percentage": _percentage_change(size - baseline_size, baseline_size) if baseline_size is not None else None,
+        "is_new": has_baseline and baseline_size is None,
+    }
+
+
+def _build_table_sizes(table_sizes, sampled_at, baseline, baseline_at):
     if not table_sizes:
         return None
 
     tables = table_sizes.get("tables") or {}
     total_bytes = table_sizes.get("total_bytes") or 0
+
+    baseline_tables = (baseline.get("tables") or {}) if baseline else None
+    baseline_total_bytes = (baseline.get("total_bytes") or 0) if baseline else None
 
     # Snapshots already store these largest first, but re-sorting here keeps the panel
     # from depending on that ordering surviving the JSON round trip.
@@ -316,14 +375,12 @@ def _build_table_sizes(table_sizes, sampled_at):
     return {
         "total_bytes": total_bytes,
         "table_count": len(tables),
-        "rows": [
-            {
-                "name": table_name,
-                "bytes": size,
-                "percentage": round(size / total_bytes * 100, 1) if total_bytes else 0,
-            }
-            for table_name, size in largest
-        ],
+        "rows": [_table_size_row(table_name, size, total_bytes, baseline_tables) for table_name, size in largest],
+        # The span the growth figures cover, which the panel reports in place of the
+        # selected window because the baseline reading rarely lands on the cutoff.
+        "growth_since": baseline_at if baseline else None,
+        "growth_bytes": total_bytes - baseline_total_bytes if baseline else None,
+        "growth_percentage": _percentage_change(total_bytes - baseline_total_bytes, baseline_total_bytes) if baseline else None,
         "sampled_at": sampled_at,
         "interval_label": _sampling_interval_label(INSTANCE_HEALTH_TABLE_SIZE_INTERVAL_SECONDS),
     }
@@ -353,6 +410,7 @@ def get_instance_health_data(window=DEFAULT_WINDOW):
     queue_names = sorted(queue_depths or {})
     connections_peak, queue_peaks = _peaks_over_window(cutoff, queue_names)
     queue_trend = _queue_trend_over_window(cutoff, now, queue_names)
+    table_sizes_baseline, table_sizes_baseline_at = _table_sizes_baseline(cutoff, table_sizes_at)
 
     return {
         "window": window,
@@ -365,5 +423,5 @@ def get_instance_health_data(window=DEFAULT_WINDOW):
         "connections": _build_connections(connections, connections_peak, connections_at),
         "queues": _build_queues(queue_names, queue_depths, queue_peaks, queue_trend, queue_depths_at),
         "workers": _build_workers(worker_stats, worker_stats_at, now),
-        "table_sizes": _build_table_sizes(table_sizes, table_sizes_at),
+        "table_sizes": _build_table_sizes(table_sizes, table_sizes_at, table_sizes_baseline, table_sizes_baseline_at),
     }

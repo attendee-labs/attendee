@@ -6,7 +6,7 @@
     <div class="d-flex justify-content-between align-items-center mb-1">
         <h2 class="mb-0">Instance Health</h2>
         <div class="d-flex gap-3 align-items-center">
-            <span class="text-muted small fw-semibold">Peaks over</span>
+            <span class="text-muted small fw-semibold">Time period</span>
             <div class="btn-group btn-group-sm">
                 {% for option in window_options %}
                 <a href="?window={{ option.key }}" class="btn {% if window == option.key %}btn-primary{% else %}btn-outline-primary{% endif %}">{{ option.label }}</a>
@@ -65,6 +65,11 @@
                         <span class="fs-3 fw-semibold">{{ table_sizes.total_bytes|filesizeformat }}</span>
                         <span class="text-muted">across {{ table_sizes.table_count }} table{{ table_sizes.table_count|pluralize }}</span>
                     </div>
+                    {% if table_sizes.growth_since %}
+                    <div class="small mt-2">
+                        <span class="fw-semibold">{% if table_sizes.growth_bytes > 0 %}+{% endif %}{{ table_sizes.growth_bytes|filesizeformat }}</span>{% if table_sizes.growth_percentage != None %} ({{ table_sizes.growth_percentage|stringformat:"+.1f" }}%){% endif %} over the last {{ table_sizes.growth_since|timesince_or_seconds }}
+                    </div>
+                    {% endif %}
                     <div class="text-muted mt-2" style="font-size: 0.75rem;">Sampled every {{ table_sizes.interval_label }}, last {{ table_sizes.sampled_at|timesince_or_seconds }} ago</div>
                     {% else %}
                     <p class="text-muted small mb-0">Not collected.</p>
@@ -182,23 +187,38 @@
         <div class="card-header bg-white d-flex justify-content-between align-items-center">
             <span class="fw-semibold">Largest Tables</span>
             {% if table_sizes %}
-            <span class="text-muted small">Sampled every {{ table_sizes.interval_label }}, last {{ table_sizes.sampled_at|timesince_or_seconds }} ago</span>
+            <span class="text-muted small">{% if table_sizes.growth_since %}Growth over the last {{ table_sizes.growth_since|timesince_or_seconds }}. {% endif %}Sampled every {{ table_sizes.interval_label }}, last {{ table_sizes.sampled_at|timesince_or_seconds }} ago</span>
             {% endif %}
         </div>
         <div class="card-body p-0">
             {% if table_sizes.rows %}
             <table class="table table-sm mb-0 small">
+                <thead>
+                    <tr class="text-muted">
+                        <th class="ps-3 fw-normal">Table</th>
+                        <th></th>
+                        <th class="text-end fw-normal">Share</th>
+                        <th class="text-end fw-normal">Size</th>
+                        <th class="text-end fw-normal pe-3" colspan="2">Growth</th>
+                    </tr>
+                </thead>
                 <tbody>
                     {% for table in table_sizes.rows %}
                     <tr>
                         <td class="ps-3">{{ table.name }}</td>
-                        <td style="width: 40%; vertical-align: middle;">
+                        <td style="width: 30%; vertical-align: middle;">
                             <div class="progress" style="height: 5px;">
                                 <div class="progress-bar bg-secondary" style="width: {{ table.percentage }}%;"></div>
                             </div>
                         </td>
                         <td class="text-end text-muted" style="width: 70px;">{{ table.percentage }}%</td>
-                        <td class="text-end fw-semibold pe-3" style="width: 110px;">{{ table.bytes|filesizeformat }}</td>
+                        <td class="text-end fw-semibold" style="width: 110px;">{{ table.bytes|filesizeformat }}</td>
+                        {% if table_sizes.growth_since %}
+                        <td class="text-end text-muted" style="width: 80px;">{% if table.is_new %}new{% elif table.growth_percentage != None %}{{ table.growth_percentage|stringformat:"+.1f" }}%{% endif %}</td>
+                        <td class="text-end fw-semibold pe-3" style="width: 110px;">{% if table.growth_bytes > 0 %}+{% endif %}{{ table.growth_bytes|filesizeformat }}</td>
+                        {% else %}
+                        <td class="text-end text-muted pe-3" colspan="2" style="width: 190px;">—</td>
+                        {% endif %}
                     </tr>
                     {% endfor %}
                 </tbody>
