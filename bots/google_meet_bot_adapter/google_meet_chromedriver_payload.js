@@ -258,6 +258,7 @@ class StyleManager {
 
         this.audioContext = null;
         this.audioTracks = [];
+        this.mixDestination = null;
         this.silenceThreshold = 0.5;
         this.silenceCheckInterval = null;
         this.memoryUsageCheckInterval = null;
@@ -269,6 +270,15 @@ class StyleManager {
 
     addAudioTrack(audioTrack) {
         this.audioTracks.push(audioTrack);
+        // If startSilenceDetection() already ran, patch the new track into the existing
+        // mix. Without this, every track Meet negotiates after the mix is built is
+        // collected here and never heard. Tracks added before it exists are picked up
+        // out of this.audioTracks when the mix is built.
+        if (this.audioContext && this.mixDestination) {
+            const source = this.audioContext.createMediaStreamSource(new MediaStream([audioTrack]));
+            source.connect(this.mixDestination);
+            this.audioSources.push(source);
+        }
     }
 
     checkAudioActivity() {
@@ -356,6 +366,7 @@ class StyleManager {
  
          // Create a destination node
          const destination = this.audioContext.createMediaStreamDestination();
+         this.mixDestination = destination;
  
          // Connect all sources to the destination
          this.audioSources.forEach(source => {
