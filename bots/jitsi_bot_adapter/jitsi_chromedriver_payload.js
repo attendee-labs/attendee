@@ -422,11 +422,18 @@
     window.ws = new WebSocketClient();
     window.styleManager = styleManager;
     window.sendChatMessage = sendChatMessage;
-    // BotOutputManager is defined in shared_chromedriver_payload.js. Mic callbacks use the
-    // app api; everything else stays a no-op (audio-only adapter).
+    // BotOutputManager is defined in shared_chromedriver_payload.js. Mic and webcam
+    // callbacks use the app api instead of DOM buttons. The webcam callbacks make the
+    // bot image work: displayImage() draws onto the shared canvas and then calls
+    // turnOnWebcam — unmuting video makes jitsi request getUserMedia({video}), which the
+    // BotOutputManager interceptor answers with the canvas track, so the bot image shows
+    // up as the bot's camera. Screenshare stays a no-op (audio-only adapter).
+    const settle = (promise) => Promise.resolve(promise).catch((error) => console.error('bot output toggle failed:', error));
     window.botOutputManager = new BotOutputManager({
-        turnOnMic: () => window.APP?.conference?.muteAudio(false),
-        turnOffMic: () => window.APP?.conference?.muteAudio(true),
+        turnOnMic: () => settle(window.APP?.conference?.muteAudio(false)),
+        turnOffMic: () => settle(window.APP?.conference?.muteAudio(true)),
+        turnOnWebcam: () => settle(window.APP?.conference?.muteVideo(false)),
+        turnOffWebcam: () => settle(window.APP?.conference?.muteVideo(true)),
     });
 
     setInterval(() => jitsiBridge.poll(), 1000);
