@@ -1123,6 +1123,31 @@ VOICE_AGENT_SETTINGS_SCHEMA = {
             "description": "If you want to start a voice agent or stream a webpage mid-meeting, but not at the start of the meeting, set this to true. This will reserve resources for the voice agent. You cannot start a voice agent mid-meeting if this is not set to true.",
             "default": False,
         },
+        "livekit": {
+            "type": "object",
+            "description": "LiveKit connection details for the voice agent. When provided, the bot connects to this LiveKit room instead of using server-side environment variables.",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "The LiveKit server URL the bot should connect to, e.g. wss://your-project.livekit.cloud.",
+                },
+                "token": {
+                    "type": "string",
+                    "description": "The LiveKit access token the bot should use to join the room.",
+                },
+                "participant_identity": {
+                    "type": "string",
+                    "description": "The identity of the LiveKit participant whose audio and video the bot should stream into the meeting. If not provided, the bot uses the first remote publisher it receives a track from.",
+                },
+                "match_participant_on_publish_on_behalf": {
+                    "type": "boolean",
+                    "description": "Controls how participant_identity is matched against the publishers in the room. When true, the bot streams tracks from publishers whose 'lk.publish_on_behalf' attribute equals participant_identity, which is how a LiveKit agent publishes on behalf of another participant. When false, the bot matches the publisher's own identity instead. Only applies to Google Meet.",
+                    "default": True,
+                },
+            },
+            "required": ["url", "token"],
+            "additionalProperties": False,
+        },
     },
     "additionalProperties": False,
 }
@@ -1350,6 +1375,15 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
             raise serializers.ValidationError({"screenshare_url": "URL is not allowed for voice agent. Please set the VOICE_AGENT_URL_PREFIX_ALLOWLIST environment variable to the comma-separated list of allowed URL prefixes."})
 
         if value.get("reserve_resources"):
+            meeting_url = self.initial_data.get("meeting_url")
+            meeting_type = meeting_type_from_url(meeting_url)
+            use_zoom_web_adapter = self.initial_data.get("zoom_settings", {}).get("sdk", "native") == "web"
+
+            if meeting_type == MeetingTypes.ZOOM and not use_zoom_web_adapter:
+                raise serializers.ValidationError("Voice agent is not supported for Zoom when using the native SDK. Please set 'zoom_settings.sdk' to 'web' in the bot creation request.")
+
+        # LiveKit settings are only consumed by the Zoom web and Google Meet adapters.
+        if value.get("livekit"):
             meeting_url = self.initial_data.get("meeting_url")
             meeting_type = meeting_type_from_url(meeting_url)
             use_zoom_web_adapter = self.initial_data.get("zoom_settings", {}).get("sdk", "native") == "web"

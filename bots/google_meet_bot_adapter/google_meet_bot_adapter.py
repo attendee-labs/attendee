@@ -20,9 +20,11 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
         create_google_meet_bot_login_session_callback: Callable[[], dict],
         modify_dom_for_video_recording: bool,
         ui_interaction_mode: str,
+        livekit_settings: dict | None = None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
+        self.livekit_settings = livekit_settings or {}
         self.google_meet_closed_captions_language = google_meet_closed_captions_language
         self.google_meet_bot_login_is_available = google_meet_bot_login_is_available
         self.google_meet_bot_login_should_be_used = google_meet_bot_login_should_be_used and google_meet_bot_login_is_available
@@ -93,6 +95,10 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
         return f"""
             window.googleMeetInitialData = {{
                 modifyDomForVideoRecording: {"true" if self.modify_dom_for_video_recording else "false"},
+                livekitUrl: {json.dumps(self.livekit_settings.get("url", ""))},
+                livekitToken: {json.dumps(self.livekit_settings.get("token", ""))},
+                livekitParticipantIdentity: {json.dumps(self.livekit_settings.get("participant_identity") or None)},
+                livekitMatchParticipantOnPublishOnBehalf: {json.dumps(self.livekit_settings.get("match_participant_on_publish_on_behalf", True))},
                 disableIncomingVideo: {"true" if self.disable_incoming_video else "false"},
             }}
         """
