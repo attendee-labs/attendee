@@ -166,6 +166,7 @@ This document lists all supported environment variables for the Attendee applica
 | `CHARGE_CREDITS_FOR_BOTS` | Boolean | `false` | Enable credit charging for bot operations. |
 | `CUSTOM_BOT_POD_SPEC_TYPES` | String | (Empty) | Comma-separated list of custom bot pod specification types. |
 | `ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME` | Boolean | `false` | Enforce domain allowlist in Chrome web bot. |
+| `JITSI_MEETING_DOMAINS` | String | `meet.jit.si` | Comma-separated list of domains whose meeting URLs are treated as Jitsi meetings (e.g. `kmeet.infomaniak.com,meet.hostpoint.ch,meet.jit.si`). Jitsi is domainless, so only explicitly listed domains are recognized. |
 | `MASK_TRANSCRIPT_IN_LOGS` | Boolean | `false` | Mask transcript content in application logs for privacy. |
 
 ---

@@ -1,7 +1,9 @@
 # test_meeting_utils.py
 import base64
 import json
+import os
 import unittest
+from unittest import mock
 
 from bots.meeting_url_utils import MeetingTypes, domain_and_subdomain_from_url, meeting_type_from_url, normalize_meeting_url, parse_zoom_join_url, parse_zoom_registrant_token, root_domain_from_url
 
@@ -100,6 +102,43 @@ class TestMeetingUrlUtils(unittest.TestCase):
         self.assertEqual(meeting_id, "111222333")
         self.assertEqual(password, "AbC9xYpQ2LmN7RkT5sVuH4ZbJe1DfG.1")
         self.assertEqual(registrant_token, "ZkPqN8f2LrS4XyT6wVaE9mHuCdJg5QbA1sDoRtUvWxY.DQkAAAAATESTTOKEN1234567890AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+
+    def test_jitsi_urls(self):
+        jitsi_domains = {"JITSI_MEETING_DOMAINS": "kmeet.infomaniak.com,meet.hostpoint.ch,meet.jit.si"}
+        with mock.patch.dict(os.environ, jitsi_domains):
+            self.assertEqual(meeting_type_from_url("https://kmeet.infomaniak.com/my-room"), MeetingTypes.JITSI)
+            self.assertEqual(meeting_type_from_url("https://meet.hostpoint.ch/my-room"), MeetingTypes.JITSI)
+            self.assertEqual(meeting_type_from_url("https://meet.jit.si/my-room"), MeetingTypes.JITSI)
+            self.assertEqual(meeting_type_from_url("https://KMEET.INFOMANIAK.COM/my-room"), MeetingTypes.JITSI)
+
+            # Query parameters and #config fragments are stripped from the normalized URL
+            self.assertEqual(normalize_meeting_url("https://kmeet.infomaniak.com/my-room#config.startWithAudioMuted=true")[1], "https://kmeet.infomaniak.com/my-room")
+            self.assertEqual(normalize_meeting_url("https://kmeet.infomaniak.com/my-room?jwt=abc")[1], "https://kmeet.infomaniak.com/my-room")
+            self.assertEqual(normalize_meeting_url("https://meet.jit.si/MyRoom123")[1], "https://meet.jit.si/MyRoom123")
+
+            # A room name is required
+            self.assertIsNone(meeting_type_from_url("https://kmeet.infomaniak.com/"))
+            self.assertIsNone(meeting_type_from_url("https://kmeet.infomaniak.com"))
+
+            # Domains not in the configured list are not treated as Jitsi
+            self.assertIsNone(meeting_type_from_url("https://jitsi.example.com/my-room"))
+
+    def test_jitsi_domains_env_override(self):
+        # Default only contains meet.jit.si
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("JITSI_MEETING_DOMAINS", None)
+            self.assertEqual(meeting_type_from_url("https://meet.jit.si/my-room"), MeetingTypes.JITSI)
+            self.assertIsNone(meeting_type_from_url("https://kmeet.infomaniak.com/my-room"))
+
+        # Overriding the env var replaces the domain list
+        with mock.patch.dict(os.environ, {"JITSI_MEETING_DOMAINS": "jitsi.example.com"}):
+            self.assertEqual(meeting_type_from_url("https://jitsi.example.com/room1"), MeetingTypes.JITSI)
+            self.assertEqual(normalize_meeting_url("https://jitsi.example.com/room1")[1], "https://jitsi.example.com/room1")
+            self.assertIsNone(meeting_type_from_url("https://meet.jit.si/my-room"))
+
+        # Platform domains always win over the jitsi domain list
+        with mock.patch.dict(os.environ, {"JITSI_MEETING_DOMAINS": "meet.google.com"}):
+            self.assertEqual(meeting_type_from_url("https://meet.google.com/abc-defg-hij"), MeetingTypes.GOOGLE_MEET)
 
 
 if __name__ == "__main__":

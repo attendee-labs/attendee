@@ -22,10 +22,10 @@ jobs:
             test_args: "--tag zoom_tests"
           - test_suite: google_meet
             test_args: "--tag google_meet_tests"
-          - test_suite: teams_and_zoom_web
-            test_args: "--tag teams_tests --tag zoom_web_tests"
+          - test_suite: teams_zoom_web_and_jitsi
+            test_args: "--tag teams_tests --tag zoom_web_tests --tag jitsi_tests"
           - test_suite: others
-            test_args: "--exclude-tag zoom_tests --exclude-tag google_meet_tests --exclude-tag teams_tests --exclude-tag zoom_web_tests"
+            test_args: "--exclude-tag zoom_tests --exclude-tag google_meet_tests --exclude-tag teams_tests --exclude-tag zoom_web_tests --exclude-tag jitsi_tests"
 
     services:
       postgres:

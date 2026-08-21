@@ -233,6 +233,7 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
     google_meet_settings = serializer.validated_data["google_meet_settings"]
     teams_settings = serializer.validated_data["teams_settings"]
     zoom_settings = serializer.validated_data["zoom_settings"]
+    jitsi_settings = serializer.validated_data["jitsi_settings"]
     bot_image = serializer.validated_data["bot_image"]
     bot_chat_message = serializer.validated_data["bot_chat_message"]
     metadata = serializer.validated_data["metadata"]
@@ -263,6 +264,7 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
         "google_meet_settings": google_meet_settings,
         "teams_settings": teams_settings,
         "zoom_settings": zoom_settings,
+        "jitsi_settings": jitsi_settings,
         "websocket_settings": websocket_settings,
         "callback_settings": callback_settings,
         "external_media_storage_settings": external_media_storage_settings,

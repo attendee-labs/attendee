@@ -2759,6 +2759,20 @@ components:
             login_mode: always
             login_group_name: null
           description: The Microsoft Teams-specific settings for the bot.
+        jitsi_settings:
+          type: object
+          properties:
+            room_password:
+              type:
+              - string
+              - 'null'
+              description: Password for the Jitsi room, if the room is password-protected.
+                Also used to bypass the lobby if one is enabled.
+              default: null
+          required: []
+          additionalProperties: false
+          default: {}
+          description: The Jitsi-specific settings for the bot.
         zoom_settings:
           type: object
           properties:
