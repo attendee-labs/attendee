@@ -21,6 +21,7 @@ from bots.automatic_leave_configuration import AutomaticLeaveConfiguration
 from bots.automatic_leave_utils import participant_is_another_bot
 from bots.bot_adapter import BotAdapter
 from bots.models import ParticipantEventTypes, RecordingViews
+from bots.paused_caption_filter import PausedCaptionFilter
 from bots.per_participant_realtime_video_configuration import PerParticipantRealtimeVideoConfiguration
 from bots.utils import half_ceil, scale_i420
 
@@ -117,6 +118,7 @@ class WebBotAdapter(BotAdapter):
         self.ready_to_send_chat_messages = False
 
         self.recording_paused = False
+        self.paused_caption_filter = PausedCaptionFilter()
 
     def pause_recording(self):
         self.recording_paused = True
@@ -337,7 +339,8 @@ class WebBotAdapter(BotAdapter):
         self.subclass_specific_handle_failed_to_join(reason)
 
     def handle_caption_update(self, json_data):
-        if self.recording_paused:
+        # Segments that carry speech from a pause stay dropped after resume, too.
+        if self.paused_caption_filter.should_drop(json_data["caption"], self.recording_paused):
             return
 
         # Count a caption as audio activity
