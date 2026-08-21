@@ -187,7 +187,7 @@
         <div class="card-header bg-white d-flex justify-content-between align-items-center">
             <span class="fw-semibold">Largest Tables</span>
             {% if table_sizes %}
-            <span class="text-muted small">{% if table_sizes.growth_since %}Growth over the last {{ table_sizes.growth_since|timesince_or_seconds }}. {% endif %}Sampled every {{ table_sizes.interval_label }}, last {{ table_sizes.sampled_at|timesince_or_seconds }} ago</span>
+            <span class="text-muted small">{% if table_sizes.growth_since %}Growth over the last {{ table_sizes.growth_since|timesince_rounded }}. {% endif %}Sampled every {{ table_sizes.interval_label }}, last {{ table_sizes.sampled_at|timesince_or_seconds }} ago</span>
             {% endif %}
         </div>
         <div class="card-body p-0">

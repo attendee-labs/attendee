@@ -25,6 +25,21 @@ def timesince_or_seconds(value, now=None):
 
 
 @register.filter
+def timesince_rounded(value, now=None):
+    """Like timesince_or_seconds, but rounds to a single unit so labels stay short (e.g. "7 hours")."""
+    if not value:
+        return ""
+    if now is None:
+        now = timezone.now() if timezone.is_aware(value) else datetime.now()
+    seconds = int((now - value).total_seconds())
+    for unit, unit_seconds in (("day", 86400), ("hour", 3600), ("minute", 60)):
+        if seconds >= unit_seconds:
+            amount = round(seconds / unit_seconds)
+            return f"{amount} {unit}{'' if amount == 1 else 's'}"
+    return f"{seconds} second{'' if seconds == 1 else 's'}"
+
+
+@register.filter
 def modulo(num, val):
     return int(num) % val
 
