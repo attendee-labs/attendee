@@ -227,7 +227,7 @@ class InstanceHealthSnapshotTaker:
 
     def _get_redis_client(self):
         if self._redis_client is None:
-            self._redis_client = redis.from_url(settings.REDIS_URL_WITH_PARAMS)
+            self._redis_client = redis.from_url(settings.REDIS_URL_WITH_PARAMS, socket_timeout=2, socket_connect_timeout=2)
         return self._redis_client
 
     def save_snapshot_if_needed(self):
