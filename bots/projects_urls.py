@@ -127,6 +127,11 @@ urlpatterns = [
         name="project-usage",
     ),
     path(
+        "<str:object_id>/instance-health/",
+        projects_views.ProjectInstanceHealthView.as_view(),
+        name="project-instance-health",
+    ),
+    path(
         "<str:object_id>/billing/",
         projects_views.ProjectBillingView.as_view(),
         name="project-billing",

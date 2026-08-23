@@ -3262,3 +3262,14 @@ class BotResourceSnapshot(models.Model):
 
     def __str__(self):
         return f"Resource snapshot for {self.bot.object_id} at {self.created_at}"
+
+
+class InstanceHealthSnapshot(models.Model):
+    """A point-in-time sample of instance-wide health: Celery queue depths, database
+    connection usage and (sampled less often) per-table sizes. Written by the scheduler."""
+
+    data = models.JSONField(null=False, default=dict)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    def __str__(self):
+        return f"Instance health snapshot at {self.created_at}"

@@ -206,6 +206,17 @@
                                 onclick="setActiveLink(this)">
                                     <i class="bi bi-bar-chart"></i> Usage
                                 </a>
+                                {% if can_view_instance_health %}
+                                <a class="nav-link ps-4"
+                                hx-get="{% url 'projects:project-instance-health' project.object_id %}"
+                                hx-select="#content"
+                                hx-target="#content"
+                                hx-swap="outerHTML"
+                                hx-push-url="true"
+                                onclick="setActiveLink(this)">
+                                    <i class="bi bi-heart-pulse"></i> Instance Health
+                                </a>
+                                {% endif %}
                             </div>
                         </div>
 

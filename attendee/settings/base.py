@@ -373,6 +373,9 @@ BYPASS_MAILGUN_VALIDATION_SUBSTRING = os.getenv("BYPASS_MAILGUN_VALIDATION_SUBST
 # After the bots recording exceeds this size, we will degrade the video recording to black to conserve storage space.
 BOT_RECORDING_VIDEO_DEGRADE_THRESHOLD_BYTES = int(os.getenv("BOT_RECORDING_VIDEO_DEGRADE_THRESHOLD_BYTES")) if os.getenv("BOT_RECORDING_VIDEO_DEGRADE_THRESHOLD_BYTES") else None
 
+SAVE_INSTANCE_HEALTH_SNAPSHOTS = os.getenv("SAVE_INSTANCE_HEALTH_SNAPSHOTS", "false") == "true"
+INSTANCE_HEALTH_ONLY_VIEWABLE_BY_SUPERUSERS = os.getenv("INSTANCE_HEALTH_ONLY_VIEWABLE_BY_SUPERUSERS", "false") == "true"
+
 # Content Security Policy
 if os.getenv("ENABLE_CSP", "false") == "true":
     _csp_media_src = [d for d in os.getenv("CSP_MEDIA_SRC", "").split(",") if d]
