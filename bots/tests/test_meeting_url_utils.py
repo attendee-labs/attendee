@@ -32,6 +32,53 @@ class TestMeetingUrlUtils(unittest.TestCase):
         self.assertEqual(meeting_type_from_url(teams_url_with_trailing_carat), MeetingTypes.TEAMS)
         self.assertEqual(normalize_meeting_url(teams_url_with_trailing_carat)[1], 'https://teams.microsoft.com/l/meetup-join/19:meeting_NjnnnnnnnnnnnnnnnnnnnnnnnnnnMzctODQwYTBmMDQ4MzQ2@thread.v2/0?context={"Tid":"b8291b4b-aaaa-bbbb-8a00-9d5fc37b9a77","Oid":"216d2e11-45cc-9999-9689-d05554e5c1d1"}')
 
+    # Not 100% sure that this behavior is desirable, but it is the current behavior, so we want to detect
+    # deviations from it: teams.live.com hosts get rewritten to teams.microsoft.com for meetup-join,
+    # launcher, and light-meetings URLs, but /meet/ URLs preserve the teams.live.com host.
+    def test_teams_live_meetup_join_normalizes_to_teams_microsoft_com(self):
+        teams_live_url = "https://teams.live.com/l/meetup-join/19%3ameeting_NjnnnnnnnnnnnnnnnnnnnnnnnnnnMzctODQwYTBmMDQ4MzQ2%40thread.v2/0?context=%7b%22Tid%22%3a%22b8291b4b-aaaa-bbbb-8a00-9d5fc37b9a77%22%2c%22Oid%22%3a%22216d2e11-45cc-9999-9689-d05554e5c1d1%22%7d"
+
+        self.assertEqual(
+            normalize_meeting_url(teams_live_url),
+            (
+                MeetingTypes.TEAMS,
+                'https://teams.microsoft.com/l/meetup-join/19:meeting_NjnnnnnnnnnnnnnnnnnnnnnnnnnnMzctODQwYTBmMDQ4MzQ2@thread.v2/0?context={"Tid":"b8291b4b-aaaa-bbbb-8a00-9d5fc37b9a77","Oid":"216d2e11-45cc-9999-9689-d05554e5c1d1"}',
+            ),
+        )
+
+        # A trailing carat should be stripped and the host still normalized to teams.microsoft.com
+        self.assertEqual(
+            normalize_meeting_url(teams_live_url + ">"),
+            (
+                MeetingTypes.TEAMS,
+                'https://teams.microsoft.com/l/meetup-join/19:meeting_NjnnnnnnnnnnnnnnnnnnnnnnnnnnMzctODQwYTBmMDQ4MzQ2@thread.v2/0?context={"Tid":"b8291b4b-aaaa-bbbb-8a00-9d5fc37b9a77","Oid":"216d2e11-45cc-9999-9689-d05554e5c1d1"}',
+            ),
+        )
+
+        # Launcher URLs on teams.live.com should also normalize the host to teams.microsoft.com
+        teams_live_launcher_url = "https://teams.live.com/dl/launcher/launcher.html?url=/_#/l/meetup-join/19:meeting_NDQ3Y2Q1NDEtY2I5Ni00MzEyLTgzfffffffffffffffffffffffffff@thread.v2/0?context=%7b%22Tid%22%3a%22b00367e2-aaaa-bbbb-cccc-7245d45c0947%22%2c%22Oid%22%3a%2266666666-3a9d-441a-892d-55555555555%22%7d&anon=true&type=meetup-join"
+        self.assertEqual(
+            normalize_meeting_url(teams_live_launcher_url),
+            (
+                MeetingTypes.TEAMS,
+                'https://teams.microsoft.com/l/meetup-join/19:meeting_NDQ3Y2Q1NDEtY2I5Ni00MzEyLTgzfffffffffffffffffffffffffff@thread.v2/0?context={"Tid":"b00367e2-aaaa-bbbb-cccc-7245d45c0947","Oid":"66666666-3a9d-441a-892d-55555555555"}',
+            ),
+        )
+
+        # Light-meetings URLs on teams.live.com should also normalize the host to teams.microsoft.com
+        coord_json = {"conversationId": "19:meeting_ffffffffffffffffffffffffffffffffffffffffffffffff@thread.v2", "tenantId": "ffffffff-ffff-fff-ffff-6866ff300052", "organizerId": "ffffffff-ffff-4085-acbd-ffffffffffff", "messageId": "0"}
+        fake_coord = base64.b64encode(json.dumps(coord_json).encode("utf-8")).decode("utf-8").rstrip("=")
+        self.assertEqual(
+            normalize_meeting_url(f"https://teams.live.com/light-meetings/launch?agent=web&version=25072001100&coords={fake_coord}%3D&deeplinkId=0ac0a241-11111-111-8ddc-4a4b333dd286")[1],
+            "https://teams.microsoft.com/l/meetup-join/" + coord_json["conversationId"] + f"/0?context={json.dumps({'Tid': coord_json['tenantId'], 'Oid': coord_json['organizerId']}, separators=(',', ':'))}",
+        )
+
+        # In contrast, /meet/ URLs on teams.live.com preserve the teams.live.com host
+        self.assertEqual(
+            normalize_meeting_url("https://teams.live.com/meet/9876543210?p=abc"),
+            (MeetingTypes.TEAMS, "https://teams.live.com/meet/9876543210?p=abc"),
+        )
+
     def test_teams_gov_and_dod_hosts(self):
         # The gov and dod clouds should be recognized as Teams meetings
         self.assertEqual(domain_and_subdomain_from_url("https://gov.teams.microsoft.us/l/meetup-join/..."), "gov.teams.microsoft.us")

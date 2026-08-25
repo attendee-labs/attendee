@@ -77,6 +77,12 @@ def normalize_teams_url(conversation_id, message_id, tenant_id, organizer_id, ho
     return f'https://{host}/l/meetup-join/{conversation_id}/{message_id}?context={{"Tid":"{tenant_id}","Oid":"{organizer_id}"}}'
 
 
+def normalized_teams_host(host):
+    if host == "teams.live.com":
+        return "teams.microsoft.com"
+    return host
+
+
 def normalize_meeting_url(url):
     if not url:
         return None, None
@@ -180,7 +186,7 @@ def normalize_meeting_url_raw(url):
             organizer_id = teams_match.group(4)
 
             # Construct normalized URL with extracted components, preserving the original host
-            return MeetingTypes.TEAMS, normalize_teams_url(conversation_id, message_id, tenant_id, organizer_id, host=domain_and_subdomain)
+            return MeetingTypes.TEAMS, normalize_teams_url(conversation_id, message_id, tenant_id, organizer_id, host=normalized_teams_host(domain_and_subdomain))
 
         # Handle Teams launcher URLs like:
         # https://teams.microsoft.com/dl/launcher/launcher.html?url=/_#/l/meetup-join/19:meeting_...@thread.v2/0?context={"Tid":"...","Oid":"..."}&...
@@ -193,7 +199,7 @@ def normalize_meeting_url_raw(url):
             organizer_id = teams_launcher_match.group(4)
 
             # Construct normalized URL with extracted components, preserving the original host
-            return MeetingTypes.TEAMS, normalize_teams_url(conversation_id, message_id, tenant_id, organizer_id, host=domain_and_subdomain)
+            return MeetingTypes.TEAMS, normalize_teams_url(conversation_id, message_id, tenant_id, organizer_id, host=normalized_teams_host(domain_and_subdomain))
 
         # Handle Teams light meetings URLs with coordinates:
         # https://teams.microsoft.com/light-meetings/launch?agent=web&version=...&coords=<base64_encoded_json>&...
@@ -218,7 +224,7 @@ def normalize_meeting_url_raw(url):
 
                 if conversation_id and tenant_id and organizer_id:
                     # Construct normalized URL with extracted components, preserving the original host
-                    return MeetingTypes.TEAMS, normalize_teams_url(conversation_id, message_id, tenant_id, organizer_id, host=domain_and_subdomain)
+                    return MeetingTypes.TEAMS, normalize_teams_url(conversation_id, message_id, tenant_id, organizer_id, host=normalized_teams_host(domain_and_subdomain))
 
             except (ValueError, KeyError, json.JSONDecodeError):
                 # If decoding or parsing fails, continue to next pattern
