@@ -198,7 +198,7 @@ def normalize_meeting_url_raw(url):
             tenant_id = teams_launcher_match.group(3)
             organizer_id = teams_launcher_match.group(4)
 
-            # Construct normalized URL with extracted components, preserving the original host
+            # Construct normalized URL with extracted components, preserving the original host (except for teams.live.com)
             return MeetingTypes.TEAMS, normalize_teams_url(conversation_id, message_id, tenant_id, organizer_id, host=normalized_teams_host(domain_and_subdomain))
 
         # Handle Teams light meetings URLs with coordinates:
@@ -223,7 +223,7 @@ def normalize_meeting_url_raw(url):
                 message_id = coords_data.get("messageId", "0")  # Default to '0' if not present
 
                 if conversation_id and tenant_id and organizer_id:
-                    # Construct normalized URL with extracted components, preserving the original host
+                    # Construct normalized URL with extracted components, preserving the original host (except for teams.live.com)
                     return MeetingTypes.TEAMS, normalize_teams_url(conversation_id, message_id, tenant_id, organizer_id, host=normalized_teams_host(domain_and_subdomain))
 
             except (ValueError, KeyError, json.JSONDecodeError):
@@ -238,7 +238,7 @@ def normalize_meeting_url_raw(url):
             meeting_id = teams_live_meetings_match.group(2)
             passcode = teams_live_meetings_match.group(3)
 
-            # Create canonical URL format - using a consistent format that preserves the original host
+            # Create canonical URL format - using a consistent format that preserves the original host (except for teams.live.com)
             canonical_url = f"https://{host}/meet/{meeting_id}?p={passcode}"
             return MeetingTypes.TEAMS, canonical_url
 
