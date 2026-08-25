@@ -238,7 +238,7 @@ def normalize_meeting_url_raw(url):
             meeting_id = teams_live_meetings_match.group(2)
             passcode = teams_live_meetings_match.group(3)
 
-            # Create canonical URL format - using a consistent format that preserves the original host (except for teams.live.com)
+            # Create canonical URL format - using a consistent format that preserves the original host
             canonical_url = f"https://{host}/meet/{meeting_id}?p={passcode}"
             return MeetingTypes.TEAMS, canonical_url
 
