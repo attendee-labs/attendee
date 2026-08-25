@@ -32,6 +32,32 @@ class TestMeetingUrlUtils(unittest.TestCase):
         self.assertEqual(meeting_type_from_url(teams_url_with_trailing_carat), MeetingTypes.TEAMS)
         self.assertEqual(normalize_meeting_url(teams_url_with_trailing_carat)[1], 'https://teams.microsoft.com/l/meetup-join/19:meeting_NjnnnnnnnnnnnnnnnnnnnnnnnnnnMzctODQwYTBmMDQ4MzQ2@thread.v2/0?context={"Tid":"b8291b4b-aaaa-bbbb-8a00-9d5fc37b9a77","Oid":"216d2e11-45cc-9999-9689-d05554e5c1d1"}')
 
+    def test_teams_gov_and_dod_hosts(self):
+        # The gov and dod clouds should be recognized as Teams meetings
+        self.assertEqual(domain_and_subdomain_from_url("https://gov.teams.microsoft.us/l/meetup-join/..."), "gov.teams.microsoft.us")
+        self.assertEqual(domain_and_subdomain_from_url("https://dod.teams.microsoft.us/l/meetup-join/..."), "dod.teams.microsoft.us")
+
+        # meetup-join URLs on the gov/dod clouds should preserve the original host during normalization
+        gov_meetup_url = "https://gov.teams.microsoft.us/l/meetup-join/19%3ameeting_NjnnnnnnnnnnnnnnnnnnnnnnnnnnMzctODQwYTBmMDQ4MzQ2%40thread.v2/0?context=%7b%22Tid%22%3a%22b8291b4b-aaaa-bbbb-8a00-9d5fc37b9a77%22%2c%22Oid%22%3a%22216d2e11-45cc-9999-9689-d05554e5c1d1%22%7d"
+        self.assertEqual(meeting_type_from_url(gov_meetup_url), MeetingTypes.TEAMS)
+        self.assertEqual(normalize_meeting_url(gov_meetup_url)[1], 'https://gov.teams.microsoft.us/l/meetup-join/19:meeting_NjnnnnnnnnnnnnnnnnnnnnnnnnnnMzctODQwYTBmMDQ4MzQ2@thread.v2/0?context={"Tid":"b8291b4b-aaaa-bbbb-8a00-9d5fc37b9a77","Oid":"216d2e11-45cc-9999-9689-d05554e5c1d1"}')
+
+        dod_meetup_url = "https://dod.teams.microsoft.us/l/meetup-join/19%3ameeting_NjnnnnnnnnnnnnnnnnnnnnnnnnnnMzctODQwYTBmMDQ4MzQ2%40thread.v2/0?context=%7b%22Tid%22%3a%22b8291b4b-aaaa-bbbb-8a00-9d5fc37b9a77%22%2c%22Oid%22%3a%22216d2e11-45cc-9999-9689-d05554e5c1d1%22%7d"
+        self.assertEqual(normalize_meeting_url(dod_meetup_url)[1], 'https://dod.teams.microsoft.us/l/meetup-join/19:meeting_NjnnnnnnnnnnnnnnnnnnnnnnnnnnMzctODQwYTBmMDQ4MzQ2@thread.v2/0?context={"Tid":"b8291b4b-aaaa-bbbb-8a00-9d5fc37b9a77","Oid":"216d2e11-45cc-9999-9689-d05554e5c1d1"}')
+
+        # /meet/ URLs on the gov/dod clouds should be recognized and preserve the host
+        self.assertEqual(meeting_type_from_url("https://gov.teams.microsoft.us/meet/9876543210?p=abc"), MeetingTypes.TEAMS)
+        self.assertEqual(normalize_meeting_url("https://gov.teams.microsoft.us/meet/9876543210?p=abc")[1], "https://gov.teams.microsoft.us/meet/9876543210?p=abc")
+        self.assertEqual(normalize_meeting_url("https://dod.teams.microsoft.us/meet/9876543210?p=abc>")[1], "https://dod.teams.microsoft.us/meet/9876543210?p=abc")
+
+        # Launcher URLs on the gov cloud should normalize to the preserved host
+        self.assertEqual(normalize_meeting_url("https://gov.teams.microsoft.us/dl/launcher/launcher.html?url=/_#/l/meetup-join/19:meeting_NDQ3Y2Q1NDEtY2I5Ni00MzEyLTgzfffffffffffffffffffffffffff@thread.v2/0?context=%7b%22Tid%22%3a%22b00367e2-aaaa-bbbb-cccc-7245d45c0947%22%2c%22Oid%22%3a%2266666666-3a9d-441a-892d-55555555555%22%7d&anon=true&type=meetup-join")[1], 'https://gov.teams.microsoft.us/l/meetup-join/19:meeting_NDQ3Y2Q1NDEtY2I5Ni00MzEyLTgzfffffffffffffffffffffffffff@thread.v2/0?context={"Tid":"b00367e2-aaaa-bbbb-cccc-7245d45c0947","Oid":"66666666-3a9d-441a-892d-55555555555"}')
+
+        # Light meetings URLs on the dod cloud should preserve the host in the normalized URL
+        coord_json = {"conversationId": "19:meeting_ffffffffffffffffffffffffffffffffffffffffffffffff@thread.v2", "tenantId": "ffffffff-ffff-fff-ffff-6866ff300052", "organizerId": "ffffffff-ffff-4085-acbd-ffffffffffff", "messageId": "0"}
+        fake_coord = base64.b64encode(json.dumps(coord_json).encode("utf-8")).decode("utf-8").rstrip("=")
+        self.assertEqual(normalize_meeting_url(f"https://dod.teams.microsoft.us/light-meetings/launch?agent=web&version=25072001100&coords={fake_coord}%3D&deeplinkId=0ac0a241-11111-111-8ddc-4a4b333dd286")[1], "https://dod.teams.microsoft.us/l/meetup-join/" + coord_json["conversationId"] + f"/0?context={json.dumps({'Tid': coord_json['tenantId'], 'Oid': coord_json['organizerId']}, separators=(',', ':'))}")
+
     def test_normalize_meeting_url(self):
         self.assertEqual(normalize_meeting_url("https://zoom.us/j/123456789")[1], "https://zoom.us/j/123456789")
         self.assertEqual(normalize_meeting_url("zoom.us/j/123456789")[1], "https://zoom.us/j/123456789")
