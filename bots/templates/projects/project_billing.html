@@ -170,7 +170,16 @@
     </div>
 
     <h4>Transaction History</h4>
-    
+
+    <div class="btn-group btn-group-sm mb-3" role="group" aria-label="Filter transactions">
+        <a href="{% url 'projects:project-billing' project.object_id %}"
+           class="btn btn-outline-secondary {% if not filter_params.transaction_type %}active{% endif %}">All</a>
+        <a href="{% url 'projects:project-billing' project.object_id %}?transaction_type=added"
+           class="btn btn-outline-secondary {% if filter_params.transaction_type == 'added' %}active{% endif %}">Credits added</a>
+        <a href="{% url 'projects:project-billing' project.object_id %}?transaction_type=deducted"
+           class="btn btn-outline-secondary {% if filter_params.transaction_type == 'deducted' %}active{% endif %}">Credits used</a>
+    </div>
+
     {% if transactions %}
     <div class="table-responsive">
         <table class="table">
@@ -213,10 +222,10 @@
         <ul class="pagination justify-content-center">
             {% if page_obj.has_previous %}
             <li class="page-item">
-                <a class="page-link" href="?page=1">&laquo; First</a>
+                <a class="page-link" href="?page=1{% if filter_params.transaction_type %}&transaction_type={{ filter_params.transaction_type }}{% endif %}">&laquo; First</a>
             </li>
             <li class="page-item">
-                <a class="page-link" href="?page={{ page_obj.previous_page_number }}">Previous</a>
+                <a class="page-link" href="?page={{ page_obj.previous_page_number }}{% if filter_params.transaction_type %}&transaction_type={{ filter_params.transaction_type }}{% endif %}">Previous</a>
             </li>
             {% endif %}
 
@@ -227,17 +236,17 @@
                 </li>
                 {% elif i > page_obj.number|add:'-3' and i < page_obj.number|add:'3' %}
                 <li class="page-item">
-                    <a class="page-link" href="?page={{ i }}">{{ i }}</a>
+                    <a class="page-link" href="?page={{ i }}{% if filter_params.transaction_type %}&transaction_type={{ filter_params.transaction_type }}{% endif %}">{{ i }}</a>
                 </li>
                 {% endif %}
             {% endfor %}
 
             {% if page_obj.has_next %}
             <li class="page-item">
-                <a class="page-link" href="?page={{ page_obj.next_page_number }}">Next</a>
+                <a class="page-link" href="?page={{ page_obj.next_page_number }}{% if filter_params.transaction_type %}&transaction_type={{ filter_params.transaction_type }}{% endif %}">Next</a>
             </li>
             <li class="page-item">
-                <a class="page-link" href="?page={{ paginator.num_pages }}">Last &raquo;</a>
+                <a class="page-link" href="?page={{ paginator.num_pages }}{% if filter_params.transaction_type %}&transaction_type={{ filter_params.transaction_type }}{% endif %}">Last &raquo;</a>
             </li>
             {% endif %}
         </ul>
@@ -246,7 +255,11 @@
     
     {% else %}
     <div class="alert alert-info">
-        No transaction history available.
+        {% if filter_params.transaction_type %}
+            No transactions found matching the current filter.
+        {% else %}
+            No transaction history available.
+        {% endif %}
     </div>
     {% endif %}
 </div>
