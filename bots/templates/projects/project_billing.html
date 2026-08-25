@@ -175,9 +175,9 @@
         <a href="{% url 'projects:project-billing' project.object_id %}"
            class="btn btn-outline-secondary {% if not filter_params.transaction_type %}active{% endif %}">All</a>
         <a href="{% url 'projects:project-billing' project.object_id %}?transaction_type=added"
-           class="btn btn-outline-secondary {% if filter_params.transaction_type == 'added' %}active{% endif %}">Credits added</a>
+           class="btn btn-outline-secondary {% if filter_params.transaction_type == 'added' %}active{% endif %}">Added</a>
         <a href="{% url 'projects:project-billing' project.object_id %}?transaction_type=deducted"
-           class="btn btn-outline-secondary {% if filter_params.transaction_type == 'deducted' %}active{% endif %}">Credits used</a>
+           class="btn btn-outline-secondary {% if filter_params.transaction_type == 'deducted' %}active{% endif %}">Deducted</a>
     </div>
 
     {% if transactions %}
