@@ -653,6 +653,7 @@ BOT_RECORDING_SETTINGS_DEFAULT_VALUES = {
     "format": RecordingFormats.MP4,
     "view": RecordingViews.SPEAKER_VIEW,
     "resolution": RecordingResolutions.HD_1080P,
+    "record_chat_messages": True,
     "record_chat_messages_when_paused": False,
     "record_async_transcription_audio_chunks": False,
     "record_participant_speech_start_stop_events": False,
@@ -674,9 +675,14 @@ BOT_RECORDING_SETTINGS_SCHEMA = {
             "description": "The resolution to use for the recording. The supported resolutions are '1080p' and '720p'. Defaults to '1080p'.",
             "enum": RecordingResolutions.values,
         },
+        "record_chat_messages": {
+            "type": "boolean",
+            "description": "Whether to record chat messages from meeting participants. Defaults to true.",
+            "default": True,
+        },
         "record_chat_messages_when_paused": {
             "type": "boolean",
-            "description": "Whether to record chat messages even when the recording is paused. Defaults to false.",
+            "description": "Whether to record chat messages even when the recording is paused. Ignored when record_chat_messages is false. Defaults to false.",
             "default": False,
         },
         "record_async_transcription_audio_chunks": {

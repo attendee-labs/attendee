@@ -907,6 +907,9 @@ class ChatMessageManager {
     }
 
     handleChatMessage(chatMessageRaw) {
+        if (!window.initialData.collectChatMessages)
+            return;
+
         try {
             const chatMessage = chatMessageRaw.chatMessage;
             console.log('handleChatMessage', chatMessage);
@@ -1713,6 +1716,11 @@ function createMessageDecoder(messageType) {
                 continue;
             }
 
+            if (!window.initialData.collectChatMessages && messageType.name === 'UserInfoListWrapperAndChatWrapper' && field.name === 'chatMessageWrapper') {
+                reader.skipType(tag & 7);
+                continue;
+            }
+
             let value;
             switch (field.type) {
                 case 'string':
@@ -1753,7 +1761,7 @@ const captionManager = new CaptionManager(ws);
 const videoTrackManager = new VideoTrackManager(ws);
 const styleManager = new StyleManager();
 const receiverManager = new ReceiverManager();
-const chatMessageManager = new ChatMessageManager(ws);
+const chatMessageManager = window.initialData.collectChatMessages ? new ChatMessageManager(ws) : null;
 const participantSpeechStartStopManager = new ParticipantSpeechStartStopManager();
 let rtpReceiverInterceptor = null;
 if (window.initialData.sendPerParticipantAudio || window.initialData.recordParticipantSpeechStartStopEvents) {
@@ -1813,10 +1821,12 @@ const handleCollectionEvent = (event) => {
     userManager.updateDeviceOutputs(deviceOutputInfoList);
   }
 
-  const chatMessageWrapper = collectionEvent.body.userInfoListWrapperAndChatWrapperWrapper?.userInfoListWrapperAndChatWrapper?.chatMessageWrapper;
-  if (chatMessageWrapper) {
-    for (const chatMessage of chatMessageWrapper) {
-        window.chatMessageManager?.handleChatMessage(chatMessage);
+  if (window.initialData.collectChatMessages) {
+    const chatMessageWrapper = collectionEvent.body.userInfoListWrapperAndChatWrapperWrapper?.userInfoListWrapperAndChatWrapper?.chatMessageWrapper;
+    if (chatMessageWrapper) {
+      for (const chatMessage of chatMessageWrapper) {
+          window.chatMessageManager?.handleChatMessage(chatMessage);
+      }
     }
   }
 

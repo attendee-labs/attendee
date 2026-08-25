@@ -123,6 +123,11 @@ class BotController:
     def should_modify_dom_for_video_recording_for_web_bots(self):
         return self.pipeline_configuration.record_video or self.pipeline_configuration.rtmp_stream_video
 
+    def get_upsert_chat_message_callback(self):
+        if not self.bot_in_db.record_chat_messages():
+            return None
+        return self.on_new_chat_message
+
     # Constructs the callback we'll use to receive per-participant audio chunks
     # For most cases, we'll feed them to the per-participant audio input manager which will transcribe them and store the audio chunks for post-meeting transcription
     # If per participant audio is being streamed via websocket, we'll send them to the websocket client
@@ -194,7 +199,7 @@ class BotController:
             add_mixed_audio_chunk_callback=self.add_mixed_audio_chunk_callback if self.pipeline_configuration.websocket_stream_audio else None,
             add_per_participant_video_frame_callback=self.add_per_participant_video_frame_callback if self.pipeline_configuration.websocket_stream_per_participant_video else None,
             upsert_caption_callback=self.closed_caption_manager.upsert_caption if self.save_utterances_for_closed_captions() else None,
-            upsert_chat_message_callback=self.on_new_chat_message,
+            upsert_chat_message_callback=self.get_upsert_chat_message_callback(),
             add_participant_event_callback=self.on_new_participant_event,
             automatic_leave_configuration=self.automatic_leave_configuration,
             per_participant_realtime_video_configuration=self.per_participant_realtime_video_configuration,
@@ -266,7 +271,7 @@ class BotController:
             add_mixed_audio_chunk_callback=self.add_mixed_audio_chunk_callback if self.pipeline_configuration.websocket_stream_audio else None,
             add_per_participant_video_frame_callback=self.add_per_participant_video_frame_callback if self.pipeline_configuration.websocket_stream_per_participant_video else None,
             upsert_caption_callback=self.closed_caption_manager.upsert_caption if self.save_utterances_for_closed_captions() else None,
-            upsert_chat_message_callback=self.on_new_chat_message,
+            upsert_chat_message_callback=self.get_upsert_chat_message_callback(),
             add_participant_event_callback=self.on_new_participant_event,
             automatic_leave_configuration=self.automatic_leave_configuration,
             per_participant_realtime_video_configuration=self.per_participant_realtime_video_configuration,
@@ -343,7 +348,7 @@ class BotController:
             add_mixed_audio_chunk_callback=self.add_mixed_audio_chunk_callback if self.pipeline_configuration.websocket_stream_audio else None,
             add_per_participant_video_frame_callback=self.add_per_participant_video_frame_callback if self.pipeline_configuration.websocket_stream_per_participant_video else None,
             upsert_caption_callback=self.closed_caption_manager.upsert_caption if self.save_utterances_for_closed_captions() else None,
-            upsert_chat_message_callback=self.on_new_chat_message,
+            upsert_chat_message_callback=self.get_upsert_chat_message_callback(),
             add_participant_event_callback=self.on_new_participant_event,
             automatic_leave_configuration=self.automatic_leave_configuration,
             per_participant_realtime_video_configuration=self.per_participant_realtime_video_configuration,
@@ -382,7 +387,7 @@ class BotController:
             wants_any_video_frames_callback=self.gstreamer_pipeline.wants_any_video_frames if self.gstreamer_pipeline else lambda: False,
             add_mixed_audio_chunk_callback=self.add_mixed_audio_chunk_callback,
             add_per_participant_video_frame_callback=self.add_per_participant_video_frame_callback if self.pipeline_configuration.websocket_stream_per_participant_video else None,
-            upsert_chat_message_callback=self.on_new_chat_message,
+            upsert_chat_message_callback=self.get_upsert_chat_message_callback(),
             add_participant_event_callback=self.on_new_participant_event,
             automatic_leave_configuration=self.automatic_leave_configuration,
             per_participant_realtime_video_configuration=self.per_participant_realtime_video_configuration,
@@ -411,7 +416,7 @@ class BotController:
             add_video_frame_callback=self.gstreamer_pipeline.on_new_video_frame if self.gstreamer_pipeline else None,
             wants_any_video_frames_callback=self.gstreamer_pipeline.wants_any_video_frames if self.gstreamer_pipeline else lambda: False,
             add_mixed_audio_chunk_callback=self.add_mixed_audio_chunk_callback,
-            upsert_chat_message_callback=self.on_new_chat_message,
+            upsert_chat_message_callback=self.get_upsert_chat_message_callback(),
             add_participant_event_callback=self.on_new_participant_event,
             video_frame_size=self.bot_in_db.recording_dimensions(),
         )
@@ -1535,6 +1540,8 @@ class BotController:
         self.create_utterance_from_audio_chunk(audio_chunk, participant, recording)
 
     def on_new_chat_message(self, chat_message):
+        if not self.bot_in_db.record_chat_messages():
+            return
         GLib.idle_add(lambda: self.upsert_chat_message(chat_message))
 
     def on_message_that_webpage_streamer_connection_can_start(self):
@@ -1601,6 +1608,9 @@ class BotController:
         return
 
     def upsert_chat_message(self, chat_message):
+        if not self.bot_in_db.record_chat_messages():
+            return
+
         logger.info(f"Upserting chat message: {chat_message}")
 
         participant = self.adapter.get_participant(chat_message["participant_uuid"])

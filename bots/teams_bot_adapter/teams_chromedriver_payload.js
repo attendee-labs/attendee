@@ -1254,6 +1254,9 @@ class ChatMessageManager {
     }
 
     handleChatMessage(chatMessage) {
+        if (!window.initialData.collectChatMessages)
+            return;
+
         try {
             if (!chatMessage.clientMessageId)
                 return;
@@ -2200,7 +2203,7 @@ window.ws = ws;
 const userManager = new UserManager(ws);
 window.userManager = userManager;
 
-const chatMessageManager = new ChatMessageManager(ws);
+const chatMessageManager = window.initialData.collectChatMessages ? new ChatMessageManager(ws) : null;
 window.chatMessageManager = chatMessageManager;
 
 //const videoTrackManager = new VideoTrackManager(ws);
@@ -3470,7 +3473,7 @@ window.botOutputManager = botOutputManager;
             const bound = _bind.apply(this, [thisArg, ...args]);
             return function (...callArgs) {
                 const eventData = callArgs[0];
-                if (eventData?.data?.chatServiceBatchEvent)
+                if (window.initialData.collectChatMessages && eventData?.data?.chatServiceBatchEvent)
                 {
                     const batchEvents = eventData.data.chatServiceBatchEvent;
                     if (Array.isArray(batchEvents))

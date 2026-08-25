@@ -522,6 +522,9 @@ class ZoomBotAdapter(BotAdapter):
         builder.Clear()
 
     def on_chat_msg_notification_callback(self, chat_msg_info, content):
+        if self.upsert_chat_message_callback is None:
+            return
+
         if self.recording_is_paused and not self.record_chat_messages_when_paused:
             logger.info("on_chat_msg_notification_callback called but recording is paused")
             return
@@ -628,8 +631,10 @@ class ZoomBotAdapter(BotAdapter):
 
         # Chats controller
         self.chat_ctrl = self.meeting_service.GetMeetingChatController()
-        self.chat_ctrl_event = zoom.MeetingChatEventCallbacks(onChatMsgNotificationCallback=self.on_chat_msg_notification_callback)
-        self.chat_ctrl.SetEvent(self.chat_ctrl_event)
+        self.chat_ctrl_event = None
+        if self.upsert_chat_message_callback is not None:
+            self.chat_ctrl_event = zoom.MeetingChatEventCallbacks(onChatMsgNotificationCallback=self.on_chat_msg_notification_callback)
+            self.chat_ctrl.SetEvent(self.chat_ctrl_event)
         self.ready_to_send_chat_messages = True
         self.send_message_callback({"message": self.Messages.READY_TO_SEND_CHAT_MESSAGE})
 
