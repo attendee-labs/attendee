@@ -676,6 +676,7 @@ class ZoomRTMSAdapter(BotAdapter):
         self.black_frame = make_black_h264_annexb(self.video_frame_size[0], self.video_frame_size[1])
 
         self.black_frame_timer_id = None
+        self.black_frame_tick_counter = 0
         self.connected_at = None
         self.waiting_for_keyframe = False
         self.last_keyframe_received_at = time.time()
@@ -698,7 +699,9 @@ class ZoomRTMSAdapter(BotAdapter):
                     name_to_render = self.active_speaker_name or ""
 
                 self._on_video_frame(self.black_frame, name_to_render, -1)
-                logger.info("Sent black frame for name: %s", name_to_render)
+                self.black_frame_tick_counter += 1
+                if self.black_frame_tick_counter % 25 == 0:
+                    logger.info("Sent black frame for name: %s", name_to_render)
 
         # Keep the GLib timeout active until we've been cleaned up
         return not self.cleaned_up
