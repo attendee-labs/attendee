@@ -79,6 +79,12 @@ class TestMeetingUrlUtils(unittest.TestCase):
             (MeetingTypes.TEAMS, "https://teams.live.com/meet/9876543210?p=abc"),
         )
 
+        # Launcher-wrapped /meet/ URLs on teams.live.com also preserve the teams.live.com host
+        self.assertEqual(
+            normalize_meeting_url("https://teams.live.com/dl/launcher/launcher.html?url=/_#/meet/9876543210?p=abc&anon=true&type=meet")[1],
+            "https://teams.live.com/meet/9876543210?p=abc",
+        )
+
     def test_teams_gov_and_dod_hosts(self):
         # The gov and dod clouds should be recognized as Teams meetings
         self.assertEqual(domain_and_subdomain_from_url("https://gov.teams.microsoft.us/l/meetup-join/..."), "gov.teams.microsoft.us")
@@ -96,6 +102,12 @@ class TestMeetingUrlUtils(unittest.TestCase):
         self.assertEqual(meeting_type_from_url("https://gov.teams.microsoft.us/meet/9876543210?p=abc"), MeetingTypes.TEAMS)
         self.assertEqual(normalize_meeting_url("https://gov.teams.microsoft.us/meet/9876543210?p=abc")[1], "https://gov.teams.microsoft.us/meet/9876543210?p=abc")
         self.assertEqual(normalize_meeting_url("https://dod.teams.microsoft.us/meet/9876543210?p=abc>")[1], "https://dod.teams.microsoft.us/meet/9876543210?p=abc")
+
+        # Launcher-wrapped /meet/ URLs on the gov cloud should preserve the host
+        self.assertEqual(
+            normalize_meeting_url("https://gov.teams.microsoft.us/dl/launcher/launcher.html?url=/_#/meet/9876543210?p=abc&anon=true&type=meet")[1],
+            "https://gov.teams.microsoft.us/meet/9876543210?p=abc",
+        )
 
         # Launcher URLs on the gov cloud should normalize to the preserved host
         self.assertEqual(normalize_meeting_url("https://gov.teams.microsoft.us/dl/launcher/launcher.html?url=/_#/l/meetup-join/19:meeting_NDQ3Y2Q1NDEtY2I5Ni00MzEyLTgzfffffffffffffffffffffffffff@thread.v2/0?context=%7b%22Tid%22%3a%22b00367e2-aaaa-bbbb-cccc-7245d45c0947%22%2c%22Oid%22%3a%2266666666-3a9d-441a-892d-55555555555%22%7d&anon=true&type=meetup-join")[1], 'https://gov.teams.microsoft.us/l/meetup-join/19:meeting_NDQ3Y2Q1NDEtY2I5Ni00MzEyLTgzfffffffffffffffffffffffffff@thread.v2/0?context={"Tid":"b00367e2-aaaa-bbbb-cccc-7245d45c0947","Oid":"66666666-3a9d-441a-892d-55555555555"}')
