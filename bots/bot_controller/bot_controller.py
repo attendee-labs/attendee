@@ -936,6 +936,7 @@ class BotController:
         if self.bot_in_db.should_use_room_sync():
             # LiveKit is the only supported room sync provider for now
             # Fetch the credentials from the database
+            # TODO: fail gracefully, dont throw exception.
             livekit_credentials_record = Credentials.objects.filter(project=self.bot_in_db.project, credential_type=Credentials.CredentialTypes.LIVEKIT).first()
             if livekit_credentials_record is None:
                 raise Exception("Room sync is enabled but no LiveKit credentials are configured for this project")
@@ -1589,7 +1590,8 @@ class BotController:
             return
 
         # Mirror participant joins/leaves into the LiveKit room if room sync is enabled
-        if self.room_sync_client is not None:
+        # Don't sync the bot itself into the room
+        if self.room_sync_client is not None and not participant["participant_is_the_bot"]:
             self.room_sync_client.handle_participant_event(event, participant=participant)
 
         # Create participant record if it doesn't exist
