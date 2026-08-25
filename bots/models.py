@@ -1108,6 +1108,14 @@ class Bot(models.Model):
         websocket_per_participant_video_settings = websocket_settings.get("per_participant_video") or {}
         return websocket_per_participant_video_settings.get("screenshare_resolution", "360p")
 
+    def should_use_room_sync(self):
+        return bool(self.room_sync_livekit_room_name())
+
+    def room_sync_livekit_room_name(self):
+        room_sync_settings = self.settings.get("room_sync_settings") or {}
+        livekit_settings = room_sync_settings.get("livekit") or {}
+        return livekit_settings.get("room_name", None)
+
     def voice_agent_url(self):
         voice_agent_settings = self.settings.get("voice_agent_settings", {}) or {}
         return voice_agent_settings.get("url", None) or voice_agent_settings.get("screenshare_url", None)
@@ -2780,6 +2788,7 @@ class Credentials(models.Model):
         ELEVENLABS = 10, "ElevenLabs"
         KYUTAI = 11, "Kyutai"
         TEAMS_BOT_IDENTIFICATION_CREDENTIALS = 12, "Teams Bot Identification Credentials"
+        LIVEKIT = 13, "LiveKit"
 
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="credentials")
     credential_type = models.IntegerField(choices=CredentialTypes.choices, null=False)

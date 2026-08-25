@@ -17,6 +17,7 @@ from django.utils import timezone
 from bots.automatic_leave_configuration import AutomaticLeaveConfiguration
 from bots.bot_adapter import BotAdapter
 from bots.bot_controller.bot_websocket_client_manager import BotWebsocketClientManager
+from bots.bot_controller.livekit_room_sync_client import LivekitRoomSyncClient
 from bots.bot_controller.main_thread_executor import MainThreadExecutor
 from bots.bot_sso_utils import create_google_meet_sign_in_session
 from bots.bots_api_utils import BotCreationSource
@@ -124,29 +125,35 @@ class BotController:
         return self.pipeline_configuration.record_video or self.pipeline_configuration.rtmp_stream_video
 
     # Constructs the callback we'll use to receive per-participant audio chunks
-    # For most cases, we'll feed them to the per-participant audio input manager which will transcribe them and store the audio chunks for post-meeting transcription
-    # If per participant audio is being streamed via websocket, we'll send them to the websocket client
+    # A single chunk can be routed to multiple sinks at once:
+    #   - the per-participant audio input manager, which transcribes it and stores the audio chunks for post-meeting transcription
+    #   - the websocket client, when per-participant audio is being streamed via websocket
+    #   - the room sync client, when per-participant audio is being mirrored into a LiveKit room
     def get_per_participant_audio_chunk_callback(self):
-        pass_to_per_participant_audio_input_manager = self.should_capture_audio_chunks()
-        pass_to_websocket_client = self.pipeline_configuration.websocket_stream_per_participant_audio
+        sinks = []
 
-        if pass_to_per_participant_audio_input_manager and pass_to_websocket_client:
-            logger.info("In get_per_participant_audio_chunk_callback, passing per-participant audio chunk to both per-participant audio input manager and websocket client")
-            per_participant_audio_input_manager = self.per_participant_audio_input_manager()
+        if self.should_capture_audio_chunks():
+            sinks.append(("per-participant audio input manager", self.per_participant_audio_input_manager().add_chunk))
+        if self.pipeline_configuration.websocket_stream_per_participant_audio:
+            sinks.append(("websocket client", self.send_per_participant_audio_chunk_to_websocket_client))
+        if self.pipeline_configuration.room_sync_stream_per_participant_audio:
+            sinks.append(("room sync client", self.send_per_participant_audio_chunk_to_room_sync_client))
 
-            def send_to_both(speaker_id, chunk_time, chunk_bytes):
-                per_participant_audio_input_manager.add_chunk(speaker_id, chunk_time, chunk_bytes)
-                self.send_per_participant_audio_chunk_to_websocket_client(speaker_id, chunk_time, chunk_bytes)
+        if not sinks:
+            return None
 
-            return send_to_both
-        elif pass_to_per_participant_audio_input_manager:
-            logger.info("In get_per_participant_audio_chunk_callback, passing per-participant audio chunk to per-participant audio input manager")
-            return self.per_participant_audio_input_manager().add_chunk
-        elif pass_to_websocket_client:
-            logger.info("In get_per_participant_audio_chunk_callback, passing per-participant audio chunk to websocket client")
-            return self.send_per_participant_audio_chunk_to_websocket_client
+        logger.info(f"In get_per_participant_audio_chunk_callback, passing per-participant audio chunk to: {', '.join(name for name, _ in sinks)}")
 
-        return None
+        if len(sinks) == 1:
+            return sinks[0][1]
+
+        callbacks = [callback for _, callback in sinks]
+
+        def send_to_all(speaker_id, chunk_time, chunk_bytes):
+            for callback in callbacks:
+                callback(speaker_id, chunk_time, chunk_bytes)
+
+        return send_to_all
 
     def send_per_participant_audio_chunk_to_websocket_client(self, speaker_id, chunk_time, chunk_bytes):
         if not self.websocket_client_manager:
@@ -161,6 +168,12 @@ class BotController:
         )
 
         self.websocket_client_manager.send_per_participant_audio(payload)
+
+    def send_per_participant_audio_chunk_to_room_sync_client(self, speaker_id, chunk_time, chunk_bytes):
+        if not self.room_sync_client:
+            return
+
+        self.room_sync_client.send_audio_chunk(speaker_id, chunk_bytes)
 
     def create_google_meet_bot_login_session(self):
         if not self.bot_in_db.google_meet_use_bot_login():
@@ -671,6 +684,10 @@ class BotController:
             logger.info("Telling websocket client manager to cleanup...")
             self.websocket_client_manager.cleanup()
 
+        if self.room_sync_client:
+            logger.info("Telling room sync client to shutdown...")
+            self.room_sync_client.shutdown()
+
         if self.get_recording_file_location():
             self.upload_recording_to_external_media_storage_if_enabled()
 
@@ -740,19 +757,20 @@ class BotController:
         if self.bot_in_db.rtmp_destination_url():
             return PipelineConfiguration.rtmp_streaming_bot()
 
-        websocket_kwargs = dict(
+        optional_add_ons_kwargs = dict(
             websocket_stream_audio=bool(self.bot_in_db.websocket_audio_url()),
             websocket_stream_per_participant_audio=bool(self.bot_in_db.websocket_per_participant_audio_url()),
             websocket_stream_per_participant_video=bool(self.bot_in_db.websocket_per_participant_video_url()),
+            room_sync_stream_per_participant_audio=bool(self.bot_in_db.should_use_room_sync()),
         )
 
         if self.bot_in_db.recording_type() == RecordingTypes.AUDIO_ONLY:
-            return PipelineConfiguration.audio_recorder_bot(**websocket_kwargs)
+            return PipelineConfiguration.audio_recorder_bot(**optional_add_ons_kwargs)
 
         if self.bot_in_db.recording_type() == RecordingTypes.NO_RECORDING:
-            return PipelineConfiguration.pure_transcription_bot(**websocket_kwargs)
+            return PipelineConfiguration.pure_transcription_bot(**optional_add_ons_kwargs)
 
-        return PipelineConfiguration.recorder_bot(**websocket_kwargs)
+        return PipelineConfiguration.recorder_bot(**optional_add_ons_kwargs)
 
     def get_gstreamer_sink_type(self):
         if self.pipeline_configuration.rtmp_stream_audio or self.pipeline_configuration.rtmp_stream_video:
@@ -912,6 +930,24 @@ class BotController:
                 per_participant_audio_url=self.bot_in_db.websocket_per_participant_audio_url(),
                 per_participant_video_url=self.bot_in_db.websocket_per_participant_video_url(),
                 on_message_callback=self.on_message_from_websocket_audio,
+            )
+
+        self.room_sync_client = None
+        if self.bot_in_db.should_use_room_sync():
+            # LiveKit is the only supported room sync provider for now
+            # Fetch the credentials from the database
+            livekit_credentials_record = Credentials.objects.filter(project=self.bot_in_db.project, credential_type=Credentials.CredentialTypes.LIVEKIT).first()
+            if livekit_credentials_record is None:
+                raise Exception("Room sync is enabled but no LiveKit credentials are configured for this project")
+
+            livekit_credentials = livekit_credentials_record.get_credentials()
+            if not livekit_credentials or not livekit_credentials.get("url") or not livekit_credentials.get("api_key") or not livekit_credentials.get("api_secret"):
+                raise Exception("Room sync is enabled but the configured LiveKit credentials are missing a url, api_key or api_secret")
+
+            self.room_sync_client = LivekitRoomSyncClient(
+                room=self.bot_in_db.room_sync_livekit_room_name(),
+                credentials=livekit_credentials,
+                sample_rate=self.get_per_participant_audio_sample_rate(),
             )
 
         self.adapter = self.get_bot_adapter()
@@ -1551,6 +1587,10 @@ class BotController:
         if participant is None:
             logger.warning(f"Warning: No participant found for participant event: {event}")
             return
+
+        # Mirror participant joins/leaves into the LiveKit room if room sync is enabled
+        if self.room_sync_client is not None:
+            self.room_sync_client.handle_participant_event(event, participant=participant)
 
         # Create participant record if it doesn't exist
         participant, _ = Participant.objects.get_or_create(
