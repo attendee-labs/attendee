@@ -609,7 +609,10 @@ class WebBotAdapter(BotAdapter):
     def room_sync_js_library_paths(self, current_dir):
         if self.room_sync_source_participant_configuration:
             if self.room_sync_source_participant_configuration.livekit:
-                return [os.path.join(current_dir, "js_libs", "livekit-client", "2.21.0", "livekit-client.umd.min.js")]
+                return [
+                    os.path.join(current_dir, "js_libs", "livekit-client", "2.21.0", "livekit-client.umd.min.js"),
+                    os.path.join(current_dir, "js_libs", "livekit-client", "2.21.0", "livekit-client-adapter.js"),
+                ]
         return []
 
     def init_driver(self):
