@@ -2,11 +2,16 @@ import asyncio
 import logging
 import threading
 import time
+import uuid
 
 import jwt
 from livekit import rtc
 
 from bots.models import ParticipantEventTypes
+from bots.room_sync_source_participant_configuration import (
+    LivekitRoomSyncSourceParticipantConfiguration,
+    RoomSyncSourceParticipantConfiguration,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -39,13 +44,14 @@ class LivekitRoomSyncClient:
         - ``api_secret``: the LiveKit API secret used to mint per-participant tokens
     """
 
-    def __init__(self, room: str, credentials: dict, sample_rate: int = 48000, num_channels: int = 1):
+    def __init__(self, room: str, credentials: dict, sample_rate: int = 48000, num_channels: int = 1, source_participant: dict = None):
         self.room_name = room
         self.url = credentials["url"]
         self.api_key = credentials["api_key"]
         self.api_secret = credentials["api_secret"]
         self.sample_rate = sample_rate
         self.num_channels = num_channels
+        self.source_participant = source_participant
 
         # Maps the meeting participant uuid to its LiveKit rtc.Room connection.
         self._rooms: dict[str, rtc.Room] = {}
@@ -95,7 +101,7 @@ class LivekitRoomSyncClient:
     # Tokens are valid for 6 hours, which comfortably outlasts any meeting.
     TOKEN_TTL_SECONDS = 6 * 60 * 60
 
-    def _build_token(self, participant_uuid: str, name: str | None) -> str:
+    def _build_token(self, identity: str, name: str | None, video_grants: dict) -> str:
         """Mint a LiveKit access token.
 
         A LiveKit access token is a JWT signed with the API secret (HS256). The
@@ -103,29 +109,77 @@ class LivekitRoomSyncClient:
         room permissions live in the ``video`` grants claim (camelCase keys, per
         the LiveKit spec). This is a purely local signing operation, so no server
         round-trip is needed.
+
+        ``video_grants`` supplies the permission-specific grants (e.g.
+        ``canPublish``/``canSubscribe``/``hidden``); ``roomJoin`` and ``room`` are
+        always added since every token this client mints is for joining this room.
         """
         now = int(time.time())
         claims = {
             "iss": self.api_key,
-            "sub": participant_uuid,
-            "name": name or participant_uuid,
+            "sub": identity,
+            "name": name or identity,
             "nbf": now,
             "exp": now + self.TOKEN_TTL_SECONDS,
             "video": {
                 "roomJoin": True,
                 "room": self.room_name,
-                "canPublish": True,
-                "canSubscribe": False,
+                **video_grants,
             },
         }
         return jwt.encode(claims, self.api_secret, algorithm="HS256")
+
+    def _build_participant_token(self, participant_uuid: str, name: str | None) -> str:
+        """Mint a publish-only token for mirroring a meeting participant."""
+        return self._build_token(participant_uuid, name, {"canPublish": True, "canSubscribe": False})
+
+    def _build_source_subscriber_token(self, identity: str) -> str:
+        """Mint a hidden, subscribe-only LiveKit access token for the JS SDK.
+
+        The JS SDK runs inside the bot's browser and uses this token to connect
+        to the room and read the source participant's tracks. ``hidden`` keeps
+        this connection out of the room roster so it is not visible to the other
+        participants, and granting ``canSubscribe`` without ``canPublish`` limits
+        it to reading tracks rather than producing any of its own.
+        """
+        return self._build_token(identity, identity, {"canPublish": False, "canSubscribe": True, "hidden": True})
+
+    def build_source_participant_configuration(self) -> RoomSyncSourceParticipantConfiguration | None:
+        """Build the configuration the in-browser LiveKit JS SDK uses to subscribe
+        to the source participant's tracks.
+
+        Returns ``None`` when no source participant was configured, in which case
+        the bot only mirrors meeting participants into LiveKit and does not stream
+        any external media back into the meeting.
+
+        ``self.source_participant`` mirrors the ``source_participant`` object in
+        ROOM_SYNC_SETTINGS_SCHEMA and contains exactly one of ``identity`` or
+        ``publish_on_behalf`` identifying which participant to stream from. Those
+        are passed through unchanged so the JS SDK can select the participant,
+        while the ``url`` and hidden subscribe-only ``token`` are supplied by us.
+        """
+        if not self.source_participant:
+            return None
+
+        identity = self.source_participant.get("identity")
+        publish_on_behalf = self.source_participant.get("publish_on_behalf")
+
+        token_identity = f"attendee-source-subscriber-{uuid.uuid4().hex[:8]}"
+        livekit = LivekitRoomSyncSourceParticipantConfiguration(
+            room_name=self.room_name,
+            url=self.url,
+            token=self._build_source_subscriber_token(token_identity),
+            identity=identity,
+            publish_on_behalf=publish_on_behalf,
+        )
+        return RoomSyncSourceParticipantConfiguration(livekit=livekit)
 
     async def _add_participant(self, participant_uuid: str, name: str | None):
         if participant_uuid in self._rooms:
             logger.info(f"LiveKit participant already synced for {participant_uuid}, skipping add")
             return
 
-        token = self._build_token(participant_uuid, name)
+        token = self._build_participant_token(participant_uuid, name)
         room = rtc.Room()
 
         try:

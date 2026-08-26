@@ -22,6 +22,7 @@ from bots.automatic_leave_utils import participant_is_another_bot
 from bots.bot_adapter import BotAdapter
 from bots.models import ParticipantEventTypes, RecordingViews
 from bots.per_participant_realtime_video_configuration import PerParticipantRealtimeVideoConfiguration
+from bots.room_sync_source_participant_configuration import RoomSyncSourceParticipantConfiguration
 from bots.utils import half_ceil, scale_i420
 
 from .debug_screen_recorder import DebugScreenRecorder
@@ -56,6 +57,7 @@ class WebBotAdapter(BotAdapter):
         record_chat_messages_when_paused: bool,
         disable_incoming_video: bool,
         record_participant_speech_start_stop_events: bool,
+        room_sync_source_participant_configuration: RoomSyncSourceParticipantConfiguration,
     ):
         self.display_name = display_name
         self.send_message_callback = send_message_callback
@@ -106,6 +108,7 @@ class WebBotAdapter(BotAdapter):
 
         self.automatic_leave_configuration = automatic_leave_configuration
         self.per_participant_realtime_video_configuration = per_participant_realtime_video_configuration
+        self.room_sync_source_participant_configuration = room_sync_source_participant_configuration
 
         self.should_create_debug_recording = should_create_debug_recording
         self.debug_screen_recorder = None

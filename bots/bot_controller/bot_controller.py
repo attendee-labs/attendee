@@ -211,6 +211,7 @@ class BotController:
             add_participant_event_callback=self.on_new_participant_event,
             automatic_leave_configuration=self.automatic_leave_configuration,
             per_participant_realtime_video_configuration=self.per_participant_realtime_video_configuration,
+            room_sync_source_participant_configuration=self.get_room_sync_source_participant_configuration(),
             add_encoded_mp4_chunk_callback=None,
             recording_view=self.bot_in_db.recording_view(),
             google_meet_closed_captions_language=self.bot_in_db.transcription_settings.google_meet_closed_captions_language(),
@@ -542,9 +543,16 @@ class BotController:
 
         return LivekitRoomSyncClient(
             room=self.bot_in_db.room_sync_livekit_room_name(),
+            source_participant=self.bot_in_db.room_sync_livekit_source_participant(),
             credentials=livekit_credentials,
             sample_rate=self.get_per_participant_audio_sample_rate(),
         )
+
+    def get_room_sync_source_participant_configuration(self):
+        if not self.room_sync_client:
+            return None
+        
+        return self.room_sync_client.build_source_participant_configuration()
 
     def get_bot_adapter(self):
         meeting_type = self.get_meeting_type()

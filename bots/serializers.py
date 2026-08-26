@@ -1145,14 +1145,24 @@ ROOM_SYNC_SETTINGS_SCHEMA = {
                     "type": "string",
                     "description": "The name of the LiveKit room the bot should join.",
                 },
-                "participant_identity": {
-                    "type": "string",
-                    "description": "The identity of the LiveKit participant whose audio and video the bot should stream into the meeting. If not provided, the bot uses the first remote publisher it receives a track from.",
-                },
-                "match_participant_on_publish_on_behalf": {
-                    "type": "boolean",
-                    "description": "Controls how participant_identity is matched against the publishers in the room. When true, the bot streams tracks from publishers whose 'lk.publish_on_behalf' attribute equals participant_identity, which is how a LiveKit agent publishes on behalf of another participant. When false, the bot matches the publisher's own identity instead. Only applies to Google Meet.",
-                    "default": True,
+                "source_participant": {
+                    "type": "object",
+                    "description": "Identifies the LiveKit participant whose audio and video the bot should stream into the meeting. If omitted, no media will be streamed into the meeting. Exactly one of 'identity' or 'publish_on_behalf' must be provided.",
+                    "properties": {
+                        "identity": {
+                            "type": "string",
+                            "description": "The identity of the LiveKit participant to stream from.",
+                        },
+                        "publish_on_behalf": {
+                            "type": "string",
+                            "description": "The bot streams tracks from the first participant whose 'lk.publish_on_behalf' attribute equals this value, which is how a LiveKit agent publishes on behalf of another participant.",
+                        },
+                    },
+                    "oneOf": [
+                        {"required": ["identity"]},
+                        {"required": ["publish_on_behalf"]},
+                    ],
+                    "additionalProperties": False,
                 },
             },
             "required": ["room_name"],

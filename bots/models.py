@@ -1116,6 +1116,11 @@ class Bot(models.Model):
         livekit_settings = room_sync_settings.get("livekit") or {}
         return livekit_settings.get("room_name", None)
 
+    def room_sync_livekit_source_participant(self):
+        room_sync_settings = self.settings.get("room_sync_settings") or {}
+        livekit_settings = room_sync_settings.get("livekit") or {}
+        return livekit_settings.get("source_participant", None)
+
     def voice_agent_url(self):
         voice_agent_settings = self.settings.get("voice_agent_settings", {}) or {}
         return voice_agent_settings.get("url", None) or voice_agent_settings.get("screenshare_url", None)
