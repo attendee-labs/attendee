@@ -208,7 +208,7 @@ class LivekitRoomSyncClient:
             except Exception as e:
                 logger.exception(f"Failed to disconnect LiveKit participant for {participant_uuid}: {e}")
 
-    def shutdown(self):
+    def cleanup(self):
         """Disconnect all synced participants and stop the background loop."""
         try:
             future = self._run_coroutine(self._disconnect_all())

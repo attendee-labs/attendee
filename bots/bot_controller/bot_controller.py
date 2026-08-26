@@ -524,6 +524,28 @@ class BotController:
             return 0.9
         return 0.1
 
+    def get_room_sync_client(self):
+        if not self.bot_in_db.should_use_room_sync():
+            return None
+
+        # LiveKit is the only supported room sync provider for now
+
+        livekit_credentials_record = Credentials.objects.filter(project=self.bot_in_db.project, credential_type=Credentials.CredentialTypes.LIVEKIT).first()
+        if livekit_credentials_record is None:
+            logger.error("Room sync is enabled but no LiveKit credentials are configured for this project")
+            return None
+
+        livekit_credentials = livekit_credentials_record.get_credentials()
+        if not livekit_credentials or not livekit_credentials.get("url") or not livekit_credentials.get("api_key") or not livekit_credentials.get("api_secret"):
+            logger.error("Room sync is enabled but the configured LiveKit credentials are missing a url, api_key or api_secret")
+            return None
+
+        return LivekitRoomSyncClient(
+            room=self.bot_in_db.room_sync_livekit_room_name(),
+            credentials=livekit_credentials,
+            sample_rate=self.get_per_participant_audio_sample_rate(),
+        )
+
     def get_bot_adapter(self):
         meeting_type = self.get_meeting_type()
         if meeting_type == MeetingTypes.ZOOM:
@@ -686,7 +708,7 @@ class BotController:
 
         if self.room_sync_client:
             logger.info("Telling room sync client to shutdown...")
-            self.room_sync_client.shutdown()
+            self.room_sync_client.cleanup()
 
         if self.get_recording_file_location():
             self.upload_recording_to_external_media_storage_if_enabled()
@@ -932,24 +954,7 @@ class BotController:
                 on_message_callback=self.on_message_from_websocket_audio,
             )
 
-        self.room_sync_client = None
-        if self.bot_in_db.should_use_room_sync():
-            # LiveKit is the only supported room sync provider for now
-            # Fetch the credentials from the database
-            # TODO: fail gracefully, dont throw exception.
-            livekit_credentials_record = Credentials.objects.filter(project=self.bot_in_db.project, credential_type=Credentials.CredentialTypes.LIVEKIT).first()
-            if livekit_credentials_record is None:
-                raise Exception("Room sync is enabled but no LiveKit credentials are configured for this project")
-
-            livekit_credentials = livekit_credentials_record.get_credentials()
-            if not livekit_credentials or not livekit_credentials.get("url") or not livekit_credentials.get("api_key") or not livekit_credentials.get("api_secret"):
-                raise Exception("Room sync is enabled but the configured LiveKit credentials are missing a url, api_key or api_secret")
-
-            self.room_sync_client = LivekitRoomSyncClient(
-                room=self.bot_in_db.room_sync_livekit_room_name(),
-                credentials=livekit_credentials,
-                sample_rate=self.get_per_participant_audio_sample_rate(),
-            )
+        self.room_sync_client = self.get_room_sync_client()
 
         self.adapter = self.get_bot_adapter()
 
