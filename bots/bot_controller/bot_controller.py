@@ -551,7 +551,7 @@ class BotController:
     def get_room_sync_source_participant_configuration(self):
         if not self.room_sync_client:
             return None
-        
+
         return self.room_sync_client.build_source_participant_configuration()
 
     def get_bot_adapter(self):

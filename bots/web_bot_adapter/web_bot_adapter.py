@@ -57,7 +57,7 @@ class WebBotAdapter(BotAdapter):
         record_chat_messages_when_paused: bool,
         disable_incoming_video: bool,
         record_participant_speech_start_stop_events: bool,
-        room_sync_source_participant_configuration: RoomSyncSourceParticipantConfiguration,
+        room_sync_source_participant_configuration: RoomSyncSourceParticipantConfiguration | None,
     ):
         self.display_name = display_name
         self.send_message_callback = send_message_callback
@@ -606,6 +606,12 @@ class WebBotAdapter(BotAdapter):
     def subclass_specific_use_disable_gpu_chrome_option(self):
         return True
 
+    def room_sync_js_library_paths(self, current_dir):
+        if self.room_sync_source_participant_configuration:
+            if self.room_sync_source_participant_configuration.livekit:
+                return [os.path.join(current_dir, "js_libs", "livekit-client", "2.21.0", "livekit-client.umd.min.js")]
+        return []
+
     def init_driver(self):
         self.write_chrome_policies_file()
 
@@ -656,7 +662,7 @@ class WebBotAdapter(BotAdapter):
         self.driver = webdriver.Chrome(options=options, service=Service(executable_path="/usr/local/bin/chromedriver"))
         logger.info(f"web driver server initialized at port {self.driver.service.port}")
 
-        initial_data_code = f"window.initialData = {{websocketPort: {self.websocket_port}, videoFrameWidth: {self.video_frame_size[0]}, videoFrameHeight: {self.video_frame_size[1]}, botName: {json.dumps(self.display_name)}, addClickRipple: {'true' if self.should_create_debug_recording else 'false'}, recordingView: '{self.recording_view}', sendMixedAudio: {'true' if self.add_mixed_audio_chunk_callback else 'false'}, sendPerParticipantAudio: {'true' if self.add_audio_chunk_callback else 'false'}, perParticipantRealtimeVideoConfiguration: {json.dumps(self.per_participant_realtime_video_configuration.to_dict())}, sendPerParticipantVideo: {'true' if self.add_per_participant_video_frame_callback else 'false'}, collectCaptions: {'true' if self.upsert_caption_callback else 'false'}, recordParticipantSpeechStartStopEvents: {'true' if self.record_participant_speech_start_stop_events else 'false'}}}"
+        initial_data_code = f"window.initialData = {{websocketPort: {self.websocket_port}, videoFrameWidth: {self.video_frame_size[0]}, videoFrameHeight: {self.video_frame_size[1]}, botName: {json.dumps(self.display_name)}, addClickRipple: {'true' if self.should_create_debug_recording else 'false'}, recordingView: '{self.recording_view}', sendMixedAudio: {'true' if self.add_mixed_audio_chunk_callback else 'false'}, sendPerParticipantAudio: {'true' if self.add_audio_chunk_callback else 'false'}, perParticipantRealtimeVideoConfiguration: {json.dumps(self.per_participant_realtime_video_configuration.to_dict())}, roomSyncSourceParticipantConfiguration: {json.dumps(self.room_sync_source_participant_configuration.to_dict()) if self.room_sync_source_participant_configuration else None}, sendPerParticipantVideo: {'true' if self.add_per_participant_video_frame_callback else 'false'}, collectCaptions: {'true' if self.upsert_caption_callback else 'false'}, recordParticipantSpeechStartStopEvents: {'true' if self.record_participant_speech_start_stop_events else 'false'}}}"
 
         # Get directory of current file
         current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -665,6 +671,7 @@ class WebBotAdapter(BotAdapter):
         JS_LIBRARIES = [
             os.path.join(current_dir, "js_libs", "protobufjs", "7.4.0", "protobuf.min.js"),
             os.path.join(current_dir, "js_libs", "pako", "2.1.0", "pako.min.js"),
+            *self.room_sync_js_library_paths(current_dir),
         ]
 
         libraries_code = ""
