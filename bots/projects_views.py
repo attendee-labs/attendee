@@ -1272,12 +1272,26 @@ class ProjectBillingView(AdminRequiredMixin, ProjectUrlContextMixin, ListView):
 
     def get_queryset(self):
         project = get_project_for_user(user=self.request.user, project_object_id=self.kwargs["object_id"])
-        return CreditTransaction.objects.filter(organization=project.organization).order_by("-created_at")
+        queryset = CreditTransaction.objects.filter(organization=project.organization)
+
+        # Apply transaction type filter if provided. "added" shows only
+        # transactions where credits were added (positive delta), "deducted"
+        # shows only transactions where credits were deducted (negative delta).
+        transaction_type = self.request.GET.get("transaction_type", "").strip()
+        if transaction_type == "added":
+            queryset = queryset.filter(centicredits_delta__gt=0)
+        elif transaction_type == "deducted":
+            queryset = queryset.filter(centicredits_delta__lt=0)
+
+        return queryset.order_by("-created_at")
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         project = get_project_for_user(user=self.request.user, project_object_id=self.kwargs["object_id"])
         context.update(self.get_project_context(self.kwargs["object_id"], project))
+
+        # Add filter parameters to context for maintaining state
+        context["filter_params"] = {"transaction_type": self.request.GET.get("transaction_type", "")}
 
         # Check if organization has a valid payment method
         has_payment_method = False
