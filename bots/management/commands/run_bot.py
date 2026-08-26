@@ -1,4 +1,6 @@
 import logging
+import os
+import sys
 
 from django.core.management.base import BaseCommand
 
@@ -21,3 +23,9 @@ class Command(BaseCommand):
         result = run_bot.run(options["botid"])
 
         logger.info(f"Run bot task completed with result: {result}")
+        if "zoom_meeting_sdk" in sys.modules:
+            logging.shutdown()
+            sys.stdout.flush()
+            sys.stderr.flush()
+            # Zoom raw-data helper wrappers can segfault while Python finalizes after CleanUPSDK().
+            os._exit(0)

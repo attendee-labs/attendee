@@ -962,7 +962,7 @@ class BotController:
         def repeatedly_try_to_reconnect_to_redis():
             reconnect_delay_seconds = 1
             num_attempts = 0
-            while True:
+            while not redis_listener_stop.is_set():
                 try:
                     self.connect_to_redis()
                     break
@@ -974,13 +974,15 @@ class BotController:
                         raise Exception("Failed to reconnect to Redis after 30 attempts")
 
         def redis_listener():
-            while True:
+            while not redis_listener_stop.is_set():
                 try:
                     message = self.pubsub.get_message(timeout=1.0)
                     if message:
                         # Schedule Redis message handling in the main GLib loop
                         GLib.idle_add(self.handle_redis_message, message)
                 except Exception as e:
+                    if redis_listener_stop.is_set():
+                        break
                     # If this is a certain type of exception, we can attempt to reconnect
                     if isinstance(e, redis.exceptions.ConnectionError) and "Connection closed by server." in str(e):
                         logger.info("Redis connection closed by server. Attempting to reconnect...")
@@ -991,6 +993,7 @@ class BotController:
                         logger.warning(f"Error in Redis listener: {type(e)} {e}")
                         break
 
+        redis_listener_stop = threading.Event()
         redis_thread = threading.Thread(target=redis_listener, daemon=True)
         redis_thread.start()
 
@@ -1009,9 +1012,13 @@ class BotController:
             logger.warning(f"Error in bot {self.bot_in_db.id}: {str(e)}")
             self.cleanup()
         finally:
-            # Clean up Redis subscription
+            redis_listener_stop.set()
+            redis_thread.join(timeout=2)
             self.pubsub.unsubscribe(self.pubsub_channel)
             self.pubsub.close()
+            self.redis_client.close()
+            if redis_thread.is_alive():
+                redis_thread.join(timeout=2)
 
     def take_action_based_on_bot_in_db(self):
         if self.bot_in_db.state == BotStates.JOINING:
