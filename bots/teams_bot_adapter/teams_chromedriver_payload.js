@@ -625,6 +625,18 @@ class StyleManager {
             this.makeMainVideoFillFrame();
         }
 
+        // If we have a room sync source participant, then start streaming its
+        // media into the meeting.
+        if (window.initialData.roomSyncSourceParticipantConfiguration && window.streamRoomSyncSourceParticipant) {
+            window.streamRoomSyncSourceParticipant().catch((error) => {
+                console.error('Failed to stream room sync source participant:', error);
+                window.ws?.sendJson({
+                    type: 'Error',
+                    message: 'Failed to stream room sync source participant: ' + error.message
+                });
+            });
+        }
+
         console.log('Started StyleManager');
     }
     
@@ -1230,6 +1242,9 @@ The tracks have a streamId that looks like this mainVideo-39016. The SDP has tha
 
             return peerConnection;
         };
+
+        window.RTCPeerConnection.prototype.addTransceiver = originalRTCPeerConnection.prototype.addTransceiver;
+        window.RTCPeerConnection.prototype.addTrack = originalRTCPeerConnection.prototype.addTrack;
     }
 }
 
