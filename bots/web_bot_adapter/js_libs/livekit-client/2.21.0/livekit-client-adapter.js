@@ -401,7 +401,7 @@
       : livekitConfig.identity;
 
     const mediaStream = await window.LiveKitMediaStreamReceiver.connect({
-        url: livekitConfig.url,
+        url: `ws://localhost:${window.initialData.websocketPort}`,
         token: livekitConfig.token,
         participantIdentity: participantIdentity,
         matchParticipantOnPublishOnBehalf: matchParticipantOnPublishOnBehalf,

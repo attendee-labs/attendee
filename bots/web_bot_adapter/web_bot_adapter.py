@@ -26,6 +26,7 @@ from bots.room_sync_source_participant_configuration import RoomSyncSourcePartic
 from bots.utils import half_ceil, scale_i420
 
 from .debug_screen_recorder import DebugScreenRecorder
+from .livekit_websocket_bridge import LiveKitWebsocketBridge
 from .ui_methods import UiAuthorizedUserNotInMeetingTimeoutExceededException, UiBlockedByCaptchaException, UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiIncorrectPasswordException, UiInfinitelyRetryableException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableException, UiRetryableExpectedException
 
 logger = logging.getLogger(__name__)
@@ -109,6 +110,7 @@ class WebBotAdapter(BotAdapter):
         self.automatic_leave_configuration = automatic_leave_configuration
         self.per_participant_realtime_video_configuration = per_participant_realtime_video_configuration
         self.room_sync_source_participant_configuration = room_sync_source_participant_configuration
+        self.livekit_websocket_bridge = self.create_livekit_websocket_bridge()
 
         self.should_create_debug_recording = should_create_debug_recording
         self.debug_screen_recorder = None
@@ -365,6 +367,19 @@ class WebBotAdapter(BotAdapter):
             json_data_masked["caption"]["text"] = hashlib.sha256(json_data.get("caption").get("text").encode("utf-8")).hexdigest()
         return json_data_masked
 
+    def create_livekit_websocket_bridge(self):
+        config = self.room_sync_source_participant_configuration
+        if config is None or not config.livekit:
+            return None
+        return LiveKitWebsocketBridge(livekit_url=config.livekit.url)
+
+    def handle_websocket_with_livekit_bridge(self, websocket):
+        request_path = LiveKitWebsocketBridge.get_websocket_request_path(websocket)
+        if self.livekit_websocket_bridge.is_bridge_path(request_path):
+            self.livekit_websocket_bridge.handle(websocket, request_path)
+            return
+        self.handle_websocket(websocket)
+
     def handle_websocket(self, websocket):
         audio_format = None
 
@@ -464,13 +479,15 @@ class WebBotAdapter(BotAdapter):
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
+        websocket_handler = self.handle_websocket if self.livekit_websocket_bridge is None else self.handle_websocket_with_livekit_bridge
+
         port = self.get_websocket_port()
         max_retries = 10
 
         for attempt in range(max_retries):
             try:
                 self.websocket_server = serve(
-                    self.handle_websocket,
+                    websocket_handler,
                     "localhost",
                     port,
                     compression=None,
