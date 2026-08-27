@@ -2567,6 +2567,17 @@ const handleVideoTrack = async (event) => {
   const globalAudioQueueIntervalsSet = new Set();
 
   const handleAudioTrack = async (event) => {
+    // streamId must contain mainAudio in it, which means it's from Teams, not from a voice agent.
+    const firstStreamId = event.streams[0]?.id;
+    if (!firstStreamId?.includes('mainAudio')) {
+        window.ws?.sendJson({
+            type: 'AudioTrackNotProcessedForPerParticipantAudio',
+            trackId: event.track?.id,
+            streams: event.streams?.map(stream => stream?.id),
+        });
+        return;
+    }
+
     let lastAudioFormat = null;  // Track last seen format
     const audioDataQueue = [];
     const ACTIVE_SPEAKER_LATENCY_MS = 2000;
