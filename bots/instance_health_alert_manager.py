@@ -77,11 +77,24 @@ class InstanceHealthAlertManager:
     def update_alerts(self):
         if not settings.SAVE_INSTANCE_HEALTH_SNAPSHOTS:
             return
-        alerts_state = InstanceHealthAlertsState.load()
-        active = compute_active_alerts(alerts_state.settings)
 
-        new_state = {alert.value: {**_alert_state_with_defaults(alerts_state.state, alert), "active": alert in active} for alert in InstanceHealthAlertTypes}
+        # Never let an alerting failure propagate: this runs inside the scheduler loop
+        # and an exception here would skip the rest of that cycle's work.
+        try:
+            alerts_state = InstanceHealthAlertsState.load()
+            active = compute_active_alerts(alerts_state.settings)
 
-        if new_state != alerts_state.state:
-            alerts_state.state = new_state
-            alerts_state.save(update_fields=["state", "updated_at"])
+            new_state = {alert.value: {**_alert_state_with_defaults(alerts_state.state, alert), "active": alert in active} for alert in InstanceHealthAlertTypes}
+
+            if new_state != alerts_state.state:
+                newly_active = sorted(alert for alert in active if not (alerts_state.state.get(alert.value) or {}).get("active"))
+                newly_cleared = sorted(alert.value for alert in InstanceHealthAlertTypes if alert not in active and (alerts_state.state.get(alert.value) or {}).get("active"))
+                logger.info(
+                    "Instance health alert state changed (newly active: %s, cleared: %s)",
+                    [alert.value for alert in newly_active] or "none",
+                    newly_cleared or "none",
+                )
+                alerts_state.state = new_state
+                alerts_state.save(update_fields=["state", "updated_at"])
+        except Exception:
+            logger.exception("Failed to update instance health alerts")
