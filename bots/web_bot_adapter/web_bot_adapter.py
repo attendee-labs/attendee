@@ -609,7 +609,24 @@ class WebBotAdapter(BotAdapter):
     def subclass_specific_use_disable_gpu_chrome_option(self):
         return True
 
-    def teardown_driver_with_timeout(self, driver):
+    def run_driver_call_with_timeout(self, call, description):
+        """Run a driver call on a thread we are willing to abandon.
+
+        Returns True if the call finished within DRIVER_TEARDOWN_TIMEOUT_SECONDS.
+        """
+
+        def guarded_call():
+            try:
+                call()
+            except Exception as e:
+                logger.warning(f"Error during {description}: {e}")
+
+        thread = threading.Thread(target=guarded_call, daemon=True)
+        thread.start()
+        thread.join(DRIVER_TEARDOWN_TIMEOUT_SECONDS)
+        return not thread.is_alive()
+
+    def teardown_driver_with_timeout(self, driver, before_close=None):
         """Tear down a browser without letting an unresponsive chromedriver block the retry.
 
         close() and quit() are best effort. selenium waits 120 seconds for each
@@ -621,6 +638,12 @@ class WebBotAdapter(BotAdapter):
         """
 
         def graceful_teardown():
+            if before_close is not None:
+                try:
+                    before_close()
+                except Exception as e:
+                    logger.warning(f"Error before closing driver: {e}")
+
             # Simulate closing browser window
             try:
                 driver.close()
@@ -632,11 +655,7 @@ class WebBotAdapter(BotAdapter):
             except Exception as e:
                 logger.warning(f"Error closing existing driver: {e}")
 
-        teardown_thread = threading.Thread(target=graceful_teardown, daemon=True)
-        teardown_thread.start()
-        teardown_thread.join(DRIVER_TEARDOWN_TIMEOUT_SECONDS)
-
-        if not teardown_thread.is_alive():
+        if self.run_driver_call_with_timeout(graceful_teardown, "driver teardown"):
             return
 
         logger.warning(f"Driver teardown did not finish within {DRIVER_TEARDOWN_TIMEOUT_SECONDS} seconds, killing the chromedriver process so a new browser can start")
@@ -939,10 +958,9 @@ class WebBotAdapter(BotAdapter):
             self.left_meeting = True
 
     def abort_join_attempt(self):
-        try:
-            self.driver.close()
-        except Exception as e:
-            logger.warning(f"Error closing driver: {e}")
+        # Bounded for the same reason as teardown_driver_with_timeout: a wedged
+        # chromedriver here would delay the "could not join" report by minutes.
+        self.run_driver_call_with_timeout(self.driver.close, "abort join attempt")
 
     def cleanup(self):
         if self.stop_recording_screen_callback:
@@ -963,20 +981,12 @@ class WebBotAdapter(BotAdapter):
 
         try:
             if self.driver:
-                self.log_browser_history()
 
-                # Simulate closing browser window
-                try:
+                def before_close():
+                    self.log_browser_history()
                     self.subclass_specific_before_driver_close()
-                    self.driver.close()
-                except Exception as e:
-                    logger.warning(f"Error closing driver: {e}")
 
-                # Then quit the driver
-                try:
-                    self.driver.quit()
-                except Exception as e:
-                    logger.warning(f"Error quitting driver: {e}")
+                self.teardown_driver_with_timeout(self.driver, before_close=before_close)
         except Exception as e:
             logger.warning(f"Error during cleanup: {e}")
 
