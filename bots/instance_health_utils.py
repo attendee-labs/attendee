@@ -64,6 +64,11 @@ CONNECTION_DANGER_PERCENTAGE = 85
 QUEUE_TREND_MINIMUM_CHANGE = 2
 QUEUE_TREND_MINIMUM_CHANGE_PERCENTAGE = 15
 
+# Default window for deciding that a non-empty queue is not draining. The alert
+# setting can override this; keeping the default in snapshot intervals makes the
+# amount of evidence stable if the sampling cadence changes.
+QUEUE_NOT_DRAINING_CONFIRMED_AFTER_SECONDS = INSTANCE_HEALTH_SNAPSHOT_INTERVAL_SECONDS * 15
+
 # How long every worker has to stay silent before the workers panel calls them gone
 # rather than restarting. Worker stats are collected by the scheduler, which samples
 # them as soon as it starts, so the first sample after a deploy is taken while the
@@ -73,6 +78,43 @@ QUEUE_TREND_MINIMUM_CHANGE_PERCENTAGE = 15
 # leaves room for a sample taken after the deploy has settled, while still surfacing a
 # genuine outage within minutes.
 WORKER_SILENCE_CONFIRMED_AFTER_SECONDS = INSTANCE_HEALTH_CELERY_WORKER_STATS_INTERVAL_SECONDS * 4
+
+
+def celery_queue_has_not_decreased_for(threshold_seconds):
+    """Whether any non-empty queue stayed flat or grew for the whole threshold."""
+    latest_depths, latest_at = _latest_reading("celery_queue_depths")
+    if not latest_depths or latest_at is None:
+        return False
+
+    cutoff = latest_at - timedelta(seconds=max(threshold_seconds, 0))
+    queue_readings = InstanceHealthSnapshot.objects.filter(data__has_key="celery_queue_depths")
+
+    # Include the last reading at or before the cutoff so the observations cover
+    # the full configured range rather than merely beginning somewhere inside it.
+    evidence = queue_readings.filter(created_at__lte=cutoff).order_by("-created_at").values_list("data", flat=True).first()
+    if evidence is None:
+        return False
+
+    readings = [evidence]
+    readings.extend(queue_readings.filter(created_at__gt=cutoff, created_at__lte=latest_at).order_by("created_at").values_list("data", flat=True))
+
+    for queue_name, latest_depth in latest_depths.items():
+        # A queue at zero is idle, not stalled. A missing value means Redis failed
+        # to report that queue, so continuity cannot be established for this window.
+        if latest_depth is None or latest_depth <= 0:
+            continue
+
+        depths = []
+        for data in readings:
+            queue_depths = data.get("celery_queue_depths") or {}
+            if queue_name not in queue_depths or queue_depths[queue_name] is None:
+                break
+            depths.append(queue_depths[queue_name])
+        else:
+            if depths[0] > 0 and all(current >= previous for previous, current in zip(depths, depths[1:])):
+                return True
+
+    return False
 
 
 def _worker_stats_have_alive_workers(worker_stats):

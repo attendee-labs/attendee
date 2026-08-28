@@ -7,8 +7,10 @@ from django.conf import settings
 
 from .instance_health_utils import (
     CONNECTION_DANGER_PERCENTAGE,
+    QUEUE_NOT_DRAINING_CONFIRMED_AFTER_SECONDS,
     WORKER_SILENCE_CONFIRMED_AFTER_SECONDS,
     _latest_reading,
+    celery_queue_has_not_decreased_for,
     celery_workers_have_been_down_for,
 )
 from .models import InstanceHealthAlertsState
@@ -20,6 +22,7 @@ class InstanceHealthAlertTypes(str, Enum):
     CONNECTIONS_USED_PERCENTAGE_EXCEEDS_THRESHOLD = "connections_used_percentage_exceeds_threshold"
     DATABASE_SIZE_EXCEEDS_THRESHOLD = "database_size_exceeds_threshold"
     CELERY_WORKERS_DOWN = "celery_workers_down"
+    CELERY_QUEUE_NOT_DRAINING = "celery_queue_not_draining"
 
 
 DEFAULT_ALERT_STATE = {"active": False}
@@ -38,6 +41,10 @@ DEFAULT_ALERT_SETTINGS = {
     InstanceHealthAlertTypes.CELERY_WORKERS_DOWN: {
         "enabled": True,
         "threshold": WORKER_SILENCE_CONFIRMED_AFTER_SECONDS,
+    },
+    InstanceHealthAlertTypes.CELERY_QUEUE_NOT_DRAINING: {
+        "enabled": True,
+        "threshold": QUEUE_NOT_DRAINING_CONFIRMED_AFTER_SECONDS,
     },
 }
 
@@ -67,6 +74,13 @@ ALERT_METADATA = {
         "step": "1",
         "display_factor": 60,
     },
+    InstanceHealthAlertTypes.CELERY_QUEUE_NOT_DRAINING: {
+        "label": "Celery queue not draining",
+        "description": "Fires when any non-empty queue only grows or stays level for this long.",
+        "unit_label": "minutes",
+        "step": "1",
+        "display_factor": 60,
+    },
 }
 
 
@@ -83,6 +97,9 @@ def _alert_is_firing(alert, config):
 
     if alert is InstanceHealthAlertTypes.CELERY_WORKERS_DOWN:
         return celery_workers_have_been_down_for(config["threshold"])
+
+    if alert is InstanceHealthAlertTypes.CELERY_QUEUE_NOT_DRAINING:
+        return celery_queue_has_not_decreased_for(config["threshold"])
 
     return False
 
