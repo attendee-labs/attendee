@@ -75,6 +75,39 @@ QUEUE_TREND_MINIMUM_CHANGE_PERCENTAGE = 15
 WORKER_SILENCE_CONFIRMED_AFTER_SECONDS = INSTANCE_HEALTH_CELERY_WORKER_STATS_INTERVAL_SECONDS * 4
 
 
+def _worker_stats_have_alive_workers(worker_stats):
+    """Whether a worker census contains an execution pool able to run tasks."""
+    if not worker_stats:
+        return False
+
+    return any((worker or {}).get("processes_alive", 0) > 0 for worker in (worker_stats.get("workers") or {}).values())
+
+
+def celery_workers_have_been_down_for(threshold_seconds):
+    """Return whether every Celery execution pool has stayed down for the threshold.
+
+    Time is measured between collected worker censuses, not from the latest census to
+    wall-clock time. That distinction prevents a stopped scheduler (and therefore
+    stale snapshots) from being misreported as a Celery outage.
+    """
+    latest_stats, latest_at = _latest_reading("celery_worker_stats")
+    if latest_at is None or _worker_stats_have_alive_workers(latest_stats):
+        return False
+
+    cutoff = latest_at - timedelta(seconds=max(threshold_seconds, 0))
+    worker_readings = InstanceHealthSnapshot.objects.filter(data__has_key="celery_worker_stats")
+
+    # A down reading at or before the cutoff proves the outage spans the full
+    # threshold. Without one, snapshot history does not go back far enough to know.
+    evidence = worker_readings.filter(created_at__lte=cutoff).order_by("-created_at").values_list("data", flat=True).first()
+    if evidence is None or _worker_stats_have_alive_workers(evidence.get("celery_worker_stats")):
+        return False
+
+    # Every census since the cutoff must still show no usable worker pool.
+    subsequent_readings = worker_readings.filter(created_at__gt=cutoff, created_at__lte=latest_at).values_list("data", flat=True)
+    return not any(_worker_stats_have_alive_workers(data.get("celery_worker_stats")) for data in subsequent_readings)
+
+
 def _interval_label(seconds):
     """Render a sampling interval the way an operator would say it: 30s, 10m, 1h."""
     if seconds >= 3600 and seconds % 3600 == 0:

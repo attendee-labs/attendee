@@ -5,7 +5,12 @@ from enum import Enum
 import requests
 from django.conf import settings
 
-from .instance_health_utils import CONNECTION_DANGER_PERCENTAGE, _latest_reading
+from .instance_health_utils import (
+    CONNECTION_DANGER_PERCENTAGE,
+    WORKER_SILENCE_CONFIRMED_AFTER_SECONDS,
+    _latest_reading,
+    celery_workers_have_been_down_for,
+)
 from .models import InstanceHealthAlertsState
 
 logger = logging.getLogger(__name__)
@@ -14,6 +19,7 @@ logger = logging.getLogger(__name__)
 class InstanceHealthAlertTypes(str, Enum):
     CONNECTIONS_USED_PERCENTAGE_EXCEEDS_THRESHOLD = "connections_used_percentage_exceeds_threshold"
     DATABASE_SIZE_EXCEEDS_THRESHOLD = "database_size_exceeds_threshold"
+    CELERY_WORKERS_DOWN = "celery_workers_down"
 
 
 DEFAULT_ALERT_STATE = {"active": False}
@@ -28,6 +34,10 @@ DEFAULT_ALERT_SETTINGS = {
     InstanceHealthAlertTypes.DATABASE_SIZE_EXCEEDS_THRESHOLD: {
         "enabled": True,
         "threshold": 100 * BYTES_PER_GIGABYTE,
+    },
+    InstanceHealthAlertTypes.CELERY_WORKERS_DOWN: {
+        "enabled": True,
+        "threshold": WORKER_SILENCE_CONFIRMED_AFTER_SECONDS,
     },
 }
 
@@ -50,6 +60,13 @@ ALERT_METADATA = {
         "step": "0.1",
         "display_factor": BYTES_PER_GIGABYTE,
     },
+    InstanceHealthAlertTypes.CELERY_WORKERS_DOWN: {
+        "label": "Celery workers down",
+        "description": "Fires when no Celery worker has a live execution process for this long.",
+        "unit_label": "minutes",
+        "step": "1",
+        "display_factor": 60,
+    },
 }
 
 
@@ -63,6 +80,9 @@ def _alert_is_firing(alert, config):
         table_sizes, _ = _latest_reading("database_table_sizes")
         total_bytes = (table_sizes or {}).get("total_bytes")
         return total_bytes is not None and total_bytes >= config["threshold"]
+
+    if alert is InstanceHealthAlertTypes.CELERY_WORKERS_DOWN:
+        return celery_workers_have_been_down_for(config["threshold"])
 
     return False
 
@@ -220,7 +240,7 @@ def _notify_slack_of_alert_changes(newly_active, newly_cleared):
         lines.extend(f"• {ALERT_METADATA[alert]['label']}" for alert in newly_cleared)
 
     lines.append("")
-    lines.append(f"Head to the instance health dashboard to see the metrics.")
+    lines.append("Head to the instance health dashboard to see the metrics.")
 
     try:
         response = requests.post(webhook_url, json={"text": "\n".join(lines)}, timeout=4)
