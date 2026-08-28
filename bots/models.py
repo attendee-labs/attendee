@@ -3273,3 +3273,41 @@ class InstanceHealthSnapshot(models.Model):
 
     def __str__(self):
         return f"Instance health snapshot at {self.created_at}"
+
+
+class InstanceHealthAlertsState(models.Model):
+    """Singleton holding the configuration and current firing state of instance health alerts.
+
+    There is exactly one row for the whole instance. `settings` holds each alert's
+    configuration (whether it is enabled and its threshold); `state` holds whether each
+    alert is currently active (firing) or inactive. The two are kept apart so operators
+    can edit configuration without racing the writer that flips firing state, and so a
+    schema change to one does not disturb the other.
+
+    Both columns are JSON objects keyed by alert; their shape and defaults are owned by
+    application code, not this model.
+    """
+
+    # Fixed primary key so there can only ever be one row: every save writes pk=1.
+    SINGLETON_ID = 1
+
+    settings = models.JSONField(null=False, default=dict)
+    state = models.JSONField(null=False, default=dict)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def save(self, *args, **kwargs):
+        self.pk = self.SINGLETON_ID
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        """Deleting the singleton is a no-op: the row is meant to always exist."""
+        pass
+
+    @classmethod
+    def load(cls):
+        """Return the singleton row, creating it with empty settings and state if needed."""
+        obj, _ = cls.objects.get_or_create(pk=cls.SINGLETON_ID)
+        return obj
+
+    def __str__(self):
+        return "Instance health alert state"
