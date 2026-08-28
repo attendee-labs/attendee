@@ -1,6 +1,8 @@
 import logging
+import os
 from enum import Enum
 
+import requests
 from django.conf import settings
 
 from .instance_health_utils import CONNECTION_DANGER_PERCENTAGE, _latest_reading
@@ -14,7 +16,7 @@ class InstanceHealthAlertTypes(str, Enum):
     DATABASE_SIZE_EXCEEDS_THRESHOLD = "database_size_exceeds_threshold"
 
 
-DEFAULT_ALERT_STATE = {"activated_at": None}
+DEFAULT_ALERT_STATE = {"active": False}
 
 BYTES_PER_GIGABYTE = 1024 * 1024 * 1024
 
@@ -181,13 +183,44 @@ class InstanceHealthAlertManager:
 
             if new_state != alerts_state.state:
                 newly_active = sorted(alert for alert in active if not (alerts_state.state.get(alert.value) or {}).get("active"))
-                newly_cleared = sorted(alert.value for alert in InstanceHealthAlertTypes if alert not in active and (alerts_state.state.get(alert.value) or {}).get("active"))
+                newly_cleared = sorted(alert for alert in InstanceHealthAlertTypes if alert not in active and (alerts_state.state.get(alert.value) or {}).get("active"))
                 logger.info(
                     "Instance health alert state changed (newly active: %s, cleared: %s)",
                     [alert.value for alert in newly_active] or "none",
-                    newly_cleared or "none",
+                    [alert.value for alert in newly_cleared] or "none",
                 )
                 alerts_state.state = new_state
                 alerts_state.save(update_fields=["state", "updated_at"])
+                _notify_slack_of_alert_changes(newly_active, newly_cleared)
         except Exception:
             logger.exception("Failed to update instance health alerts")
+
+
+def _notify_slack_of_alert_changes(newly_active, newly_cleared):
+    """Post a single Slack message summarizing which alerts started and stopped firing.
+
+    Only sends if SLACK_WEBHOOK_URL_FOR_INSTANCE_HEALTH_ALERTS is configured. Any
+    failure is swallowed so alerting never disrupts the scheduler loop.
+    """
+    webhook_url = os.getenv("SLACK_WEBHOOK_URL_FOR_INSTANCE_HEALTH_ALERTS")
+    if not webhook_url:
+        return
+
+    if not newly_active and not newly_cleared:
+        return
+
+    lines = ["*Attendee instance health alerts update*"]
+    if newly_active:
+        lines.append("")
+        lines.append(":rotating_light: Now firing:")
+        lines.extend(f"• {ALERT_METADATA[alert]['label']}" for alert in newly_active)
+    if newly_cleared:
+        lines.append("")
+        lines.append(":white_check_mark: No longer firing:")
+        lines.extend(f"• {ALERT_METADATA[alert]['label']}" for alert in newly_cleared)
+
+    try:
+        response = requests.post(webhook_url, json={"text": "\n".join(lines)}, timeout=4)
+        response.raise_for_status()
+    except Exception:
+        logger.warning("Failed to send instance health alert Slack notification", exc_info=True)
