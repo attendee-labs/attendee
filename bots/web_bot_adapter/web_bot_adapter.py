@@ -29,6 +29,12 @@ from .ui_methods import UiAuthorizedUserNotInMeetingTimeoutExceededException, Ui
 
 logger = logging.getLogger(__name__)
 
+# Wall-clock budget for tearing down a browser before starting a new one. selenium
+# waits 120 seconds for each webdriver command and urllib3 retries the request three
+# times, so close() and quit() against a hung chromedriver can each block for about
+# six minutes.
+DRIVER_TEARDOWN_TIMEOUT_SECONDS = 30
+
 
 class WebBotAdapter(BotAdapter):
     def __init__(
@@ -603,6 +609,51 @@ class WebBotAdapter(BotAdapter):
     def subclass_specific_use_disable_gpu_chrome_option(self):
         return True
 
+    def teardown_driver_with_timeout(self, driver):
+        """Tear down a browser without letting an unresponsive chromedriver block the retry.
+
+        close() and quit() are best effort. selenium waits 120 seconds for each
+        webdriver command and urllib3 retries it three times, so either call can block
+        for about six minutes against a wedged chromedriver, which is long enough for
+        the bot to miss most of the meeting it is retrying to join. Run them on a
+        thread we are willing to abandon, and if that thread does not finish in time,
+        kill chromedriver so a new browser can start immediately.
+        """
+
+        def graceful_teardown():
+            # Simulate closing browser window
+            try:
+                driver.close()
+            except Exception as e:
+                logger.warning(f"Error closing driver: {e}")
+
+            try:
+                driver.quit()
+            except Exception as e:
+                logger.warning(f"Error closing existing driver: {e}")
+
+        teardown_thread = threading.Thread(target=graceful_teardown, daemon=True)
+        teardown_thread.start()
+        teardown_thread.join(DRIVER_TEARDOWN_TIMEOUT_SECONDS)
+
+        if not teardown_thread.is_alive():
+            return
+
+        logger.warning(f"Driver teardown did not finish within {DRIVER_TEARDOWN_TIMEOUT_SECONDS} seconds, killing the chromedriver process so a new browser can start")
+
+        # The abandoned thread keeps its reference to the old driver, so killing the
+        # process is what actually frees it: the pending webdriver calls fail fast and
+        # the thread unwinds.
+        process = getattr(getattr(driver, "service", None), "process", None)
+        if process is None:
+            return
+
+        try:
+            if process.poll() is None:
+                process.kill()
+        except Exception as e:
+            logger.warning(f"Error killing chromedriver process: {e}")
+
     def init_driver(self):
         self.write_chrome_policies_file()
 
@@ -638,16 +689,7 @@ class WebBotAdapter(BotAdapter):
         self.add_subclass_specific_chrome_options(options)
 
         if self.driver:
-            # Simulate closing browser window
-            try:
-                self.driver.close()
-            except Exception as e:
-                logger.warning(f"Error closing driver: {e}")
-
-            try:
-                self.driver.quit()
-            except Exception as e:
-                logger.warning(f"Error closing existing driver: {e}")
+            self.teardown_driver_with_timeout(self.driver)
             self.driver = None
 
         self.driver = webdriver.Chrome(options=options, service=Service(executable_path="/usr/local/bin/chromedriver"))
