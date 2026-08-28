@@ -1250,7 +1250,6 @@ class ProjectInstanceHealthView(AdminRequiredMixin, ProjectUrlContextMixin, View
         context = self.get_project_context(object_id, project)
         context.update(get_instance_health_data(request.GET.get("window", DEFAULT_WINDOW)))
         context["alert_configs"] = get_alert_configs(InstanceHealthAlertsState.load())
-        context["alerts_saved"] = request.GET.get("alerts_saved") == "1"
         return render(request, "projects/project_instance_health.html", context)
 
     def post(self, request, object_id):
@@ -1260,8 +1259,10 @@ class ProjectInstanceHealthView(AdminRequiredMixin, ProjectUrlContextMixin, View
         project = get_project_for_user(user=request.user, project_object_id=object_id)
         update_alert_settings(InstanceHealthAlertsState.load(), request.POST)
 
-        url = reverse("bots:project-instance-health", kwargs={"object_id": project.object_id})
-        return redirect(f"{url}?alerts_saved=1#alerts")
+        context = self.get_project_context(object_id, project)
+        context["alert_configs"] = get_alert_configs(InstanceHealthAlertsState.load())
+        context["alerts_saved"] = True
+        return render(request, "projects/partials/instance_health_alerts_form.html", context)
 
 
 class ProjectBillingView(AdminRequiredMixin, ProjectUrlContextMixin, ListView):

@@ -243,60 +243,9 @@
     </div>
 
     <div class="tab-pane fade" id="alerts" role="tabpanel">
-        {% if alerts_saved %}
-        <div class="alert alert-success d-flex align-items-center gap-2" role="alert">
-            <i class="bi bi-check-circle-fill"></i>
-            <div>Alert configuration saved.</div>
+        <div id="alerts-form-wrapper">
+            {% include 'projects/partials/instance_health_alerts_form.html' %}
         </div>
-        {% endif %}
-        <form method="post">
-            {% csrf_token %}
-            <div class="card mb-3">
-                <div class="card-body p-0">
-                    <table class="table mb-0 align-middle">
-                        <thead>
-                            <tr class="text-muted">
-                                <th class="ps-3 fw-normal">Alert</th>
-                                <th class="fw-normal text-center" style="width: 120px;">Enabled</th>
-                                <th class="fw-normal text-end pe-3" style="width: 220px;">Threshold</th>
-                                <th class="fw-normal text-center" style="width: 110px;">Status</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {% for alert in alert_configs %}
-                            <tr>
-                                <td class="ps-3">
-                                    <div class="fw-semibold">{{ alert.label }}</div>
-                                    <div class="text-muted small">{{ alert.description }}</div>
-                                </td>
-                                <td class="text-center">
-                                    <div class="form-check form-switch d-inline-block">
-                                        <input class="form-check-input" type="checkbox" role="switch" name="{{ alert.key }}__enabled" id="{{ alert.key }}__enabled" {% if alert.enabled %}checked{% endif %}>
-                                    </div>
-                                </td>
-                                <td class="pe-3">
-                                    <div class="input-group input-group-sm">
-                                        <input type="number" class="form-control text-end" name="{{ alert.key }}__threshold" value="{{ alert.threshold }}" step="{{ alert.step }}" min="0">
-                                        <span class="input-group-text">{{ alert.unit_label }}</span>
-                                    </div>
-                                </td>
-                                <td class="text-center">
-                                    {% if not alert.enabled %}
-                                    <span class="badge bg-secondary">Off</span>
-                                    {% elif alert.active %}
-                                    <span class="badge bg-danger">Firing</span>
-                                    {% else %}
-                                    <span class="badge bg-success">OK</span>
-                                    {% endif %}
-                                </td>
-                            </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-            <button type="submit" class="btn btn-primary">Save changes</button>
-        </form>
     </div>
     </div>
 </div>
@@ -310,6 +259,28 @@
                 new bootstrap.Tab(trigger).show();
             }
         }
+    });
+
+    // Show a "Saving…" state on the alerts form button while the htmx request is in flight.
+    document.body.addEventListener('htmx:beforeRequest', function (evt) {
+        if (!evt.target || evt.target.id !== 'alerts-form') return;
+        var button = document.getElementById('save-alerts-btn');
+        if (button) {
+            button.disabled = true;
+            button.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>Saving\u2026';
+        }
+    });
+
+    // After the form swaps back in showing the "Saved" state, revert it after a moment.
+    document.body.addEventListener('htmx:afterSettle', function (evt) {
+        if (!evt.target || evt.target.id !== 'alerts-form-wrapper') return;
+        setTimeout(function () {
+            var button = document.getElementById('save-alerts-btn');
+            if (!button) return;
+            button.classList.remove('btn-success');
+            button.classList.add('btn-primary');
+            button.textContent = 'Save changes';
+        }, 2000);
     });
 </script>
 {% endblock %}
