@@ -16,6 +16,8 @@ class InstanceHealthAlertTypes(str, Enum):
 
 DEFAULT_ALERT_STATE = {"activated_at": None}
 
+BYTES_PER_GIGABYTE = 1024 * 1024 * 1024
+
 DEFAULT_ALERT_SETTINGS = {
     InstanceHealthAlertTypes.CONNECTIONS_USED_PERCENTAGE_EXCEEDS_THRESHOLD: {
         "enabled": True,
@@ -23,7 +25,28 @@ DEFAULT_ALERT_SETTINGS = {
     },
     InstanceHealthAlertTypes.DATABASE_SIZE_EXCEEDS_THRESHOLD: {
         "enabled": True,
-        "threshold": 100 * 1024 * 1024 * 1024,
+        "threshold": 100 * BYTES_PER_GIGABYTE,
+    },
+}
+
+# Presentation metadata for each alert, kept alongside the defaults so the settings UI
+# and its form parsing share one source of truth. Thresholds are stored raw (a
+# percentage, a byte count) but shown in the unit an operator would actually type, so
+# each alert carries a factor for converting between the stored and displayed value.
+ALERT_METADATA = {
+    InstanceHealthAlertTypes.CONNECTIONS_USED_PERCENTAGE_EXCEEDS_THRESHOLD: {
+        "label": "Database connections in use",
+        "description": "Fires when the share of the database connection pool in use reaches the threshold.",
+        "unit_label": "%",
+        "step": "1",
+        "display_factor": 1,
+    },
+    InstanceHealthAlertTypes.DATABASE_SIZE_EXCEEDS_THRESHOLD: {
+        "label": "Database size",
+        "description": "Fires when the total size of the database reaches the threshold.",
+        "unit_label": "GB",
+        "step": "0.1",
+        "display_factor": BYTES_PER_GIGABYTE,
     },
 }
 
@@ -52,6 +75,76 @@ def _alert_state_with_defaults(alert_state, alert):
     """Firing state for one alert, with any missing fields filled from the default."""
     stored = alert_state.get(alert.value) or {}
     return {**DEFAULT_ALERT_STATE, **stored}
+
+
+def _threshold_to_display(alert, raw_threshold):
+    """Convert a stored threshold into the unit shown in the settings form."""
+    factor = ALERT_METADATA[alert]["display_factor"]
+    value = raw_threshold / factor
+    # Keep whole numbers whole so the form does not show a trailing ".0".
+    return int(value) if float(value).is_integer() else round(value, 2)
+
+
+def _threshold_from_display(alert, display_value):
+    """Convert a value typed into the settings form back into a stored threshold."""
+    factor = ALERT_METADATA[alert]["display_factor"]
+    raw = display_value * factor
+    return int(raw) if float(raw).is_integer() else raw
+
+
+def get_alert_configs(alerts_state):
+    """Return one row per alert describing its configuration and current firing state.
+
+    This is what the settings UI renders and pre-fills its form from, so it merges the
+    stored configuration with the defaults and exposes thresholds in display units.
+    """
+    configs = []
+    for alert in InstanceHealthAlertTypes:
+        settings_for_alert = _alert_settings_with_defaults(alerts_state.settings, alert)
+        state_for_alert = _alert_state_with_defaults(alerts_state.state, alert)
+        metadata = ALERT_METADATA[alert]
+        configs.append(
+            {
+                "key": alert.value,
+                "label": metadata["label"],
+                "description": metadata["description"],
+                "unit_label": metadata["unit_label"],
+                "step": metadata["step"],
+                "enabled": bool(settings_for_alert.get("enabled")),
+                "threshold": _threshold_to_display(alert, settings_for_alert["threshold"]),
+                "active": bool(state_for_alert.get("active")),
+            }
+        )
+    return configs
+
+
+def update_alert_settings(alerts_state, form_data):
+    """Persist enabled flags and thresholds submitted by the settings form.
+
+    Every alert is rewritten from the form so an unchecked checkbox (absent from the
+    POST) is correctly read as disabled. A blank or unparseable threshold leaves the
+    existing one untouched rather than wiping it.
+    """
+    new_settings = {}
+    for alert in InstanceHealthAlertTypes:
+        current = _alert_settings_with_defaults(alerts_state.settings, alert)
+        threshold = current["threshold"]
+
+        raw_value = form_data.get(f"{alert.value}__threshold")
+        if raw_value not in (None, ""):
+            try:
+                threshold = _threshold_from_display(alert, float(raw_value))
+            except (TypeError, ValueError):
+                pass
+
+        new_settings[alert.value] = {
+            **current,
+            "enabled": form_data.get(f"{alert.value}__enabled") is not None,
+            "threshold": threshold,
+        }
+
+    alerts_state.settings = new_settings
+    alerts_state.save(update_fields=["settings", "updated_at"])
 
 
 def compute_active_alerts(alert_settings):

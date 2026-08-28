@@ -3,8 +3,20 @@
 
 {% block content %}
 <div class="container mt-4">
-    <div class="d-flex justify-content-between align-items-center mb-1">
-        <h2 class="mb-0">Instance Health</h2>
+    <h2 class="mb-3">Instance Health</h2>
+
+    <ul class="nav nav-tabs mb-3" id="instanceHealthTabs" role="tablist">
+        <li class="nav-item" role="presentation">
+            <button class="nav-link active" id="dashboard-tab" data-bs-toggle="tab" data-bs-target="#dashboard" type="button" role="tab">Dashboard</button>
+        </li>
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="alerts-tab" data-bs-toggle="tab" data-bs-target="#alerts" type="button" role="tab">Alerts</button>
+        </li>
+    </ul>
+
+    <div class="tab-content">
+    <div class="tab-pane fade show active" id="dashboard" role="tabpanel">
+    <div class="d-flex justify-content-end align-items-center mb-1">
         <div class="d-flex gap-3 align-items-center">
             <span class="text-muted small fw-semibold">Time period</span>
             <div class="btn-group btn-group-sm">
@@ -228,5 +240,76 @@
             {% endif %}
         </div>
     </div>
+    </div>
+
+    <div class="tab-pane fade" id="alerts" role="tabpanel">
+        {% if alerts_saved %}
+        <div class="alert alert-success d-flex align-items-center gap-2" role="alert">
+            <i class="bi bi-check-circle-fill"></i>
+            <div>Alert configuration saved.</div>
+        </div>
+        {% endif %}
+        <form method="post">
+            {% csrf_token %}
+            <div class="card mb-3">
+                <div class="card-body p-0">
+                    <table class="table mb-0 align-middle">
+                        <thead>
+                            <tr class="text-muted">
+                                <th class="ps-3 fw-normal">Alert</th>
+                                <th class="fw-normal text-center" style="width: 120px;">Enabled</th>
+                                <th class="fw-normal text-end pe-3" style="width: 220px;">Threshold</th>
+                                <th class="fw-normal text-center" style="width: 110px;">Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for alert in alert_configs %}
+                            <tr>
+                                <td class="ps-3">
+                                    <div class="fw-semibold">{{ alert.label }}</div>
+                                    <div class="text-muted small">{{ alert.description }}</div>
+                                </td>
+                                <td class="text-center">
+                                    <div class="form-check form-switch d-inline-block">
+                                        <input class="form-check-input" type="checkbox" role="switch" name="{{ alert.key }}__enabled" id="{{ alert.key }}__enabled" {% if alert.enabled %}checked{% endif %}>
+                                    </div>
+                                </td>
+                                <td class="pe-3">
+                                    <div class="input-group input-group-sm">
+                                        <input type="number" class="form-control text-end" name="{{ alert.key }}__threshold" value="{{ alert.threshold }}" step="{{ alert.step }}" min="0">
+                                        <span class="input-group-text">{{ alert.unit_label }}</span>
+                                    </div>
+                                </td>
+                                <td class="text-center">
+                                    {% if not alert.enabled %}
+                                    <span class="badge bg-secondary">Off</span>
+                                    {% elif alert.active %}
+                                    <span class="badge bg-danger">Firing</span>
+                                    {% else %}
+                                    <span class="badge bg-success">OK</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <button type="submit" class="btn btn-primary">Save changes</button>
+        </form>
+    </div>
+    </div>
 </div>
+
+<script>
+    document.addEventListener('DOMContentLoaded', function () {
+        var hash = window.location.hash;
+        if (hash) {
+            var trigger = document.querySelector('[data-bs-target="' + hash + '"]');
+            if (trigger) {
+                new bootstrap.Tab(trigger).show();
+            }
+        }
+    });
+</script>
 {% endblock %}
