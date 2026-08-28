@@ -219,6 +219,9 @@ def _notify_slack_of_alert_changes(newly_active, newly_cleared):
         lines.append(":white_check_mark: No longer firing:")
         lines.extend(f"• {ALERT_METADATA[alert]['label']}" for alert in newly_cleared)
 
+    lines.append("")
+    lines.append(f"Head to the instance health dashboard to see the metrics.")
+
     try:
         response = requests.post(webhook_url, json={"text": "\n".join(lines)}, timeout=4)
         response.raise_for_status()
