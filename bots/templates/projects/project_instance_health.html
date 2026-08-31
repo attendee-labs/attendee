@@ -3,8 +3,20 @@
 
 {% block content %}
 <div class="container mt-4">
-    <div class="d-flex justify-content-between align-items-center mb-1">
-        <h2 class="mb-0">Instance Health</h2>
+    <h2 class="mb-3">Instance Health</h2>
+
+    <ul class="nav nav-tabs mb-3" id="instanceHealthTabs" role="tablist">
+        <li class="nav-item" role="presentation">
+            <button class="nav-link active" id="dashboard-tab" data-bs-toggle="tab" data-bs-target="#dashboard" type="button" role="tab">Dashboard</button>
+        </li>
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="alerts-tab" data-bs-toggle="tab" data-bs-target="#alerts" type="button" role="tab">Alerts</button>
+        </li>
+    </ul>
+
+    <div class="tab-content">
+    <div class="tab-pane fade show active" id="dashboard" role="tabpanel">
+    <div class="d-flex justify-content-end align-items-center mb-1">
         <div class="d-flex gap-3 align-items-center">
             <span class="text-muted small fw-semibold">Time period</span>
             <div class="btn-group btn-group-sm">
@@ -228,5 +240,47 @@
             {% endif %}
         </div>
     </div>
+    </div>
+
+    <div class="tab-pane fade" id="alerts" role="tabpanel">
+        <div id="alerts-form-wrapper">
+            {% include 'projects/partials/instance_health_alerts_form.html' %}
+        </div>
+    </div>
+    </div>
 </div>
+
+<script>
+    document.addEventListener('DOMContentLoaded', function () {
+        var hash = window.location.hash;
+        if (hash) {
+            var trigger = document.querySelector('[data-bs-target="' + hash + '"]');
+            if (trigger) {
+                new bootstrap.Tab(trigger).show();
+            }
+        }
+    });
+
+    // Show a "Saving…" state on the alerts form button while the htmx request is in flight.
+    document.body.addEventListener('htmx:beforeRequest', function (evt) {
+        if (!evt.target || evt.target.id !== 'alerts-form') return;
+        var button = document.getElementById('save-alerts-btn');
+        if (button) {
+            button.disabled = true;
+            button.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>Saving\u2026';
+        }
+    });
+
+    // After the form swaps back in showing the "Saved" state, revert it after a moment.
+    document.body.addEventListener('htmx:afterSettle', function (evt) {
+        if (!evt.target || evt.target.id !== 'alerts-form-wrapper') return;
+        setTimeout(function () {
+            var button = document.getElementById('save-alerts-btn');
+            if (!button) return;
+            button.classList.remove('btn-success');
+            button.classList.add('btn-primary');
+            button.textContent = 'Save changes';
+        }, 2000);
+    });
+</script>
 {% endblock %}
