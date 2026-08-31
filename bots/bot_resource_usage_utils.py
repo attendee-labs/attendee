@@ -11,6 +11,7 @@ dashboard renders, so that resource usage can be compared across every bot.
 from datetime import timedelta
 
 from django.conf import settings
+from django.db import connection
 from django.db.models import Aggregate, FloatField, Max
 from django.db.models.functions import Cast
 from django.utils import timezone
@@ -118,12 +119,7 @@ def _top_bots_by_cpu_p99(snapshots_qs, limit=10):
     spikes" card), then bots are ranked by that value. Returns a list of dicts with
     the bot's object_id, meeting_url and cpu_p99 (millicores).
     """
-    per_bot = (
-        snapshots_qs.annotate(value=Cast("data__cpu_usage_millicores", FloatField()))
-        .values("bot_id", "bot__object_id", "bot__meeting_url")
-        .annotate(cpu_p99=PercentileCont("value", 0.99))
-        .order_by("-cpu_p99")[:limit]
-    )
+    per_bot = snapshots_qs.annotate(value=Cast("data__cpu_usage_millicores", FloatField())).values("bot_id", "bot__object_id", "bot__meeting_url").annotate(cpu_p99=PercentileCont("value", 0.99)).order_by("-cpu_p99")[:limit]
     return [
         {
             "object_id": row["bot__object_id"],
@@ -131,6 +127,57 @@ def _top_bots_by_cpu_p99(snapshots_qs, limit=10):
             "cpu_p99": row["cpu_p99"],
         }
         for row in per_bot
+    ]
+
+
+def _cpu_by_sample_index(snapshots_qs, num_samples=5):
+    """Look at the first `num_samples` CPU snapshots of each bot (ordered by time)
+    and, for each sample position, report the max/p99/p95 of that position's value
+    across every bot.
+
+    This shows whether early-life samples run hotter than later ones: if sample 1's
+    stats are higher than sample 5's, CPU tends to peak at the start of a bot's life.
+
+    Done in a single windowed pass over the already-filtered snapshots. Returns a
+    list of dicts (one per sample position) with keys sample_index, max, p99, p95,
+    bot_count.
+    """
+    inner_qs = snapshots_qs.annotate(value=Cast("data__cpu_usage_millicores", FloatField())).values("bot_id", "created_at", "value").distinct()
+    inner_sql, inner_params = inner_qs.query.sql_with_params()
+
+    sql = f"""
+        WITH filtered AS ({inner_sql}),
+        ranked AS (
+            SELECT
+                value,
+                ROW_NUMBER() OVER (PARTITION BY bot_id ORDER BY created_at ASC) AS sample_index
+            FROM filtered
+        )
+        SELECT
+            sample_index,
+            MAX(value) AS max,
+            PERCENTILE_CONT(0.99) WITHIN GROUP (ORDER BY value) AS p99,
+            PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY value) AS p95,
+            COUNT(*) AS bot_count
+        FROM ranked
+        WHERE sample_index <= %s
+        GROUP BY sample_index
+        ORDER BY sample_index
+    """
+
+    with connection.cursor() as cursor:
+        cursor.execute(sql, [*inner_params, num_samples])
+        rows = cursor.fetchall()
+
+    return [
+        {
+            "sample_index": row[0],
+            "max": row[1],
+            "p99": row[2],
+            "p95": row[3],
+            "bot_count": row[4],
+        }
+        for row in rows
     ]
 
 
@@ -168,6 +215,7 @@ def get_bot_resource_usage_data(project, window=DEFAULT_WINDOW, platform="", rec
     cpu_p99_stats = _per_bot_percentile_stats(snapshots_qs, "cpu_usage_millicores", 0.99)
     ram_stats = _per_bot_stats(snapshots_qs, "ram_usage_megabytes")
     top_bots_by_cpu_p99 = _top_bots_by_cpu_p99(snapshots_qs)
+    cpu_by_sample = _cpu_by_sample_index(snapshots_qs)
 
     return {
         "window": window,
@@ -184,4 +232,5 @@ def get_bot_resource_usage_data(project, window=DEFAULT_WINDOW, platform="", rec
         "cpu_p99_stats": cpu_p99_stats,
         "ram_stats": ram_stats,
         "top_bots_by_cpu_p99": top_bots_by_cpu_p99,
+        "cpu_by_sample": cpu_by_sample,
     }

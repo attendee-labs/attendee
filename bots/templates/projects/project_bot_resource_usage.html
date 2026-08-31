@@ -129,6 +129,43 @@
         </div>
     </div>
 
+    <div class="card mt-4">
+        <div class="card-header">
+            <i class="bi bi-hourglass-top me-1"></i> CPU by sample position (millicores)
+            <span class="text-muted small">— first 5 snapshots of each bot</span>
+        </div>
+        <div class="card-body p-0">
+            {% if cpu_by_sample %}
+            <div class="table-responsive">
+                <table class="table table-sm table-hover mb-0 align-middle">
+                    <thead>
+                        <tr>
+                            <th class="ps-3">Sample</th>
+                            <th class="text-end">Max</th>
+                            <th class="text-end">p99</th>
+                            <th class="text-end pe-3">p95</th>
+                            <th class="text-end pe-3">Bots</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for sample in cpu_by_sample %}
+                        <tr>
+                            <td class="ps-3 text-muted">Sample {{ sample.sample_index }}</td>
+                            <td class="text-end fw-semibold">{{ sample.max|floatformat:0 }}</td>
+                            <td class="text-end fw-semibold">{{ sample.p99|floatformat:0 }}</td>
+                            <td class="text-end pe-3 fw-semibold">{{ sample.p95|floatformat:0 }}</td>
+                            <td class="text-end pe-3 text-muted">{{ sample.bot_count }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <p class="text-muted text-center mb-0 py-3">No data.</p>
+            {% endif %}
+        </div>
+    </div>
+
     <div class="row g-4 mt-1">
         <div class="col-md-6">
             <div class="card h-100">
