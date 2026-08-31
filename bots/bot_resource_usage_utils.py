@@ -111,6 +111,29 @@ def _per_bot_percentile_stats(snapshots_qs, data_key, per_bot_percentile):
     )
 
 
+def _top_bots_by_cpu_p99(snapshots_qs, limit=10):
+    """Return the `limit` bots with the highest per-bot p99 CPU usage.
+
+    Each bot is reduced to the p99 of its CPU samples (matching the "ignores brief
+    spikes" card), then bots are ranked by that value. Returns a list of dicts with
+    the bot's object_id, meeting_url and cpu_p99 (millicores).
+    """
+    per_bot = (
+        snapshots_qs.annotate(value=Cast("data__cpu_usage_millicores", FloatField()))
+        .values("bot_id", "bot__object_id", "bot__meeting_url")
+        .annotate(cpu_p99=PercentileCont("value", 0.99))
+        .order_by("-cpu_p99")[:limit]
+    )
+    return [
+        {
+            "object_id": row["bot__object_id"],
+            "meeting_url": row["bot__meeting_url"],
+            "cpu_p99": row["cpu_p99"],
+        }
+        for row in per_bot
+    ]
+
+
 def get_bot_resource_usage_data(project, window=DEFAULT_WINDOW, platform="", recording=""):
     """Return the template context for the bot resource usage dashboard.
 
@@ -139,10 +162,12 @@ def get_bot_resource_usage_data(project, window=DEFAULT_WINDOW, platform="", rec
         )
 
     latest_snapshot_at = snapshots_qs.order_by("-created_at").values_list("created_at", flat=True).first()
+    bot_count = snapshots_qs.values("bot_id").distinct().count()
 
     cpu_stats = _per_bot_stats(snapshots_qs, "cpu_usage_millicores")
     cpu_p99_stats = _per_bot_percentile_stats(snapshots_qs, "cpu_usage_millicores", 0.99)
     ram_stats = _per_bot_stats(snapshots_qs, "ram_usage_megabytes")
+    top_bots_by_cpu_p99 = _top_bots_by_cpu_p99(snapshots_qs)
 
     return {
         "window": window,
@@ -153,8 +178,10 @@ def get_bot_resource_usage_data(project, window=DEFAULT_WINDOW, platform="", rec
         "recording": recording,
         "recording_options": RECORDING_OPTIONS,
         "snapshot_count": snapshots_qs.count(),
+        "bot_count": bot_count,
         "latest_snapshot_at": latest_snapshot_at,
         "cpu_stats": cpu_stats,
         "cpu_p99_stats": cpu_p99_stats,
         "ram_stats": ram_stats,
+        "top_bots_by_cpu_p99": top_bots_by_cpu_p99,
     }
