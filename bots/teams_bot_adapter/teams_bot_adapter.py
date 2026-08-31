@@ -232,5 +232,5 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
 
     def get_per_participant_audio_utterance_delay_ms(self):
         if self.room_sync_source_participant_configuration:
-            return 500
+            return 750
         return 2000
