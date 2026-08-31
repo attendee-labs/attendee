@@ -901,6 +901,11 @@ def get_webhook_trigger_enum():
     return list(WebhookTriggerTypes._get_mapping().values())
 
 
+def build_webhook_url_regexp():
+    """Regexp for webhook URLs. Allow http:// when REQUIRE_HTTPS_WEBHOOKS is disabled."""
+    return "^https://.*" if settings.REQUIRE_HTTPS_WEBHOOKS else "^https?://.*"
+
+
 @extend_schema_field(
     {
         "type": "array",
@@ -1234,7 +1239,7 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
             "properties": {
                 "url": {
                     "type": "string",
-                    "pattern": "^https://.*",
+                    "pattern": build_webhook_url_regexp(),
                 },
                 "triggers": {
                     "type": "array",

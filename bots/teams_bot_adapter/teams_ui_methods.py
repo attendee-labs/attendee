@@ -113,7 +113,7 @@ class TeamsUIMethods:
             self.x11_input.move_abs(screen_width // 2, screen_height // 2)
             time.sleep(random.uniform(0.1, 0.4))
 
-            num_movements = 5
+            num_movements = 10
             logger.info(f"Wiggling mouse at OS level with {num_movements} movements")
             for _ in range(num_movements):
                 target_x = random.randint(0, screen_width - 1)

@@ -294,7 +294,7 @@ class InstanceHealthSnapshotTaker:
             return
 
         elapsed_seconds = time.monotonic() - now
-        logger.info(f"Saved instance health snapshot in {elapsed_seconds:.3f}s: {snapshot_data}")
+        logger.info(f"Saved instance health snapshot in {elapsed_seconds:.3f}s: {snapshot_data}", extra={"instance_health_snapshot_data": snapshot_data})
 
     def _delete_old_snapshots_if_needed(self, now):
         """Enforce the retention window if a cleanup pass is due."""

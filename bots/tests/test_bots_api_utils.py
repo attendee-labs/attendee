@@ -604,6 +604,16 @@ class TestCreateWebhookSubscription(TestCase):
         with self.assertRaises(ValidationError):
             create_webhook_subscription("https://example3.com", ["bot.state_change"], self.project)
 
+    @override_settings(REQUIRE_HTTPS_WEBHOOKS=False)
+    def test_create_webhook_subscription_allows_http_when_https_not_required(self):
+        create_webhook_subscription("http://example.com", ["bot.state_change"], self.project)
+        self.assertTrue(WebhookSubscription.objects.filter(url="http://example.com").exists())
+
+    @override_settings(REQUIRE_HTTPS_WEBHOOKS=True)
+    def test_create_webhook_subscription_rejects_http_when_https_required(self):
+        with self.assertRaises(ValidationError):
+            create_webhook_subscription("http://example.com", ["bot.state_change"], self.project)
+
 
 class TestPatchBot(TestCase):
     def setUp(self):
