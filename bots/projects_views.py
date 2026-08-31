@@ -1275,7 +1275,14 @@ class ProjectBotResourceUsageView(AdminRequiredMixin, ProjectUrlContextMixin, Vi
 
         project = get_project_for_user(user=request.user, project_object_id=object_id)
         context = self.get_project_context(object_id, project)
-        context.update(get_bot_resource_usage_data(request.GET.get("window", BOT_RESOURCE_USAGE_DEFAULT_WINDOW)))
+        context.update(
+            get_bot_resource_usage_data(
+                project,
+                window=request.GET.get("window", BOT_RESOURCE_USAGE_DEFAULT_WINDOW),
+                platform=request.GET.get("platform", ""),
+                recording=request.GET.get("recording", ""),
+            )
+        )
         return render(request, "projects/project_bot_resource_usage.html", context)
 
 

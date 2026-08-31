@@ -5,28 +5,87 @@
 <div class="container mt-4">
     <h2 class="mb-3">Bot Resource Usage</h2>
 
-    <div class="d-flex justify-content-end align-items-center mb-1">
-        <div class="d-flex gap-3 align-items-center">
+    <div class="d-flex flex-wrap align-items-center gap-4 mb-1">
+        <div class="d-flex gap-2 align-items-center">
             <span class="text-muted small fw-semibold">Time period</span>
             <div class="btn-group btn-group-sm">
                 {% for option in window_options %}
-                <a href="?window={{ option.key }}" class="btn {% if window == option.key %}btn-primary{% else %}btn-outline-primary{% endif %}">{{ option.label }}</a>
+                <a href="?window={{ option.key }}&platform={{ platform }}&recording={{ recording }}" class="btn {% if window == option.key %}btn-primary{% else %}btn-outline-primary{% endif %}">{{ option.label }}</a>
+                {% endfor %}
+            </div>
+        </div>
+        <div class="d-flex gap-2 align-items-center">
+            <span class="text-muted small fw-semibold">Meeting type</span>
+            <div class="btn-group btn-group-sm">
+                {% for option in platform_options %}
+                <a href="?window={{ window }}&platform={{ option.key }}&recording={{ recording }}" class="btn {% if platform == option.key %}btn-primary{% else %}btn-outline-primary{% endif %}">{{ option.label }}</a>
+                {% endfor %}
+            </div>
+        </div>
+        <div class="d-flex gap-2 align-items-center">
+            <span class="text-muted small fw-semibold">Recording</span>
+            <div class="btn-group btn-group-sm">
+                {% for option in recording_options %}
+                <a href="?window={{ window }}&platform={{ platform }}&recording={{ option.key }}" class="btn {% if recording == option.key %}btn-primary{% else %}btn-outline-primary{% endif %}">{{ option.label }}</a>
                 {% endfor %}
             </div>
         </div>
     </div>
-    <p class="text-muted mb-3">
-        {% if latest_snapshot_at %}
-            Last snapshot {{ latest_snapshot_at|timesince_or_seconds }} ago. {{ snapshot_count }} snapshot{{ snapshot_count|pluralize }} in the last {{ window_label }}.
-        {% else %}
-            No resource snapshots have been recorded yet.
-        {% endif %}
-    </p>
 
-    <div class="card mb-4">
-        <div class="card-body text-center text-muted py-5">
-            <i class="bi bi-cpu fs-1 d-block mb-3"></i>
-            <p class="mb-0">Bot resource usage visualizations are coming soon.</p>
+    <div class="row g-4 mt-4">
+        <div class="col-md-6">
+            <div class="card h-100">
+                <div class="card-header">
+                    <i class="bi bi-cpu me-1"></i> Peak CPU per bot (millicores)
+                </div>
+                <div class="card-body">
+                    {% if cpu_stats.max is not None %}
+                    <div class="row text-center">
+                        <div class="col">
+                            <div class="text-muted small">Max</div>
+                            <div class="fs-4 fw-semibold">{{ cpu_stats.max|floatformat:0 }}</div>
+                        </div>
+                        <div class="col">
+                            <div class="text-muted small">p99</div>
+                            <div class="fs-4 fw-semibold">{{ cpu_stats.p99|floatformat:0 }}</div>
+                        </div>
+                        <div class="col">
+                            <div class="text-muted small">p95</div>
+                            <div class="fs-4 fw-semibold">{{ cpu_stats.p95|floatformat:0 }}</div>
+                        </div>
+                    </div>
+                    {% else %}
+                    <p class="text-muted text-center mb-0 py-3">No data.</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        <div class="col-md-6">
+            <div class="card h-100">
+                <div class="card-header">
+                    <i class="bi bi-memory me-1"></i> Peak RAM per bot (MB)
+                </div>
+                <div class="card-body">
+                    {% if ram_stats.max is not None %}
+                    <div class="row text-center">
+                        <div class="col">
+                            <div class="text-muted small">Max</div>
+                            <div class="fs-4 fw-semibold">{{ ram_stats.max|floatformat:0 }}</div>
+                        </div>
+                        <div class="col">
+                            <div class="text-muted small">p99</div>
+                            <div class="fs-4 fw-semibold">{{ ram_stats.p99|floatformat:0 }}</div>
+                        </div>
+                        <div class="col">
+                            <div class="text-muted small">p95</div>
+                            <div class="fs-4 fw-semibold">{{ ram_stats.p95|floatformat:0 }}</div>
+                        </div>
+                    </div>
+                    {% else %}
+                    <p class="text-muted text-center mb-0 py-3">No data.</p>
+                    {% endif %}
+                </div>
+            </div>
         </div>
     </div>
 </div>
