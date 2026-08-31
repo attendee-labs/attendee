@@ -63,6 +63,34 @@
         <div class="col-md-6">
             <div class="card h-100">
                 <div class="card-header">
+                    <i class="bi bi-cpu me-1"></i> p99 CPU per bot (millicores)
+                    <span class="text-muted small">— ignores brief spikes</span>
+                </div>
+                <div class="card-body">
+                    {% if cpu_p99_stats.max is not None %}
+                    <div class="row text-center">
+                        <div class="col">
+                            <div class="text-muted small">Max</div>
+                            <div class="fs-4 fw-semibold">{{ cpu_p99_stats.max|floatformat:0 }}</div>
+                        </div>
+                        <div class="col">
+                            <div class="text-muted small">p99</div>
+                            <div class="fs-4 fw-semibold">{{ cpu_p99_stats.p99|floatformat:0 }}</div>
+                        </div>
+                        <div class="col">
+                            <div class="text-muted small">p95</div>
+                            <div class="fs-4 fw-semibold">{{ cpu_p99_stats.p95|floatformat:0 }}</div>
+                        </div>
+                    </div>
+                    {% else %}
+                    <p class="text-muted text-center mb-0 py-3">No data.</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        <div class="col-md-6">
+            <div class="card h-100">
+                <div class="card-header">
                     <i class="bi bi-memory me-1"></i> Peak RAM per bot (MB)
                 </div>
                 <div class="card-body">

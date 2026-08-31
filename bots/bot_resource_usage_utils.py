@@ -87,11 +87,27 @@ def _per_bot_stats(snapshots_qs, data_key):
     those per-bot maxima. Returns a dict with keys max, p95, p99 (values may be None
     when there are no snapshots).
     """
-    per_bot = snapshots_qs.annotate(value=Cast(f"data__{data_key}", FloatField())).values("bot_id").annotate(max_value=Max("value"))
+    per_bot = snapshots_qs.annotate(value=Cast(f"data__{data_key}", FloatField())).values("bot_id").annotate(bot_value=Max("value"))
     return per_bot.aggregate(
-        max=Max("max_value"),
-        p99=PercentileCont("max_value", 0.99),
-        p95=PercentileCont("max_value", 0.95),
+        max=Max("bot_value"),
+        p99=PercentileCont("bot_value", 0.99),
+        p95=PercentileCont("bot_value", 0.95),
+    )
+
+
+def _per_bot_percentile_stats(snapshots_qs, data_key, per_bot_percentile):
+    """Like _per_bot_stats, but reduce each bot to a percentile of its samples
+    (instead of its max) before taking the max/p95/p99 across bots.
+
+    Using a per-bot percentile discards brief spikes: a bot that only touched a
+    high value for a single sample is represented by its typical high usage
+    rather than that one-off peak.
+    """
+    per_bot = snapshots_qs.annotate(value=Cast(f"data__{data_key}", FloatField())).values("bot_id").annotate(bot_value=PercentileCont("value", per_bot_percentile))
+    return per_bot.aggregate(
+        max=Max("bot_value"),
+        p99=PercentileCont("bot_value", 0.99),
+        p95=PercentileCont("bot_value", 0.95),
     )
 
 
@@ -125,6 +141,7 @@ def get_bot_resource_usage_data(project, window=DEFAULT_WINDOW, platform="", rec
     latest_snapshot_at = snapshots_qs.order_by("-created_at").values_list("created_at", flat=True).first()
 
     cpu_stats = _per_bot_stats(snapshots_qs, "cpu_usage_millicores")
+    cpu_p99_stats = _per_bot_percentile_stats(snapshots_qs, "cpu_usage_millicores", 0.99)
     ram_stats = _per_bot_stats(snapshots_qs, "ram_usage_megabytes")
 
     return {
@@ -138,5 +155,6 @@ def get_bot_resource_usage_data(project, window=DEFAULT_WINDOW, platform="", rec
         "snapshot_count": snapshots_qs.count(),
         "latest_snapshot_at": latest_snapshot_at,
         "cpu_stats": cpu_stats,
+        "cpu_p99_stats": cpu_p99_stats,
         "ram_stats": ram_stats,
     }
