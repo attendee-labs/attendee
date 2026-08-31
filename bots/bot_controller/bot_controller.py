@@ -216,6 +216,7 @@ class BotController:
                 self.create_google_meet_bot_login_session,
             ),
             ui_interaction_mode=self.bot_in_db.google_meet_ui_interaction_mode(),
+            livekit_settings=self.bot_in_db.voice_agent_livekit_settings(),
         )
 
     def retrieve_teams_bot_login_credentials(self):
@@ -361,6 +362,7 @@ class BotController:
             modify_dom_for_video_recording=self.should_modify_dom_for_video_recording_for_web_bots(),
             record_participant_speech_start_stop_events=self.bot_in_db.record_participant_speech_start_stop_events(),
             zoom_tokens=zoom_tokens,
+            livekit_settings=self.bot_in_db.voice_agent_livekit_settings(),
         )
 
     def get_zoom_bot_adapter(self):
