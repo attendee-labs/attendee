@@ -132,9 +132,9 @@ urlpatterns = [
         name="project-instance-health",
     ),
     path(
-        "<str:object_id>/bot-resource-consumption/",
-        projects_views.ProjectBotResourceConsumptionView.as_view(),
-        name="project-bot-resource-consumption",
+        "<str:object_id>/bot-resource-usage/",
+        projects_views.ProjectBotResourceUsageView.as_view(),
+        name="project-bot-resource-usage",
     ),
     path(
         "<str:object_id>/billing/",
