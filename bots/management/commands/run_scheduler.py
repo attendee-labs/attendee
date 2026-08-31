@@ -14,7 +14,7 @@ from django.db.models import Q
 from django.utils import timezone
 
 from accounts.models import Organization
-from bots.instance_health_snapshot_taker import InstanceHealthSnapshotTaker
+from bots.instance_health_snapshot_taker import InstanceHealthSnapshotTaker, get_celery_queue_depths
 from bots.models import Bot, BotStates, Calendar, CalendarStates, ZoomOAuthConnection, ZoomOAuthConnectionStates
 from bots.tasks.autopay_charge_task import enqueue_autopay_charge_task
 from bots.tasks.launch_scheduled_bot_task import launch_scheduled_bot
@@ -57,6 +57,17 @@ class Command(BaseCommand):
             self._redis_client = redis.from_url(settings.REDIS_URL_WITH_PARAMS)
         return self._redis_client
 
+    def _log_celery_queue_sizes(self):
+        """Log the size of every Celery queue, when LOG_CELERY_QUEUE_SIZES is turned on."""
+        if not settings.LOG_CELERY_QUEUE_SIZES:
+            return
+        try:
+            for queue_name, queue_size in get_celery_queue_depths(self._get_redis_client()).items():
+                log.info("Celery queue %s size: %d", queue_name, queue_size)
+        except Exception:
+            log.exception("Failed to get Celery queue sizes")
+            self._redis_client = None  # Reset connection on failure
+
     def _write_heartbeat(self):
         """Rewrite the heartbeat file so a liveness probe can detect a stalled loop."""
         if not SCHEDULER_HEARTBEAT_FILE:
@@ -82,6 +93,7 @@ class Command(BaseCommand):
         while self._keep_running:
             began = time.monotonic()
             try:
+                self._log_celery_queue_sizes()
                 instance_health_snapshot_taker.save_snapshot_if_needed()
                 self._run_scheduled_bots()
                 self._run_periodic_calendar_syncs()

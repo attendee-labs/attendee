@@ -5,7 +5,7 @@ import signal
 import tempfile
 from unittest.mock import MagicMock, patch
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.utils import timezone as django_timezone
 
 from accounts.models import Organization
@@ -68,6 +68,43 @@ class RunSchedulerCommandTestCase(TestCase):
 
         # Verify the shutdown flag was set
         self.assertFalse(command._keep_running)
+
+    @override_settings(LOG_CELERY_QUEUE_SIZES=True)
+    def test_log_celery_queue_sizes_logs_every_queue(self):
+        """With LOG_CELERY_QUEUE_SIZES on, each queue's size is logged."""
+        command = Command()
+
+        with patch.object(command, "_get_redis_client", return_value=MagicMock()):
+            with patch("bots.management.commands.run_scheduler.get_celery_queue_depths", return_value={"bots": 2, "celery": 7}):
+                with self.assertLogs("bots.management.commands.run_scheduler", level="INFO") as logs:
+                    command._log_celery_queue_sizes()
+
+        self.assertIn("Celery queue bots size: 2", logs.output[0])
+        self.assertIn("Celery queue celery size: 7", logs.output[1])
+
+    @override_settings(LOG_CELERY_QUEUE_SIZES=False)
+    def test_log_celery_queue_sizes_noop_when_disabled(self):
+        """The queue sizes are off by default, so Redis is never touched."""
+        command = Command()
+
+        with patch.object(command, "_get_redis_client") as mock_get_redis_client:
+            with patch("bots.management.commands.run_scheduler.get_celery_queue_depths") as mock_get_depths:
+                command._log_celery_queue_sizes()
+
+        mock_get_redis_client.assert_not_called()
+        mock_get_depths.assert_not_called()
+
+    @override_settings(LOG_CELERY_QUEUE_SIZES=True)
+    def test_log_celery_queue_sizes_swallows_errors(self):
+        """A failed queue read must never raise, and it drops the stale connection."""
+        command = Command()
+        command._redis_client = MagicMock()
+
+        with patch("bots.management.commands.run_scheduler.get_celery_queue_depths", side_effect=ConnectionError("redis is down")):
+            with self.assertLogs("bots.management.commands.run_scheduler", level="ERROR"):
+                command._log_celery_queue_sizes()
+
+        self.assertIsNone(command._redis_client)
 
     def test_write_heartbeat_creates_file_with_timestamp(self):
         """_write_heartbeat writes the current time to the heartbeat file."""
