@@ -217,6 +217,17 @@
                                     <i class="bi bi-heart-pulse"></i> Instance Health
                                 </a>
                                 {% endif %}
+                                {% if can_view_bot_resource_consumption %}
+                                <a class="nav-link ps-4"
+                                hx-get="{% url 'projects:project-bot-resource-consumption' project.object_id %}"
+                                hx-select="#content"
+                                hx-target="#content"
+                                hx-swap="outerHTML"
+                                hx-push-url="true"
+                                onclick="setActiveLink(this)">
+                                    <i class="bi bi-cpu"></i> Bot Resource Consumption
+                                </a>
+                                {% endif %}
                             </div>
                         </div>
 

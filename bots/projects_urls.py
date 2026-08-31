@@ -132,6 +132,11 @@ urlpatterns = [
         name="project-instance-health",
     ),
     path(
+        "<str:object_id>/bot-resource-consumption/",
+        projects_views.ProjectBotResourceConsumptionView.as_view(),
+        name="project-bot-resource-consumption",
+    ),
+    path(
         "<str:object_id>/billing/",
         projects_views.ProjectBillingView.as_view(),
         name="project-billing",
