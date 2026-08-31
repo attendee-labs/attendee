@@ -2580,7 +2580,7 @@ const handleVideoTrack = async (event) => {
 
     let lastAudioFormat = null;  // Track last seen format
     const audioDataQueue = [];
-    const ACTIVE_SPEAKER_LATENCY_MS = 2000;
+    const ACTIVE_SPEAKER_LATENCY_MS = window.initialData.perParticipantAudioUtteranceDelayMs;
     let trackIsNonSilent = false;
     let handleAudioTrackDebugInfo = {
         framesWithoutDominantSpeaker: 0,
