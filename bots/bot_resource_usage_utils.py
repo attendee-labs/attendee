@@ -24,6 +24,7 @@ WINDOWS = {
     "6h": {"label": "6 hours", "hours": 6},
     "24h": {"label": "24 hours", "hours": 24},
     "7d": {"label": "7 days", "hours": 24 * 7},
+    "30d": {"label": "30 days", "hours": 24 * 30},
 }
 DEFAULT_WINDOW = "24h"
 
@@ -112,7 +113,7 @@ def _per_bot_percentile_stats(snapshots_qs, data_key, per_bot_percentile):
     )
 
 
-def _top_bots_by_cpu_p99(snapshots_qs, limit=10):
+def _top_bots_by_cpu_p99(snapshots_qs, limit=25):
     """Return the `limit` bots with the highest per-bot p99 CPU usage.
 
     Each bot is reduced to the p99 of its CPU samples (matching the "ignores brief
