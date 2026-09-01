@@ -376,6 +376,9 @@ BOT_RECORDING_VIDEO_DEGRADE_THRESHOLD_BYTES = int(os.getenv("BOT_RECORDING_VIDEO
 SAVE_INSTANCE_HEALTH_SNAPSHOTS = os.getenv("SAVE_INSTANCE_HEALTH_SNAPSHOTS", "false") == "true"
 INSTANCE_HEALTH_ONLY_VIEWABLE_BY_SUPERUSERS = os.getenv("INSTANCE_HEALTH_ONLY_VIEWABLE_BY_SUPERUSERS", "false") == "true"
 
+SAVE_BOT_RESOURCE_SNAPSHOTS = str(os.getenv("SAVE_BOT_RESOURCE_SNAPSHOTS", "false")).lower() == "true"
+BOT_RESOURCE_USAGE_ONLY_VIEWABLE_BY_SUPERUSERS = os.getenv("BOT_RESOURCE_USAGE_ONLY_VIEWABLE_BY_SUPERUSERS", "false") == "true"
+
 # Content Security Policy
 if os.getenv("ENABLE_CSP", "false") == "true":
     _csp_media_src = [d for d in os.getenv("CSP_MEDIA_SRC", "").split(",") if d]
