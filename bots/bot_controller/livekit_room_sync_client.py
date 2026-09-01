@@ -98,8 +98,41 @@ class LivekitRoomSyncClient:
             # LiveKit roster, so there is nothing to sync.
             logger.debug(f"Ignoring participant event type {event_type} for LiveKit room sync")
 
+    def handle_chat_message(self, chat_message):
+        """Mirror a meeting chat message from its synced LiveKit participant.
+
+        ``chat_message`` is the same in-memory chat message dict used elsewhere in
+        the bot controller, containing at least ``participant_uuid`` and ``text``.
+        The message is sent from the LiveKit participant that mirrors the meeting
+        participant who authored it, so the LiveKit room reflects the meeting chat.
+        """
+        participant_uuid = chat_message["participant_uuid"]
+        text = chat_message.get("text")
+        if not text:
+            return
+        self._run_coroutine(self._send_chat_message(participant_uuid, text))
+
+    async def _send_chat_message(self, participant_uuid: str, text: str):
+        room = self._rooms.get(participant_uuid)
+        if room is None:
+            # The chat message can arrive before the join event has been fully
+            # processed, in which case there is no LiveKit participant to send
+            # it from yet.
+            logger.warning(f"No LiveKit participant to mirror chat message from for {participant_uuid}")
+            return
+
+        try:
+            await room.local_participant.send_text(text, topic=self.CHAT_TOPIC)
+        except Exception as e:
+            logger.exception(f"Failed to mirror chat message for LiveKit participant {participant_uuid}: {e}")
+
     # Tokens are valid for 6 hours, which comfortably outlasts any meeting.
     TOKEN_TTL_SECONDS = 6 * 60 * 60
+
+    # LiveKit's convention for chat messages sent over text streams. Clients that
+    # follow this convention (including the LiveKit JS SDK) surface text sent on
+    # this topic as chat messages.
+    CHAT_TOPIC = "lk.chat"
 
     def _build_token(self, identity: str, name: str | None, video_grants: dict) -> str:
         """Mint a LiveKit access token.
@@ -130,8 +163,12 @@ class LivekitRoomSyncClient:
         return jwt.encode(claims, self.api_secret, algorithm="HS256")
 
     def _build_participant_token(self, participant_uuid: str, name: str | None) -> str:
-        """Mint a publish-only token for mirroring a meeting participant."""
-        return self._build_token(participant_uuid, name, {"canPublish": True, "canSubscribe": False})
+        """Mint a publish-only token for mirroring a meeting participant.
+
+        ``canPublishData`` is granted in addition to ``canPublish`` so the synced
+        participant can also mirror chat messages over LiveKit's data channel.
+        """
+        return self._build_token(participant_uuid, name, {"canPublish": True, "canPublishData": True, "canSubscribe": False})
 
     def _build_source_subscriber_token(self, identity: str) -> str:
         """Mint a hidden, subscribe-only LiveKit access token for the JS SDK.

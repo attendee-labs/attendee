@@ -1666,6 +1666,11 @@ class BotController:
             logger.warning(f"Warning: No participant found for chat message: {chat_message}")
             return
 
+        # Mirror participant chat messages into the LiveKit room if room sync is enabled
+        # Don't mirror messages sent by the bot itself
+        if self.room_sync_client is not None and not participant["participant_is_the_bot"]:
+            self.room_sync_client.handle_chat_message(chat_message)
+
         participant, _ = Participant.objects.get_or_create(
             bot=self.bot_in_db,
             uuid=participant["participant_uuid"],
