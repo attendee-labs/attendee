@@ -14,6 +14,7 @@ from django.db.models import Q
 from django.utils import timezone
 
 from accounts.models import Organization
+from bots.instance_health_alert_manager import InstanceHealthAlertManager
 from bots.instance_health_snapshot_taker import InstanceHealthSnapshotTaker
 from bots.models import Bot, BotStates, Calendar, CalendarStates, ZoomOAuthConnection, ZoomOAuthConnectionStates
 from bots.tasks.autopay_charge_task import enqueue_autopay_charge_task
@@ -78,11 +79,13 @@ class Command(BaseCommand):
         self._write_heartbeat()
 
         instance_health_snapshot_taker = InstanceHealthSnapshotTaker()
+        instance_health_alert_manager = InstanceHealthAlertManager()
 
         while self._keep_running:
             began = time.monotonic()
             try:
                 instance_health_snapshot_taker.save_snapshot_if_needed()
+                instance_health_alert_manager.update_alerts()
                 self._run_scheduled_bots()
                 self._run_periodic_calendar_syncs()
                 self._run_periodic_zoom_oauth_connection_syncs()
