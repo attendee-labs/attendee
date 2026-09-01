@@ -12,7 +12,7 @@ from datetime import timedelta
 
 from django.conf import settings
 from django.db import connection
-from django.db.models import Aggregate, FloatField, Max
+from django.db.models import Aggregate, F, FloatField, Max
 from django.db.models.functions import Cast
 from django.utils import timezone
 
@@ -139,11 +139,15 @@ def _cpu_by_sample_index(snapshots_qs, num_samples=5):
     This shows whether early-life samples run hotter than later ones: if sample 1's
     stats are higher than sample 5's, CPU tends to peak at the start of a bot's life.
 
+    Samples taken before a bot's join_at are discarded so that pre-join startup
+    activity does not pollute the early sample positions. Bots without a join_at
+    keep all of their samples.
+
     Done in a single windowed pass over the already-filtered snapshots. Returns a
     list of dicts (one per sample position) with keys sample_index, max, p99, p95,
     bot_count.
     """
-    inner_qs = snapshots_qs.annotate(value=Cast("data__cpu_usage_millicores", FloatField())).values("bot_id", "created_at", "value").distinct()
+    inner_qs = snapshots_qs.annotate(value=Cast("data__cpu_usage_millicores", FloatField())).values("bot_id", "created_at", "value", join_at=F("bot__join_at")).distinct()
     inner_sql, inner_params = inner_qs.query.sql_with_params()
 
     sql = f"""
@@ -153,6 +157,7 @@ def _cpu_by_sample_index(snapshots_qs, num_samples=5):
                 value,
                 ROW_NUMBER() OVER (PARTITION BY bot_id ORDER BY created_at ASC) AS sample_index
             FROM filtered
+            WHERE join_at IS NULL OR created_at >= join_at
         )
         SELECT
             sample_index,
