@@ -59,10 +59,34 @@
           this.removeRemoteTrack(track, publication, participant)
         );
   
-        room.on(RoomEvent.Disconnected, () => {
-          console.info("[LiveKit receiver] Room disconnected");
-        });
+      room.on(RoomEvent.TrackMuted, (publication, participant) =>
+        this.handleRemoteMuteChange(publication, participant, true)
+      );
+
+      room.on(RoomEvent.TrackUnmuted, (publication, participant) =>
+        this.handleRemoteMuteChange(publication, participant, false)
+      );
+
+      room.on(RoomEvent.Disconnected, () => {
+        console.info("[LiveKit receiver] Room disconnected");
+      });
+    }
+
+    /*
+     * The participant's audio reaches the meeting through the bot's
+     * microphone, so their mute state has to be mirrored onto it.
+     */
+    handleRemoteMuteChange(publication, participant, muted) {
+      if (publication.kind !== "audio" || !this.acceptsParticipant(participant)) {
+        return;
       }
+
+      if (muted) {
+        window.botOutputManager?.disableMic();
+      } else {
+        window.botOutputManager?.ensureMicOn();
+      }
+    }
   
       /*
        * A LiveKit agent publishing for someone else carries that person's
