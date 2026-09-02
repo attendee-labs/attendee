@@ -1333,8 +1333,10 @@ class ProjectBillingView(AdminRequiredMixin, ProjectUrlContextMixin, ListView):
         return context
 
 
-class CheckoutSuccessView(LoginRequiredMixin, ProjectUrlContextMixin, View):
+class CheckoutSuccessView(AdminRequiredMixin, ProjectUrlContextMixin, View):
     def get(self, request, object_id):
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
+
         session_id = request.GET.get("session_id")
         if not session_id:
             return HttpResponse("No session ID provided", status=400)
@@ -1345,13 +1347,23 @@ class CheckoutSuccessView(LoginRequiredMixin, ProjectUrlContextMixin, View):
         except Exception as e:
             return HttpResponse(f"Error retrieving session details: {e}", status=400)
 
+        # Only credit after Stripe confirms payment. "paid" covers successful card
+        # payments; "no_payment_required" covers zero-amount / already-settled sessions.
+        if checkout_session.payment_status not in ("paid", "no_payment_required"):
+            return HttpResponse(
+                f"Checkout session is not paid (payment_status={checkout_session.payment_status}). Credits will not be added.",
+                status=400,
+            )
+
         process_checkout_session_completed(checkout_session)
 
-        return redirect(reverse("bots:project-billing", kwargs={"object_id": object_id}))
+        return redirect(reverse("bots:project-billing", kwargs={"object_id": project.object_id}))
 
 
-class CreateCheckoutSessionView(LoginRequiredMixin, ProjectUrlContextMixin, View):
+class CreateCheckoutSessionView(AdminRequiredMixin, ProjectUrlContextMixin, View):
     def post(self, request, object_id):
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
+
         # Get the purchase amount from the form submission
         try:
             purchase_amount = float(request.POST.get("purchase_amount", 50.0))
@@ -1388,7 +1400,7 @@ class CreateCheckoutSessionView(LoginRequiredMixin, ProjectUrlContextMixin, View
             success_url=request.build_absolute_uri(reverse("bots:checkout-success", kwargs={"object_id": object_id})) + "?session_id={CHECKOUT_SESSION_ID}",
             cancel_url=request.build_absolute_uri(reverse("bots:project-billing", kwargs={"object_id": object_id})),
             metadata={
-                "organization_id": str(request.user.organization.id),
+                "organization_id": str(project.organization.id),
                 "user_id": str(request.user.id),
                 "credit_amount": str(credit_amount),
             },
