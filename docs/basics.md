@@ -51,6 +51,7 @@ Transcription Settings
 Recording Settings
    - Recording type (Audio and Video / Audio Only)
    - Recording view (Speaker View / Gallery View)
+   - Meeting chat message recording
 
 Automatic leave settings
    - How long should the bot wait to be let into the meeting before giving up?
@@ -61,6 +62,20 @@ Automatic leave settings
 Webhooks
    - Bot state changes
    - Transcript updates
+
+### Disabling chat message recording
+
+By default, bots record chat messages sent by meeting participants. To disable incoming chat message recording, set `record_chat_messages` to `false`:
+
+```json
+{
+  "recording_settings": {
+    "record_chat_messages": false
+  }
+}
+```
+
+This setting does not prevent the bot from sending chat messages.
 
 ## Platform Support
 Currently supported platforms:
