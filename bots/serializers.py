@@ -1021,7 +1021,12 @@ class OutputVideoRequestSerializer(serializers.Serializer):
             raise serializers.ValidationError("URL must start with https://")
         if not value.endswith(".mp4"):
             raise serializers.ValidationError("URL must end with .mp4")
-        return value
+        from bots.ssrf import assert_safe_https_media_url
+
+        try:
+            return assert_safe_https_media_url(value)
+        except ValueError as e:
+            raise serializers.ValidationError(str(e))
 
 
 WEBSOCKET_SETTINGS_SCHEMA = {
