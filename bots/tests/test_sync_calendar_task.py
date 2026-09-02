@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 from datetime import timezone as python_timezone
+from contextlib import contextmanager
 from unittest.mock import Mock, patch
 
 import requests
@@ -31,6 +32,11 @@ from bots.tasks.sync_calendar_task import (
     sync_calendar,
 )
 from bots.webhook_payloads import calendar_webhook_payload
+
+
+@contextmanager
+def _calendar_noop_lock(*args, **kwargs):
+    yield
 
 
 class TestExtractMeetingUrlFromText(TestCase):
@@ -288,8 +294,10 @@ class TestSyncCalendar(TestCase):
         self.assertEqual(result, {"success": True})
 
     @patch("bots.tasks.sync_calendar_task.MicrosoftCalendarSyncHandler")
-    def test_sync_calendar_microsoft(self, mock_handler_class):
+    @patch("bots.tasks.sync_calendar_task.calendar_sync_lock")
+    def test_sync_calendar_microsoft(self, mock_lock, mock_handler_class):
         """Test sync_calendar task creates MicrosoftCalendarSyncHandler for Microsoft calendar."""
+        mock_lock.side_effect = lambda *args, **kwargs: _calendar_noop_lock()
         calendar = Calendar.objects.create(project=self.project, platform=CalendarPlatform.MICROSOFT, client_id="test_client_id")
         mock_handler = Mock()
         mock_handler.sync_events.return_value = {"success": True}
@@ -297,6 +305,7 @@ class TestSyncCalendar(TestCase):
 
         result = sync_calendar(calendar.id)
 
+        mock_lock.assert_called_with(calendar.id)
         mock_handler_class.assert_called_once_with(calendar.id)
         mock_handler.sync_events.assert_called_once()
         self.assertEqual(result, {"success": True})
@@ -979,6 +988,15 @@ class TestMicrosoftNotificationChannelLifecycle(TransactionTestCase):
 
         settings.CELERY_TASK_ALWAYS_EAGER = True
         settings.CELERY_TASK_EAGER_PROPAGATES = True
+        self.lock_patcher = patch(
+            "bots.tasks.sync_calendar_task.calendar_sync_lock",
+            side_effect=_calendar_noop_lock,
+        )
+        self.lock_patcher.start()
+
+    def tearDown(self):
+        self.lock_patcher.stop()
+        super().tearDown()
 
     @patch("bots.tasks.sync_calendar_task.MicrosoftCalendarSyncHandler._list_events")
     @patch("bots.tasks.sync_calendar_task.MicrosoftCalendarSyncHandler._get_event_by_id")

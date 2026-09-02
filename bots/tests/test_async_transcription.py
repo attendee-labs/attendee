@@ -10,6 +10,7 @@ from unittest import mock
 
 from django.test import override_settings
 from django.test.testcases import TransactionTestCase
+from django.utils import timezone
 
 from bots.models import (
     AsyncTranscription,
@@ -466,6 +467,99 @@ class TestProcessUtteranceGroup(AsyncTranscriptionTestCase):
         """Verify empty utterance IDs list is handled gracefully."""
         # Should not raise
         process_utterance_group_for_async_transcription([])
+
+    @mock.patch("bots.tasks.process_utterance_group_for_async_transcription_task.get_transcription_for_utterance_group")
+    def test_partial_write_is_healed_and_retried(self, mock_get_transcription):
+        """A crash mid-save leaves partial transcriptions; retry must heal and complete the group."""
+        chunks = self._create_audio_chunks(count=3, duration_ms=1000)
+        async_transcription = AsyncTranscription.objects.create(
+            recording=self.recording,
+            settings={"transcription_settings": {"assembly_ai": {}}},
+        )
+        utterances = []
+        for chunk in chunks:
+            utterance = Utterance.objects.create(
+                recording=self.recording,
+                async_transcription=async_transcription,
+                participant=self.participant,
+                audio_chunk=chunk,
+                timestamp_ms=chunk.timestamp_ms,
+                duration_ms=chunk.duration_ms,
+            )
+            utterances.append(utterance)
+
+        # Simulate partial crash: first utterance saved, siblings incomplete
+        utterances[0].transcription = {"transcript": "partial", "words": []}
+        utterances[0].save(update_fields=["transcription"])
+
+        mock_transcriptions = {
+            utterances[0].id: {"transcript": "hello", "words": []},
+            utterances[1].id: {"transcript": "world", "words": []},
+            utterances[2].id: {"transcript": "test", "words": []},
+        }
+        mock_get_transcription.return_value = (mock_transcriptions, None)
+
+        process_utterance_group_for_async_transcription([u.id for u in utterances])
+
+        for utterance in utterances:
+            utterance.refresh_from_db()
+            self.assertIsNotNone(utterance.transcription)
+            self.assertIsNone(utterance.failure_data)
+        utterances[0].refresh_from_db()
+        self.assertEqual(utterances[0].transcription["transcript"], "hello")
+
+    @mock.patch("bots.tasks.process_utterance_group_for_async_transcription_task.get_transcription_for_utterance_group")
+    def test_unexpected_error_marks_failure_after_max_attempts(self, mock_get_transcription):
+        """Exhausted retries on unexpected errors mark the whole group failed (recoverable status)."""
+        chunks = self._create_audio_chunks(count=2, duration_ms=1000)
+        async_transcription = AsyncTranscription.objects.create(
+            recording=self.recording,
+            settings={"transcription_settings": {"assembly_ai": {}}},
+        )
+        utterances = []
+        for chunk in chunks:
+            utterance = Utterance.objects.create(
+                recording=self.recording,
+                async_transcription=async_transcription,
+                participant=self.participant,
+                audio_chunk=chunk,
+                timestamp_ms=chunk.timestamp_ms,
+                duration_ms=chunk.duration_ms,
+                transcription_attempt_count=4,  # next attempt hits max
+            )
+            utterances.append(utterance)
+
+        mock_get_transcription.side_effect = RuntimeError("boom")
+
+        process_utterance_group_for_async_transcription([u.id for u in utterances])
+
+        for utterance in utterances:
+            utterance.refresh_from_db()
+            self.assertIsNotNone(utterance.failure_data)
+            self.assertEqual(utterance.failure_data["reason"], TranscriptionFailureReasons.INTERNAL_ERROR)
+
+
+class TestProcessAsyncTranscriptionClaimRace(AsyncTranscriptionTestCase):
+    """Tests that NOT_STARTED is claimed with select_for_update."""
+
+    @mock.patch("bots.tasks.process_async_transcription_task.check_for_transcription_completion")
+    @mock.patch("bots.tasks.process_async_transcription_task.create_utterances_for_transcription")
+    def test_only_not_started_creates_utterances(self, mock_create, mock_check):
+        async_transcription = AsyncTranscription.objects.create(
+            recording=self.recording,
+            settings={"transcription_settings": {"assembly_ai": {}}},
+            state=AsyncTranscriptionStates.NOT_STARTED,
+        )
+
+        process_async_transcription(async_transcription.id)
+        mock_create.assert_called_once()
+
+        mock_create.reset_mock()
+        # After first claim path, if already IN_PROGRESS, must not create again
+        AsyncTranscription.objects.filter(id=async_transcription.id).update(state=AsyncTranscriptionStates.IN_PROGRESS, started_at=timezone.now())
+        process_async_transcription(async_transcription.id)
+        mock_create.assert_not_called()
+        mock_check.assert_called()
 
 
 @override_settings(CELERY_TASK_ALWAYS_EAGER=True, CELERY_TASK_EAGER_PROPAGATES=True)
