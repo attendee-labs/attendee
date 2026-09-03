@@ -2079,6 +2079,14 @@ class BotController:
 
         if message.get("message") == BotAdapter.Messages.BOT_PUT_IN_WAITING_ROOM:
             logger.info("Received message to put bot in waiting room")
+            # joining -> waiting_room is the only valid transition for this event, and
+            # create_event raises on anything else. A bot that was admitted (or gave
+            # up) between the sighting and this message must not take the whole bot
+            # down with a ValidationError.
+            self.bot_in_db.refresh_from_db()
+            if self.bot_in_db.state != BotStates.JOINING:
+                logger.info(f"Bot is in state {BotStates.state_to_api_code(self.bot_in_db.state)}, not recording it as put in waiting room")
+                return
             BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.BOT_PUT_IN_WAITING_ROOM)
             return
 
