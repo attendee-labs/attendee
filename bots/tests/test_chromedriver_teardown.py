@@ -126,7 +126,7 @@ class GracefulShutdownStrategiesTest(unittest.TestCase):
         with patch.object(adapter, "log_browser_history") as log_browser_history:
             adapter.cleanup_graceful_driver_shutdown(driver)
 
-        log_browser_history.assert_called_once_with(driver)
+        log_browser_history.assert_called_once_with(driver=driver)
         self.assertEqual(calls, ["hook", "close", "quit"])
 
     def test_cleanup_shutdown_still_quits_when_hook_raises(self):

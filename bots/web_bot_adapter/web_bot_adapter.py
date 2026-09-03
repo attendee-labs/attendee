@@ -627,7 +627,7 @@ class WebBotAdapter(BotAdapter):
             logger.warning(f"Error quitting driver: {e}")
 
     def cleanup_graceful_driver_shutdown(self, driver):
-        self.log_browser_history(driver)
+        self.log_browser_history(driver=driver)
 
         # Simulate closing browser window
         try:
@@ -1030,8 +1030,7 @@ class WebBotAdapter(BotAdapter):
             logger.warning(f"Error normalizing history entry url: {e}")
             return url
 
-    def get_navigation_history_urls(self, driver=None):
-        driver = driver or self.driver
+    def get_navigation_history_urls(self, *, driver):
         if not driver:
             return []
         try:
@@ -1042,9 +1041,9 @@ class WebBotAdapter(BotAdapter):
             logger.warning(f"Error getting navigation history: {e}")
             return []
 
-    def log_browser_history(self, driver=None):
+    def log_browser_history(self, *, driver):
         try:
-            nav_history_urls = self.get_navigation_history_urls(driver)
+            nav_history_urls = self.get_navigation_history_urls(driver=driver)
             nav_history_hosts = list(set([self.domain_for_history_entry_url(url) for url in nav_history_urls]))
             logger.info(f"Browser navigation history {nav_history_hosts}")
             # If any of the navigation urls start with chrome://browser-switch, then the url was blocked.
@@ -1064,7 +1063,7 @@ class WebBotAdapter(BotAdapter):
 
         self.last_domain_allow_list_violation_check_time = time.time()
 
-        nav_history_urls = self.get_navigation_history_urls()
+        nav_history_urls = self.get_navigation_history_urls(driver=self.driver)
 
         # If any of the navigation urls start with chrome://browser-switch, then the url was blocked.
         for url in nav_history_urls:
