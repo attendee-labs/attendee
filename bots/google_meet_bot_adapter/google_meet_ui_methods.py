@@ -176,6 +176,21 @@ class GoogleMeetUIMethods:
             logger.warning("Bot was not let in after waiting period expired. Raising UiRequestToJoinDeniedException")
             raise UiRequestToJoinDeniedException("Bot was not let in after waiting period expired", step)
 
+    def check_if_in_waiting_room(self, step):
+        # Nothing left to report, so stop paying for the DOM lookup every second.
+        if self.sent_bot_put_in_waiting_room_message:
+            return
+
+        # Same element look_for_asking_to_be_let_in_element_after_waiting_period_expired
+        # checks at the end of the wait — reported here as soon as it appears, while
+        # someone can still admit the bot.
+        asking_to_be_let_in_element = self.find_element_by_selector(
+            By.XPATH,
+            '//*[contains(text(), "Asking to be let in")]',
+        )
+        if asking_to_be_let_in_element:
+            self.send_bot_put_in_waiting_room_message()
+
     def check_if_waiting_room_timeout_exceeded(self, waiting_room_timeout_started_at, step):
         waiting_room_timeout_exceeded = time.time() - waiting_room_timeout_started_at > self.automatic_leave_configuration.waiting_room_timeout_seconds
         if waiting_room_timeout_exceeded:
@@ -533,6 +548,7 @@ class GoogleMeetUIMethods:
                 self.look_for_denied_your_request_element("click_captions_button")
                 self.click_this_meeting_is_being_recorded_join_now_button("click_captions_button")
                 self.click_others_may_see_your_meeting_differently_button("click_captions_button")
+                self.check_if_in_waiting_room("click_captions_button")
                 self.check_if_waiting_room_timeout_exceeded(waiting_room_timeout_started_at, "click_captions_button")
 
                 last_check_timed_out = attempt_to_look_for_captions_button_index == num_attempts_to_look_for_captions_button - 1

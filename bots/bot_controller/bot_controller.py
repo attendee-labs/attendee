@@ -11,6 +11,7 @@ from datetime import timedelta
 import gi
 import redis
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.core.files.base import ContentFile
 from django.utils import timezone
 
@@ -1014,8 +1015,10 @@ class BotController:
             self.pubsub.close()
 
     def take_action_based_on_bot_in_db(self):
-        if self.bot_in_db.state == BotStates.JOINING:
-            logger.info("take_action_based_on_bot_in_db - JOINING")
+        # WAITING_ROOM is a join in progress too: a pod recreated while the bot was in
+        # the lobby has to re-attempt the join rather than idle until it is reaped.
+        if self.bot_in_db.state == BotStates.JOINING or self.bot_in_db.state == BotStates.WAITING_ROOM:
+            logger.info(f"take_action_based_on_bot_in_db - {BotStates(self.bot_in_db.state).name}")
             BotEventManager.set_requested_bot_action_taken_at(self.bot_in_db)
             self.adapter.init()
         if self.bot_in_db.state == BotStates.LEAVING:
@@ -2079,7 +2082,20 @@ class BotController:
 
         if message.get("message") == BotAdapter.Messages.BOT_PUT_IN_WAITING_ROOM:
             logger.info("Received message to put bot in waiting room")
-            BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.BOT_PUT_IN_WAITING_ROOM)
+            # joining -> waiting_room is the only valid transition for this event, and
+            # create_event raises on anything else. A bot admitted (or given up on)
+            # between the sighting and this message must not take the whole bot down
+            # with a ValidationError, so check the state and then survive losing the
+            # race anyway: create_event re-reads the bot inside its own transaction,
+            # and the web process creates events for this bot out of band.
+            self.bot_in_db.refresh_from_db()
+            if self.bot_in_db.state != BotStates.JOINING:
+                logger.info(f"Bot is in state {BotStates.state_to_api_code(self.bot_in_db.state)}, not recording it as put in waiting room")
+                return
+            try:
+                BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.BOT_PUT_IN_WAITING_ROOM)
+            except ValidationError as e:
+                logger.info(f"Could not record the bot as put in waiting room, continuing: {e}")
             return
 
         if message.get("message") == BotAdapter.Messages.BOT_JOINED_MEETING:
