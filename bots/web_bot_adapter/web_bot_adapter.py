@@ -5,6 +5,8 @@ import hashlib
 import json
 import logging
 import os
+import signal
+import subprocess
 import threading
 import time
 from time import sleep
@@ -603,6 +605,88 @@ class WebBotAdapter(BotAdapter):
     def subclass_specific_use_disable_gpu_chrome_option(self):
         return True
 
+    def _descendant_pids(self, pid):
+        try:
+            out = subprocess.run(["ps", "-o", "pid=", "--ppid", str(pid)], capture_output=True, text=True, timeout=5).stdout
+        except Exception:
+            return []
+        pids = []
+        for child in [int(p) for p in out.split()]:
+            pids.extend(self._descendant_pids(child))
+            pids.append(child)
+        return pids
+
+    def default_graceful_driver_shutdown(self, driver):
+        try:
+            driver.close()
+        except Exception as e:
+            logger.warning(f"Error closing driver: {e}")
+        try:
+            driver.quit()
+        except Exception as e:
+            logger.warning(f"Error quitting driver: {e}")
+
+    def cleanup_graceful_driver_shutdown(self, driver):
+        self.log_browser_history(driver=driver)
+
+        # Simulate closing browser window
+        try:
+            self.subclass_specific_before_driver_close(driver)
+            driver.close()
+        except Exception as e:
+            logger.warning(f"Error closing driver: {e}")
+
+        # Then quit the driver
+        try:
+            driver.quit()
+        except Exception as e:
+            logger.warning(f"Error quitting driver: {e}")
+
+    def teardown_driver(self, *, graceful_shutdown_fn, graceful_timeout_seconds=30):
+        driver = self.driver
+        if not driver:
+            return
+
+        # Capture identifiers before quit() clears them
+        chromedriver_pid = getattr(getattr(driver.service, "process", None), "pid", None)
+        user_data_dir = None
+        try:
+            user_data_dir = driver.capabilities.get("chrome", {}).get("userDataDir")
+        except Exception:
+            pass
+
+        def run_graceful_shutdown():
+            try:
+                graceful_shutdown_fn(driver)
+            except Exception as e:
+                logger.warning(f"Error during graceful driver shutdown: {e}")
+
+        shutdown_thread = threading.Thread(target=run_graceful_shutdown, daemon=True)
+        shutdown_thread.start()
+        shutdown_thread.join(timeout=graceful_timeout_seconds)
+        if shutdown_thread.is_alive():
+            logger.warning(f"Graceful driver shutdown did not complete within {graceful_timeout_seconds}s, force killing browser processes")
+
+        # Unconditionally kill the chromedriver process tree (chrome is a descendant of chromedriver)
+        if chromedriver_pid:
+            for pid in self._descendant_pids(chromedriver_pid) + [chromedriver_pid]:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                except Exception as e:
+                    logger.warning(f"Error killing pid {pid}: {e}")
+
+        # Belt and braces: catch any chrome processes that were reparented away from chromedriver
+        if user_data_dir:
+            try:
+                subprocess.run(["pkill", "-9", "-f", user_data_dir], timeout=5)
+            except Exception as e:
+                logger.warning(f"Error running pkill for {user_data_dir}: {e}")
+
+        if chromedriver_pid:
+            logger.info(f"Tore down chromedriver pid {chromedriver_pid} and its process tree")
+
     def init_driver(self):
         self.write_chrome_policies_file()
 
@@ -638,16 +722,7 @@ class WebBotAdapter(BotAdapter):
         self.add_subclass_specific_chrome_options(options)
 
         if self.driver:
-            # Simulate closing browser window
-            try:
-                self.driver.close()
-            except Exception as e:
-                logger.warning(f"Error closing driver: {e}")
-
-            try:
-                self.driver.quit()
-            except Exception as e:
-                logger.warning(f"Error closing existing driver: {e}")
+            self.teardown_driver(graceful_shutdown_fn=self.default_graceful_driver_shutdown)
             self.driver = None
 
         self.driver = webdriver.Chrome(options=options, service=Service(executable_path="/usr/local/bin/chromedriver"))
@@ -921,20 +996,7 @@ class WebBotAdapter(BotAdapter):
 
         try:
             if self.driver:
-                self.log_browser_history()
-
-                # Simulate closing browser window
-                try:
-                    self.subclass_specific_before_driver_close()
-                    self.driver.close()
-                except Exception as e:
-                    logger.warning(f"Error closing driver: {e}")
-
-                # Then quit the driver
-                try:
-                    self.driver.quit()
-                except Exception as e:
-                    logger.warning(f"Error quitting driver: {e}")
+                self.teardown_driver(graceful_shutdown_fn=self.cleanup_graceful_driver_shutdown)
         except Exception as e:
             logger.warning(f"Error during cleanup: {e}")
 
@@ -962,20 +1024,20 @@ class WebBotAdapter(BotAdapter):
             logger.warning(f"Error normalizing history entry url: {e}")
             return url
 
-    def get_navigation_history_urls(self):
-        if not self.driver:
+    def get_navigation_history_urls(self, *, driver):
+        if not driver:
             return []
         try:
-            nav_history = self.driver.execute_cdp_cmd("Page.getNavigationHistory", {})
+            nav_history = driver.execute_cdp_cmd("Page.getNavigationHistory", {})
             nav_history_entries = nav_history.get("entries", [])
             return [entry.get("url", "") for entry in nav_history_entries]
         except Exception as e:
             logger.warning(f"Error getting navigation history: {e}")
             return []
 
-    def log_browser_history(self):
+    def log_browser_history(self, *, driver):
         try:
-            nav_history_urls = self.get_navigation_history_urls()
+            nav_history_urls = self.get_navigation_history_urls(driver=driver)
             nav_history_hosts = list(set([self.domain_for_history_entry_url(url) for url in nav_history_urls]))
             logger.info(f"Browser navigation history {nav_history_hosts}")
             # If any of the navigation urls start with chrome://browser-switch, then the url was blocked.
@@ -995,7 +1057,7 @@ class WebBotAdapter(BotAdapter):
 
         self.last_domain_allow_list_violation_check_time = time.time()
 
-        nav_history_urls = self.get_navigation_history_urls()
+        nav_history_urls = self.get_navigation_history_urls(driver=self.driver)
 
         # If any of the navigation urls start with chrome://browser-switch, then the url was blocked.
         for url in nav_history_urls:
@@ -1118,5 +1180,5 @@ class WebBotAdapter(BotAdapter):
         pass
 
     # Sub-classes can override this to add class-specific before driver close code
-    def subclass_specific_before_driver_close(self):
+    def subclass_specific_before_driver_close(self, driver):
         pass
