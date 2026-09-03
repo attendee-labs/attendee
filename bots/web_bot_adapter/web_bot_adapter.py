@@ -631,7 +631,7 @@ class WebBotAdapter(BotAdapter):
 
         # Simulate closing browser window
         try:
-            self.subclass_specific_before_driver_close()
+            self.subclass_specific_before_driver_close(driver)
             driver.close()
         except Exception as e:
             logger.warning(f"Error closing driver: {e}")
@@ -646,7 +646,6 @@ class WebBotAdapter(BotAdapter):
         driver = self.driver
         if not driver:
             return
-        self.driver = None
 
         # Capture identifiers before quit() clears them
         chromedriver_pid = getattr(getattr(driver.service, "process", None), "pid", None)
@@ -724,6 +723,7 @@ class WebBotAdapter(BotAdapter):
 
         if self.driver:
             self.teardown_driver(graceful_shutdown_fn=self.default_graceful_driver_shutdown)
+            self.driver = None
 
         self.driver = webdriver.Chrome(options=options, service=Service(executable_path="/usr/local/bin/chromedriver"))
         logger.info(f"web driver server initialized at port {self.driver.service.port}")
@@ -1183,5 +1183,5 @@ class WebBotAdapter(BotAdapter):
         pass
 
     # Sub-classes can override this to add class-specific before driver close code
-    def subclass_specific_before_driver_close(self):
+    def subclass_specific_before_driver_close(self, driver):
         pass
