@@ -685,7 +685,7 @@ class WebBotAdapter(BotAdapter):
                 logger.warning(f"Error running pkill for {user_data_dir}: {e}")
 
         if chromedriver_pid:
-            logger.info(f"Tore down chromedriver pid {chromedriver_pid} and its process tree")
+            logger.info(f"Tore down chromedriver pid {chromedriver_pid} and processes with user_data_dir {user_data_dir}")
 
     def init_driver(self):
         self.write_chrome_policies_file()
