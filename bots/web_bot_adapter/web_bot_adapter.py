@@ -971,14 +971,11 @@ class WebBotAdapter(BotAdapter):
             )
             self.left_meeting = True
 
-    def abort_join_attempt_graceful_driver_shutdown(self, driver):
+    def abort_join_attempt(self):
         try:
-            driver.close()
+            self.driver.close()
         except Exception as e:
             logger.warning(f"Error closing driver: {e}")
-
-    def abort_join_attempt(self):
-        self.teardown_driver(graceful_shutdown_fn=self.abort_join_attempt_graceful_driver_shutdown)
 
     def cleanup(self):
         if self.stop_recording_screen_callback:

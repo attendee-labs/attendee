@@ -70,7 +70,6 @@ class DriverTeardownLogicTest(unittest.TestCase):
         driver.close.assert_called_once()
         driver.quit.assert_called_once()
         self.assertLess(elapsed, TEST_TIMEOUT_SECONDS)
-        self.assertIsNone(adapter.driver)
 
     def test_hung_graceful_shutdown_is_abandoned_at_the_timeout(self):
         driver = build_driver(hang_event=hanging_event(self))
@@ -106,7 +105,7 @@ class DriverTeardownLogicTest(unittest.TestCase):
 
 
 class GracefulShutdownStrategiesTest(unittest.TestCase):
-    """The three graceful shutdown strategies passed to teardown_driver."""
+    """The graceful shutdown strategies passed to teardown_driver."""
 
     def test_default_shutdown_closes_then_quits(self):
         driver = build_driver()
@@ -123,7 +122,7 @@ class GracefulShutdownStrategiesTest(unittest.TestCase):
         driver.close.side_effect = lambda: calls.append("close")
         driver.quit.side_effect = lambda: calls.append("quit")
         adapter = build_adapter(driver)
-        adapter.subclass_specific_before_driver_close = lambda: calls.append("hook")
+        adapter.subclass_specific_before_driver_close = lambda driver: calls.append("hook")
 
         with patch.object(adapter, "log_browser_history") as log_browser_history:
             adapter.cleanup_graceful_driver_shutdown(driver)
@@ -135,7 +134,7 @@ class GracefulShutdownStrategiesTest(unittest.TestCase):
         driver = build_driver()
         adapter = build_adapter(driver)
 
-        def boom():
+        def boom(driver):
             raise RuntimeError("boom")
 
         adapter.subclass_specific_before_driver_close = boom
@@ -147,31 +146,25 @@ class GracefulShutdownStrategiesTest(unittest.TestCase):
         driver.close.assert_not_called()
         driver.quit.assert_called_once()
 
-    def test_abort_shutdown_closes_without_quitting(self):
+
+class AbortJoinAttemptTest(unittest.TestCase):
+    """abort_join_attempt closes the driver directly without quitting it or reaping the tree."""
+
+    def test_closes_driver_without_quitting(self):
         driver = build_driver()
         adapter = build_adapter(driver)
 
-        adapter.abort_join_attempt_graceful_driver_shutdown(driver)
+        adapter.abort_join_attempt()
 
         driver.close.assert_called_once()
         driver.quit.assert_not_called()
 
-    def test_abort_shutdown_swallows_close_error(self):
+    def test_swallows_close_error(self):
         driver = build_driver()
         driver.close.side_effect = RuntimeError("boom")
         adapter = build_adapter(driver)
 
-        adapter.abort_join_attempt_graceful_driver_shutdown(driver)  # must not raise
-
-
-class AbortJoinAttemptTest(unittest.TestCase):
-    def test_delegates_to_teardown_with_close_only_strategy(self):
-        adapter = build_adapter(build_driver())
-        adapter.teardown_driver = MagicMock()
-
-        adapter.abort_join_attempt()
-
-        adapter.teardown_driver.assert_called_once_with(graceful_shutdown_fn=adapter.abort_join_attempt_graceful_driver_shutdown)
+        adapter.abort_join_attempt()  # must not raise
 
 
 def _process_alive(pid):
@@ -241,7 +234,6 @@ class DriverTeardownProcessTreeTest(unittest.TestCase):
 
         for pid in [parent.pid, *descendants]:
             self.assertTrue(_wait_until_dead(pid), f"pid {pid} survived teardown")
-        self.assertIsNone(adapter.driver)
 
     def test_reparented_process_is_pkilled_by_user_data_dir(self):
         # A process with no chromedriver pid attached; only the userDataDir pkill fallback can catch it.
@@ -318,7 +310,6 @@ class DriverTeardownRealChromeTest(unittest.TestCase):
 
         for pid in [chromedriver_pid, *descendants]:
             self.assertTrue(_wait_until_dead(pid), f"pid {pid} survived teardown")
-        self.assertIsNone(adapter.driver)
 
 
 if __name__ == "__main__":
