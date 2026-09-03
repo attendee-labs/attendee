@@ -785,12 +785,18 @@ class WebBotAdapter(BotAdapter):
         websocket_thread = threading.Thread(target=self.run_websocket_server, daemon=True)
         websocket_thread.start()
 
-        sleep(0.5)  # Give the websocketserver time to start
-        if not self.websocket_port:
-            raise Exception("WebSocket server failed to start")
+        self.wait_for_websocket_server_to_start()
 
         repeatedly_attempt_to_join_meeting_thread = threading.Thread(target=self.repeatedly_attempt_to_join_meeting, daemon=True)
         repeatedly_attempt_to_join_meeting_thread.start()
+
+    def wait_for_websocket_server_to_start(self, timeout_seconds=10):
+        # Poll instead of waiting a fixed interval, since the server thread can be slow to get scheduled when CPU is contended
+        deadline = time.time() + timeout_seconds
+        while not self.websocket_port and time.time() < deadline:
+            sleep(0.1)
+        if not self.websocket_port:
+            raise Exception(f"WebSocket server failed to start within {timeout_seconds} seconds")
 
     def should_retry_joining_meeting_that_requires_login_by_logging_in(self):
         return False
