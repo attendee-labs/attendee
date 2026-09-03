@@ -5,6 +5,8 @@ import hashlib
 import json
 import logging
 import os
+import signal
+import subprocess
 import threading
 import time
 from time import sleep
@@ -28,12 +30,6 @@ from .debug_screen_recorder import DebugScreenRecorder
 from .ui_methods import UiAuthorizedUserNotInMeetingTimeoutExceededException, UiBlockedByCaptchaException, UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiIncorrectPasswordException, UiInfinitelyRetryableException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableException, UiRetryableExpectedException
 
 logger = logging.getLogger(__name__)
-
-# Wall-clock budget for tearing down a browser before starting a new one. selenium
-# waits 120 seconds for each webdriver command and urllib3 retries the request three
-# times, so close() and quit() against a hung chromedriver can each block for about
-# six minutes.
-DRIVER_TEARDOWN_TIMEOUT_SECONDS = 30
 
 
 class WebBotAdapter(BotAdapter):
@@ -609,69 +605,66 @@ class WebBotAdapter(BotAdapter):
     def subclass_specific_use_disable_gpu_chrome_option(self):
         return True
 
-    def run_driver_call_with_timeout(self, call, description):
-        """Run a driver call on a thread we are willing to abandon.
+    def _descendant_pids(self, pid):
+        try:
+            out = subprocess.run(["ps", "-o", "pid=", "--ppid", str(pid)], capture_output=True, text=True, timeout=5).stdout
+        except Exception:
+            return []
+        pids = []
+        for child in [int(p) for p in out.split()]:
+            pids.extend(self._descendant_pids(child))
+            pids.append(child)
+        return pids
 
-        Returns True if the call finished within DRIVER_TEARDOWN_TIMEOUT_SECONDS.
-        """
+    def teardown_driver(self, graceful_timeout_seconds=10):
+        driver = self.driver
+        if not driver:
+            return
+        self.driver = None
 
-        def guarded_call():
-            try:
-                call()
-            except Exception as e:
-                logger.warning(f"Error during {description}: {e}")
+        # Capture identifiers before quit() clears them
+        chromedriver_pid = getattr(getattr(driver.service, "process", None), "pid", None)
+        user_data_dir = None
+        try:
+            user_data_dir = driver.capabilities.get("chrome", {}).get("userDataDir")
+        except Exception:
+            pass
 
-        thread = threading.Thread(target=guarded_call, daemon=True)
-        thread.start()
-        thread.join(DRIVER_TEARDOWN_TIMEOUT_SECONDS)
-        return not thread.is_alive()
-
-    def teardown_driver_with_timeout(self, driver, before_close=None):
-        """Tear down a browser without letting an unresponsive chromedriver block the retry.
-
-        close() and quit() are best effort. selenium waits 120 seconds for each
-        webdriver command and urllib3 retries it three times, so either call can block
-        for about six minutes against a wedged chromedriver, which is long enough for
-        the bot to miss most of the meeting it is retrying to join. Run them on a
-        thread we are willing to abandon, and if that thread does not finish in time,
-        kill chromedriver so a new browser can start immediately.
-        """
-
-        def graceful_teardown():
-            if before_close is not None:
-                try:
-                    before_close()
-                except Exception as e:
-                    logger.warning(f"Error before closing driver: {e}")
-
-            # Simulate closing browser window
+        def graceful_shutdown():
             try:
                 driver.close()
             except Exception as e:
                 logger.warning(f"Error closing driver: {e}")
-
             try:
                 driver.quit()
             except Exception as e:
-                logger.warning(f"Error closing existing driver: {e}")
+                logger.warning(f"Error quitting driver: {e}")
 
-        if self.run_driver_call_with_timeout(graceful_teardown, "driver teardown"):
-            return
+        shutdown_thread = threading.Thread(target=graceful_shutdown, daemon=True)
+        shutdown_thread.start()
+        shutdown_thread.join(timeout=graceful_timeout_seconds)
+        if shutdown_thread.is_alive():
+            logger.warning(f"Graceful driver shutdown did not complete within {graceful_timeout_seconds}s, force killing browser processes")
 
-        logger.warning(f"Driver teardown did not finish within {DRIVER_TEARDOWN_TIMEOUT_SECONDS} seconds, killing the chromedriver process so a new browser can start")
+        # Unconditionally kill the chromedriver process tree (chrome is a descendant of chromedriver)
+        if chromedriver_pid:
+            for pid in self._descendant_pids(chromedriver_pid) + [chromedriver_pid]:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                except Exception as e:
+                    logger.warning(f"Error killing pid {pid}: {e}")
 
-        # The abandoned thread keeps its reference to the old driver, so killing the
-        # process is what actually frees it: the pending webdriver calls fail fast and
-        # the thread unwinds.
-        process = getattr(getattr(driver, "service", None), "process", None)
-        if process is None:
-            return
+        # Belt and braces: catch any chrome processes that were reparented away from chromedriver
+        if user_data_dir:
+            try:
+                subprocess.run(["pkill", "-9", "-f", user_data_dir], timeout=5)
+            except Exception as e:
+                logger.warning(f"Error running pkill for {user_data_dir}: {e}")
 
-        try:
-            if process.poll() is None:
-                process.kill()
-        except Exception as e:
-            logger.warning(f"Error killing chromedriver process: {e}")
+        if chromedriver_pid:
+            logger.info(f"Tore down chromedriver pid {chromedriver_pid} and its process tree")
 
     def init_driver(self):
         self.write_chrome_policies_file()
@@ -708,8 +701,7 @@ class WebBotAdapter(BotAdapter):
         self.add_subclass_specific_chrome_options(options)
 
         if self.driver:
-            self.teardown_driver_with_timeout(self.driver)
-            self.driver = None
+            self.teardown_driver()
 
         self.driver = webdriver.Chrome(options=options, service=Service(executable_path="/usr/local/bin/chromedriver"))
         logger.info(f"web driver server initialized at port {self.driver.service.port}")
@@ -958,9 +950,10 @@ class WebBotAdapter(BotAdapter):
             self.left_meeting = True
 
     def abort_join_attempt(self):
-        # Bounded for the same reason as teardown_driver_with_timeout: a wedged
-        # chromedriver here would delay the "could not join" report by minutes.
-        self.run_driver_call_with_timeout(self.driver.close, "abort join attempt")
+        try:
+            self.driver.close()
+        except Exception as e:
+            logger.warning(f"Error closing driver: {e}")
 
     def cleanup(self):
         if self.stop_recording_screen_callback:
@@ -981,12 +974,20 @@ class WebBotAdapter(BotAdapter):
 
         try:
             if self.driver:
+                self.log_browser_history()
 
-                def before_close():
-                    self.log_browser_history()
+                # Simulate closing browser window
+                try:
                     self.subclass_specific_before_driver_close()
+                    self.driver.close()
+                except Exception as e:
+                    logger.warning(f"Error closing driver: {e}")
 
-                self.teardown_driver_with_timeout(self.driver, before_close=before_close)
+                # Then quit the driver
+                try:
+                    self.driver.quit()
+                except Exception as e:
+                    logger.warning(f"Error quitting driver: {e}")
         except Exception as e:
             logger.warning(f"Error during cleanup: {e}")
 
