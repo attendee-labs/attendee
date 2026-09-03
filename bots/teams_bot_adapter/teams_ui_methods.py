@@ -15,6 +15,10 @@ from bots.web_bot_adapter.ui_methods import UiBlockedByCaptchaException, UiCould
 
 logger = logging.getLogger(__name__)
 
+# How long the prejoin join button stays untrustworthy after it is clicked. Mirrors
+# the grace period in check_if_waiting_room_connection_failed.
+WAITING_ROOM_BUTTON_GRACE_SECONDS = 30
+
 
 class UiTeamsBlockingUsException(UiRetryableExpectedException):
     def __init__(self, message, step=None, inner_exception=None):
@@ -63,17 +67,26 @@ class TeamsUIMethods:
             logger.info("Still waiting to be admitted to the meeting after waiting period expired. Raising UiRequestToJoinDeniedException")
             raise UiRequestToJoinDeniedException("Bot was not let in after waiting period expired", step)
 
-    def check_if_in_waiting_room(self, step):
-        # Called from the post-join polling loop. Either tell means the join request is
-        # sitting in the lobby: the lobby copy, or the prejoin join button still on the
-        # page but disabled — the same state check_if_waiting_room_connection_failed
-        # reads as "in the waiting room, connection intact".
-        #
+    def check_if_in_waiting_room(self, waiting_room_timeout_started_at, step):
+        # Nothing left to report, so stop paying for the DOM lookups. They would
+        # otherwise run once a second for the whole wait, competing with
+        # monitor_for_disable_light_experience_redirect for selenium's connection pool.
+        if self.sent_bot_put_in_waiting_room_message:
+            return
+
         # Detection only ever reports; the caller's loop turns any exception into a
         # failed join, so a stale element must not escape.
         try:
             if self.find_element_by_selector(By.XPATH, '//*[contains(text(), "Someone will let you in soon")]'):
                 self.send_bot_put_in_waiting_room_message()
+                return
+
+            # Fallback for a lobby whose copy we don't match (a non-English tenant):
+            # the prejoin join button still on the page but disabled. Teams disables
+            # that button the instant it is clicked, before it has decided whether the
+            # bot goes to the lobby or straight in, so it is only meaningful after the
+            # same grace period check_if_waiting_room_connection_failed waits out.
+            if time.time() - waiting_room_timeout_started_at < WAITING_ROOM_BUTTON_GRACE_SECONDS:
                 return
 
             join_button = self.find_element_by_selector(By.CSS_SELECTOR, '[data-tid="prejoin-join-button"]')
@@ -330,7 +343,7 @@ class TeamsUIMethods:
                 self.look_for_denied_your_request_element("click_show_more_button")
                 self.look_for_we_could_not_connect_you_element("click_show_more_button")
 
-                self.check_if_in_waiting_room("click_show_more_button")
+                self.check_if_in_waiting_room(waiting_room_timeout_started_at, "click_show_more_button")
                 self.check_if_waiting_room_timeout_exceeded(waiting_room_timeout_started_at, "click_show_more_button")
                 self.check_if_waiting_room_connection_failed(waiting_room_timeout_started_at, "click_show_more_button")
 

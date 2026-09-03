@@ -1758,6 +1758,8 @@ class BotEventManager:
     def set_requested_bot_action_taken_at(cls, bot: Bot):
         event_type = {
             BotStates.JOINING: BotEventTypes.JOIN_REQUESTED,
+            # A pod restarted while its bot sat in the lobby re-attempts the join.
+            BotStates.WAITING_ROOM: BotEventTypes.BOT_PUT_IN_WAITING_ROOM,
             BotStates.LEAVING: BotEventTypes.LEAVE_REQUESTED,
             BotStates.CONNECTING: BotEventTypes.APP_SESSION_CONNECTION_REQUESTED,
             BotStates.DISCONNECTING: BotEventTypes.APP_SESSION_DISCONNECT_REQUESTED,

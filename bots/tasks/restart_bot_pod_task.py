@@ -24,8 +24,11 @@ def restart_bot_pod(self, bot_id):
 
     last_bot_event = bot.last_bot_event()
 
-    if last_bot_event.event_type != BotEventTypes.JOIN_REQUESTED:
-        logger.info(f"Bot {bot_id} is not in JOINING state, so not restarting pod")
+    # A bot that was put in the waiting room is still mid-join: same recovery, and
+    # refusing it would leave the pod dead until the heartbeat cleanup reaps the bot
+    # as a fatal error ~10 minutes later.
+    if last_bot_event.event_type not in (BotEventTypes.JOIN_REQUESTED, BotEventTypes.BOT_PUT_IN_WAITING_ROOM):
+        logger.info(f"Bot {bot_id} is not joining, so not restarting pod")
         return
 
     # Initialize kubernetes client

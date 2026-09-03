@@ -177,6 +177,10 @@ class GoogleMeetUIMethods:
             raise UiRequestToJoinDeniedException("Bot was not let in after waiting period expired", step)
 
     def check_if_in_waiting_room(self, step):
+        # Nothing left to report, so stop paying for the DOM lookup every second.
+        if self.sent_bot_put_in_waiting_room_message:
+            return
+
         # Same element look_for_asking_to_be_let_in_element_after_waiting_period_expired
         # checks at the end of the wait — reported here as soon as it appears, while
         # someone can still admit the bot.
