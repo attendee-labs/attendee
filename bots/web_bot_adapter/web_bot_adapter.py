@@ -642,14 +642,11 @@ class WebBotAdapter(BotAdapter):
         except Exception as e:
             logger.warning(f"Error quitting driver: {e}")
 
-    def teardown_driver(self, graceful_shutdown_fn=None, graceful_timeout_seconds=30):
+    def teardown_driver(self, *, graceful_shutdown_fn, graceful_timeout_seconds=30):
         driver = self.driver
         if not driver:
             return
         self.driver = None
-
-        if graceful_shutdown_fn is None:
-            graceful_shutdown_fn = self.default_graceful_driver_shutdown
 
         # Capture identifiers before quit() clears them
         chromedriver_pid = getattr(getattr(driver.service, "process", None), "pid", None)
@@ -726,7 +723,7 @@ class WebBotAdapter(BotAdapter):
         self.add_subclass_specific_chrome_options(options)
 
         if self.driver:
-            self.teardown_driver()
+            self.teardown_driver(graceful_shutdown_fn=self.default_graceful_driver_shutdown)
 
         self.driver = webdriver.Chrome(options=options, service=Service(executable_path="/usr/local/bin/chromedriver"))
         logger.info(f"web driver server initialized at port {self.driver.service.port}")

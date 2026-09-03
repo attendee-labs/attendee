@@ -49,6 +49,8 @@ class DriverTeardownLogicTest(unittest.TestCase):
     tests can't easily provoke."""
 
     def run_teardown(self, adapter, *, graceful_shutdown_fn=None, timeout=TEST_TIMEOUT_SECONDS):
+        if graceful_shutdown_fn is None:
+            graceful_shutdown_fn = adapter.default_graceful_driver_shutdown
         # Stub the things that touch real processes so a made-up pid can never hurt this machine.
         with (
             patch("bots.web_bot_adapter.web_bot_adapter.os.kill"),
@@ -90,7 +92,7 @@ class DriverTeardownLogicTest(unittest.TestCase):
     def test_no_driver_returns_early(self):
         adapter = build_adapter(None)
 
-        adapter.teardown_driver()  # must not raise
+        adapter.teardown_driver(graceful_shutdown_fn=adapter.default_graceful_driver_shutdown)  # must not raise
 
     def test_errors_from_close_and_quit_are_swallowed(self):
         driver = build_driver()
@@ -235,7 +237,7 @@ class DriverTeardownProcessTreeTest(unittest.TestCase):
         descendants = self._wait_for_descendants(adapter, parent.pid, expected=2)
         self.assertGreaterEqual(len(descendants), 2, "child processes never started")
 
-        adapter.teardown_driver(graceful_timeout_seconds=TEST_TIMEOUT_SECONDS)
+        adapter.teardown_driver(graceful_shutdown_fn=adapter.default_graceful_driver_shutdown, graceful_timeout_seconds=TEST_TIMEOUT_SECONDS)
 
         for pid in [parent.pid, *descendants]:
             self.assertTrue(_wait_until_dead(pid), f"pid {pid} survived teardown")
@@ -254,7 +256,7 @@ class DriverTeardownProcessTreeTest(unittest.TestCase):
         driver.capabilities = {"chrome": {"userDataDir": marker}}
         adapter = build_adapter(driver)
 
-        adapter.teardown_driver(graceful_timeout_seconds=TEST_TIMEOUT_SECONDS)
+        adapter.teardown_driver(graceful_shutdown_fn=adapter.default_graceful_driver_shutdown, graceful_timeout_seconds=TEST_TIMEOUT_SECONDS)
 
         self.assertTrue(_wait_until_dead(proc.pid), "pkill -f userDataDir did not kill the process")
 
@@ -306,13 +308,13 @@ class DriverTeardownRealChromeTest(unittest.TestCase):
 
         adapter = build_adapter(driver)
         # Guarantee the browser is gone even if an assertion below fails before teardown runs.
-        self.addCleanup(lambda: adapter.driver and adapter.teardown_driver(graceful_timeout_seconds=5))
+        self.addCleanup(lambda: adapter.driver and adapter.teardown_driver(graceful_shutdown_fn=adapter.default_graceful_driver_shutdown, graceful_timeout_seconds=5))
 
         chromedriver_pid = driver.service.process.pid
         descendants = adapter._descendant_pids(chromedriver_pid)
         self.assertTrue(descendants, "expected chrome to spawn child processes under chromedriver")
 
-        adapter.teardown_driver(graceful_timeout_seconds=5)
+        adapter.teardown_driver(graceful_shutdown_fn=adapter.default_graceful_driver_shutdown, graceful_timeout_seconds=5)
 
         for pid in [chromedriver_pid, *descendants]:
             self.assertTrue(_wait_until_dead(pid), f"pid {pid} survived teardown")
