@@ -23,16 +23,37 @@
             return false;
           }
         }
-  
+
         return origTest.call(this, str);
       };
     }
-  
+
+    function interceptionWouldChangeResult(displayName) {
+      for (const source of FORCE_TRUE_SOURCES) {
+        if (!origTest.call(new RegExp(source, "u"), displayName)) {
+          return true;
+        }
+      }
+      for (const source of FORCE_FALSE_SOURCES) {
+        if (origTest.call(new RegExp(source, "u"), displayName)) {
+          return true;
+        }
+      }
+      return false;
+    }
+
     // Allow the Python side to update which display name should bypass Teams'
-    // display name validation regex, then re-arm the interception.
+    // display name validation regex, then re-arm the interception only if the
+    // display name would otherwise violate one of the validation sources.
     window.setDisplayNameToAllowForTeamsNameValidationBypass = function (displayName) {
       PAYLOAD = displayName;
-      armInterception();
+      if (interceptionWouldChangeResult(displayName)) {
+        armInterception();
+        window.ws?.sendJson({
+          type: 'DisplayNameValidationBypassSet',
+          displayName: displayName,
+        });
+      }
     };
   })();
 
