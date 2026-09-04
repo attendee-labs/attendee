@@ -140,8 +140,6 @@ class TeamsUIMethods:
                     self.display_name,
                     keywords=["notetaker"],
                 )
-                # Teams rejects certain characters in the display name; replace them with safe equivalents.
-                # display_name_sanitized = display_name_cyrillized.replace("|", "-")
                 self.set_display_name_to_allow(display_name_cyrillized)
                 name_input.send_keys(display_name_cyrillized)
                 return
