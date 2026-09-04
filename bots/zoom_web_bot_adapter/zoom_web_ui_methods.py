@@ -49,8 +49,8 @@ class ZoomWebUIMethods:
         # A webinar_user_email is only ever supplied for webinar joins. When it is present, run a
         # fully self-contained webinar flow and return early so the standard meeting
         # "happy path" below is never entered or altered for regular meetings.
-        if getattr(self, "webinar_user_email", None):
-            logger.info("webinar_user_email provided, joining as a webinar participant.")
+        if self.webinar_user_email:
+            logger.info(f"webinar_user_email {self.webinar_user_email} provided, joining as a webinar participant.")
             self.attempt_to_join_webinar()
             return
 
