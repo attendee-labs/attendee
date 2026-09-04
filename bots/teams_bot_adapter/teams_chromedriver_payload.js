@@ -34,8 +34,6 @@
       PAYLOAD = displayName;
       armInterception();
     };
-  
-    armInterception();
   })();
 
 const handleVideoTrackForRealTimePerParticipantVideo = async ({ track, streams }) => {
