@@ -826,6 +826,10 @@ class TeamsSettingsJSONField(serializers.JSONField):
                 "additionalProperties": False,
                 "description": "The user ID of the Zoom OAuth Connection to use for the onbehalf token.",
             },
+            "webinar_user_email": {
+                "type": "string",
+                "description": "The email address to use when joining a Zoom webinar. When this is set, the bot joins using the webinar flow (accepting a promotion to panelist if the host offers one). Leave unset for regular meetings.",
+            },
         },
         "required": [],
         "additionalProperties": False,
@@ -1570,6 +1574,7 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
                 "additionalProperties": False,
                 "description": "The user ID of the Zoom OAuth Connection to use for the onbehalf token.",
             },
+            "webinar_user_email": {"type": "string"},
         },
         "required": [],
         "additionalProperties": False,
