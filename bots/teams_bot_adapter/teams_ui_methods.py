@@ -125,6 +125,10 @@ class TeamsUIMethods:
             # break the join flow.
             logger.warning(f"Error wiggling mouse at OS level: {e}")
 
+    def set_display_name_to_allow(self, display_name):
+        # Tell the injected payload to allow this exact display name through Teams' validation regex.
+        self.driver.execute_script("return window.setDisplayNameToAllowForTeamsNameValidationBypass?.(arguments[0]);", display_name)
+
     def fill_out_name_input(self):
         num_attempts = 60
         logger.info("Waiting for the name input field...")
@@ -136,6 +140,7 @@ class TeamsUIMethods:
                     self.display_name,
                     keywords=["notetaker"],
                 )
+                self.set_display_name_to_allow(display_name_cyrillized)
                 name_input.send_keys(display_name_cyrillized)
                 return
             except TimeoutException as e:
