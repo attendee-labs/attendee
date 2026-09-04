@@ -46,11 +46,11 @@ class ZoomWebUIMethods:
 
         self.wait_to_be_admitted_to_meeting()
 
-        # A user_email is only ever supplied for webinar joins. When it is present, run a
+        # A webinar_user_email is only ever supplied for webinar joins. When it is present, run a
         # fully self-contained webinar flow and return early so the standard meeting
         # "happy path" below is never entered or altered for regular meetings.
-        if getattr(self, "user_email", None):
-            logger.info("user_email provided, joining as a webinar participant.")
+        if getattr(self, "webinar_user_email", None):
+            logger.info("webinar_user_email provided, joining as a webinar participant.")
             self.attempt_to_join_webinar()
             return
 
