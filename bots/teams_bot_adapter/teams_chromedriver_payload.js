@@ -1,3 +1,53 @@
+(() => {
+    // Inactive by default: no display name is whitelisted until the Python side
+    // calls window.setDisplayNameToAllow(...).
+    let PAYLOAD = null;
+  
+    const TARGET_SOURCE =
+      "^[\\p{L}\\p{M}\\p{N} '’._@\\u00B7\\u30FB-]+$";
+  
+    const origTest = RegExp.prototype.test;
+  
+    function armInterception() {
+      RegExp.prototype.test = function (str) {
+        if (
+          PAYLOAD !== null &&
+          str === PAYLOAD &&
+          this.flags === "u" &&
+          this.source === TARGET_SOURCE
+        ) {
+          const targetRegex = this;
+  
+          Object.defineProperty(targetRegex, "test", {
+            configurable: true,
+            writable: true,
+            value(str) {
+              if (str === PAYLOAD) {
+                return true;
+              }
+              return origTest.call(targetRegex, str);
+            },
+          });
+  
+          RegExp.prototype.test = origTest;
+  
+          return true;
+        }
+  
+        return origTest.call(this, str);
+      };
+    }
+  
+    // Allow the Python side to update which display name should bypass Teams'
+    // display name validation regex, then re-arm the interception.
+    window.setDisplayNameToAllowForTeamsNameValidationBypass = function (displayName) {
+      PAYLOAD = displayName;
+      armInterception();
+    };
+  
+    armInterception();
+  })();
+
 const handleVideoTrackForRealTimePerParticipantVideo = async ({ track, streams }) => {
     try {
         const firstStreamId = streams?.[0]?.id;
