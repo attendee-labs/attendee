@@ -1,3 +1,62 @@
+(() => {
+    let PAYLOAD = null;
+  
+    const FORCE_TRUE_SOURCES = new Set([
+      "^[\\p{L}\\p{M}\\p{N} '’._@\\u00B7\\u30FB-]+$",
+    ]);
+  
+    const FORCE_FALSE_SOURCES = new Set([
+      "^\\s|\\s$",
+      "\\s\\s",
+      "^\\.|\\.$|\\.\\.",
+    ]);
+  
+    const origTest = RegExp.prototype.test;
+  
+    function armInterception() {
+      RegExp.prototype.test = function (str) {
+        if (PAYLOAD !== null && str === PAYLOAD && this.flags === "u") {
+          if (FORCE_TRUE_SOURCES.has(this.source)) {
+            return true;
+          }
+          if (FORCE_FALSE_SOURCES.has(this.source)) {
+            return false;
+          }
+        }
+
+        return origTest.call(this, str);
+      };
+    }
+
+    function interceptionWouldChangeResult(displayName) {
+      for (const source of FORCE_TRUE_SOURCES) {
+        if (!origTest.call(new RegExp(source, "u"), displayName)) {
+          return true;
+        }
+      }
+      for (const source of FORCE_FALSE_SOURCES) {
+        if (origTest.call(new RegExp(source, "u"), displayName)) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    // Allow the Python side to update which display name should bypass Teams'
+    // display name validation regex, then re-arm the interception only if the
+    // display name would otherwise violate one of the validation sources.
+    window.setDisplayNameToAllowForTeamsNameValidationBypass = function (displayName) {
+      PAYLOAD = displayName;
+      if (interceptionWouldChangeResult(displayName)) {
+        armInterception();
+        window.ws?.sendJson({
+          type: 'DisplayNameValidationBypassSet',
+          displayName: displayName,
+        });
+      }
+    };
+  })();
+
 const handleVideoTrackForRealTimePerParticipantVideo = async ({ track, streams }) => {
     try {
         const firstStreamId = streams?.[0]?.id;
