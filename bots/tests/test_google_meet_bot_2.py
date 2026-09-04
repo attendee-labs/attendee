@@ -44,6 +44,7 @@ from bots.models import (
 )
 from bots.tests.mock_data import create_mock_file_uploader, create_mock_google_meet_driver
 from bots.web_bot_adapter.ui_methods import UiLoginRequiredException, UiRetryableException
+from bots.web_bot_adapter.web_bot_adapter import WebBotAdapter
 
 
 @override_settings(
@@ -360,6 +361,80 @@ class TestGoogleMeetBot2(TransactionTestCase):
             # If thread is still running after timeout, that's a problem to report
             if bot_thread.is_alive():
                 print("WARNING: Bot thread did not terminate properly after cleanup")
+
+            # Close the database connection since we're in a thread
+            connection.close()
+
+    @patch("bots.models.Bot.create_debug_recording", return_value=False)
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.AzureFileUploader")
+    def test_fatal_error_when_websocket_server_fails_to_start(
+        self,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+        mock_create_debug_recording,
+    ):
+        # Configure the mock uploader
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        # Mock the Chrome driver
+        mock_driver = create_mock_google_meet_driver()
+        MockChromeDriver.return_value = mock_driver
+
+        # Mock virtual display
+        mock_display = MagicMock()
+        MockDisplay.return_value = mock_display
+
+        # Keep a reference to the real implementation so we exercise its actual failure
+        # path (the timeout loop and the raised exception), just with a short timeout so
+        # the test doesn't block for the full 10 seconds.
+        real_wait_for_websocket_server_to_start = WebBotAdapter.wait_for_websocket_server_to_start
+
+        def wait_for_websocket_server_to_start_with_short_timeout(adapter_self, timeout_seconds=1):
+            return real_wait_for_websocket_server_to_start(adapter_self, timeout_seconds=1)
+
+        # Simulate the websocket server never coming up: run_websocket_server does nothing,
+        # so self.websocket_port is never set and wait_for_websocket_server_to_start() raises.
+        with (
+            patch.object(WebBotAdapter, "run_websocket_server", return_value=None),
+            patch.object(WebBotAdapter, "wait_for_websocket_server_to_start", wait_for_websocket_server_to_start_with_short_timeout),
+        ):
+            # Create bot controller
+            controller = BotController(self.bot.id)
+
+            # Run the bot in a separate thread since it has an event loop
+            bot_thread = threading.Thread(target=controller.run)
+            bot_thread.daemon = True
+            bot_thread.start()
+
+            # Give the bot time to attempt init, fail to start the websocket server,
+            # and transition to FATAL_ERROR
+            bot_thread.join(timeout=10)
+
+            # Refresh the bot from the database
+            self.bot.refresh_from_db()
+
+            # The bot should have transitioned to FATAL_ERROR because the websocket server never started
+            self.assertEqual(self.bot.state, BotStates.FATAL_ERROR)
+
+            # Verify that a FATAL_ERROR event was created with the internal error sub type
+            fatal_error_event = self.bot.bot_events.filter(
+                event_type=BotEventTypes.FATAL_ERROR,
+                event_sub_type=BotEventSubTypes.FATAL_ERROR_ATTENDEE_INTERNAL_ERROR,
+            ).first()
+            self.assertIsNotNone(fatal_error_event)
+            self.assertEqual(fatal_error_event.old_state, BotStates.JOINING)
+            self.assertEqual(fatal_error_event.new_state, BotStates.FATAL_ERROR)
+
+            # The websocket startup failure should be captured in the event metadata so it's diagnosable
+            self.assertIn("WebSocket server failed to start", fatal_error_event.metadata["error"])
+
+            # Cleanup
+            controller.cleanup()
+            bot_thread.join(timeout=5)
 
             # Close the database connection since we're in a thread
             connection.close()

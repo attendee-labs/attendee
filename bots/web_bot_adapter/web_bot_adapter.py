@@ -676,6 +676,7 @@ class WebBotAdapter(BotAdapter):
                     pass
                 except Exception as e:
                     logger.warning(f"Error killing pid {pid}: {e}")
+            logger.info(f"Killed chromedriver pid {chromedriver_pid} and descendants")
 
         # Belt and braces: catch any chrome processes that were reparented away from chromedriver
         if user_data_dir:
@@ -683,9 +684,7 @@ class WebBotAdapter(BotAdapter):
                 subprocess.run(["pkill", "-9", "-f", user_data_dir], timeout=5)
             except Exception as e:
                 logger.warning(f"Error running pkill for {user_data_dir}: {e}")
-
-        if chromedriver_pid:
-            logger.info(f"Tore down chromedriver pid {chromedriver_pid} and its process tree")
+            logger.info(f"Killed processes with user_data_dir {user_data_dir}")
 
     def init_driver(self):
         self.write_chrome_policies_file()
@@ -785,12 +784,17 @@ class WebBotAdapter(BotAdapter):
         websocket_thread = threading.Thread(target=self.run_websocket_server, daemon=True)
         websocket_thread.start()
 
-        sleep(0.5)  # Give the websocketserver time to start
-        if not self.websocket_port:
-            raise Exception("WebSocket server failed to start")
+        self.wait_for_websocket_server_to_start()
 
         repeatedly_attempt_to_join_meeting_thread = threading.Thread(target=self.repeatedly_attempt_to_join_meeting, daemon=True)
         repeatedly_attempt_to_join_meeting_thread.start()
+
+    def wait_for_websocket_server_to_start(self, timeout_seconds=10):
+        deadline = time.time() + timeout_seconds
+        while not self.websocket_port and time.time() < deadline:
+            sleep(0.1)
+        if not self.websocket_port:
+            raise Exception(f"WebSocket server failed to start within {timeout_seconds} seconds")
 
     def should_retry_joining_meeting_that_requires_login_by_logging_in(self):
         return False
