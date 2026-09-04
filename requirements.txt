@@ -106,3 +106,4 @@ django-csp==4.0
 pyotp==2.9.0
 Cython==3.2.4
 gdown==6.0.0
+livekit==1.1.8

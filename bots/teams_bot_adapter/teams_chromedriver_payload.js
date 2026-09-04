@@ -684,6 +684,18 @@ class StyleManager {
             this.makeMainVideoFillFrame();
         }
 
+        // If we have a room sync source participant, then start streaming its
+        // media into the meeting.
+        if (window.initialData.roomSyncSourceParticipantConfiguration && window.streamRoomSyncSourceParticipant) {
+            window.streamRoomSyncSourceParticipant().catch((error) => {
+                console.error('Failed to stream room sync source participant:', error);
+                window.ws?.sendJson({
+                    type: 'Error',
+                    message: 'Failed to stream room sync source participant: ' + error.message
+                });
+            });
+        }
+
         console.log('Started StyleManager');
     }
     
@@ -1289,6 +1301,9 @@ The tracks have a streamId that looks like this mainVideo-39016. The SDP has tha
 
             return peerConnection;
         };
+
+        window.RTCPeerConnection.prototype.addTransceiver = originalRTCPeerConnection.prototype.addTransceiver;
+        window.RTCPeerConnection.prototype.addTrack = originalRTCPeerConnection.prototype.addTrack;
     }
 }
 
@@ -2611,9 +2626,20 @@ const handleVideoTrack = async (event) => {
   const globalAudioQueueIntervalsSet = new Set();
 
   const handleAudioTrack = async (event) => {
+    // streamId must contain mainAudio in it, which means it's from Teams, not from a voice agent.
+    const firstStreamId = event.streams[0]?.id;
+    if (!firstStreamId?.includes('mainAudio')) {
+        window.ws?.sendJson({
+            type: 'AudioTrackNotProcessedForPerParticipantAudio',
+            trackId: event.track?.id,
+            streams: event.streams?.map(stream => stream?.id),
+        });
+        return;
+    }
+
     let lastAudioFormat = null;  // Track last seen format
     const audioDataQueue = [];
-    const ACTIVE_SPEAKER_LATENCY_MS = 2000;
+    const ACTIVE_SPEAKER_LATENCY_MS = window.teamsInitialData.perParticipantAudioUtteranceDelayMs;
     let trackIsNonSilent = false;
     let handleAudioTrackDebugInfo = {
         framesWithoutDominantSpeaker: 0,

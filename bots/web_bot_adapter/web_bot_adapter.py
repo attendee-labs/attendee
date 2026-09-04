@@ -24,9 +24,11 @@ from bots.automatic_leave_utils import participant_is_another_bot
 from bots.bot_adapter import BotAdapter
 from bots.models import ParticipantEventTypes, RecordingViews
 from bots.per_participant_realtime_video_configuration import PerParticipantRealtimeVideoConfiguration
+from bots.room_sync_source_participant_configuration import RoomSyncSourceParticipantConfiguration
 from bots.utils import half_ceil, scale_i420
 
 from .debug_screen_recorder import DebugScreenRecorder
+from .livekit_websocket_bridge import LiveKitWebsocketBridge
 from .ui_methods import UiAuthorizedUserNotInMeetingTimeoutExceededException, UiBlockedByCaptchaException, UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiIncorrectPasswordException, UiInfinitelyRetryableException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableException, UiRetryableExpectedException
 
 logger = logging.getLogger(__name__)
@@ -58,8 +60,9 @@ class WebBotAdapter(BotAdapter):
         record_chat_messages_when_paused: bool,
         disable_incoming_video: bool,
         record_participant_speech_start_stop_events: bool,
+        room_sync_source_participant_configuration: RoomSyncSourceParticipantConfiguration | None,
     ):
-        self.display_name = display_name
+        self.display_name = display_name if not room_sync_source_participant_configuration else self.add_bot_indicator_to_display_name(display_name)
         self.send_message_callback = send_message_callback
         self.add_audio_chunk_callback = add_audio_chunk_callback
         self.add_mixed_audio_chunk_callback = add_mixed_audio_chunk_callback
@@ -108,6 +111,8 @@ class WebBotAdapter(BotAdapter):
 
         self.automatic_leave_configuration = automatic_leave_configuration
         self.per_participant_realtime_video_configuration = per_participant_realtime_video_configuration
+        self.room_sync_source_participant_configuration = room_sync_source_participant_configuration
+        self.livekit_websocket_bridge = self.create_livekit_websocket_bridge()
 
         self.should_create_debug_recording = should_create_debug_recording
         self.debug_screen_recorder = None
@@ -364,6 +369,23 @@ class WebBotAdapter(BotAdapter):
             json_data_masked["caption"]["text"] = hashlib.sha256(json_data.get("caption").get("text").encode("utf-8")).hexdigest()
         return json_data_masked
 
+    def add_bot_indicator_to_display_name(self, display_name):
+        # Tag it with an invisible indicator so other Attendee room sync bots in the meeting can identify it as a bot
+        return f"{display_name}\u200b"
+
+    def create_livekit_websocket_bridge(self):
+        config = self.room_sync_source_participant_configuration
+        if config is None or not config.livekit:
+            return None
+        return LiveKitWebsocketBridge(livekit_url=config.livekit.url)
+
+    def handle_websocket_with_livekit_bridge(self, websocket):
+        request_path = LiveKitWebsocketBridge.get_websocket_request_path(websocket)
+        if self.livekit_websocket_bridge.is_bridge_path(request_path):
+            self.livekit_websocket_bridge.handle(websocket, request_path)
+            return
+        self.handle_websocket(websocket)
+
     def handle_websocket(self, websocket):
         audio_format = None
 
@@ -463,13 +485,15 @@ class WebBotAdapter(BotAdapter):
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
+        websocket_handler = self.handle_websocket if self.livekit_websocket_bridge is None else self.handle_websocket_with_livekit_bridge
+
         port = self.get_websocket_port()
         max_retries = 10
 
         for attempt in range(max_retries):
             try:
                 self.websocket_server = serve(
-                    self.handle_websocket,
+                    websocket_handler,
                     "localhost",
                     port,
                     compression=None,
@@ -605,6 +629,15 @@ class WebBotAdapter(BotAdapter):
     def subclass_specific_use_disable_gpu_chrome_option(self):
         return True
 
+    def room_sync_js_library_paths(self, current_dir):
+        if self.room_sync_source_participant_configuration:
+            if self.room_sync_source_participant_configuration.livekit:
+                return [
+                    os.path.join(current_dir, "js_libs", "livekit-client", "2.21.0", "livekit-client.umd.min.js"),
+                    os.path.join(current_dir, "js_libs", "livekit-client", "2.21.0", "livekit-client-adapter.js"),
+                ]
+        return []
+
     def _descendant_pids(self, pid):
         try:
             out = subprocess.run(["ps", "-o", "pid=", "--ppid", str(pid)], capture_output=True, text=True, timeout=5).stdout
@@ -727,7 +760,7 @@ class WebBotAdapter(BotAdapter):
         self.driver = webdriver.Chrome(options=options, service=Service(executable_path="/usr/local/bin/chromedriver"))
         logger.info(f"web driver server initialized at port {self.driver.service.port}")
 
-        initial_data_code = f"window.initialData = {{websocketPort: {self.websocket_port}, videoFrameWidth: {self.video_frame_size[0]}, videoFrameHeight: {self.video_frame_size[1]}, botName: {json.dumps(self.display_name)}, addClickRipple: {'true' if self.should_create_debug_recording else 'false'}, recordingView: '{self.recording_view}', sendMixedAudio: {'true' if self.add_mixed_audio_chunk_callback else 'false'}, sendPerParticipantAudio: {'true' if self.add_audio_chunk_callback else 'false'}, perParticipantRealtimeVideoConfiguration: {json.dumps(self.per_participant_realtime_video_configuration.to_dict())}, sendPerParticipantVideo: {'true' if self.add_per_participant_video_frame_callback else 'false'}, collectCaptions: {'true' if self.upsert_caption_callback else 'false'}, recordParticipantSpeechStartStopEvents: {'true' if self.record_participant_speech_start_stop_events else 'false'}}}"
+        initial_data_code = f"window.initialData = {{websocketPort: {self.websocket_port}, videoFrameWidth: {self.video_frame_size[0]}, videoFrameHeight: {self.video_frame_size[1]}, botName: {json.dumps(self.display_name)}, addClickRipple: {'true' if self.should_create_debug_recording else 'false'}, recordingView: '{self.recording_view}', sendMixedAudio: {'true' if self.add_mixed_audio_chunk_callback else 'false'}, sendPerParticipantAudio: {'true' if self.add_audio_chunk_callback else 'false'}, perParticipantRealtimeVideoConfiguration: {json.dumps(self.per_participant_realtime_video_configuration.to_dict())}, roomSyncSourceParticipantConfiguration: {json.dumps(self.room_sync_source_participant_configuration.to_dict()) if self.room_sync_source_participant_configuration else 'null'}, sendPerParticipantVideo: {'true' if self.add_per_participant_video_frame_callback else 'false'}, collectCaptions: {'true' if self.upsert_caption_callback else 'false'}, recordParticipantSpeechStartStopEvents: {'true' if self.record_participant_speech_start_stop_events else 'false'}}}"
 
         # Get directory of current file
         current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -736,6 +769,7 @@ class WebBotAdapter(BotAdapter):
         JS_LIBRARIES = [
             os.path.join(current_dir, "js_libs", "protobufjs", "7.4.0", "protobuf.min.js"),
             os.path.join(current_dir, "js_libs", "pako", "2.1.0", "pako.min.js"),
+            *self.room_sync_js_library_paths(current_dir),
         ]
 
         libraries_code = ""
