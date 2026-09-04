@@ -5,6 +5,7 @@ import os
 import tempfile
 import threading
 import time
+from datetime import timedelta
 from logging.handlers import RotatingFileHandler
 from unittest.mock import MagicMock, mock_open, patch
 from urllib.parse import urlparse
@@ -13,6 +14,7 @@ from django.conf import settings
 from django.core.files.storage import InMemoryStorage
 from django.db import connection
 from django.test import TransactionTestCase, tag
+from django.utils import timezone
 from selenium.common.exceptions import TimeoutException
 
 from bots.bot_adapter import BotAdapter
@@ -261,6 +263,193 @@ class TestTeamsBot(TransactionTestCase):
                 self.assertEqual(last_bot_event.metadata.get("error"), "Internal error during main loop processing")
                 self.assertEqual(self.bot.state, BotStates.FATAL_ERROR)
                 print("last_bot_event for attendee internal error", last_bot_event.__dict__)
+
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
+    def test_glib_shutdown_creates_process_terminated_fatal_error(
+        self,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+    ):
+        """Test that receiving a SIGTERM/SIGINT (via the GLib shutdown handler) after the bot
+        has joined creates a FATAL_ERROR / PROCESS_TERMINATED event and cleans the bot up.
+
+        This exercises the real handle_glib_shutdown() path registered with
+        GLib.unix_signal_add for SIGTERM/SIGINT. Because LAUNCH_BOT_METHOD is not "kubernetes"
+        in the test environment, bot_was_restarted_instead_of_terminated() returns False, so the
+        handler creates the fatal error event and runs cleanup rather than restarting the pod.
+
+        Flow:
+        1. Bot joins the meeting successfully.
+        2. The process is "terminated" by invoking the GLib shutdown handler directly, which is
+           what GLib does when the pod receives SIGTERM/SIGINT.
+        3. A FATAL_ERROR event with the PROCESS_TERMINATED sub-type is created.
+        4. cleanup() runs, finishing the recording and leaving the bot in the FATAL_ERROR state.
+        """
+        # Configure the mock uploader
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        # Mock the Chrome driver
+        mock_driver = create_mock_teams_driver()
+        MockChromeDriver.return_value = mock_driver
+
+        # Mock virtual display
+        mock_display = MagicMock()
+        MockDisplay.return_value = mock_display
+
+        # Create bot controller
+        controller = BotController(self.bot.id)
+
+        # Mock the attempt_to_join_meeting to succeed immediately
+        with patch("bots.teams_bot_adapter.teams_ui_methods.TeamsUIMethods.attempt_to_join_meeting") as mock_attempt_to_join:
+            mock_attempt_to_join.return_value = None  # Successful join
+
+            # Run the bot in a separate thread since it has an event loop
+            bot_thread = threading.Thread(target=controller.run)
+            bot_thread.daemon = True
+            bot_thread.start()
+
+            # Wait for the bot to join
+            time.sleep(3)
+
+            # Simulate the pod receiving SIGTERM/SIGINT - GLib invokes this handler
+            return_value = controller.handle_glib_shutdown()
+
+            # The handler must return False so GLib removes the signal source
+            self.assertFalse(return_value, "handle_glib_shutdown should return False")
+
+            # Give cleanup time to run
+            time.sleep(1)
+
+            # Now wait for the thread to finish naturally
+            bot_thread.join(timeout=5)
+
+            # If thread is still running after timeout, that's a problem to report
+            if bot_thread.is_alive():
+                print("WARNING: Bot thread did not terminate properly after cleanup")
+
+            # Close the database connection since we're in a thread
+            connection.close()
+
+            # Test that the last bot event is a FATAL_ERROR with the PROCESS_TERMINATED sub-type
+            self.bot.refresh_from_db()
+            last_bot_event = self.bot.bot_events.last()
+            self.assertEqual(last_bot_event.event_type, BotEventTypes.FATAL_ERROR)
+            self.assertEqual(last_bot_event.event_sub_type, BotEventSubTypes.FATAL_ERROR_PROCESS_TERMINATED)
+            self.assertEqual(self.bot.state, BotStates.FATAL_ERROR)
+
+            # Verify that cleanup terminated the recording (a fatal error fails the recording
+            # rather than completing it normally)
+            self.recording.refresh_from_db()
+            self.assertEqual(self.recording.state, RecordingStates.FAILED)
+
+    @patch.dict("os.environ", {"LAUNCH_BOT_METHOD": "kubernetes"})
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
+    def test_glib_shutdown_restarts_pod_when_bot_still_staged(
+        self,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+    ):
+        """Test that receiving a SIGTERM/SIGINT while a Kubernetes-launched bot is still STAGED
+        restarts the bot pod instead of creating a fatal error event.
+
+        When a bot is still STAGED, it never started joining (e.g. the pod was terminated early),
+        so handle_glib_shutdown() -> bot_was_restarted_instead_of_terminated() schedules a pod
+        restart and quits the main loop rather than failing the bot. This only happens for
+        Kubernetes-launched bots, so LAUNCH_BOT_METHOD is patched to "kubernetes".
+
+        Flow:
+        1. A STAGED bot with a join_at an hour in the future runs, staying STAGED (a main-loop
+           no-op) because it isn't time to join yet.
+        2. The process is "terminated" by invoking the GLib shutdown handler directly.
+        3. Because the bot is still STAGED (and recently created), restart_bot_pod is scheduled
+           and the main loop is quit.
+        4. No FATAL_ERROR event is created and cleanup() is NOT run, since the pod is restarting.
+        """
+        # A staged bot with a future join_at stays STAGED (main loop no-op) until it's time to join
+        staged_bot = Bot.objects.create(
+            name="Test Teams Bot Staged",
+            meeting_url="https://teams.microsoft.com/meet/789789789?p=789789789",
+            state=BotStates.STAGED,
+            join_at=timezone.now() + timedelta(hours=1),
+            project=self.project,
+        )
+        Recording.objects.create(
+            bot=staged_bot,
+            recording_type=RecordingTypes.AUDIO_AND_VIDEO,
+            transcription_type=TranscriptionTypes.NON_REALTIME,
+            transcription_provider=TranscriptionProviders.DEEPGRAM,
+            is_default_recording=True,
+        )
+
+        # Configure the mock uploader
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        # Mock the Chrome driver
+        mock_driver = create_mock_teams_driver()
+        MockChromeDriver.return_value = mock_driver
+
+        # Mock virtual display
+        mock_display = MagicMock()
+        MockDisplay.return_value = mock_display
+
+        # Create bot controller
+        controller = BotController(staged_bot.id)
+
+        # Spy on cleanup to prove the restart path skips the normal shutdown cleanup, and mock the
+        # restart_bot_pod task so no real Kubernetes call is made.
+        with (
+            patch.object(controller, "cleanup") as mock_cleanup,
+            patch("bots.tasks.restart_bot_pod_task.restart_bot_pod.apply_async") as mock_restart_apply_async,
+        ):
+            # Run the bot in a separate thread since it has an event loop
+            bot_thread = threading.Thread(target=controller.run)
+            bot_thread.daemon = True
+            bot_thread.start()
+
+            # Wait for the bot to initialize; it stays STAGED because join_at is in the future
+            time.sleep(3)
+
+            # Confirm the bot is still staged before we terminate it
+            staged_bot.refresh_from_db()
+            self.assertEqual(staged_bot.state, BotStates.STAGED, "Bot should still be STAGED before termination")
+
+            # Simulate the pod receiving SIGTERM/SIGINT - GLib invokes this handler
+            return_value = controller.handle_glib_shutdown()
+
+            # The handler must return False so GLib removes the signal source
+            self.assertFalse(return_value, "handle_glib_shutdown should return False")
+
+            # Now wait for the thread to finish (the main loop was quit by the restart path)
+            bot_thread.join(timeout=5)
+
+            # If thread is still running after timeout, that's a problem to report
+            if bot_thread.is_alive():
+                print("WARNING: Bot thread did not terminate properly after cleanup")
+
+            # Close the database connection since we're in a thread
+            connection.close()
+
+            # A pod restart should have been scheduled with a countdown
+            mock_restart_apply_async.assert_called_once_with(args=[staged_bot.id], countdown=60)
+
+            # The normal shutdown cleanup should NOT run, since the pod is being restarted
+            mock_cleanup.assert_not_called()
+
+            # The bot should remain STAGED with no fatal error event
+            staged_bot.refresh_from_db()
+            self.assertEqual(staged_bot.state, BotStates.STAGED, "Bot should remain STAGED after the restart path runs")
+            self.assertFalse(
+                staged_bot.bot_events.filter(event_type=BotEventTypes.FATAL_ERROR).exists(),
+                "No FATAL_ERROR event should be created when the pod is restarted",
+            )
 
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
     @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
