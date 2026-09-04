@@ -1894,6 +1894,7 @@ class TestGoogleMeetBot2(TransactionTestCase):
         controller.per_participant_non_streaming_audio_input_manager = MagicMock()
         controller.closed_caption_manager = MagicMock()
         controller.screen_and_audio_recorder = None
+        controller.room_sync_client = None
         adapter = controller.get_google_meet_bot_adapter()
 
         self.assertTrue(adapter.google_meet_bot_login_is_available)
