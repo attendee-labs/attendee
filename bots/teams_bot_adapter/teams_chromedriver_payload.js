@@ -1,37 +1,27 @@
 (() => {
-    // Inactive by default: no display name is whitelisted until the Python side
-    // calls window.setDisplayNameToAllow(...).
     let PAYLOAD = null;
   
-    const TARGET_SOURCE =
-      "^[\\p{L}\\p{M}\\p{N} '’._@\\u00B7\\u30FB-]+$";
+    const FORCE_TRUE_SOURCES = new Set([
+      "^[\\p{L}\\p{M}\\p{N} '’._@\\u00B7\\u30FB-]+$",
+    ]);
+  
+    const FORCE_FALSE_SOURCES = new Set([
+      "^\\s|\\s$",
+      "\\s\\s",
+      "^\\.|\\.$|\\.\\.",
+    ]);
   
     const origTest = RegExp.prototype.test;
   
     function armInterception() {
       RegExp.prototype.test = function (str) {
-        if (
-          PAYLOAD !== null &&
-          str === PAYLOAD &&
-          this.flags === "u" &&
-          this.source === TARGET_SOURCE
-        ) {
-          const targetRegex = this;
-  
-          Object.defineProperty(targetRegex, "test", {
-            configurable: true,
-            writable: true,
-            value(str) {
-              if (str === PAYLOAD) {
-                return true;
-              }
-              return origTest.call(targetRegex, str);
-            },
-          });
-  
-          RegExp.prototype.test = origTest;
-  
-          return true;
+        if (PAYLOAD !== null && str === PAYLOAD && this.flags === "u") {
+          if (FORCE_TRUE_SOURCES.has(this.source)) {
+            return true;
+          }
+          if (FORCE_FALSE_SOURCES.has(this.source)) {
+            return false;
+          }
         }
   
         return origTest.call(this, str);
