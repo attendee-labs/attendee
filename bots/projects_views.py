@@ -20,6 +20,8 @@ from django.views.generic import ListView
 
 from accounts.models import User, UserRole
 
+from .bot_resource_usage_utils import DEFAULT_WINDOW as BOT_RESOURCE_USAGE_DEFAULT_WINDOW
+from .bot_resource_usage_utils import get_bot_resource_usage_data, user_can_view_bot_resource_usage
 from .bots_api_utils import BotCreationSource, create_bot, create_webhook_subscription
 from .instance_health_alert_manager import get_alert_configs, update_alert_settings
 from .instance_health_utils import DEFAULT_WINDOW, get_instance_health_data, user_can_view_instance_health
@@ -220,6 +222,7 @@ class ProjectUrlContextMixin:
             "project": project,
             "charge_credits_for_bots_setting": settings.CHARGE_CREDITS_FOR_BOTS,
             "can_view_instance_health": user_can_view_instance_health(self.request.user),
+            "can_view_bot_resource_usage": user_can_view_bot_resource_usage(self.request.user),
             "user_projects": Project.accessible_to(self.request.user),
             "UserRole": UserRole,
             "debug_mode": True if settings.DEBUG else False,
@@ -1263,6 +1266,24 @@ class ProjectInstanceHealthView(AdminRequiredMixin, ProjectUrlContextMixin, View
         context["alert_configs"] = get_alert_configs(InstanceHealthAlertsState.load())
         context["alerts_saved"] = True
         return render(request, "projects/partials/instance_health_alerts_form.html", context)
+
+
+class ProjectBotResourceUsageView(AdminRequiredMixin, ProjectUrlContextMixin, View):
+    def get(self, request, object_id):
+        if not user_can_view_bot_resource_usage(request.user):
+            raise Http404("Bot resource usage is not available.")
+
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
+        context = self.get_project_context(object_id, project)
+        context.update(
+            get_bot_resource_usage_data(
+                project,
+                window=request.GET.get("window", BOT_RESOURCE_USAGE_DEFAULT_WINDOW),
+                platform=request.GET.get("platform", ""),
+                recording=request.GET.get("recording", ""),
+            )
+        )
+        return render(request, "projects/project_bot_resource_usage.html", context)
 
 
 class ProjectBillingView(AdminRequiredMixin, ProjectUrlContextMixin, ListView):

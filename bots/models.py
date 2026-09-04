@@ -1189,8 +1189,7 @@ class Bot(models.Model):
         return recording_settings.get("view", RecordingViews.SPEAKER_VIEW)
 
     def save_resource_snapshots(self):
-        save_resource_snapshots_env_var_value = os.getenv("SAVE_BOT_RESOURCE_SNAPSHOTS", "false")
-        return str(save_resource_snapshots_env_var_value).lower() == "true"
+        return settings.SAVE_BOT_RESOURCE_SNAPSHOTS
 
     def create_debug_recording(self):
         if os.getenv("SAVE_DEBUG_RECORDINGS", "false") == "true":
