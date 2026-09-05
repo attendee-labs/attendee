@@ -44,7 +44,7 @@ class LivekitRoomSyncClient:
         - ``api_secret``: the LiveKit API secret used to mint per-participant tokens
     """
 
-    def __init__(self, room: str, credentials: dict, sample_rate: int = 48000, num_channels: int = 1, source_participant: dict = None):
+    def __init__(self, room: str, credentials: dict, sample_rate: int = 48000, num_channels: int = 1, source_participant: dict = None, sync_to_room: bool = True):
         self.room_name = room
         self.url = credentials["url"]
         self.api_key = credentials["api_key"]
@@ -52,6 +52,11 @@ class LivekitRoomSyncClient:
         self.sample_rate = sample_rate
         self.num_channels = num_channels
         self.source_participant = source_participant
+        # When multiple LiveKit agents share a room, only one of them should
+        # mirror the meeting's participants, audio and chat into the room.
+        # When this is false, the client only streams the source participant's
+        # media from the room into the meeting and does not mirror anything back.
+        self.sync_to_room = sync_to_room
 
         # Maps the meeting participant uuid to its LiveKit rtc.Room connection.
         self._rooms: dict[str, rtc.Room] = {}
@@ -83,6 +88,9 @@ class LivekitRoomSyncClient:
         optional so that callers that only have the raw event can still use this
         method.
         """
+        if not self.sync_to_room:
+            return
+
         participant_uuid = event["participant_uuid"]
         event_type = event["event_type"]
 
@@ -106,6 +114,9 @@ class LivekitRoomSyncClient:
         The message is sent from the LiveKit participant that mirrors the meeting
         participant who authored it, so the LiveKit room reflects the meeting chat.
         """
+        if not self.sync_to_room:
+            return
+
         participant_uuid = chat_message["participant_uuid"]
         text = chat_message.get("text")
         if not text:
@@ -264,6 +275,9 @@ class LivekitRoomSyncClient:
         from the GLib main thread; the work is scheduled onto the background
         event loop.
         """
+        if not self.sync_to_room:
+            return
+
         self._run_coroutine(self._capture_audio(participant_uuid, chunk_bytes))
 
     async def _capture_audio(self, participant_uuid: str, chunk_bytes: bytes):

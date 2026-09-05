@@ -549,6 +549,7 @@ class BotController:
             source_participant=self.bot_in_db.room_sync_livekit_source_participant(),
             credentials=livekit_credentials,
             sample_rate=self.get_per_participant_audio_sample_rate(),
+            sync_to_room=self.bot_in_db.room_sync_sync_to_room(),
         )
 
     def get_room_sync_source_participant_configuration(self):
@@ -794,7 +795,7 @@ class BotController:
             websocket_stream_audio=bool(self.bot_in_db.websocket_audio_url()),
             websocket_stream_per_participant_audio=bool(self.bot_in_db.websocket_per_participant_audio_url()),
             websocket_stream_per_participant_video=bool(self.bot_in_db.websocket_per_participant_video_url()),
-            room_sync_stream_per_participant_audio=bool(self.bot_in_db.should_use_room_sync()),
+            room_sync_stream_per_participant_audio=self.bot_in_db.should_use_room_sync() and self.bot_in_db.room_sync_sync_to_room(),
         )
 
         if self.bot_in_db.recording_type() == RecordingTypes.AUDIO_ONLY:

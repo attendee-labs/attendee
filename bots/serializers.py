@@ -1146,6 +1146,11 @@ ROOM_SYNC_SETTINGS_SCHEMA = {
     "type": "object",
     "description": "Settings for syncing meeting media and participants with an external real-time room. Currently only LiveKit is supported.",
     "properties": {
+        "sync_to_room": {
+            "type": "boolean",
+            "default": True,
+            "description": "Whether the bot should mirror the meeting's participants, audio and chat into the room. Defaults to true. Only set to false when multiple agents will be sharing a room.",
+        },
         "livekit": {
             "type": "object",
             "description": "LiveKit connection details. The LiveKit server URL is configured as part of the project's LiveKit credentials.",
