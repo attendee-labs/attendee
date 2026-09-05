@@ -12,6 +12,7 @@ from bots.room_sync_source_participant_configuration import (
     LivekitRoomSyncSourceParticipantConfiguration,
     RoomSyncSourceParticipantConfiguration,
 )
+from bots.room_sync_utils import does_participant_name_have_bot_indicator
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +99,12 @@ class LivekitRoomSyncClient:
             name = None
             if participant is not None:
                 name = participant.get("participant_full_name")
+            # Other Attendee room sync bots tag their display name with an
+            # invisible marker. Don't mirror them into the room, otherwise room
+            # sync bots would endlessly reflect each other back and forth.
+            if does_participant_name_have_bot_indicator(name):
+                logger.info(f"Skipping LiveKit sync for room sync bot participant {participant_uuid}")
+                return
             self._run_coroutine(self._add_participant(participant_uuid, name))
         elif event_type == ParticipantEventTypes.LEAVE:
             self._run_coroutine(self._remove_participant(participant_uuid))
