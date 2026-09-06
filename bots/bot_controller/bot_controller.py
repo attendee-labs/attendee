@@ -17,7 +17,6 @@ from django.utils import timezone
 from bots.automatic_leave_configuration import AutomaticLeaveConfiguration
 from bots.bot_adapter import BotAdapter
 from bots.bot_controller.bot_websocket_client_manager import BotWebsocketClientManager
-from bots.bot_controller.livekit_room_sync_client import LivekitRoomSyncClient
 from bots.bot_controller.main_thread_executor import MainThreadExecutor
 from bots.bot_sso_utils import create_google_meet_sign_in_session
 from bots.bots_api_utils import BotCreationSource
@@ -531,6 +530,8 @@ class BotController:
     def get_room_sync_client(self):
         if not self.bot_in_db.should_use_room_sync():
             return None
+
+        from bots.bot_controller.livekit_room_sync_client import LivekitRoomSyncClient
 
         # LiveKit is the only supported room sync provider for now
 
