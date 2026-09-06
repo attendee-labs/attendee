@@ -194,6 +194,8 @@ def get_partial_for_credential_type(credential_type, request, context):
         return render(request, "projects/partials/external_media_storage_credentials.html", context)
     elif credential_type == Credentials.CredentialTypes.TEAMS_BOT_IDENTIFICATION_CREDENTIALS:
         return render(request, "projects/partials/teams_bot_identification_credentials.html", context)
+    elif credential_type == Credentials.CredentialTypes.LIVEKIT:
+        return render(request, "projects/partials/livekit_credentials.html", context)
     else:
         return HttpResponse("Cannot render the partial for this credential type", status=400)
 
@@ -413,6 +415,15 @@ class CreateCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 
                 if not all(credentials_data.values()):
                     return HttpResponse("Missing required credentials data", status=400)
+            elif credential_type == Credentials.CredentialTypes.LIVEKIT:
+                credentials_data = {
+                    "url": request.POST.get("url"),
+                    "api_key": request.POST.get("api_key"),
+                    "api_secret": request.POST.get("api_secret"),
+                }
+
+                if not all(credentials_data.values()):
+                    return HttpResponse("Missing required credentials data", status=400)
             else:
                 return HttpResponse("Unsupported credential type", status=400)
 
@@ -490,6 +501,8 @@ class ProjectCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 
         teams_bot_identification_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.TEAMS_BOT_IDENTIFICATION_CREDENTIALS).first()
 
+        livekit_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.LIVEKIT).first()
+
         context = self.get_project_context(object_id, project)
         context.update(
             {
@@ -517,6 +530,8 @@ class ProjectCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
                 "teams_bot_identification_credentials": teams_bot_identification_credentials.get_credentials() if teams_bot_identification_credentials else None,
                 "teams_bot_identification_credential_type": Credentials.CredentialTypes.TEAMS_BOT_IDENTIFICATION_CREDENTIALS,
                 "show_teams_bot_identification_credentials": settings.SHOW_TEAMS_BOT_IDENTIFICATION_CREDENTIALS,
+                "livekit_credentials": livekit_credentials.get_credentials() if livekit_credentials else None,
+                "livekit_credential_type": Credentials.CredentialTypes.LIVEKIT,
             }
         )
 

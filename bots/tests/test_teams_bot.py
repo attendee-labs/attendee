@@ -344,6 +344,9 @@ class TestTeamsBot(TransactionTestCase):
                 self.assertEqual(call_args.kwargs["text"], "Test message")
                 self.assertEqual(call_args.kwargs["to_user_uuid"], None)
 
+                # Verify utterance delay is 2000ms
+                self.assertEqual(controller.adapter.get_per_participant_audio_utterance_delay_ms(), 2000, "Utterance delay should be 2000ms")
+
                 # Verify that the chat message request is now in SENT state
                 chat_message_request.refresh_from_db()
                 self.assertEqual(chat_message_request.state, BotChatMessageRequestStates.SENT, "Chat message should be in SENT state after being sent")
@@ -894,6 +897,7 @@ class TestTeamsBot(TransactionTestCase):
         controller.per_participant_non_streaming_audio_input_manager = MagicMock()
         controller.closed_caption_manager = MagicMock()
         controller.screen_and_audio_recorder = None
+        controller.room_sync_client = None
         adapter = controller.get_teams_bot_adapter()
 
         self.assertTrue(adapter.teams_bot_login_is_available)
