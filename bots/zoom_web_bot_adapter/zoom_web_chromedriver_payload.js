@@ -787,6 +787,9 @@ class RTCInterceptor {
             
             return peerConnection;
         };
+
+        window.RTCPeerConnection.prototype.addTransceiver = originalRTCPeerConnection.prototype.addTransceiver;
+        window.RTCPeerConnection.prototype.addTrack = originalRTCPeerConnection.prototype.addTrack;
     }
 }
 
@@ -1019,6 +1022,18 @@ class StyleManager {
 
         if (initialData.sendPerParticipantVideo) {
             window.perParticipantVideoCaptureManager.start();
+        }
+
+        // If we have a room sync source participant, then start streaming its
+        // media into the meeting.
+        if (window.initialData.roomSyncSourceParticipantConfiguration && window.streamRoomSyncSourceParticipant) {
+            window.streamRoomSyncSourceParticipant().catch((error) => {
+                console.error('Failed to stream room sync source participant:', error);
+                window.ws?.sendJson({
+                    type: 'Error',
+                    message: 'Failed to stream room sync source participant: ' + error.message
+                });
+            });
         }
 
         // Ensure the mixed meeting audio stream is set up so that mixed audio can
