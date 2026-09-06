@@ -3360,12 +3360,22 @@ if (window.initialData.addClickRipple) {
 
 
 
+const mediaControlCameraButtonIds = ["video-button"]
+const mediaControlMicButtonIds = ["microphone-button", "mic-button"]
+const mediaControlScreenshareButtonIds = ["screenshare-button", "share-button"]
+
+// Teams uses different element ids for these controls depending on the client version,
+// so match on any of the known ids combined with the aria-label.
+function mediaControlSelector(ids, ariaLabel, tagName) {
+    return ids.map(id => `${tagName}[id="${id}"][aria-label="${ariaLabel}"]`).join(", ");
+}
+
 async function turnOnCamera() {
     // Click camera button to turn it on
     let cameraButton = null;
     const numAttempts = 30;
     for (let i = 0; i < numAttempts; i++) {
-        cameraButton = document.querySelector('button[aria-label="Turn camera on"]') || document.querySelector('div[aria-label="Turn camera on"]');
+        cameraButton = document.querySelector(mediaControlSelector(mediaControlCameraButtonIds, "Turn camera on", "button")) || document.querySelector(mediaControlSelector(mediaControlCameraButtonIds, "Turn camera on", "div"));
         if (cameraButton) {
             break;
         }
@@ -3390,7 +3400,7 @@ async function turnOnCamera() {
 
 function turnOnMic() {
     // Click microphone button to turn it on
-    const microphoneButton = document.querySelector('button[aria-label="Unmute mic"]');
+    const microphoneButton = document.querySelector(mediaControlSelector(mediaControlMicButtonIds, "Unmute mic", "button"));
     if (microphoneButton) {
         console.log("Clicking the microphone button to turn it on");
         microphoneButton.click();
@@ -3399,56 +3409,16 @@ function turnOnMic() {
 
 function turnOffMic() {
     // Click microphone button to turn it on
-    const microphoneButton = document.querySelector('button[aria-label="Mute mic"]');
+    const microphoneButton = document.querySelector(mediaControlSelector(mediaControlMicButtonIds, "Mute mic", "button"));
     if (microphoneButton) {
         console.log("Clicking the microphone button to turn it off");
         microphoneButton.click();
-    }
-}
-
-function turnOnMicAndCamera() {
-    // Click microphone button to turn it on
-    const microphoneButton = document.querySelector('button[aria-label="Unmute mic"]');
-    if (microphoneButton) {
-        console.log("Clicking the microphone button to turn it on");
-        microphoneButton.click();
-    } else {
-        console.log("Microphone button not found");
-    }
-
-    // Click camera button to turn it on
-    const cameraButton = document.querySelector('button[aria-label="Turn camera on"]');
-    if (cameraButton) {
-        console.log("Clicking the camera button to turn it on");
-        cameraButton.click();
-    } else {
-        console.log("Camera button not found");
-    }
-}
-
-function turnOffMicAndCamera() {
-    // Click microphone button to turn it off
-    const microphoneButton = document.querySelector('button[aria-label="Mute mic"]');
-    if (microphoneButton) {
-        console.log("Clicking the microphone button to turn it off");
-        microphoneButton.click();
-    } else {
-        console.log("Microphone off button not found");
-    }
-
-    // Click camera button to turn it off
-    const cameraButton = document.querySelector('button[aria-label="Turn camera off"]');
-    if (cameraButton) {
-        console.log("Clicking the camera button to turn it off");
-        cameraButton.click();
-    } else {
-        console.log("Camera off button not found");
     }
 }
 
 function turnOffCamera() {
     // Click camera button to turn it off
-    const cameraButton = document.querySelector('button[aria-label="Turn camera off"]');
+    const cameraButton = document.querySelector(mediaControlSelector(mediaControlCameraButtonIds, "Turn camera off", "button"));
     if (cameraButton) {
         console.log("Clicking the camera button to turn it off");
         cameraButton.click();
@@ -3458,75 +3428,26 @@ function turnOffCamera() {
 }
 
 const turnOnMicArialLabel = "Unmute mic"
-const turnOnScreenshareButtonId = "screenshare-button"
-const turnOnScreenshareButtonAlternateId = "share-button"
 const turnOffMicArialLabel = "Turn off microphone"
 const turnOffScreenshareAriaLabel = "Stop sharing"
 
-function turnOnMicAndScreenshare() {
-    // Click microphone button to turn it on
-    const microphoneButton = document.querySelector(`button[aria-label="${turnOnMicArialLabel}"]`);
-    if (microphoneButton) {
-        console.log("Clicking the microphone button to turn it on");
-        microphoneButton.click();
-    } else {
-        console.log("Microphone button not found");
-        window.ws.sendJson({
-            turnOnMicAndScreenshareError: "Microphone button not found in turnOnMicAndScreenshare"
-        });
-    }
-
-    // Click screenshare button to turn it on
-    const screenshareButton = document.querySelector(`button[id="${turnOnScreenshareButtonId}"]`) || document.querySelector(`button[id="${turnOnScreenshareButtonAlternateId}"]`);
-    if (screenshareButton) {
-        console.log("Clicking the screenshare button to turn it on");
-        screenshareButton.click();
-    } else {
-        console.log("Screenshare button not found");
-        window.ws.sendJson({
-            turnOnMicAndScreenshareError: "Screenshare button not found in turnOnMicAndScreenshare"
-        });
-    }
-}
-
-function turnOffMicAndScreenshare() {
-    // Click microphone button to turn it off
-    const microphoneButton = document.querySelector(`button[aria-label="${turnOffMicArialLabel}"]`);
-    if (microphoneButton) {
-        console.log("Clicking the microphone button to turn it off");
-        microphoneButton.click();
-    } else {
-        console.log("Microphone off button not found");
-    }
-
-    // Click screenshare button to turn it off
-    const screenshareButton = document.querySelector(`button[aria-label="${turnOffScreenshareAriaLabel}"]`);
-    if (screenshareButton) {
-        console.log("Clicking the screenshare button to turn it off");
-        screenshareButton.click();
-    } else {
-        console.log("Screenshare off button not found");
-    }
-}
-
-
 function turnOnScreenshare() {
     // Click screenshare button to turn it on
-    const screenshareButton = document.querySelector(`button[id="${turnOnScreenshareButtonId}"]`) || document.querySelector(`button[id="${turnOnScreenshareButtonAlternateId}"]`);
+    const screenshareButton = document.querySelector(mediaControlScreenshareButtonIds.map(id => `button[id="${id}"]`).join(", "));
     if (screenshareButton) {
         console.log("Clicking the screenshare button to turn it on");
         screenshareButton.click();
     } else {
         console.log("Screenshare button not found");
         window.ws.sendJson({
-            turnOnMicAndScreenshareError: "Screenshare button not found in turnOnMicAndScreenshare"
+            turnOnScreenshareError: "Screenshare button not found in turnOnScreenshare"
         });
     }
 }
 
 function turnOffScreenshare() {
     // Click screenshare button to turn it off
-    const screenshareButton = document.querySelector(`button[aria-label="${turnOffScreenshareAriaLabel}"]`);
+    const screenshareButton = document.querySelector(mediaControlSelector(mediaControlScreenshareButtonIds, turnOffScreenshareAriaLabel, "button"));
     if (screenshareButton) {
         console.log("Clicking the screenshare button to turn it off");
         screenshareButton.click();
