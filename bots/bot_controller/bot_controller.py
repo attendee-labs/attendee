@@ -1185,19 +1185,19 @@ class BotController:
         if os.getenv("LAUNCH_BOT_METHOD") != "kubernetes":
             return False
 
-        # If the bot is still staged, it never started joining (e.g. the pod was terminated early),
-        # so restart the pod to recover instead of failing.
+        # If the bot is still staged or joining (e.g. the pod was terminated early),
+        # restart the pod to recover instead of failing.
         self.bot_in_db.refresh_from_db()
-        if self.bot_in_db.state != BotStates.STAGED:
+        if self.bot_in_db.state not in [BotStates.STAGED, BotStates.JOINING]:
             return False
 
         # Don't bother restarting if the bot is too old.
         bot_start_time = self.bot_in_db.join_at or self.bot_in_db.created_at
         if bot_start_time < timezone.now() - timedelta(minutes=15):
-            logger.info("Bot is still staged but was created more than 15 minutes ago, so not restarting the bot pod")
+            logger.info("Bot is still staged / joining but was created more than 15 minutes ago, so not restarting the bot pod")
             return False
 
-        logger.info("Bot is still staged, so restarting the bot pod instead of creating a fatal error event")
+        logger.info("Bot is still staged / joining, so restarting the bot pod instead of creating a fatal error event")
         from bots.tasks.restart_bot_pod_task import restart_bot_pod
 
         restart_bot_pod.apply_async(args=[self.bot_in_db.id], countdown=60)
