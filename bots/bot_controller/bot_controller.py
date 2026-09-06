@@ -1191,6 +1191,11 @@ class BotController:
         if self.bot_in_db.state not in [BotStates.STAGED, BotStates.JOINING]:
             return False
 
+        # If bot never got a heartbeat, terminate normally.
+        if self.bot_in_db.last_heartbeat_timestamp is None:
+            logger.info("Bot never got a heartbeat, so terminating normally instead of restarting the bot pod")
+            return False
+
         # Don't bother restarting if the bot is too old.
         bot_start_time = self.bot_in_db.join_at or self.bot_in_db.created_at
         if bot_start_time < timezone.now() - timedelta(minutes=15):
