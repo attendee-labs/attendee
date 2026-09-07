@@ -130,6 +130,9 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
             ],
         }
 
+        if os.getenv("USE_SAFE_NAVIGATION_FOR_SIGNED_IN_GOOGLE_MEET_BOTS", "false") != "true":
+            chrome_policies["BrowserSwitcherUrlList"].append("!www.google.com")
+
         if os.getenv("USE_OKTA_LOGIN_FOR_SIGNED_IN_GOOGLE_MEET_BOTS", "false") == "true" and os.getenv("OKTA_DOMAIN"):
             chrome_policies["BrowserSwitcherUrlList"].append("!" + os.getenv("OKTA_DOMAIN"))
 
