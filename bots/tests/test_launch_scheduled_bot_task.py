@@ -37,6 +37,20 @@ class LaunchScheduledBotTaskTestCase(TestCase):
             # Verify launch_bot was called
             mock_launch_bot.assert_called_once_with(self.bot)
 
+    def test_duplicate_launch_scheduled_bot(self):
+        """A duplicate delivery after staging skips without launching again."""
+        with patch("bots.tasks.launch_scheduled_bot_task.launch_bot") as mock_launch_bot:
+            launch_scheduled_bot(self.bot.id, self.original_join_at.isoformat())
+            with self.assertLogs("bots.tasks.launch_scheduled_bot_task", level="INFO") as logs:
+                launch_scheduled_bot(self.bot.id, self.original_join_at.isoformat())
+
+        self.bot.refresh_from_db()
+        self.assertEqual(self.bot.state, BotStates.STAGED)
+        self.assertEqual(self.bot.bot_events.filter(event_type=BotEventTypes.STAGED).count(), 1)
+        mock_launch_bot.assert_called_once_with(self.bot)
+        self.assertTrue(any("is not in state SCHEDULED, skipping" in message for message in logs.output))
+        self.assertTrue(all(record.levelname == "INFO" for record in logs.records))
+
     def test_bot_not_in_scheduled_state(self):
         """Test that task exits early if bot is not in SCHEDULED state"""
         # Change bot state to READY
@@ -74,25 +88,18 @@ class LaunchScheduledBotTaskTestCase(TestCase):
 
     def test_join_at_modified_after_task_queued(self):
         """Test the race condition where join_at is modified between task queueing and execution"""
-
-        def mock_get_bot_and_modify_join_at(id, *args, **kwargs):
-            """Mock that simulates another process modifying join_at after we get the bot"""
-            bot = Bot.objects.filter(id=id).first()
-            # Simulate another process modifying the join_at field
-            Bot.objects.filter(id=id).update(join_at=self.modified_join_at)
-            return bot
+        Bot.objects.filter(id=self.bot.id).update(join_at=self.modified_join_at)
 
         with patch("bots.tasks.launch_scheduled_bot_task.launch_bot") as mock_launch_bot:
-            with patch("bots.models.Bot.objects.get", side_effect=mock_get_bot_and_modify_join_at):
-                # Execute the task with the original join_at time
-                # This should raise a ValidationError due to the join_at mismatch
-                with self.assertRaises(ValidationError) as context:
-                    launch_scheduled_bot(self.bot.id, self.original_join_at.isoformat())
+            # Execute the task with the original join_at time
+            # This should raise a ValidationError due to the join_at mismatch
+            with self.assertRaises(ValidationError) as context:
+                launch_scheduled_bot(self.bot.id, self.original_join_at.isoformat())
 
-                # Verify the error message contains the expected text
-                error_message = str(context.exception)
-                self.assertIn("join_at in event_metadata", error_message)
-                self.assertIn("is different from the join_at in the database", error_message)
+            # Verify the error message contains the expected text
+            error_message = str(context.exception)
+            self.assertIn("join_at in event_metadata", error_message)
+            self.assertIn("is different from the join_at in the database", error_message)
 
-                # Verify launch_bot was not called due to the error
-                mock_launch_bot.assert_not_called()
+            # Verify launch_bot was not called due to the error
+            mock_launch_bot.assert_not_called()

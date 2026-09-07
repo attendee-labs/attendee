@@ -246,14 +246,16 @@ class Command(BaseCommand):
 
     # -----------------------------------------------------------
     def _run_scheduled_bots(self):
+        """
+        Enqueue launches for scheduled bots within the join_at thresholds.
+
+        SELECT … FOR UPDATE SKIP LOCKED prevents overlapping transactions from
+        enqueueing the same bot. After commit the bot remains SCHEDULED until a
+        worker stages it, so another daemon can enqueue it again. Duplicate
+        tasks are handled by launch_scheduled_bot's locked state transition.
+        """
         if os.getenv("SCHEDULED_BOT_JITTER_START_SECONDS") and os.getenv("SCHEDULED_BOT_JITTER_END_SECONDS"):
             return self._run_scheduled_bots_with_jitter()
-
-        """
-        Promote objects whose join_at ≤ join_at_threshold.
-        Uses SELECT … FOR UPDATE SKIP LOCKED so multiple daemons
-        can run safely (e.g. during rolling deploys).
-        """
 
         # Give the bots 5 minutes to spin up, before they join the meeting.
         join_at_upper_threshold = timezone.now() + timezone.timedelta(minutes=5)
