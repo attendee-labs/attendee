@@ -826,6 +826,10 @@ class TeamsSettingsJSONField(serializers.JSONField):
                 "additionalProperties": False,
                 "description": "The user ID of the Zoom OAuth Connection to use for the onbehalf token.",
             },
+            "webinar_user_email": {
+                "type": "string",
+                "description": "The email address to use when joining a Zoom webinar. When this is set, the bot joins using the webinar flow (accepting a promotion to panelist if the host offers one). Leave unset for regular meetings.",
+            },
         },
         "required": [],
         "additionalProperties": False,
@@ -899,6 +903,11 @@ def get_webhook_trigger_enum():
     from .models import WebhookTriggerTypes
 
     return list(WebhookTriggerTypes._get_mapping().values())
+
+
+def build_webhook_url_regexp():
+    """Regexp for webhook URLs. Allow http:// when REQUIRE_HTTPS_WEBHOOKS is disabled."""
+    return "^https://.*" if settings.REQUIRE_HTTPS_WEBHOOKS else "^https?://.*"
 
 
 @extend_schema_field(
@@ -1133,6 +1142,56 @@ class VoiceAgentSettingsJSONField(serializers.JSONField):
     pass
 
 
+ROOM_SYNC_SETTINGS_SCHEMA = {
+    "type": "object",
+    "description": "Settings for syncing meeting media and participants with an external real-time room. Currently only LiveKit is supported.",
+    "properties": {
+        "sync_to_room": {
+            "type": "boolean",
+            "default": True,
+            "description": "Whether the bot should mirror the meeting's participants, audio and chat into the room. Defaults to true. Only set to false when multiple agents will be sharing a room.",
+        },
+        "livekit": {
+            "type": "object",
+            "description": "LiveKit connection details. The LiveKit server URL is configured as part of the project's LiveKit credentials.",
+            "properties": {
+                "room_name": {
+                    "type": "string",
+                    "description": "The name of the LiveKit room the bot should join.",
+                },
+                "source_participant": {
+                    "type": "object",
+                    "description": "Identifies the LiveKit participant whose audio and video the bot should stream into the meeting. If omitted, no media will be streamed into the meeting. Exactly one of 'identity' or 'publish_on_behalf' must be provided.",
+                    "properties": {
+                        "identity": {
+                            "type": "string",
+                            "description": "The identity of the LiveKit participant to stream from.",
+                        },
+                        "publish_on_behalf": {
+                            "type": "string",
+                            "description": "The bot streams tracks from the first participant whose 'lk.publish_on_behalf' attribute equals this value, which is how a LiveKit agent publishes on behalf of another participant.",
+                        },
+                    },
+                    "oneOf": [
+                        {"required": ["identity"]},
+                        {"required": ["publish_on_behalf"]},
+                    ],
+                    "additionalProperties": False,
+                },
+            },
+            "required": ["room_name"],
+            "additionalProperties": False,
+        },
+    },
+    "additionalProperties": False,
+}
+
+
+@extend_schema_field(ROOM_SYNC_SETTINGS_SCHEMA)
+class RoomSyncSettingsJSONField(serializers.JSONField):
+    pass
+
+
 @extend_schema_field(
     {
         "type": "object",
@@ -1227,6 +1286,12 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
         default=None,
     )
 
+    room_sync_settings = RoomSyncSettingsJSONField(
+        help_text="Settings for syncing meeting media and participants with an external real-time room. Currently only LiveKit is supported.",
+        required=False,
+        default=None,
+    )
+
     WEBHOOKS_SCHEMA = {
         "type": "array",
         "items": {
@@ -1234,7 +1299,7 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
             "properties": {
                 "url": {
                     "type": "string",
-                    "pattern": "^https://.*",
+                    "pattern": build_webhook_url_regexp(),
                 },
                 "triggers": {
                     "type": "array",
@@ -1356,6 +1421,25 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
 
             if meeting_type == MeetingTypes.ZOOM and not use_zoom_web_adapter:
                 raise serializers.ValidationError("Voice agent is not supported for Zoom when using the native SDK. Please set 'zoom_settings.sdk' to 'web' in the bot creation request.")
+
+        return value
+
+    def validate_room_sync_settings(self, value):
+        if value is None:
+            return value
+
+        try:
+            jsonschema.validate(instance=value, schema=ROOM_SYNC_SETTINGS_SCHEMA)
+        except jsonschema.exceptions.ValidationError as e:
+            raise serializers.ValidationError(e.message)
+
+        if value:
+            meeting_url = self.initial_data.get("meeting_url")
+            meeting_type = meeting_type_from_url(meeting_url)
+            use_zoom_web_adapter = self.initial_data.get("zoom_settings", {}).get("sdk", "native") == "web"
+
+            if meeting_type == MeetingTypes.ZOOM and not use_zoom_web_adapter:
+                raise serializers.ValidationError("Room sync is not supported for Zoom when using the native SDK. Please set 'zoom_settings.sdk' to 'web' in the bot creation request.")
 
         return value
 
@@ -1565,6 +1649,7 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
                 "additionalProperties": False,
                 "description": "The user ID of the Zoom OAuth Connection to use for the onbehalf token.",
             },
+            "webinar_user_email": {"type": "string"},
         },
         "required": [],
         "additionalProperties": False,

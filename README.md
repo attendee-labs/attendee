@@ -119,6 +119,23 @@ For more details, follow [this guide](https://developers.zoom.us/docs/meeting-sd
 - You should now be able to log in, input your credentials and obtain an API key. API calls should be directed to http://localhost:8000 instead of https://app.attendee.dev.
 
 
+## Running in production
+
+By default, Attendee launches bots as Celery tasks. This mode is convenient for local development and testing, but it is not suitable for production for two reasons:
+
+- **Bots are killed on restart.** Whenever Celery containers are restarted (for example, on deploy or when scaling up/down), any bots running inside them are terminated mid-meeting.
+
+- **Lack of isolation between bots.** Multiple bots running in the same Celery worker container share audio devices, so audio from separate meetings can bleed together. Additionally, any infrastructure issues with the Celery worker container will affect all bots running inside it.
+
+The correct way to run Attendee in production is with Kubernetes, where each bot runs in its own isolated pod. Enable this by setting the environment variable:
+
+```
+LAUNCH_BOT_METHOD="kubernetes"
+```
+
+Our paid self-hosting plan includes official directions and support for running Attendee with Kubernetes. Interested in using Attendee at your company? Schedule a call [here](https://calendly.com/d/cw6r-2n4-gcw/attendee-intro-meeting).
+
+
 ## Contribute 
 
 Attendee is open source. The best way to contribute is to open an issue or join the [Slack Community](https://join.slack.com/t/attendee-community/shared_invite/zt-3l43ns8cl-G8YnMccWVTugMlloUtSf9g) and let us know what you want to build.

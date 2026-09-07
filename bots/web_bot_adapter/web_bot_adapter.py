@@ -5,6 +5,8 @@ import hashlib
 import json
 import logging
 import os
+import signal
+import subprocess
 import threading
 import time
 from time import sleep
@@ -22,9 +24,12 @@ from bots.automatic_leave_utils import participant_is_another_bot
 from bots.bot_adapter import BotAdapter
 from bots.models import ParticipantEventTypes, RecordingViews
 from bots.per_participant_realtime_video_configuration import PerParticipantRealtimeVideoConfiguration
+from bots.room_sync_source_participant_configuration import RoomSyncSourceParticipantConfiguration
+from bots.room_sync_utils import add_bot_indicator_to_display_name
 from bots.utils import half_ceil, scale_i420
 
 from .debug_screen_recorder import DebugScreenRecorder
+from .livekit_websocket_bridge import LiveKitWebsocketBridge
 from .ui_methods import UiAuthorizedUserNotInMeetingTimeoutExceededException, UiBlockedByCaptchaException, UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiIncorrectPasswordException, UiInfinitelyRetryableException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableException, UiRetryableExpectedException
 
 logger = logging.getLogger(__name__)
@@ -56,8 +61,9 @@ class WebBotAdapter(BotAdapter):
         record_chat_messages_when_paused: bool,
         disable_incoming_video: bool,
         record_participant_speech_start_stop_events: bool,
+        room_sync_source_participant_configuration: RoomSyncSourceParticipantConfiguration | None,
     ):
-        self.display_name = display_name
+        self.display_name = display_name if not room_sync_source_participant_configuration else add_bot_indicator_to_display_name(display_name)
         self.send_message_callback = send_message_callback
         self.add_audio_chunk_callback = add_audio_chunk_callback
         self.add_mixed_audio_chunk_callback = add_mixed_audio_chunk_callback
@@ -87,6 +93,7 @@ class WebBotAdapter(BotAdapter):
 
         self.left_meeting = False
         self.was_removed_from_meeting = False
+        self.remover = None
         self.cleaned_up = False
 
         self.websocket_port = None
@@ -105,6 +112,8 @@ class WebBotAdapter(BotAdapter):
 
         self.automatic_leave_configuration = automatic_leave_configuration
         self.per_participant_realtime_video_configuration = per_participant_realtime_video_configuration
+        self.room_sync_source_participant_configuration = room_sync_source_participant_configuration
+        self.livekit_websocket_bridge = self.create_livekit_websocket_bridge()
 
         self.should_create_debug_recording = should_create_debug_recording
         self.debug_screen_recorder = None
@@ -307,9 +316,19 @@ class WebBotAdapter(BotAdapter):
         else:
             self.only_one_participant_in_meeting_at = None
 
+    def handle_remover_data(self, json_data):
+        # A meeting status change names the participant who removed us when it knows who that was.
+        if not json_data.get("remover"):
+            return
+
+        if self.meeting_uuid_mismatch(json_data):
+            return
+
+        self.remover = json_data["remover"]
+
     def handle_removed_from_meeting(self):
         self.left_meeting = True
-        self.send_message_callback({"message": self.Messages.MEETING_ENDED})
+        self.send_message_callback({"message": self.Messages.MEETING_ENDED, "remover": self.remover})
 
     def handle_meeting_ended(self, meeting_id):
         # If a meeting id was passed in the meeting ended message and we have one on the backend, then
@@ -319,7 +338,7 @@ class WebBotAdapter(BotAdapter):
             return
 
         self.left_meeting = True
-        self.send_message_callback({"message": self.Messages.MEETING_ENDED})
+        self.send_message_callback({"message": self.Messages.MEETING_ENDED, "remover": self.remover})
 
     def handle_failed_to_join(self, reason):
         logger.info(f"failed to join meeting with reason {reason}")
@@ -350,6 +369,19 @@ class WebBotAdapter(BotAdapter):
         if json_data.get("caption") and json_data.get("caption").get("text"):
             json_data_masked["caption"]["text"] = hashlib.sha256(json_data.get("caption").get("text").encode("utf-8")).hexdigest()
         return json_data_masked
+
+    def create_livekit_websocket_bridge(self):
+        config = self.room_sync_source_participant_configuration
+        if config is None or not config.livekit:
+            return None
+        return LiveKitWebsocketBridge(livekit_url=config.livekit.url)
+
+    def handle_websocket_with_livekit_bridge(self, websocket):
+        request_path = LiveKitWebsocketBridge.get_websocket_request_path(websocket)
+        if self.livekit_websocket_bridge.is_bridge_path(request_path):
+            self.livekit_websocket_bridge.handle(websocket, request_path)
+            return
+        self.handle_websocket(websocket)
 
     def handle_websocket(self, websocket):
         audio_format = None
@@ -411,6 +443,8 @@ class WebBotAdapter(BotAdapter):
                                 self.send_message_callback({"message": self.Messages.READY_TO_SEND_CHAT_MESSAGE})
 
                         elif json_data.get("type") == "MeetingStatusChange":
+                            self.handle_remover_data(json_data)
+
                             if json_data.get("change") == "removed_from_meeting":
                                 self.handle_removed_from_meeting()
                             if json_data.get("change") == "meeting_ended":
@@ -448,13 +482,15 @@ class WebBotAdapter(BotAdapter):
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
+        websocket_handler = self.handle_websocket if self.livekit_websocket_bridge is None else self.handle_websocket_with_livekit_bridge
+
         port = self.get_websocket_port()
         max_retries = 10
 
         for attempt in range(max_retries):
             try:
                 self.websocket_server = serve(
-                    self.handle_websocket,
+                    websocket_handler,
                     "localhost",
                     port,
                     compression=None,
@@ -474,7 +510,7 @@ class WebBotAdapter(BotAdapter):
                 raise  # Re-raise other OSErrors
 
     def send_request_to_join_denied_message(self):
-        self.send_message_callback({"message": self.Messages.REQUEST_TO_JOIN_DENIED})
+        self.send_message_callback({"message": self.Messages.REQUEST_TO_JOIN_DENIED, "remover": self.remover})
 
     def send_meeting_not_found_message(self):
         self.send_message_callback({"message": self.Messages.MEETING_NOT_FOUND})
@@ -590,6 +626,96 @@ class WebBotAdapter(BotAdapter):
     def subclass_specific_use_disable_gpu_chrome_option(self):
         return True
 
+    def room_sync_js_library_paths(self, current_dir):
+        if self.room_sync_source_participant_configuration:
+            if self.room_sync_source_participant_configuration.livekit:
+                return [
+                    os.path.join(current_dir, "js_libs", "livekit-client", "2.21.0", "livekit-client.umd.min.js"),
+                    os.path.join(current_dir, "js_libs", "livekit-client", "2.21.0", "livekit-client-adapter.js"),
+                ]
+        return []
+
+    def _descendant_pids(self, pid):
+        try:
+            out = subprocess.run(["ps", "-o", "pid=", "--ppid", str(pid)], capture_output=True, text=True, timeout=5).stdout
+        except Exception:
+            return []
+        pids = []
+        for child in [int(p) for p in out.split()]:
+            pids.extend(self._descendant_pids(child))
+            pids.append(child)
+        return pids
+
+    def default_graceful_driver_shutdown(self, driver):
+        try:
+            driver.close()
+        except Exception as e:
+            logger.warning(f"Error closing driver: {e}")
+        try:
+            driver.quit()
+        except Exception as e:
+            logger.warning(f"Error quitting driver: {e}")
+
+    def cleanup_graceful_driver_shutdown(self, driver):
+        self.log_browser_history(driver=driver)
+
+        # Simulate closing browser window
+        try:
+            self.subclass_specific_before_driver_close(driver)
+            driver.close()
+        except Exception as e:
+            logger.warning(f"Error closing driver: {e}")
+
+        # Then quit the driver
+        try:
+            driver.quit()
+        except Exception as e:
+            logger.warning(f"Error quitting driver: {e}")
+
+    def teardown_driver(self, *, graceful_shutdown_fn, graceful_timeout_seconds=30):
+        driver = self.driver
+        if not driver:
+            return
+
+        # Capture identifiers before quit() clears them
+        chromedriver_pid = getattr(getattr(driver.service, "process", None), "pid", None)
+        user_data_dir = None
+        try:
+            user_data_dir = driver.capabilities.get("chrome", {}).get("userDataDir")
+        except Exception:
+            pass
+
+        def run_graceful_shutdown():
+            try:
+                graceful_shutdown_fn(driver)
+            except Exception as e:
+                logger.warning(f"Error during graceful driver shutdown: {e}")
+
+        shutdown_thread = threading.Thread(target=run_graceful_shutdown, daemon=True)
+        shutdown_thread.start()
+        shutdown_thread.join(timeout=graceful_timeout_seconds)
+        if shutdown_thread.is_alive():
+            logger.warning(f"Graceful driver shutdown did not complete within {graceful_timeout_seconds}s, force killing browser processes")
+
+        # Unconditionally kill the chromedriver process tree (chrome is a descendant of chromedriver)
+        if chromedriver_pid:
+            for pid in self._descendant_pids(chromedriver_pid) + [chromedriver_pid]:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                except Exception as e:
+                    logger.warning(f"Error killing pid {pid}: {e}")
+            logger.info(f"Killed chromedriver pid {chromedriver_pid} and descendants")
+
+        # Belt and braces: catch any chrome processes that were reparented away from chromedriver
+        if user_data_dir:
+            try:
+                subprocess.run(["pkill", "-9", "-f", user_data_dir], timeout=5)
+            except Exception as e:
+                logger.warning(f"Error running pkill for {user_data_dir}: {e}")
+            logger.info(f"Killed processes with user_data_dir {user_data_dir}")
+
     def init_driver(self):
         self.write_chrome_policies_file()
 
@@ -625,22 +751,13 @@ class WebBotAdapter(BotAdapter):
         self.add_subclass_specific_chrome_options(options)
 
         if self.driver:
-            # Simulate closing browser window
-            try:
-                self.driver.close()
-            except Exception as e:
-                logger.warning(f"Error closing driver: {e}")
-
-            try:
-                self.driver.quit()
-            except Exception as e:
-                logger.warning(f"Error closing existing driver: {e}")
+            self.teardown_driver(graceful_shutdown_fn=self.default_graceful_driver_shutdown)
             self.driver = None
 
         self.driver = webdriver.Chrome(options=options, service=Service(executable_path="/usr/local/bin/chromedriver"))
         logger.info(f"web driver server initialized at port {self.driver.service.port}")
 
-        initial_data_code = f"window.initialData = {{websocketPort: {self.websocket_port}, videoFrameWidth: {self.video_frame_size[0]}, videoFrameHeight: {self.video_frame_size[1]}, botName: {json.dumps(self.display_name)}, addClickRipple: {'true' if self.should_create_debug_recording else 'false'}, recordingView: '{self.recording_view}', sendMixedAudio: {'true' if self.add_mixed_audio_chunk_callback else 'false'}, sendPerParticipantAudio: {'true' if self.add_audio_chunk_callback else 'false'}, perParticipantRealtimeVideoConfiguration: {json.dumps(self.per_participant_realtime_video_configuration.to_dict())}, sendPerParticipantVideo: {'true' if self.add_per_participant_video_frame_callback else 'false'}, collectCaptions: {'true' if self.upsert_caption_callback else 'false'}, recordParticipantSpeechStartStopEvents: {'true' if self.record_participant_speech_start_stop_events else 'false'}}}"
+        initial_data_code = f"window.initialData = {{websocketPort: {self.websocket_port}, videoFrameWidth: {self.video_frame_size[0]}, videoFrameHeight: {self.video_frame_size[1]}, botName: {json.dumps(self.display_name)}, addClickRipple: {'true' if self.should_create_debug_recording else 'false'}, recordingView: '{self.recording_view}', sendMixedAudio: {'true' if self.add_mixed_audio_chunk_callback else 'false'}, sendPerParticipantAudio: {'true' if self.add_audio_chunk_callback else 'false'}, perParticipantRealtimeVideoConfiguration: {json.dumps(self.per_participant_realtime_video_configuration.to_dict())}, roomSyncSourceParticipantConfiguration: {json.dumps(self.room_sync_source_participant_configuration.to_dict()) if self.room_sync_source_participant_configuration else 'null'}, sendPerParticipantVideo: {'true' if self.add_per_participant_video_frame_callback else 'false'}, collectCaptions: {'true' if self.upsert_caption_callback else 'false'}, recordParticipantSpeechStartStopEvents: {'true' if self.record_participant_speech_start_stop_events else 'false'}}}"
 
         # Get directory of current file
         current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -649,6 +766,7 @@ class WebBotAdapter(BotAdapter):
         JS_LIBRARIES = [
             os.path.join(current_dir, "js_libs", "protobufjs", "7.4.0", "protobuf.min.js"),
             os.path.join(current_dir, "js_libs", "pako", "2.1.0", "pako.min.js"),
+            *self.room_sync_js_library_paths(current_dir),
         ]
 
         libraries_code = ""
@@ -697,12 +815,17 @@ class WebBotAdapter(BotAdapter):
         websocket_thread = threading.Thread(target=self.run_websocket_server, daemon=True)
         websocket_thread.start()
 
-        sleep(0.5)  # Give the websocketserver time to start
-        if not self.websocket_port:
-            raise Exception("WebSocket server failed to start")
+        self.wait_for_websocket_server_to_start()
 
         repeatedly_attempt_to_join_meeting_thread = threading.Thread(target=self.repeatedly_attempt_to_join_meeting, daemon=True)
         repeatedly_attempt_to_join_meeting_thread.start()
+
+    def wait_for_websocket_server_to_start(self, timeout_seconds=10):
+        deadline = time.time() + timeout_seconds
+        while not self.websocket_port and time.time() < deadline:
+            sleep(0.1)
+        if not self.websocket_port:
+            raise Exception(f"WebSocket server failed to start within {timeout_seconds} seconds")
 
     def should_retry_joining_meeting_that_requires_login_by_logging_in(self):
         return False
@@ -908,20 +1031,7 @@ class WebBotAdapter(BotAdapter):
 
         try:
             if self.driver:
-                self.log_browser_history()
-
-                # Simulate closing browser window
-                try:
-                    self.subclass_specific_before_driver_close()
-                    self.driver.close()
-                except Exception as e:
-                    logger.warning(f"Error closing driver: {e}")
-
-                # Then quit the driver
-                try:
-                    self.driver.quit()
-                except Exception as e:
-                    logger.warning(f"Error quitting driver: {e}")
+                self.teardown_driver(graceful_shutdown_fn=self.cleanup_graceful_driver_shutdown)
         except Exception as e:
             logger.warning(f"Error during cleanup: {e}")
 
@@ -949,20 +1059,20 @@ class WebBotAdapter(BotAdapter):
             logger.warning(f"Error normalizing history entry url: {e}")
             return url
 
-    def get_navigation_history_urls(self):
-        if not self.driver:
+    def get_navigation_history_urls(self, *, driver):
+        if not driver:
             return []
         try:
-            nav_history = self.driver.execute_cdp_cmd("Page.getNavigationHistory", {})
+            nav_history = driver.execute_cdp_cmd("Page.getNavigationHistory", {})
             nav_history_entries = nav_history.get("entries", [])
             return [entry.get("url", "") for entry in nav_history_entries]
         except Exception as e:
             logger.warning(f"Error getting navigation history: {e}")
             return []
 
-    def log_browser_history(self):
+    def log_browser_history(self, *, driver):
         try:
-            nav_history_urls = self.get_navigation_history_urls()
+            nav_history_urls = self.get_navigation_history_urls(driver=driver)
             nav_history_hosts = list(set([self.domain_for_history_entry_url(url) for url in nav_history_urls]))
             logger.info(f"Browser navigation history {nav_history_hosts}")
             # If any of the navigation urls start with chrome://browser-switch, then the url was blocked.
@@ -982,7 +1092,7 @@ class WebBotAdapter(BotAdapter):
 
         self.last_domain_allow_list_violation_check_time = time.time()
 
-        nav_history_urls = self.get_navigation_history_urls()
+        nav_history_urls = self.get_navigation_history_urls(driver=self.driver)
 
         # If any of the navigation urls start with chrome://browser-switch, then the url was blocked.
         for url in nav_history_urls:
@@ -1105,5 +1215,5 @@ class WebBotAdapter(BotAdapter):
         pass
 
     # Sub-classes can override this to add class-specific before driver close code
-    def subclass_specific_before_driver_close(self):
+    def subclass_specific_before_driver_close(self, driver):
         pass

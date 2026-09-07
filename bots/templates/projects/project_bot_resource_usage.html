@@ -1,0 +1,199 @@
+{% extends 'projects/sidebar.html' %}
+{% load bot_filters %}
+
+{% block content %}
+<div class="container mt-4">
+    <h2 class="mb-1">Bot Resource Usage</h2>
+    {% if bot_count %}
+    <p class="text-muted small mb-3">Based on data from {{ bot_count }} bot{{ bot_count|pluralize }}.</p>
+    {% endif %}
+
+    <div class="d-flex flex-wrap align-items-center gap-4 mb-1">
+        <div class="d-flex gap-2 align-items-center">
+            <span class="text-muted small fw-semibold">Time period</span>
+            <div class="btn-group btn-group-sm">
+                {% for option in window_options %}
+                <a href="?window={{ option.key }}&platform={{ platform }}&recording={{ recording }}" class="btn {% if window == option.key %}btn-primary{% else %}btn-outline-primary{% endif %}">{{ option.label }}</a>
+                {% endfor %}
+            </div>
+        </div>
+        <div class="d-flex gap-2 align-items-center">
+            <span class="text-muted small fw-semibold">Meeting type</span>
+            <div class="btn-group btn-group-sm">
+                {% for option in platform_options %}
+                <a href="?window={{ window }}&platform={{ option.key }}&recording={{ recording }}" class="btn {% if platform == option.key %}btn-primary{% else %}btn-outline-primary{% endif %}">{{ option.label }}</a>
+                {% endfor %}
+            </div>
+        </div>
+        <div class="d-flex gap-2 align-items-center">
+            <span class="text-muted small fw-semibold">Recording</span>
+            <div class="btn-group btn-group-sm">
+                {% for option in recording_options %}
+                <a href="?window={{ window }}&platform={{ platform }}&recording={{ option.key }}" class="btn {% if recording == option.key %}btn-primary{% else %}btn-outline-primary{% endif %}">{{ option.label }}</a>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-4 mt-4">
+        <div class="col-md-6">
+            <div class="card h-100">
+                <div class="card-header">
+                    <i class="bi bi-cpu me-1"></i> Peak CPU per bot (millicores)
+                </div>
+                <div class="card-body">
+                    {% if cpu_stats.max is not None %}
+                    <div class="row text-center">
+                        <div class="col">
+                            <div class="text-muted small">Max</div>
+                            <div class="fs-4 fw-semibold">{{ cpu_stats.max|floatformat:0 }}</div>
+                        </div>
+                        <div class="col">
+                            <div class="text-muted small">p99</div>
+                            <div class="fs-4 fw-semibold">{{ cpu_stats.p99|floatformat:0 }}</div>
+                        </div>
+                        <div class="col">
+                            <div class="text-muted small">p95</div>
+                            <div class="fs-4 fw-semibold">{{ cpu_stats.p95|floatformat:0 }}</div>
+                        </div>
+                    </div>
+                    {% else %}
+                    <p class="text-muted text-center mb-0 py-3">No data.</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        <div class="col-md-6">
+            <div class="card h-100">
+                <div class="card-header">
+                    <i class="bi bi-cpu me-1"></i> p99 CPU per bot (millicores)
+                    <span class="text-muted small">— ignores brief spikes</span>
+                </div>
+                <div class="card-body">
+                    {% if cpu_p99_stats.max is not None %}
+                    <div class="row text-center">
+                        <div class="col">
+                            <div class="text-muted small">Max</div>
+                            <div class="fs-4 fw-semibold">{{ cpu_p99_stats.max|floatformat:0 }}</div>
+                        </div>
+                        <div class="col">
+                            <div class="text-muted small">p99</div>
+                            <div class="fs-4 fw-semibold">{{ cpu_p99_stats.p99|floatformat:0 }}</div>
+                        </div>
+                        <div class="col">
+                            <div class="text-muted small">p95</div>
+                            <div class="fs-4 fw-semibold">{{ cpu_p99_stats.p95|floatformat:0 }}</div>
+                        </div>
+                    </div>
+                    {% else %}
+                    <p class="text-muted text-center mb-0 py-3">No data.</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card mt-4">
+        <div class="card-header">
+            <i class="bi bi-list-ol me-1"></i> Top 25 bots by p99 CPU usage (millicores)
+        </div>
+        <div class="card-body p-0">
+            {% if top_bots_by_cpu_p99 %}
+            <div class="table-responsive">
+                <table class="table table-sm table-hover mb-0 align-middle">
+                    <thead>
+                        <tr>
+                            <th class="ps-3" style="width: 3rem;">#</th>
+                            <th>Bot</th>
+                            <th>Meeting URL</th>
+                            <th class="text-end pe-3">p99 CPU</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for bot in top_bots_by_cpu_p99 %}
+                        <tr>
+                            <td class="ps-3 text-muted">{{ forloop.counter }}</td>
+                            <td>
+                                <a href="{% url 'projects:project-bot-detail' project.object_id bot.object_id %}">{{ bot.object_id }}</a>
+                            </td>
+                            <td class="text-truncate" style="max-width: 24rem;">{{ bot.meeting_url|default:"—" }}</td>
+                            <td class="text-end pe-3 fw-semibold">{{ bot.cpu_p99|floatformat:0 }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <p class="text-muted text-center mb-0 py-3">No data.</p>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="card mt-4">
+        <div class="card-header">
+            <i class="bi bi-hourglass-top me-1"></i> CPU by sample position (millicores)
+            <span class="text-muted small">— first 5 snapshots of each bot</span>
+        </div>
+        <div class="card-body p-0">
+            {% if cpu_by_sample %}
+            <div class="table-responsive">
+                <table class="table table-sm table-hover mb-0 align-middle">
+                    <thead>
+                        <tr>
+                            <th class="ps-3">Sample</th>
+                            <th class="text-end">Max</th>
+                            <th class="text-end">p99</th>
+                            <th class="text-end pe-3">p95</th>
+                            <th class="text-end pe-3">Bots</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for sample in cpu_by_sample %}
+                        <tr>
+                            <td class="ps-3 text-muted">Sample {{ sample.sample_index }}</td>
+                            <td class="text-end fw-semibold">{{ sample.max|floatformat:0 }}</td>
+                            <td class="text-end fw-semibold">{{ sample.p99|floatformat:0 }}</td>
+                            <td class="text-end pe-3 fw-semibold">{{ sample.p95|floatformat:0 }}</td>
+                            <td class="text-end pe-3 text-muted">{{ sample.bot_count }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <p class="text-muted text-center mb-0 py-3">No data.</p>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="row g-4 mt-1">
+        <div class="col-md-6">
+            <div class="card h-100">
+                <div class="card-header">
+                    <i class="bi bi-memory me-1"></i> Peak RAM per bot (MB)
+                </div>
+                <div class="card-body">
+                    {% if ram_stats.max is not None %}
+                    <div class="row text-center">
+                        <div class="col">
+                            <div class="text-muted small">Max</div>
+                            <div class="fs-4 fw-semibold">{{ ram_stats.max|floatformat:0 }}</div>
+                        </div>
+                        <div class="col">
+                            <div class="text-muted small">p99</div>
+                            <div class="fs-4 fw-semibold">{{ ram_stats.p99|floatformat:0 }}</div>
+                        </div>
+                        <div class="col">
+                            <div class="text-muted small">p95</div>
+                            <div class="fs-4 fw-semibold">{{ ram_stats.p95|floatformat:0 }}</div>
+                        </div>
+                    </div>
+                    {% else %}
+                    <p class="text-muted text-center mb-0 py-3">No data.</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

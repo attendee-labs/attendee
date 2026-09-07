@@ -408,13 +408,13 @@ class RTMSClient:
                 # ---------------------------
                 # Match your working JS client:
                 #
-                #  - audio-only: 1
+                #  - audio-only: 17
                 #  - audio+video+transcript: 32
                 #
                 if self.use_video or self.use_transcript:
                     media_type = 32  # AUDIO+VIDEO+TRANSCRIPT (as in JS example)
                 else:
-                    media_type = 1  # AUDIO only
+                    media_type = 17  # AUDIO only
 
                 handshake = {
                     "msg_type": 3,  # DATA_HAND_SHAKE_REQ
@@ -505,7 +505,8 @@ class RTMSClient:
                     # Transcript data (17 in your JS example)
                     elif msg_type == 17 and self.use_transcript:  # MEDIA_DATA_TRANSCRIPT
                         self._handle_transcript(content)
-
+                    elif msg_type == 18:  # MEDIA_DATA_CHAT
+                        self._handle_chat(content)
                     else:
                         # other media messages ignored for now
                         pass
@@ -620,6 +621,47 @@ class RTMSClient:
         }
         self.adapter.post_rtms_event(event)
 
+    def _handle_chat(self, content: dict) -> None:
+        logger.info("RTMS chatMessage RAW: %s", content)
+
+        # NEW = 1, UPDATE = 3.
+        # Ignore deletes/reactions because the existing callback interface
+        # doesn't provide a way to represent them.
+        operation_type = content.get("operation_type")
+        if operation_type not in (1, 3):
+            return
+
+        sender = content.get("sender") or {}
+        receiver = content.get("receiver") or {}
+        chat_session = content.get("chat_session") or {}
+        chat_session_type = chat_session.get("type")
+        parent_message_id = content.get("parent_message_id")
+
+        event = {
+            "type": "chatMessage",
+            "text": content.get("data", ""),
+            "participant_uuid": sender.get("user_id"),
+            "timestamp": content.get("timestamp") // 1000 if content.get("timestamp") is not None else None,
+            "message_uuid": content.get("message_id"),
+            "to_bot": False,
+            "additional_data": {
+                "is_comment": bool(parent_message_id),
+                "is_thread": bool(parent_message_id),
+                "thread_id": parent_message_id,
+                "is_chat_to_all": chat_session_type == 1,
+                "is_chat_to_all_panelist": chat_session_type == 4,
+                "is_chat_to_waitingroom": False,
+                "chat_session_type": chat_session_type,
+                "chat_session_id": chat_session.get("id"),
+                "operation_type": operation_type,
+                "receiver_user_id": receiver.get("user_id"),
+                "receiver_user_name": receiver.get("user_name"),
+                "files": content.get("files") or [],
+            },
+        }
+
+        self.adapter.post_rtms_event(event)
+
 
 class ZoomRTMSAdapter(BotAdapter):
     def __init__(
@@ -676,6 +718,7 @@ class ZoomRTMSAdapter(BotAdapter):
         self.black_frame = make_black_h264_annexb(self.video_frame_size[0], self.video_frame_size[1])
 
         self.black_frame_timer_id = None
+        self.black_frame_tick_counter = 0
         self.connected_at = None
         self.waiting_for_keyframe = False
         self.last_keyframe_received_at = time.time()
@@ -698,7 +741,9 @@ class ZoomRTMSAdapter(BotAdapter):
                     name_to_render = self.active_speaker_name or ""
 
                 self._on_video_frame(self.black_frame, name_to_render, -1)
-                logger.info("Sent black frame for name: %s", name_to_render)
+                self.black_frame_tick_counter += 1
+                if self.black_frame_tick_counter % 25 == 0:
+                    logger.info("Sent black frame for name: %s", name_to_render)
 
         # Keep the GLib timeout active until we've been cleaned up
         return not self.cleaned_up
@@ -891,6 +936,23 @@ class ZoomRTMSAdapter(BotAdapter):
             }
 
             self.upsert_caption_callback(itemConverted)
+
+        elif json_data.get("type") == "chatMessage":
+            logger.info("RTMS chatMessage: %s", json_data)
+
+            try:
+                self.upsert_chat_message_callback(
+                    {
+                        "text": json_data.get("text"),
+                        "participant_uuid": json_data.get("participant_uuid"),
+                        "timestamp": json_data.get("timestamp"),
+                        "message_uuid": json_data.get("message_uuid"),
+                        "to_bot": json_data.get("to_bot"),
+                        "additional_data": json_data.get("additional_data"),
+                    }
+                )
+            except Exception:
+                logger.exception("Error processing RTMS chat message")
 
         elif json_data.get("type") == "firstVideoFrameReceived":
             self.first_buffer_timestamp_ms = time.time() * 1000

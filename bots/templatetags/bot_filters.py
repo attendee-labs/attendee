@@ -1,11 +1,42 @@
 import hashlib
+import json
 from datetime import datetime
 
 from django import template
+from django.utils import timezone
+from django.utils.timesince import timesince
 
 from bots.models import WebhookTriggerTypes
 
 register = template.Library()
+
+
+@register.filter
+def timesince_or_seconds(value, now=None):
+    """Like Django's timesince, but renders sub-minute gaps in seconds instead of "0 minutes"."""
+    if not value:
+        return ""
+    if now is None:
+        now = timezone.now() if timezone.is_aware(value) else datetime.now()
+    seconds = int((now - value).total_seconds())
+    if 0 <= seconds < 60:
+        return f"{seconds} second{'' if seconds == 1 else 's'}"
+    return timesince(value, now)
+
+
+@register.filter
+def timesince_rounded(value, now=None):
+    """Like timesince_or_seconds, but rounds to a single unit so labels stay short (e.g. "7 hours")."""
+    if not value:
+        return ""
+    if now is None:
+        now = timezone.now() if timezone.is_aware(value) else datetime.now()
+    seconds = int((now - value).total_seconds())
+    for unit, unit_seconds in (("day", 86400), ("hour", 3600), ("minute", 60)):
+        if seconds >= unit_seconds:
+            amount = round(seconds / unit_seconds)
+            return f"{amount} {unit}{'' if amount == 1 else 's'}"
+    return f"{seconds} second{'' if seconds == 1 else 's'}"
 
 
 @register.filter
@@ -71,6 +102,20 @@ def epoch_to_datetime(value):
         return datetime.fromtimestamp(float(value))
     except (ValueError, TypeError, OSError):
         return None
+
+
+@register.filter
+def pretty_json(value):
+    """Format a value as indented JSON for display."""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (ValueError, TypeError):
+            return value
+    try:
+        return json.dumps(value, indent=2, sort_keys=True, default=str)
+    except (TypeError, ValueError):
+        return value
 
 
 @register.filter

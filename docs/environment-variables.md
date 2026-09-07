@@ -33,9 +33,15 @@ This document lists all supported environment variables for the Attendee applica
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `DATABASE_URL` | String | **Required** | PostgreSQL database connection URL (format: `postgresql://user:password@host:port/database`). |
+| `DATABASE_URL` | String | **Required*** | PostgreSQL database connection URL (format: `postgresql://user:password@host:port/database`). Takes precedence over the individual `POSTGRES_*` variables below. |
 | `POSTGRES_SSL_REQUIRE` | Boolean | `true` | Require SSL/TLS connection to PostgreSQL. Set to `false` for local development. |
-| `POSTGRES_HOST` | String | `localhost` | PostgreSQL host for development environments. Only used if not specified in `DATABASE_URL`. |
+| `POSTGRES_HOST` | String | `localhost` | PostgreSQL host. Alternative to `DATABASE_URL` together with the other `POSTGRES_*` variables; also used for development environments. |
+| `POSTGRES_PORT` | String | `5432` | PostgreSQL port. Only used when connecting via the `POSTGRES_*` variables. |
+| `POSTGRES_DB` | String | — | PostgreSQL database name. Required when connecting via the `POSTGRES_*` variables. |
+| `POSTGRES_USER` | String | — | PostgreSQL user. Required when connecting via the `POSTGRES_*` variables. |
+| `POSTGRES_PASSWORD` | String | — | PostgreSQL password. Only used when connecting via the `POSTGRES_*` variables. |
+
+\* Either `DATABASE_URL` or the set of `POSTGRES_HOST`, `POSTGRES_DB` and `POSTGRES_USER` (plus `POSTGRES_PASSWORD`/`POSTGRES_PORT` as needed) must be provided.
 
 ---
 
@@ -57,6 +63,7 @@ This document lists all supported environment variables for the Attendee applica
 | `AWS_ENDPOINT_URL` | String | (None) | Custom S3-compatible endpoint URL (e.g., for MinIO or LocalStack). |
 | `AWS_RECORDING_STORAGE_BUCKET_NAME` | String | **Required** | S3 bucket name for storing meeting recordings. |
 | `AWS_AUDIO_CHUNK_STORAGE_BUCKET_NAME` | String | (Uses recording bucket) | S3 bucket name for storing audio chunks. Falls back to `AWS_RECORDING_STORAGE_BUCKET_NAME` if not set. |
+| `AWS_BOT_DEBUG_SCREENSHOT_STORAGE_BUCKET_NAME` | String | (Uses recording bucket) | S3 bucket name for storing bot debug screenshots. Falls back to `AWS_RECORDING_STORAGE_BUCKET_NAME` if not set. |
 | `USE_IRSA_FOR_S3_STORAGE` | Boolean | `false` | Use IRSA (IAM Roles for Service Accounts) for S3 authentication in EKS. Set to `true` when running on Kubernetes with IRSA. |
 
 ### Azure Blob Storage Configuration
@@ -68,6 +75,7 @@ This document lists all supported environment variables for the Attendee applica
 | `AZURE_ACCOUNT_NAME` | String | **Required** (if using Azure) | Azure Storage Account name. |
 | `AZURE_RECORDING_STORAGE_CONTAINER_NAME` | String | **Required** (if using Azure) | Azure Blob Container name for recordings. |
 | `AZURE_AUDIO_CHUNK_STORAGE_CONTAINER_NAME` | String | (Uses recording container) | Azure Blob Container name for audio chunks. Falls back to `AZURE_RECORDING_STORAGE_CONTAINER_NAME` if not set. |
+| `AZURE_BOT_DEBUG_SCREENSHOT_STORAGE_CONTAINER_NAME` | String | (Uses recording container) | Azure Blob Container name for bot debug screenshots. Falls back to `AZURE_RECORDING_STORAGE_CONTAINER_NAME` if not set. |
 | `AZURE_STORAGE_USE_PERMANENT_LINKS` | Boolean | `false` | Generate permanent links instead of expiring ones for Azure storage. |
 | `AZURE_STORAGE_LINK_EXPIRATION_SECONDS` | Integer | `1800` | Expiration time (in seconds) for Azure storage links. Ignored if `AZURE_STORAGE_USE_PERMANENT_LINKS` is `true`. |
 
@@ -168,6 +176,9 @@ This document lists all supported environment variables for the Attendee applica
 |----------|------|---------|-------------|
 | `ATTENDEE_LOG_LEVEL` | String | `INFO` | Application log level: `DEBUG`, `INFO`, `WARNING`, `ERROR`, or `CRITICAL`. |
 | `ATTENDEE_LOG_FORMAT` | String | (None) | Log format type: use `json` for JSON structured logs or leave empty for plain text. When `None`, default formatter is used. |
+| `SAVE_BOT_LOGS_TO_DASHBOARD` | Boolean | `false` | When `true` and `IS_A_BOT_POD` is `true`, the bot pod writes its application logs to a file and attaches them to the bot's last event as a debug file, viewable in the dashboard. |
+| `BOT_POD_LOG_FILE_PATH` | String | `/tmp/bot_pod_logs.log` | Path the bot pod writes its application logs to when `SAVE_BOT_LOGS_TO_DASHBOARD` is enabled. |
+| `BOT_POD_LOG_FILE_MAX_BYTES` | Integer | `26214400` | Maximum size of the saved bot pod log file. Once reached, the oldest logs are dropped. |
 
 ---
 

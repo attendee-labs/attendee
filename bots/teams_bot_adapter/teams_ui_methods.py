@@ -113,7 +113,7 @@ class TeamsUIMethods:
             self.x11_input.move_abs(screen_width // 2, screen_height // 2)
             time.sleep(random.uniform(0.1, 0.4))
 
-            num_movements = 5
+            num_movements = 10
             logger.info(f"Wiggling mouse at OS level with {num_movements} movements")
             for _ in range(num_movements):
                 target_x = random.randint(0, screen_width - 1)
@@ -124,6 +124,10 @@ class TeamsUIMethods:
             # Mouse wiggling is best-effort anti-bot-detection; never let it
             # break the join flow.
             logger.warning(f"Error wiggling mouse at OS level: {e}")
+
+    def set_display_name_to_allow(self, display_name):
+        # Tell the injected payload to allow this exact display name through Teams' validation regex.
+        self.driver.execute_script("return window.setDisplayNameToAllowForTeamsNameValidationBypass?.(arguments[0]);", display_name)
 
     def fill_out_name_input(self):
         num_attempts = 60
@@ -136,6 +140,7 @@ class TeamsUIMethods:
                     self.display_name,
                     keywords=["notetaker"],
                 )
+                self.set_display_name_to_allow(display_name_cyrillized)
                 name_input.send_keys(display_name_cyrillized)
                 return
             except TimeoutException as e:
@@ -544,7 +549,7 @@ class TeamsUIMethods:
         logger.info("Waiting for the turn off incoming video button...")
         for attempt_index in range(num_attempts):
             try:
-                turn_off_incoming_video_button = WebDriverWait(self.driver, 1).until(EC.element_to_be_clickable((By.CSS_SELECTOR, "[aria-label='Turn off incoming video'], [aria-label='Turn off all videos'], #incoming-video-button, #toggle-incoming-video-button")))
+                turn_off_incoming_video_button = WebDriverWait(self.driver, 1).until(EC.element_to_be_clickable((By.CSS_SELECTOR, '#incoming-video-button, #toggle-incoming-video-button, [data-track-module-name="incomingVideoButton"]')))
                 logger.info("Turn off incoming video button found")
                 turn_off_incoming_video_button.click()
                 return

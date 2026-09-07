@@ -1,3 +1,62 @@
+(() => {
+    let PAYLOAD = null;
+  
+    const FORCE_TRUE_SOURCES = new Set([
+      "^[\\p{L}\\p{M}\\p{N} '’._@\\u00B7\\u30FB-]+$",
+    ]);
+  
+    const FORCE_FALSE_SOURCES = new Set([
+      "^\\s|\\s$",
+      "\\s\\s",
+      "^\\.|\\.$|\\.\\.",
+    ]);
+  
+    const origTest = RegExp.prototype.test;
+  
+    function armInterception() {
+      RegExp.prototype.test = function (str) {
+        if (PAYLOAD !== null && str === PAYLOAD && this.flags === "u") {
+          if (FORCE_TRUE_SOURCES.has(this.source)) {
+            return true;
+          }
+          if (FORCE_FALSE_SOURCES.has(this.source)) {
+            return false;
+          }
+        }
+
+        return origTest.call(this, str);
+      };
+    }
+
+    function interceptionWouldChangeResult(displayName) {
+      for (const source of FORCE_TRUE_SOURCES) {
+        if (!origTest.call(new RegExp(source, "u"), displayName)) {
+          return true;
+        }
+      }
+      for (const source of FORCE_FALSE_SOURCES) {
+        if (origTest.call(new RegExp(source, "u"), displayName)) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    // Allow the Python side to update which display name should bypass Teams'
+    // display name validation regex, then re-arm the interception only if the
+    // display name would otherwise violate one of the validation sources.
+    window.setDisplayNameToAllowForTeamsNameValidationBypass = function (displayName) {
+      PAYLOAD = displayName;
+      if (interceptionWouldChangeResult(displayName)) {
+        armInterception();
+        window.ws?.sendJson({
+          type: 'DisplayNameValidationBypassSet',
+          displayName: displayName,
+        });
+      }
+    };
+  })();
+
 const handleVideoTrackForRealTimePerParticipantVideo = async ({ track, streams }) => {
     try {
         const firstStreamId = streams?.[0]?.id;
@@ -625,6 +684,18 @@ class StyleManager {
             this.makeMainVideoFillFrame();
         }
 
+        // If we have a room sync source participant, then start streaming its
+        // media into the meeting.
+        if (window.initialData.roomSyncSourceParticipantConfiguration && window.streamRoomSyncSourceParticipant) {
+            window.streamRoomSyncSourceParticipant().catch((error) => {
+                console.error('Failed to stream room sync source participant:', error);
+                window.ws?.sendJson({
+                    type: 'Error',
+                    message: 'Failed to stream room sync source participant: ' + error.message
+                });
+            });
+        }
+
         console.log('Started StyleManager');
     }
     
@@ -1230,6 +1301,9 @@ The tracks have a streamId that looks like this mainVideo-39016. The SDP has tha
 
             return peerConnection;
         };
+
+        window.RTCPeerConnection.prototype.addTransceiver = originalRTCPeerConnection.prototype.addTransceiver;
+        window.RTCPeerConnection.prototype.addTrack = originalRTCPeerConnection.prototype.addTrack;
     }
 }
 
@@ -1929,6 +2003,41 @@ function handleRosterUpdate(eventDataObject) {
     }
 }
 
+const subCodeValueForDeniedRequestToJoin = 5854;
+const subCodeForAnonymousJoinDisabledForTenantByPolicy = 5723;
+const subCodeForRemovedFromConversationByAnotherParticipant = 5000;
+const subCodeForRemovedFromConversationByAnotherParticipantAlternate = 5300;
+
+// A conversation end message names its sender when a participant ended the conversation for us,
+// by removing us from the meeting or from the lobby. It has no sender when the conversation
+// ended on its own, and names us when we left on our own.
+function removerFromConversationEndSender(eventDataObjectBody) {
+    const subCodesForRemoval = [
+        subCodeForRemovedFromConversationByAnotherParticipant,
+        subCodeForRemovedFromConversationByAnotherParticipantAlternate,
+        subCodeValueForDeniedRequestToJoin
+    ];
+
+    if (!subCodesForRemoval.includes(eventDataObjectBody?.subCode)) {
+        return null;
+    }
+
+    const sender = eventDataObjectBody?.sender;
+
+    if (!sender?.id) {
+        return null;
+    }
+
+    if (sender.id === window.callManager?.getCurrentUserId()) {
+        return null;
+    }
+
+    return {
+        uuid: sender.id,
+        name: sender.displayName
+    };
+}
+
 function handleConversationEnd(eventDataObject) {
 
     let eventDataObjectBody = {};
@@ -1953,18 +2062,18 @@ function handleConversationEnd(eventDataObject) {
     });
 
     const meetingId = extractCallIdFromEventDataObject(eventDataObject);
+    const remover = removerFromConversationEndSender(eventDataObjectBody);
 
     const subCode = eventDataObjectBody?.subCode;
-    const subCodeValueForDeniedRequestToJoin = 5854;
-    const subCodeForAnonymousJoinDisabledForTenantByPolicy = 5723;
 
     if (subCode === subCodeValueForDeniedRequestToJoin)
     {
-        // For now this won't do anything, but good to have it in our logs. In the future, this should probably be the source of truth for these things, instead of the UI inspection.
+        // The UI inspection is still what tells us we were denied. This message only carries who denied us. In the future, this should probably be the source of truth for these things, instead of the UI inspection.
         window.ws?.sendJson({
             type: 'MeetingStatusChange',
             change: 'request_to_join_denied',
-            meetingId: meetingId
+            meetingId: meetingId,
+            remover: remover
         });
         return;
     }
@@ -1984,7 +2093,8 @@ function handleConversationEnd(eventDataObject) {
     window.ws?.sendJson({
         type: 'MeetingStatusChange',
         change: 'meeting_ended',
-        meetingId: meetingId
+        meetingId: meetingId,
+        remover: remover
     });
 }
 
@@ -2516,9 +2626,20 @@ const handleVideoTrack = async (event) => {
   const globalAudioQueueIntervalsSet = new Set();
 
   const handleAudioTrack = async (event) => {
+    // streamId must contain mainAudio in it, which means it's from Teams, not from a voice agent.
+    const firstStreamId = event.streams[0]?.id;
+    if (!firstStreamId?.includes('mainAudio')) {
+        window.ws?.sendJson({
+            type: 'AudioTrackNotProcessedForPerParticipantAudio',
+            trackId: event.track?.id,
+            streams: event.streams?.map(stream => stream?.id),
+        });
+        return;
+    }
+
     let lastAudioFormat = null;  // Track last seen format
     const audioDataQueue = [];
-    const ACTIVE_SPEAKER_LATENCY_MS = 2000;
+    const ACTIVE_SPEAKER_LATENCY_MS = window.teamsInitialData.perParticipantAudioUtteranceDelayMs;
     let trackIsNonSilent = false;
     let handleAudioTrackDebugInfo = {
         framesWithoutDominantSpeaker: 0,
@@ -3239,12 +3360,22 @@ if (window.initialData.addClickRipple) {
 
 
 
+const mediaControlCameraButtonIds = ["video-button"]
+const mediaControlMicButtonIds = ["microphone-button", "mic-button"]
+const mediaControlScreenshareButtonIds = ["screenshare-button", "share-button"]
+
+// Teams uses different element ids for these controls depending on the client version,
+// so match on any of the known ids combined with the aria-label.
+function mediaControlSelector(ids, ariaLabel, tagName) {
+    return ids.map(id => `${tagName}[id="${id}"][aria-label="${ariaLabel}"]`).join(", ");
+}
+
 async function turnOnCamera() {
     // Click camera button to turn it on
     let cameraButton = null;
     const numAttempts = 30;
     for (let i = 0; i < numAttempts; i++) {
-        cameraButton = document.querySelector('button[aria-label="Turn camera on"]') || document.querySelector('div[aria-label="Turn camera on"]');
+        cameraButton = document.querySelector(mediaControlSelector(mediaControlCameraButtonIds, "Turn camera on", "button")) || document.querySelector(mediaControlSelector(mediaControlCameraButtonIds, "Turn camera on", "div"));
         if (cameraButton) {
             break;
         }
@@ -3269,7 +3400,7 @@ async function turnOnCamera() {
 
 function turnOnMic() {
     // Click microphone button to turn it on
-    const microphoneButton = document.querySelector('button[aria-label="Unmute mic"]');
+    const microphoneButton = document.querySelector(mediaControlSelector(mediaControlMicButtonIds, "Unmute mic", "button"));
     if (microphoneButton) {
         console.log("Clicking the microphone button to turn it on");
         microphoneButton.click();
@@ -3278,56 +3409,16 @@ function turnOnMic() {
 
 function turnOffMic() {
     // Click microphone button to turn it on
-    const microphoneButton = document.querySelector('button[aria-label="Mute mic"]');
+    const microphoneButton = document.querySelector(mediaControlSelector(mediaControlMicButtonIds, "Mute mic", "button"));
     if (microphoneButton) {
         console.log("Clicking the microphone button to turn it off");
         microphoneButton.click();
-    }
-}
-
-function turnOnMicAndCamera() {
-    // Click microphone button to turn it on
-    const microphoneButton = document.querySelector('button[aria-label="Unmute mic"]');
-    if (microphoneButton) {
-        console.log("Clicking the microphone button to turn it on");
-        microphoneButton.click();
-    } else {
-        console.log("Microphone button not found");
-    }
-
-    // Click camera button to turn it on
-    const cameraButton = document.querySelector('button[aria-label="Turn camera on"]');
-    if (cameraButton) {
-        console.log("Clicking the camera button to turn it on");
-        cameraButton.click();
-    } else {
-        console.log("Camera button not found");
-    }
-}
-
-function turnOffMicAndCamera() {
-    // Click microphone button to turn it off
-    const microphoneButton = document.querySelector('button[aria-label="Mute mic"]');
-    if (microphoneButton) {
-        console.log("Clicking the microphone button to turn it off");
-        microphoneButton.click();
-    } else {
-        console.log("Microphone off button not found");
-    }
-
-    // Click camera button to turn it off
-    const cameraButton = document.querySelector('button[aria-label="Turn camera off"]');
-    if (cameraButton) {
-        console.log("Clicking the camera button to turn it off");
-        cameraButton.click();
-    } else {
-        console.log("Camera off button not found");
     }
 }
 
 function turnOffCamera() {
     // Click camera button to turn it off
-    const cameraButton = document.querySelector('button[aria-label="Turn camera off"]');
+    const cameraButton = document.querySelector(mediaControlSelector(mediaControlCameraButtonIds, "Turn camera off", "button"));
     if (cameraButton) {
         console.log("Clicking the camera button to turn it off");
         cameraButton.click();
@@ -3337,75 +3428,26 @@ function turnOffCamera() {
 }
 
 const turnOnMicArialLabel = "Unmute mic"
-const turnOnScreenshareButtonId = "screenshare-button"
-const turnOnScreenshareButtonAlternateId = "share-button"
 const turnOffMicArialLabel = "Turn off microphone"
 const turnOffScreenshareAriaLabel = "Stop sharing"
 
-function turnOnMicAndScreenshare() {
-    // Click microphone button to turn it on
-    const microphoneButton = document.querySelector(`button[aria-label="${turnOnMicArialLabel}"]`);
-    if (microphoneButton) {
-        console.log("Clicking the microphone button to turn it on");
-        microphoneButton.click();
-    } else {
-        console.log("Microphone button not found");
-        window.ws.sendJson({
-            turnOnMicAndScreenshareError: "Microphone button not found in turnOnMicAndScreenshare"
-        });
-    }
-
-    // Click screenshare button to turn it on
-    const screenshareButton = document.querySelector(`button[id="${turnOnScreenshareButtonId}"]`) || document.querySelector(`button[id="${turnOnScreenshareButtonAlternateId}"]`);
-    if (screenshareButton) {
-        console.log("Clicking the screenshare button to turn it on");
-        screenshareButton.click();
-    } else {
-        console.log("Screenshare button not found");
-        window.ws.sendJson({
-            turnOnMicAndScreenshareError: "Screenshare button not found in turnOnMicAndScreenshare"
-        });
-    }
-}
-
-function turnOffMicAndScreenshare() {
-    // Click microphone button to turn it off
-    const microphoneButton = document.querySelector(`button[aria-label="${turnOffMicArialLabel}"]`);
-    if (microphoneButton) {
-        console.log("Clicking the microphone button to turn it off");
-        microphoneButton.click();
-    } else {
-        console.log("Microphone off button not found");
-    }
-
-    // Click screenshare button to turn it off
-    const screenshareButton = document.querySelector(`button[aria-label="${turnOffScreenshareAriaLabel}"]`);
-    if (screenshareButton) {
-        console.log("Clicking the screenshare button to turn it off");
-        screenshareButton.click();
-    } else {
-        console.log("Screenshare off button not found");
-    }
-}
-
-
 function turnOnScreenshare() {
     // Click screenshare button to turn it on
-    const screenshareButton = document.querySelector(`button[id="${turnOnScreenshareButtonId}"]`) || document.querySelector(`button[id="${turnOnScreenshareButtonAlternateId}"]`);
+    const screenshareButton = document.querySelector(mediaControlScreenshareButtonIds.map(id => `button[id="${id}"]`).join(", "));
     if (screenshareButton) {
         console.log("Clicking the screenshare button to turn it on");
         screenshareButton.click();
     } else {
         console.log("Screenshare button not found");
         window.ws.sendJson({
-            turnOnMicAndScreenshareError: "Screenshare button not found in turnOnMicAndScreenshare"
+            turnOnScreenshareError: "Screenshare button not found in turnOnScreenshare"
         });
     }
 }
 
 function turnOffScreenshare() {
     // Click screenshare button to turn it off
-    const screenshareButton = document.querySelector(`button[aria-label="${turnOffScreenshareAriaLabel}"]`);
+    const screenshareButton = document.querySelector(mediaControlSelector(mediaControlScreenshareButtonIds, turnOffScreenshareAriaLabel, "button"));
     if (screenshareButton) {
         console.log("Clicking the screenshare button to turn it off");
         screenshareButton.click();

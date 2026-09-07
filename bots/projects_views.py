@@ -12,7 +12,7 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import models, transaction
 from django.db.models.fields.json import KeyTextTransform
 from django.db.models.functions import Cast
-from django.http import HttpResponse, QueryDict
+from django.http import Http404, HttpResponse, QueryDict
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.views import View
@@ -20,7 +20,11 @@ from django.views.generic import ListView
 
 from accounts.models import User, UserRole
 
+from .bot_resource_usage_utils import DEFAULT_WINDOW as BOT_RESOURCE_USAGE_DEFAULT_WINDOW
+from .bot_resource_usage_utils import get_bot_resource_usage_data, user_can_view_bot_resource_usage
 from .bots_api_utils import BotCreationSource, create_bot, create_webhook_subscription
+from .instance_health_alert_manager import get_alert_configs, update_alert_settings
+from .instance_health_utils import DEFAULT_WINDOW, get_instance_health_data, user_can_view_instance_health
 from .launch_bot_utils import launch_adhoc_bot_from_view
 from .models import (
     ApiKey,
@@ -39,6 +43,7 @@ from .models import (
     ChatMessage,
     Credentials,
     CreditTransaction,
+    InstanceHealthAlertsState,
     Participant,
     ParticipantEventTypes,
     Project,
@@ -189,6 +194,8 @@ def get_partial_for_credential_type(credential_type, request, context):
         return render(request, "projects/partials/external_media_storage_credentials.html", context)
     elif credential_type == Credentials.CredentialTypes.TEAMS_BOT_IDENTIFICATION_CREDENTIALS:
         return render(request, "projects/partials/teams_bot_identification_credentials.html", context)
+    elif credential_type == Credentials.CredentialTypes.LIVEKIT:
+        return render(request, "projects/partials/livekit_credentials.html", context)
     else:
         return HttpResponse("Cannot render the partial for this credential type", status=400)
 
@@ -216,6 +223,8 @@ class ProjectUrlContextMixin:
         return {
             "project": project,
             "charge_credits_for_bots_setting": settings.CHARGE_CREDITS_FOR_BOTS,
+            "can_view_instance_health": user_can_view_instance_health(self.request.user),
+            "can_view_bot_resource_usage": user_can_view_bot_resource_usage(self.request.user),
             "user_projects": Project.accessible_to(self.request.user),
             "UserRole": UserRole,
             "debug_mode": True if settings.DEBUG else False,
@@ -406,6 +415,15 @@ class CreateCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 
                 if not all(credentials_data.values()):
                     return HttpResponse("Missing required credentials data", status=400)
+            elif credential_type == Credentials.CredentialTypes.LIVEKIT:
+                credentials_data = {
+                    "url": request.POST.get("url"),
+                    "api_key": request.POST.get("api_key"),
+                    "api_secret": request.POST.get("api_secret"),
+                }
+
+                if not all(credentials_data.values()):
+                    return HttpResponse("Missing required credentials data", status=400)
             else:
                 return HttpResponse("Unsupported credential type", status=400)
 
@@ -483,6 +501,8 @@ class ProjectCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 
         teams_bot_identification_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.TEAMS_BOT_IDENTIFICATION_CREDENTIALS).first()
 
+        livekit_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.LIVEKIT).first()
+
         context = self.get_project_context(object_id, project)
         context.update(
             {
@@ -510,6 +530,8 @@ class ProjectCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
                 "teams_bot_identification_credentials": teams_bot_identification_credentials.get_credentials() if teams_bot_identification_credentials else None,
                 "teams_bot_identification_credential_type": Credentials.CredentialTypes.TEAMS_BOT_IDENTIFICATION_CREDENTIALS,
                 "show_teams_bot_identification_credentials": settings.SHOW_TEAMS_BOT_IDENTIFICATION_CREDENTIALS,
+                "livekit_credentials": livekit_credentials.get_credentials() if livekit_credentials else None,
+                "livekit_credential_type": Credentials.CredentialTypes.LIVEKIT,
             }
         )
 
@@ -1237,6 +1259,48 @@ class ProjectUsageView(AdminRequiredMixin, ProjectUrlContextMixin, View):
         return render(request, "projects/project_usage.html", context)
 
 
+class ProjectInstanceHealthView(AdminRequiredMixin, ProjectUrlContextMixin, View):
+    def get(self, request, object_id):
+        if not user_can_view_instance_health(request.user):
+            raise Http404("Instance health is not available.")
+
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
+        context = self.get_project_context(object_id, project)
+        context.update(get_instance_health_data(request.GET.get("window", DEFAULT_WINDOW)))
+        context["alert_configs"] = get_alert_configs(InstanceHealthAlertsState.load())
+        return render(request, "projects/project_instance_health.html", context)
+
+    def post(self, request, object_id):
+        if not user_can_view_instance_health(request.user):
+            raise Http404("Instance health is not available.")
+
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
+        update_alert_settings(InstanceHealthAlertsState.load(), request.POST)
+
+        context = self.get_project_context(object_id, project)
+        context["alert_configs"] = get_alert_configs(InstanceHealthAlertsState.load())
+        context["alerts_saved"] = True
+        return render(request, "projects/partials/instance_health_alerts_form.html", context)
+
+
+class ProjectBotResourceUsageView(AdminRequiredMixin, ProjectUrlContextMixin, View):
+    def get(self, request, object_id):
+        if not user_can_view_bot_resource_usage(request.user):
+            raise Http404("Bot resource usage is not available.")
+
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
+        context = self.get_project_context(object_id, project)
+        context.update(
+            get_bot_resource_usage_data(
+                project,
+                window=request.GET.get("window", BOT_RESOURCE_USAGE_DEFAULT_WINDOW),
+                platform=request.GET.get("platform", ""),
+                recording=request.GET.get("recording", ""),
+            )
+        )
+        return render(request, "projects/project_bot_resource_usage.html", context)
+
+
 class ProjectBillingView(AdminRequiredMixin, ProjectUrlContextMixin, ListView):
     template_name = "projects/project_billing.html"
     context_object_name = "transactions"
@@ -1244,12 +1308,26 @@ class ProjectBillingView(AdminRequiredMixin, ProjectUrlContextMixin, ListView):
 
     def get_queryset(self):
         project = get_project_for_user(user=self.request.user, project_object_id=self.kwargs["object_id"])
-        return CreditTransaction.objects.filter(organization=project.organization).order_by("-created_at")
+        queryset = CreditTransaction.objects.filter(organization=project.organization)
+
+        # Apply transaction type filter if provided. "added" shows only
+        # transactions where credits were added (positive delta), "deducted"
+        # shows only transactions where credits were deducted (negative delta).
+        transaction_type = self.request.GET.get("transaction_type", "").strip()
+        if transaction_type == "added":
+            queryset = queryset.filter(centicredits_delta__gt=0)
+        elif transaction_type == "deducted":
+            queryset = queryset.filter(centicredits_delta__lt=0)
+
+        return queryset.order_by("-created_at")
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         project = get_project_for_user(user=self.request.user, project_object_id=self.kwargs["object_id"])
         context.update(self.get_project_context(self.kwargs["object_id"], project))
+
+        # Add filter parameters to context for maintaining state
+        context["filter_params"] = {"transaction_type": self.request.GET.get("transaction_type", "")}
 
         # Check if organization has a valid payment method
         has_payment_method = False

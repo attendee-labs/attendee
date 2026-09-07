@@ -5,12 +5,79 @@ import unittest
 import gi
 
 gi.require_version("GLib", "2.0")
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 from gi.repository import GLib  # noqa: E402
 
 from bots.bot_controller.main_thread_executor import MainThreadExecutor  # noqa: E402
 
 
-class TestMainThreadExecutor(unittest.TestCase):
+class IsolatedProcessTestCase(unittest.TestCase):
+    """
+    Runs each test method in a fresh Python/Django process.
+
+    The parent Django test runner discovers the tests normally. For each test,
+    this class launches:
+
+        python manage.py test --keepdb <fully-qualified-test-name>
+
+    The environment variable prevents the child from spawning another child.
+    """
+
+    _ISOLATED_PROCESS_ENV = "RUNNING_ISOLATED_TEST_PROCESS"
+
+    def run(self, result=None):
+        # In the child process, actually run the test normally.
+        if os.environ.get(self._ISOLATED_PROCESS_ENV) == "1":
+            return super().run(result)
+
+        if result is None:
+            result = self.defaultTestResult()
+
+        test_name = self.id()
+
+        env = os.environ.copy()
+        env[self._ISOLATED_PROCESS_ENV] = "1"
+
+        # Your normal invocation is `python manage.py test ...`, so sys.argv[0]
+        # should be the path to manage.py.
+        manage_py = Path(sys.argv[0]).resolve()
+
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(manage_py),
+                "test",
+                "--keepdb",
+                test_name,
+            ],
+            env=env,
+            cwd=manage_py.parent,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+
+        result.startTest(self)
+
+        try:
+            if proc.returncode == 0:
+                result.addSuccess(self)
+            else:
+                try:
+                    raise AssertionError(f"Isolated test process failed (exit code {proc.returncode}):\n\n{proc.stdout}")
+                except AssertionError:
+                    result.addFailure(self, sys.exc_info())
+        finally:
+            result.stopTest(self)
+
+        return result
+
+
+class TestMainThreadExecutor(IsolatedProcessTestCase):
     """Exercises MainThreadExecutor against a real GLib main loop running on its own thread."""
 
     def setUp(self):

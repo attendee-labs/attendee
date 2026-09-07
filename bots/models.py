@@ -844,6 +844,16 @@ class TranscriptionSettings:
 class Bot(models.Model):
     OBJECT_ID_PREFIX = "bot_"
 
+    # Top level keys in a bot event's metadata that hold personal data and must not survive a data deletion
+    SENSITIVE_EVENT_METADATA_KEYS = frozenset(
+        {
+            "remover_is_host",
+            "remover_name",
+            "remover_user_uuid",
+            "remover_uuid",
+        }
+    )
+
     object_id = models.CharField(max_length=32, unique=True, editable=False)
 
     project = models.ForeignKey(Project, on_delete=models.PROTECT, related_name="bots")
@@ -877,30 +887,62 @@ class Bot(models.Model):
             raise ValueError("Bot is not in a state where the data deleted event can be created")
 
         with transaction.atomic():
-            # Delete all debug screenshots from bot events
-            BotDebugScreenshot.objects.filter(bot_event__bot=self).delete()
-
-            # Delete all utterances and recording files for each recording
-            for recording in self.recordings.all():
-                # Delete all audio chunks and utterances first
-                recording.audio_chunks.all().delete()
-                recording.utterances.all().delete()
-
-                # Delete the actual recording file if it exists
-                if recording.file and recording.file.name:
-                    recording.file.delete()
-
-            # Delete all participants
-            self.participants.all().delete()
-
-            # Delete all chat messages
-            self.chat_messages.all().delete()
-
-            # Delete all webhook delivery attempts that have a trigger other than BOT_STATE_CHANGE, since these contain sensitive data
-            webhook_delivery_attempts_with_sensitive_data = self.webhook_delivery_attempts.exclude(webhook_trigger_type=WebhookTriggerTypes.BOT_STATE_CHANGE)
-            webhook_delivery_attempts_with_sensitive_data.delete()
+            self.ensure_data_deleted()
 
             BotEventManager.create_event(bot=self, event_type=BotEventTypes.DATA_DELETED)
+
+    # This method performs the actual delete queries for the delete_data operation.
+    # It does not set the bot's state to DATA_DELETED.
+    # It is also used by the finalize_bot_data_deletion management command to finalize the deletion process.
+    def ensure_data_deleted(self):
+        # Delete all debug screenshots from bot events
+        debug_screenshots = BotDebugScreenshot.objects.filter(bot_event__bot=self)
+        for debug_screenshot in debug_screenshots:
+            if debug_screenshot.file and debug_screenshot.file.name:
+                debug_screenshot.file.delete()
+        debug_screenshots.delete()
+
+        # Delete all utterances and recording files for each recording
+        for recording in self.recordings.all():
+            # Delete all audio chunks and utterances first
+            recording.audio_chunks.all().delete()
+            recording.utterances.all().delete()
+
+            # Delete the actual recording file if it exists
+            if recording.file and recording.file.name:
+                recording.file.delete()
+
+        # Delete all participants
+        self.participants.all().delete()
+
+        # Delete all chat messages
+        self.chat_messages.all().delete()
+
+        # Delete all webhook delivery attempts that have a trigger other than BOT_STATE_CHANGE, since these contain sensitive data
+        webhook_delivery_attempts_with_sensitive_data = self.webhook_delivery_attempts.exclude(webhook_trigger_type=WebhookTriggerTypes.BOT_STATE_CHANGE)
+        webhook_delivery_attempts_with_sensitive_data.delete()
+
+        # Wipe any sensitive metadata attributes from both bot_events metadata and webhook delivery attempt payloads for bot.state change trigger
+        for bot_event in self.bot_events.all():
+            metadata = bot_event.metadata
+            if not isinstance(metadata, dict):
+                continue
+            scrubbed_metadata = self.metadata_without_sensitive_keys(metadata)
+            if scrubbed_metadata != metadata:
+                BotEvent.objects.filter(id=bot_event.id).update(metadata=scrubbed_metadata)
+
+        for webhook_delivery_attempt in self.webhook_delivery_attempts.filter(webhook_trigger_type=WebhookTriggerTypes.BOT_STATE_CHANGE):
+            payload = webhook_delivery_attempt.payload or {}
+            event_metadata = payload.get("event_metadata")
+            if not isinstance(event_metadata, dict):
+                continue
+            scrubbed_metadata = self.metadata_without_sensitive_keys(event_metadata)
+            if scrubbed_metadata != event_metadata:
+                WebhookDeliveryAttempt.objects.filter(id=webhook_delivery_attempt.id).update(payload={**payload, "event_metadata": scrubbed_metadata})
+
+    @classmethod
+    def metadata_without_sensitive_keys(cls, metadata):
+        return {key: value for key, value in metadata.items() if key not in cls.SENSITIVE_EVENT_METADATA_KEYS}
 
     def set_heartbeat(self):
         retry_count = 0
@@ -1017,6 +1059,9 @@ class Bot(models.Model):
     def zoom_meeting_settings(self):
         return self.settings.get("zoom_settings", {}).get("meeting_settings", {})
 
+    def zoom_webinar_user_email(self):
+        return self.settings.get("zoom_settings", {}).get("webinar_user_email", None)
+
     def rtmp_destination_url(self):
         rtmp_settings = self.settings.get("rtmp_settings")
         if not rtmp_settings:
@@ -1065,6 +1110,23 @@ class Bot(models.Model):
         websocket_settings = self.settings.get("websocket_settings") or {}
         websocket_per_participant_video_settings = websocket_settings.get("per_participant_video") or {}
         return websocket_per_participant_video_settings.get("screenshare_resolution", "360p")
+
+    def should_use_room_sync(self):
+        return bool(self.room_sync_livekit_room_name())
+
+    def room_sync_livekit_room_name(self):
+        room_sync_settings = self.settings.get("room_sync_settings") or {}
+        livekit_settings = room_sync_settings.get("livekit") or {}
+        return livekit_settings.get("room_name", None)
+
+    def room_sync_livekit_source_participant(self):
+        room_sync_settings = self.settings.get("room_sync_settings") or {}
+        livekit_settings = room_sync_settings.get("livekit") or {}
+        return livekit_settings.get("source_participant", None)
+
+    def room_sync_sync_to_room(self):
+        room_sync_settings = self.settings.get("room_sync_settings") or {}
+        return room_sync_settings.get("sync_to_room", True)
 
     def voice_agent_url(self):
         voice_agent_settings = self.settings.get("voice_agent_settings", {}) or {}
@@ -1147,8 +1209,7 @@ class Bot(models.Model):
         return recording_settings.get("view", RecordingViews.SPEAKER_VIEW)
 
     def save_resource_snapshots(self):
-        save_resource_snapshots_env_var_value = os.getenv("SAVE_BOT_RESOURCE_SNAPSHOTS", "false")
-        return str(save_resource_snapshots_env_var_value).lower() == "true"
+        return settings.SAVE_BOT_RESOURCE_SNAPSHOTS
 
     def create_debug_recording(self):
         if os.getenv("SAVE_DEBUG_RECORDINGS", "false") == "true":
@@ -2738,6 +2799,7 @@ class Credentials(models.Model):
         ELEVENLABS = 10, "ElevenLabs"
         KYUTAI = 11, "Kyutai"
         TEAMS_BOT_IDENTIFICATION_CREDENTIALS = 12, "Teams Bot Identification Credentials"
+        LIVEKIT = 13, "LiveKit"
 
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="credentials")
     credential_type = models.IntegerField(choices=CredentialTypes.choices, null=False)
@@ -3220,3 +3282,52 @@ class BotResourceSnapshot(models.Model):
 
     def __str__(self):
         return f"Resource snapshot for {self.bot.object_id} at {self.created_at}"
+
+
+class InstanceHealthSnapshot(models.Model):
+    """A point-in-time sample of instance-wide health: Celery queue depths, database
+    connection usage and (sampled less often) per-table sizes. Written by the scheduler."""
+
+    data = models.JSONField(null=False, default=dict)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    def __str__(self):
+        return f"Instance health snapshot at {self.created_at}"
+
+
+class InstanceHealthAlertsState(models.Model):
+    """Singleton holding the configuration and current firing state of instance health alerts.
+
+    There is exactly one row for the whole instance. `settings` holds each alert's
+    configuration (whether it is enabled and its threshold); `state` holds whether each
+    alert is currently active (firing) or inactive. The two are kept apart so operators
+    can edit configuration without racing the writer that flips firing state, and so a
+    schema change to one does not disturb the other.
+
+    Both columns are JSON objects keyed by alert; their shape and defaults are owned by
+    application code, not this model.
+    """
+
+    # Fixed primary key so there can only ever be one row: every save writes pk=1.
+    SINGLETON_ID = 1
+
+    settings = models.JSONField(null=False, default=dict)
+    state = models.JSONField(null=False, default=dict)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def save(self, *args, **kwargs):
+        self.pk = self.SINGLETON_ID
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        """Deleting the singleton is a no-op: the row is meant to always exist."""
+        pass
+
+    @classmethod
+    def load(cls):
+        """Return the singleton row, creating it with empty settings and state if needed."""
+        obj, _ = cls.objects.get_or_create(pk=cls.SINGLETON_ID)
+        return obj
+
+    def __str__(self):
+        return "Instance health alert state"

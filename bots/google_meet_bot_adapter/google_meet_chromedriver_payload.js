@@ -798,6 +798,19 @@ class StyleManager {
         }
 
         console.log('Started StyleManager');
+
+        // If we have a room sync source participant, then start streaming its
+        // media into the meeting. The adapter is only loaded when this is
+        // configured, so guard on both the config and the function existing.
+        if (window.initialData.roomSyncSourceParticipantConfiguration && window.streamRoomSyncSourceParticipant) {
+            window.streamRoomSyncSourceParticipant().catch((error) => {
+                console.error('Failed to stream room sync source participant:', error);
+                window.ws?.sendJson({
+                    type: 'Error',
+                    message: 'Failed to stream room sync source participant: ' + error.message
+                });
+            });
+        }
     }
 
     /*
@@ -1556,6 +1569,9 @@ class RTCInterceptor {
             
             return peerConnection;
         };
+
+        window.RTCPeerConnection.prototype.addTransceiver = originalRTCPeerConnection.prototype.addTransceiver;
+        window.RTCPeerConnection.prototype.addTrack = originalRTCPeerConnection.prototype.addTrack;
     }
 }
 
