@@ -10,7 +10,7 @@ import subprocess
 import threading
 import time
 from time import sleep
-from urllib.parse import unquote, urlparse
+from urllib.parse import urlparse
 
 import numpy as np
 from django.conf import settings
@@ -658,6 +658,7 @@ class WebBotAdapter(BotAdapter):
 
     def cleanup_graceful_driver_shutdown(self, driver):
         self.log_browser_history(driver=driver)
+        self.log_if_iframe_is_blocked_by_chrome_policy(driver=driver)
 
         # Simulate closing browser window
         try:
@@ -1049,12 +1050,7 @@ class WebBotAdapter(BotAdapter):
 
     def domain_for_history_entry_url(self, url):
         try:
-            if url.startswith("chrome://browser-switch"):
-                url_normalized = unquote(url.removeprefix("chrome://browser-switch/?url="))
-            else:
-                url_normalized = url
-
-            return str(urlparse(url_normalized).netloc)
+            return str(urlparse(url).netloc)
         except Exception as e:
             logger.warning(f"Error normalizing history entry url: {e}")
             return url
@@ -1070,31 +1066,101 @@ class WebBotAdapter(BotAdapter):
             logger.warning(f"Error getting navigation history: {e}")
             return []
 
+    def history_entry_url_violates_allow_list(self, *, url, allowlist):
+        parsed = urlparse(url)
+        # Only http(s) navigations are subject to the allow list. Skip about:blank,
+        # chrome://, chrome-error://, data:, blob:, etc.
+        if parsed.scheme not in ("http", "https"):
+            return False
+
+        host = parsed.netloc.split("@")[-1].split(":")[0].lower()
+        if not host:
+            return False
+
+        for entry in allowlist:
+            allowed = str(entry).lower().strip()
+            if "://" in allowed:
+                allowed = urlparse(allowed).netloc
+            allowed = allowed.lstrip(".").split("/")[0].split(":")[0]
+            if not allowed:
+                continue
+            # "*" allows everything; otherwise match the host or any subdomain of it,
+            # mirroring Chrome's URLAllowlist matching semantics.
+            if allowed == "*" or host == allowed or host.endswith("." + allowed):
+                return False
+
+        return True
+
     def log_browser_history(self, *, driver):
         try:
             nav_history_urls = self.get_navigation_history_urls(driver=driver)
             nav_history_hosts = list(set([self.domain_for_history_entry_url(url) for url in nav_history_urls]))
             logger.info(f"Browser navigation history {nav_history_hosts}")
-            # If any of the navigation urls start with chrome://browser-switch, then the url was blocked.
+
+            if not settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:
+                return
+
+            allowlist = self.subclass_specific_chrome_policies().get("URLAllowlist", [])
+            if not allowlist:
+                return
+
             for url in nav_history_urls:
-                if url.startswith("chrome://browser-switch"):
-                    logger.error(f"Domain allow list violation detected after leave: {url}")
+                if self.history_entry_url_violates_allow_list(url=url, allowlist=allowlist):
+                    logger.error(f"Domain allow list violation detected after leave: {self.domain_for_history_entry_url(url)}")
         except Exception as e:
             logger.warning(f"Error logging browser navigation history: {e}")
 
-    def is_blocked_by_chrome_policy(self, driver):
-        result = driver.execute_cdp_cmd(
-            "Runtime.evaluate",
-            {
-                "expression": """
-                    (() => {
-                        const data = window.loadTimeDataRaw;
-                        return data?.summary?.msg || null;
-                    })()
-                """,
-                "returnByValue": True,
-            },
-        )
+    def get_child_frames(self, driver):
+        if not driver:
+            return []
+        try:
+            tree = driver.execute_cdp_cmd("Page.getFrameTree", {})
+        except Exception as e:
+            logger.warning(f"Error getting frame tree: {e}")
+            return []
+
+        frames = []
+
+        def walk(node, is_root):
+            # Skip the main frame; that's covered by the top-level check.
+            if not is_root:
+                frames.append(node.get("frame", {}))
+            for child in node.get("childFrames", []):
+                walk(child, is_root=False)
+
+        walk(tree.get("frameTree", {}), is_root=True)
+        return frames
+
+    def log_if_iframe_is_blocked_by_chrome_policy(self, *, driver):
+        try:
+            allowlist = self.subclass_specific_chrome_policies().get("URLAllowlist", [])
+            if not allowlist:
+                return
+
+            for frame in self.get_child_frames(driver):
+                url = frame.get("url")
+                if url and self.history_entry_url_violates_allow_list(url=url, allowlist=allowlist):
+                    logger.error(f"Domain allow list violation detected in iframe: {self.domain_for_history_entry_url(url)}")
+        except Exception:
+            logger.exception("Error in log_if_iframe_is_blocked_by_chrome_policy")
+
+    def top_level_page_is_blocked_by_chrome_policy(self, *, driver):
+        try:
+            result = driver.execute_cdp_cmd(
+                "Runtime.evaluate",
+                {
+                    "expression": """
+                        (() => {
+                            const data = window.loadTimeDataRaw;
+                            return data?.summary?.msg || null;
+                        })()
+                    """,
+                    "returnByValue": True,
+                },
+            )
+        except Exception:
+            logger.exception("Error in top_level_page_is_blocked_by_chrome_policy")
+            return False
 
         return result.get("result", {}).get("value") == "Your organization doesn’t allow you to view this site"
 
@@ -1108,10 +1174,13 @@ class WebBotAdapter(BotAdapter):
 
         self.last_domain_allow_list_violation_check_time = time.time()
 
-        if self.is_blocked_by_chrome_policy(self.driver):
+        if self.top_level_page_is_blocked_by_chrome_policy(driver=self.driver):
             url = self.driver.current_url
             logger.error(f"Domain allow list violation detected: {url}")
             raise Exception(f"Domain allow list violation detected: {self.domain_for_history_entry_url(url)}")
+
+        # We don't abort if an iframe was blocked, we just log it.
+        self.log_if_iframe_is_blocked_by_chrome_policy(driver=self.driver)
 
     def check_auto_leave_conditions(self) -> None:
         if self.left_meeting:

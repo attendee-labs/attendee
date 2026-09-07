@@ -178,12 +178,14 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
         return {
             "URLBlocklist": ["*"],
             "URLAllowlist": [
-                "microsoft.com",
+                "teams.microsoft.com",
+                "teams.live.com",
+                "login.live.com",
+                "teams.microsoft.us",
+                "m365.cloud.microsoft",
+                "static.microsoft",
+                "login.microsoftonline.com",
                 "office.com",
-                "cloud.microsoft",
-                "microsoftonline.com",
-                "live.com",
-                "microsoft.us",
             ],
         }
 
