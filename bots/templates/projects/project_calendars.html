@@ -135,11 +135,12 @@
                     {% for calendar in calendars %}
                     <tr class="clickable-row"
                         hx-get="{% url 'bots:project-calendar-detail' object_id=project.object_id calendar_object_id=calendar.object_id %}"
+                        hx-trigger="click[!event.target.closest('a')]"
                         hx-select="#content"
                         hx-target="#content"
                         hx-swap="outerHTML"
                         hx-push-url="true">
-                        <td><small>{{ calendar.object_id }}</small></td>
+                        <td><small><a href="{% url 'bots:project-calendar-detail' object_id=project.object_id calendar_object_id=calendar.object_id %}" class="row-link" hx-boost="true" hx-select="#content" hx-target="#content" hx-swap="outerHTML">{{ calendar.object_id }}</a></small></td>
                         <td>
                             <span class="badge {% if calendar.platform == 'google' %}bg-primary{% elif calendar.platform == 'microsoft' %}bg-info{% else %}bg-secondary{% endif %}">
                                 {{ calendar.get_platform_display|title }}
