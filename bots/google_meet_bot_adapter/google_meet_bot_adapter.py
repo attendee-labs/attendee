@@ -105,9 +105,10 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
 
     def subclass_specific_chrome_policies(self):
         if not settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:
-            return {}
+            return {"BrowserSignin": 0}
 
         chrome_policies = {
+            "BrowserSignin": 0,
             "BrowserSwitcherEnabled": True,
             "AlternativeBrowserPath": "/nonexistent-browser",
             "AlternativeBrowserParameters": [],
