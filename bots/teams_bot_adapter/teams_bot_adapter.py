@@ -176,19 +176,14 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
             return {}
 
         return {
-            "BrowserSwitcherEnabled": True,
-            "AlternativeBrowserPath": "/nonexistent-browser",
-            "AlternativeBrowserParameters": [],
-            "BrowserSwitcherDelay": 0,
-            "BrowserSwitcherParsingMode": 1,
-            "BrowserSwitcherUrlList": [
-                "*",
-                "!microsoft.com",
-                "!office.com",
-                "!cloud.microsoft",
-                "!microsoftonline.com",
-                "!live.com",
-                "!microsoft.us",
+            "URLBlocklist": ["*"],
+            "URLAllowlist": [
+                "microsoft.com",
+                "office.com",
+                "cloud.microsoft",
+                "microsoftonline.com",
+                "live.com",
+                "microsoft.us",
             ],
         }
 
