@@ -104,11 +104,17 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
         self.after_bot_can_record_meeting()
 
     def subclass_specific_chrome_policies(self):
+        chrome_policies = {}
+
+        # Prevents a speedbump when signing in to Google Meet
+        if self.google_meet_bot_login_should_be_used:
+            chrome_policies["BrowserSignin"] = 0
+
         if not settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:
-            return {"BrowserSignin": 0}
+            return chrome_policies
 
         chrome_policies = {
-            "BrowserSignin": 0,
+            **chrome_policies,
             "BrowserSwitcherEnabled": True,
             "AlternativeBrowserPath": "/nonexistent-browser",
             "AlternativeBrowserParameters": [],
