@@ -1082,6 +1082,22 @@ class WebBotAdapter(BotAdapter):
         except Exception as e:
             logger.warning(f"Error logging browser navigation history: {e}")
 
+    def is_blocked_by_chrome_policy(self, driver):
+        result = driver.execute_cdp_cmd(
+            "Runtime.evaluate",
+            {
+                "expression": """
+                    (() => {
+                        const data = window.loadTimeDataRaw;
+                        return data?.summary?.msg || null;
+                    })()
+                """,
+                "returnByValue": True,
+            },
+        )
+
+        return result.get("result", {}).get("value") == "Your organization doesn’t allow you to view this site"
+
     def check_domain_allow_list_violation(self):
         if not settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:
             return
@@ -1092,13 +1108,10 @@ class WebBotAdapter(BotAdapter):
 
         self.last_domain_allow_list_violation_check_time = time.time()
 
-        nav_history_urls = self.get_navigation_history_urls(driver=self.driver)
-
-        # If any of the navigation urls start with chrome://browser-switch, then the url was blocked.
-        for url in nav_history_urls:
-            if url.startswith("chrome://browser-switch"):
-                logger.error(f"Domain allow list violation detected: {url}")
-                raise Exception(f"Domain allow list violation detected: {self.domain_for_history_entry_url(url)}")
+        if self.is_blocked_by_chrome_policy(self.driver):
+            url = self.driver.current_url
+            logger.error(f"Domain allow list violation detected: {url}")
+            raise Exception(f"Domain allow list violation detected: {self.domain_for_history_entry_url(url)}")
 
     def check_auto_leave_conditions(self) -> None:
         if self.left_meeting:
