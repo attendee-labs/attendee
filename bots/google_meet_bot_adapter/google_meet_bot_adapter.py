@@ -103,18 +103,18 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
     def subclass_specific_after_bot_joined_meeting(self):
         self.after_bot_can_record_meeting()
 
+    def add_subclass_specific_chrome_options(self, options):
+        # Prevents a speedbump when signing in to Google Meet.
+        # If settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME, we achieve the same effect differently by
+        # setting the BrowserSignin policy to 0.
+        if self.google_meet_bot_login_should_be_used and not settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:
+            options.add_argument("--guest")
+
     def subclass_specific_chrome_policies(self):
-        chrome_policies = {}
-
-        # Prevents a speedbump when signing in to Google Meet
-        if self.google_meet_bot_login_should_be_used:
-            chrome_policies["BrowserSignin"] = 0
-
         if not settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:
-            return chrome_policies
+            return {}
 
         chrome_policies = {
-            **chrome_policies,
             "BrowserSwitcherEnabled": True,
             "AlternativeBrowserPath": "/nonexistent-browser",
             "AlternativeBrowserParameters": [],
@@ -129,6 +129,13 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
                 "!" + settings.SITE_DOMAIN,
             ],
         }
+
+        # Prevents a speedbump when signing in to Google Meet
+        if self.google_meet_bot_login_should_be_used:
+            chrome_policies["BrowserSignin"] = 0
+
+        if os.getenv("INTERNAL_SITE_DOMAIN"):
+            chrome_policies["BrowserSwitcherUrlList"].append("!" + os.getenv("INTERNAL_SITE_DOMAIN"))
 
         if os.getenv("USE_SAFE_NAVIGATION_FOR_SIGNED_IN_GOOGLE_MEET_BOTS", "false") != "true":
             chrome_policies["BrowserSwitcherUrlList"].append("!www.google.com")
