@@ -9,6 +9,7 @@ import signal
 import subprocess
 import threading
 import time
+from queue import Full, Queue
 from time import sleep
 from urllib.parse import urlparse
 
@@ -17,6 +18,7 @@ from django.conf import settings
 from pyvirtualdisplay import Display
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
+from websockets.sync.client import connect
 from websockets.sync.server import serve
 
 from bots.automatic_leave_configuration import AutomaticLeaveConfiguration
@@ -749,6 +751,9 @@ class WebBotAdapter(BotAdapter):
         }
         options.add_experimental_option("prefs", prefs)
 
+        if settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:
+            options.set_capability("webSocketUrl", True)
+
         self.add_subclass_specific_chrome_options(options)
 
         if self.driver:
@@ -756,6 +761,7 @@ class WebBotAdapter(BotAdapter):
             self.driver = None
 
         self.driver = webdriver.Chrome(options=options, service=Service(executable_path="/usr/local/bin/chromedriver"))
+        self.start_domain_allow_list_listener()
         logger.info(f"web driver server initialized at port {self.driver.service.port}")
 
         initial_data_code = f"window.initialData = {{websocketPort: {self.websocket_port}, videoFrameWidth: {self.video_frame_size[0]}, videoFrameHeight: {self.video_frame_size[1]}, botName: {json.dumps(self.display_name)}, addClickRipple: {'true' if self.should_create_debug_recording else 'false'}, recordingView: '{self.recording_view}', sendMixedAudio: {'true' if self.add_mixed_audio_chunk_callback else 'false'}, sendPerParticipantAudio: {'true' if self.add_audio_chunk_callback else 'false'}, perParticipantRealtimeVideoConfiguration: {json.dumps(self.per_participant_realtime_video_configuration.to_dict())}, roomSyncSourceParticipantConfiguration: {json.dumps(self.room_sync_source_participant_configuration.to_dict()) if self.room_sync_source_participant_configuration else 'null'}, sendPerParticipantVideo: {'true' if self.add_per_participant_video_frame_callback else 'false'}, collectCaptions: {'true' if self.upsert_caption_callback else 'false'}, recordParticipantSpeechStartStopEvents: {'true' if self.record_participant_speech_start_stop_events else 'false'}}}"
@@ -799,6 +805,96 @@ class WebBotAdapter(BotAdapter):
 
         # Add the combined script to execute on new document
         self.driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": combined_code})
+
+    def start_domain_allow_list_listener(self):
+        # Capture this driver's queue so callbacks from an old driver cannot
+        # report violations against a replacement driver.
+        violations = Queue(maxsize=1)
+        self._domain_allow_list_violations = violations
+
+        if not settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:
+            return
+
+        socket = connect(
+            self.driver.capabilities["webSocketUrl"],
+            open_timeout=10,
+            close_timeout=2,
+            max_size=None,
+        )
+
+        def handle_message(message):
+            if message.get("method") == "browsingContext.navigationFailed":
+                params = message["params"]
+                logger.warning(
+                    "Navigation failed: url=%s context=%s navigation=%s",
+                    params.get("url"),
+                    params.get("context"),
+                    params.get("navigation"),
+                )
+                return
+
+            if message.get("method") != "network.fetchError":
+                return
+
+            params = message["params"]
+            error = params.get("errorText", "").removeprefix("net::")
+            if error != "ERR_BLOCKED_BY_ADMINISTRATOR":
+                return
+
+            # ChromeDriver's BiDi mapper reports "UNKNOWN" (or omits the request
+            # details entirely) when the navigation is blocked before the request
+            # is populated. Keep raising on the policy violation regardless, and
+            # rely on the browsingContext.navigationFailed log for URL diagnostics.
+            url = params.get("request", {}).get("url", "UNKNOWN")
+            logger.error("Chrome policy violation: %s", params)
+            try:
+                violations.put_nowait(url)
+            except Full:
+                pass
+
+        try:
+            socket.send(
+                json.dumps(
+                    {
+                        "id": 1,
+                        "method": "session.subscribe",
+                        "params": {
+                            "events": [
+                                "network.fetchError",
+                                "browsingContext.navigationFailed",
+                            ],
+                        },
+                    }
+                )
+            )
+
+            # Confirm subscription before allowing the bot to navigate.
+            deadline = time.monotonic() + 10
+            while True:
+                message = json.loads(socket.recv(timeout=max(0, deadline - time.monotonic())))
+                if message.get("id") == 1:
+                    if message.get("type") != "success":
+                        raise RuntimeError(f"BiDi subscription failed: {message}")
+                    break
+                handle_message(message)
+        except Exception:
+            socket.close()
+            raise
+
+        self._domain_allow_list_socket = socket
+
+        def listen():
+            try:
+                for raw_message in socket:
+                    handle_message(json.loads(raw_message))
+            except Exception:
+                logger.exception("Domain allow list listener disconnected")
+
+        threading.Thread(
+            target=listen,
+            name="domain-allow-list-listener",
+            daemon=True,
+        ).start()
 
     def init(self):
         self.display_var_for_debug_recording = os.environ.get("DISPLAY")
