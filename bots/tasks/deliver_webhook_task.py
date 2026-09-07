@@ -75,7 +75,9 @@ def deliver_webhook(self, delivery_id):
         delivery.save()
         return
 
-    # If webhook URL is not public, mark as failure and return
+    # If webhook URL is not public, mark as failure and return.
+    # Re-resolve immediately before the POST to shrink the DNS-rebinding window
+    # between an earlier subscription check and delivery.
     if settings.REQUIRE_PUBLIC_WEBHOOK_URLS and not url_is_public(subscription.url):
         delivery.status = WebhookDeliveryAttemptStatus.FAILURE
         error_response = {

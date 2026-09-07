@@ -55,6 +55,12 @@ class MP4Demuxer:
         """
         Download the file from URL to a temporary file.
         """
+        from bots.ssrf import assert_safe_https_media_url
+
+        # Defense in depth: reject private/link-local destinations even if the
+        # API layer already validated (DNS may have changed since enqueue).
+        assert_safe_https_media_url(self._url)
+
         logger.info(f"Downloading MP4 from {self._url}...")
 
         # Create a temporary file
