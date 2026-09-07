@@ -115,18 +115,13 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
             return {}
 
         chrome_policies = {
-            "BrowserSwitcherEnabled": True,
-            "AlternativeBrowserPath": "/nonexistent-browser",
-            "AlternativeBrowserParameters": [],
-            "BrowserSwitcherDelay": 0,
-            "BrowserSwitcherParsingMode": 1,
-            "BrowserSwitcherUrlList": [
-                "*",
-                "!workspace.google.com",
-                "!accounts.google.com",
-                "!mail.google.com",
-                "!meet.google.com",
-                "!" + settings.SITE_DOMAIN,
+            "URLBlocklist": ["*"],
+            "URLAllowlist": [
+                "workspace.google.com",
+                "accounts.google.com",
+                "mail.google.com",
+                "meet.google.com",
+                settings.SITE_DOMAIN,
             ],
         }
 
@@ -135,13 +130,13 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
             chrome_policies["BrowserSignin"] = 0
 
         if os.getenv("INTERNAL_SITE_DOMAIN"):
-            chrome_policies["BrowserSwitcherUrlList"].append("!" + os.getenv("INTERNAL_SITE_DOMAIN"))
+            chrome_policies["URLAllowlist"].append(os.getenv("INTERNAL_SITE_DOMAIN"))
 
         if os.getenv("USE_SAFE_NAVIGATION_FOR_SIGNED_IN_GOOGLE_MEET_BOTS", "false") != "true":
-            chrome_policies["BrowserSwitcherUrlList"].append("!www.google.com")
+            chrome_policies["URLAllowlist"].append("www.google.com")
 
         if os.getenv("USE_OKTA_LOGIN_FOR_SIGNED_IN_GOOGLE_MEET_BOTS", "false") == "true" and os.getenv("OKTA_DOMAIN"):
-            chrome_policies["BrowserSwitcherUrlList"].append("!" + os.getenv("OKTA_DOMAIN"))
+            chrome_policies["URLAllowlist"].append(os.getenv("OKTA_DOMAIN"))
 
         return chrome_policies
 
