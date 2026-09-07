@@ -15,7 +15,7 @@ def launch_scheduled_bot(self, bot_id: int, bot_join_at: str):
 
     # Serialize the state check and transition across duplicate task deliveries.
     with transaction.atomic():
-        bot = Bot.objects.select_for_update().get(id=bot_id)
+        bot = Bot.objects.select_for_update(no_key=True).get(id=bot_id)
 
         if bot.state != BotStates.SCHEDULED:
             logger.info(f"Bot {bot_id} ({bot.object_id}) is not in state SCHEDULED, skipping")
