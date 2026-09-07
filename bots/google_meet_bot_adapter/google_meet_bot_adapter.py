@@ -50,7 +50,7 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
         return True
 
     def get_chromedriver_payload_file_names(self):
-        return ["google_meet_bot_adapter/google_meet_chromedriver_payload.js"]
+        return ["google_meet_bot_adapter/google_meet_chat_sender.js", "google_meet_bot_adapter/google_meet_chromedriver_payload.js"]
 
     def get_websocket_port(self):
         return 8765
@@ -64,8 +64,8 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
         logger.info(f"send_video called with video_url = {video_url}, loop = {loop}, mute_video = {mute_video}")
         self.driver.execute_script(f"window.botOutputManager.playVideo({json.dumps(video_url)}, {json.dumps(loop)}, {json.dumps(mute_video)})")
 
-    def send_chat_message(self, text, to_user_uuid):
-        self.driver.execute_script("window?.sendChatMessage(arguments[0]);", text)
+    def send_chat_message(self, text, to_user_uuid, request_id):
+        self.driver.execute_script("window.googleMeetChatSender.send(arguments[0], arguments[1]);", text, request_id)
 
     def update_closed_captions_language(self, language):
         if self.google_meet_closed_captions_language == language:

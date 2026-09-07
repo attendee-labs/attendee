@@ -100,18 +100,18 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
         logger.info(f"send_video called with video_url = {video_url}, loop = {loop}, mute_video = {mute_video}")
         self.driver.execute_script(f"window.botOutputManager.playVideoWithBlobUrl({json.dumps(video_url)}, {json.dumps(loop)}, {json.dumps(mute_video)})")
 
-    def send_chat_message(self, text, to_user_uuid):
+    def send_chat_message(self, text, to_user_uuid, request_id):
         chatInput = self.driver.execute_script('return document.querySelector(\'[aria-label="Type a message"], [placeholder="Type a message"]\')')
 
         if not chatInput:
-            logger.error("Could not find chat input")
-            return
+            raise RuntimeError("Could not find chat input")
 
         text_contains_html = bool(re.search(r"<\s*(?:p|br|a|b|i)(?:\s|>|/)", text, flags=re.IGNORECASE))
         if text_contains_html:
             self.deliver_chat_message_via_xclip(chatInput, text)
         else:
             self.deliver_chat_message_via_keys(chatInput, text)
+        self.send_message_callback({"message": self.Messages.CHAT_MESSAGE_SEND_RESULT, "request_id": request_id, "status": "sent"})
 
     def deliver_chat_message_via_xclip(self, chatInput, text):
         try:

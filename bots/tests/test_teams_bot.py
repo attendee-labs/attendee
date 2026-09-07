@@ -310,7 +310,7 @@ class TestTeamsBot(TransactionTestCase):
             time.sleep(3)
 
             # Mock send_chat_message to track calls
-            with patch.object(controller.adapter, "send_chat_message") as mock_send_chat_message:
+            with patch.object(controller.adapter, "send_chat_message", side_effect=lambda **kwargs: controller.adapter.send_message_callback({"message": controller.adapter.Messages.CHAT_MESSAGE_SEND_RESULT, "request_id": kwargs["request_id"], "status": "sent"})) as mock_send_chat_message:
                 # Initially, the adapter is not ready to send chat messages
                 controller.adapter.ready_to_send_chat_messages = False
 
@@ -443,7 +443,7 @@ class TestTeamsBot(TransactionTestCase):
                 time.sleep(2)
 
                 # Spy on adapter methods
-                with patch.object(controller.adapter, "send_chat_message") as mock_send_chat_message:
+                with patch.object(controller.adapter, "send_chat_message", side_effect=lambda **kwargs: controller.adapter.send_message_callback({"message": controller.adapter.Messages.CHAT_MESSAGE_SEND_RESULT, "request_id": kwargs["request_id"], "status": "sent"})) as mock_send_chat_message:
                     # Make the adapter ready to send chat messages and play audio
                     controller.adapter.ready_to_send_chat_messages = True
                     controller.adapter.ready_to_play_audio = True
