@@ -822,14 +822,23 @@ class WebBotAdapter(BotAdapter):
             max_size=16 * 1024 * 1024,  # 16MB
         )
 
+        def url_violates_allow_list(url):
+            try:
+                return self.url_violates_domain_allow_list(url)
+            except Exception:
+                logger.exception("Error checking allow list for failed navigation")
+                return None
+
         def handle_message(message):
             if message.get("method") == "browsingContext.navigationFailed":
                 params = message["params"]
+                url = params.get("url")
                 logger.warning(
-                    "Navigation failed: url=%s context=%s navigation=%s",
-                    params.get("url"),
+                    "Navigation failed: url=%s context=%s navigation=%s violates_domain_allow_list=%s",
+                    url,
                     params.get("context"),
                     params.get("navigation"),
+                    url_violates_allow_list(url),
                 )
 
         try:
@@ -1140,7 +1149,11 @@ class WebBotAdapter(BotAdapter):
             logger.warning(f"Error getting navigation history: {e}")
             return []
 
-    def history_entry_url_violates_allow_list(self, *, url, allowlist):
+    def url_violates_domain_allow_list(self, url):
+        allowlist = self.subclass_specific_chrome_policies().get("URLAllowlist", [])
+        if not url or not allowlist:
+            return False
+
         parsed = urlparse(url)
         # Only http(s) navigations are subject to the allow list. Skip about:blank,
         # chrome://, chrome-error://, data:, blob:, etc.
@@ -1174,12 +1187,8 @@ class WebBotAdapter(BotAdapter):
             if not settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:
                 return
 
-            allowlist = self.subclass_specific_chrome_policies().get("URLAllowlist", [])
-            if not allowlist:
-                return
-
             for url in nav_history_urls:
-                if self.history_entry_url_violates_allow_list(url=url, allowlist=allowlist):
+                if self.url_violates_domain_allow_list(url):
                     logger.error(f"Domain allow list violation detected after leave: {self.domain_for_history_entry_url(url)}")
         except Exception as e:
             logger.warning(f"Error logging browser navigation history: {e}")
@@ -1207,13 +1216,9 @@ class WebBotAdapter(BotAdapter):
 
     def log_if_iframe_is_blocked_by_chrome_policy(self, *, driver):
         try:
-            allowlist = self.subclass_specific_chrome_policies().get("URLAllowlist", [])
-            if not allowlist:
-                return
-
             for frame in self.get_child_frames(driver):
                 url = frame.get("url")
-                if url and self.history_entry_url_violates_allow_list(url=url, allowlist=allowlist):
+                if self.url_violates_domain_allow_list(url):
                     logger.error(f"Domain allow list violation detected in iframe: {self.domain_for_history_entry_url(url)}")
         except Exception:
             logger.exception("Error in log_if_iframe_is_blocked_by_chrome_policy")
