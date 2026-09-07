@@ -201,7 +201,8 @@
     function updateActiveLink() {
         const currentPath = window.location.pathname;
         const currentPathWithoutPrefix = currentPath.replace(/^\/projects\/proj_[a-zA-Z0-9]+/, '');
-        document.querySelectorAll('.nav-link').forEach(link => {
+        // Scoped to the sidebar: Bootstrap tab buttons in page content also use .nav-link
+        document.querySelectorAll('.sidebar .nav-link').forEach(link => {
             const href = link.getAttribute('href');
             const hrefWithoutPrefix = href?.replace(/^\/projects\/proj_[a-zA-Z0-9]+/, '');
             const pathNestingMatch = hrefWithoutPrefix && currentPathWithoutPrefix.startsWith(hrefWithoutPrefix);
