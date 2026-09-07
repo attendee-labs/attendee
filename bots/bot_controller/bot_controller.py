@@ -92,6 +92,7 @@ logger = logging.getLogger(__name__)
 class BotController:
     # Default wait time for utterance termination (5 minutes)
     UTTERANCE_TERMINATION_WAIT_TIME_SECONDS = 300
+    CHAT_MESSAGE_SEND_TIMEOUT_SECONDS = 45
 
     def use_streaming_transcription(self):
         provider = self.get_recording_transcription_provider()
@@ -669,6 +670,8 @@ class BotController:
             logger.info("Cleanup already called, exiting")
             return
         self.cleanup_called = True
+        if self.pending_chat_message_request:
+            self.finish_chat_message_request({"request_id": self.pending_chat_message_request.id, "status": "failed", "error": "bot_stopped"})
 
         normal_quitting_process_worked = False
         import threading
@@ -771,6 +774,8 @@ class BotController:
     def __init__(self, bot_id):
         self.bot_in_db = Bot.objects.get(id=bot_id)
         self.cleanup_called = False
+        self.pending_chat_message_request = None
+        self.chat_message_timeout_source = None
         self.run_called = False
 
         self.redis_client = None
@@ -1178,14 +1183,42 @@ class BotController:
             BotMediaRequestManager.set_media_request_failed_to_play(oldest_enqueued_media_request)
 
     def take_action_based_on_chat_message_requests_in_db(self):
-        if not self.adapter.is_ready_to_send_chat_messages():
-            logger.info("Bot adapter is not ready to send chat messages, so not sending chat message requests")
+        if self.cleanup_called or self.pending_chat_message_request or not self.adapter.is_ready_to_send_chat_messages():
             return
+        request = self.bot_in_db.chat_message_requests.filter(state=BotChatMessageRequestStates.ENQUEUED).order_by("created_at", "id").first()
+        if request is None:
+            return
+        self.pending_chat_message_request = request
+        self.chat_message_timeout_source = GLib.timeout_add_seconds(self.CHAT_MESSAGE_SEND_TIMEOUT_SECONDS, self.chat_message_send_timed_out, request.id)
+        try:
+            self.adapter.send_chat_message(text=request.message, to_user_uuid=request.to_user_uuid, request_id=request.id)
+        except Exception as exc:
+            logger.warning("Chat message dispatch failed request_id=%s error_type=%s", request.id, type(exc).__name__)
+            self.finish_chat_message_request({"request_id": request.id, "status": "failed", "error": "dispatch_error"})
 
-        chat_message_requests = self.bot_in_db.chat_message_requests.filter(state=BotChatMessageRequestStates.ENQUEUED)
-        for chat_message_request in chat_message_requests:
-            self.adapter.send_chat_message(text=chat_message_request.message, to_user_uuid=chat_message_request.to_user_uuid)
-            BotChatMessageRequestManager.set_chat_message_request_sent(chat_message_request)
+    def chat_message_send_timed_out(self, request_id):
+        self.chat_message_timeout_source = None
+        self.finish_chat_message_request({"request_id": request_id, "status": "failed", "error": "delivery_unconfirmed"})
+        return GLib.SOURCE_REMOVE
+
+    def finish_chat_message_request(self, result):
+        request = self.pending_chat_message_request
+        if request is None or result.get("request_id") != request.id:
+            return
+        if self.chat_message_timeout_source is not None:
+            GLib.source_remove(self.chat_message_timeout_source)
+            self.chat_message_timeout_source = None
+        if result.get("status") == "sent":
+            BotChatMessageRequestManager.set_chat_message_request_sent(request)
+        else:
+            failure_data = {"error": result.get("error") or "delivery_unconfirmed"}
+            if "attempts" in result:
+                failure_data["attempts"] = result["attempts"]
+            BotChatMessageRequestManager.set_chat_message_request_failed(request, failure_data)
+            logger.warning("Chat message delivery failed request_id=%s error=%s", request.id, failure_data)
+        self.pending_chat_message_request = None
+        if not self.cleanup_called:
+            GLib.idle_add(self.take_action_based_on_chat_message_requests_in_db)
 
     def take_action_based_on_voice_agent_settings_in_db(self):
         if self.bot_in_db.should_launch_webpage_streamer():
@@ -2160,6 +2193,10 @@ class BotController:
 
             logger.info("Received message that bot joined meeting")
             BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.BOT_JOINED_MEETING)
+            return
+
+        if message.get("message") == BotAdapter.Messages.CHAT_MESSAGE_SEND_RESULT:
+            self.finish_chat_message_request(message)
             return
 
         if message.get("message") == BotAdapter.Messages.READY_TO_SEND_CHAT_MESSAGE:

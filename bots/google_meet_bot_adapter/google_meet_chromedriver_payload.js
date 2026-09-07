@@ -121,36 +121,6 @@ const handleVideoTrackForRealTimePerParticipantVideo = async ({ track, streams }
     }
 };
 
-function sendChatMessage(text) {
-    
-    // First try to find the chat input textarea
-    let chatInput = document.querySelector('textarea[aria-label="Send a message"]');
-    
-    if (!chatInput) {
-        console.error('Chat input not found');
-        return false;
-    }
-    
-    // Type the message
-    chatInput.focus();
-    chatInput.value = text;
-    
-    // Trigger input event to ensure the UI updates
-    chatInput.dispatchEvent(new Event('input', { bubbles: true }));
-    
-    // Send Enter keypress to submit the message
-    const enterEvent = new KeyboardEvent('keydown', {
-        key: 'Enter',
-        code: 'Enter',
-        keyCode: 13,
-        which: 13,
-        bubbles: true
-    });
-    chatInput.dispatchEvent(enterEvent);
-    
-    return true;
-}
-
 class ParticipantSpeechStartStopManager {
     constructor() {
         // Tracks the confirmed speaking state (true = speaking, false = not speaking)
@@ -922,6 +892,7 @@ class ChatMessageManager {
     handleChatMessage(chatMessageRaw) {
         try {
             const chatMessage = chatMessageRaw.chatMessage;
+            window.googleMeetChatSender.acknowledge(chatMessage);
             console.log('handleChatMessage', chatMessage);
 
             this.ws.sendJson({
@@ -1784,7 +1755,7 @@ window.styleManager = styleManager;
 window.receiverManager = receiverManager;
 window.chatMessageManager = chatMessageManager;
 window.participantSpeechStartStopManager = participantSpeechStartStopManager;
-window.sendChatMessage = sendChatMessage;
+window.googleMeetChatSender = new GoogleMeetChatSender(ws, userManager);
 // Create decoders for all message types
 const messageDecoders = {};
 messageTypes.forEach(type => {

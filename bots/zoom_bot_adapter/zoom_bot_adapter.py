@@ -506,7 +506,7 @@ class ZoomBotAdapter(BotAdapter):
             self.active_sharer_source_id = new_active_sharer_source_id
             self.set_video_input_manager_based_on_state()
 
-    def send_chat_message(self, text, to_user_uuid):
+    def send_chat_message(self, text, to_user_uuid, request_id):
         # Send a welcome message to the chat
         builder = self.chat_ctrl.GetChatMessageBuilder()
         builder.SetContent(text)
@@ -520,6 +520,7 @@ class ZoomBotAdapter(BotAdapter):
         send_chat_message_result = self.chat_ctrl.SendChatMsgTo(msg)
         logger.info(f"send_chat_message_result = {send_chat_message_result}")
         builder.Clear()
+        self.send_message_callback({"message": self.Messages.CHAT_MESSAGE_SEND_RESULT, "request_id": request_id, "status": "sent"})
 
     def on_chat_msg_notification_callback(self, chat_msg_info, content):
         if self.recording_is_paused and not self.record_chat_messages_when_paused:

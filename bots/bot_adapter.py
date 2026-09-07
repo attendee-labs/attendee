@@ -18,6 +18,7 @@ class BotAdapter:
         MEETING_NOT_FOUND = "Meeting not found"
         READY_TO_SHOW_BOT_IMAGE = "Ready to show bot image"
         READY_TO_SEND_CHAT_MESSAGE = "Ready to send chat message"
+        CHAT_MESSAGE_SEND_RESULT = "Chat message send result"
         BLOCKED_BY_PLATFORM_REPEATEDLY = "Blocked by Platform repeatedly"
         LOGIN_REQUIRED = "Login required"
         LOGIN_ATTEMPT_FAILED = "Login attempt failed"

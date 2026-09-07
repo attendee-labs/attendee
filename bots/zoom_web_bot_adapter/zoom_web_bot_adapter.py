@@ -115,8 +115,9 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
     def change_gallery_view_page(self, next_page: bool):
         self.driver.execute_script(f"window?.changeGalleryViewPage({json.dumps(next_page)})")
 
-    def send_chat_message(self, text, to_user_uuid):
+    def send_chat_message(self, text, to_user_uuid, request_id):
         self.driver.execute_script("window?.sendChatMessage(arguments[0], arguments[1]);", text, to_user_uuid)
+        self.send_message_callback({"message": self.Messages.CHAT_MESSAGE_SEND_RESULT, "request_id": request_id, "status": "sent"})
 
     def get_staged_bot_join_delay_seconds(self):
         return 5

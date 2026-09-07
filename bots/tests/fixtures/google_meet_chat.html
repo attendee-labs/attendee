@@ -1,0 +1,63 @@
+<!doctype html>
+<meta charset="utf-8">
+<textarea aria-label="Send a message"></textarea>
+<section id="history"></section>
+<script>
+// A local Meet fixture. Rendering a message is optimistic; the simulated server
+// can acknowledge it, reject it, or leave delivery unknown.
+window.results = [];
+window.submissions = 0;
+window.serial = 0;
+window.resends = 0;
+window.oldResends = 0;
+window.outcomes = [];
+window.messages = [];
+window.acknowledge = (id, text, deviceId = 'bot') => sender.acknowledge({
+    messageId: id, deviceId, chatMessageContent: {text},
+});
+window.addMessage = (id, text) => {
+    const container = document.createElement('div');
+    container.innerHTML = '<div class="beTDc"><div class="RLrADb" data-message-id=""></div></div>';
+    const message = container.querySelector('[data-message-id]');
+    message.dataset.messageId = id;
+    message.textContent = text;
+    document.querySelector('#history').append(container);
+    return container;
+};
+window.completeAttempt = (container, text, id) => {
+    const outcome = outcomes.shift() || 'unknown';
+    if (outcome === 'confirmed') {
+        setTimeout(() => acknowledge(id, text), 25);
+    } else if (outcome === 'rejected' || outcome === 'stuck') {
+        setTimeout(() => {
+            const error = document.createElement('div');
+            error.innerHTML = '<span>Your message wasn\'t delivered</span><button aria-label="Resend">Resend</button>';
+            error.querySelector('button').onclick = () => {
+                resends++;
+                if (outcome === 'stuck') return;
+                error.remove();
+                completeAttempt(container, text, id);
+            };
+            container.prepend(error);
+        }, 40);
+    } else if (outcome === 'other_user') {
+        setTimeout(() => acknowledge(id, text, 'participant'), 25);
+    } else if (outcome === 'old_echo') {
+        setTimeout(() => acknowledge('old-message', text), 25);
+    } else if (outcome === 'ack_without_dom') {
+        container.remove();
+        setTimeout(() => acknowledge(id, text), 25);
+    }
+};
+document.querySelector('textarea').onkeydown = event => {
+    if (event.key !== 'Enter') return;
+    const text = event.target.value;
+    event.target.value = '';
+    submissions++;
+    const id = 'message-' + (++serial);
+    if (window.insertMatchingIncomingMessage) addMessage('other-' + serial, text);
+    const container = addMessage(id, text);
+    messages.push(id);
+    completeAttempt(container, text, id);
+};
+</script>
