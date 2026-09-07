@@ -9,7 +9,6 @@ import signal
 import subprocess
 import threading
 import time
-from queue import Full, Queue
 from time import sleep
 from urllib.parse import urlparse
 
@@ -807,11 +806,12 @@ class WebBotAdapter(BotAdapter):
         self.driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": combined_code})
 
     def start_domain_allow_list_listener(self):
-        # Capture this driver's queue so callbacks from an old driver cannot
-        # report violations against a replacement driver.
-        violations = Queue(maxsize=1)
-        self._domain_allow_list_violations = violations
+        try:
+            self.start_domain_allow_list_listener_with_no_error_handling()
+        except Exception:
+            logger.exception("Error starting domain allow list listener")
 
+    def start_domain_allow_list_listener_with_no_error_handling(self):
         if not settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:
             return
 
@@ -819,7 +819,7 @@ class WebBotAdapter(BotAdapter):
             self.driver.capabilities["webSocketUrl"],
             open_timeout=10,
             close_timeout=2,
-            max_size=None,
+            max_size=16 * 1024 * 1024,  # 16MB
         )
 
         def handle_message(message):
@@ -831,26 +831,6 @@ class WebBotAdapter(BotAdapter):
                     params.get("context"),
                     params.get("navigation"),
                 )
-                return
-
-            if message.get("method") != "network.fetchError":
-                return
-
-            params = message["params"]
-            error = params.get("errorText", "").removeprefix("net::")
-            if error != "ERR_BLOCKED_BY_ADMINISTRATOR":
-                return
-
-            # ChromeDriver's BiDi mapper reports "UNKNOWN" (or omits the request
-            # details entirely) when the navigation is blocked before the request
-            # is populated. Keep raising on the policy violation regardless, and
-            # rely on the browsingContext.navigationFailed log for URL diagnostics.
-            url = params.get("request", {}).get("url", "UNKNOWN")
-            logger.error("Chrome policy violation: %s", params)
-            try:
-                violations.put_nowait(url)
-            except Full:
-                pass
 
         try:
             socket.send(
@@ -880,8 +860,6 @@ class WebBotAdapter(BotAdapter):
         except Exception:
             socket.close()
             raise
-
-        self._domain_allow_list_socket = socket
 
         def listen():
             try:
