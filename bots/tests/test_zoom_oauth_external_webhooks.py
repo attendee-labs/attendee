@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import json
+import time
 from unittest.mock import patch
 
 from django.test import Client, TestCase
@@ -46,7 +47,7 @@ class TestZoomOAuthWebhooks(TestCase):
             },
         }
         body = json.dumps(event_data)
-        timestamp = "1234567890"
+        timestamp = str(int(time.time()))
         signature = self._generate_zoom_signature(body, timestamp, "test_webhook_secret")
 
         response = self.client.post(
@@ -79,7 +80,7 @@ class TestZoomOAuthWebhooks(TestCase):
             },
         }
         body = json.dumps(event_data)
-        timestamp = "1234567890"
+        timestamp = str(int(time.time()))
         signature = self._generate_zoom_signature(body, timestamp, "test_webhook_secret")
 
         response = self.client.post(
@@ -107,7 +108,7 @@ class TestZoomOAuthWebhooks(TestCase):
             },
         }
         body = json.dumps(event_data)
-        timestamp = "1234567890"
+        timestamp = str(int(time.time()))
         signature = self._generate_zoom_signature(body, timestamp, "test_webhook_secret")
 
         response = self.client.post(
@@ -135,7 +136,7 @@ class TestZoomOAuthWebhooks(TestCase):
             },
         }
         body = json.dumps(event_data)
-        timestamp = "1234567890"
+        timestamp = str(int(time.time()))
         signature = self._generate_zoom_signature(body, timestamp, "test_webhook_secret")
 
         response = self.client.post(
@@ -168,7 +169,7 @@ class TestZoomOAuthWebhooks(TestCase):
             },
         }
         body = json.dumps(event_data)
-        timestamp = "1234567890"
+        timestamp = str(int(time.time()))
         signature = self._generate_zoom_signature(body, timestamp, "test_webhook_secret")
 
         response = self.client.post(
@@ -196,7 +197,7 @@ class TestZoomOAuthWebhooks(TestCase):
             },
         }
         body = json.dumps(event_data)
-        timestamp = "1234567890"
+        timestamp = str(int(time.time()))
         signature = self._generate_zoom_signature(body, timestamp, "test_webhook_secret")
 
         response = self.client.post(
@@ -224,7 +225,7 @@ class TestZoomOAuthWebhooks(TestCase):
             },
         }
         body = json.dumps(event_data)
-        timestamp = "1234567890"
+        timestamp = str(int(time.time()))
         signature = self._generate_zoom_signature(body, timestamp, "test_webhook_secret")
 
         response = self.client.post(
@@ -252,7 +253,7 @@ class TestZoomOAuthWebhooks(TestCase):
             },
         }
         body = json.dumps(event_data)
-        timestamp = "1234567890"
+        timestamp = str(int(time.time()))
         signature = self._generate_zoom_signature(body, timestamp, "test_webhook_secret")
 
         response = self.client.post(
@@ -280,7 +281,7 @@ class TestZoomOAuthWebhooks(TestCase):
             },
         }
         body = json.dumps(event_data)
-        timestamp = "1234567890"
+        timestamp = str(int(time.time()))
         invalid_signature = "v0=invalid_signature_hash"
 
         response = self.client.post(
@@ -302,6 +303,30 @@ class TestZoomOAuthWebhooks(TestCase):
         self.assertIsNotNone(self.zoom_oauth_app.last_unverified_webhook_received_at)
         self.assertIsNone(self.zoom_oauth_app.last_verified_webhook_received_at)
 
+    def test_stale_timestamp_rejected(self):
+        """Valid signature with a stale timestamp must be rejected (replay protection)."""
+        event_data = {
+            "event": "meeting.created",
+            "payload": {
+                "object": {"id": "123456789", "host_id": "test_user_123"},
+                "operator_id": "test_user_123",
+            },
+        }
+        body = json.dumps(event_data)
+        timestamp = str(int(time.time()) - 6 * 60)
+        signature = self._generate_zoom_signature(body, timestamp, "test_webhook_secret")
+
+        response = self.client.post(
+            self.url,
+            data=body,
+            content_type="application/json",
+            HTTP_X_ZM_SIGNATURE=signature,
+            HTTP_X_ZM_REQUEST_TIMESTAMP=timestamp,
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIsNone(ZoomMeetingToZoomOAuthConnectionMapping.objects.filter(meeting_id="123456789").first())
+
     def test_nonexistent_zoom_oauth_app(self):
         """Test webhook for non-existent ZoomOAuthApp."""
         event_data = {
@@ -312,7 +337,7 @@ class TestZoomOAuthWebhooks(TestCase):
             },
         }
         body = json.dumps(event_data)
-        timestamp = "1234567890"
+        timestamp = str(int(time.time()))
         signature = self._generate_zoom_signature(body, timestamp, "test_webhook_secret")
 
         # Use non-existent object_id
@@ -337,7 +362,7 @@ class TestZoomOAuthWebhooks(TestCase):
             },
         }
         body = json.dumps(event_data)
-        timestamp = "1234567890"
+        timestamp = str(int(time.time()))
         signature = self._generate_zoom_signature(body, timestamp, "test_webhook_secret")
 
         response = self.client.post(
@@ -387,7 +412,7 @@ class TestZoomOAuthWebhooks(TestCase):
             },
         }
         body = json.dumps(event_data)
-        timestamp = "1234567890"
+        timestamp = str(int(time.time()))
         signature = self._generate_zoom_signature(body, timestamp, "test_webhook_secret")
 
         response = self.client.post(
@@ -417,7 +442,7 @@ class TestZoomOAuthWebhooks(TestCase):
             },
         }
         body = json.dumps(event_data)
-        timestamp = "1234567890"
+        timestamp = str(int(time.time()))
         signature = self._generate_zoom_signature(body, timestamp, "test_webhook_secret")
 
         response = self.client.post(
@@ -459,7 +484,7 @@ class TestZoomOAuthWebhooks(TestCase):
             },
         }
         body = json.dumps(event_data)
-        timestamp = "1234567890"
+        timestamp = str(int(time.time()))
         signature = self._generate_zoom_signature(body, timestamp, "test_webhook_secret")
 
         response = self.client.post(
@@ -490,7 +515,7 @@ class TestZoomOAuthWebhooks(TestCase):
             },
         }
         body = json.dumps(event_data)
-        timestamp = "1234567890"
+        timestamp = str(int(time.time()))
         signature = self._generate_zoom_signature(body, timestamp, "test_webhook_secret")
 
         response = self.client.post(

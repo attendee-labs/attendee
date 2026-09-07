@@ -288,11 +288,13 @@ class ZoomOAuthApp(models.Model):
 
     @property
     def client_secret(self):
-        return self.get_credentials().get("client_secret")
+        credentials = self.get_credentials()
+        return credentials.get("client_secret") if credentials else None
 
     @property
     def webhook_secret(self):
-        return self.get_credentials().get("webhook_secret")
+        credentials = self.get_credentials()
+        return credentials.get("webhook_secret") if credentials else None
 
     def set_credentials(self, credentials_dict):
         """Encrypt and save credentials"""
