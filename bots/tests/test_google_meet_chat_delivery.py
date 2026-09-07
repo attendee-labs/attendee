@@ -203,6 +203,21 @@ class TestGoogleMeetChatDelivery(TestCase):
                 request.refresh_from_db()
                 self.assertEqual(request.state, BotChatMessageRequestStates.SENT)
 
+    def test_teams_missing_input_preserves_existing_completion(self):
+        adapter = TeamsBotAdapter.__new__(TeamsBotAdapter)
+        adapter.ready_to_send_chat_messages = True
+        adapter.driver = self.driver
+        adapter.send_message_callback = self.controller.on_message_from_adapter
+        self.controller.adapter = adapter
+        self.create_request()
+        self.create_request()
+        self.controller.take_action_based_on_chat_message_requests_in_db()
+        self.drain_callbacks()
+        self.assertEqual(list(self.bot.chat_message_requests.values_list("state", flat=True)), [BotChatMessageRequestStates.SENT] * 2)
+        self.assertIsNone(self.controller.pending_chat_message_request)
+        self.assertIsNone(self.controller.chat_message_timeout_source)
+        self.assertEqual(self.driver.execute_script("return submissions;"), 0)
+
     def test_identical_incoming_text_does_not_hide_own_confirmation(self):
         self.driver.execute_script("insertMatchingIncomingMessage = true; outcomes = ['confirmed'];")
         request = self.create_request()

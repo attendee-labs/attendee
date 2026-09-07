@@ -104,13 +104,13 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
         chatInput = self.driver.execute_script('return document.querySelector(\'[aria-label="Type a message"], [placeholder="Type a message"]\')')
 
         if not chatInput:
-            raise RuntimeError("Could not find chat input")
-
-        text_contains_html = bool(re.search(r"<\s*(?:p|br|a|b|i)(?:\s|>|/)", text, flags=re.IGNORECASE))
-        if text_contains_html:
-            self.deliver_chat_message_via_xclip(chatInput, text)
+            logger.error("Could not find chat input")
         else:
-            self.deliver_chat_message_via_keys(chatInput, text)
+            text_contains_html = bool(re.search(r"<\s*(?:p|br|a|b|i)(?:\s|>|/)", text, flags=re.IGNORECASE))
+            if text_contains_html:
+                self.deliver_chat_message_via_xclip(chatInput, text)
+            else:
+                self.deliver_chat_message_via_keys(chatInput, text)
         self.send_message_callback({"message": self.Messages.CHAT_MESSAGE_SEND_RESULT, "request_id": request_id, "status": "sent"})
 
     def deliver_chat_message_via_xclip(self, chatInput, text):
