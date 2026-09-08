@@ -1231,7 +1231,7 @@ class TestTeamsBot(TransactionTestCase):
                 "m365.cloud.microsoft",
                 "static.microsoft",
                 "login.microsoftonline.com",
-                "office.com",
+                "www.office.com",
             ]:
                 self.assertIn(allowed_domain, url_allowlist, f"{allowed_domain} should be allowed")
 
@@ -1244,7 +1244,7 @@ class TestTeamsBot(TransactionTestCase):
             # allowed domains and their subdomains pass, look-alike domains do not
             blocked_url = "https://badmicrosoft.com/some-path"
             self.assertFalse(controller.adapter.url_violates_domain_allow_list("https://teams.microsoft.com/meet/123"))
-            self.assertFalse(controller.adapter.url_violates_domain_allow_list("https://outlook.office.com/mail"))
+            self.assertFalse(controller.adapter.url_violates_domain_allow_list("https://www.office.com/mail"))
             self.assertTrue(controller.adapter.url_violates_domain_allow_list(blocked_url))
 
             # Simulate Chrome replacing the top level page with the URLBlocklist
