@@ -1141,6 +1141,7 @@ class TestTeamsBot(TransactionTestCase):
     @patch.dict("os.environ", {"ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME": "true"})
     @patch("bots.web_bot_adapter.web_bot_adapter.settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME", True)
     @patch("bots.teams_bot_adapter.teams_bot_adapter.settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME", True)
+    @patch("bots.web_bot_adapter.web_bot_adapter.connect")
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
     @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
     @patch("bots.bot_controller.bot_controller.S3FileUploader")
@@ -1149,15 +1150,17 @@ class TestTeamsBot(TransactionTestCase):
         MockFileUploader,
         MockChromeDriver,
         MockDisplay,
+        MockBiDiConnect,
     ):
         """Test that navigating to a URL not in the allow list raises an exception.
 
-        When Chrome's BrowserSwitcher policy blocks a URL, it redirects to
-        chrome://browser-switch?url=<blocked_url>. The check_domain_allow_list_violation()
-        method detects this in the navigation history and raises an exception.
+        Chrome's URLBlocklist policy blocks every URL that isn't in URLAllowlist and
+        replaces the page with an interstitial that says the organization doesn't allow
+        viewing the site. check_domain_allow_list_violation() detects that interstitial
+        on the top level page and raises an exception.
 
         Also verifies that the Chrome policy file would be written with the correct
-        BrowserSwitcher configuration for Teams.
+        URLBlocklist/URLAllowlist configuration for Teams.
         """
         # Configure the mock uploader
         mock_uploader = create_mock_file_uploader()
@@ -1165,11 +1168,18 @@ class TestTeamsBot(TransactionTestCase):
 
         # Mock the Chrome driver
         mock_driver = create_mock_teams_driver()
+        mock_driver.capabilities = {"webSocketUrl": "ws://localhost:9222/session/test-session"}
         MockChromeDriver.return_value = mock_driver
 
         # Mock virtual display
         mock_display = MagicMock()
         MockDisplay.return_value = mock_display
+
+        # Stub the BiDi websocket the domain allow list listener connects to, so it
+        # sees a successful session.subscribe response and then an empty message stream
+        mock_bidi_socket = MagicMock()
+        mock_bidi_socket.recv.return_value = json.dumps({"id": 1, "type": "success", "result": {}})
+        MockBiDiConnect.return_value = mock_bidi_socket
 
         # Create bot controller
         controller = BotController(self.bot.id)
@@ -1185,6 +1195,11 @@ class TestTeamsBot(TransactionTestCase):
 
             # Wait for the bot to join and adapter to be created
             time.sleep(3)
+
+            # Verify the listener subscribed over the driver's BiDi websocket
+            self.assertEqual(MockBiDiConnect.call_args[0][0], mock_driver.capabilities["webSocketUrl"])
+            subscribe_message = json.loads(mock_bidi_socket.send.call_args[0][0])
+            self.assertEqual(subscribe_message["method"], "session.subscribe")
 
             # --- Verify the Chrome policy file would be written correctly ---
             # Mock os.path.islink to return True so policy file writing code runs
@@ -1203,32 +1218,47 @@ class TestTeamsBot(TransactionTestCase):
             written_data = "".join(call[0][0] for call in write_calls)
             policy = json.loads(written_data)
 
-            # Verify the BrowserSwitcher policy is correctly configured
-            self.assertTrue(policy.get("BrowserSwitcherEnabled"), "BrowserSwitcherEnabled should be True")
-            self.assertEqual(policy.get("AlternativeBrowserPath"), "/nonexistent-browser")
+            # Verify every URL is blocked by default
+            self.assertEqual(policy.get("URLBlocklist"), ["*"], "URLBlocklist should block all URLs by default")
 
             # Verify the URL allow list contains the expected domains
-            url_list = policy.get("BrowserSwitcherUrlList", [])
-            self.assertIn("*", url_list, "URL list should block all URLs by default")
-            self.assertIn("!microsoft.com", url_list, "microsoft.com should be allowed")
-            self.assertIn("!office.com", url_list, "office.com should be allowed")
-            self.assertIn("!cloud.microsoft", url_list, "cloud.microsoft should be allowed")
-            self.assertIn("!microsoftonline.com", url_list, "microsoftonline.com should be allowed")
-            self.assertIn("!live.com", url_list, "live.com should be allowed")
+            url_allowlist = policy.get("URLAllowlist", [])
+            for allowed_domain in [
+                "teams.microsoft.com",
+                "teams.live.com",
+                "login.live.com",
+                "teams.microsoft.us",
+                "m365.cloud.microsoft",
+                "static.microsoft",
+                "login.microsoftonline.com",
+                "www.office.com",
+            ]:
+                self.assertIn(allowed_domain, url_allowlist, f"{allowed_domain} should be allowed")
 
             # --- Now test the domain allow list violation detection ---
 
             # Simulate the bot having joined and being in the meeting
             controller.adapter.joined_at = time.time()
 
-            # Mock the navigation history to include a disallowed URL
-            blocked_url = "chrome://browser-switch/?url=https%3A%2F%2Fbadmicrosoft.com"
-            mock_driver.execute_cdp_cmd.return_value = {
-                "entries": [
-                    {"url": "https://teams.microsoft.com/meet/123"},
-                    {"url": blocked_url},
-                ]
-            }
+            # Sanity check the allow list matching that backs the history and iframe checks:
+            # allowed domains and their subdomains pass, look-alike domains do not
+            blocked_url = "https://badmicrosoft.com/some-path"
+            self.assertFalse(controller.adapter.url_violates_domain_allow_list("https://teams.microsoft.com/meet/123"))
+            self.assertFalse(controller.adapter.url_violates_domain_allow_list("https://www.office.com/mail"))
+            self.assertTrue(controller.adapter.url_violates_domain_allow_list(blocked_url))
+
+            # Simulate Chrome replacing the top level page with the URLBlocklist
+            # interstitial, whose message is exposed via window.loadTimeDataRaw
+            mock_driver.current_url = blocked_url
+
+            def execute_cdp_cmd_side_effect(cmd, params):
+                if cmd == "Runtime.evaluate":
+                    return {"result": {"value": "Your organization doesn\u2019t allow you to view this site"}}
+                if cmd == "Page.getFrameTree":
+                    return {"frameTree": {"frame": {"url": blocked_url}, "childFrames": []}}
+                return {}
+
+            mock_driver.execute_cdp_cmd.side_effect = execute_cdp_cmd_side_effect
 
             # Reset the last check time so the check runs immediately
             controller.adapter.last_domain_allow_list_violation_check_time = 0
@@ -1240,6 +1270,10 @@ class TestTeamsBot(TransactionTestCase):
             # Verify the exception message contains the blocked domain
             self.assertIn("Domain allow list violation detected", str(context.exception))
             self.assertIn("badmicrosoft.com", str(context.exception))
+
+            # Stop simulating the interstitial so cleanup isn't affected by it
+            mock_driver.execute_cdp_cmd.side_effect = None
+            mock_driver.execute_cdp_cmd.return_value = {}
 
             # Clean up: simulate meeting ending to trigger cleanup
             controller.adapter.left_meeting = True
