@@ -1209,8 +1209,10 @@ class WebBotAdapter(BotAdapter):
 
             # Includes all navigations
             logger.info(f"Domains seen by domain allow list listener {list(self.domains_seen_by_domain_allow_list_listener)}")
-            logger.info(f"Domains seen by domain allow list listener where navigation failed {list(self.domains_seen_by_domain_allow_list_listener_where_navigation_failed)}")
-            logger.info(f"Domains seen by domain allow list listener not in allow list {list(self.domains_seen_by_domain_allow_list_listener_where_domain_was_not_in_allow_list)}")
+            if self.domains_seen_by_domain_allow_list_listener_where_navigation_failed:
+                logger.info(f"Domains seen by domain allow list listener where navigation failed {list(self.domains_seen_by_domain_allow_list_listener_where_navigation_failed)}")
+            if self.domains_seen_by_domain_allow_list_listener_where_domain_was_not_in_allow_list:
+                logger.info(f"Domains seen by domain allow list listener not in allow list {list(self.domains_seen_by_domain_allow_list_listener_where_domain_was_not_in_allow_list)}")
         except Exception as e:
             logger.warning(f"Error logging browser navigation history: {e}")
 
