@@ -185,6 +185,7 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
                 "m365.cloud.microsoft",
                 "static.microsoft",
                 "login.microsoftonline.com",
+                "login.microsoftonline.us",
                 "www.office.com",
             ],
         }
