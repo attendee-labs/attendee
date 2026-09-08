@@ -1219,6 +1219,9 @@ class BotController:
     def handle_glib_shutdown(self):
         logger.info("handle_glib_shutdown called")
 
+        if self.bot_was_restarted_instead_of_terminated():
+            return False
+
         try:
             BotEventManager.create_event(
                 bot=self.bot_in_db,
@@ -1230,6 +1233,41 @@ class BotController:
 
         self.cleanup()
         return False
+
+    def bot_was_restarted_instead_of_terminated(self):
+        # Only relevant for Kubernetes-launched bots
+        if os.getenv("LAUNCH_BOT_METHOD") != "kubernetes":
+            return False
+
+        if os.getenv("RESTART_PREJOIN_TERMINATED_BOTS", "false") == "true":
+            return False
+
+        # If the bot is still staged or joining (e.g. the pod was terminated early),
+        # restart the pod to recover instead of failing.
+        self.bot_in_db.refresh_from_db()
+        if self.bot_in_db.state not in [BotStates.STAGED, BotStates.JOINING]:
+            return False
+
+        # If bot never got a heartbeat, terminate normally.
+        if self.bot_in_db.last_heartbeat_timestamp is None:
+            logger.info("Bot never got a heartbeat, so terminating normally instead of restarting the bot pod")
+            return False
+
+        # Don't bother restarting if the bot is too old.
+        bot_start_time = self.bot_in_db.join_at or self.bot_in_db.created_at
+        if bot_start_time < timezone.now() - timedelta(minutes=15):
+            logger.info("Bot is still staged / joining but was created more than 15 minutes ago, so not restarting the bot pod")
+            return False
+
+        logger.info("Bot is still staged / joining, so restarting the bot pod instead of creating a fatal error event")
+        from bots.tasks.restart_bot_pod_task import restart_bot_pod
+
+        restart_bot_pod.apply_async(args=[self.bot_in_db.id], countdown=60)
+        # Don't do the normal cleanup tasks because we'll be restarting the pod
+        if self.main_loop and self.main_loop.is_running():
+            logger.info("Quitting main loop")
+            self.main_loop.quit()
+        return True
 
     def handle_redis_message(self, message):
         if message and message["type"] == "message":
