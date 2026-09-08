@@ -663,7 +663,6 @@ class WebBotAdapter(BotAdapter):
 
     def cleanup_graceful_driver_shutdown(self, driver):
         self.log_browser_history(driver=driver)
-        self.log_if_iframe_is_blocked_by_chrome_policy(driver=driver)
 
         # Simulate closing browser window
         try:
@@ -1199,48 +1198,21 @@ class WebBotAdapter(BotAdapter):
             nav_history_urls = self.get_navigation_history_urls(driver=driver)
             nav_history_hosts = list(set([self.domain_for_history_entry_url(url) for url in nav_history_urls]))
             logger.info(f"Browser navigation history {nav_history_hosts}")
-            logger.info(f"Domains seen by domain allow list listener {list(self.domains_seen_by_domain_allow_list_listener)}")
-            logger.info(f"Domains seen by domain allow list listener where navigation failed {list(self.domains_seen_by_domain_allow_list_listener_where_navigation_failed)}")
-            logger.info(f"Domains seen by domain allow list listener not in allow list {list(self.domains_seen_by_domain_allow_list_listener_where_domain_was_not_in_allow_list)}")
 
             if not settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:
                 return
 
+            # Only covers top-level navigations
             for url in nav_history_urls:
                 if self.url_violates_domain_allow_list(url):
                     logger.error(f"Domain allow list violation detected after leave: {self.domain_for_history_entry_url(url)}")
+
+            # Includes all navigations
+            logger.info(f"Domains seen by domain allow list listener {list(self.domains_seen_by_domain_allow_list_listener)}")
+            logger.info(f"Domains seen by domain allow list listener where navigation failed {list(self.domains_seen_by_domain_allow_list_listener_where_navigation_failed)}")
+            logger.info(f"Domains seen by domain allow list listener not in allow list {list(self.domains_seen_by_domain_allow_list_listener_where_domain_was_not_in_allow_list)}")
         except Exception as e:
             logger.warning(f"Error logging browser navigation history: {e}")
-
-    def get_child_frames(self, driver):
-        if not driver:
-            return []
-        try:
-            tree = driver.execute_cdp_cmd("Page.getFrameTree", {})
-        except Exception as e:
-            logger.warning(f"Error getting frame tree: {e}")
-            return []
-
-        frames = []
-
-        def walk(node, is_root):
-            # Skip the main frame; that's covered by the top-level check.
-            if not is_root:
-                frames.append(node.get("frame", {}))
-            for child in node.get("childFrames", []):
-                walk(child, is_root=False)
-
-        walk(tree.get("frameTree", {}), is_root=True)
-        return frames
-
-    def log_if_iframe_is_blocked_by_chrome_policy(self, *, driver):
-        try:
-            for frame in self.get_child_frames(driver):
-                url = frame.get("url")
-                if self.url_violates_domain_allow_list(url):
-                    logger.error(f"Domain allow list violation detected in iframe: {self.domain_for_history_entry_url(url)}")
-        except Exception:
-            logger.exception("Error in log_if_iframe_is_blocked_by_chrome_policy")
 
     def top_level_page_is_blocked_by_chrome_policy(self, *, driver):
         try:
@@ -1276,9 +1248,6 @@ class WebBotAdapter(BotAdapter):
             url = self.driver.current_url
             logger.error(f"Domain allow list violation detected: {url}")
             raise Exception(f"Domain allow list violation detected: {self.domain_for_history_entry_url(url)}")
-
-        # We don't abort if an iframe was blocked, we just log it.
-        self.log_if_iframe_is_blocked_by_chrome_policy(driver=self.driver)
 
     def check_auto_leave_conditions(self) -> None:
         if self.left_meeting:
