@@ -106,6 +106,7 @@ class WebBotAdapter(BotAdapter):
         self.first_buffer_timestamp_ms_offset = time.time() * 1000
         self.media_sending_enable_timestamp_ms = None
         self.last_domain_allow_list_violation_check_time = time.time()
+        self.domains_seen_by_domain_allow_list_listener = set()
 
         self.participants_info = {}
         self.only_one_participant_in_meeting_at = None
@@ -830,14 +831,15 @@ class WebBotAdapter(BotAdapter):
                 return None
 
         def handle_message(message):
-            if message.get("method") == "browsingContext.navigationFailed":
+            if message.get("method") == "browsingContext.navigationFailed" or message.get("method") == "browsingContext.navigationStarted":
                 params = message["params"]
                 url = params.get("url")
+                domain = self.domain_for_history_entry_url(url)
+                self.domains_seen_by_domain_allow_list_listener.add(domain)
                 logger.warning(
-                    "Navigation failed: url=%s context=%s navigation=%s violates_domain_allow_list=%s",
-                    url,
-                    params.get("context"),
-                    params.get("navigation"),
+                    "%s: url=%s violates_domain_allow_list=%s",
+                    message.get("method"),
+                    domain,
                     url_violates_allow_list(url),
                 )
 
@@ -849,7 +851,7 @@ class WebBotAdapter(BotAdapter):
                         "method": "session.subscribe",
                         "params": {
                             "events": [
-                                "network.fetchError",
+                                "browsingContext.navigationStarted",
                                 "browsingContext.navigationFailed",
                             ],
                         },
@@ -1183,6 +1185,7 @@ class WebBotAdapter(BotAdapter):
             nav_history_urls = self.get_navigation_history_urls(driver=driver)
             nav_history_hosts = list(set([self.domain_for_history_entry_url(url) for url in nav_history_urls]))
             logger.info(f"Browser navigation history {nav_history_hosts}")
+            logger.info(f"Domains seen by domain allow list listener {list(self.domains_seen_by_domain_allow_list_listener)}")
 
             if not settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:
                 return
