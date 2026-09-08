@@ -121,6 +121,7 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
                 "accounts.google.com",
                 "mail.google.com",
                 "meet.google.com",
+                "www.google.com",
                 settings.SITE_DOMAIN,
             ],
         }
@@ -131,9 +132,6 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
 
         if os.getenv("INTERNAL_SITE_DOMAIN"):
             chrome_policies["URLAllowlist"].append(os.getenv("INTERNAL_SITE_DOMAIN"))
-
-        if os.getenv("USE_SAFE_NAVIGATION_FOR_SIGNED_IN_GOOGLE_MEET_BOTS", "false") != "true":
-            chrome_policies["URLAllowlist"].append("www.google.com")
 
         if os.getenv("USE_OKTA_LOGIN_FOR_SIGNED_IN_GOOGLE_MEET_BOTS", "false") == "true" and os.getenv("OKTA_DOMAIN"):
             chrome_policies["URLAllowlist"].append(os.getenv("OKTA_DOMAIN"))
