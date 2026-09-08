@@ -17,6 +17,7 @@ from django.conf import settings
 from pyvirtualdisplay import Display
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
+from websockets.exceptions import ConnectionClosed
 from websockets.sync.client import connect
 from websockets.sync.server import serve
 
@@ -107,6 +108,8 @@ class WebBotAdapter(BotAdapter):
         self.media_sending_enable_timestamp_ms = None
         self.last_domain_allow_list_violation_check_time = time.time()
         self.domains_seen_by_domain_allow_list_listener = set()
+        self.domains_seen_by_domain_allow_list_listener_where_navigation_failed = set()
+        self.domains_seen_by_domain_allow_list_listener_where_domain_was_not_in_allow_list = set()
 
         self.participants_info = {}
         self.only_one_participant_in_meeting_at = None
@@ -836,11 +839,19 @@ class WebBotAdapter(BotAdapter):
                 url = params.get("url")
                 domain = self.domain_for_history_entry_url(url)
                 self.domains_seen_by_domain_allow_list_listener.add(domain)
+
+                if message.get("method") == "browsingContext.navigationFailed":
+                    self.domains_seen_by_domain_allow_list_listener_where_navigation_failed.add(domain)
+
+                violates_allow_list = url_violates_allow_list(url)
+                if violates_allow_list:
+                    self.domains_seen_by_domain_allow_list_listener_where_domain_was_not_in_allow_list.add(domain)
+
                 logger.warning(
                     "%s: url=%s violates_domain_allow_list=%s",
                     message.get("method"),
                     domain,
-                    url_violates_allow_list(url),
+                    violates_allow_list,
                 )
 
         try:
@@ -876,6 +887,9 @@ class WebBotAdapter(BotAdapter):
             try:
                 for raw_message in socket:
                     handle_message(json.loads(raw_message))
+            except ConnectionClosed:
+                # Chrome closes this socket on its way out, so there is nothing to recover from
+                logger.info("Domain allow list listener disconnected")
             except Exception:
                 logger.exception("Domain allow list listener disconnected")
 
@@ -1186,6 +1200,8 @@ class WebBotAdapter(BotAdapter):
             nav_history_hosts = list(set([self.domain_for_history_entry_url(url) for url in nav_history_urls]))
             logger.info(f"Browser navigation history {nav_history_hosts}")
             logger.info(f"Domains seen by domain allow list listener {list(self.domains_seen_by_domain_allow_list_listener)}")
+            logger.info(f"Domains seen by domain allow list listener where navigation failed {list(self.domains_seen_by_domain_allow_list_listener_where_navigation_failed)}")
+            logger.info(f"Domains seen by domain allow list listener not in allow list {list(self.domains_seen_by_domain_allow_list_listener_where_domain_was_not_in_allow_list)}")
 
             if not settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:
                 return
