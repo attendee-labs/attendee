@@ -10,13 +10,15 @@ import subprocess
 import threading
 import time
 from time import sleep
-from urllib.parse import unquote, urlparse
+from urllib.parse import urlparse
 
 import numpy as np
 from django.conf import settings
 from pyvirtualdisplay import Display
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
+from websockets.exceptions import ConnectionClosed
+from websockets.sync.client import connect
 from websockets.sync.server import serve
 
 from bots.automatic_leave_configuration import AutomaticLeaveConfiguration
@@ -105,6 +107,9 @@ class WebBotAdapter(BotAdapter):
         self.first_buffer_timestamp_ms_offset = time.time() * 1000
         self.media_sending_enable_timestamp_ms = None
         self.last_domain_allow_list_violation_check_time = time.time()
+        self.domains_seen_by_domain_allow_list_listener = set()
+        self.domains_seen_by_domain_allow_list_listener_where_navigation_failed = set()
+        self.domains_seen_by_domain_allow_list_listener_where_domain_was_not_in_allow_list = set()
 
         self.participants_info = {}
         self.only_one_participant_in_meeting_at = None
@@ -748,6 +753,9 @@ class WebBotAdapter(BotAdapter):
         }
         options.add_experimental_option("prefs", prefs)
 
+        if settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:
+            options.set_capability("webSocketUrl", True)
+
         self.add_subclass_specific_chrome_options(options)
 
         if self.driver:
@@ -755,6 +763,7 @@ class WebBotAdapter(BotAdapter):
             self.driver = None
 
         self.driver = webdriver.Chrome(options=options, service=Service(executable_path="/usr/local/bin/chromedriver"))
+        self.start_domain_allow_list_listener()
         logger.info(f"web driver server initialized at port {self.driver.service.port}")
 
         initial_data_code = f"window.initialData = {{websocketPort: {self.websocket_port}, videoFrameWidth: {self.video_frame_size[0]}, videoFrameHeight: {self.video_frame_size[1]}, botName: {json.dumps(self.display_name)}, addClickRipple: {'true' if self.should_create_debug_recording else 'false'}, recordingView: '{self.recording_view}', sendMixedAudio: {'true' if self.add_mixed_audio_chunk_callback else 'false'}, sendPerParticipantAudio: {'true' if self.add_audio_chunk_callback else 'false'}, perParticipantRealtimeVideoConfiguration: {json.dumps(self.per_participant_realtime_video_configuration.to_dict())}, roomSyncSourceParticipantConfiguration: {json.dumps(self.room_sync_source_participant_configuration.to_dict()) if self.room_sync_source_participant_configuration else 'null'}, sendPerParticipantVideo: {'true' if self.add_per_participant_video_frame_callback else 'false'}, collectCaptions: {'true' if self.upsert_caption_callback else 'false'}, recordParticipantSpeechStartStopEvents: {'true' if self.record_participant_speech_start_stop_events else 'false'}}}"
@@ -798,6 +807,96 @@ class WebBotAdapter(BotAdapter):
 
         # Add the combined script to execute on new document
         self.driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": combined_code})
+
+    def start_domain_allow_list_listener(self):
+        try:
+            self.start_domain_allow_list_listener_with_no_error_handling()
+        except Exception:
+            logger.exception("Error starting domain allow list listener")
+
+    def start_domain_allow_list_listener_with_no_error_handling(self):
+        if not settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:
+            return
+
+        socket = connect(
+            self.driver.capabilities["webSocketUrl"],
+            open_timeout=10,
+            close_timeout=2,
+            max_size=16 * 1024 * 1024,  # 16MB
+        )
+
+        def url_violates_allow_list(url):
+            try:
+                return self.url_violates_domain_allow_list(url)
+            except Exception:
+                logger.exception("Error checking allow list for failed navigation")
+                return None
+
+        def handle_message(message):
+            if message.get("method") == "browsingContext.navigationFailed" or message.get("method") == "browsingContext.navigationStarted":
+                params = message["params"]
+                url = params.get("url")
+                domain = self.domain_for_history_entry_url(url)
+                self.domains_seen_by_domain_allow_list_listener.add(domain)
+
+                if message.get("method") == "browsingContext.navigationFailed":
+                    self.domains_seen_by_domain_allow_list_listener_where_navigation_failed.add(domain)
+
+                violates_allow_list = url_violates_allow_list(url)
+                if violates_allow_list:
+                    self.domains_seen_by_domain_allow_list_listener_where_domain_was_not_in_allow_list.add(domain)
+
+                logger.warning(
+                    "%s: url=%s violates_domain_allow_list=%s",
+                    message.get("method"),
+                    domain,
+                    violates_allow_list,
+                )
+
+        try:
+            socket.send(
+                json.dumps(
+                    {
+                        "id": 1,
+                        "method": "session.subscribe",
+                        "params": {
+                            "events": [
+                                "browsingContext.navigationStarted",
+                                "browsingContext.navigationFailed",
+                            ],
+                        },
+                    }
+                )
+            )
+
+            # Confirm subscription before allowing the bot to navigate.
+            deadline = time.monotonic() + 10
+            while True:
+                message = json.loads(socket.recv(timeout=max(0, deadline - time.monotonic())))
+                if message.get("id") == 1:
+                    if message.get("type") != "success":
+                        raise RuntimeError(f"BiDi subscription failed: {message}")
+                    break
+                handle_message(message)
+        except Exception:
+            socket.close()
+            raise
+
+        def listen():
+            try:
+                for raw_message in socket:
+                    handle_message(json.loads(raw_message))
+            except ConnectionClosed:
+                # Chrome closes this socket on its way out, so there is nothing to recover from
+                logger.info("Domain allow list listener disconnected")
+            except Exception:
+                logger.exception("Domain allow list listener disconnected")
+
+        threading.Thread(
+            target=listen,
+            name="domain-allow-list-listener",
+            daemon=True,
+        ).start()
 
     def init(self):
         self.display_var_for_debug_recording = os.environ.get("DISPLAY")
@@ -1049,12 +1148,7 @@ class WebBotAdapter(BotAdapter):
 
     def domain_for_history_entry_url(self, url):
         try:
-            if url.startswith("chrome://browser-switch"):
-                url_normalized = unquote(url.removeprefix("chrome://browser-switch/?url="))
-            else:
-                url_normalized = url
-
-            return str(urlparse(url_normalized).netloc)
+            return str(urlparse(url).netloc)
         except Exception as e:
             logger.warning(f"Error normalizing history entry url: {e}")
             return url
@@ -1070,17 +1164,75 @@ class WebBotAdapter(BotAdapter):
             logger.warning(f"Error getting navigation history: {e}")
             return []
 
+    def url_violates_domain_allow_list(self, url):
+        allowlist = self.subclass_specific_chrome_policies().get("URLAllowlist", [])
+        if not url or not allowlist:
+            return False
+
+        parsed = urlparse(url)
+        # Only http(s) navigations are subject to the allow list. Skip about:blank,
+        # chrome://, chrome-error://, data:, blob:, etc.
+        if parsed.scheme not in ("http", "https"):
+            return False
+
+        host = parsed.netloc.split("@")[-1].split(":")[0].lower()
+        if not host:
+            return False
+
+        for entry in allowlist:
+            allowed = str(entry).lower().strip()
+            if "://" in allowed:
+                allowed = urlparse(allowed).netloc
+            allowed = allowed.lstrip(".").split("/")[0].split(":")[0]
+            if not allowed:
+                continue
+            # "*" allows everything; otherwise match the host or any subdomain of it,
+            # mirroring Chrome's URLAllowlist matching semantics.
+            if allowed == "*" or host == allowed or host.endswith("." + allowed):
+                return False
+
+        return True
+
     def log_browser_history(self, *, driver):
         try:
             nav_history_urls = self.get_navigation_history_urls(driver=driver)
             nav_history_hosts = list(set([self.domain_for_history_entry_url(url) for url in nav_history_urls]))
             logger.info(f"Browser navigation history {nav_history_hosts}")
-            # If any of the navigation urls start with chrome://browser-switch, then the url was blocked.
+
+            if not settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:
+                return
+
+            # Only covers top-level navigations
             for url in nav_history_urls:
-                if url.startswith("chrome://browser-switch"):
-                    logger.error(f"Domain allow list violation detected after leave: {url}")
+                if self.url_violates_domain_allow_list(url):
+                    logger.error(f"Domain allow list violation detected after leave: {self.domain_for_history_entry_url(url)}")
+
+            # Includes all navigations
+            logger.info(f"Domains seen by domain allow list listener {list(self.domains_seen_by_domain_allow_list_listener)}")
+            logger.info(f"Domains seen by domain allow list listener where navigation failed {list(self.domains_seen_by_domain_allow_list_listener_where_navigation_failed)}")
+            logger.info(f"Domains seen by domain allow list listener not in allow list {list(self.domains_seen_by_domain_allow_list_listener_where_domain_was_not_in_allow_list)}")
         except Exception as e:
             logger.warning(f"Error logging browser navigation history: {e}")
+
+    def top_level_page_is_blocked_by_chrome_policy(self, *, driver):
+        try:
+            result = driver.execute_cdp_cmd(
+                "Runtime.evaluate",
+                {
+                    "expression": """
+                        (() => {
+                            const data = window.loadTimeDataRaw;
+                            return data?.summary?.msg || null;
+                        })()
+                    """,
+                    "returnByValue": True,
+                },
+            )
+        except Exception:
+            logger.exception("Error in top_level_page_is_blocked_by_chrome_policy")
+            return False
+
+        return result.get("result", {}).get("value") == "Your organization doesn’t allow you to view this site"
 
     def check_domain_allow_list_violation(self):
         if not settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:
@@ -1092,13 +1244,10 @@ class WebBotAdapter(BotAdapter):
 
         self.last_domain_allow_list_violation_check_time = time.time()
 
-        nav_history_urls = self.get_navigation_history_urls(driver=self.driver)
-
-        # If any of the navigation urls start with chrome://browser-switch, then the url was blocked.
-        for url in nav_history_urls:
-            if url.startswith("chrome://browser-switch"):
-                logger.error(f"Domain allow list violation detected: {url}")
-                raise Exception(f"Domain allow list violation detected: {self.domain_for_history_entry_url(url)}")
+        if self.top_level_page_is_blocked_by_chrome_policy(driver=self.driver):
+            url = self.driver.current_url
+            logger.error(f"Domain allow list violation detected: {url}")
+            raise Exception(f"Domain allow list violation detected: {self.domain_for_history_entry_url(url)}")
 
     def check_auto_leave_conditions(self) -> None:
         if self.left_meeting:

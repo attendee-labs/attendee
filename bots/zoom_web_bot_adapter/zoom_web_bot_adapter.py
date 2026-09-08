@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Callable
 
 import jwt
+from django.conf import settings
 
 from bots.meeting_url_utils import parse_zoom_join_url
 from bots.models import RecordingViews
@@ -222,3 +223,15 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
             return False
 
         return super().subclass_specific_use_disable_gpu_chrome_option()
+
+    def subclass_specific_chrome_policies(self):
+        if not settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:
+            return {}
+
+        return {
+            "URLBlocklist": ["*"],
+            "URLAllowlist": [
+                "www.zoom.com",
+                "127.0.0.1",
+            ],
+        }
