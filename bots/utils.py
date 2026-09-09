@@ -72,6 +72,23 @@ def cyrillicize_keywords_in_string(string: str, keywords: list[str]) -> str:
     return pattern.sub(cyrillicize_match, string)
 
 
+def truncate_string_with_ellipsis(string: str, max_length: int, ellipsis: str = "...") -> str:
+    """
+    Truncate the string so that it is at most max_length characters long, including the
+    trailing ellipsis. If the string already fits, it is returned unchanged.
+    """
+    if not string or len(string) <= max_length:
+        return string
+
+    if max_length <= len(ellipsis):
+        truncated_string = string[:max_length]
+    else:
+        truncated_string = string[: max_length - len(ellipsis)] + ellipsis
+
+    logger.info(f"Truncated string from {len(string)} characters to {len(truncated_string)} characters")
+    return truncated_string
+
+
 def select_from_comma_separated_list_with_wrapping_index(comma_separated_list: str, index: int) -> str | None:
     """
     Select a element from a comma separated list by index with wrapping.
