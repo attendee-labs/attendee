@@ -350,6 +350,7 @@ class TestTeamsBot(TransactionTestCase):
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
     @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
     @patch("bots.bot_controller.bot_controller.S3FileUploader")
+    @patch.dict("os.environ", {"RESTART_PREJOIN_TERMINATED_BOTS": "true"})
     def test_glib_shutdown_restarts_pod_when_bot_still_staged(
         self,
         MockFileUploader,
