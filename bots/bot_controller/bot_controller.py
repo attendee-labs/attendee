@@ -1239,7 +1239,7 @@ class BotController:
         if os.getenv("LAUNCH_BOT_METHOD") != "kubernetes":
             return False
 
-        if os.getenv("RESTART_PREJOIN_TERMINATED_BOTS", "false") == "true":
+        if os.getenv("RESTART_PREJOIN_TERMINATED_BOTS", "false") != "true":
             return False
 
         # If the bot is still staged or joining (e.g. the pod was terminated early),
