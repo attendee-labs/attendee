@@ -127,8 +127,8 @@ class VirtualDisplayTeardownProcessTest(unittest.TestCase):
 
         display = Display(visible=0, size=(1930, 1090), use_xauth=True)
         display.start()
-        self.addCleanup(lambda: _process_alive(pid) and display.stop())
         pid = display.pid
+        self.addCleanup(lambda: _process_alive(pid) and display.stop())
         self.assertTrue(_process_alive(pid), "Xvfb never started")
 
         adapter = build_adapter(display=display)
