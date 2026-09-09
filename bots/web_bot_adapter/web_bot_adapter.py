@@ -1113,7 +1113,10 @@ class WebBotAdapter(BotAdapter):
 
     def cleanup(self):
         if self.stop_recording_screen_callback:
-            self.stop_recording_screen_callback()
+            try:
+                self.stop_recording_screen_callback()
+            except Exception as e:
+                logger.warning(f"Error stopping screen recording: {e}")
 
         try:
             logger.info("disable media sending")
@@ -1135,7 +1138,19 @@ class WebBotAdapter(BotAdapter):
             logger.warning(f"Error during cleanup: {e}")
 
         if self.debug_screen_recorder:
-            self.debug_screen_recorder.stop()
+            try:
+                self.debug_screen_recorder.stop()
+            except Exception as e:
+                logger.warning(f"Error stopping debug screen recorder: {e}")
+
+        # Stop the virtual display after the debug screen recorder, which is an x11grab ffmpeg
+        # reading it. stop() can raise if the display was never started or the Xvfb is already gone.
+        display = getattr(self, "display", None)
+        if display:
+            try:
+                display.stop()
+            except Exception as e:
+                logger.warning(f"Error stopping virtual display: {e}")
 
         # Properly shutdown the websocket server
         if self.websocket_server:
