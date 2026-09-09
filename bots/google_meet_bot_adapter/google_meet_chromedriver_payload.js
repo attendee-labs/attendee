@@ -1670,6 +1670,50 @@ const messageTypes = [
         ]
     },
     {
+        name: 'CaptionWrapperV2',
+        fields: [
+            { name: 'captionEventV2', fieldNumber: 1, type: 'message', messageType: 'CaptionEventV2' },
+            { name: 'timestampV2', fieldNumber: 6, type: 'message', messageType: 'CaptionTimestampV2' }
+        ]
+    },
+    {
+        name: 'CaptionEventV2',
+        fields: [
+            // Inferred from the samples:
+            // field 1 appears to identify the caption, while field 2 changes as
+            // revisions of that caption are produced.
+            { name: 'captionId', fieldNumber: 1, type: 'int64' },
+            { name: 'version', fieldNumber: 2, type: 'int64' },
+            { name: 'captionV2', fieldNumber: 3, type: 'message', messageType: 'CaptionV2' }
+        ]
+    },
+    {
+        name: 'CaptionV2',
+        fields: [
+            // This field is absent on an interim caption and 1 on the finalized
+            // caption in the supplied samples, so it appears to be isFinal.
+            { name: 'isFinal', fieldNumber: 2, type: 'varint' },
+    
+            { name: 'text', fieldNumber: 3, type: 'string' },
+    
+            // Both are "en-US" in the supplied samples. Keep both until their
+            // exact distinction is known.
+            { name: 'languageCode', fieldNumber: 4, type: 'string' },
+            { name: 'translatedLanguageCode', fieldNumber: 5, type: 'string' },
+    
+            { name: 'deviceId', fieldNumber: 6, type: 'string' },
+    
+            // Always 1 in the supplied samples. Meaning is not yet known.
+            { name: 'unknownField9', fieldNumber: 9, type: 'varint' }
+        ]
+    },
+    {
+        name: 'CaptionTimestampV2',
+        fields: [
+            { name: 'timestamp', fieldNumber: 1, type: 'int64' }
+        ]
+    },
+    {
         name: 'CaptionWrapper',
         fields: [
             { name: 'caption', fieldNumber: 1, type: 'message', messageType: 'Caption' }
@@ -1858,6 +1902,37 @@ const handleCaptionEvent = (event) => {
   const captionWrapper = messageDecoders['CaptionWrapper'](decodedData);
   const caption = captionWrapper.caption;
   captionManager.singleCaptionSynced(caption);
+}
+
+function convertCaptionV2ToV1(captionWrapperV2) {
+    const captionEventV2 = captionWrapperV2?.captionEventV2;
+    const captionV2 = captionEventV2?.captionV2;
+
+    if (!captionEventV2 || !captionV2) {
+        return null;
+    }
+
+    return {
+        deviceId: captionV2.deviceId,
+        captionId: captionEventV2.captionId,
+        version: captionEventV2.version,
+        isFinal: captionV2.isFinal ?? 0,
+        text: captionV2.text ?? '',
+
+        // V1 has a numeric languageId, while V2 appears to use language-code
+        // strings such as "en-US". There is no demonstrated equivalent numeric
+        // value in the V2 payload, so don't invent one.
+        languageId: undefined
+    };
+}
+
+const handleCaptionEventV2 = (event) => {
+  const decodedData = new Uint8Array(event.data);
+  const captionWrapperV2 = messageDecoders['CaptionWrapperV2'](decodedData);
+  const captionV1 = convertCaptionV2ToV1(captionWrapperV2);
+  if (captionV1) {
+    captionManager.singleCaptionSynced(captionV1);
+  }
 }
 
 const handleMediaDirectorEvent = (event) => {
@@ -2222,6 +2297,11 @@ new RTCInterceptor({
         console.log('On PeerConnection:', peerConnection);
         console.log('Channel label:', dataChannel.label);
 
+        window.ws?.sendJson({
+            type: 'DataChannelCreate',
+            label: dataChannel.label,
+        });
+
         //if (dataChannel.label === 'collections') {
           //  dataChannel.addEventListener("message", (event) => {
          //       console.log('collectionsevent', event)
@@ -2240,6 +2320,12 @@ new RTCInterceptor({
                 handleCaptionEvent(captionEvent);
             });
         }
+
+        if (dataChannel.label === 'captions_v2' && window.initialData.collectCaptions) {
+             dataChannel.addEventListener("message", (captionEvent) => {
+                 handleCaptionEventV2(captionEvent);
+             });
+         }
     }
 });
 
