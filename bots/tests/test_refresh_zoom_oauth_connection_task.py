@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 from unittest.mock import patch
 
 from django.test import TestCase
@@ -16,6 +17,11 @@ from bots.tasks.refresh_zoom_oauth_connection_task import (
 from bots.zoom_oauth_connections_utils import ZoomAPIAuthenticationError
 
 
+@contextmanager
+def _noop_lock(*args, **kwargs):
+    yield
+
+
 class TestRefreshZoomOAuthConnection(TestCase):
     """Test the refresh_zoom_oauth_connection Celery task."""
 
@@ -30,6 +36,14 @@ class TestRefreshZoomOAuthConnection(TestCase):
             account_id="test_account_id",
         )
         self.zoom_oauth_connection.set_credentials({"refresh_token": "test_refresh_token"})
+        self.lock_patcher = patch(
+            "bots.tasks.refresh_zoom_oauth_connection_task.zoom_oauth_connection_token_lock",
+            side_effect=_noop_lock,
+        )
+        self.lock_patcher.start()
+
+    def tearDown(self):
+        self.lock_patcher.stop()
 
     @patch("bots.tasks.refresh_zoom_oauth_connection_task._get_access_token")
     def test_refresh_zoom_oauth_connection_success(self, mock_get_access_token):
@@ -45,6 +59,18 @@ class TestRefreshZoomOAuthConnection(TestCase):
         self.assertIsNotNone(self.zoom_oauth_connection.last_attempted_token_refresh_at)
         self.assertIsNotNone(self.zoom_oauth_connection.last_successful_token_refresh_at)
         self.assertIsNone(self.zoom_oauth_connection.connection_failure_data)
+
+    @patch("bots.tasks.refresh_zoom_oauth_connection_task._get_access_token")
+    @patch("bots.tasks.refresh_zoom_oauth_connection_task.zoom_oauth_connection_token_lock")
+    def test_refresh_acquires_connection_scoped_lock(self, mock_lock, mock_get_access_token):
+        """Refresh must take the connection token lock before rotating credentials."""
+        mock_lock.side_effect = _noop_lock
+        mock_get_access_token.return_value = "mock_access_token"
+
+        refresh_zoom_oauth_connection(self.zoom_oauth_connection.id)
+
+        mock_lock.assert_called_with(self.zoom_oauth_connection.id)
+
 
     @patch("bots.zoom_oauth_connections_utils.trigger_webhook")
     @patch("bots.tasks.refresh_zoom_oauth_connection_task._get_access_token")

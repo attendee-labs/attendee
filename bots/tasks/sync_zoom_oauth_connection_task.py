@@ -4,6 +4,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from bots.models import ZoomOAuthConnection, ZoomOAuthConnectionStates
+from bots.redis_utils import zoom_oauth_connection_token_lock
 from bots.zoom_oauth_connections_utils import ZoomAPIAuthenticationError, _get_access_token, _get_zoom_meetings, _get_zoom_personal_meeting_id, _handle_zoom_api_authentication_error, _upsert_zoom_meeting_to_zoom_oauth_connection_mapping
 
 logger = logging.getLogger(__name__)
@@ -39,7 +40,12 @@ def sync_zoom_oauth_connection(self, zoom_oauth_connection_id):
         # Set the sync start time
         sync_started_at = timezone.now()
 
-        access_token = _get_access_token(zoom_oauth_connection)
+        # Token refresh is serialized via zoom_oauth_connection_token_lock inside
+        # _get_access_token (shared with refresh/join) so concurrent sync cannot
+        # rotate credentials out from under another worker.
+        with zoom_oauth_connection_token_lock(zoom_oauth_connection_id):
+            access_token = _get_access_token(zoom_oauth_connection)
+
         zoom_meetings = _get_zoom_meetings(access_token)
 
         logger.info(f"Fetched {len(zoom_meetings)} meetings from Zoom for zoom oauth connection {zoom_oauth_connection_id}")

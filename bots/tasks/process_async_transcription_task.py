@@ -3,6 +3,7 @@ import math
 import os
 
 from celery import shared_task
+from django.db import transaction
 from django.utils import timezone
 
 from bots.models import AsyncTranscription, AsyncTranscriptionManager, AsyncTranscriptionStates, TranscriptionFailureReasons, Utterance
@@ -144,17 +145,22 @@ def check_for_transcription_completion(async_transcription):
     soft_time_limit=3600,
 )
 def process_async_transcription(self, async_transcription_id):
-    async_transcription = AsyncTranscription.objects.get(id=async_transcription_id)
-
     try:
-        if async_transcription.state == AsyncTranscriptionStates.COMPLETE or async_transcription.state == AsyncTranscriptionStates.FAILED:
-            return
+        with transaction.atomic():
+            # Claim NOT_STARTED with a row lock so concurrent workers cannot both create utterances.
+            async_transcription = AsyncTranscription.objects.select_for_update().get(id=async_transcription_id)
 
-        if async_transcription.state == AsyncTranscriptionStates.NOT_STARTED:
-            create_utterances_for_transcription(async_transcription)
+            if async_transcription.state == AsyncTranscriptionStates.COMPLETE or async_transcription.state == AsyncTranscriptionStates.FAILED:
+                return
 
-        check_for_transcription_completion(async_transcription)
+            if async_transcription.state == AsyncTranscriptionStates.NOT_STARTED:
+                create_utterances_for_transcription(async_transcription)
+
+        async_transcription.refresh_from_db()
+        if async_transcription.state == AsyncTranscriptionStates.IN_PROGRESS:
+            check_for_transcription_completion(async_transcription)
 
     except Exception as e:
         logger.exception(f"Unexpected exception in process_async_transcription: {str(e)}")
+        async_transcription = AsyncTranscription.objects.get(id=async_transcription_id)
         AsyncTranscriptionManager.set_async_transcription_failed(async_transcription, failure_data={})
