@@ -70,11 +70,7 @@
         <h2 class="mb-0">Calendar Details</h2>
         <a href="{% url 'bots:project-calendars' project.object_id %}" 
            class="btn btn-outline-secondary"
-           hx-get="{% url 'bots:project-calendars' project.object_id %}"
-           hx-select="#content"
-           hx-target="#content"
-           hx-swap="outerHTML"
-           hx-push-url="true">
+           hx-boost="true" hx-select="#content" hx-target="#content" hx-swap="outerHTML">
             <i class="bi bi-arrow-left"></i> Back to Calendars
         </a>
     </div>
@@ -154,16 +150,19 @@
                             {% for event in calendar_events %}
                                 <tr class="clickable-row"
                                     hx-get="{% url 'bots:project-calendar-event-detail' project.object_id calendar.object_id event.object_id %}"
+                                    hx-trigger="click[!event.target.closest('a')]"
                                     hx-select="#content"
                                     hx-target="#content"
                                     hx-swap="outerHTML"
                                     hx-push-url="true">
                                     <td>
+                                        <a href="{% url 'bots:project-calendar-event-detail' project.object_id calendar.object_id event.object_id %}" class="row-link" hx-boost="true" hx-select="#content" hx-target="#content" hx-swap="outerHTML">
                                         {% if event.name %}
                                             {{ event.name }}
                                         {% else %}
                                             <em class="text-muted">Untitled Event</em>
                                         {% endif %}
+                                        </a>
                                     </td>
                                     <td>{{ event.start_time|date:"M d, Y H:i" }}</td>
                                     <td>

@@ -44,26 +44,16 @@
 
                 <hr class="my-2">
 
-                <nav class="nav flex-column">
+                <nav class="nav flex-column" hx-boost="true" hx-select="#content" hx-target="#content" hx-swap="outerHTML">
                     <a class="nav-link" 
-                       hx-get="{% url 'projects:project-dashboard' project.object_id %}" 
-                       hx-select="#content"
-                       hx-target="#content"
-                       hx-swap="outerHTML"
-                       hx-push-url="true"
-                       onclick="setActiveLink(this)">
+                       href="{% url 'projects:project-dashboard' project.object_id %}">
                         <i class="bi bi-speedometer2"></i> Quick start
                     </a>
                     <a class="nav-link" 
-                       hx-get="{% url 'projects:project-api-keys' project.object_id %}" 
-                       hx-select="#content"
-                       hx-target="#content"
-                       hx-swap="outerHTML"
-                       hx-push-url="true"
-                       onclick="setActiveLink(this)">
+                       href="{% url 'projects:project-api-keys' project.object_id %}">
                         <i class="bi bi-key"></i> API Keys
                     </a>
-                    <a class="nav-link" 
+                    <a class="nav-link" hx-boost="false"
                         href="https://docs.attendee.dev"
                         target="_blank"
                         rel="noopener noreferrer">
@@ -72,7 +62,7 @@
                     
                     <!-- Settings dropdown menu -->
                     <div class="settings-dropdown">
-                        <a class="nav-link" href="#" 
+                        <a class="nav-link" href="#" hx-boost="false"
                            onclick="toggleSettingsMenu(event)">
                             <i class="bi bi-gear"></i> Settings <span style="margin-left: 1px;" class="settings-caret-container">
                               <svg width="21" height="21" viewBox="0 0 14 14" fill="none" class="settings-caret">
@@ -82,42 +72,22 @@
                         </a>
                         <div class="settings-submenu" style="display: none;">
                             <a class="nav-link ps-4" 
-                               hx-get="{% url 'projects:project-credentials' project.object_id %}" 
-                               hx-select="#content"
-                               hx-target="#content"
-                               hx-swap="outerHTML"
-                               hx-push-url="true"
-                               onclick="setActiveLink(this)">
+                               href="{% url 'projects:project-credentials' project.object_id %}">
                                 <i class="bi bi-lock"></i> Credentials
                             </a>
                             <a class="nav-link ps-4"
-                               hx-get="{% url 'projects:project-bot-logins' project.object_id %}"
-                               hx-select="#content"
-                               hx-target="#content"
-                               hx-swap="outerHTML"
-                               hx-push-url="true"
-                               onclick="setActiveLink(this)">
+                               href="{% url 'projects:project-bot-logins' project.object_id %}">
                                 <i class="bi bi-person-badge"></i> Bot Logins
                             </a>
                             {% if project.organization.is_webhooks_enabled %}
                             <a class="nav-link ps-4"
-                               hx-get="{% url 'projects:project-webhooks' project.object_id %}"
-                               hx-select="#content"
-                               hx-target="#content"
-                               hx-swap="outerHTML"
-                               hx-push-url="true"
-                               onclick="setActiveLink(this)">
+                               href="{% url 'projects:project-webhooks' project.object_id %}">
                                 <i class="bi bi-link"></i> Webhooks
                             </a>
                             {% endif %}
                             {% if user.role == UserRole.ADMIN %}
                                 <a class="nav-link ps-4" 
-                                hx-get="{% url 'projects:project-project' project.object_id %}" 
-                                hx-select="#content"
-                                hx-target="#content"
-                                hx-swap="outerHTML"
-                                hx-push-url="true"
-                                onclick="setActiveLink(this)">
+                                href="{% url 'projects:project-project' project.object_id %}">
                                     <i class="bi bi-card-text"></i> Project
                                 </a>
                             {% endif %}
@@ -128,33 +98,18 @@
                     {% endif %}
 
                     <a class="nav-link" 
-                       hx-get="{% url 'projects:project-bots' project.object_id %}" 
-                       hx-select="#content"
-                       hx-target="#content"
-                       hx-swap="outerHTML"
-                       hx-push-url="true"
-                       onclick="setActiveLink(this)">
+                       href="{% url 'projects:project-bots' project.object_id %}">
                         <i class="bi bi-robot"></i> Bots
                     </a>
 
                     <a class="nav-link" 
-                       hx-get="{% url 'projects:project-calendars' project.object_id %}" 
-                       hx-select="#content"
-                       hx-target="#content"
-                       hx-swap="outerHTML"
-                       hx-push-url="true"
-                       onclick="setActiveLink(this)">
+                       href="{% url 'projects:project-calendars' project.object_id %}">
                         <i class="bi bi-calendar3"></i> Calendars
                     </a>
 
                     {% if project.organization.is_app_sessions_enabled %}
                     <a class="nav-link" 
-                       hx-get="{% url 'projects:project-app-sessions' project.object_id %}" 
-                       hx-select="#content"
-                       hx-target="#content"
-                       hx-swap="outerHTML"
-                       hx-push-url="true"
-                       onclick="setActiveLink(this)">
+                       href="{% url 'projects:project-app-sessions' project.object_id %}">
                         <i class="bi bi-app-indicator"></i> App Sessions
                     </a>
                     {% endif %}
@@ -167,8 +122,8 @@
 
                     {% if user.role == UserRole.ADMIN %}
                         <!-- Account dropdown menu -->
-                        <div class="account-dropdown">
-                            <a class="nav-link" href="#" 
+                        <div class="account-dropdown" hx-boost="true" hx-select="#content" hx-target="#content" hx-swap="outerHTML">
+                            <a class="nav-link" href="#" hx-boost="false"
                             onclick="toggleAccountMenu(event)">
                                 <i class="bi bi-x-diamond-fill"></i> Account <span style="margin-left: 1px;" class="account-caret-container">
                                 <svg width="21" height="21" viewBox="0 0 14 14" fill="none" class="account-caret">
@@ -178,53 +133,28 @@
                             </a>
                             <div class="account-submenu" style="display: none;">
                                 <a class="nav-link ps-4" 
-                                hx-get="{% url 'projects:project-team' project.object_id %}" 
-                                hx-select="#content"
-                                hx-target="#content"
-                                hx-swap="outerHTML"
-                                hx-push-url="true"
-                                onclick="setActiveLink(this)">
+                                href="{% url 'projects:project-team' project.object_id %}">
                                     <i class="bi bi-people"></i> Team
                                 </a>
                                 {% if charge_credits_for_bots_setting %}
                                 <a class="nav-link ps-4"
-                                hx-get="{% url 'projects:project-billing' project.object_id %}"
-                                hx-select="#content"
-                                hx-target="#content"
-                                hx-swap="outerHTML"
-                                hx-push-url="true"
-                                onclick="setActiveLink(this)">
+                                href="{% url 'projects:project-billing' project.object_id %}">
                                     <i class="bi bi-credit-card"></i> Billing
                                 </a>
                                 {% endif %}
                                 <a class="nav-link ps-4" 
-                                hx-get="{% url 'projects:project-usage' project.object_id %}" 
-                                hx-select="#content"
-                                hx-target="#content"
-                                hx-swap="outerHTML"
-                                hx-push-url="true"
-                                onclick="setActiveLink(this)">
+                                href="{% url 'projects:project-usage' project.object_id %}">
                                     <i class="bi bi-bar-chart"></i> Usage
                                 </a>
                                 {% if can_view_instance_health %}
                                 <a class="nav-link ps-4"
-                                hx-get="{% url 'projects:project-instance-health' project.object_id %}"
-                                hx-select="#content"
-                                hx-target="#content"
-                                hx-swap="outerHTML"
-                                hx-push-url="true"
-                                onclick="setActiveLink(this)">
+                                href="{% url 'projects:project-instance-health' project.object_id %}">
                                     <i class="bi bi-heart-pulse"></i> Instance Health
                                 </a>
                                 {% endif %}
                                 {% if can_view_bot_resource_usage %}
                                 <a class="nav-link ps-4"
-                                hx-get="{% url 'projects:project-bot-resource-usage' project.object_id %}"
-                                hx-select="#content"
-                                hx-target="#content"
-                                hx-swap="outerHTML"
-                                hx-push-url="true"
-                                onclick="setActiveLink(this)">
+                                href="{% url 'projects:project-bot-resource-usage' project.object_id %}">
                                     <i class="bi bi-cpu"></i> Bot Resource Usage
                                 </a>
                                 {% endif %}
@@ -265,40 +195,38 @@
     {% if debug_mode %}
         htmx.logAll();
     {% endif %}
-    function setActiveLink(element) {
-        // Remove active class from all nav links
-        document.querySelectorAll('.nav-link').forEach(link => {
-            link.classList.remove('active');
-        });
-        // Add active class to clicked link
-        element.classList.add('active');
-    }
+    // Mark the sidebar link matching the current URL as active. Driven by the
+    // URL rather than the click so that modified clicks (cmd/ctrl-click to open
+    // in a new tab), which htmx leaves to the browser, don't change the state.
+    function updateActiveLink() {
+        const currentPath = window.location.pathname;
+        const currentPathWithoutPrefix = currentPath.replace(/^\/projects\/proj_[a-zA-Z0-9]+/, '');
+        // Scoped to the sidebar: Bootstrap tab buttons in page content also use .nav-link
+        document.querySelectorAll('.sidebar .nav-link').forEach(link => {
+            const href = link.getAttribute('href');
+            const hrefWithoutPrefix = href?.replace(/^\/projects\/proj_[a-zA-Z0-9]+/, '');
+            const pathNestingMatch = hrefWithoutPrefix && currentPathWithoutPrefix.startsWith(hrefWithoutPrefix);
+            const exactPathMatch = href == currentPath;
+            const isActive = Boolean(pathNestingMatch || exactPathMatch);
+            link.classList.toggle('active', isActive);
+            if (!isActive) return;
 
-    // Set active link on page load
-    document.addEventListener('DOMContentLoaded', function() {
-        const currentPath = window.location.pathname;        
-        document.querySelectorAll('.nav-link').forEach(link => {
-            const hxGet = link.getAttribute('hx-get');
-            const hxGetWithoutPrefix = hxGet?.replace(/^\/projects\/proj_[a-zA-Z0-9]+/, '');
-            const currentPathWithoutPrefix = currentPath?.replace(/^\/projects\/proj_[a-zA-Z0-9]+/, '');
-            const pathNestingMatch = hxGetWithoutPrefix && currentPathWithoutPrefix && currentPathWithoutPrefix.startsWith(hxGetWithoutPrefix);
-            const exactPathMatch = hxGet == currentPath;
-            if (pathNestingMatch || exactPathMatch) {
-                link.classList.add('active');
-                
-                // Check if this is a settings submenu item
-                if (link.closest('.settings-submenu')) {
-                    toggleSettingsMenu();
-                }
-                
-                // Check if this is an account submenu item
-                if (link.closest('.account-submenu')) {
-                    toggleAccountMenu();
-                }
+            // Open the submenu containing the active link if it is collapsed
+            if (link.closest('.settings-submenu') && document.querySelector('.settings-submenu').style.display === 'none') {
+                toggleSettingsMenu();
+            }
+            if (link.closest('.account-submenu') && document.querySelector('.account-submenu').style.display === 'none') {
+                toggleAccountMenu();
             }
         });
-    });
-    
+    }
+
+    document.addEventListener('DOMContentLoaded', updateActiveLink);
+    // htmx navigation (boosted links, clickable rows) and back/forward
+    document.addEventListener('htmx:pushedIntoHistory', updateActiveLink);
+    document.addEventListener('htmx:historyRestore', updateActiveLink);
+    window.addEventListener('popstate', updateActiveLink);
+
     // Toggle settings dropdown menu
     function toggleSettingsMenu(event) {
         event?.preventDefault();

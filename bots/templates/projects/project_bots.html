@@ -241,11 +241,19 @@
                         {% if session_type == SessionTypes.BOT %}
                         hx-get="{% url 'projects:project-bot-detail' project.object_id bot.object_id %}"
                         {% endif %}
+                        hx-trigger="click[!event.target.closest('a')]"
                         hx-select="#content"
                         hx-target="#content"
                         hx-swap="outerHTML"
                         hx-push-url="true">
-                        <td><small>{{ bot.object_id }}</small></td>
+                        <td><small>
+                            {% if session_type == SessionTypes.APP_SESSION %}
+                            <a href="{% url 'projects:project-app-session-detail' project.object_id bot.object_id %}" class="row-link" hx-boost="true" hx-select="#content" hx-target="#content" hx-swap="outerHTML">{{ bot.object_id }}</a>
+                            {% endif %}
+                            {% if session_type == SessionTypes.BOT %}
+                            <a href="{% url 'projects:project-bot-detail' project.object_id bot.object_id %}" class="row-link" hx-boost="true" hx-select="#content" hx-target="#content" hx-swap="outerHTML">{{ bot.object_id }}</a>
+                            {% endif %}
+                        </small></td>
                         {% if session_type == SessionTypes.BOT %}
                             <td><small class="bot-name">{{ bot.name }}</small></td>
                             <td><span class="meeting-url" title="{{ bot.meeting_url }}">{{ bot.meeting_url }}</span></td>
