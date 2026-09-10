@@ -1169,32 +1169,33 @@ class WebBotAdapter(BotAdapter):
 
     def url_violates_domain_allow_list(self, url):
         allowlist = self.subclass_specific_domain_allowlist()
+
         if not url or not allowlist:
             return False
 
         parsed = urlparse(url)
-        # Only http(s) navigations are subject to the allow list. Skip about:blank,
-        # chrome://, chrome-error://, data:, blob:, etc.
+
+        # Only http(s) navigations are subject to the allow list.
         if parsed.scheme not in ("http", "https"):
             return False
 
-        host = parsed.netloc.split("@")[-1].split(":")[0].lower()
+        host = (parsed.hostname or "").lower().rstrip(".")
+
         if not host:
             return False
 
         for entry in allowlist:
             allowed = str(entry).lower().strip()
-            if "://" in allowed:
-                allowed = urlparse(allowed).netloc
-            # A leading dot disables subdomain matching, mirroring Chrome's
-            # URLAllowlist filter format: ".www.example.com" only matches
-            # "www.example.com", while "example.com" also matches its subdomains.
+
             exact_host_only = allowed.startswith(".")
-            allowed = allowed.lstrip(".").split("/")[0].split(":")[0].rstrip(".")
+            allowed = allowed.lstrip(".").rstrip(".")
+
             if not allowed:
                 continue
+
             if allowed == "*" or host == allowed:
                 return False
+
             if not exact_host_only and host.endswith("." + allowed):
                 return False
 
