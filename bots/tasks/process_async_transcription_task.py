@@ -127,9 +127,11 @@ def check_for_transcription_completion(async_transcription):
     in_progress_utterances = async_transcription.utterances.filter(transcription__isnull=True, failure_data__isnull=True)
 
     # If no in progress utterances exist or it's been more than max_runtime_seconds, then we need to terminate the transcription
-    max_runtime_seconds = max(1800, async_transcription.utterances.count() * 3)
+    timeout_seconds = int(os.getenv("ASYNC_TRANSCRIPTION_TIMEOUT_SECONDS", 30 * 60))  # 30 minutes in seconds
+    timeout_seconds_per_utterance = int(os.getenv("ASYNC_TRANSCRIPTION_TIMEOUT_SECONDS_PER_UTTERANCE", 3))
+    max_runtime_seconds = max(timeout_seconds, async_transcription.utterances.count() * timeout_seconds_per_utterance)
     if not in_progress_utterances.exists() or timezone.now() - async_transcription.started_at > timezone.timedelta(seconds=max_runtime_seconds):
-        logger.info(f"Terminating transcription for recording artifact {async_transcription.id} because no in progress utterances exist or it's been more than 30 minutes")
+        logger.info(f"Terminating transcription for recording artifact {async_transcription.id} because no in progress utterances exist or it's been more than {max_runtime_seconds} seconds")
         terminate_transcription(async_transcription)
         return
 
