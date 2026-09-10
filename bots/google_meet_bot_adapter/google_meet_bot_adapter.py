@@ -136,6 +136,7 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
             "mail.google.com",
             "meet.google.com",
             "www.google.com",
+            ".apps.google.com",
             settings.SITE_DOMAIN,
         ]
 
