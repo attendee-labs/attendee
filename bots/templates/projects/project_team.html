@@ -58,7 +58,14 @@
                       <span>-</span>
                     {% else %}
                       {% for access in user.project_accesses.all %}
-                        <span class="badge bg-light text-dark">{{ access.project.name }}</span>
+                        <span class="badge bg-light text-dark">
+                          {{ access.project.name }}
+                          {% if access.can_view_recording_content %}
+                            <i class="fas fa-eye text-success ms-1" title="Can view recording content"></i>
+                          {% else %}
+                            <i class="fas fa-eye-slash text-muted ms-1" title="Cannot view recording content"></i>
+                          {% endif %}
+                        </span>
                       {% endfor %}
                     {% endif %}
                   </td>
@@ -79,7 +86,8 @@
                               data-user-email="{{ user.email }}"
                               data-user-role="{{ user.role }}"
                               data-user-active="{{ user.is_active|yesno:'true,false' }}"
-                              {% if user.role != 'admin' %}data-user-project-access="{% for access in user.project_accesses.all %}{{ access.project.object_id }}{% if not forloop.last %},{% endif %}{% endfor %}"{% endif %}
+                              {% if user.role != 'admin' %}data-user-project-access="{% for access in user.project_accesses.all %}{{ access.project.object_id }}{% if not forloop.last %},{% endif %}{% endfor %}"
+                              data-user-recording-access="{% for access in user.project_accesses.all %}{% if access.can_view_recording_content %}{{ access.project.object_id }},{% endif %}{% endfor %}"{% endif %}
                               data-bs-toggle="modal" 
                               data-bs-target="#editUserModal">
                         <i class="fas fa-edit"></i> Edit
@@ -132,11 +140,19 @@
             <label class="form-label">Project Access <span class="text-danger">*</span></label>
             <div class="border rounded p-3" style="max-height: 200px; overflow-y: auto;">
               {% for project in projects %}
-                <div class="form-check">
-                  <input class="form-check-input project-checkbox" type="checkbox" name="project_access" value="{{ project.object_id }}" id="project_{{ project.object_id }}">
-                  <label class="form-check-label" for="project_{{ project.object_id }}">
-                    {{ project.name }}
-                  </label>
+                <div class="mb-2">
+                  <div class="form-check">
+                    <input class="form-check-input project-checkbox" type="checkbox" name="project_access" value="{{ project.object_id }}" id="project_{{ project.object_id }}">
+                    <label class="form-check-label" for="project_{{ project.object_id }}">
+                      {{ project.name }}
+                    </label>
+                  </div>
+                  <div class="form-check ms-4 d-none" id="recording_wrapper_{{ project.object_id }}">
+                    <input class="form-check-input recording-content-checkbox" type="checkbox" name="recording_content_access" value="{{ project.object_id }}" id="recording_{{ project.object_id }}" checked disabled>
+                    <label class="form-check-label small text-muted" for="recording_{{ project.object_id }}">
+                      Can view recording content
+                    </label>
+                  </div>
                 </div>
               {% endfor %}
             </div>
@@ -193,11 +209,19 @@
             <label class="form-label">Project Access <span class="text-danger">*</span></label>
             <div class="border rounded p-3" style="max-height: 200px; overflow-y: auto;">
               {% for project in projects %}
-                <div class="form-check">
-                  <input class="form-check-input edit-project-checkbox" type="checkbox" name="project_access" value="{{ project.object_id }}" id="edit_project_{{ project.object_id }}">
-                  <label class="form-check-label" for="edit_project_{{ project.object_id }}">
-                    {{ project.name }}
-                  </label>
+                <div class="mb-2">
+                  <div class="form-check">
+                    <input class="form-check-input edit-project-checkbox" type="checkbox" name="project_access" value="{{ project.object_id }}" id="edit_project_{{ project.object_id }}">
+                    <label class="form-check-label" for="edit_project_{{ project.object_id }}">
+                      {{ project.name }}
+                    </label>
+                  </div>
+                  <div class="form-check ms-4 d-none" id="edit_recording_wrapper_{{ project.object_id }}">
+                    <input class="form-check-input edit-recording-content-checkbox" type="checkbox" name="recording_content_access" value="{{ project.object_id }}" id="edit_recording_{{ project.object_id }}" checked disabled>
+                    <label class="form-check-label small text-muted" for="edit_recording_{{ project.object_id }}">
+                      Can view recording content
+                    </label>
+                  </div>
                 </div>
               {% endfor %}
             </div>
@@ -240,6 +264,24 @@
     const projectCheckboxes = document.querySelectorAll('.project-checkbox');
     const projectSelectionError = document.getElementById('projectSelectionError');
     
+    // The recording content checkbox is only meaningful for a project the user can access
+    function syncRecordingToggle(projectCheckbox) {
+        const recordingCheckbox = document.getElementById(`recording_${projectCheckbox.value}`);
+        const recordingWrapper = document.getElementById(`recording_wrapper_${projectCheckbox.value}`);
+        if (!recordingCheckbox || !recordingWrapper) {
+            return;
+        }
+        recordingCheckbox.disabled = !projectCheckbox.checked;
+        recordingWrapper.classList.toggle('d-none', !projectCheckbox.checked);
+        if (!projectCheckbox.checked) {
+            recordingCheckbox.checked = true;
+        }
+    }
+    
+    function syncAllRecordingToggles() {
+        projectCheckboxes.forEach(syncRecordingToggle);
+    }
+    
     function updateRoleUI() {
         if (roleToggle.checked) {
             // Admin role selected
@@ -255,6 +297,7 @@
             roleDescription.textContent = 'This user will have access only to selected projects.';
             projectAccessSection.style.display = 'block';
         }
+        syncAllRecordingToggles();
     }
     
     function validateProjectSelection() {
@@ -280,7 +323,10 @@
     
     // Handle project selection changes for validation
     projectCheckboxes.forEach(checkbox => {
-        checkbox.addEventListener('change', validateProjectSelection);
+        checkbox.addEventListener('change', function() {
+            syncRecordingToggle(checkbox);
+            validateProjectSelection();
+        });
     });
     
     function showAlert(type, message) {
@@ -406,6 +452,24 @@
         
         let currentUserActive = false; // Track current user active status
         
+        // The recording content checkbox is only meaningful for a project the user can access
+        function syncEditRecordingToggle(projectCheckbox) {
+            const recordingCheckbox = document.getElementById(`edit_recording_${projectCheckbox.value}`);
+            const recordingWrapper = document.getElementById(`edit_recording_wrapper_${projectCheckbox.value}`);
+            if (!recordingCheckbox || !recordingWrapper) {
+                return;
+            }
+            recordingCheckbox.disabled = !projectCheckbox.checked;
+            recordingWrapper.classList.toggle('d-none', !projectCheckbox.checked);
+            if (!projectCheckbox.checked) {
+                recordingCheckbox.checked = true;
+            }
+        }
+        
+        function syncAllEditRecordingToggles() {
+            editProjectCheckboxes.forEach(syncEditRecordingToggle);
+        }
+        
         function updateEditRoleUI() {
             if (editRoleToggle.checked) {
                 // Admin role selected
@@ -421,6 +485,7 @@
                 editRoleDescription.textContent = 'This user will have access only to selected projects.';
                 editProjectAccessSection.style.display = 'block';
             }
+            syncAllEditRecordingToggles();
         }
         
         function updateActiveButton() {
@@ -453,7 +518,10 @@
         
         // Handle project selection changes for validation
         editProjectCheckboxes.forEach(checkbox => {
-            checkbox.addEventListener('change', validateEditProjectSelection);
+            checkbox.addEventListener('change', function() {
+                syncEditRecordingToggle(checkbox);
+                validateEditProjectSelection();
+            });
         });
         
         function hideEditInlineError() {
@@ -546,6 +614,7 @@
                 const userRole = this.dataset.userRole;
                 const userActive = this.dataset.userActive === 'true';
                 const userProjectAccess = this.dataset.userProjectAccess || '';
+                const userRecordingAccess = (this.dataset.userRecordingAccess || '').split(',').map(id => id.trim()).filter(id => id);
                 
                 // Store current user active status
                 currentUserActive = userActive;
@@ -568,12 +637,18 @@
                 if (userRole !== 'admin' && userProjectAccess) {
                     const projectIds = userProjectAccess.split(',').filter(id => id.trim());
                     projectIds.forEach(projectId => {
-                        const checkbox = document.getElementById(`edit_project_${projectId.trim()}`);
+                        const trimmedId = projectId.trim();
+                        const checkbox = document.getElementById(`edit_project_${trimmedId}`);
                         if (checkbox) {
                             checkbox.checked = true;
                         }
+                        const recordingCheckbox = document.getElementById(`edit_recording_${trimmedId}`);
+                        if (recordingCheckbox) {
+                            recordingCheckbox.checked = userRecordingAccess.includes(trimmedId);
+                        }
                     });
                 }
+                syncAllEditRecordingToggles();
                 
                 hideEditInlineError();
             });
