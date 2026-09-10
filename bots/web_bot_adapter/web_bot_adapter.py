@@ -756,7 +756,7 @@ class WebBotAdapter(BotAdapter):
         }
         options.add_experimental_option("prefs", prefs)
 
-        if settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:
+        if settings.MONITOR_DOMAIN_ALLOWLIST_IN_CHROME:
             options.set_capability("webSocketUrl", True)
 
         self.add_subclass_specific_chrome_options(options)
@@ -818,7 +818,7 @@ class WebBotAdapter(BotAdapter):
             logger.exception("Error starting domain allow list listener")
 
     def start_domain_allow_list_listener_with_no_error_handling(self):
-        if not settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:
+        if not settings.MONITOR_DOMAIN_ALLOWLIST_IN_CHROME:
             return
 
         socket = connect(
@@ -1206,7 +1206,7 @@ class WebBotAdapter(BotAdapter):
             nav_history_hosts = list(set([self.domain_for_history_entry_url(url) for url in nav_history_urls]))
             logger.info(f"Browser navigation history {nav_history_hosts}")
 
-            if not settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:
+            if not settings.MONITOR_DOMAIN_ALLOWLIST_IN_CHROME:
                 return
 
             # Only covers top-level navigations
