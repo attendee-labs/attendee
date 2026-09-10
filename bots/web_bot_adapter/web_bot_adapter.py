@@ -28,7 +28,7 @@ from bots.models import ParticipantEventTypes, RecordingViews
 from bots.per_participant_realtime_video_configuration import PerParticipantRealtimeVideoConfiguration
 from bots.room_sync_source_participant_configuration import RoomSyncSourceParticipantConfiguration
 from bots.room_sync_utils import add_bot_indicator_to_display_name
-from bots.utils import half_ceil, scale_i420
+from bots.utils import half_ceil, mask_url_query_param_values, scale_i420
 
 from .debug_screen_recorder import DebugScreenRecorder
 from .livekit_websocket_bridge import LiveKitWebsocketBridge
@@ -849,7 +849,7 @@ class WebBotAdapter(BotAdapter):
                 logger.warning(
                     "%s: url=%s violates_domain_allow_list=%s",
                     message.get("method"),
-                    domain,
+                    mask_url_query_param_values(url),
                     violates_allow_list,
                 )
 

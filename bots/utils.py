@@ -1,6 +1,7 @@
 import io
 import logging
 import re
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import cv2
 import numpy as np
@@ -87,6 +88,19 @@ def truncate_string_with_ellipsis(string: str, max_length: int, ellipsis: str = 
 
     logger.info(f"Truncated string from {len(string)} characters to {len(truncated_string)} characters")
     return truncated_string
+
+
+def mask_url_query_param_values(url, mask="***"):
+    """Return the URL with each query parameter's value replaced by a mask, preserving the param keys."""
+    if not url:
+        return url
+    try:
+        parsed_url = urlparse(url)
+        masked_query = urlencode([(key, mask) for key, _ in parse_qsl(parsed_url.query, keep_blank_values=True)])
+        return urlunparse(parsed_url._replace(query=masked_query, params="", fragment=""))
+    except Exception:
+        logger.warning("Error masking url query param values")
+        return mask
 
 
 def select_from_comma_separated_list_with_wrapping_index(comma_separated_list: str, index: int) -> str | None:
