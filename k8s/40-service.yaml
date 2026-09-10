@@ -1,0 +1,15 @@
+# In-cluster address for the web app. Bot pods reach it through INTERNAL_SITE_DOMAIN
+# (attendee-web.attendee.svc.cluster.local:8000), which keeps their callbacks off the public
+# ingress entirely.
+apiVersion: v1
+kind: Service
+metadata:
+  name: attendee-web
+  namespace: attendee
+spec:
+  type: ClusterIP
+  selector: {app.kubernetes.io/name: attendee, app.kubernetes.io/component: web}
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http

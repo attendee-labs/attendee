@@ -1,0 +1,38 @@
+# Celery workers.
+#
+# With LAUNCH_BOT_METHOD=kubernetes these workers do NOT run bots -- each bot gets its own pod.
+# They handle the surrounding jobs: webhook delivery, utterance/transcription processing,
+# calendar sync, and launching scheduled bots. So they are small and scale horizontally.
+#
+# The default ENTRYPOINT is kept here (no `command` override) exactly as the upstream dev
+# compose does, so the container is still correct if you ever fall back to LAUNCH_BOT_METHOD
+# unset, where bots run inside this process and need PulseAudio.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: attendee-worker
+  namespace: attendee
+  labels: {app.kubernetes.io/name: attendee, app.kubernetes.io/component: worker}
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app.kubernetes.io/name: attendee, app.kubernetes.io/component: worker}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: attendee, app.kubernetes.io/component: worker}
+    spec:
+      serviceAccountName: attendee-app
+      imagePullSecrets: [{name: regcred}]
+      # Celery is configured with task_acks_late + reject_on_worker_lost, so an in-flight task
+      # is redelivered rather than lost. Give it room to finish first.
+      terminationGracePeriodSeconds: 120
+      containers:
+        - name: worker
+          image: REPLACE_WITH_REGISTRY/attendee:REPLACE_WITH_IMAGE_TAG
+          args: ["celery", "-A", "attendee", "worker", "-l", "INFO", "--concurrency", "4"]
+          envFrom:
+            - configMapRef: {name: env}
+            - secretRef: {name: app-secrets}
+          resources:
+            requests: {cpu: "500m", memory: "1Gi"}
+            limits: {cpu: "2", memory: "2Gi"}
