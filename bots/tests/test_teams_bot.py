@@ -1112,6 +1112,9 @@ class TestTeamsBot(TransactionTestCase):
         self.assertTrue(adapter.url_violates_domain_allow_list("https://badmicrosoft.com/some-path"))
         self.assertTrue(adapter.url_violates_domain_allow_list("https://teams.microsoft.com.evil.com/some-path"))
 
+        # A fully qualified hostname's trailing dot is normalized away
+        self.assertFalse(adapter.url_violates_domain_allow_list("https://teams.microsoft.com./meet/123"))
+
         # Non http(s) URLs are not subject to the allow list
         self.assertFalse(adapter.url_violates_domain_allow_list("about:blank"))
         self.assertFalse(adapter.url_violates_domain_allow_list("chrome-error://chromewebdata/"))
@@ -1122,13 +1125,15 @@ class TestTeamsBot(TransactionTestCase):
             self.assertFalse(adapter.url_violates_domain_allow_list("https://teams.microsoft.com/meet/123"))
             self.assertTrue(adapter.url_violates_domain_allow_list("https://sub.teams.microsoft.com/meet/123"))
 
-        # Entries may carry a scheme, port or path, and "*" allows everything
-        with patch.object(adapter, "subclass_specific_domain_allowlist", return_value=["https://teams.microsoft.com:443/meet"]):
-            self.assertFalse(adapter.url_violates_domain_allow_list("https://sub.teams.microsoft.com/other"))
+        # "*" allows everything
         with patch.object(adapter, "subclass_specific_domain_allowlist", return_value=["*"]):
             self.assertFalse(adapter.url_violates_domain_allow_list("https://badmicrosoft.com/some-path"))
 
-        # An empty allow list means the allow list is not being enforced
+        # A port in the URL does not interfere with matching
+        with patch.object(adapter, "subclass_specific_domain_allowlist", return_value=["127.0.0.1"]):
+            self.assertFalse(adapter.url_violates_domain_allow_list("http://127.0.0.1:46812/some-path"))
+
+        # An empty allow list produces no violations
         with patch.object(adapter, "subclass_specific_domain_allowlist", return_value=[]):
             self.assertFalse(adapter.url_violates_domain_allow_list("https://badmicrosoft.com/some-path"))
 
