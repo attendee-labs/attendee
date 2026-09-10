@@ -90,7 +90,7 @@ def truncate_string_with_ellipsis(string: str, max_length: int, ellipsis: str = 
     return truncated_string
 
 
-def mask_url_query_param_values(url, mask="***"):
+def mask_url_query_param_values(url, mask="xxx"):
     """Return the URL with each query parameter's value replaced by a mask, preserving the param keys."""
     if not url:
         return url

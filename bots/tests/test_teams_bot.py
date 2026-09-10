@@ -1097,6 +1097,41 @@ class TestTeamsBot(TransactionTestCase):
             {"username": "named@example.com", "password": "named-group-password"},
         )
 
+    def test_url_violates_domain_allow_list(self):
+        controller = BotController(self.bot.id)
+        controller.per_participant_non_streaming_audio_input_manager = MagicMock()
+        controller.closed_caption_manager = MagicMock()
+        controller.screen_and_audio_recorder = None
+        controller.room_sync_client = None
+        adapter = controller.get_teams_bot_adapter()
+
+        # Allowed domains and their subdomains pass, look-alike domains do not
+        self.assertFalse(adapter.url_violates_domain_allow_list("https://teams.microsoft.com/meet/123"))
+        self.assertFalse(adapter.url_violates_domain_allow_list("https://sub.teams.microsoft.com/meet/123"))
+        self.assertFalse(adapter.url_violates_domain_allow_list("http://WWW.Office.com/mail"))
+        self.assertTrue(adapter.url_violates_domain_allow_list("https://badmicrosoft.com/some-path"))
+        self.assertTrue(adapter.url_violates_domain_allow_list("https://teams.microsoft.com.evil.com/some-path"))
+
+        # Non http(s) URLs are not subject to the allow list
+        self.assertFalse(adapter.url_violates_domain_allow_list("about:blank"))
+        self.assertFalse(adapter.url_violates_domain_allow_list("chrome-error://chromewebdata/"))
+        self.assertFalse(adapter.url_violates_domain_allow_list(""))
+
+        # A leading dot disables subdomain matching, mirroring Chrome's filter format
+        with patch.object(adapter, "subclass_specific_domain_allowlist", return_value=[".teams.microsoft.com"]):
+            self.assertFalse(adapter.url_violates_domain_allow_list("https://teams.microsoft.com/meet/123"))
+            self.assertTrue(adapter.url_violates_domain_allow_list("https://sub.teams.microsoft.com/meet/123"))
+
+        # Entries may carry a scheme, port or path, and "*" allows everything
+        with patch.object(adapter, "subclass_specific_domain_allowlist", return_value=["https://teams.microsoft.com:443/meet"]):
+            self.assertFalse(adapter.url_violates_domain_allow_list("https://sub.teams.microsoft.com/other"))
+        with patch.object(adapter, "subclass_specific_domain_allowlist", return_value=["*"]):
+            self.assertFalse(adapter.url_violates_domain_allow_list("https://badmicrosoft.com/some-path"))
+
+        # An empty allow list means the allow list is not being enforced
+        with patch.object(adapter, "subclass_specific_domain_allowlist", return_value=[]):
+            self.assertFalse(adapter.url_violates_domain_allow_list("https://badmicrosoft.com/some-path"))
+
     @patch("bots.bot_controller.bot_controller.BotController.save_debug_recording", return_value=None)
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
     @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")

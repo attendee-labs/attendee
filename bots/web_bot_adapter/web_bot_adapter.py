@@ -611,6 +611,9 @@ class WebBotAdapter(BotAdapter):
             }
         )
 
+    def subclass_specific_domain_allowlist(self):
+        return []
+
     def subclass_specific_chrome_policies(self):
         return {}
 
@@ -1165,7 +1168,7 @@ class WebBotAdapter(BotAdapter):
             return []
 
     def url_violates_domain_allow_list(self, url):
-        allowlist = self.subclass_specific_chrome_policies().get("URLAllowlist", [])
+        allowlist = self.subclass_specific_domain_allowlist()
         if not url or not allowlist:
             return False
 
@@ -1183,12 +1186,16 @@ class WebBotAdapter(BotAdapter):
             allowed = str(entry).lower().strip()
             if "://" in allowed:
                 allowed = urlparse(allowed).netloc
-            allowed = allowed.lstrip(".").split("/")[0].split(":")[0]
+            # A leading dot disables subdomain matching, mirroring Chrome's
+            # URLAllowlist filter format: ".www.example.com" only matches
+            # "www.example.com", while "example.com" also matches its subdomains.
+            exact_host_only = allowed.startswith(".")
+            allowed = allowed.lstrip(".").split("/")[0].split(":")[0].rstrip(".")
             if not allowed:
                 continue
-            # "*" allows everything; otherwise match the host or any subdomain of it,
-            # mirroring Chrome's URLAllowlist matching semantics.
-            if allowed == "*" or host == allowed or host.endswith("." + allowed):
+            if allowed == "*" or host == allowed:
+                return False
+            if not exact_host_only and host.endswith("." + allowed):
                 return False
 
         return True

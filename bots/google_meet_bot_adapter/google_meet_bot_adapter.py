@@ -110,50 +110,55 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
         if self.google_meet_bot_login_should_be_used and not settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:
             options.add_argument("--guest")
 
+    def subclass_specific_domain_allowlist(self):
+        domain_allowlist = [
+            "accounts.google.com",
+            "accounts.google.co.in",  # India
+            "accounts.google.co.id",  # Indonesia
+            "accounts.google.com.br",  # Brazil
+            "accounts.google.com.mx",  # Mexico
+            "accounts.google.co.jp",  # Japan
+            "accounts.google.de",  # Germany
+            "accounts.google.co.uk",  # United Kingdom
+            "accounts.google.fr",  # France
+            "accounts.google.ca",  # Canada
+            "accounts.google.com.au",  # Australia
+            "accounts.google.co.kr",  # South Korea
+            "accounts.google.es",  # Spain
+            "accounts.google.it",  # Italy
+            "accounts.google.com.ph",  # Philippines
+            "accounts.google.com.ng",  # Nigeria
+            "accounts.google.com.pk",  # Pakistan
+            "accounts.google.com.vn",  # Vietnam
+            "accounts.google.nl",  # Netherlands
+            "accounts.google.com.sg",  # Singapore
+            "workspace.google.com",
+            "mail.google.com",
+            "meet.google.com",
+            "www.google.com",
+            settings.SITE_DOMAIN,
+        ]
+
+        if os.getenv("INTERNAL_SITE_DOMAIN"):
+            domain_allowlist.append(os.getenv("INTERNAL_SITE_DOMAIN"))
+
+        if os.getenv("USE_OKTA_LOGIN_FOR_SIGNED_IN_GOOGLE_MEET_BOTS", "false") == "true" and os.getenv("OKTA_DOMAIN"):
+            domain_allowlist.append(os.getenv("OKTA_DOMAIN"))
+
+        return domain_allowlist
+
     def subclass_specific_chrome_policies(self):
         if not settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:
             return {}
 
         chrome_policies = {
             "URLBlocklist": ["*"],
-            "URLAllowlist": [
-                "accounts.google.com",
-                "accounts.google.co.in",  # India
-                "accounts.google.co.id",  # Indonesia
-                "accounts.google.com.br",  # Brazil
-                "accounts.google.com.mx",  # Mexico
-                "accounts.google.co.jp",  # Japan
-                "accounts.google.de",  # Germany
-                "accounts.google.co.uk",  # United Kingdom
-                "accounts.google.fr",  # France
-                "accounts.google.ca",  # Canada
-                "accounts.google.com.au",  # Australia
-                "accounts.google.co.kr",  # South Korea
-                "accounts.google.es",  # Spain
-                "accounts.google.it",  # Italy
-                "accounts.google.com.ph",  # Philippines
-                "accounts.google.com.ng",  # Nigeria
-                "accounts.google.com.pk",  # Pakistan
-                "accounts.google.com.vn",  # Vietnam
-                "accounts.google.nl",  # Netherlands
-                "accounts.google.com.sg",  # Singapore
-                "workspace.google.com",
-                "mail.google.com",
-                "meet.google.com",
-                "www.google.com",
-                settings.SITE_DOMAIN,
-            ],
+            "URLAllowlist": self.subclass_specific_domain_allowlist(),
         }
 
         # Prevents a speedbump when signing in to Google Meet
         if self.google_meet_bot_login_should_be_used:
             chrome_policies["BrowserSignin"] = 0
-
-        if os.getenv("INTERNAL_SITE_DOMAIN"):
-            chrome_policies["URLAllowlist"].append(os.getenv("INTERNAL_SITE_DOMAIN"))
-
-        if os.getenv("USE_OKTA_LOGIN_FOR_SIGNED_IN_GOOGLE_MEET_BOTS", "false") == "true" and os.getenv("OKTA_DOMAIN"):
-            chrome_policies["URLAllowlist"].append(os.getenv("OKTA_DOMAIN"))
 
         return chrome_policies
 
