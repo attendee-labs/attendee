@@ -210,11 +210,14 @@ def get_cpu_usage_millicores():
     return _read_cpu_usage(usage_file, scale)
 
 
-def pod_cpu_millicores(window_seconds: int, u0: int, u1: int) -> int:
+def pod_cpu_millicores(window_seconds: float, u0: int, u1: int) -> int:
     """
     Sample the container’s CPU counter twice `window` seconds apart and
     return the average use in **millicores**.
     """
+
+    if window_seconds <= 0:
+        raise ValueError("window_seconds must be > 0")
 
     delta_mcore_seconds = max(u1 - u0, 0)
     return int(delta_mcore_seconds / window_seconds)  # average over the window
@@ -323,8 +326,11 @@ class BotResourceSnapshotTaker:
 
         now = timezone.now()
 
+        time_since_last_snapshot = now - self._last_snapshot_time
+        snapshot_is_due = time_since_last_snapshot >= datetime.timedelta(minutes=1)
+
         # If it is more than 30 seconds since the last snapshot, sample the cpu usage.
-        if self._first_cpu_usage_millicores is None and (now - self._last_snapshot_time) > datetime.timedelta(seconds=30):
+        if self._first_cpu_usage_millicores is None and time_since_last_snapshot > datetime.timedelta(seconds=30):
             try:
                 self._first_cpu_usage_millicores = get_cpu_usage_millicores()
                 self._first_cpu_usage_sample_time = now
@@ -338,8 +344,17 @@ class BotResourceSnapshotTaker:
             except Exception as e:
                 logger.error(f"Error getting first network stats for bot {self.bot.object_id}: {e}")
 
+            if snapshot_is_due:
+                # The main loop polls us, so it can block for longer than the whole
+                # snapshot interval and skip past the poll that should have opened
+                # the sampling window. This poll opens it instead, and the snapshot
+                # waits for the window to close rather than measuring the counters
+                # twice at the same instant over a zero length window.
+                self._last_snapshot_time = now
+                return
+
         # Don't take a snapshot if it's been less than 1 minutes since the last snapshot.
-        if (now - self._last_snapshot_time) < datetime.timedelta(minutes=1):
+        if not snapshot_is_due:
             return
 
         # Update the last snapshot time in memory for subsequent checks
