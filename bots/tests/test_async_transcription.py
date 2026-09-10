@@ -10,6 +10,7 @@ from unittest import mock
 
 from django.test import override_settings
 from django.test.testcases import TransactionTestCase
+from django.utils import timezone
 
 from bots.models import (
     AsyncTranscription,
@@ -34,6 +35,7 @@ from bots.models import (
     WebhookTriggerTypes,
 )
 from bots.tasks.process_async_transcription_task import (
+    check_for_transcription_completion,
     create_utterances_for_transcription_using_groups,
     process_async_transcription,
 )
@@ -688,3 +690,80 @@ class TestEndToEndAsyncTranscriptionAssemblyAI(AsyncTranscriptionTestCase):
         self.assertEqual(async_transcription.state, AsyncTranscriptionStates.FAILED)
         self.assertIsNotNone(async_transcription.failure_data)
         self.assertIn(TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND, async_transcription.failure_data.get("failure_reasons", []))
+
+
+class TestAsyncTranscriptionTimeout(AsyncTranscriptionTestCase):
+    """Tests for how long an async transcription is allowed to run before it is terminated."""
+
+    def _create_in_progress_async_transcription(self, seconds_ago, utterance_count=1):
+        async_transcription = AsyncTranscription.objects.create(
+            recording=self.recording,
+            settings={"transcription_settings": {"assembly_ai": {}}},
+            state=AsyncTranscriptionStates.IN_PROGRESS,
+            started_at=timezone.now() - timezone.timedelta(seconds=seconds_ago),
+        )
+        # Utterances that were queued for transcription and have not come back yet.
+        Utterance.objects.bulk_create(
+            [
+                Utterance(
+                    source=Utterance.Sources.PER_PARTICIPANT_AUDIO,
+                    recording=self.recording,
+                    async_transcription=async_transcription,
+                    participant=self.participant,
+                    timestamp_ms=i * 1000,
+                    duration_ms=1000,
+                )
+                for i in range(utterance_count)
+            ]
+        )
+        return async_transcription
+
+    def _check_for_completion(self, async_transcription):
+        """Runs the timeout check and reports whether the transcription was terminated."""
+        with mock.patch("bots.tasks.process_async_transcription_task.process_async_transcription") as mock_task:
+            mock_task.apply_async = mock.MagicMock()
+            check_for_transcription_completion(async_transcription)
+
+        async_transcription.refresh_from_db()
+        return async_transcription.state == AsyncTranscriptionStates.FAILED
+
+    @mock.patch("bots.tasks.deliver_webhook_task.deliver_webhook", mock.MagicMock())
+    def test_transcription_is_terminated_after_the_default_timeout_of_30_minutes(self):
+        self.assertFalse(self._check_for_completion(self._create_in_progress_async_transcription(seconds_ago=1799)))
+        self.assertTrue(self._check_for_completion(self._create_in_progress_async_transcription(seconds_ago=1801)))
+
+    @mock.patch.dict(os.environ, {"ASYNC_TRANSCRIPTION_TIMEOUT_SECONDS": "7200"})
+    @mock.patch("bots.tasks.deliver_webhook_task.deliver_webhook", mock.MagicMock())
+    def test_the_timeout_can_be_raised_with_an_env_var(self):
+        self.assertFalse(self._check_for_completion(self._create_in_progress_async_transcription(seconds_ago=7199)))
+        self.assertTrue(self._check_for_completion(self._create_in_progress_async_transcription(seconds_ago=7201)))
+
+    @mock.patch("bots.tasks.deliver_webhook_task.deliver_webhook", mock.MagicMock())
+    def test_the_timeout_grows_by_three_seconds_per_utterance_by_default(self):
+        # 700 utterances buy 2100 seconds, which is more than the 1800 second floor.
+        self.assertFalse(self._check_for_completion(self._create_in_progress_async_transcription(seconds_ago=2099, utterance_count=700)))
+        self.assertTrue(self._check_for_completion(self._create_in_progress_async_transcription(seconds_ago=2101, utterance_count=700)))
+
+    @mock.patch.dict(os.environ, {"ASYNC_TRANSCRIPTION_TIMEOUT_SECONDS_PER_UTTERANCE": "60"})
+    @mock.patch("bots.tasks.deliver_webhook_task.deliver_webhook", mock.MagicMock())
+    def test_the_seconds_per_utterance_can_be_raised_with_an_env_var(self):
+        # 100 utterances at 60 seconds each buy 6000 seconds.
+        self.assertFalse(self._check_for_completion(self._create_in_progress_async_transcription(seconds_ago=5999, utterance_count=100)))
+        self.assertTrue(self._check_for_completion(self._create_in_progress_async_transcription(seconds_ago=6001, utterance_count=100)))
+
+    @mock.patch.dict(os.environ, {"ASYNC_TRANSCRIPTION_TIMEOUT_SECONDS": "600", "ASYNC_TRANSCRIPTION_TIMEOUT_SECONDS_PER_UTTERANCE": "1"})
+    @mock.patch("bots.tasks.deliver_webhook_task.deliver_webhook", mock.MagicMock())
+    def test_the_timeout_is_the_floor_when_the_utterances_do_not_reach_it(self):
+        # 100 utterances at 1 second each buy 100 seconds, so the 600 second floor wins.
+        self.assertFalse(self._check_for_completion(self._create_in_progress_async_transcription(seconds_ago=599, utterance_count=100)))
+        self.assertTrue(self._check_for_completion(self._create_in_progress_async_transcription(seconds_ago=601, utterance_count=100)))
+
+    @mock.patch("bots.tasks.deliver_webhook_task.deliver_webhook", mock.MagicMock())
+    def test_a_terminated_transcription_records_that_utterances_were_still_in_progress(self):
+        async_transcription = self._create_in_progress_async_transcription(seconds_ago=1801)
+
+        self.assertTrue(self._check_for_completion(async_transcription))
+        self.assertIn(
+            TranscriptionFailureReasons.UTTERANCES_STILL_IN_PROGRESS_WHEN_TRANSCRIPTION_TERMINATED,
+            async_transcription.failure_data.get("failure_reasons", []),
+        )
