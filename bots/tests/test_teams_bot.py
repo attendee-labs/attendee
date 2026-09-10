@@ -1515,6 +1515,168 @@ class TestTeamsBot(TransactionTestCase):
             # Close the database connection since we're in a thread
             connection.close()
 
+    @patch.dict("os.environ", {"MONITOR_DOMAIN_ALLOWLIST_IN_CHROME": "true", "ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME": "false"})
+    @patch("bots.web_bot_adapter.web_bot_adapter.settings.MONITOR_DOMAIN_ALLOWLIST_IN_CHROME", True)
+    @patch("bots.web_bot_adapter.web_bot_adapter.settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME", False)
+    @patch("bots.teams_bot_adapter.teams_bot_adapter.settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME", False)
+    @patch("bots.web_bot_adapter.web_bot_adapter.connect")
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
+    def test_domain_allow_list_violation_only_monitored_when_enforcement_is_off(
+        self,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+        MockBiDiConnect,
+    ):
+        """Test that with monitoring on but enforcement off, allow list violations are
+        observed and recorded but never block the bot.
+
+        In monitor-only mode Chrome gets no URLBlocklist/URLAllowlist policy, so nothing is
+        actually blocked, but the BiDi listener still runs and records which domains were
+        navigated to and which of them were outside the allow list. Even when the top level
+        page looks like the blocked-site interstitial, check_domain_allow_list_violation()
+        must not raise.
+        """
+        # Configure the mock uploader
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        # Mock the Chrome driver
+        mock_driver = create_mock_teams_driver()
+        mock_driver.capabilities = {"webSocketUrl": "ws://localhost:9222/session/test-session"}
+        MockChromeDriver.return_value = mock_driver
+
+        # Mock virtual display
+        mock_display = MagicMock()
+        MockDisplay.return_value = mock_display
+
+        blocked_url = "https://badmicrosoft.com/some-path"
+        allowed_url = "https://teams.microsoft.com/meet/123"
+
+        # Stub the BiDi websocket so the listener sees a successful session.subscribe
+        # response and then a navigation to an allowed domain followed by a failed
+        # navigation to a domain outside the allow list
+        mock_bidi_socket = MagicMock()
+        mock_bidi_socket.recv.return_value = json.dumps({"id": 1, "type": "success", "result": {}})
+        mock_bidi_socket.__iter__.return_value = iter(
+            [
+                json.dumps({"method": "browsingContext.navigationStarted", "params": {"url": allowed_url}}),
+                json.dumps({"method": "browsingContext.navigationFailed", "params": {"url": blocked_url}}),
+            ]
+        )
+        MockBiDiConnect.return_value = mock_bidi_socket
+
+        # Create bot controller
+        controller = BotController(self.bot.id)
+
+        # Mock the attempt_to_join_meeting to succeed immediately
+        with patch("bots.teams_bot_adapter.teams_ui_methods.TeamsUIMethods.attempt_to_join_meeting") as mock_attempt_to_join:
+            mock_attempt_to_join.return_value = None  # Successful join
+
+            # Run the bot in a separate thread since it has an event loop
+            bot_thread = threading.Thread(target=controller.run)
+            bot_thread.daemon = True
+            bot_thread.start()
+
+            # Wait for the bot to join and adapter to be created
+            time.sleep(3)
+
+            # Verify Chrome was launched with the BiDi websocket capability the listener needs
+            chrome_options = MockChromeDriver.call_args.kwargs["options"]
+            self.assertTrue(chrome_options.to_capabilities().get("webSocketUrl"), "webSocketUrl capability should be requested when monitoring is enabled")
+
+            # Verify the listener subscribed over the driver's BiDi websocket
+            self.assertEqual(MockBiDiConnect.call_args[0][0], mock_driver.capabilities["webSocketUrl"])
+            subscribe_message = json.loads(mock_bidi_socket.send.call_args[0][0])
+            self.assertEqual(subscribe_message["method"], "session.subscribe")
+
+            # --- Verify Chrome is not given a blocking policy when enforcement is off ---
+            m = mock_open()
+            with patch("bots.web_bot_adapter.web_bot_adapter.os.path.islink", return_value=True):
+                with patch("builtins.open", m):
+                    controller.adapter.write_chrome_policies_file()
+
+            m.assert_called_once_with("/tmp/attendee-chrome-policies.json", "w")
+            write_calls = m().write.call_args_list
+            written_data = "".join(call[0][0] for call in write_calls)
+            policy = json.loads(written_data)
+
+            self.assertEqual(policy, {}, "No Chrome policies should be written when enforcement is off")
+            self.assertNotIn("URLBlocklist", policy, "URLs should not be blocked when enforcement is off")
+            self.assertNotIn("URLAllowlist", policy, "No URL allow list should be applied when enforcement is off")
+
+            # --- Verify the listener still recorded what it saw ---
+            self.assertEqual(
+                controller.adapter.domains_seen_by_domain_allow_list_listener,
+                {"teams.microsoft.com", "badmicrosoft.com"},
+                "Every navigated domain should be recorded while monitoring",
+            )
+            self.assertEqual(
+                controller.adapter.domains_seen_by_domain_allow_list_listener_where_navigation_failed,
+                {"badmicrosoft.com"},
+                "Only the failed navigation's domain should be recorded as failed",
+            )
+            self.assertEqual(
+                controller.adapter.domains_seen_by_domain_allow_list_listener_where_domain_was_not_in_allow_list,
+                {"badmicrosoft.com"},
+                "Only the domain outside the allow list should be recorded as a violation",
+            )
+
+            # The allow list is still evaluated even though it isn't enforced
+            self.assertFalse(controller.adapter.url_violates_domain_allow_list(allowed_url))
+            self.assertTrue(controller.adapter.url_violates_domain_allow_list(blocked_url))
+
+            # --- Verify a violation does not stop the bot ---
+
+            # Simulate the bot having joined and being in the meeting
+            controller.adapter.joined_at = time.time()
+
+            # Simulate the top level page showing the blocked-site interstitial, which is
+            # what would happen if the policy were being enforced
+            mock_driver.current_url = blocked_url
+
+            def execute_cdp_cmd_side_effect(cmd, params):
+                if cmd == "Runtime.evaluate":
+                    return {"result": {"value": "Your organization doesn\u2019t allow you to view this site"}}
+                if cmd == "Page.getFrameTree":
+                    return {"frameTree": {"frame": {"url": blocked_url}, "childFrames": []}}
+                return {}
+
+            mock_driver.execute_cdp_cmd.side_effect = execute_cdp_cmd_side_effect
+
+            # Reset the last check time so the check runs immediately
+            controller.adapter.last_domain_allow_list_violation_check_time = 0
+
+            # The check should be a no-op rather than raising
+            self.assertIsNone(controller.adapter.check_domain_allow_list_violation())
+
+            # Let the main loop tick with the interstitial in place to confirm the bot
+            # keeps running instead of failing
+            time.sleep(1)
+            self.bot.refresh_from_db()
+            self.assertNotEqual(self.bot.state, BotStates.FATAL_ERROR, "The bot should not fail when a violation is only monitored")
+
+            # Stop simulating the interstitial so cleanup isn't affected by it
+            mock_driver.execute_cdp_cmd.side_effect = None
+            mock_driver.execute_cdp_cmd.return_value = {}
+
+            # Clean up: simulate meeting ending to trigger cleanup
+            controller.adapter.left_meeting = True
+            controller.adapter.send_message_callback({"message": controller.adapter.Messages.MEETING_ENDED})
+            time.sleep(1)
+
+            # Now wait for the thread to finish naturally
+            bot_thread.join(timeout=5)
+
+            # If thread is still running after timeout, that's a problem to report
+            if bot_thread.is_alive():
+                print("WARNING: Bot thread did not terminate properly after cleanup")
+
+            # Close the database connection since we're in a thread
+            connection.close()
+
     @patch("bots.bot_controller.bot_controller.settings.BOT_RECORDING_VIDEO_DEGRADE_THRESHOLD_BYTES", 100)
     @patch("bots.bot_controller.screen_and_audio_recorder.subprocess.Popen")
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
