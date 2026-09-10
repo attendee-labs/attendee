@@ -1067,6 +1067,14 @@ paths:
           default: application/json
         description: Should always be application/json
         required: true
+      - in: query
+        name: include_incomplete
+        schema:
+          type: boolean
+        description: When the async transcription is not complete, still return the
+          utterances transcribed so far, in the incomplete_transcription field of
+          the error response. A transcription that failed because some utterances
+          did not finish in time usually holds most of the meeting.
       - in: path
         name: object_id
         schema:
@@ -1101,6 +1109,8 @@ paths:
                 items:
                   $ref: '#/components/schemas/TranscriptUtterance'
           description: List of transcribed utterances
+        '400':
+          description: The async transcription is not complete
         '404':
           description: Bot not found
   /api/v1/bots/{object_id}/voice_agent_settings:

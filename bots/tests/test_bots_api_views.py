@@ -8,6 +8,8 @@ from rest_framework import status
 from accounts.models import Organization
 from bots.models import (
     ApiKey,
+    AsyncTranscription,
+    AsyncTranscriptionStates,
     Bot,
     BotStates,
     Participant,
@@ -384,3 +386,143 @@ class TranscriptSplitOnTurnsViewTest(TransactionTestCase):
         self.assertEqual(results[2]["transcription"]["transcript"], "World")
         self.assertEqual(len(results[2]["transcription"]["words"]), 1)
         self.assertEqual(results[2]["transcription"]["words"][0]["word"], "World")
+
+
+class TranscriptIncompleteAsyncTranscriptionViewTest(TransactionTestCase):
+    """Tests for the transcript API view with the include_incomplete parameter."""
+
+    def setUp(self):
+        self.organization = Organization.objects.create(name="Test Organization")
+        self.project = Project.objects.create(name="Test Project", organization=self.organization)
+        self.api_key, self.api_key_plain = ApiKey.create(project=self.project, name="Test API Key")
+
+        self.bot = Bot.objects.create(
+            project=self.project,
+            meeting_url="https://meet.google.com/test-meeting",
+            name="Test Bot",
+            state=BotStates.ENDED,
+        )
+
+        self.recording = Recording.objects.create(
+            bot=self.bot,
+            is_default_recording=True,
+            recording_type=self.bot.recording_type(),
+            transcription_type=TranscriptionTypes.NON_REALTIME,
+        )
+
+        self.participant = Participant.objects.create(
+            bot=self.bot,
+            uuid="speaker_uuid",
+            full_name="Speaker",
+        )
+
+        # The transcription of the second utterance never arrived, so the job was
+        # terminated and marked as failed while the first utterance was already done.
+        self.async_transcription = AsyncTranscription.objects.create(
+            recording=self.recording,
+            state=AsyncTranscriptionStates.FAILED,
+            failure_data={"failure_reasons": ["utterances_still_in_progress_when_transcription_terminated"]},
+        )
+        Utterance.objects.create(
+            recording=self.recording,
+            async_transcription=self.async_transcription,
+            participant=self.participant,
+            timestamp_ms=0,
+            duration_ms=1000,
+            transcription={"transcript": "Hello everyone"},
+        )
+        Utterance.objects.create(
+            recording=self.recording,
+            async_transcription=self.async_transcription,
+            participant=self.participant,
+            timestamp_ms=2000,
+            duration_ms=1000,
+            transcription=None,
+        )
+
+        self.client = Client()
+
+    def _get_transcript(self, query):
+        return self.client.get(
+            f"/api/v1/bots/{self.bot.object_id}/transcript?{query}",
+            HTTP_AUTHORIZATION=f"Token {self.api_key_plain}",
+        )
+
+    def test_failed_async_transcription_returns_an_error_without_the_transcript(self):
+        response = self._get_transcript(f"async_transcription_id={self.async_transcription.object_id}")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            response.json(),
+            {"error": f"Async transcription {self.async_transcription.object_id} is not complete. It is in state failed"},
+        )
+
+    def test_failed_async_transcription_returns_the_transcript_it_has(self):
+        response = self._get_transcript(f"async_transcription_id={self.async_transcription.object_id}&include_incomplete=true")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        # Only the utterance that was transcribed before the job was terminated.
+        self.assertEqual(
+            response.json(),
+            {
+                "error": f"Async transcription {self.async_transcription.object_id} is not complete. It is in state failed",
+                "incomplete_transcription": [
+                    {
+                        "speaker_name": "Speaker",
+                        "speaker_uuid": "speaker_uuid",
+                        "speaker_user_uuid": None,
+                        "speaker_is_host": False,
+                        "timestamp_ms": 0,
+                        "duration_ms": 1000,
+                        "transcription": {"transcript": "Hello everyone"},
+                    }
+                ],
+            },
+        )
+
+    def test_in_progress_async_transcription_returns_the_transcript_so_far(self):
+        self.async_transcription.state = AsyncTranscriptionStates.IN_PROGRESS
+        self.async_transcription.save()
+
+        response = self._get_transcript(f"async_transcription_id={self.async_transcription.object_id}&include_incomplete=true")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            response.json(),
+            {
+                "error": f"Async transcription {self.async_transcription.object_id} is not complete. It is in state in_progress",
+                "incomplete_transcription": [
+                    {
+                        "speaker_name": "Speaker",
+                        "speaker_uuid": "speaker_uuid",
+                        "speaker_user_uuid": None,
+                        "speaker_is_host": False,
+                        "timestamp_ms": 0,
+                        "duration_ms": 1000,
+                        "transcription": {"transcript": "Hello everyone"},
+                    }
+                ],
+            },
+        )
+
+    def test_complete_async_transcription_is_unaffected(self):
+        self.async_transcription.state = AsyncTranscriptionStates.COMPLETE
+        self.async_transcription.save()
+
+        response = self._get_transcript(f"async_transcription_id={self.async_transcription.object_id}&include_incomplete=true")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response.json(),
+            [
+                {
+                    "speaker_name": "Speaker",
+                    "speaker_uuid": "speaker_uuid",
+                    "speaker_user_uuid": None,
+                    "speaker_is_host": False,
+                    "timestamp_ms": 0,
+                    "duration_ms": 1000,
+                    "transcription": {"transcript": "Hello everyone"},
+                }
+            ],
+        )

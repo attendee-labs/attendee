@@ -748,6 +748,7 @@ class TranscriptView(APIView):
                 response=TranscriptUtteranceSerializer(many=True),
                 description="List of transcribed utterances",
             ),
+            400: OpenApiResponse(description="The async transcription is not complete"),
             404: OpenApiResponse(description="Bot not found"),
         },
         parameters=[
@@ -766,6 +767,13 @@ class TranscriptView(APIView):
                 description="Only return transcript entries updated or created after this time. Useful when polling for updates to the transcript.",
                 required=False,
                 examples=[OpenApiExample("DateTime Example", value="2024-01-18T12:34:56Z")],
+            ),
+            OpenApiParameter(
+                name="include_incomplete",
+                type=bool,
+                location=OpenApiParameter.QUERY,
+                description="When the async transcription is not complete, still return the utterances transcribed so far, in the incomplete_transcription field of the error response. A transcription that failed because some utterances did not finish in time usually holds most of the meeting.",
+                required=False,
             ),
         ],
         tags=["Bots"],
@@ -786,7 +794,7 @@ class TranscriptView(APIView):
                 async_transcription = recording.async_transcriptions.get(
                     object_id=request.query_params.get("async_transcription_id"),
                 )
-                if async_transcription.state != AsyncTranscriptionStates.COMPLETE:
+                if async_transcription.state != AsyncTranscriptionStates.COMPLETE and request.query_params.get("include_incomplete") != "true":
                     return Response({"error": f"Async transcription {async_transcription.object_id} is not complete. It is in state {AsyncTranscriptionStates.state_to_api_code(async_transcription.state)}"}, status=status.HTTP_400_BAD_REQUEST)
 
             # Get all utterances with transcriptions, sorted by timeline
@@ -829,6 +837,10 @@ class TranscriptView(APIView):
                 transcript_data = split_utterances_on_turn_taking(transcript_data)
 
             serializer = TranscriptUtteranceSerializer(transcript_data, many=True)
+
+            if async_transcription and async_transcription.state != AsyncTranscriptionStates.COMPLETE:
+                return Response({"error": f"Async transcription {async_transcription.object_id} is not complete. It is in state {AsyncTranscriptionStates.state_to_api_code(async_transcription.state)}", "incomplete_transcription": serializer.data}, status=status.HTTP_400_BAD_REQUEST)
+
             return Response(serializer.data)
 
         except Bot.DoesNotExist:
