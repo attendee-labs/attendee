@@ -203,7 +203,12 @@ CELERY_TASK_ROUTES = {
     },
 }
 
-if os.getenv("LAUNCH_BOT_METHOD") != "kubernetes" and os.getenv("LAUNCH_BOT_METHOD") != "docker-compose-multi-host":
+# With the kubernetes and docker-compose-multi-host launch methods, bots run in a separate pod/container
+# via `python manage.py run_bot` and the Celery worker only runs short scheduling, webhook and transcription
+# tasks. Otherwise (unset or "celery") the run_bot task itself executes inside the worker.
+BOTS_RUN_IN_CELERY_WORKER = os.getenv("LAUNCH_BOT_METHOD") not in ("kubernetes", "docker-compose-multi-host")
+
+if BOTS_RUN_IN_CELERY_WORKER:
     # This setting means that each celery worker process will be recreated after each task.
     # Needed because latest Zoom SDK has segfault issue unless we recreate the process after each bot.
     CELERY_WORKER_MAX_TASKS_PER_CHILD = 1
