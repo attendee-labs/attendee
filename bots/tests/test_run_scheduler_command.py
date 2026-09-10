@@ -118,6 +118,43 @@ class RunSchedulerCommandTestCase(TestCase):
             # Verify no bots were launched since they're all outside the time threshold
             mock_delay.assert_not_called()
 
+    def test_run_scheduled_bots_respects_past_join_at_tolerance_env_var(self):
+        """Test that SCHEDULED_BOT_PAST_JOIN_AT_TOLERANCE_SECONDS extends how far in the past a bot's join_at can be"""
+        # Missed by 7 minutes: outside the default 5-minute tolerance, inside a 10-minute tolerance
+        bot = Bot.objects.create(project=self.project, name="Missed Bot", meeting_url="https://example.zoom.us/j/444555666", state=BotStates.SCHEDULED, join_at=self.join_at_too_late)
+
+        command = Command()
+
+        with patch.dict("os.environ", {"SCHEDULED_BOT_PAST_JOIN_AT_TOLERANCE_SECONDS": "600"}):
+            with patch("bots.tasks.launch_scheduled_bot_task.launch_scheduled_bot.delay") as mock_delay:
+                with patch("django.utils.timezone.now", return_value=self.now):
+                    command._run_scheduled_bots()
+
+                mock_delay.assert_called_once_with(bot.id, bot.join_at.isoformat())
+
+    def test_run_scheduled_bots_with_jitter_respects_past_join_at_tolerance_env_var(self):
+        """Test that the jitter code path also honors SCHEDULED_BOT_PAST_JOIN_AT_TOLERANCE_SECONDS"""
+        jitter_start = 300
+        jitter_end = 600
+
+        # Missed by 7 minutes: outside the default 5-minute tolerance, inside a 10-minute tolerance
+        bot = Bot.objects.create(project=self.project, name="Missed Bot", meeting_url="https://example.zoom.us/j/444555666", state=BotStates.SCHEDULED, join_at=self.join_at_too_late)
+
+        command = Command()
+        mock_redis = MagicMock()
+        mock_redis.hscan_iter.return_value = iter([])
+        command._redis_client = mock_redis
+
+        env = {"SCHEDULED_BOT_JITTER_START_SECONDS": str(jitter_start), "SCHEDULED_BOT_JITTER_END_SECONDS": str(jitter_end), "SCHEDULED_BOT_PAST_JOIN_AT_TOLERANCE_SECONDS": "600"}
+        with patch.dict("os.environ", env):
+            with patch("bots.tasks.launch_scheduled_bot_task.launch_scheduled_bot.delay") as mock_delay:
+                with patch("bots.tasks.launch_scheduled_bot_task.launch_scheduled_bot.apply_async") as mock_apply_async:
+                    with patch("django.utils.timezone.now", return_value=self.now):
+                        command._run_scheduled_bots_with_jitter()
+
+                    mock_delay.assert_called_once_with(bot.id, bot.join_at.isoformat())
+                    mock_apply_async.assert_not_called()
+
     def test_run_periodic_calendar_syncs_with_no_eligible_calendars(self):
         """Test that _run_periodic_calendar_syncs handles the case when no calendars need syncing"""
         # Create a calendar that was synced recently
