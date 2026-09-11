@@ -28,7 +28,7 @@ from bots.models import ParticipantEventTypes, RecordingViews
 from bots.per_participant_realtime_video_configuration import PerParticipantRealtimeVideoConfiguration
 from bots.room_sync_source_participant_configuration import RoomSyncSourceParticipantConfiguration
 from bots.room_sync_utils import add_bot_indicator_to_display_name
-from bots.utils import half_ceil, scale_i420
+from bots.utils import half_ceil, mask_url_query_param_values, scale_i420
 
 from .debug_screen_recorder import DebugScreenRecorder
 from .livekit_websocket_bridge import LiveKitWebsocketBridge
@@ -611,6 +611,9 @@ class WebBotAdapter(BotAdapter):
             }
         )
 
+    def subclass_specific_domain_allowlist(self):
+        return []
+
     def subclass_specific_chrome_policies(self):
         return {}
 
@@ -753,7 +756,7 @@ class WebBotAdapter(BotAdapter):
         }
         options.add_experimental_option("prefs", prefs)
 
-        if settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:
+        if settings.MONITOR_DOMAIN_ALLOWLIST_IN_CHROME:
             options.set_capability("webSocketUrl", True)
 
         self.add_subclass_specific_chrome_options(options)
@@ -815,7 +818,7 @@ class WebBotAdapter(BotAdapter):
             logger.exception("Error starting domain allow list listener")
 
     def start_domain_allow_list_listener_with_no_error_handling(self):
-        if not settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:
+        if not settings.MONITOR_DOMAIN_ALLOWLIST_IN_CHROME:
             return
 
         socket = connect(
@@ -849,7 +852,7 @@ class WebBotAdapter(BotAdapter):
                 logger.warning(
                     "%s: url=%s violates_domain_allow_list=%s",
                     message.get("method"),
-                    domain,
+                    mask_url_query_param_values(url),
                     violates_allow_list,
                 )
 
@@ -1165,30 +1168,35 @@ class WebBotAdapter(BotAdapter):
             return []
 
     def url_violates_domain_allow_list(self, url):
-        allowlist = self.subclass_specific_chrome_policies().get("URLAllowlist", [])
+        allowlist = self.subclass_specific_domain_allowlist()
+
         if not url or not allowlist:
             return False
 
         parsed = urlparse(url)
-        # Only http(s) navigations are subject to the allow list. Skip about:blank,
-        # chrome://, chrome-error://, data:, blob:, etc.
+
+        # Only http(s) navigations are subject to the allow list.
         if parsed.scheme not in ("http", "https"):
             return False
 
-        host = parsed.netloc.split("@")[-1].split(":")[0].lower()
+        host = (parsed.hostname or "").lower().rstrip(".")
+
         if not host:
             return False
 
         for entry in allowlist:
             allowed = str(entry).lower().strip()
-            if "://" in allowed:
-                allowed = urlparse(allowed).netloc
-            allowed = allowed.lstrip(".").split("/")[0].split(":")[0]
+
+            exact_host_only = allowed.startswith(".")
+            allowed = allowed.lstrip(".").rstrip(".")
+
             if not allowed:
                 continue
-            # "*" allows everything; otherwise match the host or any subdomain of it,
-            # mirroring Chrome's URLAllowlist matching semantics.
-            if allowed == "*" or host == allowed or host.endswith("." + allowed):
+
+            if allowed == "*" or host == allowed:
+                return False
+
+            if not exact_host_only and host.endswith("." + allowed):
                 return False
 
         return True
@@ -1199,7 +1207,7 @@ class WebBotAdapter(BotAdapter):
             nav_history_hosts = list(set([self.domain_for_history_entry_url(url) for url in nav_history_urls]))
             logger.info(f"Browser navigation history {nav_history_hosts}")
 
-            if not settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:
+            if not settings.MONITOR_DOMAIN_ALLOWLIST_IN_CHROME:
                 return
 
             # Only covers top-level navigations

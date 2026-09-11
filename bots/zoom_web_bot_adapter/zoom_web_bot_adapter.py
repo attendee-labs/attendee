@@ -224,14 +224,17 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
 
         return super().subclass_specific_use_disable_gpu_chrome_option()
 
+    def subclass_specific_domain_allowlist(self):
+        return [
+            "www.zoom.com",
+            "127.0.0.1",
+        ]
+
     def subclass_specific_chrome_policies(self):
         if not settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:
             return {}
 
         return {
             "URLBlocklist": ["*"],
-            "URLAllowlist": [
-                "www.zoom.com",
-                "127.0.0.1",
-            ],
+            "URLAllowlist": self.subclass_specific_domain_allowlist(),
         }

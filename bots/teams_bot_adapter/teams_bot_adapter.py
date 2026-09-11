@@ -171,23 +171,26 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
             }}
         """
 
+    def subclass_specific_domain_allowlist(self):
+        return [
+            "teams.microsoft.com",
+            "teams.live.com",
+            "login.live.com",
+            "teams.microsoft.us",
+            "m365.cloud.microsoft",
+            "static.microsoft",
+            "login.microsoftonline.com",
+            "login.microsoftonline.us",
+            "www.office.com",
+        ]
+
     def subclass_specific_chrome_policies(self):
         if not settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:
             return {}
 
         return {
             "URLBlocklist": ["*"],
-            "URLAllowlist": [
-                "teams.microsoft.com",
-                "teams.live.com",
-                "login.live.com",
-                "teams.microsoft.us",
-                "m365.cloud.microsoft",
-                "static.microsoft",
-                "login.microsoftonline.com",
-                "login.microsoftonline.us",
-                "www.office.com",
-            ],
+            "URLAllowlist": self.subclass_specific_domain_allowlist(),
         }
 
     def get_teams_bot_identification_token(self):

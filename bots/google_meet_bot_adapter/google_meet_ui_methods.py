@@ -5,7 +5,7 @@ import os
 import random
 import subprocess
 import time
-from urllib.parse import parse_qsl, quote, urlencode, urlparse, urlunparse
+from urllib.parse import quote, urlparse
 
 import redis
 import requests
@@ -20,18 +20,12 @@ from selenium.webdriver.support.ui import WebDriverWait
 from bots.bot_sso_utils import get_google_meet_set_cookie_url
 from bots.google_meet_bot_adapter.okta_authenticator import OktaAuthenticator, OktaSessionError
 from bots.models import RecordingViews
+from bots.utils import mask_url_query_param_values
 from bots.web_bot_adapter.ui_methods import UiCouldNotClickElementException, UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableExpectedException
 
 from .mocap_manager import MocapManager
 
 logger = logging.getLogger(__name__)
-
-
-def mask_url_query_param_values(url, mask="***"):
-    """Return the URL with each query parameter's value replaced by a mask, preserving the param keys."""
-    parsed_url = urlparse(url)
-    masked_query = urlencode([(key, mask) for key, _ in parse_qsl(parsed_url.query, keep_blank_values=True)])
-    return urlunparse(parsed_url._replace(query=masked_query, params="", fragment=""))
 
 
 class UiGoogleBlockingUsException(UiRetryableExpectedException):
