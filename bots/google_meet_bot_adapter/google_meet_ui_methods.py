@@ -144,7 +144,7 @@ class GoogleMeetUIMethods:
     def look_for_denied_your_request_element(self, step):
         denied_your_request_element = self.find_element_by_selector(
             By.XPATH,
-            '//*[contains(text(), "Someone in the call denied your request to join") or contains(text(), "No one responded to your request to join the call") or contains(text(), "You left the meeting")]',
+            '//*[contains(text(), "Someone in the call denied your request to join") or contains(text(), "No one responded to your request to join the call") or contains(text(), "No one has responded to your request to join the call") or contains(text(), "You left the meeting")]',
         )
         if not denied_your_request_element:
             return
@@ -154,7 +154,7 @@ class GoogleMeetUIMethods:
         if "Someone in the call denied your request to join" in element_text:
             logger.warning("Someone in the call actively denied our request to join. Raising UiRequestToJoinDeniedException")
             raise UiRequestToJoinDeniedException("Someone in the call denied your request to join", step)
-        elif "No one responded to your request to join the call" in element_text:
+        elif "No one responded to your request to join the call" in element_text or "No one has responded to your request to join the call" in element_text:
             logger.warning("No one responded to our request to join (timeout). Raising UiRequestToJoinDeniedException")
             raise UiRequestToJoinDeniedException("No one responded to your request to join the call", step)
         else:  # "You left the meeting"
