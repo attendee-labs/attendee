@@ -958,6 +958,7 @@ class UserManager {
         this.currentUsersMap = new Map();
         this.deviceOutputMap = new Map();
         this.currentUserId = null;
+        this.screenshareEvents = new ParticipantScreenshareEvents(ws);
 
         this.ws = ws;
     }
@@ -1125,7 +1126,22 @@ class UserManager {
                 updatedUsers: updatedUsersToSend
             });
         }
+
+        // After the UsersUpdate so a sharer's join is processed before their screenshare start
+        this.syncScreenshareStartStopEvents();
     }
+
+    syncScreenshareStartStopEvents() {
+        // Presentation devices reference the participant who owns the share.
+        const sharers = this.getCurrentUsersInMeetingWhoAreScreenSharing()
+            .map(user => user.parentDeviceId)
+            .filter(id => {
+                const owner = this.currentUsersMap.get(id);
+                return owner && !owner.parentDeviceId && owner.status === this.MEETING_STATUS.IN_MEETING;
+            });
+        this.screenshareEvents.sync(sharers);
+    }
+
 }
 
 class ReceiverManager {
@@ -1298,6 +1314,11 @@ class WebSocketClient {
   }
   
   sendJson(data) {
+      if (window.initialData.recordParticipantScreenshareStartStopEvents && (data.type === 'UsersUpdate' || data.type === 'ParticipantScreenshareStartStopEvent')) {
+          this.participantEventQueue ??= new ParticipantEventQueue(this.ws);
+          this.participantEventQueue.send(data);
+          return;
+      }
       if (this.ws.readyState !== WebSocket.OPEN) {
           console.error('WebSocket is not connected');
           return;

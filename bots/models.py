@@ -1183,6 +1183,12 @@ class Bot(models.Model):
             recording_settings = {}
         return recording_settings.get("record_participant_speech_start_stop_events", False)
 
+    def record_participant_screenshare_start_stop_events(self):
+        recording_settings = self.settings.get("recording_settings", {})
+        if recording_settings is None:
+            recording_settings = {}
+        return recording_settings.get("record_participant_screenshare_start_stop_events", False)
+
     def recording_type(self):
         # Recording type is derived from the recording format
         recording_format = self.recording_format()
@@ -2219,6 +2225,8 @@ class ParticipantEventTypes(models.IntegerChoices):
     SPEECH_START = 3, "Speech Start"
     SPEECH_STOP = 4, "Speech Stop"
     UPDATE = 5, "Update"
+    SCREENSHARE_START = 6, "Screenshare Start"
+    SCREENSHARE_STOP = 7, "Screenshare Stop"
 
     @classmethod
     def type_to_api_code(cls, value):
@@ -2229,6 +2237,8 @@ class ParticipantEventTypes(models.IntegerChoices):
             cls.SPEECH_START: "speech_start",
             cls.SPEECH_STOP: "speech_stop",
             cls.UPDATE: "update",
+            cls.SCREENSHARE_START: "screenshare_start",
+            cls.SCREENSHARE_STOP: "screenshare_stop",
         }
         return mapping.get(value)
 
@@ -3163,6 +3173,7 @@ class WebhookTriggerTypes(models.IntegerChoices):
     ZOOM_OAUTH_CONNECTION_STATE_CHANGE = 8, "Zoom OAuth Connection State Change"
     BOT_LOGS_UPDATE = 9, "Bot Logs Update"
     PARTICIPANT_EVENTS_SPEECH_START_STOP = 10, "Participant Speech Start/Stop"
+    PARTICIPANT_EVENTS_SCREENSHARE_START_STOP = 11, "Participant Screenshare Start/Stop"
     # add other event types here
 
     @classmethod
@@ -3179,6 +3190,7 @@ class WebhookTriggerTypes(models.IntegerChoices):
             cls.ZOOM_OAUTH_CONNECTION_STATE_CHANGE: "zoom_oauth_connection.state_change",
             cls.BOT_LOGS_UPDATE: "bot_logs.update",
             cls.PARTICIPANT_EVENTS_SPEECH_START_STOP: "participant_events.speech_start_stop",
+            cls.PARTICIPANT_EVENTS_SCREENSHARE_START_STOP: "participant_events.screenshare_start_stop",
         }
 
     @classmethod

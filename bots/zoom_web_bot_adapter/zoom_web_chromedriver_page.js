@@ -56,6 +56,24 @@ class TranscriptMessageFinalizationManager {
 
 const transcriptMessageFinalizationManager = new TranscriptMessageFinalizationManager();
 
+function syncInitialParticipantScreenshares() {
+    if (!window.initialData.recordParticipantScreenshareStartStopEvents)
+        return;
+    ZoomMtg.getAttendeeslist({
+        success: response => {
+            const participants = response.result?.attendeesList;
+            // A waiting-room or incomplete result is not a participant departure.
+            if (!Array.isArray(participants) || !participants.some(user => user.self))
+                return;
+            for (const user of participants) {
+                if (user.userId)
+                    window.userManager.singleUserSynced({...user, state: user.isHold ? 'inactive' : 'active'});
+            }
+        },
+        error: error => console.error('Unable to read initial participant sharing state:', error)
+    });
+}
+
 function joinMeeting() {
     const signature = zoomInitialData.signature;
     startMeeting(signature);
@@ -137,6 +155,7 @@ function startMeeting(signature) {
             success: (success) => {
                 console.log('join success');
                 console.log(success);
+                syncInitialParticipantScreenshares();
 
                 /*
                 We don't need to do this because user events include the self attribute.
@@ -207,6 +226,7 @@ function startMeeting(signature) {
         if (data.level == 13)
         {
             userEnteredMeeting = true;
+            syncInitialParticipantScreenshares();
             window.ws.sendJson({
                 type: 'ChatStatusChange',
                 change: 'ready_to_send'

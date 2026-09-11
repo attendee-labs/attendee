@@ -221,6 +221,7 @@ class BotController:
             record_chat_messages_when_paused=self.bot_in_db.record_chat_messages_when_paused(),
             disable_incoming_video=self.disable_incoming_video_for_web_bots(),
             record_participant_speech_start_stop_events=self.bot_in_db.record_participant_speech_start_stop_events(),
+            record_participant_screenshare_start_stop_events=self.bot_in_db.record_participant_screenshare_start_stop_events(),
             modify_dom_for_video_recording=self.should_modify_dom_for_video_recording_for_web_bots(),
             google_meet_bot_login_is_available=self.google_meet_bot_login_is_available(),
             google_meet_bot_login_should_be_used=self.bot_in_db.google_meet_login_mode_is_always(),
@@ -299,6 +300,7 @@ class BotController:
             ),
             record_chat_messages_when_paused=self.bot_in_db.record_chat_messages_when_paused(),
             record_participant_speech_start_stop_events=self.bot_in_db.record_participant_speech_start_stop_events(),
+            record_participant_screenshare_start_stop_events=self.bot_in_db.record_participant_screenshare_start_stop_events(),
             disable_incoming_video=self.disable_incoming_video_for_web_bots(),
             modify_dom_for_video_recording=self.should_modify_dom_for_video_recording_for_web_bots(),
             teams_bot_identification_credentials=self.get_teams_bot_identification_credentials(),
@@ -376,6 +378,7 @@ class BotController:
             disable_incoming_video=self.disable_incoming_video_for_web_bots(),
             modify_dom_for_video_recording=self.should_modify_dom_for_video_recording_for_web_bots(),
             record_participant_speech_start_stop_events=self.bot_in_db.record_participant_speech_start_stop_events(),
+            record_participant_screenshare_start_stop_events=self.bot_in_db.record_participant_screenshare_start_stop_events(),
             zoom_tokens=zoom_tokens,
         )
 
@@ -407,6 +410,7 @@ class BotController:
             zoom_meeting_settings=self.bot_in_db.zoom_meeting_settings(),
             record_chat_messages_when_paused=self.bot_in_db.record_chat_messages_when_paused(),
             record_participant_speech_start_stop_events=self.bot_in_db.record_participant_speech_start_stop_events(),
+            record_participant_screenshare_start_stop_events=self.bot_in_db.record_participant_screenshare_start_stop_events(),
         )
 
     def get_zoom_rtms_adapter(self):
@@ -1686,6 +1690,8 @@ class BotController:
             webhook_trigger_type = WebhookTriggerTypes.PARTICIPANT_EVENTS_JOIN_LEAVE
         elif participant_event.event_type == ParticipantEventTypes.SPEECH_START or participant_event.event_type == ParticipantEventTypes.SPEECH_STOP:
             webhook_trigger_type = WebhookTriggerTypes.PARTICIPANT_EVENTS_SPEECH_START_STOP
+        elif participant_event.event_type == ParticipantEventTypes.SCREENSHARE_START or participant_event.event_type == ParticipantEventTypes.SCREENSHARE_STOP:
+            webhook_trigger_type = WebhookTriggerTypes.PARTICIPANT_EVENTS_SCREENSHARE_START_STOP
         else:
             logger.warning(f"Warning: Unknown participant event type: {participant_event.event_type}")
             return

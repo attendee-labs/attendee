@@ -1197,6 +1197,11 @@ class WebSocketClient {
     }
 
     sendJson(data) {
+        if (window.initialData.recordParticipantScreenshareStartStopEvents && (data.type === 'UsersUpdate' || data.type === 'ParticipantScreenshareStartStopEvent')) {
+            this.participantEventQueue ??= new ParticipantEventQueue(this.ws);
+            this.participantEventQueue.send(data);
+            return;
+        }
         if (this.ws.readyState !== WebSocket.OPEN) {
             console.error('WebSocket is not connected');
             return;
@@ -1351,6 +1356,7 @@ class UserManager {
         this.allUsersMap = new Map();
         this.currentUsersMap = new Map();
         this.deviceOutputMap = new Map();
+        this.screenshareEvents = new ParticipantScreenshareEvents(ws);
 
         this.ws = ws;
     }
@@ -1412,6 +1418,13 @@ class UserManager {
         new Map(allUsers.map(singleUser => [singleUser.deviceId, singleUser])).values()
       );
       this.newUsersListSynced(uniqueUsers);
+      // Meeting SDK 5.1.4 normalizes sharingStatus in user events. Attribute the user first.
+      if (!convertedUser.isCurrentUser) {
+          if (user.state === 'inactive' || user.isHold)
+              this.screenshareEvents.update(convertedUser.deviceId, false);
+          else if (['sharing', 'paused', 'stopped'].includes(user.sharingStatus))
+              this.screenshareEvents.update(convertedUser.deviceId, user.sharingStatus !== 'stopped');
+      }
     }
 
     newUsersListSynced(newUsersList) {

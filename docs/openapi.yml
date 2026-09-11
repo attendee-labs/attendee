@@ -2110,6 +2110,11 @@ components:
                   - participant_events.join_leave
                   - calendar.events_update
                   - calendar.state_change
+                  - async_transcription.state_change
+                  - zoom_oauth_connection.state_change
+                  - bot_logs.update
+                  - participant_events.speech_start_stop
+                  - participant_events.screenshare_start_stop
                 description: List of webhook trigger types
                 uniqueItems: true
             required:
@@ -2669,6 +2674,21 @@ components:
               description: Whether to record chat messages even when the recording
                 is paused. Defaults to false.
               default: false
+            record_async_transcription_audio_chunks:
+              type: boolean
+              description: Whether to record additional audio data which is needed
+                for creating async (post-meeting) transcriptions. Defaults to false.
+              default: false
+            record_participant_speech_start_stop_events:
+              type: boolean
+              description: Whether to record participant speech start and stop events.
+                Defaults to false.
+              default: false
+            record_participant_screenshare_start_stop_events:
+              type: boolean
+              description: Whether to record participant screenshare start and stop
+                events. Defaults to false.
+              default: false
             reserve_additional_storage:
               type: boolean
               description: Whether to reserve extra space to store the recording.
@@ -2682,6 +2702,9 @@ components:
             view: speaker_view
             resolution: 1080p
             record_chat_messages_when_paused: false
+            record_async_transcription_audio_chunks: false
+            record_participant_speech_start_stop_events: false
+            record_participant_screenshare_start_stop_events: false
             reserve_additional_storage: false
           description: The settings for the bot's recording.
         google_meet_settings:
@@ -2906,6 +2929,15 @@ components:
       - client_secret
       - platform
       - refresh_token
+    EventTypeEnum:
+      type: string
+      enum:
+      - join
+      - leave
+      - speech_start
+      - speech_stop
+      - screenshare_start
+      - screenshare_stop
     OutputVideoRequestRequest:
       type: object
       properties:
@@ -3127,7 +3159,10 @@ components:
         participant_is_host:
           type: boolean
         event_type:
-          type: string
+          allOf:
+          - $ref: '#/components/schemas/EventTypeEnum'
+          description: The type of event. Speech and screenshare events are only recorded
+            when enabled in recording_settings.
           readOnly: true
         event_data: {}
         timestamp_ms:
@@ -3193,6 +3228,16 @@ components:
               type: boolean
               description: Whether to record additional audio data which is needed
                 for creating async (post-meeting) transcriptions. Defaults to false.
+              default: false
+            record_participant_speech_start_stop_events:
+              type: boolean
+              description: Whether to record participant speech start and stop events.
+                Defaults to false.
+              default: false
+            record_participant_screenshare_start_stop_events:
+              type: boolean
+              description: Whether to record participant screenshare start and stop
+                events. Defaults to false.
               default: false
             reserve_additional_storage:
               type: boolean
