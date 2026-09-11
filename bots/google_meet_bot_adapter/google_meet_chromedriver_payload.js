@@ -1133,7 +1133,12 @@ class UserManager {
 
     syncScreenshareStartStopEvents() {
         // Presentation devices reference the participant who owns the share.
-        const sharers = this.getCurrentUsersInMeetingWhoAreScreenSharing().map(user => user.parentDeviceId);
+        const sharers = this.getCurrentUsersInMeetingWhoAreScreenSharing()
+            .map(user => user.parentDeviceId)
+            .filter(id => {
+                const owner = this.currentUsersMap.get(id);
+                return owner && !owner.parentDeviceId && owner.status === this.MEETING_STATUS.IN_MEETING;
+            });
         this.screenshareEvents.sync(sharers);
     }
 
@@ -1309,6 +1314,11 @@ class WebSocketClient {
   }
   
   sendJson(data) {
+      if (window.initialData.recordParticipantScreenshareStartStopEvents && (data.type === 'UsersUpdate' || data.type === 'ParticipantScreenshareStartStopEvent')) {
+          this.participantEventQueue ??= new ParticipantEventQueue(this.ws);
+          this.participantEventQueue.send(data);
+          return;
+      }
       if (this.ws.readyState !== WebSocket.OPEN) {
           console.error('WebSocket is not connected');
           return;

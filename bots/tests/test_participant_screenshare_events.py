@@ -99,11 +99,12 @@ class WebBotAdapterScreenshareEventTest(SimpleTestCase):
 
 @tag("zoom_tests")
 class ZoomBotAdapterScreenshareEventTest(SimpleTestCase):
-    SHARE_BEGIN, VIEW_OTHER_SHARING, SHARE_END, PAUSE, RESUME, AUDIO_BEGIN = range(101, 107)
+    SHARE_BEGIN, VIEW_OTHER_SHARING, SHARE_END, PAUSE, RESUME, AUDIO_BEGIN, AUDIO_END = range(101, 108)
+    VIDEO_CONTENT, AUDIO_CONTENT, UNKNOWN_CONTENT = range(201, 204)
     NOW_MS = 1723456789000
 
     def setUp(self):
-        fake_sdk = SimpleNamespace(Sharing_Other_Share_Begin=self.SHARE_BEGIN, Sharing_View_Other_Sharing=self.VIEW_OTHER_SHARING, Sharing_Other_Share_End=self.SHARE_END, Sharing_Pause=self.PAUSE, Sharing_Resume=self.RESUME)
+        fake_sdk = SimpleNamespace(Sharing_Other_Share_Begin=self.SHARE_BEGIN, Sharing_View_Other_Sharing=self.VIEW_OTHER_SHARING, Sharing_Other_Share_End=self.SHARE_END, Sharing_Pause=self.PAUSE, Sharing_Resume=self.RESUME, SHARE_TYPE_COMPUTER_AUDIO=self.AUDIO_CONTENT)
         sdk_patcher = patch("bots.zoom_bot_adapter.zoom_bot_adapter.zoom", fake_sdk)
         sdk_patcher.start()
         self.addCleanup(sdk_patcher.stop)
@@ -120,8 +121,11 @@ class ZoomBotAdapterScreenshareEventTest(SimpleTestCase):
         self.adapter.update_only_one_participant_in_meeting_at = MagicMock()
         self.adapter.meeting_sharing_controller = MagicMock()
 
+    def source(self, user_id, status, source_id=42, content_type=VIDEO_CONTENT):
+        return SimpleNamespace(userid=user_id, status=status, shareSourceID=source_id, contentType=content_type)
+
     def status(self, user_id, status, source_id=42):
-        self.adapter.on_sharing_status_callback(SimpleNamespace(userid=user_id, status=status, shareSourceID=source_id))
+        self.adapter.on_sharing_status_callback(self.source(user_id, status, source_id))
 
     def event(self, user_id, event_type):
         return call({"participant_uuid": user_id, "event_type": event_type, "event_data": {}, "timestamp_ms": self.NOW_MS})
@@ -187,7 +191,7 @@ class ZoomBotAdapterScreenshareEventTest(SimpleTestCase):
 
     def test_initial_snapshot_includes_all_sharers_without_duplicates(self):
         self.adapter.meeting_sharing_controller.GetViewableSharingUserList.return_value = [2, 3]
-        self.adapter.meeting_sharing_controller.GetSharingSourceInfoList.side_effect = lambda user: [SimpleNamespace(userid=user, shareSourceID=user * 10)]
+        self.adapter.meeting_sharing_controller.GetSharingSourceInfoList.side_effect = lambda user: [self.source(user, self.SHARE_BEGIN, user * 10)]
         self.adapter.observe_initial_screenshares()
         self.adapter.observe_initial_screenshares()
         self.assert_events((2, ParticipantEventTypes.SCREENSHARE_START), (3, ParticipantEventTypes.SCREENSHARE_START))
@@ -196,6 +200,36 @@ class ZoomBotAdapterScreenshareEventTest(SimpleTestCase):
         self.status(2, self.SHARE_BEGIN)
         self.adapter.meeting_sharing_controller.GetViewableSharingUserList.return_value = None
         self.adapter.observe_initial_screenshares()
+        self.assert_events((2, ParticipantEventTypes.SCREENSHARE_START))
+
+    def test_initial_snapshot_uses_the_same_source_classification_as_callbacks(self):
+        self.adapter.meeting_sharing_controller.GetViewableSharingUserList.return_value = [2]
+        self.adapter.meeting_sharing_controller.GetSharingSourceInfoList.return_value = [
+            self.source(2, self.AUDIO_BEGIN, 40, self.AUDIO_CONTENT),
+            self.source(2, self.VIEW_OTHER_SHARING, 41, self.AUDIO_CONTENT),
+            self.source(2, self.SHARE_END, 42),
+            self.source(2, self.PAUSE, 43, self.UNKNOWN_CONTENT),
+        ]
+        self.adapter.observe_initial_screenshares()
+        self.assert_events((2, ParticipantEventTypes.SCREENSHARE_START))
+        self.assertEqual(self.adapter.participant_screenshare_sources, {2: {43}})
+        self.status(2, self.SHARE_END, 43)
+        self.assert_events((2, ParticipantEventTypes.SCREENSHARE_START), (2, ParticipantEventTypes.SCREENSHARE_STOP))
+
+    def test_audio_only_initial_snapshot_does_not_open_a_session(self):
+        self.adapter.meeting_sharing_controller.GetViewableSharingUserList.return_value = [2]
+        self.adapter.meeting_sharing_controller.GetSharingSourceInfoList.return_value = [self.source(2, self.AUDIO_BEGIN, content_type=self.AUDIO_CONTENT)]
+        self.adapter.observe_initial_screenshares()
+        self.status(2, self.AUDIO_END)
+        self.assert_events()
+
+    def test_recording_setup_retries_initial_discovery(self):
+        self.adapter.meeting_sharing_controller.GetViewableSharingUserList.return_value = []
+        self.adapter.observe_initial_screenshares()
+        self.adapter.meeting_sharing_controller.GetViewableSharingUserList.return_value = [2]
+        self.adapter.meeting_sharing_controller.GetSharingSourceInfoList.return_value = [self.source(2, self.PAUSE)]
+        self.adapter.set_up_video_input_manager()
+        self.adapter.set_up_video_input_manager()
         self.assert_events((2, ParticipantEventTypes.SCREENSHARE_START))
 
     def test_disabled_setting_neither_queries_nor_emits_sharing_events(self):

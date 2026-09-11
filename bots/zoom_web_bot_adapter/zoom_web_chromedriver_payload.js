@@ -1197,6 +1197,11 @@ class WebSocketClient {
     }
 
     sendJson(data) {
+        if (window.initialData.recordParticipantScreenshareStartStopEvents && (data.type === 'UsersUpdate' || data.type === 'ParticipantScreenshareStartStopEvent')) {
+            this.participantEventQueue ??= new ParticipantEventQueue(this.ws);
+            this.participantEventQueue.send(data);
+            return;
+        }
         if (this.ws.readyState !== WebSocket.OPEN) {
             console.error('WebSocket is not connected');
             return;
@@ -1346,43 +1351,12 @@ class WebSocketClient {
     }
 }
 
-class ZoomWebScreenshareEvents {
-    constructor(ws) {
-        this.events = new ParticipantScreenshareEvents(ws);
-        this.lastState = null;
-    }
-
-    sync(state = this.lastState) {
-        if (!window.initialData.recordParticipantScreenshareStartStopEvents || !state)
-            return;
-        this.lastState = state;
-        const participants = state.attendeesList?.attendeesList;
-        const selfId = state.meeting?.currentUser?.userId;
-        // An incomplete roster during startup or reconnect is not a sharing stop.
-        if (selfId == null || !Array.isArray(participants) || !participants.some(user => user.userId === selfId))
-            return;
-        const knownUsers = window.userManager?.currentUsersMap;
-        const present = new Set();
-        for (const user of participants) {
-            if (user.userId == null) continue;
-            const id = user.userId.toString();
-            present.add(id);
-            if (id === selfId.toString() || !knownUsers?.has(id)) continue;
-            if (typeof user.sharerOn === 'boolean')
-                this.events.update(id, user.sharerOn);
-        }
-        for (const id of this.events.activeParticipants) {
-            if (!present.has(id))
-                this.events.update(id, false);
-        }
-    }
-}
-
 class UserManager {
     constructor(ws) {
         this.allUsersMap = new Map();
         this.currentUsersMap = new Map();
         this.deviceOutputMap = new Map();
+        this.screenshareEvents = new ParticipantScreenshareEvents(ws);
 
         this.ws = ws;
     }
@@ -1444,6 +1418,13 @@ class UserManager {
         new Map(allUsers.map(singleUser => [singleUser.deviceId, singleUser])).values()
       );
       this.newUsersListSynced(uniqueUsers);
+      // Meeting SDK 5.1.4 normalizes sharingStatus in user events. Attribute the user first.
+      if (!convertedUser.isCurrentUser) {
+          if (user.state === 'inactive' || user.isHold)
+              this.screenshareEvents.update(convertedUser.deviceId, false);
+          else if (['sharing', 'paused', 'stopped'].includes(user.sharingStatus))
+              this.screenshareEvents.update(convertedUser.deviceId, user.sharingStatus !== 'stopped');
+      }
     }
 
     newUsersListSynced(newUsersList) {
@@ -1508,7 +1489,6 @@ class UserManager {
                 updatedUsers: updatedUsers
             });
         }
-        window.zoomWebScreenshareEvents?.sync();
     }
 }
 
@@ -1556,7 +1536,6 @@ const styleManager = new StyleManager();
 window.styleManager = styleManager;
 const userManager = new UserManager(ws);
 window.userManager = userManager;
-window.zoomWebScreenshareEvents = new ZoomWebScreenshareEvents(ws);
 const participantSpeechStartStopManager = new ParticipantSpeechStartStopManager();
 window.participantSpeechStartStopManager = participantSpeechStartStopManager;
 const mixedAudioStreamManager = new MixedAudioStreamManager();

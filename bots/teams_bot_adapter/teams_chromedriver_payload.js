@@ -1638,6 +1638,11 @@ class WebSocketClient {
     }
     
     sendJson(data) {
+        if (window.initialData.recordParticipantScreenshareStartStopEvents && (data.type === 'UsersUpdate' || data.type === 'ParticipantScreenshareStartStopEvent')) {
+            this.participantEventQueue ??= new ParticipantEventQueue(this.ws);
+            this.participantEventQueue.send(data);
+            return;
+        }
         if (this.ws.readyState !== originalWebSocket.OPEN) {
             realConsole?.error('WebSocket is not connected');
             return;
@@ -1991,10 +1996,15 @@ function handleRosterUpdate(eventDataObject) {
     try {
         const decodedBody = decodeWebSocketBody(eventDataObject.body);
         realConsole?.log('handleRosterUpdate decodedBody', decodedBody);
-        // Teams includes a user with no display name. Not sure what this user is but we don't want to sync that user.
-        const participants = Object.values(decodedBody.participants).filter(participant => participant.details?.displayName);
+        const participants = Object.values(decodedBody.participants);
         const callId = extractCallIdFromEventDataObject(eventDataObject);
         for (const participant of participants) {
+            // Known users' sharing deltas may omit displayName. Do not introduce nameless users.
+            if (!participant.details?.displayName) {
+                if (window.userManager.currentUsersMap.has(participant.details?.id))
+                    window.participantScreenshareStartStopManager?.updateParticipant(participant);
+                continue;
+            }
             const participantWithCallId = {
                 ...participant,
                 callId: callId
@@ -2192,6 +2202,16 @@ class ParticipantScreenshareStartStopManager {
         this.events = new ParticipantScreenshareEvents(window.ws);
     }
 
+    syncParticipantIds(participantIds) {
+        const present = new Set(participantIds);
+        for (const id of this.streamsByParticipant.keys()) {
+            if (!present.has(id)) {
+                this.streamsByParticipant.delete(id);
+                this.events.update(id, false);
+            }
+        }
+    }
+
     updateParticipant(participant, isSnapshot = false) {
         if (!window.initialData.recordParticipantScreenshareStartStopEvents)
             return;
@@ -2202,14 +2222,14 @@ class ParticipantScreenshareStartStopManager {
             this.events.update(id, false);
             return;
         }
-        const streams = isSnapshot ? new Map() : this.streamsByParticipant.get(id) || new Map();
+        const streams = isSnapshot ? new Set() : this.streamsByParticipant.get(id) || new Set();
         for (const [endpointId, endpoint] of Object.entries(participant.endpoints || {})) {
             if (!Array.isArray(endpoint.call?.mediaStreams)) continue;
             for (const stream of endpoint.call.mediaStreams) {
                 if (stream.type !== 'applicationsharing-video') continue;
                 const key = `${endpointId}:${stream.sourceId ?? stream.type}`;
                 if (stream.direction === 'sendrecv' || stream.direction === 'sendonly')
-                    streams.set(key, true);
+                    streams.add(key);
                 else if (stream.direction === 'inactive' || stream.direction === 'recvonly')
                     streams.delete(key);
             }
@@ -3659,6 +3679,8 @@ class CallManager {
         }
 
         const participantsRaw = this.activeCall.participants;
+        if (!Array.isArray(participantsRaw))
+            return;
         const participants = participantsRaw.map(participant => {
             return {
                 id: participant.id,
@@ -3700,6 +3722,9 @@ class CallManager {
             const isCompleteSnapshot = Array.isArray(participant.endpoints?.endpointDetails) && participant.endpoints.endpointDetails.every(endpoint => endpoint.endpointId && Array.isArray(endpoint.mediaStreams));
             syncVirtualStreamsFromParticipant(participantConverted, isCompleteSnapshot);
         }
+        // Only reconcile absence from a complete roster, not from individual roster deltas.
+        if (participantsRaw.every(participant => participant.id))
+            window.participantScreenshareStartStopManager?.syncParticipantIds(participantsRaw.map(participant => participant.id));
     }
 
     enableClosedCaptions() {

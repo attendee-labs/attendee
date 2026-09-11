@@ -1,3 +1,47 @@
+// Keep attribution and sharing transitions ordered until the local socket can send.
+// Only used for screenshare-enabled bots' participant messages.
+class ParticipantEventQueue {
+    constructor(ws) {
+        this.ws = ws;
+        this.messages = [];
+        this.retryTimeout = null;
+        ws.addEventListener('open', () => this.flush());
+        ws.addEventListener('close', () => {
+            clearTimeout(this.retryTimeout);
+            this.retryTimeout = null;
+            this.messages = [];
+        });
+    }
+
+    send(data) {
+        if (this.ws.readyState === this.ws.CLOSING || this.ws.readyState === this.ws.CLOSED)
+            return;
+        const bytes = new TextEncoder().encode(JSON.stringify(data));
+        const message = new Uint8Array(4 + bytes.length);
+        new DataView(message.buffer).setInt32(0, 1, true);
+        message.set(bytes, 4);
+        this.messages.push(message.buffer);
+        this.flush();
+    }
+
+    flush() {
+        clearTimeout(this.retryTimeout);
+        this.retryTimeout = null;
+        if (this.ws.readyState !== this.ws.OPEN)
+            return;
+        while (this.messages.length) {
+            try {
+                this.ws.send(this.messages[0]);
+            } catch (error) {
+                console.error('Error sending participant event:', error);
+                this.retryTimeout = setTimeout(() => this.flush(), 1000);
+                return;
+            }
+            this.messages.shift();
+        }
+    }
+}
+
 class ParticipantScreenshareEvents {
     constructor(ws) {
         this.ws = ws;

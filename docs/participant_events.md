@@ -38,11 +38,13 @@ A start means the bot first observed a participant sharing, including a share al
 | --- | --- | --- |
 | Google Meet | Presentation devices linked to the sharing participant | Implemented |
 | Microsoft Teams | Application-sharing streams in roster updates and active-call snapshots | Implemented |
-| Zoom native SDK | Sharing callbacks and the initial sharing-source list | Implemented |
-| Zoom Web | Participant sharing flags in the pinned Meeting SDK 5.1.4 roster | Implemented; depends on SDK internals |
+| Zoom native SDK | Sharing callbacks and the sharing-source list, checked at join and recording setup | Implemented |
+| Zoom Web | `sharingStatus` in Meeting SDK 5.1.4 user events and the initial `getAttendeeslist()` result | Implemented; field verified in the pinned SDK source |
 | Zoom RTMS | Sharing signaling events | Not implemented |
 
 Zoom RTMS's documented sharing-stop event has no participant ID, and sharing events require the `DESKSHARE` scope; participant attribution and joining during an existing share need separate validation before support is added. See [Zoom RTMS events](https://developers.zoom.us/docs/rtms/event-reference/).
+
+Zoom Web uses the existing SDK user listeners, with `sharing` and `paused` representing an open session and `stopped` closing it. The `sharingStatus` field is verified in the [pinned SDK 5.1.4 source](https://source.zoom.us/5.1.4/zoom-meeting-5.1.4.min.js); recheck it when upgrading the SDK. Meet and Teams use private web-client roster signals, so their payload shapes and timing still require live meeting validation.
 
 ## Fetching Participant Events
 
@@ -55,4 +57,3 @@ For more details on the API, see the [API reference](https://docs.attendee.dev/a
 You can also receive real-time notifications for participant events by setting up a webhook. For participant join/leave events, create a webhook in the dashboard and ensure the `participant_events.join_leave` trigger is enabled. For participant speech start/stop events, create a webhook in the dashboard and ensure the `participant_events.speech_start_stop` trigger is enabled. For participant screenshare start/stop events, create a webhook in the dashboard and ensure the `participant_events.screenshare_start_stop` trigger is enabled.
 
 When a participant joins or leaves, starts or stops speaking, or starts or stops sharing their screen, Attendee will send a webhook payload to your specified URL. For more details on the webhook payload, see the [webhooks documentation](https://docs.attendee.dev/guides/webhooks#payload-for-participantevents.joinleave-participantevents.speechstartstop-and-participantevents.screensharestartstop).
-

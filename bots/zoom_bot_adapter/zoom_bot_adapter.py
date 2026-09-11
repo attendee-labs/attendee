@@ -337,7 +337,8 @@ class ZoomBotAdapter(BotAdapter):
         if not self.record_participant_screenshare_start_stop_events:
             return
         if sharing_info.status in (zoom.Sharing_Other_Share_Begin, zoom.Sharing_View_Other_Sharing, zoom.Sharing_Pause, zoom.Sharing_Resume):
-            self.update_participant_screenshare(sharing_info.userid, sharing_info.shareSourceID, True)
+            if sharing_info.contentType != zoom.SHARE_TYPE_COMPUTER_AUDIO:
+                self.update_participant_screenshare(sharing_info.userid, sharing_info.shareSourceID, True)
         elif sharing_info.status == zoom.Sharing_Other_Share_End:
             self.update_participant_screenshare(sharing_info.userid, sharing_info.shareSourceID, False)
 
@@ -346,7 +347,7 @@ class ZoomBotAdapter(BotAdapter):
             return
         for participant_id in self.meeting_sharing_controller.GetViewableSharingUserList() or []:
             for source in self.meeting_sharing_controller.GetSharingSourceInfoList(participant_id) or []:
-                self.update_participant_screenshare(source.userid, source.shareSourceID, True)
+                self.observe_participant_screenshare_status(source)
 
     def on_user_active_audio_change_callback(self, user_ids):
         if len(user_ids) == 0:
@@ -438,6 +439,8 @@ class ZoomBotAdapter(BotAdapter):
             )
 
     def set_up_video_input_manager(self):
+        # Retry initial discovery once raw recording is ready; the join-time list may be empty.
+        self.observe_initial_screenshares()
         # If someone was sharing before we joined, we will not receive an event, so we need to poll for the active sharer
         viewable_sharing_user_list = self.meeting_sharing_controller.GetViewableSharingUserList()
         self.active_sharer_id = None
