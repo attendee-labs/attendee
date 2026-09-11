@@ -34,12 +34,13 @@ Your WebSocket server will receive messages in this format.
     "participant_uuid": "participant_abc123",
     "frame": "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQ...",
     "format": "jpeg",
-    "source": "webcam"
+    "source": "webcam",
+    "timestamp_ms": 1703123456789
   }
 }
 ```
 
-The `frame` field is a base64-encoded JPEG image at the resolution you configured for that source. The `source` field is either `"webcam"` or `"screenshare"`. Frames are delivered at 2 FPS for 360p, or 1 FPS for 720p and 1080p.
+The `frame` field is a base64-encoded JPEG image at the resolution you configured for that source. The `source` field is either `"webcam"` or `"screenshare"`. Frames are delivered at 2 FPS for 360p, or 1 FPS for 720p and 1080p. The `timestamp_ms` field is the Unix epoch time in milliseconds when the frame was received.
 
 To resolve a `participant_uuid` to a full participant object, subscribe to the `participant_events.join_leave` webhook event which will send the full participant object when they join the meeting.
 

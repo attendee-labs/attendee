@@ -1204,6 +1204,7 @@ class TestGoogleMeetBot(TransactionTestCase):
         self.assertEqual(webcam_message["data"]["source"], "webcam")
         self.assertIn("frame", webcam_message["data"])
         self.assertGreater(len(webcam_message["data"]["frame"]), 0)
+        self.assertEqual(webcam_message["data"]["timestamp_ms"], int(current_time * 1000))
 
         decoded_frame = b64decode(webcam_message["data"]["frame"])
         self.assertGreater(len(decoded_frame), 0)
@@ -1212,6 +1213,7 @@ class TestGoogleMeetBot(TransactionTestCase):
         self.assertEqual(screenshare_message["trigger"], "realtime_video.per_participant")
         self.assertEqual(screenshare_message["data"]["source"], "screenshare")
         self.assertEqual(screenshare_message["data"]["participant_uuid"], "user1")
+        self.assertEqual(screenshare_message["data"]["timestamp_ms"], int(current_time * 1000))
 
         bot_events = self.bot.bot_events.all()
         self.assertGreaterEqual(len(bot_events), 6)
