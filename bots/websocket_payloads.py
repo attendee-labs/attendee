@@ -79,5 +79,6 @@ def per_participant_video_websocket_payload(frame: bytes, bot_object_id: str, pa
             "format": "jpeg",
             "participant_uuid": str(participant_uuid),
             "source": source,
+            "timestamp_ms": int(time.time() * 1000),
         },
     }
