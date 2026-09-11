@@ -545,6 +545,12 @@ class ProjectAccess(models.Model):
     can_view_recording_content = models.BooleanField(default=True, db_default=True)
     can_manage_api_keys = models.BooleanField(default=True, db_default=True)
 
+    class Meta:
+        # A user should have at most one access row per project
+        constraints = [
+            models.UniqueConstraint(fields=["project", "user"], name="unique_project_access_project_user"),
+        ]
+
 
 class ApiKey(models.Model):
     name = models.CharField(max_length=255)
