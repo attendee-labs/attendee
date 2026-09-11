@@ -1572,9 +1572,9 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
         # Define defaults
         defaults = {"use_login": False, "login_mode": "always", "ui_interaction_mode": "humanized", "login_group_name": None}
 
-        # If use_login is set to true, then ui_interaction_mode should default to "robotic" (when not
+        # If use_login is set to true and login mode is always, then ui_interaction_mode should default to "robotic" (when not
         # explicitly provided), because in this case humanized motion is not needed.
-        if value.get("use_login"):
+        if value.get("use_login") and value.get("login_mode", "always") == "always":
             defaults["ui_interaction_mode"] = "robotic"
 
         try:

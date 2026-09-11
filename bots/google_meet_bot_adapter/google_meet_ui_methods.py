@@ -142,19 +142,26 @@ class GoogleMeetUIMethods:
             raise UiLoginRequiredException("Login required", step)
 
     def look_for_denied_your_request_element(self, step):
+        # Google Meet inconsistently uses "in the call" / "on the call" and "denied" / "has denied",
+        # so we match against every combination.
+        actively_denied_texts = [f"Someone {preposition} the call {verb} your request to join" for preposition in ("in", "on") for verb in ("denied", "has denied")]
+        no_one_responded_texts = [f"No one {verb} to your request to join the call" for verb in ("responded", "has responded")]
+        left_meeting_texts = ["You left the meeting"]
+
+        all_texts = actively_denied_texts + no_one_responded_texts + left_meeting_texts
         denied_your_request_element = self.find_element_by_selector(
             By.XPATH,
-            '//*[contains(text(), "Someone in the call denied your request to join") or contains(text(), "No one responded to your request to join the call") or contains(text(), "You left the meeting")]',
+            "//*[" + " or ".join(f'contains(text(), "{text}")' for text in all_texts) + "]",
         )
         if not denied_your_request_element:
             return
 
         element_text = denied_your_request_element.text
 
-        if "Someone in the call denied your request to join" in element_text:
+        if any(text in element_text for text in actively_denied_texts):
             logger.warning("Someone in the call actively denied our request to join. Raising UiRequestToJoinDeniedException")
             raise UiRequestToJoinDeniedException("Someone in the call denied your request to join", step)
-        elif "No one responded to your request to join the call" in element_text:
+        elif any(text in element_text for text in no_one_responded_texts):
             logger.warning("No one responded to our request to join (timeout). Raising UiRequestToJoinDeniedException")
             raise UiRequestToJoinDeniedException("No one responded to your request to join the call", step)
         else:  # "You left the meeting"
