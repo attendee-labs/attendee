@@ -64,6 +64,7 @@ class WebBotAdapter(BotAdapter):
         disable_incoming_video: bool,
         record_participant_speech_start_stop_events: bool,
         room_sync_source_participant_configuration: RoomSyncSourceParticipantConfiguration | None,
+        record_participant_screenshare_start_stop_events: bool = False,
     ):
         self.display_name = display_name if not room_sync_source_participant_configuration else add_bot_indicator_to_display_name(display_name)
         self.send_message_callback = send_message_callback
@@ -82,6 +83,7 @@ class WebBotAdapter(BotAdapter):
         self.record_chat_messages_when_paused = record_chat_messages_when_paused
         self.disable_incoming_video = disable_incoming_video
         self.record_participant_speech_start_stop_events = record_participant_speech_start_stop_events
+        self.record_participant_screenshare_start_stop_events = record_participant_screenshare_start_stop_events
         self.meeting_url = meeting_url
 
         # This is an internal ID that comes from the platform. It is currently only used for MS Teams.
@@ -360,6 +362,9 @@ class WebBotAdapter(BotAdapter):
     def handle_participant_speech_start_stop_event(self, json_data):
         self.add_participant_event_callback({"participant_uuid": json_data["participantId"], "event_type": ParticipantEventTypes.SPEECH_START if json_data["isSpeechStart"] else ParticipantEventTypes.SPEECH_STOP, "event_data": {}, "timestamp_ms": int(json_data["timestamp"])})
 
+    def handle_participant_screenshare_start_stop_event(self, json_data):
+        self.add_participant_event_callback({"participant_uuid": json_data["participantId"], "event_type": ParticipantEventTypes.SCREENSHARE_START if json_data["isScreenshareStart"] else ParticipantEventTypes.SCREENSHARE_STOP, "event_data": {"source": "screenshare"}, "timestamp_ms": int(json_data["timestamp"])})
+
     def handle_chat_message(self, json_data):
         if self.recording_paused and not self.record_chat_messages_when_paused:
             return
@@ -421,6 +426,9 @@ class WebBotAdapter(BotAdapter):
 
                         elif json_data.get("type") == "ParticipantSpeechStartStopEvent":
                             self.handle_participant_speech_start_stop_event(json_data)
+
+                        elif json_data.get("type") == "ParticipantScreenshareStartStopEvent":
+                            self.handle_participant_screenshare_start_stop_event(json_data)
 
                         elif json_data.get("type") == "UsersUpdate":
                             for user in json_data["newUsers"]:
@@ -769,7 +777,7 @@ class WebBotAdapter(BotAdapter):
         self.start_domain_allow_list_listener()
         logger.info(f"web driver server initialized at port {self.driver.service.port}")
 
-        initial_data_code = f"window.initialData = {{websocketPort: {self.websocket_port}, videoFrameWidth: {self.video_frame_size[0]}, videoFrameHeight: {self.video_frame_size[1]}, botName: {json.dumps(self.display_name)}, addClickRipple: {'true' if self.should_create_debug_recording else 'false'}, recordingView: '{self.recording_view}', sendMixedAudio: {'true' if self.add_mixed_audio_chunk_callback else 'false'}, sendPerParticipantAudio: {'true' if self.add_audio_chunk_callback else 'false'}, perParticipantRealtimeVideoConfiguration: {json.dumps(self.per_participant_realtime_video_configuration.to_dict())}, roomSyncSourceParticipantConfiguration: {json.dumps(self.room_sync_source_participant_configuration.to_dict()) if self.room_sync_source_participant_configuration else 'null'}, sendPerParticipantVideo: {'true' if self.add_per_participant_video_frame_callback else 'false'}, collectCaptions: {'true' if self.upsert_caption_callback else 'false'}, recordParticipantSpeechStartStopEvents: {'true' if self.record_participant_speech_start_stop_events else 'false'}}}"
+        initial_data_code = f"window.initialData = {{websocketPort: {self.websocket_port}, videoFrameWidth: {self.video_frame_size[0]}, videoFrameHeight: {self.video_frame_size[1]}, botName: {json.dumps(self.display_name)}, addClickRipple: {'true' if self.should_create_debug_recording else 'false'}, recordingView: '{self.recording_view}', sendMixedAudio: {'true' if self.add_mixed_audio_chunk_callback else 'false'}, sendPerParticipantAudio: {'true' if self.add_audio_chunk_callback else 'false'}, perParticipantRealtimeVideoConfiguration: {json.dumps(self.per_participant_realtime_video_configuration.to_dict())}, roomSyncSourceParticipantConfiguration: {json.dumps(self.room_sync_source_participant_configuration.to_dict()) if self.room_sync_source_participant_configuration else 'null'}, sendPerParticipantVideo: {'true' if self.add_per_participant_video_frame_callback else 'false'}, collectCaptions: {'true' if self.upsert_caption_callback else 'false'}, recordParticipantSpeechStartStopEvents: {'true' if self.record_participant_speech_start_stop_events else 'false'}, recordParticipantScreenshareStartStopEvents: {'true' if self.record_participant_screenshare_start_stop_events else 'false'}}}"
 
         # Get directory of current file
         current_dir = os.path.dirname(os.path.abspath(__file__))

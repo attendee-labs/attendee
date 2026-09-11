@@ -82,6 +82,7 @@ class ZoomBotAdapter(BotAdapter):
         zoom_meeting_settings: dict,
         record_chat_messages_when_paused: bool,
         record_participant_speech_start_stop_events: bool,
+        record_participant_screenshare_start_stop_events: bool = False,
     ):
         self.use_one_way_audio = use_one_way_audio
         self.use_mixed_audio = use_mixed_audio
@@ -99,6 +100,7 @@ class ZoomBotAdapter(BotAdapter):
         self.zoom_meeting_settings = zoom_meeting_settings
         self.record_chat_messages_when_paused = record_chat_messages_when_paused
         self.record_participant_speech_start_stop_events = record_participant_speech_start_stop_events
+        self.record_participant_screenshare_start_stop_events = record_participant_screenshare_start_stop_events
 
         self._jwt_token = generate_jwt(zoom_client_id, zoom_client_secret)
         self.meeting_id, self.meeting_password = parse_zoom_join_url(meeting_url)
@@ -311,6 +313,33 @@ class ZoomBotAdapter(BotAdapter):
         if new_speaker_id:
             self.send_participant_event(new_speaker_id, event_type=ParticipantEventTypes.SPEECH_START)
 
+    def create_participant_events_for_active_sharer_change(self, new_sharer_id, old_sharer_id, new_sharer_source_id):
+        if not self.record_participant_screenshare_start_stop_events:
+            return
+
+        if new_sharer_id == old_sharer_id:
+            return
+
+        if old_sharer_id:
+            self.send_participant_event(old_sharer_id, event_type=ParticipantEventTypes.SCREENSHARE_STOP, event_data={"source": "screenshare"})
+
+        if new_sharer_id:
+            self.send_participant_event(new_sharer_id, event_type=ParticipantEventTypes.SCREENSHARE_START, event_data={"source": "screenshare", "share_source_id": new_sharer_source_id})
+
+    def update_active_sharer(self, new_active_sharer_id, new_active_sharer_source_id):
+        if new_active_sharer_id == self.active_sharer_id and new_active_sharer_source_id == self.active_sharer_source_id:
+            return False
+
+        self.create_participant_events_for_active_sharer_change(
+            new_sharer_id=new_active_sharer_id,
+            old_sharer_id=self.active_sharer_id,
+            new_sharer_source_id=new_active_sharer_source_id,
+        )
+
+        self.active_sharer_id = new_active_sharer_id
+        self.active_sharer_source_id = new_active_sharer_source_id
+        return True
+
     def on_user_active_audio_change_callback(self, user_ids):
         if len(user_ids) == 0:
             return
@@ -403,15 +432,16 @@ class ZoomBotAdapter(BotAdapter):
     def set_up_video_input_manager(self):
         # If someone was sharing before we joined, we will not receive an event, so we need to poll for the active sharer
         viewable_sharing_user_list = self.meeting_sharing_controller.GetViewableSharingUserList()
-        self.active_sharer_id = None
-        self.active_sharer_source_id = None
+        new_active_sharer_id = None
+        new_active_sharer_source_id = None
 
         if viewable_sharing_user_list:
             sharing_source_info_list = self.meeting_sharing_controller.GetSharingSourceInfoList(viewable_sharing_user_list[0])
             if sharing_source_info_list:
-                self.active_sharer_id = sharing_source_info_list[0].userid
-                self.active_sharer_source_id = sharing_source_info_list[0].shareSourceID
+                new_active_sharer_id = sharing_source_info_list[0].userid
+                new_active_sharer_source_id = sharing_source_info_list[0].shareSourceID
 
+        self.update_active_sharer(new_active_sharer_id, new_active_sharer_source_id)
         self.set_video_input_manager_based_on_state()
 
     def cleanup(self):
@@ -501,9 +531,7 @@ class ZoomBotAdapter(BotAdapter):
             new_active_sharer_id = None
             new_active_sharer_source_id = None
 
-        if new_active_sharer_id != self.active_sharer_id or new_active_sharer_source_id != self.active_sharer_source_id:
-            self.active_sharer_id = new_active_sharer_id
-            self.active_sharer_source_id = new_active_sharer_source_id
+        if self.update_active_sharer(new_active_sharer_id, new_active_sharer_source_id):
             self.set_video_input_manager_based_on_state()
 
     def send_chat_message(self, text, to_user_uuid):

@@ -656,6 +656,7 @@ BOT_RECORDING_SETTINGS_DEFAULT_VALUES = {
     "record_chat_messages_when_paused": False,
     "record_async_transcription_audio_chunks": False,
     "record_participant_speech_start_stop_events": False,
+    "record_participant_screenshare_start_stop_events": False,
     "reserve_additional_storage": False,
 }
 BOT_RECORDING_SETTINGS_SCHEMA = {
@@ -687,6 +688,11 @@ BOT_RECORDING_SETTINGS_SCHEMA = {
         "record_participant_speech_start_stop_events": {
             "type": "boolean",
             "description": "Whether to record participant speech start and stop events. Defaults to false.",
+            "default": False,
+        },
+        "record_participant_screenshare_start_stop_events": {
+            "type": "boolean",
+            "description": "Whether to record participant screenshare start and stop events. Defaults to false.",
             "default": False,
         },
         "reserve_additional_storage": {
@@ -2020,6 +2026,13 @@ class ParticipantEventSerializer(serializers.Serializer):
     event_data = serializers.JSONField()
     timestamp_ms = serializers.IntegerField()
 
+    @extend_schema_field(
+        {
+            "type": "string",
+            "enum": ["join", "leave", "speech_start", "speech_stop", "screenshare_start", "screenshare_stop"],
+            "description": "The type of event. Speech and screenshare events are only recorded when enabled in recording_settings.",
+        }
+    )
     def get_event_type(self, obj):
         return ParticipantEventTypes.type_to_api_code(obj.event_type)
 
