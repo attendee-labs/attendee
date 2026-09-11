@@ -1,5 +1,16 @@
 {% extends 'projects/sidebar.html' %} {% load bot_filters %} {% block content %}
 
+<style>
+  .recording-content-checkbox,
+  .api-key-checkbox,
+  .edit-recording-content-checkbox,
+  .edit-api-key-checkbox {
+    width: 0.85em;
+    height: 0.85em;
+    margin-top: 0.3em;
+  }
+</style>
+
 <div class="container mt-4">
   <div class="d-flex justify-content-between align-items-center mb-4">
     <h2>Team</h2>
@@ -60,10 +71,13 @@
                       {% for access in user.project_accesses.all %}
                         <span class="badge bg-light text-dark">
                           {{ access.project.name }}
-                          {% if access.can_view_recording_content %}
-                            <i class="fas fa-eye text-success ms-1" title="Can view recording content"></i>
-                          {% else %}
-                            <i class="fas fa-eye-slash text-muted ms-1" title="Cannot view recording content"></i>
+                          {% if enable_granular_permissions %}
+                            {% if access.can_view_recording_content %}
+                              <i class="fas fa-eye text-success ms-1" title="Can view recording content"></i>
+                            {% endif %}
+                            {% if access.can_manage_api_keys %}
+                              <i class="fas fa-key text-success ms-1" title="Can manage API keys"></i>
+                            {% endif %}
                           {% endif %}
                         </span>
                       {% endfor %}
@@ -87,7 +101,8 @@
                               data-user-role="{{ user.role }}"
                               data-user-active="{{ user.is_active|yesno:'true,false' }}"
                               {% if user.role != 'admin' %}data-user-project-access="{% for access in user.project_accesses.all %}{{ access.project.object_id }}{% if not forloop.last %},{% endif %}{% endfor %}"
-                              data-user-recording-access="{% for access in user.project_accesses.all %}{% if access.can_view_recording_content %}{{ access.project.object_id }},{% endif %}{% endfor %}"{% endif %}
+                              data-user-recording-access="{% for access in user.project_accesses.all %}{% if access.can_view_recording_content %}{{ access.project.object_id }},{% endif %}{% endfor %}"
+                              data-user-apikey-access="{% for access in user.project_accesses.all %}{% if access.can_manage_api_keys %}{{ access.project.object_id }},{% endif %}{% endfor %}"{% endif %}
                               data-bs-toggle="modal" 
                               data-bs-target="#editUserModal">
                         <i class="fas fa-edit"></i> Edit
@@ -147,12 +162,20 @@
                       {{ project.name }}
                     </label>
                   </div>
+                  {% if enable_granular_permissions %}
                   <div class="form-check ms-4 d-none" id="recording_wrapper_{{ project.object_id }}">
                     <input class="form-check-input recording-content-checkbox" type="checkbox" name="recording_content_access" value="{{ project.object_id }}" id="recording_{{ project.object_id }}" checked disabled>
                     <label class="form-check-label small text-muted" for="recording_{{ project.object_id }}">
                       Can view recording content
                     </label>
                   </div>
+                  <div class="form-check ms-4 d-none" id="apikey_wrapper_{{ project.object_id }}">
+                    <input class="form-check-input api-key-checkbox" type="checkbox" name="api_key_access" value="{{ project.object_id }}" id="apikey_{{ project.object_id }}" checked disabled>
+                    <label class="form-check-label small text-muted" for="apikey_{{ project.object_id }}">
+                      Can manage API keys
+                    </label>
+                  </div>
+                  {% endif %}
                 </div>
               {% endfor %}
             </div>
@@ -216,12 +239,20 @@
                       {{ project.name }}
                     </label>
                   </div>
+                  {% if enable_granular_permissions %}
                   <div class="form-check ms-4 d-none" id="edit_recording_wrapper_{{ project.object_id }}">
                     <input class="form-check-input edit-recording-content-checkbox" type="checkbox" name="recording_content_access" value="{{ project.object_id }}" id="edit_recording_{{ project.object_id }}" checked disabled>
                     <label class="form-check-label small text-muted" for="edit_recording_{{ project.object_id }}">
                       Can view recording content
                     </label>
                   </div>
+                  <div class="form-check ms-4 d-none" id="edit_apikey_wrapper_{{ project.object_id }}">
+                    <input class="form-check-input edit-api-key-checkbox" type="checkbox" name="api_key_access" value="{{ project.object_id }}" id="edit_apikey_{{ project.object_id }}" checked disabled>
+                    <label class="form-check-label small text-muted" for="edit_apikey_{{ project.object_id }}">
+                      Can manage API keys
+                    </label>
+                  </div>
+                  {% endif %}
                 </div>
               {% endfor %}
             </div>
@@ -264,18 +295,23 @@
     const projectCheckboxes = document.querySelectorAll('.project-checkbox');
     const projectSelectionError = document.getElementById('projectSelectionError');
     
-    // The recording content checkbox is only meaningful for a project the user can access
-    function syncRecordingToggle(projectCheckbox) {
-        const recordingCheckbox = document.getElementById(`recording_${projectCheckbox.value}`);
-        const recordingWrapper = document.getElementById(`recording_wrapper_${projectCheckbox.value}`);
-        if (!recordingCheckbox || !recordingWrapper) {
+    // The nested permission checkboxes are only meaningful for a project the user can access
+    function syncNestedToggle(projectCheckbox, checkboxId, wrapperId) {
+        const nestedCheckbox = document.getElementById(`${checkboxId}_${projectCheckbox.value}`);
+        const nestedWrapper = document.getElementById(`${wrapperId}_${projectCheckbox.value}`);
+        if (!nestedCheckbox || !nestedWrapper) {
             return;
         }
-        recordingCheckbox.disabled = !projectCheckbox.checked;
-        recordingWrapper.classList.toggle('d-none', !projectCheckbox.checked);
+        nestedCheckbox.disabled = !projectCheckbox.checked;
+        nestedWrapper.classList.toggle('d-none', !projectCheckbox.checked);
         if (!projectCheckbox.checked) {
-            recordingCheckbox.checked = true;
+            nestedCheckbox.checked = true;
         }
+    }
+    
+    function syncRecordingToggle(projectCheckbox) {
+        syncNestedToggle(projectCheckbox, 'recording', 'recording_wrapper');
+        syncNestedToggle(projectCheckbox, 'apikey', 'apikey_wrapper');
     }
     
     function syncAllRecordingToggles() {
@@ -452,18 +488,23 @@
         
         let currentUserActive = false; // Track current user active status
         
-        // The recording content checkbox is only meaningful for a project the user can access
-        function syncEditRecordingToggle(projectCheckbox) {
-            const recordingCheckbox = document.getElementById(`edit_recording_${projectCheckbox.value}`);
-            const recordingWrapper = document.getElementById(`edit_recording_wrapper_${projectCheckbox.value}`);
-            if (!recordingCheckbox || !recordingWrapper) {
+        // The nested permission checkboxes are only meaningful for a project the user can access
+        function syncEditNestedToggle(projectCheckbox, checkboxId, wrapperId) {
+            const nestedCheckbox = document.getElementById(`${checkboxId}_${projectCheckbox.value}`);
+            const nestedWrapper = document.getElementById(`${wrapperId}_${projectCheckbox.value}`);
+            if (!nestedCheckbox || !nestedWrapper) {
                 return;
             }
-            recordingCheckbox.disabled = !projectCheckbox.checked;
-            recordingWrapper.classList.toggle('d-none', !projectCheckbox.checked);
+            nestedCheckbox.disabled = !projectCheckbox.checked;
+            nestedWrapper.classList.toggle('d-none', !projectCheckbox.checked);
             if (!projectCheckbox.checked) {
-                recordingCheckbox.checked = true;
+                nestedCheckbox.checked = true;
             }
+        }
+        
+        function syncEditRecordingToggle(projectCheckbox) {
+            syncEditNestedToggle(projectCheckbox, 'edit_recording', 'edit_recording_wrapper');
+            syncEditNestedToggle(projectCheckbox, 'edit_apikey', 'edit_apikey_wrapper');
         }
         
         function syncAllEditRecordingToggles() {
@@ -615,6 +656,7 @@
                 const userActive = this.dataset.userActive === 'true';
                 const userProjectAccess = this.dataset.userProjectAccess || '';
                 const userRecordingAccess = (this.dataset.userRecordingAccess || '').split(',').map(id => id.trim()).filter(id => id);
+                const userApiKeyAccess = (this.dataset.userApikeyAccess || '').split(',').map(id => id.trim()).filter(id => id);
                 
                 // Store current user active status
                 currentUserActive = userActive;
@@ -645,6 +687,10 @@
                         const recordingCheckbox = document.getElementById(`edit_recording_${trimmedId}`);
                         if (recordingCheckbox) {
                             recordingCheckbox.checked = userRecordingAccess.includes(trimmedId);
+                        }
+                        const apiKeyCheckbox = document.getElementById(`edit_apikey_${trimmedId}`);
+                        if (apiKeyCheckbox) {
+                            apiKeyCheckbox.checked = userApiKeyAccess.includes(trimmedId);
                         }
                     });
                 }

@@ -1050,6 +1050,7 @@ class ProjectTeamView(AdminRequiredMixin, ProjectUrlContextMixin, View):
         context["users"] = users
         # Needed for the checkbox list for choosing which products a user can access
         context["projects"] = request.user.organization.projects.all()
+        context["enable_granular_permissions"] = settings.ENABLE_GRANULAR_PERMISSIONS
         return render(request, "projects/project_team.html", context)
 
 
@@ -1059,7 +1060,8 @@ class EditUserView(AdminRequiredMixin, ProjectUrlContextMixin, View):
         is_admin = request.POST.get("is_admin") == "true"
         is_active = request.POST.get("is_active") == "true"
         selected_project_ids = request.POST.getlist("project_access")
-        recording_content_project_ids = set(request.POST.getlist("recording_content_access"))
+        can_access_recording_content_project_ids = set(request.POST.getlist("recording_content_access"))
+        can_manage_api_key_project_ids = set(request.POST.getlist("api_key_access"))
 
         if not user_object_id:
             return HttpResponse("User ID is required", status=400)
@@ -1100,10 +1102,14 @@ class EditUserView(AdminRequiredMixin, ProjectUrlContextMixin, View):
                     # Add new project access entries
                     for project_id in selected_project_ids:
                         project_obj = Project.objects.get(object_id=project_id, organization=request.user.organization)
+                        # When granular permissions are hidden, grant them for every accessible project.
+                        can_view_recording_content = project_id in can_access_recording_content_project_ids if settings.ENABLE_GRANULAR_PERMISSIONS else True
+                        can_manage_api_keys = project_id in can_manage_api_key_project_ids if settings.ENABLE_GRANULAR_PERMISSIONS else True
                         ProjectAccess.objects.create(
                             project=project_obj,
                             user=user_to_edit,
-                            can_view_recording_content=project_id in recording_content_project_ids,
+                            can_view_recording_content=can_view_recording_content,
+                            can_manage_api_keys=can_manage_api_keys,
                         )
                 else:
                     # If user is now admin, remove all project access entries
@@ -1124,6 +1130,7 @@ class InviteUserView(AdminRequiredMixin, ProjectUrlContextMixin, View):
     def get(self, request, object_id):
         project = get_project_for_user(user=request.user, project_object_id=object_id)
         context = self.get_project_context(object_id, project)
+        context["enable_granular_permissions"] = settings.ENABLE_GRANULAR_PERMISSIONS
         return render(request, "projects/project_team.html", context)
 
     def post(self, request, object_id):
@@ -1131,7 +1138,8 @@ class InviteUserView(AdminRequiredMixin, ProjectUrlContextMixin, View):
         email = request.POST.get("email")
         is_admin = request.POST.get("is_admin") == "true"
         selected_project_ids = request.POST.getlist("project_access")
-        recording_content_project_ids = set(request.POST.getlist("recording_content_access"))
+        can_access_recording_content_project_ids = set(request.POST.getlist("recording_content_access"))
+        can_manage_api_key_project_ids = set(request.POST.getlist("api_key_access"))
 
         if not email:
             return HttpResponse("Email is required", status=400)
@@ -1167,10 +1175,14 @@ class InviteUserView(AdminRequiredMixin, ProjectUrlContextMixin, View):
                 if not is_admin and selected_project_ids:
                     for project_id in selected_project_ids:
                         project = Project.objects.get(object_id=project_id, organization=request.user.organization)
+                        # When granular permissions are hidden, grant them for every accessible project.
+                        can_view_recording_content = project_id in can_access_recording_content_project_ids if settings.ENABLE_GRANULAR_PERMISSIONS else True
+                        can_manage_api_keys = project_id in can_manage_api_key_project_ids if settings.ENABLE_GRANULAR_PERMISSIONS else True
                         ProjectAccess.objects.create(
                             project=project,
                             user=user,
-                            can_view_recording_content=project_id in recording_content_project_ids,
+                            can_view_recording_content=can_view_recording_content,
+                            can_manage_api_keys=can_manage_api_keys,
                         )
 
                 # Send verification email

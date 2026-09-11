@@ -543,6 +543,7 @@ class ProjectAccess(models.Model):
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="project_accesses")
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="project_accesses")
     can_view_recording_content = models.BooleanField(default=True, db_default=True)
+    can_manage_api_keys = models.BooleanField(default=True, db_default=True)
 
 
 class ApiKey(models.Model):
