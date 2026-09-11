@@ -1035,7 +1035,16 @@ class ProjectProjectView(AdminRequiredMixin, ProjectUrlContextMixin, View):
     def get(self, request, object_id):
         project = get_project_for_user(user=request.user, project_object_id=object_id)
         context = self.get_project_context(object_id, project)
-        context["users_with_access"] = project.users_with_access()
+        # Attach each user's ProjectAccess for this specific project so the template can
+        # render the granular permission indicators without extra queries.
+        context["users_with_access"] = project.users_with_access().prefetch_related(
+            models.Prefetch(
+                "project_accesses",
+                queryset=ProjectAccess.objects.filter(project=project),
+                to_attr="access_for_project",
+            )
+        )
+        context["enable_granular_permissions"] = settings.ENABLE_GRANULAR_PERMISSIONS
         return render(request, "projects/project_project.html", context)
 
 
