@@ -405,9 +405,13 @@ class _PerParticipantVideoFrameSubscription:
         logger.info("Cleaning up subscription for participant %s (share_source_id %s)", self.participant_id, self.share_source_id)
         try:
             self._renderer.unSubscribe()
+            zoom.destroyRenderer(self._renderer)
         except Exception:
             logger.exception(
                 "Error while unsubscribing renderer for participant %s",
                 self.participant_id,
             )
         self.destroyed = True
+        self._renderer = None
+        self._delegate = None
+        self.owner = None
