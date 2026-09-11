@@ -62,6 +62,7 @@ class WebBotAdapterScreenshareEventTest(SimpleTestCase):
 
     def build_adapter(self):
         adapter = WebBotAdapter.__new__(WebBotAdapter)
+        adapter.record_participant_screenshare_start_stop_events = True
         adapter.add_participant_event_callback = MagicMock()
         return adapter
 
@@ -70,14 +71,14 @@ class WebBotAdapterScreenshareEventTest(SimpleTestCase):
 
         adapter.handle_participant_screenshare_start_stop_event({"type": "ParticipantScreenshareStartStopEvent", "participantId": "device-1", "isScreenshareStart": True, "timestamp": 1723456789000})
 
-        adapter.add_participant_event_callback.assert_called_once_with({"participant_uuid": "device-1", "event_type": ParticipantEventTypes.SCREENSHARE_START, "event_data": {"source": "screenshare"}, "timestamp_ms": 1723456789000})
+        adapter.add_participant_event_callback.assert_called_once_with({"participant_uuid": "device-1", "event_type": ParticipantEventTypes.SCREENSHARE_START, "event_data": {}, "timestamp_ms": 1723456789000})
 
     def test_stop_message_becomes_screenshare_stop_event(self):
         adapter = self.build_adapter()
 
         adapter.handle_participant_screenshare_start_stop_event({"type": "ParticipantScreenshareStartStopEvent", "participantId": "device-1", "isScreenshareStart": False, "timestamp": 1723456799000.0})
 
-        adapter.add_participant_event_callback.assert_called_once_with({"participant_uuid": "device-1", "event_type": ParticipantEventTypes.SCREENSHARE_STOP, "event_data": {"source": "screenshare"}, "timestamp_ms": 1723456799000})
+        adapter.add_participant_event_callback.assert_called_once_with({"participant_uuid": "device-1", "event_type": ParticipantEventTypes.SCREENSHARE_STOP, "event_data": {}, "timestamp_ms": 1723456799000})
 
     def test_websocket_dispatches_screenshare_messages(self):
         adapter = self.build_adapter()
@@ -87,130 +88,124 @@ class WebBotAdapterScreenshareEventTest(SimpleTestCase):
 
         adapter.handle_websocket(fake_websocket)
 
-        adapter.add_participant_event_callback.assert_called_once_with({"participant_uuid": "device-1", "event_type": ParticipantEventTypes.SCREENSHARE_START, "event_data": {"source": "screenshare"}, "timestamp_ms": 1723456789000})
+        adapter.add_participant_event_callback.assert_called_once_with({"participant_uuid": "device-1", "event_type": ParticipantEventTypes.SCREENSHARE_START, "event_data": {}, "timestamp_ms": 1723456789000})
+
+    def test_disabled_setting_ignores_browser_event(self):
+        adapter = self.build_adapter()
+        adapter.record_participant_screenshare_start_stop_events = False
+        adapter.handle_participant_screenshare_start_stop_event({"participantId": "device-1", "isScreenshareStart": True, "timestamp": 1723456789000})
+        adapter.add_participant_event_callback.assert_not_called()
 
 
 @tag("zoom_tests")
 class ZoomBotAdapterScreenshareEventTest(SimpleTestCase):
-    """Screenshare events follow the active sharer the adapter already tracks for the video pipeline."""
-
-    SHARE_BEGIN = 101
-    VIEW_OTHER_SHARING = 102
-    SHARE_END = 103
+    SHARE_BEGIN, VIEW_OTHER_SHARING, SHARE_END, PAUSE, RESUME, AUDIO_BEGIN = range(101, 107)
     NOW_MS = 1723456789000
 
     def setUp(self):
-        fake_sdk = SimpleNamespace(Sharing_Other_Share_Begin=self.SHARE_BEGIN, Sharing_View_Other_Sharing=self.VIEW_OTHER_SHARING, Sharing_Other_Share_End=self.SHARE_END)
+        fake_sdk = SimpleNamespace(Sharing_Other_Share_Begin=self.SHARE_BEGIN, Sharing_View_Other_Sharing=self.VIEW_OTHER_SHARING, Sharing_Other_Share_End=self.SHARE_END, Sharing_Pause=self.PAUSE, Sharing_Resume=self.RESUME)
         sdk_patcher = patch("bots.zoom_bot_adapter.zoom_bot_adapter.zoom", fake_sdk)
         sdk_patcher.start()
         self.addCleanup(sdk_patcher.stop)
-
         time_patcher = patch("bots.zoom_bot_adapter.zoom_bot_adapter.time.time", return_value=self.NOW_MS / 1000)
         time_patcher.start()
         self.addCleanup(time_patcher.stop)
+        self.adapter = ZoomBotAdapter.__new__(ZoomBotAdapter)
+        self.adapter.record_participant_screenshare_start_stop_events = True
+        self.adapter.participant_screenshare_sources = {}
+        self.adapter.active_sharer_id = None
+        self.adapter.active_sharer_source_id = None
+        self.adapter.add_participant_event_callback = MagicMock()
+        self.adapter.set_video_input_manager_based_on_state = MagicMock()
+        self.adapter.update_only_one_participant_in_meeting_at = MagicMock()
+        self.adapter.meeting_sharing_controller = MagicMock()
 
-    def build_adapter(self, record_screenshare_events=True):
-        adapter = ZoomBotAdapter.__new__(ZoomBotAdapter)
-        adapter.record_participant_screenshare_start_stop_events = record_screenshare_events
-        adapter.active_sharer_id = None
-        adapter.active_sharer_source_id = None
-        adapter.add_participant_event_callback = MagicMock()
-        adapter.set_video_input_manager_based_on_state = MagicMock()
-        adapter.meeting_sharing_controller = MagicMock()
-        return adapter
+    def status(self, user_id, status, source_id=42):
+        self.adapter.on_sharing_status_callback(SimpleNamespace(userid=user_id, status=status, shareSourceID=source_id))
 
-    def sharing_info(self, user_id, status, share_source_id=None):
-        return SimpleNamespace(userid=user_id, status=status, shareSourceID=share_source_id)
+    def event(self, user_id, event_type):
+        return call({"participant_uuid": user_id, "event_type": event_type, "event_data": {}, "timestamp_ms": self.NOW_MS})
 
-    def start_event(self, user_id, share_source_id):
-        return call({"participant_uuid": user_id, "event_type": ParticipantEventTypes.SCREENSHARE_START, "event_data": {"source": "screenshare", "share_source_id": share_source_id}, "timestamp_ms": self.NOW_MS})
+    def assert_events(self, *events):
+        self.assertEqual(self.adapter.add_participant_event_callback.call_args_list, [self.event(*event) for event in events])
 
-    def stop_event(self, user_id):
-        return call({"participant_uuid": user_id, "event_type": ParticipantEventTypes.SCREENSHARE_STOP, "event_data": {"source": "screenshare"}, "timestamp_ms": self.NOW_MS})
+    def test_begin_view_and_repeat_begin_emit_one_start(self):
+        for status in [self.SHARE_BEGIN, self.VIEW_OTHER_SHARING, self.SHARE_BEGIN]:
+            self.status(2, status)
+        self.assert_events((2, ParticipantEventTypes.SCREENSHARE_START))
 
-    def test_share_begin_emits_start_with_share_source_id(self):
-        adapter = self.build_adapter()
+    def test_explicit_end_emits_stop_once(self):
+        self.status(2, self.SHARE_BEGIN)
+        self.status(2, self.SHARE_END)
+        self.status(2, self.SHARE_END)
+        self.assert_events((2, ParticipantEventTypes.SCREENSHARE_START), (2, ParticipantEventTypes.SCREENSHARE_STOP))
 
-        adapter.on_sharing_status_callback(self.sharing_info(2, self.SHARE_BEGIN, share_source_id=42))
+    def test_pause_and_resume_do_not_end_the_session(self):
+        for status in [self.SHARE_BEGIN, self.PAUSE, self.RESUME]:
+            self.status(2, status)
+        self.assert_events((2, ParticipantEventTypes.SCREENSHARE_START))
+        self.status(2, self.SHARE_END)
+        self.assert_events((2, ParticipantEventTypes.SCREENSHARE_START), (2, ParticipantEventTypes.SCREENSHARE_STOP))
 
-        self.assertEqual(adapter.add_participant_event_callback.call_args_list, [self.start_event(2, 42)])
-        self.assertEqual((adapter.active_sharer_id, adapter.active_sharer_source_id), (2, 42))
-        adapter.set_video_input_manager_based_on_state.assert_called_once()
+    def test_simultaneous_sharer_and_view_switch_do_not_stop_first_sharer(self):
+        self.status(2, self.SHARE_BEGIN)
+        self.status(3, self.SHARE_BEGIN, 77)
+        self.status(3, self.VIEW_OTHER_SHARING, 77)
+        self.status(2, self.SHARE_END)
+        self.assert_events((2, ParticipantEventTypes.SCREENSHARE_START), (3, ParticipantEventTypes.SCREENSHARE_START), (2, ParticipantEventTypes.SCREENSHARE_STOP))
+        self.assertEqual(self.adapter.participant_screenshare_sources, {3: {77}})
 
-    def test_repeated_status_for_the_same_share_is_idempotent(self):
-        adapter = self.build_adapter()
+    def test_last_source_end_stops_participant(self):
+        self.status(2, self.SHARE_BEGIN, 42)
+        self.status(2, self.SHARE_BEGIN, 43)
+        self.status(2, self.SHARE_END, 42)
+        self.assert_events((2, ParticipantEventTypes.SCREENSHARE_START))
+        self.status(2, self.SHARE_END, 43)
+        self.assert_events((2, ParticipantEventTypes.SCREENSHARE_START), (2, ParticipantEventTypes.SCREENSHARE_STOP))
 
-        adapter.on_sharing_status_callback(self.sharing_info(2, self.SHARE_BEGIN, share_source_id=42))
-        adapter.on_sharing_status_callback(self.sharing_info(2, self.VIEW_OTHER_SHARING, share_source_id=42))
-        adapter.on_sharing_status_callback(self.sharing_info(2, self.SHARE_BEGIN, share_source_id=42))
+    def test_unknown_source_end_does_not_stop_known_source(self):
+        self.status(2, self.SHARE_BEGIN, 42)
+        self.status(2, self.SHARE_END, 99)
+        self.assert_events((2, ParticipantEventTypes.SCREENSHARE_START))
 
-        self.assertEqual(adapter.add_participant_event_callback.call_args_list, [self.start_event(2, 42)])
-        adapter.set_video_input_manager_based_on_state.assert_called_once()
+    def test_unrelated_and_audio_only_status_do_not_end_share(self):
+        self.status(2, self.SHARE_BEGIN)
+        self.status(3, self.AUDIO_BEGIN)
+        self.assert_events((2, ParticipantEventTypes.SCREENSHARE_START))
 
-    def test_share_end_emits_stop(self):
-        adapter = self.build_adapter()
+    def test_participant_leave_closes_all_their_sources(self):
+        self.status(2, self.SHARE_BEGIN, 42)
+        self.status(2, self.SHARE_BEGIN, 43)
+        self.adapter.on_user_left_callback([2], None)
+        self.assert_events((2, ParticipantEventTypes.SCREENSHARE_START), (2, ParticipantEventTypes.SCREENSHARE_STOP), (2, ParticipantEventTypes.LEAVE))
+        self.assertEqual(self.adapter.participant_screenshare_sources, {})
 
-        adapter.on_sharing_status_callback(self.sharing_info(2, self.SHARE_BEGIN, share_source_id=42))
-        adapter.on_sharing_status_callback(self.sharing_info(2, self.SHARE_END))
+    def test_stop_and_restart_is_a_new_session(self):
+        for status in [self.SHARE_BEGIN, self.SHARE_END, self.SHARE_BEGIN]:
+            self.status(2, status)
+        self.assert_events((2, ParticipantEventTypes.SCREENSHARE_START), (2, ParticipantEventTypes.SCREENSHARE_STOP), (2, ParticipantEventTypes.SCREENSHARE_START))
 
-        self.assertEqual(adapter.add_participant_event_callback.call_args_list, [self.start_event(2, 42), self.stop_event(2)])
-        self.assertEqual((adapter.active_sharer_id, adapter.active_sharer_source_id), (None, None))
+    def test_initial_snapshot_includes_all_sharers_without_duplicates(self):
+        self.adapter.meeting_sharing_controller.GetViewableSharingUserList.return_value = [2, 3]
+        self.adapter.meeting_sharing_controller.GetSharingSourceInfoList.side_effect = lambda user: [SimpleNamespace(userid=user, shareSourceID=user * 10)]
+        self.adapter.observe_initial_screenshares()
+        self.adapter.observe_initial_screenshares()
+        self.assert_events((2, ParticipantEventTypes.SCREENSHARE_START), (3, ParticipantEventTypes.SCREENSHARE_START))
 
-    def test_share_end_without_an_active_share_emits_nothing(self):
-        adapter = self.build_adapter()
+    def test_unknown_initial_snapshot_does_not_synthesize_a_stop(self):
+        self.status(2, self.SHARE_BEGIN)
+        self.adapter.meeting_sharing_controller.GetViewableSharingUserList.return_value = None
+        self.adapter.observe_initial_screenshares()
+        self.assert_events((2, ParticipantEventTypes.SCREENSHARE_START))
 
-        adapter.on_sharing_status_callback(self.sharing_info(2, self.SHARE_END))
-
-        adapter.add_participant_event_callback.assert_not_called()
-        adapter.set_video_input_manager_based_on_state.assert_not_called()
-
-    def test_sharer_switch_emits_stop_for_old_sharer_then_start_for_new_sharer(self):
-        adapter = self.build_adapter()
-
-        adapter.on_sharing_status_callback(self.sharing_info(2, self.SHARE_BEGIN, share_source_id=42))
-        adapter.on_sharing_status_callback(self.sharing_info(3, self.SHARE_BEGIN, share_source_id=77))
-
-        self.assertEqual(adapter.add_participant_event_callback.call_args_list, [self.start_event(2, 42), self.stop_event(2), self.start_event(3, 77)])
-
-    def test_source_change_for_the_same_sharer_emits_no_event_but_updates_video(self):
-        adapter = self.build_adapter()
-
-        adapter.on_sharing_status_callback(self.sharing_info(2, self.SHARE_BEGIN, share_source_id=42))
-        adapter.on_sharing_status_callback(self.sharing_info(2, self.SHARE_BEGIN, share_source_id=43))
-
-        self.assertEqual(adapter.add_participant_event_callback.call_args_list, [self.start_event(2, 42)])
-        self.assertEqual(adapter.active_sharer_source_id, 43)
-        self.assertEqual(adapter.set_video_input_manager_based_on_state.call_count, 2)
-
-    def test_disabled_setting_tracks_sharer_without_emitting_events(self):
-        adapter = self.build_adapter(record_screenshare_events=False)
-
-        adapter.on_sharing_status_callback(self.sharing_info(2, self.SHARE_BEGIN, share_source_id=42))
-        adapter.on_sharing_status_callback(self.sharing_info(2, self.SHARE_END))
-
-        adapter.add_participant_event_callback.assert_not_called()
-        self.assertEqual(adapter.set_video_input_manager_based_on_state.call_count, 2)
-
-    def test_share_in_progress_when_video_starts_emits_start_once(self):
-        adapter = self.build_adapter()
-        adapter.meeting_sharing_controller.GetViewableSharingUserList.return_value = [2]
-        adapter.meeting_sharing_controller.GetSharingSourceInfoList.return_value = [SimpleNamespace(userid=2, shareSourceID=42)]
-
-        adapter.set_up_video_input_manager()
-        adapter.set_up_video_input_manager()
-
-        self.assertEqual(adapter.add_participant_event_callback.call_args_list, [self.start_event(2, 42)])
-        self.assertEqual((adapter.active_sharer_id, adapter.active_sharer_source_id), (2, 42))
-        self.assertEqual(adapter.set_video_input_manager_based_on_state.call_count, 2)
-
-    def test_no_share_in_progress_when_video_starts_emits_nothing(self):
-        adapter = self.build_adapter()
-        adapter.meeting_sharing_controller.GetViewableSharingUserList.return_value = []
-
-        adapter.set_up_video_input_manager()
-
-        adapter.add_participant_event_callback.assert_not_called()
-        adapter.set_video_input_manager_based_on_state.assert_called_once()
+    def test_disabled_setting_neither_queries_nor_emits_sharing_events(self):
+        self.adapter.record_participant_screenshare_start_stop_events = False
+        self.adapter.observe_initial_screenshares()
+        self.status(2, self.SHARE_BEGIN)
+        self.status(2, self.SHARE_END)
+        self.assert_events()
+        self.adapter.meeting_sharing_controller.GetViewableSharingUserList.assert_not_called()
+        self.assertEqual(self.adapter.set_video_input_manager_based_on_state.call_count, 2)
 
 
 class BotControllerScreenshareWebhookRoutingTest(TestCase):
@@ -240,11 +235,11 @@ class BotControllerScreenshareWebhookRoutingTest(TestCase):
     def test_screenshare_start_is_persisted_and_routed_to_the_screenshare_trigger(self, mock_trigger_webhook):
         controller = self.build_controller()
 
-        controller.add_participant_event(self.participant_event(ParticipantEventTypes.SCREENSHARE_START, {"source": "screenshare", "share_source_id": 42}))
+        controller.add_participant_event(self.participant_event(ParticipantEventTypes.SCREENSHARE_START, {}))
 
         [participant_event] = ParticipantEvent.objects.filter(participant__bot=self.bot)
         self.assertEqual(participant_event.event_type, ParticipantEventTypes.SCREENSHARE_START)
-        self.assertEqual(participant_event.event_data, {"source": "screenshare", "share_source_id": 42})
+        self.assertEqual(participant_event.event_data, {})
         self.assertEqual(participant_event.participant.uuid, "user-1")
 
         mock_trigger_webhook.assert_called_once()
@@ -252,14 +247,14 @@ class BotControllerScreenshareWebhookRoutingTest(TestCase):
         self.assertEqual(kwargs["webhook_trigger_type"], WebhookTriggerTypes.PARTICIPANT_EVENTS_SCREENSHARE_START_STOP)
         self.assertEqual(kwargs["bot"], self.bot)
         self.assertEqual(kwargs["payload"]["event_type"], "screenshare_start")
-        self.assertEqual(kwargs["payload"]["event_data"], {"source": "screenshare", "share_source_id": 42})
+        self.assertEqual(kwargs["payload"]["event_data"], {})
         self.assertEqual(kwargs["payload"]["participant_name"], "Jane Doe")
 
     @patch("bots.bot_controller.bot_controller.trigger_webhook")
     def test_screenshare_stop_is_routed_to_the_screenshare_trigger(self, mock_trigger_webhook):
         controller = self.build_controller()
 
-        controller.add_participant_event(self.participant_event(ParticipantEventTypes.SCREENSHARE_STOP, {"source": "screenshare"}))
+        controller.add_participant_event(self.participant_event(ParticipantEventTypes.SCREENSHARE_STOP, {}))
 
         kwargs = mock_trigger_webhook.call_args.kwargs
         self.assertEqual(kwargs["webhook_trigger_type"], WebhookTriggerTypes.PARTICIPANT_EVENTS_SCREENSHARE_START_STOP)
@@ -277,7 +272,7 @@ class BotControllerScreenshareWebhookRoutingTest(TestCase):
     def test_screenshare_by_the_bot_itself_is_persisted_without_a_webhook(self, mock_trigger_webhook):
         controller = self.build_controller(participant_is_the_bot=True)
 
-        controller.add_participant_event(self.participant_event(ParticipantEventTypes.SCREENSHARE_START, {"source": "screenshare"}))
+        controller.add_participant_event(self.participant_event(ParticipantEventTypes.SCREENSHARE_START, {}))
 
         self.assertEqual(ParticipantEvent.objects.filter(participant__bot=self.bot, event_type=ParticipantEventTypes.SCREENSHARE_START).count(), 1)
         mock_trigger_webhook.assert_not_called()

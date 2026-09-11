@@ -28,7 +28,21 @@ Speech and screenshare events are opt-in. Enable them in `recording_settings` wh
 }
 ```
 
-Both default to `false`. Screenshare events are supported on Zoom, Google Meet and Microsoft Teams. Their `event_data` is `{"source": "screenshare"}`; on Zoom the start event also includes the platform's `share_source_id`.
+Both default to `false`; screenshare events contain an empty `event_data` object and do not require realtime video streaming.
+
+## Screenshare sessions
+
+A start means the bot first observed a participant sharing, including a share already in progress when it joined; a stop means the participant stopped their last observed share or left. Native Zoom and Zoom Web keep paused shares in the same session, and changing the viewed share does not stop another participant's session. Timestamps are the bot's observation time, not the original start time of a share discovered on join. These events describe sharing state, not whether a particular frame reached a consumer, and disconnecting the bot does not synthesize a stop for every participant.
+
+| Adapter | Signal | Support |
+| --- | --- | --- |
+| Google Meet | Presentation devices linked to the sharing participant | Implemented |
+| Microsoft Teams | Application-sharing streams in roster updates and active-call snapshots | Implemented |
+| Zoom native SDK | Sharing callbacks and the initial sharing-source list | Implemented |
+| Zoom Web | Participant sharing flags in the pinned Meeting SDK 5.1.4 roster | Implemented; depends on SDK internals |
+| Zoom RTMS | Sharing signaling events | Not implemented |
+
+Zoom RTMS's documented sharing-stop event has no participant ID, and sharing events require the `DESKSHARE` scope; participant attribution and joining during an existing share need separate validation before support is added. See [Zoom RTMS events](https://developers.zoom.us/docs/rtms/event-reference/).
 
 ## Fetching Participant Events
 

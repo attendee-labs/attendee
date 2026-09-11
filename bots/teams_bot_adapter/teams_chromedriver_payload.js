@@ -1948,12 +1948,12 @@ function decodeWebSocketBody(encodedData) {
     return JSON.parse(pako.inflate(byteArray, { to: "string" }));
 }
 
-function syncVirtualStreamsFromParticipant(participant) {
+function syncVirtualStreamsFromParticipant(participant, isSnapshot = false) {
     const participantId = participant.details?.id;
 
     if (participant.state === 'inactive') {
         virtualStreamToPhysicalStreamMappingManager.removeVirtualStreamsForParticipant(participantId);
-        window.participantScreenshareStartStopManager?.updateParticipant(participantId, false);
+        window.participantScreenshareStartStopManager?.updateParticipant(participant, isSnapshot);
         return;
     }
 
@@ -1971,21 +1971,16 @@ function syncVirtualStreamsFromParticipant(participant) {
         });
     }
 
-    let hasActiveScreenShare = false;
     for (const mediaStream of mediaStreams) {
         const isScreenShare = mediaStream.type === 'applicationsharing-video';
         const isWebcam = mediaStream.type === 'video';
         const isActive = mediaStream.direction === 'sendrecv' || mediaStream.direction === 'sendonly';
-        hasActiveScreenShare = hasActiveScreenShare || (isScreenShare && isActive);
         virtualStreamToPhysicalStreamMappingManager.upsertVirtualStream(
             {...mediaStream, participant: {displayName: participant.details?.displayName, id: participantId}, isScreenShare, isWebcam, isActive}
         );
     }
 
-    // Updates without endpoints say nothing about media streams, so they never mean "stopped sharing"
-    if (participant.endpoints) {
-        window.participantScreenshareStartStopManager?.updateParticipant(participantId, hasActiveScreenShare);
-    }
+    window.participantScreenshareStartStopManager?.updateParticipant(participant, isSnapshot);
 }
 
 function extractCallIdFromEventDataObject(eventDataObject) {
@@ -2193,36 +2188,37 @@ class ParticipantSpeakingStateMachine {
 
 class ParticipantScreenshareStartStopManager {
     constructor() {
-        // Participants with an active screenshare
-        this.activeScreenshareParticipantIds = new Set();
+        this.streamsByParticipant = new Map();
+        this.events = new ParticipantScreenshareEvents(window.ws);
     }
 
-    sendScreenshareStartStopEvent(participantId, isScreenshareStart, timestamp) {
-        window.ws?.sendJson({
-            type: 'ParticipantScreenshareStartStopEvent',
-            participantId: participantId,
-            isScreenshareStart: isScreenshareStart,
-            timestamp: timestamp
-        });
-    }
-
-    updateParticipant(participantId, isScreensharing) {
+    updateParticipant(participant, isSnapshot = false) {
         if (!window.initialData.recordParticipantScreenshareStartStopEvents)
             return;
-
-        if (!participantId)
+        const id = participant.details?.id;
+        if (!id) return;
+        if (participant.state === 'inactive') {
+            this.streamsByParticipant.delete(id);
+            this.events.update(id, false);
             return;
-
-        const wasScreensharing = this.activeScreenshareParticipantIds.has(participantId);
-        if (isScreensharing === wasScreensharing)
-            return;
-
-        if (isScreensharing)
-            this.activeScreenshareParticipantIds.add(participantId);
+        }
+        const streams = isSnapshot ? new Map() : this.streamsByParticipant.get(id) || new Map();
+        for (const [endpointId, endpoint] of Object.entries(participant.endpoints || {})) {
+            if (!Array.isArray(endpoint.call?.mediaStreams)) continue;
+            for (const stream of endpoint.call.mediaStreams) {
+                if (stream.type !== 'applicationsharing-video') continue;
+                const key = `${endpointId}:${stream.sourceId ?? stream.type}`;
+                if (stream.direction === 'sendrecv' || stream.direction === 'sendonly')
+                    streams.set(key, true);
+                else if (stream.direction === 'inactive' || stream.direction === 'recvonly')
+                    streams.delete(key);
+            }
+        }
+        if (streams.size)
+            this.streamsByParticipant.set(id, streams);
         else
-            this.activeScreenshareParticipantIds.delete(participantId);
-
-        this.sendScreenshareStartStopEvent(participantId, isScreensharing, Date.now());
+            this.streamsByParticipant.delete(id);
+        this.events.update(id, streams.size > 0);
     }
 }
 
@@ -3701,7 +3697,8 @@ class CallManager {
                 callId: this.getCallId()
             };
             window.userManager.singleUserSynced(participantConverted);
-            syncVirtualStreamsFromParticipant(participantConverted);
+            const isCompleteSnapshot = Array.isArray(participant.endpoints?.endpointDetails) && participant.endpoints.endpointDetails.every(endpoint => endpoint.endpointId && Array.isArray(endpoint.mediaStreams));
+            syncVirtualStreamsFromParticipant(participantConverted, isCompleteSnapshot);
         }
     }
 

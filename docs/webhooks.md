@@ -197,7 +197,7 @@ For webhooks triggered by `participant_events.join_leave`, `participant_events.s
   "participant_user_uuid": <The UUID of the participant's user account within the meeting platform>,
   "participant_is_host": <Whether the participant is the host of the meeting>,
   "event_type": <The type of event that occurred. One of "join", "leave", "speech_start", "speech_stop", "screenshare_start", or "screenshare_stop">,
-  "event_data": <Additional data. Empty for join, leave and speech events; {"source": "screenshare"} for screenshare events, plus "share_source_id" on Zoom start events>,
+  "event_data": <Additional data; empty for join, leave, speech and screenshare events>,
   "timestamp_ms": <The timestamp of the event in milliseconds>,
 }
 ```
@@ -217,7 +217,7 @@ Speech and screenshare events are only sent when enabled in `recording_settings`
     "participant_user_uuid": null,
     "participant_is_host": false,
     "event_type": "screenshare_start",
-    "event_data": {"source": "screenshare"},
+    "event_data": {},
     "timestamp_ms": 1723456789000
   }
 }

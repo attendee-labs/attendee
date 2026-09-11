@@ -266,8 +266,10 @@ function onReduxStoreFound() {
       console.log('Failed to send ReduxStoreFound event', e);
     }
 
+    window.zoomWebScreenshareEvents?.sync(store.getState());
     store.subscribe(() => {
       const next = store.getState();
+      window.zoomWebScreenshareEvents?.sync(next);
       window.liveTranscriptListWatcher.processLiveTranscriptChange(next.newLiveTranscription?.newLTMessage || {});
     });
   }

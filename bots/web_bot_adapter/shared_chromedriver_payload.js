@@ -1,3 +1,38 @@
+class ParticipantScreenshareEvents {
+    constructor(ws) {
+        this.ws = ws;
+        this.activeParticipants = new Set();
+    }
+
+    update(participantId, sharing) {
+        if (!window.initialData.recordParticipantScreenshareStartStopEvents || !participantId)
+            return;
+        participantId = participantId.toString();
+        if (this.activeParticipants.has(participantId) === sharing)
+            return;
+        this.ws.sendJson({
+            type: 'ParticipantScreenshareStartStopEvent',
+            participantId,
+            isScreenshareStart: sharing,
+            timestamp: Date.now()
+        });
+        if (sharing)
+            this.activeParticipants.add(participantId);
+        else
+            this.activeParticipants.delete(participantId);
+    }
+
+    sync(participantIds) {
+        const sharing = new Set(participantIds.map(id => id.toString()));
+        for (const id of this.activeParticipants) {
+            if (!sharing.has(id))
+                this.update(id, false);
+        }
+        for (const id of sharing)
+            this.update(id, true);
+    }
+}
+
 // Holds the state of a bot video output stream. We need this class because there are two bot video output streams, one for webcam and one for screenshare.
 class BotVideoOutputStream {
     constructor({

@@ -1346,6 +1346,38 @@ class WebSocketClient {
     }
 }
 
+class ZoomWebScreenshareEvents {
+    constructor(ws) {
+        this.events = new ParticipantScreenshareEvents(ws);
+        this.lastState = null;
+    }
+
+    sync(state = this.lastState) {
+        if (!window.initialData.recordParticipantScreenshareStartStopEvents || !state)
+            return;
+        this.lastState = state;
+        const participants = state.attendeesList?.attendeesList;
+        const selfId = state.meeting?.currentUser?.userId;
+        // An incomplete roster during startup or reconnect is not a sharing stop.
+        if (selfId == null || !Array.isArray(participants) || !participants.some(user => user.userId === selfId))
+            return;
+        const knownUsers = window.userManager?.currentUsersMap;
+        const present = new Set();
+        for (const user of participants) {
+            if (user.userId == null) continue;
+            const id = user.userId.toString();
+            present.add(id);
+            if (id === selfId.toString() || !knownUsers?.has(id)) continue;
+            if (typeof user.sharerOn === 'boolean')
+                this.events.update(id, user.sharerOn);
+        }
+        for (const id of this.events.activeParticipants) {
+            if (!present.has(id))
+                this.events.update(id, false);
+        }
+    }
+}
+
 class UserManager {
     constructor(ws) {
         this.allUsersMap = new Map();
@@ -1476,6 +1508,7 @@ class UserManager {
                 updatedUsers: updatedUsers
             });
         }
+        window.zoomWebScreenshareEvents?.sync();
     }
 }
 
@@ -1523,6 +1556,7 @@ const styleManager = new StyleManager();
 window.styleManager = styleManager;
 const userManager = new UserManager(ws);
 window.userManager = userManager;
+window.zoomWebScreenshareEvents = new ZoomWebScreenshareEvents(ws);
 const participantSpeechStartStopManager = new ParticipantSpeechStartStopManager();
 window.participantSpeechStartStopManager = participantSpeechStartStopManager;
 const mixedAudioStreamManager = new MixedAudioStreamManager();

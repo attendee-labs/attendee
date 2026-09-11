@@ -363,7 +363,9 @@ class WebBotAdapter(BotAdapter):
         self.add_participant_event_callback({"participant_uuid": json_data["participantId"], "event_type": ParticipantEventTypes.SPEECH_START if json_data["isSpeechStart"] else ParticipantEventTypes.SPEECH_STOP, "event_data": {}, "timestamp_ms": int(json_data["timestamp"])})
 
     def handle_participant_screenshare_start_stop_event(self, json_data):
-        self.add_participant_event_callback({"participant_uuid": json_data["participantId"], "event_type": ParticipantEventTypes.SCREENSHARE_START if json_data["isScreenshareStart"] else ParticipantEventTypes.SCREENSHARE_STOP, "event_data": {"source": "screenshare"}, "timestamp_ms": int(json_data["timestamp"])})
+        if not self.record_participant_screenshare_start_stop_events:
+            return
+        self.add_participant_event_callback({"participant_uuid": json_data["participantId"], "event_type": ParticipantEventTypes.SCREENSHARE_START if json_data["isScreenshareStart"] else ParticipantEventTypes.SCREENSHARE_STOP, "event_data": {}, "timestamp_ms": int(json_data["timestamp"])})
 
     def handle_chat_message(self, json_data):
         if self.recording_paused and not self.record_chat_messages_when_paused:

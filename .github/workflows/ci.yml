@@ -10,6 +10,16 @@ permissions:
   contents: read
 
 jobs:
+  screenshare-payloads:
+    name: Screenshare payload tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --test bots/tests/js/screenshare_events.test.cjs
+
   test:
     name: "Tests: ${{ matrix.test_suite }}"
     runs-on: ubuntu-22.04

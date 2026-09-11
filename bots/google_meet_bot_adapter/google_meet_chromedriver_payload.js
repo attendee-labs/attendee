@@ -958,8 +958,7 @@ class UserManager {
         this.currentUsersMap = new Map();
         this.deviceOutputMap = new Map();
         this.currentUserId = null;
-        // Participants (by deviceId) with an active screenshare
-        this.activeScreenshareParticipantIds = new Set();
+        this.screenshareEvents = new ParticipantScreenshareEvents(ws);
 
         this.ws = ws;
     }
@@ -1132,37 +1131,12 @@ class UserManager {
         this.syncScreenshareStartStopEvents();
     }
 
-    sendScreenshareStartStopEvent(participantId, isScreenshareStart, timestamp) {
-        this.ws.sendJson({
-            type: 'ParticipantScreenshareStartStopEvent',
-            participantId: participantId,
-            isScreenshareStart: isScreenshareStart,
-            timestamp: timestamp
-        });
-    }
-
     syncScreenshareStartStopEvents() {
-        if (!window.initialData.recordParticipantScreenshareStartStopEvents)
-            return;
-
-        // A screenshare is a roster device whose parentDeviceId is the sharing participant
-        const sharingParticipantIds = new Set(this.getCurrentUsersInMeetingWhoAreScreenSharing().map(user => user.parentDeviceId));
-        const timestamp = Date.now();
-
-        for (const participantId of sharingParticipantIds) {
-            if (this.activeScreenshareParticipantIds.has(participantId))
-                continue;
-            this.activeScreenshareParticipantIds.add(participantId);
-            this.sendScreenshareStartStopEvent(participantId, true, timestamp);
-        }
-
-        for (const participantId of Array.from(this.activeScreenshareParticipantIds)) {
-            if (sharingParticipantIds.has(participantId))
-                continue;
-            this.activeScreenshareParticipantIds.delete(participantId);
-            this.sendScreenshareStartStopEvent(participantId, false, timestamp);
-        }
+        // Presentation devices reference the participant who owns the share.
+        const sharers = this.getCurrentUsersInMeetingWhoAreScreenSharing().map(user => user.parentDeviceId);
+        this.screenshareEvents.sync(sharers);
     }
+
 }
 
 class ReceiverManager {
