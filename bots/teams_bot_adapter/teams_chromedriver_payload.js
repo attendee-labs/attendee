@@ -3712,7 +3712,14 @@ class ParticipantsPoller {
             return;
         }
         this.interval = setInterval(() => {
-            this.pollParticipants();
+            try {
+                this.pollParticipants();
+            } catch (error) {
+                window.ws?.sendJson({
+                    type: 'ErrorPollingParticipants',
+                    error: error.message
+                });
+            }
         }, 1000);
     }
 
@@ -3770,7 +3777,7 @@ class ParticipantsPoller {
                 meetingRole: participant.meetingRole,
                 state: "active",
                 endpoints: Object.fromEntries(endpoints),
-                callId: this.getCallId()
+                callId: window.callManager.getCallId()
             };
         });
 
