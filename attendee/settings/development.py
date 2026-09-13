@@ -3,7 +3,9 @@ import os
 from .base import *
 
 DEBUG = True
-SITE_DOMAIN = "localhost:8000"
+# Env-driven so the app can be published on a port other than 8000 without the account
+# confirmation and dashboard links pointing at the wrong one.
+SITE_DOMAIN = os.getenv("SITE_DOMAIN", "localhost:8000")
 ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "localhost").split(",")
 
 DATABASES = {

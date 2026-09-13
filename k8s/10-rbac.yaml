@@ -1,0 +1,93 @@
+# The app creates, inspects and deletes bot pods through the Kubernetes API, so it needs a
+# ServiceAccount with real permissions. Every verb below is exercised by code in the fork:
+#
+#   pods    create  bots/bot_pod_creator/bot_pod_creator.py  (create_namespaced_pod)
+#           get     bots/k8s_utils.py, bots/tasks/restart_bot_pod_task.py (read_namespaced_pod)
+#           list    bots/management/commands/clean_up_completed_bot_pods.py
+#           delete  clean_up_completed_bot_pods, restart_bot_pod_task,
+#                   clean_up_bots_with_heartbeat_timeout_or_that_never_launched
+#   events  list    bots/k8s_utils.py -- attaches pod events to a bot's failure record
+#   services create bot_pod_creator, for the webpage-streamer pod only
+#
+# Scope is deliberately Role (namespaced), not ClusterRole: nothing here needs cluster-wide
+# reach, and a compromised app pod should not be able to enumerate pods elsewhere.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: attendee-app
+  namespace: attendee
+---
+# Bot pods run untrusted meeting content through a browser. They never call the Kubernetes API,
+# so they get their own identity with no bindings and no mounted token.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: attendee-bot
+  namespace: attendee
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: attendee-bot
+  namespace: attendee-webpage-streamer
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: attendee-bot-pod-manager
+  namespace: attendee
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "get", "list", "delete"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: attendee-bot-pod-manager
+  namespace: attendee
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: attendee-bot-pod-manager
+subjects:
+  - kind: ServiceAccount
+    name: attendee-app
+    namespace: attendee
+---
+# Same permissions in the streamer namespace, plus `services`: the streamer pod is fronted by a
+# Service so the bot pod can reach it, created with an ownerReference so it dies with the pod.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: attendee-bot-pod-manager
+  namespace: attendee-webpage-streamer
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "get", "list", "delete"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["list"]
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: attendee-bot-pod-manager
+  namespace: attendee-webpage-streamer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: attendee-bot-pod-manager
+subjects:
+  - kind: ServiceAccount
+    name: attendee-app
+    namespace: attendee

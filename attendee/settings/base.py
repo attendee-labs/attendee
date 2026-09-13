@@ -342,8 +342,17 @@ STORAGES = {
     },
 }
 AWS_S3_SIGNATURE_VERSION = "s3v4"
+# Addressing style for S3 requests. Botocore folds the bucket into the hostname by default
+# (<bucket>.<endpoint>), which is what AWS serves but not what S3-compatible servers do --
+# rustfs, MinIO and Oracle Object Storage's `compat` endpoint serve path style
+# (<endpoint>/<bucket>/<key>). So a custom AWS_ENDPOINT_URL defaults to "path" here, real AWS
+# keeps botocore's own default, and AWS_S3_ADDRESSING_STYLE overrides either.
 if os.getenv("USE_IRSA_FOR_S3_STORAGE", "false") == "true":
     AWS_S3_ADDRESSING_STYLE = "virtual"
+elif os.getenv("AWS_S3_ADDRESSING_STYLE"):
+    AWS_S3_ADDRESSING_STYLE = os.getenv("AWS_S3_ADDRESSING_STYLE")
+elif os.getenv("AWS_ENDPOINT_URL"):
+    AWS_S3_ADDRESSING_STYLE = "path"
 
 CHARGE_CREDITS_FOR_BOTS = os.getenv("CHARGE_CREDITS_FOR_BOTS", "false") == "true"
 
