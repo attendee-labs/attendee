@@ -1442,12 +1442,16 @@ class UserManager {
     }
 
     singleUserSynced(user) {
-      const convertedUser = this.convertUser(user);
-      console.log('singleUserSynced called w', convertedUser);
-      // Create array with new user and existing users, then filter for unique deviceIds
-      // keeping the first occurrence (new user takes precedence)
-      const allUsers = [...this.currentUsersMap.values(), convertedUser];
-      console.log('allUsers', allUsers);
+      this.multipleUsersSynced([user]);
+    }
+
+    multipleUsersSynced(users) {
+      const convertedUsers = users.map(user => this.convertUser(user));
+      console.log('multipleUsersSynced called w', convertedUsers);
+      // Merge the synced users into the existing users, keyed by deviceId. Map keeps the
+      // last entry for a key, so the synced users take precedence. This is an upsert:
+      // users missing from the synced list are left as-is rather than treated as removed.
+      const allUsers = [...this.currentUsersMap.values(), ...convertedUsers];
       const uniqueUsers = Array.from(
         new Map(allUsers.map(singleUser => [singleUser.deviceId, singleUser])).values()
       );
@@ -3625,7 +3629,7 @@ class CallManager {
             };
         }).filter(participant => participant.displayName);
 
-        for (const participant of participants) {
+        const participantsConverted = participants.map(participant => {
             const endpoints = (participant?.endpoints?.endpointDetails || []).map(endpoint => {
                 if (!endpoint.endpointId) {
                     return null;
@@ -3646,14 +3650,17 @@ class CallManager {
             }).filter(endpoint => endpoint);
 
             // Transform this funny format of a participant into Teams "standard" format
-            const participantConverted = {
+            return {
                 details: {id: participant.id, displayName: participant.displayName},
                 meetingRole: participant.meetingRole,
                 state: "active",
                 endpoints: Object.fromEntries(endpoints),
                 callId: this.getCallId()
             };
-            window.userManager.singleUserSynced(participantConverted);
+        });
+
+        window.userManager.multipleUsersSynced(participantsConverted);
+        for (const participantConverted of participantsConverted) {
             syncVirtualStreamsFromParticipant(participantConverted);
         }
     }
