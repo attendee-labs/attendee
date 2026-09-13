@@ -70,8 +70,8 @@ jobs:
           tags: |
             tamhub/be-attendee:${{ env.NEW_VERSION }}
             tamhub/be-attendee:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=attendee
+          cache-to: type=gha,scope=attendee,mode=max
 
       - name: Docker Scout
         id: docker-scout
