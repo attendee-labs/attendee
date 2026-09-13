@@ -73,6 +73,28 @@ def fetch_bot_pod_spec(bot_pod_spec_type: str) -> str:
         return None
     return os.getenv(f"BOT_POD_SPEC_{bot_pod_spec_type}")
 
+def env_from_sources(config_map_names: str, secret_names: str) -> list:
+    """Build envFrom sources from comma-separated ConfigMap and Secret names.
+
+    Deployment platforms often split an app's environment across several
+    objects - e.g. one Secret holding database credentials and another holding
+    app secrets - so both names accept a comma-separated list. ConfigMaps are
+    applied before Secrets and, within each list, later names win on conflict:
+    the same precedence Kubernetes applies to envFrom entries.
+    """
+    def names(value):
+        return [name.strip() for name in value.split(",") if name.strip()]
+
+    sources = [
+        client.V1EnvFromSource(config_map_ref=client.V1ConfigMapEnvSource(name=name))
+        for name in names(config_map_names)
+    ]
+    sources.extend(
+        client.V1EnvFromSource(secret_ref=client.V1SecretEnvSource(name=name))
+        for name in names(secret_names)
+    )
+    return sources
+
 class BotPodCreator:
     def __init__(self):
         try:
@@ -256,19 +278,11 @@ class BotPodCreator:
                                 "ephemeral-storage": ephemeral_storage_request
                             }
                         ),
-                        env_from=[
-                            # environment variables for the bot, pull from the same secrets the webserver can access
-                            client.V1EnvFromSource(
-                                config_map_ref=client.V1ConfigMapEnvSource(
-                                    name=os.getenv("BOT_POD_CONFIG_MAP_NAME", "env")
-                                )
-                            ),
-                            client.V1EnvFromSource(
-                                secret_ref=client.V1SecretEnvSource(
-                                    name=os.getenv("BOT_POD_SECRETS_NAME", "app-secrets")
-                                )
-                            )
-                        ],
+                        env_from=env_from_sources(
+                            # environment variables for the bot, pull from the same config and secrets the webserver can access
+                            os.getenv("BOT_POD_CONFIG_MAP_NAME", "env"),
+                            os.getenv("BOT_POD_SECRETS_NAME", "app-secrets"),
+                        ),
                         env=[
                             # Env var so that the bot pod can know that it is a bot pod
                             client.V1EnvVar(name="IS_A_BOT_POD", value="true"),
