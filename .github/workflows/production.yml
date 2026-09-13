@@ -1,0 +1,130 @@
+name: attendee production deployment
+
+on:
+  pull_request:
+    types:
+      - closed
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  # run-tests:
+  #   uses: ./.github/workflows/test.yml
+  continuum-deploy:
+    # needs: run-tests
+    if: github.event.pull_request.merged == true || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    environment: prod
+    env:
+      username: ${{ secrets.DOCKERHUB_USERNAME }}
+      password: ${{ secrets.DOCKERHUB_TOKEN }}
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract Projects and change Tier
+        run: |
+          LABELS='(.pull_request.labels // [])[].name'
+          PROJECTS=$(jq -r "[$LABELS | select(test(\"^tier:\")|not)] | @json" "$GITHUB_EVENT_PATH")
+          TIER=$(jq -r "[$LABELS | select(test(\"^tier:\")) | sub(\"^tier:\";\"\")] | .[0] // empty" "$GITHUB_EVENT_PATH")
+          echo "PROJECTS=${PROJECTS:-[]}" >> "$GITHUB_ENV"
+          echo "TIER=${TIER:-Patch}" >> "$GITHUB_ENV"
+
+      - name: Bump Version With Continuum
+        uses: fjogeleit/http-request-action@v1.7.0
+        id: bump_version
+        with:
+          url: "https://continuum.tam.codes/api/v1/charts/bump-version"
+          method: "POST"
+          timeout: 20000
+          customHeaders: '{"Content-Type": "application/json", "Authorization": "Bearer ${{ secrets.CONTINUUM_API_TOKEN }}"}'
+          data: >
+            {"name":"attendee",
+            "changeTier":"${{ env.TIER }}"}
+
+      - name: Set up New Version
+        id: tag_version
+        run: |
+          VERSION=${{ fromJson( steps.bump_version.outputs.response ).newVersion }}
+          PREV_VERSION=${{ fromJson( steps.bump_version.outputs.response ).previousVersion }}
+          echo "Continuum bumped attendee → v$VERSION"
+          echo "Previous version: v$PREV_VERSION"
+          echo "NEW_VERSION=$VERSION" >> $GITHUB_ENV
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+      - name: Login to DockerHub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Build and push
+        uses: docker/build-push-action@v3
+        with:
+          push: true
+          file: ./Dockerfile
+          tags: |
+            tamhub/be-attendee:${{ env.NEW_VERSION }}
+            tamhub/be-attendee:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Docker Scout
+        id: docker-scout
+        uses: docker/scout-action@v1
+        with:
+          command: cves
+          to-latest: true
+          ignore-base: true
+          ignore-unchanged: true
+          only-fixed: true
+          write-comment: false
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Repository Name
+        run: |
+          REPO_NAME=$(echo "${{ github.repository }}" | cut -d'/' -f2)
+          echo "REPO_NAME=$REPO_NAME" >> $GITHUB_ENV
+
+      - name: Push to Continuum
+        uses: fjogeleit/http-request-action@v1
+        with:
+          url: "https://continuum.tam.codes/api/v1/charts"
+          method: "POST"
+          timeout: 120000
+          customHeaders: '{"Content-Type": "application/json", "Authorization": "Bearer ${{ secrets.CONTINUUM_API_TOKEN }}"}'
+          preventFailureOnNoResponse: true
+          data: >
+            {"name":"attendee",
+            "image":"tamhub/be-attendee:${{ env.NEW_VERSION }}",
+            "version":"v${{ env.NEW_VERSION }}",
+            "description":"Backend Chart for attendee application",
+            "changeLog": ${{ toJson(format('{0} - updated version to {1}', github.event.pull_request.title, env.NEW_VERSION )) }},
+            "kind":"backend",
+            "type":"application",
+            "dependencies":[],
+            "command":["/bin/bash","-c","python manage.py migrate --noinput && python manage.py collectstatic --noinput && gunicorn attendee.wsgi -b 0.0.0.0:8000 --workers 2 --timeout 120"],
+            "readinessProbe":true,
+            "port":8000,
+            "alias":"backend",
+            "repo":"${{ env.REPO_NAME }}",
+            "number":"${{ github.event.pull_request.number }}"}
+
+      # - name: Update Project Dependencies
+      #   uses: fjogeleit/http-request-action@v1
+      #   with:
+      #     url: "https://continuum.tam.codes/api/v1/projects/dependencies"
+      #     method: "PATCH"
+      #     timeout: 120000
+      #     customHeaders: '{"Content-Type": "application/json", "Authorization": "Bearer ${{ secrets.CONTINUUM_API_TOKEN }}"}'
+      #     preventFailureOnNoResponse: true
+      #     data: >
+      #       {"projects": ${{env.PROJECTS}},
+      #       "dependency":"attendee",
+      #       "version":"v${{ env.NEW_VERSION }}",
+      #       "repo": "${{ env.REPO_NAME }}",
+      #       "number":"${{ github.event.pull_request.number }}"}
