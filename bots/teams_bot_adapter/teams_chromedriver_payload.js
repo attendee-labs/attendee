@@ -1608,7 +1608,6 @@ class WebSocketClient {
         this.mediaSendingEnabled = true;
         window.receiverManager.startPollingReceivers();
         window.styleManager.start();
-        window.callManager.syncParticipants();
         // No longer need this because we're not using MediaStreamTrackProcessor's
         //this.startBlackFrameTimer();
     }
@@ -3613,56 +3612,20 @@ class CallManager {
         return speakingParticipantIds;
     }
 
-    syncParticipants() {
+    getRemoteParticipants() {
         this.setActiveCall();
         if (!this.activeCall) {
-            return;
+            return [];
         }
+        return this.activeCall.participants || [];
+    }
 
-        const participantsRaw = this.activeCall.participants;
-        const participants = participantsRaw.map(participant => {
-            return {
-                id: participant.id,
-                displayName: participant.displayName,
-                endpoints: participant.endpoints,
-                meetingRole: participant.meetingRole
-            };
-        }).filter(participant => participant.displayName);
-
-        const participantsConverted = participants.map(participant => {
-            const endpoints = (participant?.endpoints?.endpointDetails || []).map(endpoint => {
-                if (!endpoint.endpointId) {
-                    return null;
-                }
-
-                if (!endpoint.mediaStreams) {
-                    return null;
-                }
-
-                return [
-                    endpoint.endpointId,
-                    {
-                        call: {
-                            mediaStreams: endpoint.mediaStreams
-                        }
-                    }
-                ]
-            }).filter(endpoint => endpoint);
-
-            // Transform this funny format of a participant into Teams "standard" format
-            return {
-                details: {id: participant.id, displayName: participant.displayName},
-                meetingRole: participant.meetingRole,
-                state: "active",
-                endpoints: Object.fromEntries(endpoints),
-                callId: this.getCallId()
-            };
-        });
-
-        window.userManager.multipleUsersSynced(participantsConverted);
-        for (const participantConverted of participantsConverted) {
-            syncVirtualStreamsFromParticipant(participantConverted);
+    getLocalParticipant() {
+        this.setActiveCall();
+        if (!this.activeCall) {
+            return null;
         }
+        return this.activeCall.localSignalingParticipant || null;
     }
 
     enableClosedCaptions() {
@@ -3739,8 +3702,90 @@ class CallManager {
     }
 }
 
+class ParticipantsPoller {
+    constructor() {
+        this.interval = null;
+    }
+
+    start() {
+        if (this.interval) {
+            return;
+        }
+        this.interval = setInterval(() => {
+            this.pollParticipants();
+        }, 1000);
+    }
+
+    pollParticipants() {
+        let participantsRaw = window.callManager.getRemoteParticipants();
+        
+        const localParticipantRaw = window.callManager.getLocalParticipant();
+
+        if (localParticipantRaw) {
+            // Local participant has different nesting of endpoint details vs remote participants
+            participantsRaw = [...participantsRaw, {
+                id: localParticipantRaw.id,
+                displayName: localParticipantRaw.displayName,
+                endpoints: {endpointDetails: localParticipantRaw.endpointDetails},
+                meetingRole: localParticipantRaw.meetingRole
+            }];
+        }
+
+        if (!participantsRaw) {
+            return;
+        }
+
+        const participants = participantsRaw.map(participant => {
+            return {
+                id: participant.id,
+                displayName: participant.displayName,
+                endpoints: participant.endpoints,
+                meetingRole: participant.meetingRole
+            };
+        }).filter(participant => participant.displayName);
+
+        const participantsConverted = participants.map(participant => {
+            const endpoints = (participant?.endpoints?.endpointDetails || []).map(endpoint => {
+                if (!endpoint.endpointId) {
+                    return null;
+                }
+
+                if (!endpoint.mediaStreams) {
+                    return null;
+                }
+
+                return [
+                    endpoint.endpointId,
+                    {
+                        call: {
+                            mediaStreams: endpoint.mediaStreams
+                        }
+                    }
+                ]
+            }).filter(endpoint => endpoint);
+
+            // Transform this funny format of a participant into Teams "standard" format
+            return {
+                details: {id: participant.id, displayName: participant.displayName},
+                meetingRole: participant.meetingRole,
+                state: "active",
+                endpoints: Object.fromEntries(endpoints),
+                callId: this.getCallId()
+            };
+        });
+
+        window.userManager.multipleUsersSynced(participantsConverted);
+        for (const participantConverted of participantsConverted) {
+            syncVirtualStreamsFromParticipant(participantConverted);
+        }
+    }
+}
+
 const callManager = new CallManager();
 window.callManager = callManager;
+
+const participantsPoller = new ParticipantsPoller();
+window.participantsPoller = participantsPoller;
 
 if (window.teamsInitialData?.shouldLogNetworkRequests) {
     
