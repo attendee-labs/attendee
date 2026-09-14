@@ -3715,6 +3715,7 @@ class ParticipantsPoller {
         this.interval = null;
         this.errorPollingParticipantsTicker = 0;
         this.previousParticipantsConvertedHash = null;
+        this.lastLogAllParticipantsRawTime = 0;
     }
 
     start() {
@@ -3754,6 +3755,18 @@ class ParticipantsPoller {
 
         if (!participantsRaw) {
             return;
+        }
+
+        const now = Date.now();
+        if (now - this.lastLogAllParticipantsRawTime >= 600 * 1000) {
+            this.lastLogAllParticipantsRawTime = now;
+            window.ws?.sendJson({
+                type: 'AllParticipantsRaw',
+                participantsRaw: participantsRaw.map(participant => ({
+                    id: participant.id,
+                    displayName: participant.displayName
+                }))
+            });
         }
 
         const participants = participantsRaw.map(participant => {
