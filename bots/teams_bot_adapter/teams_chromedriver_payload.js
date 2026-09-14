@@ -1442,18 +1442,22 @@ class UserManager {
     }
 
     singleUserSynced(user) {
-      this.multipleUsersSynced([user]);
-    }
+        const convertedUser = this.convertUser(user);
+        console.log('singleUserSynced called w', convertedUser);
+        // Create array with new user and existing users, then filter for unique deviceIds
+        // keeping the first occurrence (new user takes precedence)
+        const allUsers = [...this.currentUsersMap.values(), convertedUser];
+        console.log('allUsers', allUsers);
+        const uniqueUsers = Array.from(
+          new Map(allUsers.map(singleUser => [singleUser.deviceId, singleUser])).values()
+        );
+        this.newUsersListSynced(uniqueUsers);
+      }
 
     multipleUsersSynced(users) {
       const convertedUsers = users.map(user => this.convertUser(user));
-      console.log('multipleUsersSynced called w', convertedUsers);
-      // Merge the synced users into the existing users, keyed by deviceId. Map keeps the
-      // last entry for a key, so the synced users take precedence. This is an upsert:
-      // users missing from the synced list are left as-is rather than treated as removed.
-      const allUsers = [...this.currentUsersMap.values(), ...convertedUsers];
       const uniqueUsers = Array.from(
-        new Map(allUsers.map(singleUser => [singleUser.deviceId, singleUser])).values()
+        new Map(convertedUsers.map(singleUser => [singleUser.deviceId, singleUser])).values()
       );
       this.newUsersListSynced(uniqueUsers);
     }
@@ -2119,7 +2123,8 @@ const wsInterceptor = new WebSocketInterceptor({
             
             realConsole?.log('Event Data Object:', eventDataObject);
             if (eventDataObject.url.endsWith("rosterUpdate/") || eventDataObject.url.endsWith("rosterUpdate")) {
-                handleRosterUpdate(eventDataObject);
+                // No longer doing this. We now poll participants instead.
+                //handleRosterUpdate(eventDataObject);
             }
             if (eventDataObject.url.endsWith("conversation/conversationEnd/")) {
                 handleConversationEnd(eventDataObject);
@@ -3702,9 +3707,21 @@ class CallManager {
     }
 }
 
+// FNV-1a
+function hashString(string) {
+    let hash = 0x811c9dc5;
+    for (let i = 0; i < string.length; i++) {
+        hash ^= string.charCodeAt(i);
+        hash = Math.imul(hash, 0x01000193);
+    }
+    return hash >>> 0;
+}
+
 class ParticipantsPoller {
     constructor() {
         this.interval = null;
+        this.errorPollingParticipantsTicker = 0;
+        this.previousParticipantsConvertedHash = null;
     }
 
     start() {
@@ -3715,10 +3732,14 @@ class ParticipantsPoller {
             try {
                 this.pollParticipants();
             } catch (error) {
-                window.ws?.sendJson({
-                    type: 'ErrorPollingParticipants',
-                    error: error.message
-                });
+                if (this.errorPollingParticipantsTicker % 500 === 0)
+                {
+                    window.ws?.sendJson({
+                        type: 'ErrorPollingParticipants',
+                        error: error.message
+                    });
+                }
+                this.errorPollingParticipantsTicker++;
             }
         }, 1000);
     }
@@ -3780,6 +3801,12 @@ class ParticipantsPoller {
                 callId: window.callManager.getCallId()
             };
         });
+
+        const participantsConvertedHash = hashString(JSON.stringify(participantsConverted));
+        if (participantsConvertedHash === this.previousParticipantsConvertedHash) {
+            return;
+        }
+        this.previousParticipantsConvertedHash = participantsConvertedHash;
 
         window.userManager.multipleUsersSynced(participantsConverted);
         for (const participantConverted of participantsConverted) {
