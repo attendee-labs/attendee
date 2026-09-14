@@ -3701,16 +3701,6 @@ class CallManager {
     }
 }
 
-// FNV-1a
-function hashString(string) {
-    let hash = 0x811c9dc5;
-    for (let i = 0; i < string.length; i++) {
-        hash ^= string.charCodeAt(i);
-        hash = Math.imul(hash, 0x01000193);
-    }
-    return hash >>> 0;
-}
-
 class ParticipantsPoller {
     static tickIntervalMs = 200;
     static normalPollIntervalMs = 1000;
@@ -3720,7 +3710,7 @@ class ParticipantsPoller {
     constructor() {
         this.interval = null;
         this.errorPollingParticipantsTicker = 0;
-        this.previousParticipantsConvertedHash = null;
+        this.previousParticipantsChangeKey = null;
         this.lastLogAllParticipantsRawTime = 0;
         this.lastPollParticipantsTime = 0;
         this.fastPollUntilTime = 0;
@@ -3836,11 +3826,10 @@ class ParticipantsPoller {
                 [endpointId, e.call.mediaStreams.map(s => [s.sourceId, s.type, s.direction])]
             )
         ]));
-        const participantsConvertedHash = hashString(changeKey);
-        if (participantsConvertedHash === this.previousParticipantsConvertedHash) {
+        if (changeKey === this.previousParticipantsChangeKey) {
             return;
         }
-        this.previousParticipantsConvertedHash = participantsConvertedHash;
+        this.previousParticipantsChangeKey = changeKey;
 
         window.userManager.multipleUsersSynced(participantsConverted);
         for (const participantConverted of participantsConverted) {
