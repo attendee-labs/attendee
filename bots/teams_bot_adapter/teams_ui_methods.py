@@ -513,6 +513,9 @@ class TeamsUIMethods:
         logger.info("Clicking the Join now button...")
         self.click_element(join_button, "join_button")
 
+        # Start polling participants
+        self.start_participants_poller()
+
         # Wait for meeting to load and enable captions
         self.click_show_more_button()
 
@@ -525,6 +528,9 @@ class TeamsUIMethods:
             self.disable_incoming_video_in_ui()
 
         self.ready_to_show_bot_image()
+
+    def start_participants_poller(self):
+        self.driver.execute_script("window.participantsPoller.start()")
 
     def disable_video_effects(self):
         if not (self.teams_bot_login_is_available and self.teams_bot_login_should_be_used):

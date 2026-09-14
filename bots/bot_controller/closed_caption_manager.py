@@ -1,5 +1,8 @@
+import logging
 from datetime import datetime, timedelta
 from typing import Dict, Optional
+
+logger = logging.getLogger(__name__)
 
 
 class CaptionEntry:
@@ -40,6 +43,7 @@ class ClosedCaptionManager:
         self.captions: Dict[str, CaptionEntry] = {}
         self.save_utterance_callback = save_utterance_callback
         self.get_participant_callback = get_participant_callback
+        self.last_participant_not_found_logged_at = datetime.min
 
     def upsert_caption(self, caption_data: dict):
         """
@@ -65,6 +69,11 @@ class ClosedCaptionManager:
             if entry.should_upsert_to_db(should_flush=should_flush):
                 device_id = entry.caption_data["deviceId"]
                 participant = self.get_participant_callback(device_id)
+
+                if not participant:
+                    if (datetime.utcnow() - self.last_participant_not_found_logged_at) > timedelta(minutes=2):
+                        logger.warning(f"Participant {device_id} not found, so cannot save caption as utterance.")
+                        self.last_participant_not_found_logged_at = datetime.utcnow()
 
                 if participant:
                     # Save as an utterance
