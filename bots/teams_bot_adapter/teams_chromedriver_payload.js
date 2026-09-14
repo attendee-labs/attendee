@@ -3782,7 +3782,7 @@ class ParticipantsPoller {
             this.lastLogAllParticipantsRawTime = now;
             window.ws?.sendJson({
                 type: 'AllParticipantsRaw',
-                participantsRaw: participantsRaw.map(participant => ({
+                participantsRaw: participantsRaw.slice(0, 100).map(participant => ({
                     id: participant.id,
                     displayName: participant.displayName
                 }))
