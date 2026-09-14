@@ -3706,6 +3706,8 @@ class ParticipantsPoller {
     static normalPollIntervalMs = 1000;
     static fastPollIntervalMs = 200;
     static fastPollWindowMs = 1000;
+    // Participants in this state are waiting in the lobby and have not joined the meeting yet
+    static lobbyParticipantState = 7;
 
     constructor() {
         this.interval = null;
@@ -3774,19 +3776,23 @@ class ParticipantsPoller {
                 type: 'AllParticipantsRaw',
                 participantsRaw: participantsRaw.slice(0, 100).map(participant => ({
                     id: participant.id,
-                    displayName: participant.displayName
+                    displayName: participant.displayName,
+                    state: participant.state,
                 }))
             });
         }
 
-        const participants = participantsRaw.map(participant => {
+        // Filter out participants in the lobby or with no display name. The bot's participant will not be affected
+        const participants = participantsRaw.filter(participant =>
+            participant.displayName && participant.state !== ParticipantsPoller.lobbyParticipantState
+        ).map(participant => {
             return {
                 id: participant.id,
                 displayName: participant.displayName,
                 endpoints: participant.endpoints,
                 meetingRole: participant.meetingRole
             };
-        }).filter(participant => participant.displayName);
+        });
 
         const participantsConverted = participants.map(participant => {
             const endpoints = (participant?.endpoints?.endpointDetails || []).map(endpoint => {
