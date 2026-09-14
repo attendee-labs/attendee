@@ -1432,7 +1432,6 @@ class UserManager {
             deviceId: user.details.id,
             displayName: user.details.displayName,
             fullName: user.details.displayName,
-            profile: '',
             status: user.state,
             humanized_status: user.state === "active" ? "in_meeting" : "not_in_meeting",
             isCurrentUser: (!!currentUserId) && (user.details.id === currentUserId),
@@ -1462,6 +1461,22 @@ class UserManager {
       this.newUsersListSynced(uniqueUsers);
     }
 
+    // Stored users are compared with JSON.stringify, so every user must pass through
+    // here to guarantee an identical key set and key order on both sides.
+    toUserRecord(user) {
+        return {
+            deviceId: user.deviceId,
+            displayName: user.displayName,
+            fullName: user.fullName,
+            status: user.status,
+            humanized_status: user.humanized_status,
+            parentDeviceId: user.parentDeviceId,
+            isCurrentUser: user.isCurrentUser,
+            isHost: user.isHost,
+            meetingId: user.meetingId
+        };
+    }
+
     newUsersListSynced(newUsersList) {
         console.log('newUsersListSynced called w', newUsersList);
         // Get the current user IDs before updating
@@ -1471,22 +1486,11 @@ class UserManager {
 
         // Update all users map
         for (const user of newUsersList) {
-            if (previousUserIds.has(user.deviceId) && JSON.stringify(this.currentUsersMap.get(user.deviceId)) !== JSON.stringify(user)) {
+            if (previousUserIds.has(user.deviceId) && JSON.stringify(this.currentUsersMap.get(user.deviceId)) !== JSON.stringify(this.toUserRecord(user))) {
                 updatedUserIds.add(user.deviceId);
             }
 
-            this.allUsersMap.set(user.deviceId, {
-                deviceId: user.deviceId,
-                displayName: user.displayName,
-                fullName: user.fullName,
-                profile: user.profile,
-                status: user.status,
-                humanized_status: user.humanized_status,
-                parentDeviceId: user.parentDeviceId,
-                isCurrentUser: user.isCurrentUser,
-                isHost: user.isHost,
-                meetingId: user.meetingId
-            });
+            this.allUsersMap.set(user.deviceId, this.toUserRecord(user));
         }
 
         // Calculate new, removed, and updated users
@@ -1502,18 +1506,7 @@ class UserManager {
         // Clear current users map and update with new list
         this.currentUsersMap.clear();
         for (const user of newUsersList) {
-            this.currentUsersMap.set(user.deviceId, {
-                deviceId: user.deviceId,
-                displayName: user.displayName,
-                fullName: user.fullName,
-                profilePicture: user.profilePicture,
-                status: user.status,
-                humanized_status: user.humanized_status,
-                parentDeviceId: user.parentDeviceId,
-                isCurrentUser: user.isCurrentUser,
-                isHost: user.isHost,
-                meetingId: user.meetingId
-            });
+            this.currentUsersMap.set(user.deviceId, this.toUserRecord(user));
         }
 
         const updatedUsers = Array.from(updatedUserIds).map(id => this.currentUsersMap.get(id));
