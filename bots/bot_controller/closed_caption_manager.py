@@ -1,5 +1,4 @@
 import logging
-import threading
 from datetime import datetime, timedelta
 from typing import Dict, Optional
 
@@ -42,7 +41,6 @@ class CaptionEntry:
 class ClosedCaptionManager:
     def __init__(self, *, save_utterance_callback, get_participant_callback):
         self.captions: Dict[str, CaptionEntry] = {}
-        self._lock = threading.Lock()
         self.save_utterance_callback = save_utterance_callback
         self.get_participant_callback = get_participant_callback
         self.last_participant_not_found_logged_at = datetime.min
@@ -55,11 +53,10 @@ class ClosedCaptionManager:
         device_id = caption_data["deviceId"]
         key = f"{device_id}:{caption_id}"
 
-        with self._lock:
-            if key in self.captions:
-                self.captions[key].update(caption_data)
-            else:
-                self.captions[key] = CaptionEntry(caption_data)
+        if key in self.captions:
+            self.captions[key].update(caption_data)
+        else:
+            self.captions[key] = CaptionEntry(caption_data)
 
     def flush_captions(self):
         self.process_captions(should_flush=True)
@@ -68,11 +65,7 @@ class ClosedCaptionManager:
         """
         Process captions that are ready to be upserted to the database
         """
-        # Take an atomic snapshot of the current entries
-        with self._lock:
-            entries = list(self.captions.items())
-
-        for key, entry in entries:
+        for key, entry in list(self.captions.items()):
             if entry.should_upsert_to_db(should_flush=should_flush):
                 device_id = entry.caption_data["deviceId"]
                 participant = self.get_participant_callback(device_id)
@@ -98,11 +91,6 @@ class ClosedCaptionManager:
                     # Mark as upserted and remove if it hasn't been modified recently
                     entry.mark_upserted_to_db()
 
-                    # If this caption hasn't been modified in a while, remove it from memory.
-                    # Re-check under the lock so we don't delete an entry that was
-                    # updated after we took the snapshot (which would lose data).
+                    # If this caption hasn't been modified in a while, remove it from memory
                     if (datetime.utcnow() - entry.modified_at) > timedelta(seconds=60):
-                        with self._lock:
-                            current = self.captions.get(key)
-                            if current is not None and (datetime.utcnow() - current.modified_at) > timedelta(seconds=60):
-                                del self.captions[key]
+                        del self.captions[key]
