@@ -3828,7 +3828,15 @@ class ParticipantsPoller {
             };
         });
 
-        const participantsConvertedHash = hashString(JSON.stringify(participantsConverted));
+        const changeKey = JSON.stringify(participantsConverted.map(p => [
+            p.details.id,
+            p.details.displayName,
+            p.meetingRole,
+            Object.entries(p.endpoints).map(([endpointId, e]) =>
+                [endpointId, e.call.mediaStreams.map(s => [s.sourceId, s.type, s.direction])]
+            )
+        ]));
+        const participantsConvertedHash = hashString(changeKey);
         if (participantsConvertedHash === this.previousParticipantsConvertedHash) {
             return;
         }
