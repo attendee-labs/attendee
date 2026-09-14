@@ -2118,6 +2118,7 @@ const wsInterceptor = new WebSocketInterceptor({
             if (eventDataObject.url.endsWith("rosterUpdate/") || eventDataObject.url.endsWith("rosterUpdate")) {
                 // No longer doing this. We now poll participants instead.
                 //handleRosterUpdate(eventDataObject);
+                window.participantsPoller?.enableFastPolling();
             }
             if (eventDataObject.url.endsWith("conversation/conversationEnd/")) {
                 handleConversationEnd(eventDataObject);
@@ -3711,11 +3712,18 @@ function hashString(string) {
 }
 
 class ParticipantsPoller {
+    static tickIntervalMs = 200;
+    static normalPollIntervalMs = 1000;
+    static fastPollIntervalMs = 200;
+    static fastPollWindowMs = 1000;
+
     constructor() {
         this.interval = null;
         this.errorPollingParticipantsTicker = 0;
         this.previousParticipantsConvertedHash = null;
         this.lastLogAllParticipantsRawTime = 0;
+        this.lastPollParticipantsTime = 0;
+        this.fastPollUntilTime = 0;
     }
 
     start() {
@@ -3724,6 +3732,12 @@ class ParticipantsPoller {
         }
         this.interval = setInterval(() => {
             try {
+                const now = Date.now();
+                const pollIntervalMs = now < this.fastPollUntilTime ? ParticipantsPoller.fastPollIntervalMs : ParticipantsPoller.normalPollIntervalMs;
+                if (now - this.lastPollParticipantsTime < pollIntervalMs) {
+                    return;
+                }
+                this.lastPollParticipantsTime = now;
                 this.pollParticipants();
             } catch (error) {
                 if (this.errorPollingParticipantsTicker % 500 === 0)
@@ -3735,7 +3749,13 @@ class ParticipantsPoller {
                 }
                 this.errorPollingParticipantsTicker++;
             }
-        }, 1000);
+        }, ParticipantsPoller.tickIntervalMs);
+    }
+
+    // A roster update means the participant list is probably changing, so poll at the faster
+    // rate for a short window to pick up the changes sooner.
+    enableFastPolling() {
+        this.fastPollUntilTime = Date.now() + ParticipantsPoller.fastPollWindowMs;
     }
 
     pollParticipants() {
