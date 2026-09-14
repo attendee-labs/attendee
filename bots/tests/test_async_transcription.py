@@ -8,11 +8,12 @@ which uses the grouped utterances approach rather than individual utterance proc
 import os
 from unittest import mock
 
-from django.test import override_settings
+from django.test import Client, override_settings
 from django.test.testcases import TransactionTestCase
 from django.utils import timezone
 
 from bots.models import (
+    ApiKey,
     AsyncTranscription,
     AsyncTranscriptionStates,
     AudioChunk,
@@ -767,3 +768,71 @@ class TestAsyncTranscriptionTimeout(AsyncTranscriptionTestCase):
             TranscriptionFailureReasons.UTTERANCES_STILL_IN_PROGRESS_WHEN_TRANSCRIPTION_TERMINATED,
             async_transcription.failure_data.get("failure_reasons", []),
         )
+
+
+class TestGetTranscriptForAsyncTranscription(AsyncTranscriptionTestCase):
+    """Tests for reading the transcript of an async transcription over the API."""
+
+    def setUp(self):
+        super().setUp()
+        self.api_key, self.api_key_plain = ApiKey.create(project=self.project, name="Test API Key")
+        self.client = Client()
+
+    def _create_async_transcription(self, state, failure_data=None):
+        async_transcription = AsyncTranscription.objects.create(
+            recording=self.recording,
+            settings={"transcription_settings": {"assembly_ai": {}}},
+            state=state,
+            failure_data=failure_data,
+        )
+        # One utterance came back from the provider and one never did.
+        Utterance.objects.create(
+            source=Utterance.Sources.PER_PARTICIPANT_AUDIO,
+            recording=self.recording,
+            async_transcription=async_transcription,
+            participant=self.participant,
+            timestamp_ms=0,
+            duration_ms=1000,
+            transcription={"transcript": "Partial transcript"},
+        )
+        Utterance.objects.create(
+            source=Utterance.Sources.PER_PARTICIPANT_AUDIO,
+            recording=self.recording,
+            async_transcription=async_transcription,
+            participant=self.participant,
+            timestamp_ms=1000,
+            duration_ms=1000,
+        )
+        return async_transcription
+
+    def _get_transcript(self, async_transcription):
+        return self.client.get(
+            f"/api/v1/bots/{self.bot.object_id}/transcript?async_transcription_id={async_transcription.object_id}",
+            HTTP_AUTHORIZATION=f"Token {self.api_key_plain}",
+        )
+
+    def test_returns_the_transcript_when_the_transcription_is_complete(self):
+        response = self._get_transcript(self._create_async_transcription(AsyncTranscriptionStates.COMPLETE))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([utterance["transcription"]["transcript"] for utterance in response.json()], ["Partial transcript"])
+
+    def test_returns_the_partial_transcript_when_the_transcription_failed(self):
+        async_transcription = self._create_async_transcription(
+            AsyncTranscriptionStates.FAILED,
+            failure_data={"failure_reasons": [TranscriptionFailureReasons.UTTERANCES_STILL_IN_PROGRESS_WHEN_TRANSCRIPTION_TERMINATED]},
+        )
+
+        response = self._get_transcript(async_transcription)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([utterance["transcription"]["transcript"] for utterance in response.json()], ["Partial transcript"])
+
+    def test_returns_an_error_when_the_transcription_has_not_finished(self):
+        for state in [AsyncTranscriptionStates.NOT_STARTED, AsyncTranscriptionStates.IN_PROGRESS]:
+            with self.subTest(state=state):
+                response = self._get_transcript(self._create_async_transcription(state))
+
+                self.assertEqual(response.status_code, 400)
+                self.assertIn("is not complete or failed", response.json()["error"])
+                self.assertIn(AsyncTranscriptionStates.state_to_api_code(state), response.json()["error"])
