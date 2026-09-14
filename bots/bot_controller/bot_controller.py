@@ -1698,10 +1698,29 @@ class BotController:
 
         return
 
+    def participant_info_from_chat_message(self, chat_message):
+        # We won't do it if the chat message did not provide a full name for them
+        if not chat_message.get("participant_full_name"):
+            return None
+
+        logger.info(f"Lazily creating participant for chat message: {chat_message['participant_full_name']} {chat_message['participant_uuid']}")
+
+        # If we have a uuid and a full name, that's enough
+        return {
+            "participant_uuid": chat_message["participant_uuid"],
+            "participant_full_name": chat_message["participant_full_name"],
+            "participant_user_uuid": None,
+            "participant_is_the_bot": False,
+            "participant_is_host": False,
+        }
+
     def upsert_chat_message(self, chat_message):
         logger.info(f"Upserting chat message: {chat_message}")
 
         participant = self.adapter.get_participant(chat_message["participant_uuid"])
+
+        if participant is None:
+            participant = self.participant_info_from_chat_message(chat_message)
 
         if participant is None:
             logger.warning(f"Warning: No participant found for chat message: {chat_message}")
