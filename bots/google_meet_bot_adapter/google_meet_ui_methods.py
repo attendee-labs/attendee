@@ -107,6 +107,12 @@ class GoogleMeetUIMethods:
         if this_meeting_is_being_recorded_join_now_button:
             logger.info("Clicking this_meeting_is_being_recorded_join_now_button")
             self.click_element(this_meeting_is_being_recorded_join_now_button, step)
+            return
+
+        this_meeting_is_being_captured_join_button = self.find_element_by_selector(By.XPATH, '//div[@role="alertdialog"]//button[@data-mdc-dialog-action="ok"][.//span[text()="Join"]]')
+        if this_meeting_is_being_captured_join_button:
+            logger.info("Clicking this_meeting_is_being_captured_join_button")
+            self.click_element_forcefully(this_meeting_is_being_captured_join_button, step)
 
     # Some modal that google put up
     def click_others_may_see_your_meeting_differently_button(self, step):
