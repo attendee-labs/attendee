@@ -3489,7 +3489,16 @@ window.botOutputManager = botOutputManager;
                         {
                             if (event?.message)
                             {
-                                // TODO VERIFY THAT convId is our convo
+                                if (event?.convId !== window.callManager?.getThreadId())
+                                {
+                                    window.ws?.sendJson({
+                                        type: 'ChatMessageHadWrongThreadId',
+                                        message: event,
+                                        expectedThreadId: window.callManager?.getThreadId(),
+                                    });
+                                    continue;
+                                }
+
                                 realConsole?.log('chatMessage', event.message);
                                 window.chatMessageManager?.handleChatMessage(event.message);
                             }
@@ -3529,6 +3538,15 @@ class CallManager {
                 }
             }
         }
+    }
+
+    getThreadId() {
+        this.setActiveCall();
+        if (!this.activeCall) {
+            return;
+        }
+
+        return this.activeCall.threadId;
     }
 
     getCallId() {
