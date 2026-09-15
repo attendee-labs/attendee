@@ -308,9 +308,9 @@ class StyleManager {
 
     checkNeededInteractions() {
         // Check for recording notification dialog
-        const recordingDialog = document.querySelector('div[aria-modal="true"][role="dialog"]');
+        const recordingDialog = document.querySelector('div[aria-modal="true"][role="dialog"], div[aria-modal="true"][role="alertdialog"]');
         
-        if (recordingDialog && (recordingDialog.textContent.includes('This video call is being recorded') || recordingDialog.textContent.includes('Others may see your video differently') || recordingDialog.textContent.includes('This video call is being transcribed') || recordingDialog.textContent.includes('Gemini is taking notes'))) {           
+        if (recordingDialog && (recordingDialog.textContent.includes('This video call is being recorded') || recordingDialog.textContent.includes('Others may see your video differently') || recordingDialog.textContent.includes('This video call is being transcribed') || recordingDialog.textContent.includes('Gemini is taking notes') || recordingDialog.textContent.includes('This meeting is being captured'))) {           
             // Find and click the "Join now" button (usually the confirm/OK button)
             const joinNowButton = recordingDialog.querySelector('button[data-mdc-dialog-action="ok"]');
             

@@ -54,6 +54,7 @@
                        onclick="setActiveLink(this)">
                         <i class="bi bi-speedometer2"></i> Quick start
                     </a>
+                    {% if can_manage_api_keys %}
                     <a class="nav-link" 
                        hx-get="{% url 'projects:project-api-keys' project.object_id %}" 
                        hx-select="#content"
@@ -63,6 +64,7 @@
                        onclick="setActiveLink(this)">
                         <i class="bi bi-key"></i> API Keys
                     </a>
+                    {% endif %}
                     <a class="nav-link" 
                         href="https://docs.attendee.dev"
                         target="_blank"
