@@ -283,6 +283,12 @@
 <script>
     function initializeInviteForm() {
     const inviteForm = document.getElementById('inviteUserForm');
+    // Runs again on every htmx swap, so bail out when the form is absent or already wired up.
+    // Re-binding would stack submit handlers and fire one POST per handler.
+    if (!inviteForm || inviteForm.dataset.listenersAttached) {
+        return;
+    }
+    inviteForm.dataset.listenersAttached = 'true';
     const submitBtn = document.getElementById('inviteSubmitBtn');
     const spinner = submitBtn.querySelector('.spinner-border');
     const inviteError = document.getElementById('inviteError');
@@ -470,6 +476,12 @@
 
     function initializeEditForm() {
         const editForm = document.getElementById('editUserForm');
+        // Runs again on every htmx swap, so bail out when the form is absent or already wired up.
+        // Re-binding would stack submit handlers and fire one POST per handler.
+        if (!editForm || editForm.dataset.listenersAttached) {
+            return;
+        }
+        editForm.dataset.listenersAttached = 'true';
         const editSubmitBtn = document.getElementById('editSubmitBtn');
         const editSpinner = editSubmitBtn.querySelector('.spinner-border');
         const editError = document.getElementById('editError');
