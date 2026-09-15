@@ -1358,6 +1358,7 @@ class ChatMessageManager {
                 message_uuid: chatMessage.clientMessageId,
                 participant_uuid: chatMessage.from,
                 participant_full_name: chatMessage.imDisplayName,
+                can_lazily_insert_participant: true,
                 timestamp: Math.floor(timestamp_ms / 1000),
                 text: this.stripHtml(chatMessage.content),
             });

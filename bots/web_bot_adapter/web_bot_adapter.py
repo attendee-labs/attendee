@@ -186,6 +186,9 @@ class WebBotAdapter(BotAdapter):
         if not json_data.get("participant_uuid"):
             return
 
+        if not json_data.get("can_lazily_insert_participant"):
+            return
+
         if self.participants_info.get(json_data["participant_uuid"]):
             return
 
