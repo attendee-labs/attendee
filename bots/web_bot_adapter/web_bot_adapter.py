@@ -189,6 +189,8 @@ class WebBotAdapter(BotAdapter):
         if self.participants_info.get(json_data["participant_uuid"]):
             return
 
+        logger.info(f"Lazily inserting participant for chat message: {json_data['participant_full_name']} {json_data['participant_uuid']}")
+
         self.handle_participant_update(
             {
                 "deviceId": json_data["participant_uuid"],
