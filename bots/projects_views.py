@@ -64,7 +64,12 @@ from .models import (
 from .stripe_utils import credit_amount_for_purchase_amount_dollars, process_checkout_session_completed
 from .tasks.deliver_webhook_task import deliver_webhook
 from .usage_utils import get_usage_data
-from .utils import generate_recordings_json_for_bot_detail_view
+from .utils import (
+    generate_recordings_json_for_bot_detail_view,
+    obfuscate_chat_messages_for_bot_detail_view,
+    obfuscate_recordings_json_for_bot_detail_view,
+    obfuscate_webhook_delivery_attempts_for_bot_detail_view,
+)
 from .zoom_oauth_apps_api_utils import create_or_update_zoom_oauth_app
 
 logger = logging.getLogger(__name__)
@@ -86,10 +91,26 @@ def get_webhook_subscription_for_user(user, webhook_subscription_object_id):
     return webhook_subscription
 
 
+def user_can_manage_api_keys(user, project):
+    # If you're an admin you can manage api keys for any project in the organization
+    if user.role == UserRole.ADMIN:
+        return True
+    return ProjectAccess.objects.filter(project=project, user=user, can_manage_api_keys=True).exists()
+
+
+def user_can_view_recording_content(user, project):
+    # If viewing recording content is disabled globally, nobody can view recording content
+    if not settings.ENABLE_VIEWING_RECORDING_CONTENT:
+        return False
+    # If you're an admin you can view recording content for any project in the organization
+    if user.role == UserRole.ADMIN:
+        return True
+    return ProjectAccess.objects.filter(project=project, user=user, can_view_recording_content=True).exists()
+
+
 def get_api_key_for_user(user, api_key_object_id):
     api_key = get_object_or_404(ApiKey, object_id=api_key_object_id, project__organization=user.organization)
-    # If you're an admin you can access any api key in the organization
-    if user.role != UserRole.ADMIN and not ProjectAccess.objects.filter(project=api_key.project, user=user).exists():
+    if not user_can_manage_api_keys(user, api_key.project):
         raise PermissionDenied
     return api_key
 
@@ -225,6 +246,8 @@ class ProjectUrlContextMixin:
             "charge_credits_for_bots_setting": settings.CHARGE_CREDITS_FOR_BOTS,
             "can_view_instance_health": user_can_view_instance_health(self.request.user),
             "can_view_bot_resource_usage": user_can_view_bot_resource_usage(self.request.user),
+            "can_manage_api_keys": user_can_manage_api_keys(self.request.user, project),
+            "can_view_recording_content": user_can_view_recording_content(self.request.user, project),
             "user_projects": Project.accessible_to(self.request.user),
             "UserRole": UserRole,
             "debug_mode": True if settings.DEBUG else False,
@@ -267,6 +290,8 @@ class ProjectDashboardView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 class ProjectApiKeysView(LoginRequiredMixin, ProjectUrlContextMixin, View):
     def get(self, request, object_id):
         project = get_project_for_user(user=request.user, project_object_id=object_id)
+        if not user_can_manage_api_keys(request.user, project):
+            raise PermissionDenied
         context = self.get_project_context(object_id, project)
         context["api_keys"] = ApiKey.objects.filter(project=project).order_by("-created_at")
         return render(request, "projects/project_api_keys.html", context)
@@ -275,6 +300,8 @@ class ProjectApiKeysView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 class CreateApiKeyView(LoginRequiredMixin, View):
     def post(self, request, object_id):
         project = get_project_for_user(user=request.user, project_object_id=object_id)
+        if not user_can_manage_api_keys(request.user, project):
+            raise PermissionDenied
         name = request.POST.get("name")
 
         if not name:
@@ -896,11 +923,17 @@ class ProjectBotDetailView(LoginRequiredMixin, ProjectUrlContextMixin, View):
             # Redirect to bots list if bot not found
             return redirect("bots:project-bots", object_id=object_id)
 
+        can_view_recording_content = user_can_view_recording_content(request.user, project)
+
         # Get webhook delivery attempts for this bot (from both project-level and bot-specific webhook subscriptions)
         webhook_delivery_attempts = WebhookDeliveryAttempt.objects.filter(bot=bot).select_related("webhook_subscription").order_by("-created_at")
+        if not can_view_recording_content:
+            webhook_delivery_attempts = obfuscate_webhook_delivery_attempts_for_bot_detail_view(webhook_delivery_attempts)
 
         # Get chat messages for this bot
         chat_messages = ChatMessage.objects.filter(bot=bot).select_related("participant").order_by("created_at")
+        if not can_view_recording_content:
+            chat_messages = obfuscate_chat_messages_for_bot_detail_view(chat_messages)
 
         # Get participants and participant events for this bot
         participants = Participant.objects.filter(bot=bot, is_the_bot=False).prefetch_related("events").order_by("created_at")
@@ -1005,11 +1038,17 @@ class ProjectBotRecordingsView(LoginRequiredMixin, ProjectUrlContextMixin, View)
             # Redirect to bots list if bot not found
             return redirect("bots:project-bots", object_id=object_id)
 
+        can_view_recording_content = user_can_view_recording_content(request.user, project)
+        recordings = generate_recordings_json_for_bot_detail_view(bot)
+        if not can_view_recording_content:
+            recordings = obfuscate_recordings_json_for_bot_detail_view(recordings)
+
         context = {
             "RecordingStates": RecordingStates,
             "RecordingTypes": RecordingTypes,
             "RecordingTranscriptionStates": RecordingTranscriptionStates,
-            "recordings": generate_recordings_json_for_bot_detail_view(bot),
+            "recordings": recordings,
+            "can_view_recording_content": can_view_recording_content,
         }
 
         return render(request, "projects/partials/project_bot_recordings.html", context)
@@ -1035,7 +1074,16 @@ class ProjectProjectView(AdminRequiredMixin, ProjectUrlContextMixin, View):
     def get(self, request, object_id):
         project = get_project_for_user(user=request.user, project_object_id=object_id)
         context = self.get_project_context(object_id, project)
-        context["users_with_access"] = project.users_with_access()
+        # Attach each user's ProjectAccess for this specific project so the template can
+        # render the granular permission indicators without extra queries.
+        context["users_with_access"] = project.users_with_access().prefetch_related(
+            models.Prefetch(
+                "project_accesses",
+                queryset=ProjectAccess.objects.filter(project=project),
+                to_attr="access_for_project",
+            )
+        )
+        context["enable_granular_permissions"] = settings.ENABLE_GRANULAR_PERMISSIONS
         return render(request, "projects/project_project.html", context)
 
 
@@ -1050,6 +1098,7 @@ class ProjectTeamView(AdminRequiredMixin, ProjectUrlContextMixin, View):
         context["users"] = users
         # Needed for the checkbox list for choosing which products a user can access
         context["projects"] = request.user.organization.projects.all()
+        context["enable_granular_permissions"] = settings.ENABLE_GRANULAR_PERMISSIONS
         return render(request, "projects/project_team.html", context)
 
 
@@ -1059,6 +1108,8 @@ class EditUserView(AdminRequiredMixin, ProjectUrlContextMixin, View):
         is_admin = request.POST.get("is_admin") == "true"
         is_active = request.POST.get("is_active") == "true"
         selected_project_ids = request.POST.getlist("project_access")
+        can_access_recording_content_project_ids = set(request.POST.getlist("recording_content_access"))
+        can_manage_api_key_project_ids = set(request.POST.getlist("api_key_access"))
 
         if not user_object_id:
             return HttpResponse("User ID is required", status=400)
@@ -1099,7 +1150,15 @@ class EditUserView(AdminRequiredMixin, ProjectUrlContextMixin, View):
                     # Add new project access entries
                     for project_id in selected_project_ids:
                         project_obj = Project.objects.get(object_id=project_id, organization=request.user.organization)
-                        ProjectAccess.objects.create(project=project_obj, user=user_to_edit)
+                        # When granular permissions are hidden, grant them for every accessible project.
+                        can_view_recording_content = project_id in can_access_recording_content_project_ids if settings.ENABLE_GRANULAR_PERMISSIONS else True
+                        can_manage_api_keys = project_id in can_manage_api_key_project_ids if settings.ENABLE_GRANULAR_PERMISSIONS else True
+                        ProjectAccess.objects.create(
+                            project=project_obj,
+                            user=user_to_edit,
+                            can_view_recording_content=can_view_recording_content,
+                            can_manage_api_keys=can_manage_api_keys,
+                        )
                 else:
                     # If user is now admin, remove all project access entries
                     # since admins have access to all projects
@@ -1119,6 +1178,7 @@ class InviteUserView(AdminRequiredMixin, ProjectUrlContextMixin, View):
     def get(self, request, object_id):
         project = get_project_for_user(user=request.user, project_object_id=object_id)
         context = self.get_project_context(object_id, project)
+        context["enable_granular_permissions"] = settings.ENABLE_GRANULAR_PERMISSIONS
         return render(request, "projects/project_team.html", context)
 
     def post(self, request, object_id):
@@ -1126,6 +1186,8 @@ class InviteUserView(AdminRequiredMixin, ProjectUrlContextMixin, View):
         email = request.POST.get("email")
         is_admin = request.POST.get("is_admin") == "true"
         selected_project_ids = request.POST.getlist("project_access")
+        can_access_recording_content_project_ids = set(request.POST.getlist("recording_content_access"))
+        can_manage_api_key_project_ids = set(request.POST.getlist("api_key_access"))
 
         if not email:
             return HttpResponse("Email is required", status=400)
@@ -1161,7 +1223,15 @@ class InviteUserView(AdminRequiredMixin, ProjectUrlContextMixin, View):
                 if not is_admin and selected_project_ids:
                     for project_id in selected_project_ids:
                         project = Project.objects.get(object_id=project_id, organization=request.user.organization)
-                        ProjectAccess.objects.create(project=project, user=user)
+                        # When granular permissions are hidden, grant them for every accessible project.
+                        can_view_recording_content = project_id in can_access_recording_content_project_ids if settings.ENABLE_GRANULAR_PERMISSIONS else True
+                        can_manage_api_keys = project_id in can_manage_api_key_project_ids if settings.ENABLE_GRANULAR_PERMISSIONS else True
+                        ProjectAccess.objects.create(
+                            project=project,
+                            user=user,
+                            can_view_recording_content=can_view_recording_content,
+                            can_manage_api_keys=can_manage_api_keys,
+                        )
 
                 # Send verification email
                 send_email_confirmation(request, user, email=email)

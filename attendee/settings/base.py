@@ -227,6 +227,13 @@ REST_FRAMEWORK = {
 }
 
 DISABLE_RATE_LIMITING = os.getenv("DISABLE_RATE_LIMITING", "false") == "true"
+
+# When enabled, the team management UI exposes granular per-project permissions for viewing
+# recording content and managing API keys.
+ENABLE_GRANULAR_PERMISSIONS = os.getenv("ENABLE_GRANULAR_PERMISSIONS", "false") == "true"
+
+ENABLE_VIEWING_RECORDING_CONTENT = os.getenv("ENABLE_VIEWING_RECORDING_CONTENT", "true") == "true"
+
 SPECTACULAR_SETTINGS = {
     "TITLE": "Attendee API",
     "DESCRIPTION": "Meetings bots made easy",
