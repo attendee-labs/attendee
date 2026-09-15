@@ -66,9 +66,9 @@ from .tasks.deliver_webhook_task import deliver_webhook
 from .usage_utils import get_usage_data
 from .utils import (
     generate_recordings_json_for_bot_detail_view,
+    obfuscate_chat_messages_for_bot_detail_view,
     obfuscate_recordings_json_for_bot_detail_view,
-    obfuscate_text,
-    withhold_recording_content_webhook_payloads,
+    obfuscate_webhook_delivery_attempts_for_bot_detail_view,
 )
 from .zoom_oauth_apps_api_utils import create_or_update_zoom_oauth_app
 
@@ -928,15 +928,12 @@ class ProjectBotDetailView(LoginRequiredMixin, ProjectUrlContextMixin, View):
         # Get webhook delivery attempts for this bot (from both project-level and bot-specific webhook subscriptions)
         webhook_delivery_attempts = WebhookDeliveryAttempt.objects.filter(bot=bot).select_related("webhook_subscription").order_by("-created_at")
         if not can_view_recording_content:
-            webhook_delivery_attempts = withhold_recording_content_webhook_payloads(list(webhook_delivery_attempts))
+            webhook_delivery_attempts = obfuscate_webhook_delivery_attempts_for_bot_detail_view(webhook_delivery_attempts)
 
         # Get chat messages for this bot
         chat_messages = ChatMessage.objects.filter(bot=bot).select_related("participant").order_by("created_at")
         if not can_view_recording_content:
-            chat_messages = list(chat_messages)
-            for chat_message in chat_messages:
-                # Masked for rendering only, these instances are never saved back to the database
-                chat_message.text = obfuscate_text(chat_message.text)
+            chat_messages = obfuscate_chat_messages_for_bot_detail_view(chat_messages)
 
         # Get participants and participant events for this bot
         participants = Participant.objects.filter(bot=bot, is_the_bot=False).prefetch_related("events").order_by("created_at")

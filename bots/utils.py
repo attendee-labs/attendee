@@ -1,6 +1,7 @@
 import io
 import logging
 import re
+from types import SimpleNamespace
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import cv2
@@ -734,25 +735,60 @@ def obfuscate_recordings_json_for_bot_detail_view(recordings_data):
     return recordings_data
 
 
-def withhold_recording_content_webhook_payloads(webhook_delivery_attempts):
+def obfuscate_chat_messages_for_bot_detail_view(chat_messages):
+    """Mask the text of chat messages for rendering.
+
+    Returns plain objects rather than the model instances so that a masked value has no
+    save() to reach the database through. Only the attributes the bot detail view renders
+    are carried over; additional_data is left off entirely because it can echo the message
+    text back. Participant and timing are left intact so the log stays navigable.
+    """
+    return [
+        SimpleNamespace(
+            id=chat_message.id,
+            object_id=chat_message.object_id,
+            participant=chat_message.participant,
+            to=chat_message.to,
+            timestamp=chat_message.timestamp,
+            created_at=chat_message.created_at,
+            text=obfuscate_text(chat_message.text),
+        )
+        for chat_message in chat_messages
+    ]
+
+
+def obfuscate_webhook_delivery_attempts_for_bot_detail_view(webhook_delivery_attempts):
     """Drop the payloads of webhook delivery attempts whose body is meeting content.
 
-    The payload is dropped whole rather than field-masked because its shape varies by
-    trigger and carries pass-through blobs, such as a chat message's additional_data,
-    that can echo the content back. Delivery metadata is left intact so the log stays
-    useful for debugging.
+    Returns plain objects rather than the model instances so that a withheld payload has no
+    save() to reach the database through. The payload is dropped whole rather than
+    field-masked because its shape varies by trigger and carries pass-through blobs, such as
+    a chat message's additional_data, that can echo the content back. Delivery metadata is
+    left intact so the log stays useful for debugging.
     """
     trigger_types_carrying_recording_content = (
         WebhookTriggerTypes.TRANSCRIPT_UPDATE,
         WebhookTriggerTypes.CHAT_MESSAGES_UPDATE,
     )
 
-    for attempt in webhook_delivery_attempts:
-        if attempt.webhook_trigger_type in trigger_types_carrying_recording_content:
-            # Cleared for rendering only, these instances are never saved back to the database
-            attempt.payload = None
-
-    return webhook_delivery_attempts
+    return [
+        SimpleNamespace(
+            id=attempt.id,
+            idempotency_key=attempt.idempotency_key,
+            webhook_subscription=attempt.webhook_subscription,
+            webhook_trigger_type=attempt.webhook_trigger_type,
+            get_webhook_trigger_type_display=attempt.get_webhook_trigger_type_display(),
+            status=attempt.status,
+            get_status_display=attempt.get_status_display(),
+            attempt_count=attempt.attempt_count,
+            last_attempt_at=attempt.last_attempt_at,
+            succeeded_at=attempt.succeeded_at,
+            response_body_list=attempt.response_body_list,
+            created_at=attempt.created_at,
+            payload=None if attempt.webhook_trigger_type in trigger_types_carrying_recording_content else attempt.payload,
+        )
+        for attempt in webhook_delivery_attempts
+    ]
 
 
 def is_valid_png(image_data: bytes) -> bool:
