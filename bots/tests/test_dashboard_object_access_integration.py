@@ -1,3 +1,4 @@
+import uuid
 from unittest.mock import patch
 
 from django.core.exceptions import PermissionDenied
@@ -26,6 +27,8 @@ from bots.models import (
     RecordingTypes,
     TranscriptionTypes,
     Utterance,
+    WebhookDeliveryAttempt,
+    WebhookDeliveryAttemptStatus,
     WebhookSubscription,
     WebhookTriggerTypes,
     ZoomOAuthApp,
@@ -603,14 +606,75 @@ class ObjectAccessIntegrationTest(TransactionTestCase):
         self.assertContains(recordings_response, "supersecrettranscript")
         self.assertContains(recordings_response, "<video")
 
+    def _create_webhook_delivery_attempts_for_bot_a1(self):
+        """Create a delivery attempt on bot_a1 for each trigger type keyed by payload marker"""
+        markers = {
+            WebhookTriggerTypes.TRANSCRIPT_UPDATE: "supersecrettranscriptpayload",
+            WebhookTriggerTypes.CHAT_MESSAGES_UPDATE: "supersecretchatpayload",
+            WebhookTriggerTypes.BOT_STATE_CHANGE: "botstatechangepayload",
+        }
+
+        attempts = {}
+        for trigger_type, marker in markers.items():
+            attempts[marker] = WebhookDeliveryAttempt.objects.create(
+                webhook_subscription=self.webhook_a1,
+                webhook_trigger_type=trigger_type,
+                idempotency_key=uuid.uuid4(),
+                bot=self.bot_a1,
+                payload={"marker": marker},
+                status=WebhookDeliveryAttemptStatus.SUCCESS,
+            )
+
+        return attempts
+
+    def test_webhook_payloads_are_withheld_without_can_view_recording_content(self):
+        """Test that webhook payloads carrying meeting content are hidden from users lacking the privilege"""
+        attempts = self._create_webhook_delivery_attempts_for_bot_a1()
+
+        access = ProjectAccess.objects.get(project=self.project_a1, user=self.regular_user_a)
+        access.can_view_recording_content = False
+        access.save()
+
+        self.client.force_login(self.regular_user_a)
+        detail_url = reverse("bots:project-bot-detail", kwargs={"object_id": self.project_a1.object_id, "bot_object_id": self.bot_a1.object_id})
+
+        detail_response = self.client.get(detail_url)
+        self.assertEqual(detail_response.status_code, 200)
+        self.assertNotContains(detail_response, "supersecrettranscriptpayload")
+        self.assertNotContains(detail_response, "supersecretchatpayload")
+        # Payloads that are not meeting content stay visible
+        self.assertContains(detail_response, "botstatechangepayload")
+
+        # Delivery metadata stays intact so the log is still useful for debugging
+        self.assertContains(detail_response, self.webhook_a1.url)
+        for attempt in attempts.values():
+            self.assertContains(detail_response, f"webhook-status-{attempt.idempotency_key}")
+
+        # Withholding is display-only and must not touch the stored data
+        for marker, attempt in attempts.items():
+            attempt.refresh_from_db()
+            self.assertEqual(attempt.payload, {"marker": marker})
+
+        # Granting the privilege restores the payloads
+        access.can_view_recording_content = True
+        access.save()
+
+        detail_response = self.client.get(detail_url)
+        self.assertContains(detail_response, "supersecrettranscriptpayload")
+        self.assertContains(detail_response, "supersecretchatpayload")
+        self.assertContains(detail_response, "botstatechangepayload")
+
     def test_recording_content_visible_to_admin_without_project_access(self):
         """Test that admins can see recording content even without a ProjectAccess row"""
         self._create_recording_content_for_bot_a1()
+        self._create_webhook_delivery_attempts_for_bot_a1()
 
         self.client.force_login(self.admin_user_a)
 
         detail_response = self.client.get(reverse("bots:project-bot-detail", kwargs={"object_id": self.project_a1.object_id, "bot_object_id": self.bot_a1.object_id}))
         self.assertContains(detail_response, "supersecretchatmessage")
+        self.assertContains(detail_response, "supersecrettranscriptpayload")
+        self.assertContains(detail_response, "supersecretchatpayload")
         self.assertNotContains(detail_response, "You do not have permission to view recording content")
 
         recordings_response = self.client.get(reverse("bots:project-bot-recordings", kwargs={"object_id": self.project_a1.object_id, "bot_object_id": self.bot_a1.object_id}))

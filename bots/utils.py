@@ -13,6 +13,7 @@ from .models import (
     ParticipantEvent,
     ParticipantEventTypes,
     TranscriptionProviders,
+    WebhookTriggerTypes,
 )
 from .templatetags.bot_filters import participant_color as compute_participant_color
 
@@ -731,6 +732,27 @@ def obfuscate_recordings_json_for_bot_detail_view(recordings_data):
                     word_data["word"] = obfuscate_text(word_data["word"])
 
     return recordings_data
+
+
+def withhold_recording_content_webhook_payloads(webhook_delivery_attempts):
+    """Drop the payloads of webhook delivery attempts whose body is meeting content.
+
+    The payload is dropped whole rather than field-masked because its shape varies by
+    trigger and carries pass-through blobs, such as a chat message's additional_data,
+    that can echo the content back. Delivery metadata is left intact so the log stays
+    useful for debugging.
+    """
+    trigger_types_carrying_recording_content = (
+        WebhookTriggerTypes.TRANSCRIPT_UPDATE,
+        WebhookTriggerTypes.CHAT_MESSAGES_UPDATE,
+    )
+
+    for attempt in webhook_delivery_attempts:
+        if attempt.webhook_trigger_type in trigger_types_carrying_recording_content:
+            # Cleared for rendering only, these instances are never saved back to the database
+            attempt.payload = None
+
+    return webhook_delivery_attempts
 
 
 def is_valid_png(image_data: bytes) -> bool:
