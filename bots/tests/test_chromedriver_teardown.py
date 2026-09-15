@@ -172,10 +172,14 @@ def _process_alive(pid):
     -waited zombie counts as dead, which is what we care about here."""
     try:
         with open(f"/proc/{pid}/stat") as stat_file:
-            state = stat_file.read().rsplit(") ", 1)[1].split(" ", 1)[0]
-    except FileNotFoundError:
+            contents = stat_file.read()
+    except (FileNotFoundError, ProcessLookupError):
+        # A process that exits between the open() and the read() fails the read with ESRCH
+        # rather than the missing-file error you'd get from opening it after it's gone.
         return False
-    return state != "Z"
+    if not contents:
+        return False
+    return contents.rsplit(") ", 1)[1].split(" ", 1)[0] != "Z"
 
 
 def _wait_until_dead(pid, timeout=5):
