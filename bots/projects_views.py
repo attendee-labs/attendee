@@ -86,10 +86,16 @@ def get_webhook_subscription_for_user(user, webhook_subscription_object_id):
     return webhook_subscription
 
 
+def user_can_manage_api_keys(user, project):
+    # If you're an admin you can manage api keys for any project in the organization
+    if user.role == UserRole.ADMIN:
+        return True
+    return ProjectAccess.objects.filter(project=project, user=user, can_manage_api_keys=True).exists()
+
+
 def get_api_key_for_user(user, api_key_object_id):
     api_key = get_object_or_404(ApiKey, object_id=api_key_object_id, project__organization=user.organization)
-    # If you're an admin you can access any api key in the organization
-    if user.role != UserRole.ADMIN and not ProjectAccess.objects.filter(project=api_key.project, user=user).exists():
+    if not user_can_manage_api_keys(user, api_key.project):
         raise PermissionDenied
     return api_key
 
@@ -225,6 +231,7 @@ class ProjectUrlContextMixin:
             "charge_credits_for_bots_setting": settings.CHARGE_CREDITS_FOR_BOTS,
             "can_view_instance_health": user_can_view_instance_health(self.request.user),
             "can_view_bot_resource_usage": user_can_view_bot_resource_usage(self.request.user),
+            "can_manage_api_keys": user_can_manage_api_keys(self.request.user, project),
             "user_projects": Project.accessible_to(self.request.user),
             "UserRole": UserRole,
             "debug_mode": True if settings.DEBUG else False,
@@ -267,6 +274,8 @@ class ProjectDashboardView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 class ProjectApiKeysView(LoginRequiredMixin, ProjectUrlContextMixin, View):
     def get(self, request, object_id):
         project = get_project_for_user(user=request.user, project_object_id=object_id)
+        if not user_can_manage_api_keys(request.user, project):
+            raise PermissionDenied
         context = self.get_project_context(object_id, project)
         context["api_keys"] = ApiKey.objects.filter(project=project).order_by("-created_at")
         return render(request, "projects/project_api_keys.html", context)
@@ -275,6 +284,8 @@ class ProjectApiKeysView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 class CreateApiKeyView(LoginRequiredMixin, View):
     def post(self, request, object_id):
         project = get_project_for_user(user=request.user, project_object_id=object_id)
+        if not user_can_manage_api_keys(request.user, project):
+            raise PermissionDenied
         name = request.POST.get("name")
 
         if not name:

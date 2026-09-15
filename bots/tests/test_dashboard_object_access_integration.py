@@ -487,6 +487,42 @@ class ObjectAccessIntegrationTest(TransactionTestCase):
         response = self.client.delete(reverse("bots:delete-api-key", kwargs={"object_id": self.project_a2.object_id, "key_object_id": self.api_key_a2.object_id}))
         self.assertEqual(response.status_code, 403)
 
+    def test_api_key_access_requires_can_manage_api_keys(self):
+        """Test that the api key views are gated on the can_manage_api_keys privilege"""
+        access = ProjectAccess.objects.get(project=self.project_a1, user=self.regular_user_a)
+        access.can_manage_api_keys = False
+        access.save()
+
+        self.client.force_login(self.regular_user_a)
+        api_keys_url = reverse("bots:project-api-keys", kwargs={"object_id": self.project_a1.object_id})
+
+        response = self.client.get(api_keys_url)
+        self.assertEqual(response.status_code, 403)
+
+        response = self.client.post(reverse("bots:create-api-key", kwargs={"object_id": self.project_a1.object_id}), {"name": "New API Key A1"})
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(ApiKey.objects.filter(project=self.project_a1, name="New API Key A1").exists())
+
+        response = self.client.delete(reverse("bots:delete-api-key", kwargs={"object_id": self.project_a1.object_id, "key_object_id": self.api_key_a1.object_id}))
+        self.assertEqual(response.status_code, 403)
+        self.assertTrue(ApiKey.objects.filter(id=self.api_key_a1.id).exists())
+
+        # The sidebar should not link to a page the user cannot open
+        response = self.client.get(reverse("bots:project-dashboard", kwargs={"object_id": self.project_a1.object_id}))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, api_keys_url)
+
+        # Granting the privilege restores access
+        access.can_manage_api_keys = True
+        access.save()
+        response = self.client.get(api_keys_url)
+        self.assertEqual(response.status_code, 200)
+
+        # Admins can manage api keys without a ProjectAccess row
+        self.client.force_login(self.admin_user_a)
+        response = self.client.get(api_keys_url)
+        self.assertEqual(response.status_code, 200)
+
     def test_webhook_deletion_access_control(self):
         """Test that webhook deletion is properly controlled"""
         # Admin can delete any webhook in their org
