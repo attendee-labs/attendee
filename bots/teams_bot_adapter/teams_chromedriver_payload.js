@@ -3489,12 +3489,13 @@ window.botOutputManager = botOutputManager;
                         {
                             if (event?.message)
                             {
-                                if (event?.convId !== window.callManager?.getThreadId())
+                                const threadId = window.callManager?.getThreadId();
+                                if ((event?.convId !== threadId) && threadId && event?.convId)
                                 {
                                     window.ws?.sendJson({
                                         type: 'ChatMessageHadWrongThreadId',
                                         message: event,
-                                        expectedThreadId: window.callManager?.getThreadId(),
+                                        expectedThreadId: threadId,
                                     });
                                     continue;
                                 }
