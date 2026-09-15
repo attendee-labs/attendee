@@ -232,6 +232,8 @@ DISABLE_RATE_LIMITING = os.getenv("DISABLE_RATE_LIMITING", "false") == "true"
 # recording content and managing API keys.
 ENABLE_GRANULAR_PERMISSIONS = os.getenv("ENABLE_GRANULAR_PERMISSIONS", "false") == "true"
 
+ENABLE_VIEWING_RECORDING_CONTENT = os.getenv("ENABLE_VIEWING_RECORDING_CONTENT", "true") == "true"
+
 SPECTACULAR_SETTINGS = {
     "TITLE": "Attendee API",
     "DESCRIPTION": "Meetings bots made easy",

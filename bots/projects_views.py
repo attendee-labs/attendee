@@ -98,6 +98,9 @@ def user_can_manage_api_keys(user, project):
 
 
 def user_can_view_recording_content(user, project):
+    # If viewing recording content is disabled globally, nobody can view recording content
+    if not settings.ENABLE_VIEWING_RECORDING_CONTENT:
+        return False
     # If you're an admin you can view recording content for any project in the organization
     if user.role == UserRole.ADMIN:
         return True
