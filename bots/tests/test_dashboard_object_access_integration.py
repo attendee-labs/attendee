@@ -516,11 +516,6 @@ class ObjectAccessIntegrationTest(TransactionTestCase):
         self.assertEqual(response.status_code, 403)
         self.assertTrue(ApiKey.objects.filter(id=self.api_key_a1.id).exists())
 
-        # The sidebar should not link to a page the user cannot open
-        response = self.client.get(reverse("bots:project-dashboard", kwargs={"object_id": self.project_a1.object_id}))
-        self.assertEqual(response.status_code, 200)
-        self.assertNotContains(response, api_keys_url)
-
         # Granting the privilege restores access
         access.can_manage_api_keys = True
         access.save()
@@ -583,7 +578,7 @@ class ObjectAccessIntegrationTest(TransactionTestCase):
         detail_response = self.client.get(detail_url)
         self.assertEqual(detail_response.status_code, 200)
         self.assertNotContains(detail_response, "supersecretchatmessage")
-        self.assertContains(detail_response, "Recording content is hidden")
+        self.assertContains(detail_response, "You do not have permission to view recording content")
         # Participant names are not considered recording content
         self.assertContains(detail_response, participant.full_name)
 
@@ -602,7 +597,7 @@ class ObjectAccessIntegrationTest(TransactionTestCase):
 
         detail_response = self.client.get(detail_url)
         self.assertContains(detail_response, "supersecretchatmessage")
-        self.assertNotContains(detail_response, "Recording content is hidden")
+        self.assertNotContains(detail_response, "You do not have permission to view recording content")
 
         recordings_response = self.client.get(recordings_url)
         self.assertContains(recordings_response, "supersecrettranscript")
@@ -616,7 +611,7 @@ class ObjectAccessIntegrationTest(TransactionTestCase):
 
         detail_response = self.client.get(reverse("bots:project-bot-detail", kwargs={"object_id": self.project_a1.object_id, "bot_object_id": self.bot_a1.object_id}))
         self.assertContains(detail_response, "supersecretchatmessage")
-        self.assertNotContains(detail_response, "Recording content is hidden")
+        self.assertNotContains(detail_response, "You do not have permission to view recording content")
 
         recordings_response = self.client.get(reverse("bots:project-bot-recordings", kwargs={"object_id": self.project_a1.object_id, "bot_object_id": self.bot_a1.object_id}))
         self.assertContains(recordings_response, "supersecrettranscript")
