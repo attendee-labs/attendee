@@ -315,13 +315,13 @@
         }
     }
     
-    function syncRecordingToggle(projectCheckbox) {
+    function syncProjectPermissionToggles(projectCheckbox) {
         syncNestedToggle(projectCheckbox, 'recording', 'recording_wrapper');
         syncNestedToggle(projectCheckbox, 'apikey', 'apikey_wrapper');
     }
     
-    function syncAllRecordingToggles() {
-        projectCheckboxes.forEach(syncRecordingToggle);
+    function syncAllProjectPermissionToggles() {
+        projectCheckboxes.forEach(syncProjectPermissionToggles);
     }
     
     function updateRoleUI() {
@@ -339,7 +339,7 @@
             roleDescription.textContent = 'This user will have access only to selected projects.';
             projectAccessSection.style.display = 'block';
         }
-        syncAllRecordingToggles();
+        syncAllProjectPermissionToggles();
     }
     
     function validateProjectSelection() {
@@ -366,7 +366,7 @@
     // Handle project selection changes for validation
     projectCheckboxes.forEach(checkbox => {
         checkbox.addEventListener('change', function() {
-            syncRecordingToggle(checkbox);
+            syncProjectPermissionToggles(checkbox);
             validateProjectSelection();
         });
     });
@@ -514,13 +514,13 @@
             }
         }
         
-        function syncEditRecordingToggle(projectCheckbox) {
+        function syncEditProjectPermissionToggles(projectCheckbox) {
             syncEditNestedToggle(projectCheckbox, 'edit_recording', 'edit_recording_wrapper');
             syncEditNestedToggle(projectCheckbox, 'edit_apikey', 'edit_apikey_wrapper');
         }
         
-        function syncAllEditRecordingToggles() {
-            editProjectCheckboxes.forEach(syncEditRecordingToggle);
+        function syncAllEditProjectPermissionToggles() {
+            editProjectCheckboxes.forEach(syncEditProjectPermissionToggles);
         }
         
         function updateEditRoleUI() {
@@ -538,7 +538,7 @@
                 editRoleDescription.textContent = 'This user will have access only to selected projects.';
                 editProjectAccessSection.style.display = 'block';
             }
-            syncAllEditRecordingToggles();
+            syncAllEditProjectPermissionToggles();
         }
         
         function updateActiveButton() {
@@ -572,7 +572,7 @@
         // Handle project selection changes for validation
         editProjectCheckboxes.forEach(checkbox => {
             checkbox.addEventListener('change', function() {
-                syncEditRecordingToggle(checkbox);
+                syncEditProjectPermissionToggles(checkbox);
                 validateEditProjectSelection();
             });
         });
@@ -706,7 +706,7 @@
                         }
                     });
                 }
-                syncAllEditRecordingToggles();
+                syncAllEditProjectPermissionToggles();
                 
                 hideEditInlineError();
             });
