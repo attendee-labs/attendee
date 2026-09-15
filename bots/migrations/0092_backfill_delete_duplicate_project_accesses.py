@@ -9,6 +9,8 @@ def delete_duplicate_project_accesses(apps, schema_editor):
 
     duplicated_pairs = ProjectAccess.objects.values('project', 'user').annotate(access_count=Count('id')).filter(access_count__gt=1)
 
+    print(f"Found {len(duplicated_pairs)} duplicated project access pairs")
+
     for pair in duplicated_pairs:
         access_ids = list(ProjectAccess.objects.filter(project=pair['project'], user=pair['user']).order_by('-id').values_list('id', flat=True))
 
