@@ -64,7 +64,11 @@ from .models import (
 from .stripe_utils import credit_amount_for_purchase_amount_dollars, process_checkout_session_completed
 from .tasks.deliver_webhook_task import deliver_webhook
 from .usage_utils import get_usage_data
-from .utils import generate_recordings_json_for_bot_detail_view
+from .utils import (
+    generate_recordings_json_for_bot_detail_view,
+    obfuscate_recordings_json_for_bot_detail_view,
+    obfuscate_text,
+)
 from .zoom_oauth_apps_api_utils import create_or_update_zoom_oauth_app
 
 logger = logging.getLogger(__name__)
@@ -91,6 +95,13 @@ def user_can_manage_api_keys(user, project):
     if user.role == UserRole.ADMIN:
         return True
     return ProjectAccess.objects.filter(project=project, user=user, can_manage_api_keys=True).exists()
+
+
+def user_can_view_recording_content(user, project):
+    # If you're an admin you can view recording content for any project in the organization
+    if user.role == UserRole.ADMIN:
+        return True
+    return ProjectAccess.objects.filter(project=project, user=user, can_view_recording_content=True).exists()
 
 
 def get_api_key_for_user(user, api_key_object_id):
@@ -232,6 +243,7 @@ class ProjectUrlContextMixin:
             "can_view_instance_health": user_can_view_instance_health(self.request.user),
             "can_view_bot_resource_usage": user_can_view_bot_resource_usage(self.request.user),
             "can_manage_api_keys": user_can_manage_api_keys(self.request.user, project),
+            "can_view_recording_content": user_can_view_recording_content(self.request.user, project),
             "user_projects": Project.accessible_to(self.request.user),
             "UserRole": UserRole,
             "debug_mode": True if settings.DEBUG else False,
@@ -911,7 +923,11 @@ class ProjectBotDetailView(LoginRequiredMixin, ProjectUrlContextMixin, View):
         webhook_delivery_attempts = WebhookDeliveryAttempt.objects.filter(bot=bot).select_related("webhook_subscription").order_by("-created_at")
 
         # Get chat messages for this bot
-        chat_messages = ChatMessage.objects.filter(bot=bot).select_related("participant").order_by("created_at")
+        chat_messages = list(ChatMessage.objects.filter(bot=bot).select_related("participant").order_by("created_at"))
+        if not user_can_view_recording_content(request.user, project):
+            for chat_message in chat_messages:
+                # Masked for rendering only, these instances are never saved back to the database
+                chat_message.text = obfuscate_text(chat_message.text)
 
         # Get participants and participant events for this bot
         participants = Participant.objects.filter(bot=bot, is_the_bot=False).prefetch_related("events").order_by("created_at")
@@ -1016,11 +1032,17 @@ class ProjectBotRecordingsView(LoginRequiredMixin, ProjectUrlContextMixin, View)
             # Redirect to bots list if bot not found
             return redirect("bots:project-bots", object_id=object_id)
 
+        can_view_recording_content = user_can_view_recording_content(request.user, project)
+        recordings = generate_recordings_json_for_bot_detail_view(bot)
+        if not can_view_recording_content:
+            recordings = obfuscate_recordings_json_for_bot_detail_view(recordings)
+
         context = {
             "RecordingStates": RecordingStates,
             "RecordingTypes": RecordingTypes,
             "RecordingTranscriptionStates": RecordingTranscriptionStates,
-            "recordings": generate_recordings_json_for_bot_detail_view(bot),
+            "recordings": recordings,
+            "can_view_recording_content": can_view_recording_content,
         }
 
         return render(request, "projects/partials/project_bot_recordings.html", context)

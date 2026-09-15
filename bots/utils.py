@@ -710,6 +710,29 @@ def generate_recordings_json_for_bot_detail_view(bot):
     return recordings_data
 
 
+def obfuscate_text(text):
+    """Mask every non-whitespace character so that layout survives but the content does not."""
+    if not text:
+        return text
+    return "".join(character if character.isspace() else "*" for character in text)
+
+
+def obfuscate_recordings_json_for_bot_detail_view(recordings_data):
+    """Mask transcript text and drop media urls from the output of generate_recordings_json_for_bot_detail_view.
+
+    Participant names and timings are left intact so the transcript remains navigable.
+    """
+    for recording in recordings_data:
+        recording["url"] = None
+        for transcription in recording["transcriptions"]:
+            for utterance in transcription["utterances"]:
+                utterance["transcript"] = obfuscate_text(utterance.get("transcript"))
+                for word_data in utterance.get("words") or []:
+                    word_data["word"] = obfuscate_text(word_data["word"])
+
+    return recordings_data
+
+
 def is_valid_png(image_data: bytes) -> bool:
     """
     Validates whether the provided bytes data is a valid PNG image.

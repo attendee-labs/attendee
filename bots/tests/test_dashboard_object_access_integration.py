@@ -15,8 +15,17 @@ from bots.models import (
     Calendar,
     CalendarEvent,
     CalendarPlatform,
+    ChatMessage,
+    ChatMessageToOptions,
+    Participant,
     Project,
     ProjectAccess,
+    Recording,
+    RecordingStates,
+    RecordingTranscriptionStates,
+    RecordingTypes,
+    TranscriptionTypes,
+    Utterance,
     WebhookSubscription,
     WebhookTriggerTypes,
     ZoomOAuthApp,
@@ -522,6 +531,95 @@ class ObjectAccessIntegrationTest(TransactionTestCase):
         self.client.force_login(self.admin_user_a)
         response = self.client.get(api_keys_url)
         self.assertEqual(response.status_code, 200)
+
+    def _create_recording_content_for_bot_a1(self):
+        """Create a participant, a transcribed recording and a chat message on bot_a1"""
+        participant = Participant.objects.create(bot=self.bot_a1, uuid="participant_a1", full_name="Alice Speaker")
+
+        recording = Recording.objects.create(
+            bot=self.bot_a1,
+            recording_type=RecordingTypes.AUDIO_AND_VIDEO,
+            transcription_type=TranscriptionTypes.NON_REALTIME,
+            is_default_recording=True,
+            state=RecordingStates.COMPLETE,
+            transcription_state=RecordingTranscriptionStates.COMPLETE,
+            first_buffer_timestamp_ms=1000,
+        )
+
+        Utterance.objects.create(
+            recording=recording,
+            participant=participant,
+            timestamp_ms=2000,
+            duration_ms=1000,
+            audio_blob=b"",
+            transcription={
+                "transcript": "supersecrettranscript",
+                "words": [{"word": "supersecrettranscript", "start": 0.0, "end": 1.0}],
+            },
+        )
+
+        ChatMessage.objects.create(
+            bot=self.bot_a1,
+            participant=participant,
+            text="supersecretchatmessage",
+            to=ChatMessageToOptions.EVERYONE,
+            timestamp=2000,
+        )
+
+        return participant
+
+    def test_recording_content_is_obfuscated_without_can_view_recording_content(self):
+        """Test that transcripts, chat messages and the recording are hidden from users lacking the privilege"""
+        participant = self._create_recording_content_for_bot_a1()
+
+        access = ProjectAccess.objects.get(project=self.project_a1, user=self.regular_user_a)
+        access.can_view_recording_content = False
+        access.save()
+
+        self.client.force_login(self.regular_user_a)
+        detail_url = reverse("bots:project-bot-detail", kwargs={"object_id": self.project_a1.object_id, "bot_object_id": self.bot_a1.object_id})
+        recordings_url = reverse("bots:project-bot-recordings", kwargs={"object_id": self.project_a1.object_id, "bot_object_id": self.bot_a1.object_id})
+
+        detail_response = self.client.get(detail_url)
+        self.assertEqual(detail_response.status_code, 200)
+        self.assertNotContains(detail_response, "supersecretchatmessage")
+        self.assertContains(detail_response, "Recording content is hidden")
+        # Participant names are not considered recording content
+        self.assertContains(detail_response, participant.full_name)
+
+        recordings_response = self.client.get(recordings_url)
+        self.assertEqual(recordings_response.status_code, 200)
+        self.assertNotContains(recordings_response, "supersecrettranscript")
+        self.assertNotContains(recordings_response, "<video")
+        self.assertContains(recordings_response, participant.full_name)
+
+        # Obfuscation is display-only and must not touch the stored data
+        self.assertEqual(ChatMessage.objects.get(bot=self.bot_a1).text, "supersecretchatmessage")
+
+        # Granting the privilege restores the content
+        access.can_view_recording_content = True
+        access.save()
+
+        detail_response = self.client.get(detail_url)
+        self.assertContains(detail_response, "supersecretchatmessage")
+        self.assertNotContains(detail_response, "Recording content is hidden")
+
+        recordings_response = self.client.get(recordings_url)
+        self.assertContains(recordings_response, "supersecrettranscript")
+        self.assertContains(recordings_response, "<video")
+
+    def test_recording_content_visible_to_admin_without_project_access(self):
+        """Test that admins can see recording content even without a ProjectAccess row"""
+        self._create_recording_content_for_bot_a1()
+
+        self.client.force_login(self.admin_user_a)
+
+        detail_response = self.client.get(reverse("bots:project-bot-detail", kwargs={"object_id": self.project_a1.object_id, "bot_object_id": self.bot_a1.object_id}))
+        self.assertContains(detail_response, "supersecretchatmessage")
+        self.assertNotContains(detail_response, "Recording content is hidden")
+
+        recordings_response = self.client.get(reverse("bots:project-bot-recordings", kwargs={"object_id": self.project_a1.object_id, "bot_object_id": self.bot_a1.object_id}))
+        self.assertContains(recordings_response, "supersecrettranscript")
 
     def test_webhook_deletion_access_control(self):
         """Test that webhook deletion is properly controlled"""
