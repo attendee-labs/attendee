@@ -244,6 +244,7 @@ class BotPodCreator:
                         image=self.image,
                         image_pull_policy=os.getenv("BOT_POD_IMAGE_PULL_POLICY", "Always"),
                         args=args,
+                        termination_message_policy="FallbackToLogsOnError",
                         resources=client.V1ResourceRequirements(
                             requests={
                                 "cpu": cpu_request,

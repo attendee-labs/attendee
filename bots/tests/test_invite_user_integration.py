@@ -2,7 +2,7 @@ import re
 
 from allauth.account.models import EmailAddress
 from django.core import mail
-from django.test import Client, TransactionTestCase
+from django.test import Client, TransactionTestCase, override_settings
 from django.urls import reverse
 
 from accounts.models import Organization, User, UserRole
@@ -35,6 +35,7 @@ class InviteUserIntegrationTest(TransactionTestCase):
         # Clear any existing emails
         mail.outbox = []
 
+    @override_settings(SITE_DOMAIN="testserver")
     def test_invite_user_happy_path(self):
         """Test the complete happy path of inviting a user"""
 

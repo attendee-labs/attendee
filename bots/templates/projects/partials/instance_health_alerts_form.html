@@ -1,0 +1,57 @@
+{% load bot_filters %}
+<form method="post"
+      id="alerts-form"
+      hx-post="{% url 'bots:project-instance-health' project.object_id %}"
+      hx-target="#alerts-form-wrapper"
+      hx-swap="innerHTML">
+    {% csrf_token %}
+    <div class="card mb-3">
+        <div class="card-body p-0">
+            <table class="table mb-0 align-middle">
+                <thead>
+                    <tr class="text-muted">
+                        <th class="ps-3 fw-normal">Alert</th>
+                        <th class="fw-normal text-center" style="width: 120px;">Enabled</th>
+                        <th class="fw-normal text-end pe-3" style="width: 220px;">Threshold</th>
+                        <th class="fw-normal text-center" style="width: 110px;">Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for alert in alert_configs %}
+                    <tr>
+                        <td class="ps-3">
+                            <div class="fw-semibold">{{ alert.label }}</div>
+                            <div class="text-muted small">{{ alert.description }}</div>
+                        </td>
+                        <td class="text-center">
+                            <div class="form-check form-switch d-inline-block">
+                                <input class="form-check-input" type="checkbox" role="switch" name="{{ alert.key }}__enabled" id="{{ alert.key }}__enabled" {% if alert.enabled %}checked{% endif %}>
+                            </div>
+                        </td>
+                        <td class="pe-3">
+                            <div class="input-group input-group-sm">
+                                <input type="number" class="form-control text-end" name="{{ alert.key }}__threshold" value="{{ alert.threshold }}" step="{{ alert.step }}" min="0">
+                                <span class="input-group-text">{{ alert.unit_label }}</span>
+                            </div>
+                        </td>
+                        <td class="text-center">
+                            {% if not alert.enabled %}
+                            <span class="badge bg-secondary">Off</span>
+                            {% elif alert.active %}
+                            <span class="badge bg-danger">Firing</span>
+                            {% else %}
+                            <span class="badge bg-success">OK</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    <button type="submit"
+            id="save-alerts-btn"
+            class="btn {% if alerts_saved %}btn-success{% else %}btn-primary{% endif %}">
+        {% if alerts_saved %}<i class="bi bi-check-lg me-1"></i>Saved{% else %}Save changes{% endif %}
+    </button>
+</form>

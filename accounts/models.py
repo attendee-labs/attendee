@@ -38,7 +38,13 @@ class Organization(models.Model):
     def credits(self):
         return self.centicredits / 100
 
+    def has_working_autopay(self):
+        return self.autopay_enabled and bool(self.autopay_stripe_customer_id) and self.autopay_charge_failure_data is None
+
     def out_of_credits(self):
+        # If organization has working autopay grant them additional leeway
+        if self.has_working_autopay():
+            return self.credits() < -25
         return self.credits() < -1
 
 

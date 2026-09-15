@@ -344,9 +344,9 @@ TRANSCRIPTION_SETTINGS_SCHEMA = {
                 },
                 "keyterms_prompt": {"type": "array", "items": {"type": "string"}, "description": "List of words or phrases to boost in the transcript. Only supported for when using the 'slam-1' speech model. See AssemblyAI docs for details."},
                 "custom_spelling": {"type": "array", "items": {"type": "object", "properties": {"from": {"type": "array", "items": {"type": "string"}}, "to": {"type": "string"}}, "required": ["from", "to"], "additionalProperties": False}, "description": "List of {from: [...], to: ...} entries that deterministically replace known misspellings with the correct spelling at the engine level, preserving word-level timestamps. See AssemblyAI docs for details."},
-                "prompt": {"type": "string", "description": "Natural language prompt of up to 1500 words providing contextual information (e.g. meeting topic, participant names, domain terms) to bias transcription. Only supported for the 'universal-3-pro' speech model; ignored otherwise. See AssemblyAI docs for details."},
+                "prompt": {"type": "string", "description": "Natural language prompt of up to 1500 words providing contextual information (e.g. meeting topic, participant names, domain terms) to bias transcription. Only supported for the 'universal-3-5-pro' speech model; ignored otherwise. See AssemblyAI docs for details."},
                 "speech_model": {"type": "string", "description": "The speech model to use for transcription. See AssemblyAI docs for details. This parameter is deprecated, use the speech_models param instead."},
-                "speech_models": {"type": "array", "items": {"type": "string"}, "uniqueItems": True, "description": "The speech models to use for transcription in order of preference. Defaults to ['universal-3-pro', 'universal-2']. See AssemblyAI docs for details."},
+                "speech_models": {"type": "array", "items": {"type": "string"}, "uniqueItems": True, "description": "The speech models to use for transcription in order of preference. Defaults to ['universal-3-5-pro', 'universal-2']. See AssemblyAI docs for details."},
                 "speaker_labels": {"type": "boolean", "description": "Whether to enable AssemblyAI's ML-based diarization. Only needed if multiple people are speaking into a single microphone. Defaults to false."},
                 "use_eu_server": {"type": "boolean", "description": "Whether to use the EU server for transcription. Defaults to false."},
                 "language_detection_options": {"type": "object", "properties": {"expected_languages": {"type": "array", "items": {"type": "string"}}, "fallback_language": {"type": "string"}}, "description": "Options for controlling the automatic language detection. See AssemblyAI docs for details.", "additionalProperties": False},
@@ -847,6 +847,10 @@ class TeamsSettingsJSONField(serializers.JSONField):
                 "additionalProperties": False,
                 "description": "The user ID of the Zoom OAuth Connection to use for the onbehalf token.",
             },
+            "webinar_user_email": {
+                "type": "string",
+                "description": "The email address to use when joining a Zoom webinar. When this is set, the bot joins using the webinar flow (accepting a promotion to panelist if the host offers one). Leave unset for regular meetings.",
+            },
         },
         "required": [],
         "additionalProperties": False,
@@ -920,6 +924,11 @@ def get_webhook_trigger_enum():
     from .models import WebhookTriggerTypes
 
     return list(WebhookTriggerTypes._get_mapping().values())
+
+
+def build_webhook_url_regexp():
+    """Regexp for webhook URLs. Allow http:// when REQUIRE_HTTPS_WEBHOOKS is disabled."""
+    return "^https://.*" if settings.REQUIRE_HTTPS_WEBHOOKS else "^https?://.*"
 
 
 @extend_schema_field(
@@ -1154,6 +1163,56 @@ class VoiceAgentSettingsJSONField(serializers.JSONField):
     pass
 
 
+ROOM_SYNC_SETTINGS_SCHEMA = {
+    "type": "object",
+    "description": "Settings for syncing meeting media and participants with an external real-time room. Currently only LiveKit is supported.",
+    "properties": {
+        "sync_to_room": {
+            "type": "boolean",
+            "default": True,
+            "description": "Whether the bot should mirror the meeting's participants, audio and chat into the room. Defaults to true. Only set to false when multiple agents will be sharing a room.",
+        },
+        "livekit": {
+            "type": "object",
+            "description": "LiveKit connection details. The LiveKit server URL is configured as part of the project's LiveKit credentials.",
+            "properties": {
+                "room_name": {
+                    "type": "string",
+                    "description": "The name of the LiveKit room the bot should join.",
+                },
+                "source_participant": {
+                    "type": "object",
+                    "description": "Identifies the LiveKit participant whose audio and video the bot should stream into the meeting. If omitted, no media will be streamed into the meeting. Exactly one of 'identity' or 'publish_on_behalf' must be provided.",
+                    "properties": {
+                        "identity": {
+                            "type": "string",
+                            "description": "The identity of the LiveKit participant to stream from.",
+                        },
+                        "publish_on_behalf": {
+                            "type": "string",
+                            "description": "The bot streams tracks from the first participant whose 'lk.publish_on_behalf' attribute equals this value, which is how a LiveKit agent publishes on behalf of another participant.",
+                        },
+                    },
+                    "oneOf": [
+                        {"required": ["identity"]},
+                        {"required": ["publish_on_behalf"]},
+                    ],
+                    "additionalProperties": False,
+                },
+            },
+            "required": ["room_name"],
+            "additionalProperties": False,
+        },
+    },
+    "additionalProperties": False,
+}
+
+
+@extend_schema_field(ROOM_SYNC_SETTINGS_SCHEMA)
+class RoomSyncSettingsJSONField(serializers.JSONField):
+    pass
+
+
 @extend_schema_field(
     {
         "type": "object",
@@ -1248,6 +1307,12 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
         default=None,
     )
 
+    room_sync_settings = RoomSyncSettingsJSONField(
+        help_text="Settings for syncing meeting media and participants with an external real-time room. Currently only LiveKit is supported.",
+        required=False,
+        default=None,
+    )
+
     WEBHOOKS_SCHEMA = {
         "type": "array",
         "items": {
@@ -1255,7 +1320,7 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
             "properties": {
                 "url": {
                     "type": "string",
-                    "pattern": "^https://.*",
+                    "pattern": build_webhook_url_regexp(),
                 },
                 "triggers": {
                     "type": "array",
@@ -1377,6 +1442,25 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
 
             if meeting_type == MeetingTypes.ZOOM and not use_zoom_web_adapter:
                 raise serializers.ValidationError("Voice agent is not supported for Zoom when using the native SDK. Please set 'zoom_settings.sdk' to 'web' in the bot creation request.")
+
+        return value
+
+    def validate_room_sync_settings(self, value):
+        if value is None:
+            return value
+
+        try:
+            jsonschema.validate(instance=value, schema=ROOM_SYNC_SETTINGS_SCHEMA)
+        except jsonschema.exceptions.ValidationError as e:
+            raise serializers.ValidationError(e.message)
+
+        if value:
+            meeting_url = self.initial_data.get("meeting_url")
+            meeting_type = meeting_type_from_url(meeting_url)
+            use_zoom_web_adapter = self.initial_data.get("zoom_settings", {}).get("sdk", "native") == "web"
+
+            if meeting_type == MeetingTypes.ZOOM and not use_zoom_web_adapter:
+                raise serializers.ValidationError("Room sync is not supported for Zoom when using the native SDK. Please set 'zoom_settings.sdk' to 'web' in the bot creation request.")
 
         return value
 
@@ -1509,9 +1593,9 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
         # Define defaults
         defaults = {"use_login": False, "login_mode": "always", "ui_interaction_mode": "humanized", "login_group_name": None}
 
-        # If use_login is set to true, then ui_interaction_mode should default to "robotic" (when not
+        # If use_login is set to true and login mode is always, then ui_interaction_mode should default to "robotic" (when not
         # explicitly provided), because in this case humanized motion is not needed.
-        if value.get("use_login"):
+        if value.get("use_login") and value.get("login_mode", "always") == "always":
             defaults["ui_interaction_mode"] = "robotic"
 
         try:
@@ -1586,6 +1670,7 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
                 "additionalProperties": False,
                 "description": "The user ID of the Zoom OAuth Connection to use for the onbehalf token.",
             },
+            "webinar_user_email": {"type": "string"},
         },
         "required": [],
         "additionalProperties": False,

@@ -582,11 +582,25 @@ class BotOutputManager {
 
             let originalStream;
             if (self.callOriginalGetUserMedia) {
-                try {
-                    // Call the *original* getUserMedia to trigger permissions, etc.
-                    originalStream = await self._originalGetUserMedia(constraints);
+              try {
+                  // We discard the real tracks anyway and substitute our own virtual
+                  // stream, so call the *original* getUserMedia with relaxed constraints
+                  // just to trigger permissions. This avoids OverconstrainedError when
+                  // the app (e.g. Zoom) requests a specific { deviceId: { exact: ... } }
+                  // device that doesn't exist in the bot's container.
+                  originalStream = await self._originalGetUserMedia({
+                      audio: needAudio,
+                      video: needVideo,
+                  });
                 } catch (err) {
                     console.error("Error from original getUserMedia:", err);
+                    window.ws?.sendJson({
+                        type: 'GET_USER_MEDIA_ERROR',
+                        name: err?.name,
+                        message: err?.message,
+                        constraint: err?.constraint,
+                        requestedConstraints: { audio: needAudio, video: needVideo },
+                    });
                     throw err; // propagate the same error to the caller
                 }
 
@@ -799,6 +813,10 @@ class BotOutputManager {
 
     botOutputMediaStreamIsReady() {
         return this.botOutputMediaStream.getVideoTracks().length > 0 && this.botOutputMediaStream.getAudioTracks().length > 0;
+    }
+
+    setBotOutputMediaStream(mediaStream) {
+        this.botOutputMediaStream = mediaStream;
     }
 
     async playBotOutputMediaStream(outputDestination) {

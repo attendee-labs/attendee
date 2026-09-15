@@ -1,5 +1,8 @@
 import io
 import logging
+import re
+from types import SimpleNamespace
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import cv2
 import numpy as np
@@ -11,10 +14,95 @@ from .models import (
     ParticipantEvent,
     ParticipantEventTypes,
     TranscriptionProviders,
+    WebhookTriggerTypes,
 )
 from .templatetags.bot_filters import participant_color as compute_participant_color
 
 logger = logging.getLogger(__name__)
+
+# Latin characters that have a visually identical Cyrillic counterpart.
+LATIN_TO_CYRILLIC_HOMOGLYPHS = {
+    "a": "а",
+    "c": "с",
+    "e": "е",
+    "i": "і",
+    "j": "ј",
+    "o": "о",
+    "p": "р",
+    "s": "ѕ",
+    "x": "х",
+    "y": "у",
+    "A": "А",
+    "B": "В",
+    "C": "С",
+    "E": "Е",
+    "H": "Н",
+    "I": "І",
+    "J": "Ј",
+    "K": "К",
+    "M": "М",
+    "O": "О",
+    "P": "Р",
+    "S": "Ѕ",
+    "T": "Т",
+    "X": "Х",
+    "Y": "У",
+}
+
+
+def cyrillicize_keywords_in_string(string: str, keywords: list[str]) -> str:
+    """
+    Replace the Latin characters of any occurrence of the given keywords with visually
+    identical Cyrillic characters, so the text reads the same to a human but no longer
+    matches a keyword search.
+
+    Keyword matching is case insensitive and the case of the original string is preserved.
+    Characters without a Cyrillic look-alike are left untouched.
+    """
+    if not string or not keywords:
+        return string
+
+    # Longest first so that a keyword that contains another one wins the match.
+    sorted_keywords = sorted((keyword for keyword in keywords if keyword), key=len, reverse=True)
+    if not sorted_keywords:
+        return string
+
+    pattern = re.compile("|".join(re.escape(keyword) for keyword in sorted_keywords), re.IGNORECASE)
+
+    def cyrillicize_match(match: re.Match) -> str:
+        return "".join(LATIN_TO_CYRILLIC_HOMOGLYPHS.get(character, character) for character in match.group(0))
+
+    return pattern.sub(cyrillicize_match, string)
+
+
+def truncate_string_with_ellipsis(string: str, max_length: int, ellipsis: str = "...") -> str:
+    """
+    Truncate the string so that it is at most max_length characters long, including the
+    trailing ellipsis. If the string already fits, it is returned unchanged.
+    """
+    if not string or len(string) <= max_length:
+        return string
+
+    if max_length <= len(ellipsis):
+        truncated_string = string[:max_length]
+    else:
+        truncated_string = string[: max_length - len(ellipsis)] + ellipsis
+
+    logger.info(f"Truncated string from {len(string)} characters to {len(truncated_string)} characters")
+    return truncated_string
+
+
+def mask_url_query_param_values(url, mask="xxx"):
+    """Return the URL with each query parameter's value replaced by a mask, preserving the param keys."""
+    if not url:
+        return url
+    try:
+        parsed_url = urlparse(url)
+        masked_query = urlencode([(key, mask) for key, _ in parse_qsl(parsed_url.query, keep_blank_values=True)])
+        return urlunparse(parsed_url._replace(query=masked_query, params="", fragment=""))
+    except Exception:
+        logger.warning("Error masking url query param values")
+        return mask
 
 
 def select_from_comma_separated_list_with_wrapping_index(comma_separated_list: str, index: int) -> str | None:
@@ -622,6 +710,85 @@ def generate_recordings_json_for_bot_detail_view(bot):
         )
 
     return recordings_data
+
+
+def obfuscate_text(text):
+    """Mask every non-whitespace character so that layout survives but the content does not."""
+    if not text:
+        return text
+    return "".join(character if character.isspace() else "*" for character in text)
+
+
+def obfuscate_recordings_json_for_bot_detail_view(recordings_data):
+    """Mask transcript text and drop media urls from the output of generate_recordings_json_for_bot_detail_view.
+
+    Participant names and timings are left intact so the transcript remains navigable.
+    """
+    for recording in recordings_data:
+        recording["url"] = None
+        for transcription in recording["transcriptions"]:
+            for utterance in transcription["utterances"]:
+                utterance["transcript"] = obfuscate_text(utterance.get("transcript"))
+                for word_data in utterance.get("words") or []:
+                    word_data["word"] = obfuscate_text(word_data["word"])
+
+    return recordings_data
+
+
+def obfuscate_chat_messages_for_bot_detail_view(chat_messages):
+    """Mask the text of chat messages for rendering.
+
+    Returns plain objects rather than the model instances so that a masked value has no
+    save() to reach the database through. Only the attributes the bot detail view renders
+    are carried over; additional_data is left off entirely because it can echo the message
+    text back. Participant and timing are left intact so the log stays navigable.
+    """
+    return [
+        SimpleNamespace(
+            id=chat_message.id,
+            object_id=chat_message.object_id,
+            participant=chat_message.participant,
+            to=chat_message.to,
+            timestamp=chat_message.timestamp,
+            created_at=chat_message.created_at,
+            text=obfuscate_text(chat_message.text),
+        )
+        for chat_message in chat_messages
+    ]
+
+
+def obfuscate_webhook_delivery_attempts_for_bot_detail_view(webhook_delivery_attempts):
+    """Drop the payloads of webhook delivery attempts whose body is meeting content.
+
+    Returns plain objects rather than the model instances so that a withheld payload has no
+    save() to reach the database through. The payload is dropped whole rather than
+    field-masked because its shape varies by trigger and carries pass-through blobs, such as
+    a chat message's additional_data, that can echo the content back. Delivery metadata is
+    left intact so the log stays useful for debugging.
+    """
+    trigger_types_carrying_recording_content = (
+        WebhookTriggerTypes.TRANSCRIPT_UPDATE,
+        WebhookTriggerTypes.CHAT_MESSAGES_UPDATE,
+    )
+
+    return [
+        SimpleNamespace(
+            id=attempt.id,
+            idempotency_key=attempt.idempotency_key,
+            webhook_subscription=attempt.webhook_subscription,
+            webhook_trigger_type=attempt.webhook_trigger_type,
+            get_webhook_trigger_type_display=attempt.get_webhook_trigger_type_display(),
+            status=attempt.status,
+            get_status_display=attempt.get_status_display(),
+            attempt_count=attempt.attempt_count,
+            last_attempt_at=attempt.last_attempt_at,
+            succeeded_at=attempt.succeeded_at,
+            response_body_list=attempt.response_body_list,
+            created_at=attempt.created_at,
+            payload=None if attempt.webhook_trigger_type in trigger_types_carrying_recording_content else attempt.payload,
+        )
+        for attempt in webhook_delivery_attempts
+    ]
 
 
 def is_valid_png(image_data: bytes) -> bool:

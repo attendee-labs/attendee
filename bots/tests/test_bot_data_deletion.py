@@ -54,7 +54,13 @@ class TestBotDataDeletion(TransactionTestCase):
         self.save_mock = self.save_patch.start()
 
         # Set side effects
-        self.delete_mock.side_effect = mock_file_field_delete_sets_name_to_none
+        self.deleted_file_names = []
+
+        def track_deleted_file_names(instance, save=True):
+            self.deleted_file_names.append(instance.name)
+            mock_file_field_delete_sets_name_to_none(instance, save=save)
+
+        self.delete_mock.side_effect = track_deleted_file_names
         self.save_mock.side_effect = mock_file_field_save
 
         # Create test organization
@@ -153,6 +159,8 @@ class TestBotDataDeletion(TransactionTestCase):
         self.assertEqual(Utterance.objects.filter(recording__bot=self.bot1).count(), 0)
         self.assertEqual(ChatMessage.objects.filter(bot=self.bot1).count(), 0)
         self.assertEqual(BotDebugScreenshot.objects.filter(bot_event__bot=self.bot1).count(), 0)
+        self.assertIn(self.screenshot1.file.name, self.deleted_file_names)
+        self.assertNotIn(self.screenshot2.file.name, self.deleted_file_names)
         self.assertEqual(ParticipantEvent.objects.filter(participant__bot=self.bot1).count(), 0)
         self.assertEqual(WebhookDeliveryAttempt.objects.filter(bot=self.bot1, webhook_trigger_type=WebhookTriggerTypes.BOT_STATE_CHANGE).count(), 3)
         self.assertEqual(WebhookDeliveryAttempt.objects.filter(bot=self.bot1, webhook_trigger_type=WebhookTriggerTypes.TRANSCRIPT_UPDATE).count(), 0)
@@ -188,6 +196,49 @@ class TestBotDataDeletion(TransactionTestCase):
         self.assertIsNotNone(event)
         self.assertEqual(event.old_state, BotStates.ENDED)
         self.assertEqual(event.new_state, BotStates.DATA_DELETED)
+
+    def test_delete_data_wipes_sensitive_metadata_from_bot_events_and_state_change_webhooks(self):
+        """Test that data deletion strips personal data from the records it keeps"""
+        sensitive_metadata = {
+            "remover_name": "Test Participant 1",
+            "remover_uuid": "participant1",
+            "remover_user_uuid": "user1",
+            "remover_is_host": True,
+            "not_sensitive": "keep me",
+        }
+
+        self.event1.metadata = sensitive_metadata
+        self.event1.save()
+        self.event2.metadata = sensitive_metadata
+        self.event2.save()
+
+        self.webhook_delivery_attempt1.payload = {"event_type": "bot.state_change", "event_metadata": sensitive_metadata}
+        self.webhook_delivery_attempt1.save()
+        self.webhook_delivery_attempt2.payload = {"event_type": "bot.state_change", "event_metadata": sensitive_metadata}
+        self.webhook_delivery_attempt2.save()
+
+        self.bot1.delete_data()
+
+        # Verify bot1's sensitive metadata is gone but the rest of the metadata is kept
+        self.event1.refresh_from_db()
+        self.assertEqual(self.event1.metadata, {"not_sensitive": "keep me"})
+
+        self.webhook_delivery_attempt1.refresh_from_db()
+        self.assertEqual(self.webhook_delivery_attempt1.payload, {"event_type": "bot.state_change", "event_metadata": {"not_sensitive": "keep me"}})
+
+        # Verify bot2's metadata is untouched
+        self.event2.refresh_from_db()
+        self.assertEqual(self.event2.metadata, sensitive_metadata)
+
+        self.webhook_delivery_attempt2.refresh_from_db()
+        self.assertEqual(self.webhook_delivery_attempt2.payload, {"event_type": "bot.state_change", "event_metadata": sensitive_metadata})
+
+    def test_delete_data_leaves_webhook_payloads_without_event_metadata_alone(self):
+        """Test that a payload that isn't shaped like a bot state change payload survives data deletion unchanged"""
+        self.bot1.delete_data()
+
+        self.webhook_delivery_attempt1.refresh_from_db()
+        self.assertEqual(self.webhook_delivery_attempt1.payload, {"test": "test"})
 
     def test_delete_data_invalid_state(self):
         """Test that delete_data raises an error if bot is not in a valid state"""

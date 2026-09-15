@@ -5,7 +5,7 @@ import os
 import random
 import subprocess
 import time
-from urllib.parse import parse_qsl, quote, urlencode, urlparse, urlunparse
+from urllib.parse import quote, urlparse
 
 import redis
 import requests
@@ -20,18 +20,12 @@ from selenium.webdriver.support.ui import WebDriverWait
 from bots.bot_sso_utils import get_google_meet_set_cookie_url
 from bots.google_meet_bot_adapter.okta_authenticator import OktaAuthenticator, OktaSessionError
 from bots.models import RecordingViews
+from bots.utils import mask_url_query_param_values
 from bots.web_bot_adapter.ui_methods import UiCouldNotClickElementException, UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableExpectedException
 
 from .mocap_manager import MocapManager
 
 logger = logging.getLogger(__name__)
-
-
-def mask_url_query_param_values(url, mask="***"):
-    """Return the URL with each query parameter's value replaced by a mask, preserving the param keys."""
-    parsed_url = urlparse(url)
-    masked_query = urlencode([(key, mask) for key, _ in parse_qsl(parsed_url.query, keep_blank_values=True)])
-    return urlunparse(parsed_url._replace(query=masked_query, params="", fragment=""))
 
 
 class UiGoogleBlockingUsException(UiRetryableExpectedException):
@@ -97,6 +91,16 @@ class GoogleMeetUIMethods:
             logger.warning(f"Error occurred when clicking element for step {step}, will retry. Exception class name was {e.__class__.__name__}")
             raise UiCouldNotClickElementException("Error occurred when clicking element", step, e)
 
+    def click_element_with_fallback_to_forceful_click(self, element, step):
+        try:
+            self.click_element(element, step)
+        except UiCouldNotClickElementException as e:
+            if isinstance(e.inner_exception, ElementNotInteractableException):
+                logger.warning(f"Element was not interactable for step {step}, falling back to forceful click")
+                self.click_element_forcefully(element, step)
+            else:
+                raise
+
     # If the meeting you're about to join is being recorded, gmeet makes you click an additional button after you're admitted to the meeting
     def click_this_meeting_is_being_recorded_join_now_button(self, step):
         this_meeting_is_being_recorded_join_now_button = self.find_element_by_selector(By.XPATH, '//button[.//span[text()="Join now"]]')
@@ -138,19 +142,26 @@ class GoogleMeetUIMethods:
             raise UiLoginRequiredException("Login required", step)
 
     def look_for_denied_your_request_element(self, step):
+        # Google Meet inconsistently uses "in the call" / "on the call" and "denied" / "has denied",
+        # so we match against every combination.
+        actively_denied_texts = [f"Someone {preposition} the call {verb} your request to join" for preposition in ("in", "on") for verb in ("denied", "has denied")]
+        no_one_responded_texts = [f"No one {verb} to your request to join the call" for verb in ("responded", "has responded")]
+        left_meeting_texts = ["You left the meeting"]
+
+        all_texts = actively_denied_texts + no_one_responded_texts + left_meeting_texts
         denied_your_request_element = self.find_element_by_selector(
             By.XPATH,
-            '//*[contains(text(), "Someone in the call denied your request to join") or contains(text(), "No one responded to your request to join the call") or contains(text(), "You left the meeting")]',
+            "//*[" + " or ".join(f'contains(text(), "{text}")' for text in all_texts) + "]",
         )
         if not denied_your_request_element:
             return
 
         element_text = denied_your_request_element.text
 
-        if "Someone in the call denied your request to join" in element_text:
+        if any(text in element_text for text in actively_denied_texts):
             logger.warning("Someone in the call actively denied our request to join. Raising UiRequestToJoinDeniedException")
             raise UiRequestToJoinDeniedException("Someone in the call denied your request to join", step)
-        elif "No one responded to your request to join the call" in element_text:
+        elif any(text in element_text for text in no_one_responded_texts):
             logger.warning("No one responded to our request to join (timeout). Raising UiRequestToJoinDeniedException")
             raise UiRequestToJoinDeniedException("No one responded to your request to join the call", step)
         else:  # "You left the meeting"
@@ -233,7 +244,7 @@ class GoogleMeetUIMethods:
                 logger.warning("Camera button did not seem to be turned off. Retrying...")
 
     def join_now_button_selector(self):
-        return '//button[.//span[text()="Ask to join" or text()="Join now" or text()="Join the call now" or text()="Join anyway"]]'
+        return '//button[.//span[text()="Ask to join" or text()="Ask to join anyway" or text()="Join now" or text()="Join the call now" or text()="Join anyway" or text()="Join here too"]]'
 
     def check_for_failed_logged_in_bot_attempt(self):
         if not self.google_meet_bot_login_session:
@@ -626,20 +637,27 @@ class GoogleMeetUIMethods:
         self.click_element(close_button, "close_button")
 
     def disable_incoming_video_in_ui(self):
+        # First check if incoming video is already disabled. This is what we expect because
+        # we are disabling it via setting localstorage.
+        incoming_video_is_set_to_audio_only_element = self.find_element_by_selector(By.XPATH, '//*[contains(text(), "Incoming video is set to audio only")]')
+        if incoming_video_is_set_to_audio_only_element:
+            logger.info("No need to disable incoming video via the UI. It is already disabled.")
+            return
+
         logger.info("Disabling incoming video")
         logger.info("Waiting for the more options button...")
         MORE_OPTIONS_BUTTON_SELECTOR = 'button[jsname="NakZHc"][aria-label="More options"]'
         more_options_button = self.locate_element(
-            step="more_options_button_for_language_selection",
+            step="disable_incoming_video:more_options_button",
             condition=EC.element_to_be_clickable((By.CSS_SELECTOR, MORE_OPTIONS_BUTTON_SELECTOR)),
             wait_time_seconds=6,
         )
-        logger.info("Clicking the more options button...")
-        self.click_element(more_options_button, "disable_incoming_video:more_options_button")
+        logger.info("Forcefully clicking the more options button...")
+        self.click_element_forcefully(more_options_button, "disable_incoming_video:more_options_button")
 
         logger.info("Waiting for the settings list item...")
         settings_list_item = self.locate_element(
-            step="settings_list_item",
+            step="disable_incoming_video:settings_list_item",
             condition=EC.element_to_be_clickable((By.XPATH, '//li[.//span[text()="Settings"]]')),
             wait_time_seconds=6,
         )
@@ -1158,13 +1176,14 @@ class GoogleMeetUIMethods:
         if self.ui_interaction_mode == "humanized":
             self.humanized_navigate_to_and_click_element(join_button)
         else:
-            self.click_element(join_button, "join_button")
+            self.click_element_with_fallback_to_forceful_click(join_button, "join_button")
 
         self.click_captions_button()
 
         self.wait_for_host_if_needed()
 
-        self.set_layout(layout_to_select)
+        if not self.disable_incoming_video:
+            self.set_layout(layout_to_select)
 
         if self.disable_incoming_video:
             self.disable_incoming_video_in_ui()

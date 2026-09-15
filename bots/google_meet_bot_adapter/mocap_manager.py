@@ -1,8 +1,5 @@
-import glob
-import json
 import logging
 import math
-import os
 import random
 from dataclasses import dataclass, field
 
@@ -18,115 +15,28 @@ class PrimitiveMocapSequence:
     click_up_dt: float = 0.0
 
 
-@dataclass
-class _TransformCandidate:
-    continuous_distance_to_rect: float
-    scale_deviation: float
-    rotation_deviation: float
-    tier_index: int
-    seq: PrimitiveMocapSequence
-    scale: float
-    rotation_degrees: float
-
-
 class MocapManager:
+    """
+    Generates mouse movement primitives on demand instead of replaying captured
+    files.
+
+    The generated path uses a stochastic motor-control model:
+      - movement duration follows a Fitts-law style distance/target-width rule;
+      - the main path follows a minimum-jerk reaching trajectory, which gives the
+        bell-shaped velocity profile typical of human pointing motions;
+      - the cursor is simulated as a damped point mass tracking that motor plan;
+      - lateral/parallel deviations are added as small curved sub-movements.
+
+    This is intentionally not an anti-detection guarantee. It is a compact way to
+    produce smooth, varied, human-like UI automation without storing mocap files.
+    """
+
+    _MIN_DT_SECONDS = 0.006
+    _MAX_DT_SECONDS = 0.018
+
     def __init__(self, video_frame_size: tuple[int, int]):
         self.video_frame_size = video_frame_size
-        self.sequences: list[PrimitiveMocapSequence] = []
-        self._initial_mouse_position: tuple[int, int] | None = None
-        self._load_all_scramble_files()
-        self._generate_perturbed_sequences()
-
-    def _generate_perturbed_sequences(self):
-        original_sequences = list(self.sequences)
-        for seq in original_sequences:
-            for i in range(40):
-                angle = -5 + (10 / 41) * (i + 1)
-                if angle == 0:
-                    continue
-                rad = math.radians(angle)
-                cos_a = math.cos(rad)
-                sin_a = math.sin(rad)
-
-                perturbed_movements = []
-                total_dx = 0
-                total_dy = 0
-                for mov in seq.movements:
-                    dx = mov.get("dx", 0)
-                    dy = mov.get("dy", 0)
-                    new_dx = round(dx * cos_a - dy * sin_a)
-                    new_dy = round(dx * sin_a + dy * cos_a)
-                    total_dx += new_dx
-                    total_dy += new_dy
-                    perturbed_mov = dict(mov)
-                    perturbed_mov["dx"] = new_dx
-                    perturbed_mov["dy"] = new_dy
-                    perturbed_movements.append(perturbed_mov)
-
-                self.sequences.append(
-                    PrimitiveMocapSequence(
-                        movements=perturbed_movements,
-                        total_dx=total_dx,
-                        total_dy=total_dy,
-                        click_down_dt=seq.click_down_dt,
-                        click_up_dt=seq.click_up_dt,
-                    )
-                )
-
-        logger.info(f"Generated {len(self.sequences) - len(original_sequences)} perturbed sequences ({len(self.sequences)} total)")
-
-    def _load_all_scramble_files(self):
-        directory = os.path.dirname(__file__)
-        pattern = os.path.join(directory, "mocap", f"join_mocap_{self.video_frame_size[1]}p_*.json")
-        file_paths = sorted(glob.glob(pattern))
-
-        logger.info(f"Found {len(file_paths)} mocap scramble files")
-
-        for file_path in file_paths:
-            with open(file_path, "r") as f:
-                events = json.load(f)
-            if self._initial_mouse_position is None and events:
-                first = events[0]
-                self._initial_mouse_position = (
-                    first["global_x"] - first.get("dx", 0),
-                    first["global_y"] - first.get("dy", 0),
-                )
-            primitives = self._parse_primitives(events)
-            logger.info(f"Parsed {len(primitives)} primitive sequences from {os.path.basename(file_path)}")
-            self.sequences.extend(primitives)
-
-    def _parse_primitives(self, events: list[dict]) -> list[PrimitiveMocapSequence]:
-        primitives = []
-        current_movements = []
-        dx_acc = 0
-        dy_acc = 0
-        click_down_dt = 0.0
-
-        for event in events:
-            if event["type"] == "mouse_move":
-                current_movements.append(event)
-                dx_acc += event.get("dx", 0)
-                dy_acc += event.get("dy", 0)
-
-            elif event["type"] == "mouse_click" and event.get("state") == "down":
-                click_down_dt = event.get("dt", 0.0)
-
-            elif event["type"] == "mouse_click" and event.get("state") == "up":
-                primitives.append(
-                    PrimitiveMocapSequence(
-                        movements=current_movements,
-                        total_dx=dx_acc,
-                        total_dy=dy_acc,
-                        click_down_dt=click_down_dt,
-                        click_up_dt=event.get("dt", 0.0),
-                    )
-                )
-                current_movements = []
-                dx_acc = 0
-                dy_acc = 0
-                click_down_dt = 0.0
-
-        return primitives
+        self._initial_mouse_position = self._choose_initial_mouse_position()
 
     def get_initial_mouse_position(self) -> tuple[int, int] | None:
         return self._initial_mouse_position
@@ -140,602 +50,15 @@ class MocapManager:
         rect_right: int,
         rect_bottom: int,
     ) -> PrimitiveMocapSequence | None:
-        matching = [seq for seq in self.sequences if rect_left <= current_x + seq.total_dx <= rect_right and rect_top <= current_y + seq.total_dy <= rect_bottom]
-        logger.info(f"Found {len(matching)} sequences matching the rect")
-        if not matching:
-            return None
-        return random.choice(matching)
-
-    def _sequence_lands_in_rect(
-        self,
-        seq: PrimitiveMocapSequence,
-        current_x: int,
-        current_y: int,
-        rect_left: int,
-        rect_top: int,
-        rect_right: int,
-        rect_bottom: int,
-    ) -> bool:
-        final_x = current_x + seq.total_dx
-        final_y = current_y + seq.total_dy
-        return rect_left <= final_x <= rect_right and rect_top <= final_y <= rect_bottom
-
-    def _transform_sequence(
-        self,
-        seq: PrimitiveMocapSequence,
-        scale: float,
-        rotation_degrees: float,
-    ) -> PrimitiveMocapSequence:
-        rad = math.radians(rotation_degrees)
-        cos_a = math.cos(rad)
-        sin_a = math.sin(rad)
-
-        transformed_movements = []
-        total_dx = 0
-        total_dy = 0
-
-        for mov in seq.movements:
-            dx = mov.get("dx", 0)
-            dy = mov.get("dy", 0)
-
-            scaled_dx = dx * scale
-            scaled_dy = dy * scale
-
-            new_dx = round(scaled_dx * cos_a - scaled_dy * sin_a)
-            new_dy = round(scaled_dx * sin_a + scaled_dy * cos_a)
-
-            total_dx += new_dx
-            total_dy += new_dy
-
-            transformed_mov = dict(mov)
-            transformed_mov["dx"] = new_dx
-            transformed_mov["dy"] = new_dy
-            transformed_movements.append(transformed_mov)
-
-        return PrimitiveMocapSequence(
-            movements=transformed_movements,
-            total_dx=total_dx,
-            total_dy=total_dy,
-            click_down_dt=seq.click_down_dt,
-            click_up_dt=seq.click_up_dt,
-        )
-
-    @staticmethod
-    def _normalize_angle_degrees(angle: float) -> float:
-        # Return an equivalent angle in [-180, 180).
-        return (angle + 180.0) % 360.0 - 180.0
-
-    @staticmethod
-    def _clamp(value: float, lower: float, upper: float) -> float:
-        return min(max(value, lower), upper)
-
-    @staticmethod
-    def _point_distance_to_rect(
-        x: float,
-        y: float,
-        rect_left: float,
-        rect_top: float,
-        rect_right: float,
-        rect_bottom: float,
-    ) -> float:
-        dx = max(rect_left - x, 0.0, x - rect_right)
-        dy = max(rect_top - y, 0.0, y - rect_bottom)
-        return math.hypot(dx, dy)
-
-    def _sequence_distance_to_rect(
-        self,
-        seq: PrimitiveMocapSequence,
-        current_x: int,
-        current_y: int,
-        rect_left: int,
-        rect_top: int,
-        rect_right: int,
-        rect_bottom: int,
-    ) -> float:
-        final_x = current_x + seq.total_dx
-        final_y = current_y + seq.total_dy
-        return self._point_distance_to_rect(final_x, final_y, rect_left, rect_top, rect_right, rect_bottom)
-
-    @staticmethod
-    def _ray_rect_radius_interval(
-        angle_degrees: float,
-        rect_left: float,
-        rect_top: float,
-        rect_right: float,
-        rect_bottom: float,
-    ) -> tuple[float, float] | None:
-        """
-        For the ray from (0, 0) at angle_degrees, return the inclusive interval of
-        distances along the ray where the point is inside the axis-aligned rect.
-
-        Rect coordinates are relative to the current mouse position, not absolute
-        screen coordinates.
-        """
-        rad = math.radians(angle_degrees)
-        dx = math.cos(rad)
-        dy = math.sin(rad)
-
-        t_min = 0.0
-        t_max = math.inf
-        eps = 1e-9
-
-        for lower, upper, direction in (
-            (rect_left, rect_right, dx),
-            (rect_top, rect_bottom, dy),
-        ):
-            if abs(direction) < eps:
-                # Ray is parallel to these slab boundaries. It either always
-                # satisfies this axis or never can.
-                if lower <= 0.0 <= upper:
-                    continue
-                return None
-
-            a = lower / direction
-            b = upper / direction
-            if a > b:
-                a, b = b, a
-
-            t_min = max(t_min, a)
-            t_max = min(t_max, b)
-
-            if t_min > t_max:
-                return None
-
-        if t_max < 0.0:
-            return None
-
-        return max(t_min, 0.0), t_max
-
-    def _probe_points_for_rect(
-        self,
-        rect_left: float,
-        rect_top: float,
-        rect_right: float,
-        rect_bottom: float,
-        preferred_x: float,
-        preferred_y: float,
-    ) -> list[tuple[float, float]]:
-        center_x = (rect_left + rect_right) / 2.0
-        center_y = (rect_top + rect_bottom) / 2.0
-        closest_to_preferred_x = self._clamp(preferred_x, rect_left, rect_right)
-        closest_to_preferred_y = self._clamp(preferred_y, rect_top, rect_bottom)
-
-        def halfway_from_center_to(x: float, y: float) -> tuple[float, float]:
-            return (
-                (center_x + x) / 2.0,
-                (center_y + y) / 2.0,
-            )
-
-        return [
-            (center_x, center_y),
-            (closest_to_preferred_x, closest_to_preferred_y),
-            # Interior points halfway between the center and each corner.
-            halfway_from_center_to(rect_left, rect_top),
-            halfway_from_center_to(rect_left, rect_bottom),
-            halfway_from_center_to(rect_right, rect_top),
-            halfway_from_center_to(rect_right, rect_bottom),
-            # Edge midpoints are still useful and not as extreme as corners.
-            (center_x, rect_top),
-            (center_x, rect_bottom),
-            (rect_left, center_y),
-            (rect_right, center_y),
-        ]
-
-    def _candidate_rotations_for_rect(
-        self,
-        seq: PrimitiveMocapSequence,
-        rect_left: float,
-        rect_top: float,
-        rect_right: float,
-        rect_bottom: float,
-        max_rot_deg: float,
-    ) -> list[float]:
-        base_angle = math.degrees(math.atan2(seq.total_dy, seq.total_dx))
-        probes = self._probe_points_for_rect(
+        return self._generate_sequence_landing_in_rect(
+            current_x=current_x,
+            current_y=current_y,
             rect_left=rect_left,
             rect_top=rect_top,
             rect_right=rect_right,
             rect_bottom=rect_bottom,
-            preferred_x=seq.total_dx,
-            preferred_y=seq.total_dy,
         )
 
-        rotations = {-max_rot_deg, 0.0, max_rot_deg}
-        for x, y in probes:
-            if abs(x) < 1e-9 and abs(y) < 1e-9:
-                continue
-            target_angle = math.degrees(math.atan2(y, x))
-            rotation = self._normalize_angle_degrees(target_angle - base_angle)
-            rotations.add(self._clamp(rotation, -max_rot_deg, max_rot_deg))
-
-        rotations_list = list(rotations)
-        random.shuffle(rotations_list)
-        return rotations_list
-
-    def _candidate_transform_params_for_rect(
-        self,
-        seq: PrimitiveMocapSequence,
-        rect_left: float,
-        rect_top: float,
-        rect_right: float,
-        rect_bottom: float,
-        scale_pct: float,
-        max_rot_deg: float,
-    ) -> list[tuple[float, float]]:
-        """
-        Compute viable (scale, rotation_degrees) pairs by reasoning about only the
-        sequence endpoint vector.
-
-        A transformed endpoint must be scale * R(theta) * (seq.total_dx,
-        seq.total_dy). The reachable endpoints for a tier form an annular sector.
-        This method intersects candidate rays in that sector with the target rect,
-        then returns only params whose continuous endpoint can land inside it.
-        """
-        seq_len = math.hypot(seq.total_dx, seq.total_dy)
-        if seq_len < 1e-9:
-            if rect_left <= 0.0 <= rect_right and rect_top <= 0.0 <= rect_bottom:
-                return [(1.0, 0.0)]
-            return []
-
-        base_angle = math.degrees(math.atan2(seq.total_dy, seq.total_dx))
-        min_radius = seq_len * (1.0 - scale_pct)
-        max_radius = seq_len * (1.0 + scale_pct)
-
-        params: list[tuple[float, float]] = []
-        seen: set[tuple[float, float]] = set()
-
-        for rotation in self._candidate_rotations_for_rect(
-            seq=seq,
-            rect_left=rect_left,
-            rect_top=rect_top,
-            rect_right=rect_right,
-            rect_bottom=rect_bottom,
-            max_rot_deg=max_rot_deg,
-        ):
-            endpoint_angle = base_angle + rotation
-            ray_interval = self._ray_rect_radius_interval(
-                endpoint_angle,
-                rect_left,
-                rect_top,
-                rect_right,
-                rect_bottom,
-            )
-            if ray_interval is None:
-                continue
-
-            ray_min, ray_max = ray_interval
-            overlap_min = max(ray_min, min_radius)
-            overlap_max = min(ray_max, max_radius)
-            if overlap_min > overlap_max:
-                continue
-
-            # Try one radius that minimizes distortion, and one radius centered in
-            # the overlap to reduce the chance that per-movement rounding pushes
-            # the final endpoint just outside the rect.
-            radii = [
-                self._clamp(seq_len, overlap_min, overlap_max),
-                (overlap_min + overlap_max) / 2.0,
-            ]
-            for radius in radii:
-                scale = radius / seq_len
-                key = (round(scale, 6), round(rotation, 6))
-                if key in seen:
-                    continue
-                seen.add(key)
-                params.append((scale, rotation))
-
-        return params
-
-    def _best_effort_transform_candidate_for_rect(
-        self,
-        seq: PrimitiveMocapSequence,
-        rect_left: float,
-        rect_top: float,
-        rect_right: float,
-        rect_bottom: float,
-        scale_pct: float,
-        max_rot_deg: float,
-        tier_index: int,
-    ) -> _TransformCandidate:
-        """
-        Return the lowest-distance endpoint transform found by endpoint-only math.
-
-        This is used when no transformed sequence actually lands in the rect. It
-        intentionally does not materialize transformed movements; the caller only
-        does that for the best few endpoint candidates.
-        """
-        seq_len = math.hypot(seq.total_dx, seq.total_dy)
-        if seq_len < 1e-9:
-            return _TransformCandidate(
-                continuous_distance_to_rect=self._point_distance_to_rect(
-                    0.0,
-                    0.0,
-                    rect_left,
-                    rect_top,
-                    rect_right,
-                    rect_bottom,
-                ),
-                scale_deviation=0.0,
-                rotation_deviation=0.0,
-                tier_index=tier_index,
-                seq=seq,
-                scale=1.0,
-                rotation_degrees=0.0,
-            )
-
-        base_angle = math.degrees(math.atan2(seq.total_dy, seq.total_dx))
-        min_radius = seq_len * (1.0 - scale_pct)
-        max_radius = seq_len * (1.0 + scale_pct)
-
-        best: _TransformCandidate | None = None
-
-        for rotation in self._candidate_rotations_for_rect(
-            seq=seq,
-            rect_left=rect_left,
-            rect_top=rect_top,
-            rect_right=rect_right,
-            rect_bottom=rect_bottom,
-            max_rot_deg=max_rot_deg,
-        ):
-            endpoint_angle = base_angle + rotation
-            ray_interval = self._ray_rect_radius_interval(
-                endpoint_angle,
-                rect_left,
-                rect_top,
-                rect_right,
-                rect_bottom,
-            )
-
-            if ray_interval is not None:
-                ray_min, ray_max = ray_interval
-                overlap_min = max(ray_min, min_radius)
-                overlap_max = min(ray_max, max_radius)
-                if overlap_min <= overlap_max:
-                    # Exact continuous hit. Prefer scale closest to 1.0.
-                    radius = self._clamp(seq_len, overlap_min, overlap_max)
-                    scale = radius / seq_len
-                    candidate = _TransformCandidate(
-                        continuous_distance_to_rect=0.0,
-                        scale_deviation=abs(scale - 1.0),
-                        rotation_deviation=abs(rotation),
-                        tier_index=tier_index,
-                        seq=seq,
-                        scale=scale,
-                        rotation_degrees=rotation,
-                    )
-                    if best is None or self._candidate_sort_key(candidate) < self._candidate_sort_key(best):
-                        best = candidate
-                    continue
-
-            # No exact continuous intersection for this ray. Minimize distance
-            # from the allowed segment on the ray to the rect with a cheap ternary
-            # search. Distance to a convex rect along a line is convex.
-            rad = math.radians(endpoint_angle)
-            cos_a = math.cos(rad)
-            sin_a = math.sin(rad)
-
-            lo = min_radius
-            hi = max_radius
-            for _ in range(24):
-                m1 = lo + (hi - lo) / 3.0
-                m2 = hi - (hi - lo) / 3.0
-                d1 = self._point_distance_to_rect(
-                    m1 * cos_a,
-                    m1 * sin_a,
-                    rect_left,
-                    rect_top,
-                    rect_right,
-                    rect_bottom,
-                )
-                d2 = self._point_distance_to_rect(
-                    m2 * cos_a,
-                    m2 * sin_a,
-                    rect_left,
-                    rect_top,
-                    rect_right,
-                    rect_bottom,
-                )
-                if d1 < d2:
-                    hi = m2
-                else:
-                    lo = m1
-
-            radius = (lo + hi) / 2.0
-            scale = radius / seq_len
-            distance = self._point_distance_to_rect(
-                radius * cos_a,
-                radius * sin_a,
-                rect_left,
-                rect_top,
-                rect_right,
-                rect_bottom,
-            )
-            candidate = _TransformCandidate(
-                continuous_distance_to_rect=distance,
-                scale_deviation=abs(scale - 1.0),
-                rotation_deviation=abs(rotation),
-                tier_index=tier_index,
-                seq=seq,
-                scale=scale,
-                rotation_degrees=rotation,
-            )
-            if best is None or self._candidate_sort_key(candidate) < self._candidate_sort_key(best):
-                best = candidate
-
-        # _candidate_rotations_for_rect always returns at least {-max, 0, max}, so
-        # best should always be set for a non-zero endpoint. This guard is just to
-        # keep the return type total.
-        if best is not None:
-            return best
-
-        return _TransformCandidate(
-            continuous_distance_to_rect=self._point_distance_to_rect(
-                seq.total_dx,
-                seq.total_dy,
-                rect_left,
-                rect_top,
-                rect_right,
-                rect_bottom,
-            ),
-            scale_deviation=0.0,
-            rotation_deviation=0.0,
-            tier_index=tier_index,
-            seq=seq,
-            scale=1.0,
-            rotation_degrees=0.0,
-        )
-
-    @staticmethod
-    def _candidate_sort_key(candidate: _TransformCandidate) -> tuple[float, float, float, int]:
-        return (
-            candidate.continuous_distance_to_rect,
-            candidate.scale_deviation,
-            candidate.rotation_deviation,
-            candidate.tier_index,
-        )
-
-    def _transform_sequence_to_exact_delta(
-        self,
-        seq: PrimitiveMocapSequence,
-        target_dx: int,
-        target_dy: int,
-    ) -> PrimitiveMocapSequence | None:
-        seq_len = math.hypot(seq.total_dx, seq.total_dy)
-        target_len = math.hypot(target_dx, target_dy)
-
-        if seq_len < 1e-9:
-            # A zero endpoint vector cannot be rotated/scaled into a non-zero target.
-            if target_dx == 0 and target_dy == 0:
-                return self._transform_sequence(seq, scale=1.0, rotation_degrees=0.0)
-            return None
-
-        if target_len < 1e-9:
-            scale = 0.0
-            rotation_degrees = 0.0
-        else:
-            scale = target_len / seq_len
-            source_angle = math.degrees(math.atan2(seq.total_dy, seq.total_dx))
-            target_angle = math.degrees(math.atan2(target_dy, target_dx))
-            rotation_degrees = self._normalize_angle_degrees(target_angle - source_angle)
-
-        transformed = self._transform_sequence(
-            seq=seq,
-            scale=scale,
-            rotation_degrees=rotation_degrees,
-        )
-
-        # _transform_sequence rounds every movement independently, so even if the
-        # continuous transform maps the endpoint exactly to target_dx/target_dy, the
-        # summed rounded deltas may be off by a few pixels. Apply the residual to the
-        # last movement so the actual executed movement lands exactly on target.
-        residual_dx = target_dx - transformed.total_dx
-        residual_dy = target_dy - transformed.total_dy
-
-        if residual_dx == 0 and residual_dy == 0:
-            return transformed
-
-        if not transformed.movements:
-            return None
-
-        last_movement_index = None
-        for i in range(len(transformed.movements) - 1, -1, -1):
-            if transformed.movements[i].get("type") == "mouse_move":
-                last_movement_index = i
-                break
-
-        if last_movement_index is None:
-            return None
-
-        adjusted_movements = list(transformed.movements)
-        adjusted_last_movement = dict(adjusted_movements[last_movement_index])
-        adjusted_last_movement["dx"] = adjusted_last_movement.get("dx", 0) + residual_dx
-        adjusted_last_movement["dy"] = adjusted_last_movement.get("dy", 0) + residual_dy
-        adjusted_movements[last_movement_index] = adjusted_last_movement
-
-        return PrimitiveMocapSequence(
-            movements=adjusted_movements,
-            total_dx=target_dx,
-            total_dy=target_dy,
-            click_down_dt=transformed.click_down_dt,
-            click_up_dt=transformed.click_up_dt,
-        )
-
-    def _center_landing_fallback(
-        self,
-        current_x: int,
-        current_y: int,
-        rect_left: int,
-        rect_top: int,
-        rect_right: int,
-        rect_bottom: int,
-    ) -> PrimitiveMocapSequence | None:
-        target_x = round((rect_left + rect_right) / 2.0)
-        target_y = round((rect_top + rect_bottom) / 2.0)
-
-        target_dx = target_x - current_x
-        target_dy = target_y - current_y
-        target_len = math.hypot(target_dx, target_dy)
-
-        candidates: list[tuple[float, float, PrimitiveMocapSequence]] = []
-
-        for seq in self.sequences:
-            seq_len = math.hypot(seq.total_dx, seq.total_dy)
-
-            if seq_len < 1e-9:
-                if target_dx == 0 and target_dy == 0:
-                    candidates.append((0.0, 0.0, seq))
-                continue
-
-            if target_len < 1e-9:
-                scale = 0.0
-                rotation_degrees = 0.0
-            else:
-                scale = target_len / seq_len
-                source_angle = math.degrees(math.atan2(seq.total_dy, seq.total_dx))
-                target_angle = math.degrees(math.atan2(target_dy, target_dx))
-                rotation_degrees = self._normalize_angle_degrees(target_angle - source_angle)
-
-            # Prefer the least-distorted source sequence.
-            scale_score = abs(math.log(scale)) if scale > 0.0 else float("inf")
-            rotation_score = abs(rotation_degrees)
-
-            candidates.append((scale_score, rotation_score, seq))
-
-        if not candidates:
-            logger.info("Could not construct center-landing fallback because no usable sequence was available")
-            return None
-
-        candidates.sort(key=lambda item: (item[0], item[1]))
-
-        # Pick randomly among the best few so this path does not become completely
-        # deterministic while still staying plausible.
-        top_candidates = candidates[: min(10, len(candidates))]
-        _, _, seq = random.choice(top_candidates)
-
-        transformed = self._transform_sequence_to_exact_delta(
-            seq=seq,
-            target_dx=target_dx,
-            target_dy=target_dy,
-        )
-
-        if transformed is None:
-            logger.info("Failed to materialize center-landing fallback")
-            return None
-
-        logger.info(
-            "Returning center-landing fallback targeting (%s, %s) with delta (%s, %s)",
-            target_x,
-            target_y,
-            target_dx,
-            target_dy,
-        )
-
-        return transformed
-
-    # Fallback for when we absolutely need to find a motion sequence that lands in
-    # the rect, even if it means stretching or rotating it. If no allowed
-    # transform can actually land inside the rect after per-movement rounding, this
-    # returns the closest plausible transformed sequence instead of None.
     def find_random_sequence_landing_in_rect_with_stretch_and_rotation_allowed(
         self,
         current_x: int,
@@ -745,144 +68,10 @@ class MocapManager:
         rect_right: int,
         rect_bottom: int,
     ) -> PrimitiveMocapSequence | None:
-        tiers = [
-            (0.02, 2),
-            (0.04, 4),
-        ]
-
-        if not self.sequences:
-            logger.info("No mocap sequences available")
-            return None
-
-        # Normalize rect ordering defensively. Existing callers likely already pass
-        # ordered bounds, but this keeps the geometry helpers sane.
-        rect_left, rect_right = sorted((rect_left, rect_right))
-        rect_top, rect_bottom = sorted((rect_top, rect_bottom))
-
-        # Work in a coordinate system where the current mouse position is the
-        # origin. The target rect then describes the allowed final delta vector.
-        target_left = rect_left - current_x
-        target_top = rect_top - current_y
-        target_right = rect_right - current_x
-        target_bottom = rect_bottom - current_y
-
-        best_available_exact_matches: list[PrimitiveMocapSequence] = []
-        best_effort_candidates: list[_TransformCandidate] = []
-        seen_best_effort_candidates: set[tuple[int, float, float]] = set()
-
-        for tier_index, (scale_pct, max_rot_deg) in enumerate(tiers):
-            matching: list[PrimitiveMocapSequence] = []
-            transformed_attempts = 0
-            analytic_candidates = 0
-
-            sequences = list(self.sequences)
-            random.shuffle(sequences)
-
-            for seq in sequences:
-                best_effort = self._best_effort_transform_candidate_for_rect(
-                    seq=seq,
-                    rect_left=target_left,
-                    rect_top=target_top,
-                    rect_right=target_right,
-                    rect_bottom=target_bottom,
-                    scale_pct=scale_pct,
-                    max_rot_deg=max_rot_deg,
-                    tier_index=tier_index,
-                )
-                best_effort_key = (
-                    id(seq),
-                    round(best_effort.scale, 6),
-                    round(best_effort.rotation_degrees, 6),
-                )
-                if best_effort_key not in seen_best_effort_candidates:
-                    seen_best_effort_candidates.add(best_effort_key)
-                    best_effort_candidates.append(best_effort)
-
-                params = self._candidate_transform_params_for_rect(
-                    seq=seq,
-                    rect_left=target_left,
-                    rect_top=target_top,
-                    rect_right=target_right,
-                    rect_bottom=target_bottom,
-                    scale_pct=scale_pct,
-                    max_rot_deg=max_rot_deg,
-                )
-                analytic_candidates += len(params)
-
-                for scale, angle in params:
-                    transformed_attempts += 1
-                    transformed = self._transform_sequence(
-                        seq=seq,
-                        scale=scale,
-                        rotation_degrees=angle,
-                    )
-                    if self._sequence_lands_in_rect(
-                        transformed,
-                        current_x,
-                        current_y,
-                        rect_left,
-                        rect_top,
-                        rect_right,
-                        rect_bottom,
-                    ):
-                        matching.append(transformed)
-                        if len(matching) >= 10:
-                            logger.info(
-                                "Found at least %s transformed sequences matching rect with up to %.1f%% scaling and %s degrees rotation after %s full transforms (%s endpoint candidates)",
-                                len(matching),
-                                scale_pct * 100,
-                                max_rot_deg,
-                                transformed_attempts,
-                                analytic_candidates,
-                            )
-                            return random.choice(matching)
-                    else:
-                        # It was a continuous endpoint candidate, but summed
-                        # per-movement rounding may have pushed it out of bounds.
-                        # Keep it as a fallback candidate using its actual distance.
-                        distance = self._sequence_distance_to_rect(
-                            transformed,
-                            current_x,
-                            current_y,
-                            rect_left,
-                            rect_top,
-                            rect_right,
-                            rect_bottom,
-                        )
-                        fallback_candidate = _TransformCandidate(
-                            continuous_distance_to_rect=distance,
-                            scale_deviation=abs(scale - 1.0),
-                            rotation_deviation=abs(angle),
-                            tier_index=tier_index,
-                            seq=seq,
-                            scale=scale,
-                            rotation_degrees=angle,
-                        )
-                        fallback_key = (id(seq), round(scale, 6), round(angle, 6))
-                        if fallback_key not in seen_best_effort_candidates:
-                            seen_best_effort_candidates.add(fallback_key)
-                            best_effort_candidates.append(fallback_candidate)
-
-            logger.info(
-                "Found %s transformed sequences matching rect with up to %.1f%% scaling and %s degrees rotation after %s full transforms (%s endpoint candidates)",
-                len(matching),
-                scale_pct * 100,
-                max_rot_deg,
-                transformed_attempts,
-                analytic_candidates,
-            )
-
-            if matching:
-                best_available_exact_matches = matching
-
-        if best_available_exact_matches:
-            logger.info(
-                "Could not find 10 transformed matches; returning a random choice from the widest tier with %s exact matches",
-                len(best_available_exact_matches),
-            )
-            return random.choice(best_available_exact_matches)
-
-        return self._center_landing_fallback(
+        # Kept for API compatibility with the old mocap-backed implementation.
+        # There is no longer anything to stretch or rotate: we generate a fresh
+        # physically-plausible motion directly toward the target rectangle.
+        return self._generate_sequence_landing_in_rect(
             current_x=current_x,
             current_y=current_y,
             rect_left=rect_left,
@@ -890,3 +79,391 @@ class MocapManager:
             rect_right=rect_right,
             rect_bottom=rect_bottom,
         )
+
+    def _generate_sequence_landing_in_rect(
+        self,
+        current_x: int,
+        current_y: int,
+        rect_left: int,
+        rect_top: int,
+        rect_right: int,
+        rect_bottom: int,
+    ) -> PrimitiveMocapSequence | None:
+        rect_left, rect_top, rect_right, rect_bottom = self._normalize_rect(
+            rect_left,
+            rect_top,
+            rect_right,
+            rect_bottom,
+        )
+
+        target_x, target_y = self._choose_target_point_in_rect(
+            rect_left=rect_left,
+            rect_top=rect_top,
+            rect_right=rect_right,
+            rect_bottom=rect_bottom,
+        )
+
+        sequence = self._generate_sequence_to_point(
+            current_x=current_x,
+            current_y=current_y,
+            target_x=target_x,
+            target_y=target_y,
+            target_width=max(1, rect_right - rect_left + 1),
+            target_height=max(1, rect_bottom - rect_top + 1),
+        )
+
+        final_x = current_x + sequence.total_dx
+        final_y = current_y + sequence.total_dy
+        if not (rect_left <= final_x <= rect_right and rect_top <= final_y <= rect_bottom):
+            # This should be unreachable because the final rounded position is
+            # forced to the selected target pixel, but keep the API honest.
+            logger.warning(
+                "Generated mouse sequence missed target rect: final=(%s, %s), rect=(%s, %s, %s, %s)",
+                final_x,
+                final_y,
+                rect_left,
+                rect_top,
+                rect_right,
+                rect_bottom,
+            )
+            return None
+
+        logger.info(
+            "Generated mouse sequence with %s movement events from (%s, %s) to (%s, %s)",
+            len(sequence.movements),
+            current_x,
+            current_y,
+            final_x,
+            final_y,
+        )
+        return sequence
+
+    def _generate_sequence_to_point(
+        self,
+        current_x: int,
+        current_y: int,
+        target_x: int,
+        target_y: int,
+        target_width: int,
+        target_height: int,
+    ) -> PrimitiveMocapSequence:
+        target_dx = target_x - current_x
+        target_dy = target_y - current_y
+        distance = math.hypot(target_dx, target_dy)
+
+        if distance < 0.5:
+            return PrimitiveMocapSequence(
+                movements=[],
+                total_dx=0,
+                total_dy=0,
+                click_down_dt=random.uniform(0.06, 0.18),
+                click_up_dt=random.uniform(0.035, 0.09),
+            )
+
+        target_size = max(1.0, min(target_width, target_height))
+        duration = self._movement_duration_seconds(distance=distance, target_size=target_size)
+        dts = self._sample_frame_dts(duration)
+
+        positions, dts = self._sample_physical_trajectory(
+            target_dx=float(target_dx),
+            target_dy=float(target_dy),
+            distance=distance,
+            dts=dts,
+        )
+
+        movements: list[dict] = []
+        prev_x = 0
+        prev_y = 0
+        total_dx = 0
+        total_dy = 0
+        pending_dt = 0.0
+
+        max_x = max(0, self.video_frame_size[0] - 1)
+        max_y = max(0, self.video_frame_size[1] - 1)
+
+        for i, ((x, y), dt) in enumerate(zip(positions, dts)):
+            pending_dt += dt
+
+            if i == len(positions) - 1:
+                rounded_x = target_dx
+                rounded_y = target_dy
+            else:
+                absolute_x = self._clamp(round(current_x + x), 0, max_x)
+                absolute_y = self._clamp(round(current_y + y), 0, max_y)
+                rounded_x = absolute_x - current_x
+                rounded_y = absolute_y - current_y
+
+            dx = int(rounded_x - prev_x)
+            dy = int(rounded_y - prev_y)
+            if dx == 0 and dy == 0:
+                continue
+
+            prev_x += dx
+            prev_y += dy
+            total_dx += dx
+            total_dy += dy
+
+            movements.append(
+                {
+                    "type": "mouse_move",
+                    "dt": pending_dt,
+                    "dx": dx,
+                    "dy": dy,
+                    "global_x": current_x + prev_x,
+                    "global_y": current_y + prev_y,
+                }
+            )
+            pending_dt = 0.0
+
+        if total_dx != target_dx or total_dy != target_dy:
+            residual_dx = target_dx - total_dx
+            residual_dy = target_dy - total_dy
+            total_dx += residual_dx
+            total_dy += residual_dy
+            movements.append(
+                {
+                    "type": "mouse_move",
+                    "dt": max(pending_dt, random.uniform(0.006, 0.014)),
+                    "dx": residual_dx,
+                    "dy": residual_dy,
+                    "global_x": current_x + total_dx,
+                    "global_y": current_y + total_dy,
+                }
+            )
+            pending_dt = 0.0
+
+        return PrimitiveMocapSequence(
+            movements=movements,
+            total_dx=total_dx,
+            total_dy=total_dy,
+            click_down_dt=pending_dt + self._settle_before_click_seconds(distance),
+            click_up_dt=random.uniform(0.035, 0.095),
+        )
+
+    def _sample_physical_trajectory(
+        self,
+        target_dx: float,
+        target_dy: float,
+        distance: float,
+        dts: list[float],
+    ) -> tuple[list[tuple[float, float]], list[float]]:
+        ux = target_dx / distance
+        uy = target_dy / distance
+        px = -uy
+        py = ux
+
+        mass = random.uniform(0.8, 1.25)
+        natural_frequency = random.uniform(18.0, 28.0)
+        damping_ratio = random.uniform(0.78, 1.02)
+        stiffness = mass * natural_frequency**2
+        damping = 2.0 * damping_ratio * mass * natural_frequency
+
+        lateral_scale = min(22.0, max(0.6, distance * random.uniform(0.012, 0.035)))
+        parallel_scale = min(7.0, max(0.25, distance * random.uniform(0.002, 0.008)))
+        motor_noise = min(900.0, 35.0 + distance * random.uniform(0.10, 0.22))
+
+        lateral_modes = [
+            (random.uniform(-0.75, 0.75) * lateral_scale, random.choice((1, 2))),
+            (random.uniform(-0.35, 0.35) * lateral_scale, random.choice((2, 3))),
+        ]
+        parallel_modes = [
+            (random.uniform(-0.55, 0.55) * parallel_scale, random.choice((1, 2))),
+            (random.uniform(-0.25, 0.25) * parallel_scale, random.choice((2, 3))),
+        ]
+
+        total = sum(dts)
+        elapsed = 0.0
+        x = 0.0
+        y = 0.0
+        vx = 0.0
+        vy = 0.0
+        prev_command_x = 0.0
+        prev_command_y = 0.0
+        positions: list[tuple[float, float]] = []
+
+        for dt in dts:
+            elapsed += dt
+            u = 1.0 if total <= 0.0 else self._clamp(elapsed / total, 0.0, 1.0)
+            command_x, command_y, envelope = self._motor_command_point(
+                u=u,
+                target_dx=target_dx,
+                target_dy=target_dy,
+                ux=ux,
+                uy=uy,
+                px=px,
+                py=py,
+                lateral_modes=lateral_modes,
+                parallel_modes=parallel_modes,
+            )
+
+            command_vx = (command_x - prev_command_x) / dt
+            command_vy = (command_y - prev_command_y) / dt
+            prev_command_x = command_x
+            prev_command_y = command_y
+
+            noise_parallel = random.gauss(0.0, motor_noise * 0.35 * envelope)
+            noise_lateral = random.gauss(0.0, motor_noise * envelope)
+
+            ax = (stiffness * (command_x - x) + damping * (command_vx - vx)) / mass + ux * noise_parallel + px * noise_lateral
+            ay = (stiffness * (command_y - y) + damping * (command_vy - vy)) / mass + uy * noise_parallel + py * noise_lateral
+
+            vx += ax * dt
+            vy += ay * dt
+            x += vx * dt
+            y += vy * dt
+            positions.append((x, y))
+
+        settle_time = 0.0
+        while settle_time < 0.28:
+            remaining = math.hypot(target_dx - x, target_dy - y)
+            speed = math.hypot(vx, vy)
+            if remaining <= 0.35 and speed <= 8.0:
+                break
+
+            dt = random.uniform(self._MIN_DT_SECONDS, self._MAX_DT_SECONDS)
+            settle_time += dt
+            dts.append(dt)
+
+            ax = (stiffness * (target_dx - x) - damping * vx) / mass
+            ay = (stiffness * (target_dy - y) - damping * vy) / mass
+            vx += ax * dt
+            vy += ay * dt
+            x += vx * dt
+            y += vy * dt
+            positions.append((x, y))
+
+        positions[-1] = (target_dx, target_dy)
+        return positions, dts
+
+    def _motor_command_point(
+        self,
+        u: float,
+        target_dx: float,
+        target_dy: float,
+        ux: float,
+        uy: float,
+        px: float,
+        py: float,
+        lateral_modes: list[tuple[float, int]],
+        parallel_modes: list[tuple[float, int]],
+    ) -> tuple[float, float, float]:
+        progress = self._minimum_jerk(u)
+        envelope = math.sin(math.pi * u) ** 1.35
+
+        lateral = 0.0
+        for amplitude, harmonic in lateral_modes:
+            lateral += amplitude * math.sin(harmonic * math.pi * u)
+
+        parallel = 0.0
+        for amplitude, harmonic in parallel_modes:
+            parallel += amplitude * math.sin(harmonic * math.pi * u)
+
+        lateral *= envelope
+        parallel *= envelope
+
+        x = target_dx * progress + ux * parallel + px * lateral
+        y = target_dy * progress + uy * parallel + py * lateral
+        return x, y, envelope
+
+    def _movement_duration_seconds(self, distance: float, target_size: float) -> float:
+        index_of_difficulty = math.log2(distance / target_size + 1.0)
+        intercept = random.gauss(0.085, 0.018)
+        slope = random.gauss(0.105, 0.018)
+        duration = intercept + slope * index_of_difficulty + random.gauss(0.0, 0.025)
+
+        lower = 0.11 if distance < 20.0 else 0.18
+        upper = 0.75 if distance < 600.0 else 1.25
+        return self._clamp(duration, lower, upper)
+
+    def _sample_frame_dts(self, duration: float) -> list[float]:
+        dts: list[float] = []
+        remaining = duration
+
+        while remaining > 0.0:
+            dt = random.uniform(self._MIN_DT_SECONDS, self._MAX_DT_SECONDS)
+            if remaining - dt < self._MIN_DT_SECONDS:
+                dt = remaining
+            dts.append(dt)
+            remaining -= dt
+
+        if len(dts) < 5:
+            count = 5
+            base = duration / count
+            dts = [base for _ in range(count)]
+
+        return dts
+
+    def _settle_before_click_seconds(self, distance: float) -> float:
+        base = 0.045 + min(0.08, distance / 6000.0)
+        return self._clamp(random.gauss(base, 0.025), 0.025, 0.16)
+
+    def _choose_target_point_in_rect(
+        self,
+        rect_left: int,
+        rect_top: int,
+        rect_right: int,
+        rect_bottom: int,
+    ) -> tuple[int, int]:
+        width = rect_right - rect_left + 1
+        height = rect_bottom - rect_top + 1
+        center_x = (rect_left + rect_right) / 2.0
+        center_y = (rect_top + rect_bottom) / 2.0
+
+        if width <= 2 and height <= 2:
+            return round(center_x), round(center_y)
+
+        # Aim near the center, not the exact center every time. The clamped
+        # interior band avoids edge clicks unless the rect is very small.
+        inset_x = min(width * 0.22, max(0.0, (width - 1) / 2.0))
+        inset_y = min(height * 0.22, max(0.0, (height - 1) / 2.0))
+
+        min_x = rect_left + inset_x
+        max_x = rect_right - inset_x
+        min_y = rect_top + inset_y
+        max_y = rect_bottom - inset_y
+
+        if min_x > max_x:
+            min_x = max_x = center_x
+        if min_y > max_y:
+            min_y = max_y = center_y
+
+        x = random.gauss(center_x, max(0.5, width / 7.0))
+        y = random.gauss(center_y, max(0.5, height / 7.0))
+        return (
+            int(round(self._clamp(x, min_x, max_x))),
+            int(round(self._clamp(y, min_y, max_y))),
+        )
+
+    def _choose_initial_mouse_position(self) -> tuple[int, int] | None:
+        width, height = self.video_frame_size
+        if width <= 0 or height <= 0:
+            return None
+
+        # Replaces the old value inferred from the first mocap file.
+        x = random.gauss(width * 0.50, width * 0.08)
+        y = random.gauss(height * 0.68, height * 0.08)
+        return (
+            int(round(self._clamp(x, 0, width - 1))),
+            int(round(self._clamp(y, 0, height - 1))),
+        )
+
+    @staticmethod
+    def _minimum_jerk(u: float) -> float:
+        # 10u^3 - 15u^4 + 6u^5.
+        # Starts and ends with zero velocity and acceleration.
+        return 10.0 * u**3 - 15.0 * u**4 + 6.0 * u**5
+
+    @staticmethod
+    def _normalize_rect(
+        rect_left: int,
+        rect_top: int,
+        rect_right: int,
+        rect_bottom: int,
+    ) -> tuple[int, int, int, int]:
+        left, right = sorted((rect_left, rect_right))
+        top, bottom = sorted((rect_top, rect_bottom))
+        return left, top, right, bottom
+
+    @staticmethod
+    def _clamp(value: float, lower: float, upper: float) -> float:
+        return min(max(value, lower), upper)

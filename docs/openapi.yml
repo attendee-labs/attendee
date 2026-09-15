@@ -2438,7 +2438,7 @@ components:
                     type: string
                   uniqueItems: true
                   description: The speech models to use for transcription in order
-                    of preference. Defaults to ['universal-3-pro', 'universal-2'].
+                    of preference. Defaults to ['universal-3-5-pro', 'universal-2'].
                     See AssemblyAI docs for details.
                 speaker_labels:
                   type: boolean
