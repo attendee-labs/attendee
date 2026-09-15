@@ -108,6 +108,8 @@ This document lists all supported environment variables for the Attendee applica
 |----------|------|---------|-------------|
 | `DISABLE_SIGNUP` | Boolean | `false` | Disable new user sign-ups. When `true`, only existing users can log in. |
 | `DJANGO_SSL_REQUIRE` | Boolean | `true` | Require HTTPS connections in production. Set to `false` for local development. |
+| `ENABLE_GRANULAR_PERMISSIONS` | Boolean | `false` | Expose granular per-project permissions (viewing recording content, managing API keys) in the team management UI. When `false`, non-admin users are granted both permissions for every project they can access. |
+| `ENABLE_VIEWING_RECORDING_CONTENT` | Boolean | `true` | Allow viewing recording content (recordings, transcripts, chat messages) in the dashboard. When `false`, no user can view recording content, including admins. |
 
 ---
 
