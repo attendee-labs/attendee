@@ -923,8 +923,9 @@ class ProjectBotDetailView(LoginRequiredMixin, ProjectUrlContextMixin, View):
         webhook_delivery_attempts = WebhookDeliveryAttempt.objects.filter(bot=bot).select_related("webhook_subscription").order_by("-created_at")
 
         # Get chat messages for this bot
-        chat_messages = list(ChatMessage.objects.filter(bot=bot).select_related("participant").order_by("created_at"))
+        chat_messages = ChatMessage.objects.filter(bot=bot).select_related("participant").order_by("created_at")
         if not user_can_view_recording_content(request.user, project):
+            chat_messages = list(chat_messages)
             for chat_message in chat_messages:
                 # Masked for rendering only, these instances are never saved back to the database
                 chat_message.text = obfuscate_text(chat_message.text)
