@@ -3488,6 +3488,7 @@ window.botOutputManager = botOutputManager;
                         {
                             if (event?.message)
                             {
+                                // TODO VERIFY THAT convId is our convo
                                 realConsole?.log('chatMessage', event.message);
                                 window.chatMessageManager?.handleChatMessage(event.message);
                             }
