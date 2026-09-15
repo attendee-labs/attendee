@@ -15,6 +15,7 @@ import requests
 # ----------------------------
 
 # python diarization.py --api-key xx --base-url https://staging.attendee.dev --speaker1 /home/nduncan/Downloads/speech_datasets/two_people_talking_ten_min/speaker_1_trimmed.mp3 --speaker2 /home/nduncan/Downloads/speech_datasets/two_people_talking_ten_min/speaker_2_trimmed.mp3 --meeting-url xxx --speak-wait 10 --leave-after 310 --verbose
+# To run the recorder bot locally: add --recorder-api-key yy --recorder-base-url http://localhost:8000
 
 
 class AttendeeClient:
@@ -38,7 +39,9 @@ class AttendeeClient:
         payload = {"meeting_url": meeting_url, "bot_name": bot_name}
         if enable_transcription:
             payload["transcription_settings"] = {"assembly_ai": {}}
-            payload["recording_settings"] = {"format": "mp3", "record_async_transcription_audio_chunks": True}
+            payload["recording_settings"] = {"format": "mp3", "record_participant_speech_start_stop_events": True}
+        else:
+            payload["recording_settings"] = {"format": "none"}
         if extra:
             payload.update(extra)
         r = self.session.post(self._url("/api/v1/bots"), data=json.dumps(payload), timeout=self.timeout)
@@ -136,8 +139,10 @@ def wait_for_state(client: AttendeeClient, bot_id: str, predicate, desc: str, ti
 
 def main():
     parser = argparse.ArgumentParser(description="Spin up three Attendee bots in a Teams meeting: two speaker bots to play audio and one recorder bot to transcribe.")
-    parser.add_argument("--api-key", required=True, help="Attendee API key")
-    parser.add_argument("--base-url", required=True, help="Attendee base URL, e.g. https://staging.attendee.dev")
+    parser.add_argument("--api-key", required=True, help="Attendee API key for speaker bots")
+    parser.add_argument("--base-url", required=True, help="Attendee base URL for speaker bots, e.g. https://staging.attendee.dev")
+    parser.add_argument("--recorder-api-key", default=None, help="Separate API key for the recorder bot (defaults to --api-key)")
+    parser.add_argument("--recorder-base-url", default=None, help="Separate base URL for the recorder bot (defaults to --base-url)")
     parser.add_argument("--speaker1", required=True, help="Path to first speaker audio (mp3/wav)")
     parser.add_argument("--speaker2", required=True, help="Path to second speaker audio (mp3/wav)")
     parser.add_argument("--meeting-url", default=None, help="Meeting URL (must bypass waiting room).")
@@ -153,7 +158,11 @@ def main():
         print("ERROR: Meeting URL is required", file=sys.stderr)
         sys.exit(2)
 
-    client = AttendeeClient(args.base_url, args.api_key)
+    speaker_client = AttendeeClient(args.base_url, args.api_key)
+    recorder_client = AttendeeClient(
+        args.recorder_base_url or args.base_url,
+        args.recorder_api_key or args.api_key,
+    )
 
     bot1_name = "Speaker 1"
     bot2_name = "Speaker 2"
@@ -162,9 +171,9 @@ def main():
     # 1) Create three bots: two speaker bots (no transcription) and one recorder bot (with Assembly AI)
     if args.verbose:
         print("Creating bots...")
-    bot1 = client.create_bot(meeting_url=meeting_url, bot_name=bot1_name, enable_transcription=False)
-    bot2 = client.create_bot(meeting_url=meeting_url, bot_name=bot2_name, enable_transcription=False)
-    recorder = client.create_bot(meeting_url=meeting_url, bot_name=recorder_name, enable_transcription=True)
+    bot1 = speaker_client.create_bot(meeting_url=meeting_url, bot_name=bot1_name, enable_transcription=False)
+    bot2 = speaker_client.create_bot(meeting_url=meeting_url, bot_name=bot2_name, enable_transcription=False)
+    recorder = recorder_client.create_bot(meeting_url=meeting_url, bot_name=recorder_name, enable_transcription=True)
     bot1_id = bot1["id"]
     bot2_id = bot2["id"]
     recorder_id = recorder["id"]
@@ -178,9 +187,9 @@ def main():
     def _pred_joined(state: str, bot_obj: Dict) -> bool:
         return state_is_joined_recording(state)
 
-    wait_for_state(client, bot1_id, _pred_joined, "joined_recording", args.join_timeout)
-    wait_for_state(client, bot2_id, _pred_joined, "joined_recording", args.join_timeout)
-    wait_for_state(client, recorder_id, _pred_joined, "joined_recording", args.join_timeout)
+    wait_for_state(speaker_client, bot1_id, _pred_joined, "joined_recording", args.join_timeout)
+    wait_for_state(speaker_client, bot2_id, _pred_joined, "joined_recording", args.join_timeout)
+    wait_for_state(recorder_client, recorder_id, _pred_joined, "joined_recording", args.join_timeout)
 
     if args.speak_wait > 0:
         if args.verbose:
@@ -194,7 +203,7 @@ def main():
         print("Sending output_audio to both bots concurrently...")
 
     def _speak(bot_id: str, path: Path):
-        client.output_audio(bot_id, path)
+        speaker_client.output_audio(bot_id, path)
 
     # Record the absolute timestamp when the audio is played
     audio_played_at = int(time.time() * 1000)
@@ -220,9 +229,9 @@ def main():
 
     if args.verbose:
         print("Telling all three bots to leave...")
-    client.tell_bot_to_leave(bot1_id)
-    client.tell_bot_to_leave(bot2_id)
-    client.tell_bot_to_leave(recorder_id)
+    speaker_client.tell_bot_to_leave(bot1_id)
+    speaker_client.tell_bot_to_leave(bot2_id)
+    recorder_client.tell_bot_to_leave(recorder_id)
 
     # 5) Poll until all three bots are in the "ended" state.
     if args.verbose:
@@ -231,9 +240,9 @@ def main():
     def _pred_ended(state: str, bot_obj: Dict) -> bool:
         return (state or "").strip().lower() == "ended"
 
-    wait_for_state(client, bot1_id, _pred_ended, "ended", args.end_timeout)
-    wait_for_state(client, bot2_id, _pred_ended, "ended", args.end_timeout)
-    wait_for_state(client, recorder_id, _pred_ended, "ended", args.end_timeout)
+    wait_for_state(speaker_client, bot1_id, _pred_ended, "ended", args.end_timeout)
+    wait_for_state(speaker_client, bot2_id, _pred_ended, "ended", args.end_timeout)
+    wait_for_state(recorder_client, recorder_id, _pred_ended, "ended", args.end_timeout)
 
     # 6) Verify that the transcription has the correct diarization.
     # Strategy:
@@ -244,7 +253,7 @@ def main():
     if args.verbose:
         print("Fetching transcripts and verifying diarization...")
 
-    transcript = client.get_transcript(recorder_id) or []
+    transcript = recorder_client.get_transcript(recorder_id) or []
 
     if args.verbose:
         print(f"Transcript: {transcript}")
@@ -257,7 +266,7 @@ def main():
     print(f"Speaker 2 utterances: {' '.join(speaker2_utterances)}")
 
     # Get a list of participant events for the meeting from the recorder bot
-    participant_events = client.get_participant_events(recorder_id)
+    participant_events = recorder_client.get_participant_events(recorder_id)
     print(f"Participant events: {participant_events}")
     participant_events = participant_events.get("results", [])
 
