@@ -208,7 +208,7 @@ class WebBotAdapter(BotAdapter):
         if self.meeting_uuid_mismatch(user):
             return
 
-        user_before = self.participants_info.get(user["deviceId"], {"active": False})
+        user_before = self.participants_info.get(user["deviceId"], {"active": False, "isHost": bool(user.get("isHost"))})
         self.participants_info[user["deviceId"]] = user
 
         if user_before.get("active") and not user["active"]:

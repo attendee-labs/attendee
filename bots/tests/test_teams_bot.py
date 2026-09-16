@@ -589,6 +589,7 @@ class TestTeamsBot(TransactionTestCase):
         2. Someone the bot has never seen sends a chat message, and is lazily inserted as inactive.
         3. A chat message whose sender may not be lazily inserted is dropped.
         4. The sender joins the meeting as the host, which updates their record to say they are a host.
+        5. Someone the bot has never seen joins as a host, which is not an update to whether they are a host.
         """
         mock_deliver_webhook.return_value = None
 
@@ -621,6 +622,7 @@ class TestTeamsBot(TransactionTestCase):
 
         chatter_uuid = "8:orgid:00000000-0000-0000-0000-000000000006"
         lurker_uuid = "8:orgid:00000000-0000-0000-0000-000000000007"
+        host_uuid = "8:orgid:00000000-0000-0000-0000-000000000008"
         message_timestamp = int(time.time())
 
         # Create bot controller
@@ -638,6 +640,19 @@ class TestTeamsBot(TransactionTestCase):
             # Wait for the bot to join, start recording and start its websocket server
             time.sleep(3)
             self.assertIsNotNone(controller.adapter.websocket_port, "The adapter should have started its websocket server by now")
+
+            # Update events are not saved in the database, so record what the adapter emits
+            emitted_participant_events = []
+            emit_participant_event = controller.adapter.add_participant_event_callback
+
+            def record_participant_event(event):
+                emitted_participant_events.append(event)
+                return emit_participant_event(event)
+
+            controller.adapter.add_participant_event_callback = record_participant_event
+
+            def emitted_event_types_for(participant_uuid):
+                return [event["event_type"] for event in emitted_participant_events if event["participant_uuid"] == participant_uuid]
 
             with ws_connect(f"ws://localhost:{controller.adapter.websocket_port}") as websocket:
                 # Someone who is not in the meeting sends a chat message
@@ -725,6 +740,7 @@ class TestTeamsBot(TransactionTestCase):
             participant.refresh_from_db()
             self.assertTrue(participant.is_host, "The sender should be a host once they join the meeting as one")
             self.assertEqual(controller.adapter.number_of_participants_ever_in_meeting_excluding_other_bots(), 1, "The sender should be counted once they actually join the meeting")
+            self.assertEqual(emitted_event_types_for(chatter_uuid), [ParticipantEventTypes.JOIN, ParticipantEventTypes.UPDATE], "The sender was not a host when they were lazily inserted, so becoming one is an update")
 
             # Their message stays attributed to the same record, which now says they are a host
             chat_message.refresh_from_db()
@@ -736,6 +752,37 @@ class TestTeamsBot(TransactionTestCase):
             self.assertEqual(join_webhook.payload["event_type"], "join")
             self.assertEqual(join_webhook.payload["participant_uuid"], chatter_uuid)
             self.assertEqual(join_webhook.payload["id"], join_event.object_id)
+
+            # Someone the bot has never seen joins the meeting as a host, the normal way a host joins
+            with ws_connect(f"ws://localhost:{controller.adapter.websocket_port}") as websocket:
+                send_json_websocket_message(
+                    websocket,
+                    {
+                        "type": "UsersUpdate",
+                        "newUsers": [
+                            {
+                                "deviceId": host_uuid,
+                                "displayName": "Host Person",
+                                "fullName": "Host Person",
+                                "status": "active",
+                                "humanized_status": "in_meeting",
+                                "isCurrentUser": False,
+                                "isHost": True,
+                                "meetingId": "meeting-123",
+                            }
+                        ],
+                        "removedUsers": [],
+                        "updatedUsers": [],
+                    },
+                )
+
+                time.sleep(1)
+
+            # They were a host the first time the bot saw them, so nothing about them changed when
+            # they joined and only their join should be reported
+            host_participant = Participant.objects.get(bot=self.bot, uuid=host_uuid)
+            self.assertTrue(host_participant.is_host, "A host who joins normally should be recorded as a host from the moment they join")
+            self.assertEqual(emitted_event_types_for(host_uuid), [ParticipantEventTypes.JOIN], "Being a host is not a change for someone who was already a host when the bot first saw them")
 
             # Clean up: simulate meeting ending to trigger cleanup
             controller.adapter.left_meeting = True
