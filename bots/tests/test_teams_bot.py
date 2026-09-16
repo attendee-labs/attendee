@@ -1369,6 +1369,7 @@ class TestTeamsBot(TransactionTestCase):
             connection.close()
 
     @patch.dict("os.environ", {"ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME": "true"})
+    @patch.dict("os.environ", {"MONITOR_DOMAIN_ALLOWLIST_IN_CHROME": "true"})
     @patch("bots.web_bot_adapter.web_bot_adapter.settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME", True)
     @patch("bots.teams_bot_adapter.teams_bot_adapter.settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME", True)
     @patch("bots.web_bot_adapter.web_bot_adapter.connect")
