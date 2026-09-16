@@ -676,6 +676,7 @@ class TestTeamsBot(TransactionTestCase):
 
                 # The sender was never in the meeting, so nothing should report them as having joined
                 self.assertFalse(ParticipantEvent.objects.filter(participant=participant).exists(), "A lazy insert is not a join, so it should not be saved as a participant event")
+                self.assertEqual(controller.adapter.number_of_participants_ever_in_meeting_excluding_other_bots(), 0, "A lazily inserted sender was never in the meeting, so they should not be counted")
 
                 # A sender the adapter may not lazily insert stays unknown, so their message is dropped
                 send_json_websocket_message(
@@ -723,6 +724,7 @@ class TestTeamsBot(TransactionTestCase):
             self.assertEqual(Participant.objects.filter(bot=self.bot, uuid=chatter_uuid).count(), 1)
             participant.refresh_from_db()
             self.assertTrue(participant.is_host, "The sender should be a host once they join the meeting as one")
+            self.assertEqual(controller.adapter.number_of_participants_ever_in_meeting_excluding_other_bots(), 1, "The sender should be counted once they actually join the meeting")
 
             # Their message stays attributed to the same record, which now says they are a host
             chat_message.refresh_from_db()
