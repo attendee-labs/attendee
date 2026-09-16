@@ -16,11 +16,12 @@ from django.db import connection
 from django.test import TransactionTestCase, tag
 from django.utils import timezone
 from selenium.common.exceptions import TimeoutException
+from websockets.sync.client import connect as ws_connect
 
 from bots.bot_adapter import BotAdapter
 from bots.bot_controller.bot_controller import BotController
 from bots.bots_api_views import send_sync_command
-from bots.models import Bot, BotChatMessageRequest, BotChatMessageRequestStates, BotChatMessageToOptions, BotDebugScreenshot, BotEventManager, BotEventSubTypes, BotEventTypes, BotLogin, BotLoginGroup, BotLoginPlatform, BotMediaRequest, BotMediaRequestMediaTypes, BotMediaRequestStates, BotStates, Credentials, MediaBlob, Organization, Participant, Project, Recording, RecordingStates, RecordingTypes, TranscriptionProviders, TranscriptionTypes
+from bots.models import Bot, BotChatMessageRequest, BotChatMessageRequestStates, BotChatMessageToOptions, BotDebugScreenshot, BotEventManager, BotEventSubTypes, BotEventTypes, BotLogin, BotLoginGroup, BotLoginPlatform, BotMediaRequest, BotMediaRequestMediaTypes, BotMediaRequestStates, BotStates, ChatMessage, ChatMessageToOptions, Credentials, MediaBlob, Organization, Participant, ParticipantEvent, ParticipantEventTypes, Project, Recording, RecordingStates, RecordingTypes, TranscriptionProviders, TranscriptionTypes, WebhookDeliveryAttempt, WebhookSubscription, WebhookTriggerTypes
 from bots.teams_bot_adapter.teams_ui_methods import TeamsUIMethods, UiTeamsBlockingUsException, UiWaitingRoomTransitionFailedException
 from bots.web_bot_adapter.ui_methods import UiLoginRequiredException
 
@@ -39,6 +40,12 @@ def create_mock_teams_driver():
     mock_driver = MagicMock()
     mock_driver.execute_script.return_value = "test_result"
     return mock_driver
+
+
+def send_json_websocket_message(websocket, message):
+    """Send a message to the adapter's websocket server the way the chromedriver payload does:
+    the message type as 4 little-endian bytes, where 1 means JSON, followed by the JSON itself."""
+    websocket.send((1).to_bytes(4, byteorder="little") + json.dumps(message).encode("utf-8"))
 
 
 @tag("teams_tests")
@@ -552,6 +559,248 @@ class TestTeamsBot(TransactionTestCase):
             # If thread is still running after timeout, that's a problem to report
             if bot_thread.is_alive():
                 print("WARNING: Bot thread did not terminate properly after cleanup")
+
+            # Close the database connection since we're in a thread
+            connection.close()
+
+    @patch("bots.web_bot_adapter.web_bot_adapter.connect")
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
+    @patch("bots.tasks.deliver_webhook_task.deliver_webhook")
+    def test_chat_message_from_someone_outside_the_meeting_lazily_inserts_them(
+        self,
+        mock_deliver_webhook,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+        MockBiDiConnect,
+    ):
+        """
+        In Teams someone can send a chat message into the meeting without being in it. The adapter
+        lazily inserts that sender as an inactive participant so their message can still be saved,
+        and when they later join the meeting the real participant data takes over their record.
+
+        The messages are sent over the adapter's websocket server, the way the chromedriver payload
+        sends them, so the whole path from a websocket message to the saved records runs.
+
+        Flow:
+        1. The bot joins the meeting and starts recording.
+        2. Someone the bot has never seen sends a chat message, and is lazily inserted as inactive.
+        3. A chat message whose sender may not be lazily inserted is dropped.
+        4. The sender joins the meeting as the host, which updates their record to say they are a host.
+        5. Someone the bot has never seen joins as a host, which is not an update to whether they are a host.
+        """
+        mock_deliver_webhook.return_value = None
+
+        # Configure the mock uploader
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        # Mock the Chrome driver
+        mock_driver = create_mock_teams_driver()
+        mock_driver.capabilities = {"webSocketUrl": "ws://localhost:9222/session/test-session"}
+        MockChromeDriver.return_value = mock_driver
+
+        # Mock virtual display
+        mock_display = MagicMock()
+        MockDisplay.return_value = mock_display
+
+        # Stub the BiDi websocket the domain allow list listener connects to, so it
+        # sees a successful session.subscribe response and then an empty message stream
+        mock_bidi_socket = MagicMock()
+        mock_bidi_socket.recv.return_value = json.dumps({"id": 1, "type": "success", "result": {}})
+        MockBiDiConnect.return_value = mock_bidi_socket
+
+        # Subscribe to the webhooks the saved records should trigger
+        WebhookSubscription.objects.create(
+            project=self.project,
+            url="https://example.com/webhook",
+            triggers=[WebhookTriggerTypes.CHAT_MESSAGES_UPDATE, WebhookTriggerTypes.PARTICIPANT_EVENTS_JOIN_LEAVE],
+            is_active=True,
+        )
+
+        chatter_uuid = "8:orgid:00000000-0000-0000-0000-000000000006"
+        lurker_uuid = "8:orgid:00000000-0000-0000-0000-000000000007"
+        host_uuid = "8:orgid:00000000-0000-0000-0000-000000000008"
+        message_timestamp = int(time.time())
+
+        # Create bot controller
+        controller = BotController(self.bot.id)
+
+        # Mock the attempt_to_join_meeting to succeed immediately
+        with patch("bots.teams_bot_adapter.teams_ui_methods.TeamsUIMethods.attempt_to_join_meeting") as mock_attempt_to_join:
+            mock_attempt_to_join.return_value = None  # Successful join
+
+            # Run the bot in a separate thread since it has an event loop
+            bot_thread = threading.Thread(target=controller.run)
+            bot_thread.daemon = True
+            bot_thread.start()
+
+            # Wait for the bot to join, start recording and start its websocket server
+            time.sleep(3)
+            self.assertIsNotNone(controller.adapter.websocket_port, "The adapter should have started its websocket server by now")
+
+            # Update events are not saved in the database, so record what the adapter emits
+            emitted_participant_events = []
+            emit_participant_event = controller.adapter.add_participant_event_callback
+
+            def record_participant_event(event):
+                emitted_participant_events.append(event)
+                return emit_participant_event(event)
+
+            controller.adapter.add_participant_event_callback = record_participant_event
+
+            def emitted_event_types_for(participant_uuid):
+                return [event["event_type"] for event in emitted_participant_events if event["participant_uuid"] == participant_uuid]
+
+            with ws_connect(f"ws://localhost:{controller.adapter.websocket_port}") as websocket:
+                # Someone who is not in the meeting sends a chat message
+                send_json_websocket_message(
+                    websocket,
+                    {
+                        "type": "ChatMessage",
+                        "message_uuid": "msg-from-outside-the-meeting",
+                        "participant_uuid": chatter_uuid,
+                        "participant_full_name": "Chatty Person",
+                        "can_lazily_insert_participant": True,
+                        "timestamp": message_timestamp,
+                        "text": "Running late, please start without me",
+                    },
+                )
+
+                # Wait for the message to be processed by the main loop
+                time.sleep(1)
+
+                # The sender was lazily inserted, so their message is saved and attributed to them
+                participant = Participant.objects.get(bot=self.bot, uuid=chatter_uuid)
+                self.assertEqual(participant.full_name, "Chatty Person")
+                self.assertFalse(participant.is_the_bot)
+                self.assertFalse(participant.is_host, "The sender should not be a host until the meeting says they are")
+
+                chat_message = ChatMessage.objects.get(bot=self.bot, participant=participant)
+                self.assertEqual(chat_message.text, "Running late, please start without me")
+                self.assertEqual(chat_message.timestamp, message_timestamp)
+                self.assertEqual(chat_message.to, ChatMessageToOptions.EVERYONE)
+                self.assertEqual(chat_message.source_uuid, f"{self.recording.object_id}-msg-from-outside-the-meeting")
+
+                chat_message_webhook = WebhookDeliveryAttempt.objects.get(bot=self.bot, webhook_trigger_type=WebhookTriggerTypes.CHAT_MESSAGES_UPDATE)
+                self.assertEqual(chat_message_webhook.payload["text"], "Running late, please start without me")
+                self.assertEqual(chat_message_webhook.payload["sender_name"], "Chatty Person")
+                self.assertEqual(chat_message_webhook.payload["sender_uuid"], chatter_uuid)
+
+                # The sender was never in the meeting, so nothing should report them as having joined
+                self.assertFalse(ParticipantEvent.objects.filter(participant=participant).exists(), "A lazy insert is not a join, so it should not be saved as a participant event")
+                self.assertEqual(controller.adapter.number_of_participants_ever_in_meeting_excluding_other_bots(), 0, "A lazily inserted sender was never in the meeting, so they should not be counted")
+
+                # A sender the adapter may not lazily insert stays unknown, so their message is dropped
+                send_json_websocket_message(
+                    websocket,
+                    {
+                        "type": "ChatMessage",
+                        "message_uuid": "msg-from-a-sender-we-cannot-insert",
+                        "participant_uuid": lurker_uuid,
+                        "participant_full_name": "Unknown Person",
+                        "timestamp": message_timestamp,
+                        "text": "Nobody knows who I am",
+                    },
+                )
+
+                time.sleep(1)
+
+                self.assertFalse(Participant.objects.filter(bot=self.bot, uuid=lurker_uuid).exists(), "No participant should be created for a sender without can_lazily_insert_participant")
+                self.assertEqual(ChatMessage.objects.filter(bot=self.bot).count(), 1, "Only the message from the lazily inserted sender should be saved")
+
+                # The sender now joins the meeting, as the host
+                send_json_websocket_message(
+                    websocket,
+                    {
+                        "type": "UsersUpdate",
+                        "newUsers": [
+                            {
+                                "deviceId": chatter_uuid,
+                                "displayName": "Chatty Person",
+                                "fullName": "Chatty Person",
+                                "status": "active",
+                                "humanized_status": "in_meeting",
+                                "isCurrentUser": False,
+                                "isHost": True,
+                                "meetingId": "meeting-123",
+                            }
+                        ],
+                        "removedUsers": [],
+                        "updatedUsers": [],
+                    },
+                )
+
+                time.sleep(1)
+
+            # The record created for their chat message is updated, not duplicated
+            self.assertEqual(Participant.objects.filter(bot=self.bot, uuid=chatter_uuid).count(), 1)
+            participant.refresh_from_db()
+            self.assertTrue(participant.is_host, "The sender should be a host once they join the meeting as one")
+            self.assertEqual(controller.adapter.number_of_participants_ever_in_meeting_excluding_other_bots(), 1, "The sender should be counted once they actually join the meeting")
+            self.assertEqual(emitted_event_types_for(chatter_uuid), [ParticipantEventTypes.JOIN, ParticipantEventTypes.UPDATE], "The sender was not a host when they were lazily inserted, so becoming one is an update")
+
+            # Their message stays attributed to the same record, which now says they are a host
+            chat_message.refresh_from_db()
+            self.assertEqual(chat_message.participant, participant)
+
+            # Joining the meeting is saved as a join event, and reported as one
+            join_event = ParticipantEvent.objects.get(participant=participant, event_type=ParticipantEventTypes.JOIN)
+            join_webhook = WebhookDeliveryAttempt.objects.get(bot=self.bot, webhook_trigger_type=WebhookTriggerTypes.PARTICIPANT_EVENTS_JOIN_LEAVE)
+            self.assertEqual(join_webhook.payload["event_type"], "join")
+            self.assertEqual(join_webhook.payload["participant_uuid"], chatter_uuid)
+            self.assertEqual(join_webhook.payload["id"], join_event.object_id)
+
+            # Someone the bot has never seen joins the meeting as a host, the normal way a host joins
+            with ws_connect(f"ws://localhost:{controller.adapter.websocket_port}") as websocket:
+                send_json_websocket_message(
+                    websocket,
+                    {
+                        "type": "UsersUpdate",
+                        "newUsers": [
+                            {
+                                "deviceId": host_uuid,
+                                "displayName": "Host Person",
+                                "fullName": "Host Person",
+                                "status": "active",
+                                "humanized_status": "in_meeting",
+                                "isCurrentUser": False,
+                                "isHost": True,
+                                "meetingId": "meeting-123",
+                            }
+                        ],
+                        "removedUsers": [],
+                        "updatedUsers": [],
+                    },
+                )
+
+                time.sleep(1)
+
+            # They were a host the first time the bot saw them, so nothing about them changed when
+            # they joined and only their join should be reported
+            host_participant = Participant.objects.get(bot=self.bot, uuid=host_uuid)
+            self.assertTrue(host_participant.is_host, "A host who joins normally should be recorded as a host from the moment they join")
+            self.assertEqual(emitted_event_types_for(host_uuid), [ParticipantEventTypes.JOIN], "Being a host is not a change for someone who was already a host when the bot first saw them")
+
+            # Clean up: simulate meeting ending to trigger cleanup
+            controller.adapter.left_meeting = True
+            controller.adapter.send_message_callback({"message": controller.adapter.Messages.MEETING_ENDED})
+            time.sleep(2)
+
+            # Now wait for the thread to finish naturally
+            bot_thread.join(timeout=5)
+
+            # If thread is still running after timeout, that's a problem to report
+            if bot_thread.is_alive():
+                print("WARNING: Bot thread did not terminate properly after cleanup")
+
+            # The records should survive the meeting ending, with the sender still a single
+            # participant who is a host
+            self.assertTrue(self.bot.bot_events.filter(event_type=BotEventTypes.MEETING_ENDED).exists())
+            self.assertEqual(ChatMessage.objects.filter(bot=self.bot).count(), 1)
+            self.assertEqual(Participant.objects.filter(bot=self.bot, uuid=chatter_uuid, is_host=True).count(), 1)
 
             # Close the database connection since we're in a thread
             connection.close()
