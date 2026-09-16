@@ -19,7 +19,6 @@ jobs:
       contents: write
 
     outputs:
-      version: ${{ steps.get_version.outputs.version }}
       tag: ${{ steps.get_version.outputs.tag }}
 
     steps:
