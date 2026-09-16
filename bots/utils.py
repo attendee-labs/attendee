@@ -1,6 +1,7 @@
 import io
 import logging
 import re
+from types import SimpleNamespace
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import cv2
@@ -13,6 +14,7 @@ from .models import (
     ParticipantEvent,
     ParticipantEventTypes,
     TranscriptionProviders,
+    WebhookTriggerTypes,
 )
 from .templatetags.bot_filters import participant_color as compute_participant_color
 
@@ -708,6 +710,85 @@ def generate_recordings_json_for_bot_detail_view(bot):
         )
 
     return recordings_data
+
+
+def obfuscate_text(text):
+    """Mask every non-whitespace character so that layout survives but the content does not."""
+    if not text:
+        return text
+    return "".join(character if character.isspace() else "*" for character in text)
+
+
+def obfuscate_recordings_json_for_bot_detail_view(recordings_data):
+    """Mask transcript text and drop media urls from the output of generate_recordings_json_for_bot_detail_view.
+
+    Participant names and timings are left intact so the transcript remains navigable.
+    """
+    for recording in recordings_data:
+        recording["url"] = None
+        for transcription in recording["transcriptions"]:
+            for utterance in transcription["utterances"]:
+                utterance["transcript"] = obfuscate_text(utterance.get("transcript"))
+                for word_data in utterance.get("words") or []:
+                    word_data["word"] = obfuscate_text(word_data["word"])
+
+    return recordings_data
+
+
+def obfuscate_chat_messages_for_bot_detail_view(chat_messages):
+    """Mask the text of chat messages for rendering.
+
+    Returns plain objects rather than the model instances so that a masked value has no
+    save() to reach the database through. Only the attributes the bot detail view renders
+    are carried over; additional_data is left off entirely because it can echo the message
+    text back. Participant and timing are left intact so the log stays navigable.
+    """
+    return [
+        SimpleNamespace(
+            id=chat_message.id,
+            object_id=chat_message.object_id,
+            participant=chat_message.participant,
+            to=chat_message.to,
+            timestamp=chat_message.timestamp,
+            created_at=chat_message.created_at,
+            text=obfuscate_text(chat_message.text),
+        )
+        for chat_message in chat_messages
+    ]
+
+
+def obfuscate_webhook_delivery_attempts_for_bot_detail_view(webhook_delivery_attempts):
+    """Drop the payloads of webhook delivery attempts whose body is meeting content.
+
+    Returns plain objects rather than the model instances so that a withheld payload has no
+    save() to reach the database through. The payload is dropped whole rather than
+    field-masked because its shape varies by trigger and carries pass-through blobs, such as
+    a chat message's additional_data, that can echo the content back. Delivery metadata is
+    left intact so the log stays useful for debugging.
+    """
+    trigger_types_carrying_recording_content = (
+        WebhookTriggerTypes.TRANSCRIPT_UPDATE,
+        WebhookTriggerTypes.CHAT_MESSAGES_UPDATE,
+    )
+
+    return [
+        SimpleNamespace(
+            id=attempt.id,
+            idempotency_key=attempt.idempotency_key,
+            webhook_subscription=attempt.webhook_subscription,
+            webhook_trigger_type=attempt.webhook_trigger_type,
+            get_webhook_trigger_type_display=attempt.get_webhook_trigger_type_display(),
+            status=attempt.status,
+            get_status_display=attempt.get_status_display(),
+            attempt_count=attempt.attempt_count,
+            last_attempt_at=attempt.last_attempt_at,
+            succeeded_at=attempt.succeeded_at,
+            response_body_list=attempt.response_body_list,
+            created_at=attempt.created_at,
+            payload=None if attempt.webhook_trigger_type in trigger_types_carrying_recording_content else attempt.payload,
+        )
+        for attempt in webhook_delivery_attempts
+    ]
 
 
 def is_valid_png(image_data: bytes) -> bool:

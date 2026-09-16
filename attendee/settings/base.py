@@ -227,6 +227,13 @@ REST_FRAMEWORK = {
 }
 
 DISABLE_RATE_LIMITING = os.getenv("DISABLE_RATE_LIMITING", "false") == "true"
+
+# When enabled, the team management UI exposes granular per-project permissions for viewing
+# recording content and managing API keys.
+ENABLE_GRANULAR_PERMISSIONS = os.getenv("ENABLE_GRANULAR_PERMISSIONS", "false") == "true"
+
+ENABLE_VIEWING_RECORDING_CONTENT = os.getenv("ENABLE_VIEWING_RECORDING_CONTENT", "true") == "true"
+
 SPECTACULAR_SETTINGS = {
     "TITLE": "Attendee API",
     "DESCRIPTION": "Meetings bots made easy",
@@ -357,7 +364,7 @@ MAX_METADATA_LENGTH = int(os.getenv("MAX_METADATA_LENGTH", 1000))
 SITE_DOMAIN = os.getenv("SITE_DOMAIN", "app.attendee.dev")
 MASK_TRANSCRIPT_IN_LOGS = os.getenv("MASK_TRANSCRIPT_IN_LOGS", "false") == "true"
 ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME = os.getenv("ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME", "false") == "true"
-MONITOR_DOMAIN_ALLOWLIST_IN_CHROME = ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME or (os.getenv("MONITOR_DOMAIN_ALLOWLIST_IN_CHROME", "true") == "true")
+MONITOR_DOMAIN_ALLOWLIST_IN_CHROME = ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME or (os.getenv("MONITOR_DOMAIN_ALLOWLIST_IN_CHROME", "false") == "true")
 CUSTOM_BOT_POD_SPEC_TYPES = os.getenv("CUSTOM_BOT_POD_SPEC_TYPES", "").split(",") if os.getenv("CUSTOM_BOT_POD_SPEC_TYPES") else []
 GLOBAL_WEBHOOK_DELIVERIES_PER_SECOND_RATE_LIMIT = int(os.getenv("GLOBAL_WEBHOOK_DELIVERIES_PER_SECOND_RATE_LIMIT")) if os.getenv("GLOBAL_WEBHOOK_DELIVERIES_PER_SECOND_RATE_LIMIT") else None
 LOG_BOT_STATE_CHANGES = os.getenv("LOG_BOT_STATE_CHANGES", "false") == "true"
