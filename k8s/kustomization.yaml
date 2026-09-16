@@ -1,0 +1,26 @@
+# Convenience wrapper so the image tag is set in one place.
+#
+# ⚠ newTag below and CUBER_RELEASE_VERSION in 20-configmap-env.yaml must be the SAME value.
+# Kustomize rewrites container images; it does not touch ConfigMap values, and the app builds
+# each bot pod's image as "$BOT_POD_IMAGE:$CUBER_RELEASE_VERSION". If they drift, the app and
+# its bots run different builds.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - 00-namespaces.yaml
+  - 10-rbac.yaml
+  - 20-configmap-env.yaml
+  - 21-secret-app-secrets.yaml   # remove if the Secret is managed outside git
+  - 30-deployment-web.yaml
+  - 31-deployment-worker.yaml
+  - 32-deployment-scheduler.yaml
+  - 40-service.yaml
+  - 41-ingress.yaml
+  - 60-cronjobs.yaml
+  # 50-job-migrate.yaml is applied on its own, before the rollout -- not part of the base.
+
+images:
+  - name: REPLACE_WITH_REGISTRY/attendee
+    newName: REPLACE_WITH_REGISTRY/attendee
+    newTag: REPLACE_WITH_IMAGE_TAG
