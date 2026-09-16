@@ -107,7 +107,7 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
         # Prevents a speedbump when signing in to Google Meet.
         # If settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME, we achieve the same effect differently by
         # setting the BrowserSignin policy to 0.
-        if self.google_meet_bot_login_should_be_used and not settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:
+        if self.google_meet_bot_login_should_be_used and not settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME and not settings.MONITOR_DOMAIN_ALLOWLIST_IN_CHROME:
             options.add_argument("--guest")
 
     def subclass_specific_domain_allowlist(self):
@@ -150,6 +150,8 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
 
     def subclass_specific_chrome_policies(self):
         if not settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:
+            if settings.MONITOR_DOMAIN_ALLOWLIST_IN_CHROME and self.google_meet_bot_login_should_be_used:
+                return {"BrowserSignin": 0}
             return {}
 
         chrome_policies = {
