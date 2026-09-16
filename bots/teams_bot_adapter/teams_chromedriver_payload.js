@@ -1357,6 +1357,8 @@ class ChatMessageManager {
                 type: 'ChatMessage',
                 message_uuid: chatMessage.clientMessageId,
                 participant_uuid: chatMessage.from,
+                participant_full_name: chatMessage.imDisplayName,
+                can_lazily_insert_participant: true,
                 timestamp: Math.floor(timestamp_ms / 1000),
                 text: this.stripHtml(chatMessage.content),
             });
@@ -3487,6 +3489,18 @@ window.botOutputManager = botOutputManager;
                         {
                             if (event?.message)
                             {
+                                const threadId = window.callManager?.getThreadId();
+                                const convIdFromEvent = event.convId ?? event.message?.conversationId;
+                                if (!threadId || (convIdFromEvent !== threadId))
+                                {
+                                    window.ws?.sendJson({
+                                        type: 'ChatMessageHadWrongThreadId',
+                                        message: event,
+                                        expectedThreadId: threadId,
+                                    });
+                                    continue;
+                                }
+
                                 realConsole?.log('chatMessage', event.message);
                                 window.chatMessageManager?.handleChatMessage(event.message);
                             }
@@ -3526,6 +3540,15 @@ class CallManager {
                 }
             }
         }
+    }
+
+    getThreadId() {
+        this.setActiveCall();
+        if (!this.activeCall) {
+            return;
+        }
+
+        return this.activeCall.threadId;
     }
 
     getCallId() {
