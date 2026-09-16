@@ -102,6 +102,7 @@ RUN pip install -r requirements.txt
 
 ENV TINI_VERSION=v0.19.0
 ADD https://github.com/krallin/tini/releases/download/${TINI_VERSION}/tini /tini
+RUN echo "93dcc18adc78c65a028a84799ecf8ad40c936fdfc5f2a57b1acda5a8117fa82c  /tini" | sha256sum -c -
 RUN chmod +x /tini
 
 WORKDIR /opt
