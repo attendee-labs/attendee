@@ -338,6 +338,11 @@ class BotResourceSnapshotTaker:
             except Exception as e:
                 logger.error(f"Error getting first network stats for bot {self.bot.object_id}: {e}")
 
+            # The two samples have to come from different calls, or the window below is
+            # `now - now`. Both gates count from _last_snapshot_time and neither has an
+            # upper bound, so a call arriving more than a minute late clears both.
+            return
+
         # Don't take a snapshot if it's been less than 1 minutes since the last snapshot.
         if (now - self._last_snapshot_time) < datetime.timedelta(minutes=1):
             return
