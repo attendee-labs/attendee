@@ -1,4 +1,15 @@
+class ChatMessageSendError(Exception):
+    """A provider rejected a chat message; retry only explicit transient failures."""
+
+    def __init__(self, code, *, retryable=False):
+        super().__init__(code)
+        self.code = code
+        self.retryable = retryable
+
+
 class BotAdapter:
+    CHAT_MESSAGE_INTERVAL_SECONDS = 0
+
     class Messages:
         LEAVE_MEETING_WAITING_FOR_HOST = "Leave meeting because received waiting for host status"
         LEAVE_MEETING_WAITING_ROOM_TIMEOUT_EXCEEDED = "Leave meeting because waiting room timeout exceeded"
