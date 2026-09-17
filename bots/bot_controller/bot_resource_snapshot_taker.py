@@ -300,14 +300,16 @@ class BotResourceSnapshotTaker:
         """
         self.bot = bot
         self._last_snapshot_time = timezone.now()
-        self._first_cpu_usage_millicores = None
-        self._first_cpu_usage_sample_time = None
-        self._first_network_stats = None
-        self._first_network_sample_time = None
+        self._last_reading_time = None
+        self._last_cpu_usage_millicores = None
+        self._last_network_stats = None
         self._is_first_snapshot = True
         self._public_ip = None
 
         if self.bot.save_resource_snapshots():
+            # The first snapshot needs something to measure its counters against.
+            self._take_reading(self._last_snapshot_time)
+
             # It will make an API call to get the public IP, and we don't want to block the main thread on that.
             threading.Thread(target=self._fetch_public_ip, daemon=True).start()
 
@@ -317,26 +319,31 @@ class BotResourceSnapshotTaker:
         except Exception as e:
             logger.warning(f"Could not get public IP for bot {self.bot.object_id}: {e}. Continuing...")
 
+    def _take_reading(self, now):
+        """
+        Read the counters a snapshot reports as a delta, together with the time they
+        were read at. Each is best effort: a counter that can't be read leaves that one
+        field out of the next snapshot rather than losing the whole thing.
+        """
+        self._last_reading_time = now
+
+        try:
+            self._last_cpu_usage_millicores = get_cpu_usage_millicores()
+        except Exception as e:
+            logger.error(f"Error getting cpu usage for bot {self.bot.object_id}: {e}")
+            self._last_cpu_usage_millicores = None
+
+        try:
+            self._last_network_stats = get_network_interface_stats()
+        except Exception as e:
+            logger.error(f"Error getting network stats for bot {self.bot.object_id}: {e}")
+            self._last_network_stats = None
+
     def save_snapshot_if_needed(self):
         if not self.bot.save_resource_snapshots():
             return
 
         now = timezone.now()
-
-        # If it is more than 30 seconds since the last snapshot, sample the cpu usage.
-        if self._first_cpu_usage_millicores is None and (now - self._last_snapshot_time) > datetime.timedelta(seconds=30):
-            try:
-                self._first_cpu_usage_millicores = get_cpu_usage_millicores()
-                self._first_cpu_usage_sample_time = now
-            except Exception as e:
-                logger.error(f"Error getting first cpu usage for bot {self.bot.object_id}: {e}")
-                return
-
-            try:
-                self._first_network_stats = get_network_interface_stats()
-                self._first_network_sample_time = now
-            except Exception as e:
-                logger.error(f"Error getting first network stats for bot {self.bot.object_id}: {e}")
 
         # Don't take a snapshot if it's been less than 1 minutes since the last snapshot.
         if (now - self._last_snapshot_time) < datetime.timedelta(minutes=1):
@@ -344,6 +351,15 @@ class BotResourceSnapshotTaker:
 
         # Update the last snapshot time in memory for subsequent checks
         self._last_snapshot_time = now
+
+        # Take the new reading before anything that can bail out, so the gap between a
+        # reading and the one it is measured against is always a snapshot interval.
+        prev_reading_time = self._last_reading_time
+        prev_cpu_usage_millicores = self._last_cpu_usage_millicores
+        prev_network_stats = self._last_network_stats
+        self._take_reading(now)
+        elapsed_seconds = (now - prev_reading_time).total_seconds()
+
         ram_usage_megabytes = None
         cpu_usage_millicores_delta_per_second = None
 
@@ -354,26 +370,18 @@ class BotResourceSnapshotTaker:
             logger.error(f"Error getting memory usage for bot {self.bot.object_id}: {e}")
             return
 
-        if self._first_cpu_usage_millicores is not None:
+        if prev_cpu_usage_millicores is not None and self._last_cpu_usage_millicores is not None:
             try:
-                second_cpu_usage_millicores = get_cpu_usage_millicores()
-                cpu_usage_millicores_delta_seconds = (now - self._first_cpu_usage_sample_time).total_seconds()
-                cpu_usage_millicores_delta_per_second = pod_cpu_millicores(cpu_usage_millicores_delta_seconds, self._first_cpu_usage_millicores, second_cpu_usage_millicores)
-                self._first_cpu_usage_millicores = None
-                self._first_cpu_usage_sample_time = None
+                cpu_usage_millicores_delta_per_second = pod_cpu_millicores(elapsed_seconds, prev_cpu_usage_millicores, self._last_cpu_usage_millicores)
             except Exception as e:
-                logger.error(f"Error getting second cpu usage for bot {self.bot.object_id}: {e}")
+                logger.error(f"Error getting cpu usage delta for bot {self.bot.object_id}: {e}")
                 return
 
         # Network deltas
         network_delta = None
-        if self._first_network_stats is not None:
+        if prev_network_stats is not None and self._last_network_stats is not None:
             try:
-                current_network_stats = get_network_interface_stats()
-                elapsed = (now - self._first_network_sample_time).total_seconds()
-                network_delta = compute_network_deltas(self._first_network_stats, current_network_stats, elapsed)
-                self._first_network_stats = None
-                self._first_network_sample_time = None
+                network_delta = compute_network_deltas(prev_network_stats, self._last_network_stats, elapsed_seconds)
             except Exception as e:
                 logger.error(f"Error getting network delta for bot {self.bot.object_id}: {e}")
 
