@@ -2009,6 +2009,8 @@ const subCodeValueForDeniedRequestToJoin = 5854;
 const subCodeForAnonymousJoinDisabledForTenantByPolicy = 5723;
 const subCodeForRemovedFromConversationByAnotherParticipant = 5000;
 const subCodeForRemovedFromConversationByAnotherParticipantAlternate = 5300;
+const subCodeForNoNonHiddenParticipantsInTheIncomingRoster = 5020;
+const subCodeForNoParticipantsInTheOutgoingRoster = 5012;
 
 // A conversation end message names its sender when a participant ended the conversation for us,
 // by removing us from the meeting or from the lobby. It has no sender when the conversation
@@ -2060,7 +2062,8 @@ function handleConversationEnd(eventDataObject) {
         type: 'ConversationEndPayload',
         body: eventDataObjectBody,
         headers: eventDataObject?.headers,
-        currentCallId: window.callManager?.getCallId()
+        currentCallId: window.callManager?.getCallId(),
+        currentCallState: window.callManager?.getCallState()
     });
 
     const meetingId = extractCallIdFromEventDataObject(eventDataObject);
@@ -2086,6 +2089,22 @@ function handleConversationEnd(eventDataObject) {
         window.ws?.sendJson({
             type: 'MeetingStatusChange',
             change: 'anonymous_join_disabled_for_tenant_by_policy',
+            meetingId: meetingId
+        });
+        return;
+    }
+
+    const meetingEndedButShouldRetryJoinSubCodes = [
+        subCodeForNoNonHiddenParticipantsInTheIncomingRoster,
+        subCodeForNoParticipantsInTheOutgoingRoster
+    ];
+
+    if (meetingEndedButShouldRetryJoinSubCodes.includes(subCode) && window.callManager?.getCallState() === 10) // 10 means in the lobby
+    {
+        connectionStateManager.setDidMeetingEndButShouldRetryJoin(true);
+        window.ws?.sendJson({
+            type: 'MeetingStatusChange',
+            change: 'meeting_ended_but_should_retry_join',
             meetingId: meetingId
         });
         return;
@@ -3514,6 +3533,34 @@ window.botOutputManager = botOutputManager;
     };
 })();
 
+class ConnectionStateManager {
+    constructor() {
+        this.didMeetingEndButShouldRetryJoin = false;
+        this.didMeetingEndButShouldRetryJoinSetAt = null;
+    }
+
+    getDidMeetingEndButShouldRetryJoin() {
+        return this.didMeetingEndButShouldRetryJoin;
+    }
+
+    getSecondsSinceDidMeetingEndButShouldRetryJoin() {
+        if (!this.didMeetingEndButShouldRetryJoin) {
+            return null;
+        }
+        return (performance.now() - this.didMeetingEndButShouldRetryJoinSetAt) / 1000;
+    }
+
+    setDidMeetingEndButShouldRetryJoin(didMeetingEndButShouldRetryJoin) {
+        if (didMeetingEndButShouldRetryJoin && !this.didMeetingEndButShouldRetryJoin) {
+            this.didMeetingEndButShouldRetryJoinSetAt = performance.now();
+        }
+        if (!didMeetingEndButShouldRetryJoin) {
+            this.didMeetingEndButShouldRetryJoinSetAt = null;
+        }
+        this.didMeetingEndButShouldRetryJoin = didMeetingEndButShouldRetryJoin;
+    }
+}
+
 class CallManager {
     constructor() {
         this.activeCall = null;
@@ -3558,6 +3605,15 @@ class CallManager {
         }
 
         return this.activeCall._callId;
+    }
+
+    getCallState() {
+        this.setActiveCall();
+        if (!this.activeCall) {
+            return;
+        }
+
+        return this.activeCall.state;
     }
 
     getCurrentUserId() {
@@ -3872,6 +3928,9 @@ window.callManager = callManager;
 
 const participantsPoller = new ParticipantsPoller();
 window.participantsPoller = participantsPoller;
+
+const connectionStateManager = new ConnectionStateManager();
+window.connectionStateManager = connectionStateManager;
 
 if (window.teamsInitialData?.shouldLogNetworkRequests) {
     

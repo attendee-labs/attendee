@@ -301,6 +301,15 @@ class TeamsUIMethods:
             logger.info("Waiting room timeout exceeded. Raising UiCouldNotJoinMeetingWaitingRoomTimeoutException")
             raise UiCouldNotJoinMeetingWaitingRoomTimeoutException("Waiting room timeout exceeded", step)
 
+    def check_if_meeting_ended_but_we_should_retry(self, step):
+        # How long the meeting must stay in the "ended but should retry join" state before we give up and retry
+        meeting_ended_but_should_retry_join_duration_threshold_seconds = 10
+
+        seconds_since_meeting_ended_but_we_should_retry = self.driver.execute_script("return window.connectionStateManager?.getSecondsSinceDidMeetingEndButShouldRetryJoin()")
+        if seconds_since_meeting_ended_but_we_should_retry is not None and seconds_since_meeting_ended_but_we_should_retry >= meeting_ended_but_should_retry_join_duration_threshold_seconds:
+            logger.info(f"Meeting ended but we should retry for {seconds_since_meeting_ended_but_we_should_retry} seconds. Raising UiTeamsBlockingUsException")
+            raise UiTeamsBlockingUsException("Meeting ended but we should retry", step)
+
     def click_show_more_button(self):
         waiting_room_timeout_started_at = time.time()
         num_attempts = self.automatic_leave_configuration.waiting_room_timeout_seconds * 10
@@ -316,6 +325,7 @@ class TeamsUIMethods:
                 self.check_if_blocked_by_captcha("click_show_more_button")
                 self.look_for_denied_your_request_element("click_show_more_button")
                 self.look_for_we_could_not_connect_you_element("click_show_more_button")
+                self.check_if_meeting_ended_but_we_should_retry("click_show_more_button")
 
                 self.check_if_waiting_room_timeout_exceeded(waiting_room_timeout_started_at, "click_show_more_button")
                 self.check_if_waiting_room_connection_failed(waiting_room_timeout_started_at, "click_show_more_button")
