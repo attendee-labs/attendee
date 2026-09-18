@@ -193,6 +193,7 @@ def create_mock_zoom_sdk():
     mock_meeting_service.SetEvent.return_value = base_mock.SDKERR_SUCCESS
     mock_meeting_service.Join.return_value = base_mock.SDKERR_SUCCESS
     mock_meeting_service.GetMeetingStatus.return_value = base_mock.MEETING_STATUS_IDLE
+    mock_meeting_service.GetMeetingChatController.return_value.SendChatMsgTo.return_value = base_mock.SDKERR_SUCCESS
     mock_meeting_service.Leave.return_value = base_mock.SDKERR_SUCCESS
 
     mock_meeting_video_controller = MagicMock()

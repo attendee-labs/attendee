@@ -9,7 +9,7 @@ import numpy as np
 import zoom_meeting_sdk as zoom
 
 from bots.automatic_leave_utils import participant_is_another_bot
-from bots.bot_adapter import BotAdapter
+from bots.bot_adapter import BotAdapter, ChatMessageSendError
 from bots.meeting_url_utils import parse_zoom_join_url
 from bots.utils import image_to_yuv420_frame, scale_i420, select_from_comma_separated_list_with_wrapping_index
 
@@ -57,6 +57,9 @@ def create_black_yuv420_frame(width=640, height=360):
 
 
 class ZoomBotAdapter(BotAdapter):
+    # Pace actual SDK calls, including DMs to different participants.
+    CHAT_MESSAGE_INTERVAL_SECONDS = 2
+
     def __init__(
         self,
         *,
@@ -507,19 +510,26 @@ class ZoomBotAdapter(BotAdapter):
             self.set_video_input_manager_based_on_state()
 
     def send_chat_message(self, text, to_user_uuid):
-        # Send a welcome message to the chat
         builder = self.chat_ctrl.GetChatMessageBuilder()
-        builder.SetContent(text)
-        if to_user_uuid:
-            builder.SetReceiver(to_user_uuid)
-            builder.SetMessageType(zoom.SDKChatMessageType.To_Individual)
-        else:
-            builder.SetReceiver(0)
-            builder.SetMessageType(zoom.SDKChatMessageType.To_All)
-        msg = builder.Build()
-        send_chat_message_result = self.chat_ctrl.SendChatMsgTo(msg)
-        logger.info(f"send_chat_message_result = {send_chat_message_result}")
-        builder.Clear()
+        if builder is None:
+            raise ChatMessageSendError("zoom_chat_builder_unavailable")
+        try:
+            builder.SetContent(text)
+            if to_user_uuid:
+                builder.SetReceiver(to_user_uuid)
+                builder.SetMessageType(zoom.SDKChatMessageType.To_Individual)
+            else:
+                builder.SetReceiver(0)
+                builder.SetMessageType(zoom.SDKChatMessageType.To_All)
+            msg = builder.Build()
+            if msg is None:
+                raise ChatMessageSendError("zoom_chat_message_build_failed")
+            result = self.chat_ctrl.SendChatMsgTo(msg)
+            logger.info("send_chat_message_result = %s", result)
+            if result != zoom.SDKError.SDKERR_SUCCESS:
+                raise ChatMessageSendError(str(result), retryable=result == zoom.SDKError.SDKERR_TOO_FREQUENT_CALL)
+        finally:
+            builder.Clear()
 
     def on_chat_msg_notification_callback(self, chat_msg_info, content):
         if self.recording_is_paused and not self.record_chat_messages_when_paused:

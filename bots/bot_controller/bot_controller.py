@@ -25,8 +25,6 @@ from bots.meeting_url_utils import meeting_type_from_url, parse_zoom_registrant_
 from bots.models import (
     AudioChunk,
     Bot,
-    BotChatMessageRequestManager,
-    BotChatMessageRequestStates,
     BotDebugScreenshot,
     BotEventManager,
     BotEventSubTypes,
@@ -70,6 +68,7 @@ from .audio_chunk_uploader import AudioChunkUploader
 from .audio_output_manager import AudioOutputManager
 from .azure_file_uploader import AzureFileUploader
 from .bot_resource_snapshot_taker import BotResourceSnapshotTaker
+from .chat_message_sender import ChatMessageSender
 from .closed_caption_manager import ClosedCaptionManager
 from .grouped_closed_caption_manager import GroupedClosedCaptionManager
 from .gstreamer_pipeline import GstreamerPipeline
@@ -669,6 +668,10 @@ class BotController:
             logger.info("Cleanup already called, exiting")
             return
         self.cleanup_called = True
+        try:
+            self.chat_message_sender.stop()
+        except Exception:
+            logger.exception("Failed to finalize pending chat messages during cleanup")
 
         normal_quitting_process_worked = False
         import threading
@@ -770,6 +773,7 @@ class BotController:
 
     def __init__(self, bot_id):
         self.bot_in_db = Bot.objects.get(id=bot_id)
+        self.chat_message_sender = ChatMessageSender(self.bot_in_db)
         self.cleanup_called = False
         self.run_called = False
 
@@ -1178,14 +1182,7 @@ class BotController:
             BotMediaRequestManager.set_media_request_failed_to_play(oldest_enqueued_media_request)
 
     def take_action_based_on_chat_message_requests_in_db(self):
-        if not self.adapter.is_ready_to_send_chat_messages():
-            logger.info("Bot adapter is not ready to send chat messages, so not sending chat message requests")
-            return
-
-        chat_message_requests = self.bot_in_db.chat_message_requests.filter(state=BotChatMessageRequestStates.ENQUEUED)
-        for chat_message_request in chat_message_requests:
-            self.adapter.send_chat_message(text=chat_message_request.message, to_user_uuid=chat_message_request.to_user_uuid)
-            BotChatMessageRequestManager.set_chat_message_request_sent(chat_message_request)
+        self.chat_message_sender.send_pending(self.adapter)
 
     def take_action_based_on_voice_agent_settings_in_db(self):
         if self.bot_in_db.should_launch_webpage_streamer():
@@ -1410,6 +1407,9 @@ class BotController:
 
             # Monitor transcription
             self.per_participant_streaming_audio_input_manager.monitor_transcription()
+
+            # Retry and pace chat delivery without blocking media processing.
+            self.chat_message_sender.process(self.adapter)
 
             # Process captions
             self.closed_caption_manager.process_captions()
