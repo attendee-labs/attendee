@@ -87,20 +87,32 @@ def validate_ip_with_cleantalk(email: str, ip: str) -> None:
                 "auth_key": settings.CLEANTALK_API_KEY,
                 "ip": ip,
             },
-            timeout=(2, 3),  # connect timeout, read timeout
+            timeout=(2, 3),
         )
         response.raise_for_status()
         result = response.json()
+
+        if result.get("error_no"):
+            raise ValueError(f"CleanTalk API error {result.get('error_no')}: {result.get('error_message')}")
+
+        data = result.get("data")
+        if not isinstance(data, dict):
+            raise ValueError(f"Unexpected CleanTalk data: {data!r}")
+
+        record = data.get(ip)
+        if not isinstance(record, dict):
+            raise ValueError(f"Missing CleanTalk result for IP {ip}")
+
     except Exception as exc:
         logger.warning(
-            f"Cleantalk IP validation failed for email {email} from ip {ip}",
+            f"CleanTalk IP validation failed for email {email} from ip {ip}",
             exc_info=exc,
         )
         return
 
-    logger.info(f"Cleantalk IP validation response for email {email} from ip {ip}: {result}")
+    logger.info(f"Cleantalk IP validation response for email {email} from ip {ip}: {record}")
 
-    if (result.get("data") or {}).get(ip, {}).get("appears") == 1:
+    if str(record.get("appears")) == "1":
         logger.warning(f"Blocking signup for email {email} from ip {ip} flagged by Cleantalk")
         raise ValidationError("We are unable to complete your sign up at this time.")
 
