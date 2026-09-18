@@ -31,9 +31,12 @@ def get_request_ip(request=None) -> str:
 
 def is_crowdsec_bad_for_signup(result: dict) -> bool:
     try:
-        last_day = (result.get("scores") or {}).get("last_day") or {}
+        scores = result.get("scores") or {}
+        # An IP that has been quiet for a while has empty last_day scores, so fall back to
+        # overall to catch known offenders whose activity is stale.
+        windows = [scores.get("last_day") or {}, scores.get("overall") or {}]
 
-        return result.get("reputation") == "malicious" or (bool(result.get("behaviors")) and (last_day.get("threat", 0) >= 3 or last_day.get("aggressiveness", 0) >= 3))
+        return result.get("reputation") == "malicious" or (bool(result.get("behaviors")) and any(window.get("threat", 0) >= 3 or window.get("aggressiveness", 0) >= 3 for window in windows))
     except Exception as exc:
         logger.warning(
             f"Could not interpret Crowdsec response {result}",
