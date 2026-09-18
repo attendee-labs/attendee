@@ -54,6 +54,7 @@ def validate_ip_with_crowdsec(email: str, ip: str) -> None:
         )
         # Crowdsec returns 404 for addresses it has never seen, which means nothing bad is known about them.
         if response.status_code == 404:
+            logger.warning(f"Ignoring Crowdsec validation for unknown IP {ip}")
             return
         response.raise_for_status()
         result = response.json()
