@@ -12,8 +12,11 @@ from django.urls import reverse
 logger = logging.getLogger(__name__)
 
 
-def get_request_ip() -> str:
-    request = getattr(context, "request", None)
+def get_request_ip(request=None) -> str:
+    # Callers that have the request (e.g. views) should pass it. Allauth hooks like
+    # clean_email don't get one, so fall back to the contextvar allauth sets per request.
+    if request is None:
+        request = getattr(context, "request", None)
     if request is None:
         return "unknown"
 

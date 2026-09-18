@@ -18,6 +18,7 @@ from django.urls import reverse
 from django.views import View
 from django.views.generic import ListView
 
+from accounts.adapters import get_request_ip
 from accounts.models import User, UserRole
 
 from .bot_resource_usage_utils import DEFAULT_WINDOW as BOT_RESOURCE_USAGE_DEFAULT_WINDOW
@@ -256,6 +257,8 @@ class ProjectUrlContextMixin:
 
 class ProjectDashboardView(LoginRequiredMixin, ProjectUrlContextMixin, View):
     def get(self, request, object_id):
+        logger.info(f"Quickstart guide loaded for project {object_id} by user {request.user.email} from ip {get_request_ip(request)}")
+
         try:
             project = get_project_for_user(user=request.user, project_object_id=object_id)
         except:
