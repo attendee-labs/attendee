@@ -171,6 +171,7 @@ def validate_email_with_usercheck(email: str) -> None:
     logger.info(f"UserCheck email validation response for email {email}: {validation}")
 
     if validation.get("disposable") or validation.get("relay_domain") or validation.get("free_subdomain"):
+        logger.warning(f"Blocking signup for email {email} flagged as disposable by UserCheck")
         raise ValidationError("Please use a permanent email address.")
 
     if validation.get("blocklisted") or validation.get("spam"):
@@ -179,6 +180,7 @@ def validate_email_with_usercheck(email: str) -> None:
 
     # A domain with no MX records cannot receive our verification email.
     if validation.get("mx") is False:
+        logger.warning(f"Blocking signup for email {email} with no MX records")
         raise ValidationError("This email address does not appear to be valid.")
 
 
