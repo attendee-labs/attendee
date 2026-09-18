@@ -50,7 +50,7 @@ def validate_ip_with_crowdsec(email: str, ip: str) -> None:
         response = requests.get(
             f"https://cti.api.crowdsec.net/v2/smoke/{ip}",
             headers={"x-api-key": settings.CROWDSEC_API_KEY},
-            timeout=(3, 15),  # connect timeout, read timeout
+            timeout=(2, 3),  # connect timeout, read timeout
         )
         # Crowdsec returns 404 for addresses it has never seen, which means nothing bad is known about them.
         if response.status_code == 404:
