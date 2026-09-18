@@ -75,6 +75,36 @@ def validate_ip_with_crowdsec(email: str, ip: str) -> None:
         raise ValidationError("We are unable to complete your sign up at this time.")
 
 
+def validate_ip_with_cleantalk(email: str, ip: str) -> None:
+    if not ip or ip == "unknown":
+        return
+
+    try:
+        response = requests.get(
+            "https://api.cleantalk.org/",
+            params={
+                "method_name": "spam_check",
+                "auth_key": settings.CLEANTALK_API_KEY,
+                "ip": ip,
+            },
+            timeout=(2, 3),  # connect timeout, read timeout
+        )
+        response.raise_for_status()
+        result = response.json()
+    except Exception as exc:
+        logger.warning(
+            f"Cleantalk IP validation failed for email {email} from ip {ip}",
+            exc_info=exc,
+        )
+        return
+
+    logger.info(f"Cleantalk IP validation response for email {email} from ip {ip}: {result}")
+
+    if (result.get("data") or {}).get(ip, {}).get("appears") == 1:
+        logger.warning(f"Blocking signup for email {email} from ip {ip} flagged by Cleantalk")
+        raise ValidationError("We are unable to complete your sign up at this time.")
+
+
 def validate_email_with_mailgun(email: str) -> None:
     if settings.BYPASS_MAILGUN_VALIDATION_SUBSTRING and settings.BYPASS_MAILGUN_VALIDATION_SUBSTRING in email:
         return
@@ -110,6 +140,9 @@ def validate_email_with_mailgun(email: str) -> None:
 class StandardAccountAdapter(DefaultAccountAdapter):
     def clean_email(self, email: str) -> str:
         email = super().clean_email(email)
+
+        if settings.CLEANTALK_API_KEY:
+            validate_ip_with_cleantalk(email, get_request_ip())
 
         if settings.CROWDSEC_API_KEY:
             validate_ip_with_crowdsec(email, get_request_ip())
