@@ -1,5 +1,5 @@
 import logging
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import quote, urlsplit, urlunsplit
 
 import requests
 from allauth.account.adapter import DefaultAccountAdapter
@@ -149,6 +149,39 @@ def validate_email_with_mailgun(email: str) -> None:
         raise ValidationError("This email address does not appear to be valid.")
 
 
+def validate_email_with_usercheck(email: str) -> None:
+    if settings.BYPASS_MAILGUN_VALIDATION_SUBSTRING and settings.BYPASS_MAILGUN_VALIDATION_SUBSTRING in email:
+        return
+
+    try:
+        response = requests.get(
+            f"https://api.usercheck.com/email/{quote(email)}",
+            headers={"Authorization": f"Bearer {settings.USERCHECK_API_KEY}"},
+            timeout=(3, 15),  # connect timeout, read timeout,
+        )
+        response.raise_for_status()
+        validation = response.json()
+    except Exception as exc:
+        logger.warning(
+            f"UserCheck email validation failed for email {email}",
+            exc_info=exc,
+        )
+        return
+
+    logger.info(f"UserCheck email validation response for email {email}: {validation}")
+
+    if validation.get("disposable") or validation.get("relay_domain") or validation.get("free_subdomain"):
+        raise ValidationError("Please use a permanent email address.")
+
+    if validation.get("blocklisted") or validation.get("spam"):
+        logger.warning(f"Blocking signup for email {email} flagged by UserCheck")
+        raise ValidationError("We are unable to complete your sign up at this time.")
+
+    # A domain with no MX records cannot receive our verification email.
+    if validation.get("mx") is False:
+        raise ValidationError("This email address does not appear to be valid.")
+
+
 class StandardAccountAdapter(DefaultAccountAdapter):
     def clean_email(self, email: str) -> str:
         email = super().clean_email(email)
@@ -158,6 +191,9 @@ class StandardAccountAdapter(DefaultAccountAdapter):
 
         if settings.CROWDSEC_API_KEY:
             validate_ip_with_crowdsec(email, get_request_ip())
+
+        if settings.USERCHECK_API_KEY:
+            validate_email_with_usercheck(email)
 
         if settings.MAILGUN_VALIDATION_API_KEY:
             validate_email_with_mailgun(email)
