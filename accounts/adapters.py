@@ -3,12 +3,27 @@ from urllib.parse import urlsplit, urlunsplit
 
 import requests
 from allauth.account.adapter import DefaultAccountAdapter
+from allauth.core import context
 from django.conf import settings
 from django.contrib.auth import login
 from django.core.exceptions import ValidationError
 from django.urls import reverse
 
 logger = logging.getLogger(__name__)
+
+
+def get_request_ip() -> str:
+    request = getattr(context, "request", None)
+    if request is None:
+        return "unknown"
+
+    # We sit behind a proxy, so REMOTE_ADDR is the proxy's address. The first entry in
+    # X-Forwarded-For is the client, the rest are the proxies it passed through.
+    forwarded_for = request.META.get("HTTP_X_FORWARDED_FOR")
+    if forwarded_for:
+        return forwarded_for.split(",")[0].strip()
+
+    return request.META.get("REMOTE_ADDR") or "unknown"
 
 
 def validate_email_with_mailgun(email: str) -> None:
@@ -32,7 +47,7 @@ def validate_email_with_mailgun(email: str) -> None:
         )
         return
 
-    logger.info(f"Mailgun email validation response for email {email}: {validation}")
+    logger.info(f"Mailgun email validation response for email {email} from ip {get_request_ip()}: {validation}")
 
     if validation.get("is_disposable_address"):
         raise ValidationError("Please use a permanent email address.")
@@ -46,6 +61,9 @@ def validate_email_with_mailgun(email: str) -> None:
 class StandardAccountAdapter(DefaultAccountAdapter):
     def clean_email(self, email: str) -> str:
         email = super().clean_email(email)
+
+        # Log the IP here, separately
+        logger.info(f"Cleaning email {email} from ip {get_request_ip()}")
 
         if settings.MAILGUN_VALIDATION_API_KEY:
             validate_email_with_mailgun(email)
