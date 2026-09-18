@@ -29,6 +29,48 @@ def get_request_ip(request=None) -> str:
     return request.META.get("REMOTE_ADDR") or "unknown"
 
 
+def is_crowdsec_bad_for_signup(result: dict) -> bool:
+    try:
+        last_day = (result.get("scores") or {}).get("last_day") or {}
+
+        return result.get("reputation") == "malicious" or (bool(result.get("behaviors")) and (last_day.get("threat", 0) >= 3 or last_day.get("aggressiveness", 0) >= 3))
+    except Exception as exc:
+        logger.warning(
+            f"Could not interpret Crowdsec response {result}",
+            exc_info=exc,
+        )
+        return False
+
+
+def validate_ip_with_crowdsec(email: str, ip: str) -> None:
+    if not ip or ip == "unknown":
+        return
+
+    try:
+        response = requests.get(
+            f"https://cti.api.crowdsec.net/v2/smoke/{ip}",
+            headers={"x-api-key": settings.CROWDSEC_API_KEY},
+            timeout=(3, 15),  # connect timeout, read timeout
+        )
+        # Crowdsec returns 404 for addresses it has never seen, which means nothing bad is known about them.
+        if response.status_code == 404:
+            return
+        response.raise_for_status()
+        result = response.json()
+    except Exception as exc:
+        logger.warning(
+            f"Crowdsec IP validation failed for email {email} from ip {ip}",
+            exc_info=exc,
+        )
+        return
+
+    logger.info(f"Crowdsec IP validation response for email {email} from ip {ip}: {result}")
+
+    if is_crowdsec_bad_for_signup(result):
+        logger.warning(f"Blocking signup for email {email} from ip {ip} flagged by Crowdsec")
+        raise ValidationError("We are unable to complete your sign up at this time.")
+
+
 def validate_email_with_mailgun(email: str) -> None:
     if settings.BYPASS_MAILGUN_VALIDATION_SUBSTRING and settings.BYPASS_MAILGUN_VALIDATION_SUBSTRING in email:
         return
@@ -65,8 +107,8 @@ class StandardAccountAdapter(DefaultAccountAdapter):
     def clean_email(self, email: str) -> str:
         email = super().clean_email(email)
 
-        # Log the IP here, separately
-        logger.info(f"Cleaning email {email} from ip {get_request_ip()}")
+        if settings.CROWDSEC_API_KEY:
+            validate_ip_with_crowdsec(email, get_request_ip())
 
         if settings.MAILGUN_VALIDATION_API_KEY:
             validate_email_with_mailgun(email)
