@@ -175,6 +175,15 @@
         {% endif %}
     </div>
 
+    {% if not can_view_recording_content %}
+        <div class="alert alert-warning d-flex align-items-start gap-2" role="alert">
+            <i class="bi bi-eye-slash-fill"></i>
+            <div>
+                You do not have permission to view recording content for this project.
+            </div>
+        </div>
+    {% endif %}
+
     <div class="row mb-4">
         <div class="col-md-6">
             <p><strong>ID:</strong> {{ bot.object_id }}</p>
@@ -306,32 +315,40 @@
                                 <span class="badge bg-primary">{{ event.get_new_state_display }}</span>
                             </p>
                             {% if event.metadata %}
-                                <pre class="small mt-3"><span class="small">metadata: </span>{{ event.metadata|pprint }}</pre>
+                                <pre class="small mt-3"><span class="small">metadata: </span>{{ event.metadata|pretty_json }}</pre>
                             {% endif %}
                             {% if event.debug_screenshots.all %}
                                 <div class="mt-2">
                                     <h6 class="text-muted mb-2">Debug Files:</h6>
                                     {% for screenshot in event.debug_screenshots.all %}
-                                        {% if screenshot.file.name|stringformat:"s"|slice:"-4:" == ".mp4" %}
-                                            <video class="img-fluid mb-2" controls style="max-width: 300px;">
-                                                <source src="{{ screenshot.url }}" type="video/mp4">
-                                                Your browser does not support the video tag.
-                                            </video>
-                                        {% elif screenshot.file.name|stringformat:"s"|slice:"-6:" == ".mhtml" %}
-                                            <a href="{{ screenshot.url }}" 
-                                                class="btn btn-outline-secondary mb-2" 
-                                                target="_blank">
-                                                Download MHTML
-                                            </a>
-                                        {% else %}
-                                            <img src="{{ screenshot.url }}" 
-                                                class="img-fluid mb-2" 
-                                                alt="Debug Screenshot"
-                                                style="max-width: 300px;">
-                                        {% endif %}
-                                        {% if screenshot.metadata %}
-                                            <pre class="small">{{ screenshot.metadata|pprint }}</pre>
-                                        {% endif %}
+                                        <div class="mb-2">
+                                            {% if screenshot.file.name|stringformat:"s"|slice:"-4:" == ".mp4" %}
+                                                <video class="img-fluid d-block" controls style="max-width: 300px;">
+                                                    <source src="{{ screenshot.url }}" type="video/mp4">
+                                                    Your browser does not support the video tag.
+                                                </video>
+                                            {% elif screenshot.file.name|stringformat:"s"|slice:"-6:" == ".mhtml" %}
+                                                <a href="{{ screenshot.url }}" 
+                                                    class="btn btn-outline-secondary" 
+                                                    target="_blank">
+                                                    Download MHTML
+                                                </a>
+                                            {% elif screenshot.file.name|stringformat:"s"|slice:"-4:" == ".log" %}
+                                                <a href="{{ screenshot.url }}" 
+                                                    class="btn btn-outline-secondary" 
+                                                    target="_blank">
+                                                    Download Logs
+                                                </a>
+                                            {% else %}
+                                                <img src="{{ screenshot.url }}" 
+                                                    class="img-fluid d-block" 
+                                                    alt="Debug Screenshot"
+                                                    style="max-width: 300px;">
+                                            {% endif %}
+                                            {% if screenshot.metadata %}
+                                                <pre class="small mt-2 mb-0">{{ screenshot.metadata|pretty_json }}</pre>
+                                            {% endif %}
+                                        </div>
                                     {% endfor %}
                                 </div>
                             {% endif %}
@@ -414,62 +431,19 @@
                                         {% endif %}
                                     </td>
                                 </tr>
-                                {% if attempt.response_body_list or attempt.payload %}
+                                {% if attempt.payload %}
                                     <tr>
                                         <td colspan="7">
                                             <div class="accordion" id="responseAccordion{{ attempt.id }}">
                                                 <div class="accordion-item">
                                                     <h2 class="accordion-header" id="heading{{ attempt.id }}">
                                                         <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapse{{ attempt.id }}" aria-expanded="false" aria-controls="collapse{{ attempt.id }}">
-                                                            Webhook Details
+                                                            Payload
                                                         </button>
                                                     </h2>
                                                     <div id="collapse{{ attempt.id }}" class="accordion-collapse collapse" aria-labelledby="heading{{ attempt.id }}" data-bs-parent="#responseAccordion{{ attempt.id }}">
                                                         <div class="accordion-body">
-                                                            <ul class="nav nav-tabs mb-3" role="tablist">
-                                                                <li class="nav-item" role="presentation">
-                                                                    <button class="nav-link active" 
-                                                                            id="payload-tab-{{ attempt.id }}" 
-                                                                            data-bs-toggle="tab" 
-                                                                            data-bs-target="#payload-{{ attempt.id }}" 
-                                                                            type="button" 
-                                                                            role="tab">
-                                                                        Payload
-                                                                    </button>
-                                                                </li>
-                                                                <li class="nav-item" role="presentation">
-                                                                    <button class="nav-link" 
-                                                                            id="responses-tab-{{ attempt.id }}" 
-                                                                            data-bs-toggle="tab" 
-                                                                            data-bs-target="#responses-{{ attempt.id }}" 
-                                                                            type="button" 
-                                                                            role="tab">
-                                                                        Responses
-                                                                    </button>
-                                                                </li>
-                                                            </ul>
-                                                            <div class="tab-content">
-                                                                <div class="tab-pane fade show active" id="payload-{{ attempt.id }}" role="tabpanel">
-                                                                    {% if attempt.payload %}
-                                                                        <pre class="small mb-0">{{ attempt.payload|pprint }}</pre>
-                                                                    {% else %}
-                                                                        <div class="alert alert-info">No payload data available.</div>
-                                                                    {% endif %}
-                                                                </div>
-                                                                <div class="tab-pane fade" id="responses-{{ attempt.id }}" role="tabpanel">
-                                                                    {% if attempt.response_body_list %}
-                                                                        <ul class="list-group">
-                                                                            {% for response in attempt.response_body_list %}
-                                                                                <li class="list-group-item">
-                                                                                    <pre class="small mb-0">{{ response|pprint }}</pre>
-                                                                                </li>
-                                                                            {% endfor %}
-                                                                        </ul>
-                                                                    {% else %}
-                                                                        <div class="alert alert-info">No response data available.</div>
-                                                                    {% endif %}
-                                                                </div>
-                                                            </div>
+                                                            <pre class="small mb-0">{{ attempt.payload|pprint }}</pre>
                                                         </div>
                                                     </div>
                                                 </div>

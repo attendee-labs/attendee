@@ -1,6 +1,9 @@
 import json
 import logging
+import os
 from typing import Callable
+
+from django.conf import settings
 
 from bots.google_meet_bot_adapter.google_meet_ui_methods import (
     GoogleMeetUIMethods,
@@ -93,6 +96,7 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
         return f"""
             window.googleMeetInitialData = {{
                 modifyDomForVideoRecording: {"true" if self.modify_dom_for_video_recording else "false"},
+                disableIncomingVideo: {"true" if self.disable_incoming_video else "false"},
             }}
         """
 
@@ -100,13 +104,71 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
         self.after_bot_can_record_meeting()
 
     def add_subclass_specific_chrome_options(self, options):
-        if self.google_meet_bot_login_should_be_used:
+        # Prevents a speedbump when signing in to Google Meet.
+        # If settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME, we achieve the same effect differently by
+        # setting the BrowserSignin policy to 0.
+        if self.google_meet_bot_login_should_be_used and not settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME and not settings.MONITOR_DOMAIN_ALLOWLIST_IN_CHROME:
             options.add_argument("--guest")
 
-    def subclass_specific_before_driver_close(self):
+    def subclass_specific_domain_allowlist(self):
+        domain_allowlist = [
+            "accounts.google.com",
+            "accounts.google.co.in",  # India
+            "accounts.google.co.id",  # Indonesia
+            "accounts.google.com.br",  # Brazil
+            "accounts.google.com.mx",  # Mexico
+            "accounts.google.co.jp",  # Japan
+            "accounts.google.de",  # Germany
+            "accounts.google.co.uk",  # United Kingdom
+            "accounts.google.fr",  # France
+            "accounts.google.ca",  # Canada
+            "accounts.google.com.au",  # Australia
+            "accounts.google.co.kr",  # South Korea
+            "accounts.google.es",  # Spain
+            "accounts.google.it",  # Italy
+            "accounts.google.com.ph",  # Philippines
+            "accounts.google.com.ng",  # Nigeria
+            "accounts.google.com.pk",  # Pakistan
+            "accounts.google.com.vn",  # Vietnam
+            "accounts.google.nl",  # Netherlands
+            "accounts.google.com.sg",  # Singapore
+            "workspace.google.com",
+            "mail.google.com",
+            "meet.google.com",
+            "www.google.com",
+            ".apps.google.com",
+            settings.SITE_DOMAIN,
+        ]
+
+        if os.getenv("INTERNAL_SITE_DOMAIN"):
+            domain_allowlist.append(os.getenv("INTERNAL_SITE_DOMAIN"))
+
+        if os.getenv("USE_OKTA_LOGIN_FOR_SIGNED_IN_GOOGLE_MEET_BOTS", "false") == "true" and os.getenv("OKTA_DOMAIN"):
+            domain_allowlist.append(os.getenv("OKTA_DOMAIN"))
+
+        return domain_allowlist
+
+    def subclass_specific_chrome_policies(self):
+        if not settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:
+            if settings.MONITOR_DOMAIN_ALLOWLIST_IN_CHROME and self.google_meet_bot_login_should_be_used:
+                return {"BrowserSignin": 0}
+            return {}
+
+        chrome_policies = {
+            "URLBlocklist": ["*"],
+            "URLAllowlist": self.subclass_specific_domain_allowlist(),
+        }
+
+        # Prevents a speedbump when signing in to Google Meet
+        if self.google_meet_bot_login_should_be_used:
+            chrome_policies["BrowserSignin"] = 0
+
+        return chrome_policies
+
+    def subclass_specific_before_driver_close(self, driver):
         if self.google_meet_bot_login_session:
             logger.info("Navigating to the logout page to sign out of the Google account")
             try:
-                self.driver.get("https://www.google.com/accounts/logout")
+                driver.get("https://www.google.com/accounts/logout")
             except Exception as e:
                 logger.warning(f"Error navigating to the logout page to sign out of the Google account: {e}")

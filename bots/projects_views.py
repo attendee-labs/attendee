@@ -10,7 +10,9 @@ from django.conf import settings
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import models, transaction
-from django.http import HttpResponse, QueryDict
+from django.db.models.fields.json import KeyTextTransform
+from django.db.models.functions import Cast
+from django.http import Http404, HttpResponse, QueryDict
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.views import View
@@ -18,7 +20,11 @@ from django.views.generic import ListView
 
 from accounts.models import User, UserRole
 
+from .bot_resource_usage_utils import DEFAULT_WINDOW as BOT_RESOURCE_USAGE_DEFAULT_WINDOW
+from .bot_resource_usage_utils import get_bot_resource_usage_data, user_can_view_bot_resource_usage
 from .bots_api_utils import BotCreationSource, create_bot, create_webhook_subscription
+from .instance_health_alert_manager import get_alert_configs, update_alert_settings
+from .instance_health_utils import DEFAULT_WINDOW, get_instance_health_data, user_can_view_instance_health
 from .launch_bot_utils import launch_adhoc_bot_from_view
 from .models import (
     ApiKey,
@@ -37,6 +43,7 @@ from .models import (
     ChatMessage,
     Credentials,
     CreditTransaction,
+    InstanceHealthAlertsState,
     Participant,
     ParticipantEventTypes,
     Project,
@@ -57,7 +64,12 @@ from .models import (
 from .stripe_utils import credit_amount_for_purchase_amount_dollars, process_checkout_session_completed
 from .tasks.deliver_webhook_task import deliver_webhook
 from .usage_utils import get_usage_data
-from .utils import generate_recordings_json_for_bot_detail_view
+from .utils import (
+    generate_recordings_json_for_bot_detail_view,
+    obfuscate_chat_messages_for_bot_detail_view,
+    obfuscate_recordings_json_for_bot_detail_view,
+    obfuscate_webhook_delivery_attempts_for_bot_detail_view,
+)
 from .zoom_oauth_apps_api_utils import create_or_update_zoom_oauth_app
 
 logger = logging.getLogger(__name__)
@@ -79,10 +91,26 @@ def get_webhook_subscription_for_user(user, webhook_subscription_object_id):
     return webhook_subscription
 
 
+def user_can_manage_api_keys(user, project):
+    # If you're an admin you can manage api keys for any project in the organization
+    if user.role == UserRole.ADMIN:
+        return True
+    return ProjectAccess.objects.filter(project=project, user=user, can_manage_api_keys=True).exists()
+
+
+def user_can_view_recording_content(user, project):
+    # If viewing recording content is disabled globally, nobody can view recording content
+    if not settings.ENABLE_VIEWING_RECORDING_CONTENT:
+        return False
+    # If you're an admin you can view recording content for any project in the organization
+    if user.role == UserRole.ADMIN:
+        return True
+    return ProjectAccess.objects.filter(project=project, user=user, can_view_recording_content=True).exists()
+
+
 def get_api_key_for_user(user, api_key_object_id):
     api_key = get_object_or_404(ApiKey, object_id=api_key_object_id, project__organization=user.organization)
-    # If you're an admin you can access any api key in the organization
-    if user.role != UserRole.ADMIN and not ProjectAccess.objects.filter(project=api_key.project, user=user).exists():
+    if not user_can_manage_api_keys(user, api_key.project):
         raise PermissionDenied
     return api_key
 
@@ -185,6 +213,10 @@ def get_partial_for_credential_type(credential_type, request, context):
         return render(request, "projects/partials/kyutai_credentials.html", context)
     elif credential_type == Credentials.CredentialTypes.EXTERNAL_MEDIA_STORAGE:
         return render(request, "projects/partials/external_media_storage_credentials.html", context)
+    elif credential_type == Credentials.CredentialTypes.TEAMS_BOT_IDENTIFICATION_CREDENTIALS:
+        return render(request, "projects/partials/teams_bot_identification_credentials.html", context)
+    elif credential_type == Credentials.CredentialTypes.LIVEKIT:
+        return render(request, "projects/partials/livekit_credentials.html", context)
     else:
         return HttpResponse("Cannot render the partial for this credential type", status=400)
 
@@ -212,6 +244,10 @@ class ProjectUrlContextMixin:
         return {
             "project": project,
             "charge_credits_for_bots_setting": settings.CHARGE_CREDITS_FOR_BOTS,
+            "can_view_instance_health": user_can_view_instance_health(self.request.user),
+            "can_view_bot_resource_usage": user_can_view_bot_resource_usage(self.request.user),
+            "can_manage_api_keys": user_can_manage_api_keys(self.request.user, project),
+            "can_view_recording_content": user_can_view_recording_content(self.request.user, project),
             "user_projects": Project.accessible_to(self.request.user),
             "UserRole": UserRole,
             "debug_mode": True if settings.DEBUG else False,
@@ -254,6 +290,8 @@ class ProjectDashboardView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 class ProjectApiKeysView(LoginRequiredMixin, ProjectUrlContextMixin, View):
     def get(self, request, object_id):
         project = get_project_for_user(user=request.user, project_object_id=object_id)
+        if not user_can_manage_api_keys(request.user, project):
+            raise PermissionDenied
         context = self.get_project_context(object_id, project)
         context["api_keys"] = ApiKey.objects.filter(project=project).order_by("-created_at")
         return render(request, "projects/project_api_keys.html", context)
@@ -262,6 +300,8 @@ class ProjectApiKeysView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 class CreateApiKeyView(LoginRequiredMixin, View):
     def post(self, request, object_id):
         project = get_project_for_user(user=request.user, project_object_id=object_id)
+        if not user_can_manage_api_keys(request.user, project):
+            raise PermissionDenied
         name = request.POST.get("name")
 
         if not name:
@@ -393,6 +433,24 @@ class CreateCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 
                 if not credentials_data.get("access_key_id") or not credentials_data.get("access_key_secret") or (not credentials_data.get("endpoint_url") and not credentials_data.get("region_name")):
                     return HttpResponse("Missing required credentials data", status=400)
+            elif credential_type == Credentials.CredentialTypes.TEAMS_BOT_IDENTIFICATION_CREDENTIALS:
+                credentials_data = {
+                    "tenant_id": request.POST.get("tenant_id"),
+                    "client_id": request.POST.get("client_id"),
+                    "client_secret": request.POST.get("client_secret"),
+                }
+
+                if not all(credentials_data.values()):
+                    return HttpResponse("Missing required credentials data", status=400)
+            elif credential_type == Credentials.CredentialTypes.LIVEKIT:
+                credentials_data = {
+                    "url": request.POST.get("url"),
+                    "api_key": request.POST.get("api_key"),
+                    "api_secret": request.POST.get("api_secret"),
+                }
+
+                if not all(credentials_data.values()):
+                    return HttpResponse("Missing required credentials data", status=400)
             else:
                 return HttpResponse("Unsupported credential type", status=400)
 
@@ -468,6 +526,10 @@ class ProjectCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 
         external_media_storage_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.EXTERNAL_MEDIA_STORAGE).first()
 
+        teams_bot_identification_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.TEAMS_BOT_IDENTIFICATION_CREDENTIALS).first()
+
+        livekit_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.LIVEKIT).first()
+
         context = self.get_project_context(object_id, project)
         context.update(
             {
@@ -492,6 +554,11 @@ class ProjectCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
                 "kyutai_credential_type": Credentials.CredentialTypes.KYUTAI,
                 "external_media_storage_credentials": external_media_storage_credentials.get_credentials() if external_media_storage_credentials else None,
                 "external_media_storage_credential_type": Credentials.CredentialTypes.EXTERNAL_MEDIA_STORAGE,
+                "teams_bot_identification_credentials": teams_bot_identification_credentials.get_credentials() if teams_bot_identification_credentials else None,
+                "teams_bot_identification_credential_type": Credentials.CredentialTypes.TEAMS_BOT_IDENTIFICATION_CREDENTIALS,
+                "show_teams_bot_identification_credentials": settings.SHOW_TEAMS_BOT_IDENTIFICATION_CREDENTIALS,
+                "livekit_credentials": livekit_credentials.get_credentials() if livekit_credentials else None,
+                "livekit_credential_type": Credentials.CredentialTypes.LIVEKIT,
             }
         )
 
@@ -611,6 +678,33 @@ class ProjectBotsView(LoginRequiredMixin, ProjectUrlContextMixin, ListView):
         elif unexpected_error == "no":
             queryset = queryset.exclude(bot_events__event_type=BotEventTypes.FATAL_ERROR)
 
+        # Apply transcript filter if provided. A bot has "generated a transcript"
+        # when it has at least one non-errored utterance (failure_data is null).
+        transcript = self.request.GET.get("transcript", "").strip()
+        if transcript in ("yes", "no"):
+            has_transcript = models.Exists(Utterance.objects.filter(recording__bot=models.OuterRef("pk"), failure_data__isnull=True))
+            if transcript == "yes":
+                queryset = queryset.filter(has_transcript)
+            else:
+                queryset = queryset.filter(~has_transcript)
+
+        # Apply "minimum participants" filter if provided. This counts only
+        # non-bot participants, so a value of 2 means the meeting had at least
+        # two participants other than the bot itself.
+        min_participants = self.request.GET.get("min_participants", "").strip()
+        if min_participants.isdigit() and int(min_participants) >= 1:
+            other_participant_count = Participant.objects.filter(bot=models.OuterRef("pk"), is_the_bot=False).order_by().values("bot").annotate(count=models.Count("id")).values("count")
+            queryset = queryset.annotate(other_participant_count=models.Subquery(other_participant_count, output_field=models.IntegerField())).filter(other_participant_count__gte=int(min_participants))
+
+        # Apply "minimum duration" filter (in minutes) if provided. Duration is
+        # pulled from the metadata of the terminal BotEvent (the one that
+        # transitioned the bot to ENDED or FATAL_ERROR), matching how usage
+        # stats compute per-bot duration.
+        min_duration = self.request.GET.get("min_duration", "").strip()
+        if min_duration.isdigit() and int(min_duration) >= 1:
+            bot_duration_seconds = BotEvent.objects.filter(bot=models.OuterRef("pk"), new_state__in=[BotStates.ENDED, BotStates.FATAL_ERROR]).annotate(_dur=Cast(KeyTextTransform("bot_duration_seconds", "metadata"), output_field=models.IntegerField())).order_by("created_at").values("_dur")[:1]
+            queryset = queryset.annotate(bot_duration_seconds=models.Subquery(bot_duration_seconds, output_field=models.IntegerField())).filter(bot_duration_seconds__gte=int(min_duration) * 60)
+
         # Get the latest bot event type and subtype for each bot using subquery annotations
         latest_event_subquery_base = BotEvent.objects.filter(bot=models.OuterRef("pk")).order_by("-created_at")
         latest_event_type = latest_event_subquery_base.values("event_type")[:1]
@@ -634,7 +728,7 @@ class ProjectBotsView(LoginRequiredMixin, ProjectUrlContextMixin, ListView):
         context["session_type"] = self.get_session_type()
 
         # Add filter parameters to context for maintaining state
-        context["filter_params"] = {"start_date": self.request.GET.get("start_date", ""), "end_date": self.request.GET.get("end_date", ""), "join_at_start": self.request.GET.get("join_at_start", ""), "join_at_end": self.request.GET.get("join_at_end", ""), "ended_at_start": self.request.GET.get("ended_at_start", ""), "ended_at_end": self.request.GET.get("ended_at_end", ""), "states": self.request.GET.getlist("states"), "search": self.request.GET.get("search", ""), "joined_meeting": self.request.GET.get("joined_meeting", ""), "unexpected_error": self.request.GET.get("unexpected_error", ""), "metadata_pairs": self.get_metadata_pairs()}
+        context["filter_params"] = {"start_date": self.request.GET.get("start_date", ""), "end_date": self.request.GET.get("end_date", ""), "join_at_start": self.request.GET.get("join_at_start", ""), "join_at_end": self.request.GET.get("join_at_end", ""), "ended_at_start": self.request.GET.get("ended_at_start", ""), "ended_at_end": self.request.GET.get("ended_at_end", ""), "states": self.request.GET.getlist("states"), "search": self.request.GET.get("search", ""), "joined_meeting": self.request.GET.get("joined_meeting", ""), "unexpected_error": self.request.GET.get("unexpected_error", ""), "transcript": self.request.GET.get("transcript", ""), "min_participants": self.request.GET.get("min_participants", ""), "min_duration": self.request.GET.get("min_duration", ""), "metadata_pairs": self.get_metadata_pairs()}
 
         # Add flag to detect if create modal should be automatically opened
         context["open_create_modal"] = self.request.GET.get("open_create_modal") == "true"
@@ -829,11 +923,17 @@ class ProjectBotDetailView(LoginRequiredMixin, ProjectUrlContextMixin, View):
             # Redirect to bots list if bot not found
             return redirect("bots:project-bots", object_id=object_id)
 
+        can_view_recording_content = user_can_view_recording_content(request.user, project)
+
         # Get webhook delivery attempts for this bot (from both project-level and bot-specific webhook subscriptions)
         webhook_delivery_attempts = WebhookDeliveryAttempt.objects.filter(bot=bot).select_related("webhook_subscription").order_by("-created_at")
+        if not can_view_recording_content:
+            webhook_delivery_attempts = obfuscate_webhook_delivery_attempts_for_bot_detail_view(webhook_delivery_attempts)
 
         # Get chat messages for this bot
         chat_messages = ChatMessage.objects.filter(bot=bot).select_related("participant").order_by("created_at")
+        if not can_view_recording_content:
+            chat_messages = obfuscate_chat_messages_for_bot_detail_view(chat_messages)
 
         # Get participants and participant events for this bot
         participants = Participant.objects.filter(bot=bot, is_the_bot=False).prefetch_related("events").order_by("created_at")
@@ -938,11 +1038,17 @@ class ProjectBotRecordingsView(LoginRequiredMixin, ProjectUrlContextMixin, View)
             # Redirect to bots list if bot not found
             return redirect("bots:project-bots", object_id=object_id)
 
+        can_view_recording_content = user_can_view_recording_content(request.user, project)
+        recordings = generate_recordings_json_for_bot_detail_view(bot)
+        if not can_view_recording_content:
+            recordings = obfuscate_recordings_json_for_bot_detail_view(recordings)
+
         context = {
             "RecordingStates": RecordingStates,
             "RecordingTypes": RecordingTypes,
             "RecordingTranscriptionStates": RecordingTranscriptionStates,
-            "recordings": generate_recordings_json_for_bot_detail_view(bot),
+            "recordings": recordings,
+            "can_view_recording_content": can_view_recording_content,
         }
 
         return render(request, "projects/partials/project_bot_recordings.html", context)
@@ -968,7 +1074,16 @@ class ProjectProjectView(AdminRequiredMixin, ProjectUrlContextMixin, View):
     def get(self, request, object_id):
         project = get_project_for_user(user=request.user, project_object_id=object_id)
         context = self.get_project_context(object_id, project)
-        context["users_with_access"] = project.users_with_access()
+        # Attach each user's ProjectAccess for this specific project so the template can
+        # render the granular permission indicators without extra queries.
+        context["users_with_access"] = project.users_with_access().prefetch_related(
+            models.Prefetch(
+                "project_accesses",
+                queryset=ProjectAccess.objects.filter(project=project),
+                to_attr="access_for_project",
+            )
+        )
+        context["enable_granular_permissions"] = settings.ENABLE_GRANULAR_PERMISSIONS
         return render(request, "projects/project_project.html", context)
 
 
@@ -983,6 +1098,7 @@ class ProjectTeamView(AdminRequiredMixin, ProjectUrlContextMixin, View):
         context["users"] = users
         # Needed for the checkbox list for choosing which products a user can access
         context["projects"] = request.user.organization.projects.all()
+        context["enable_granular_permissions"] = settings.ENABLE_GRANULAR_PERMISSIONS
         return render(request, "projects/project_team.html", context)
 
 
@@ -992,6 +1108,8 @@ class EditUserView(AdminRequiredMixin, ProjectUrlContextMixin, View):
         is_admin = request.POST.get("is_admin") == "true"
         is_active = request.POST.get("is_active") == "true"
         selected_project_ids = request.POST.getlist("project_access")
+        can_access_recording_content_project_ids = set(request.POST.getlist("recording_content_access"))
+        can_manage_api_key_project_ids = set(request.POST.getlist("api_key_access"))
 
         if not user_object_id:
             return HttpResponse("User ID is required", status=400)
@@ -1032,7 +1150,15 @@ class EditUserView(AdminRequiredMixin, ProjectUrlContextMixin, View):
                     # Add new project access entries
                     for project_id in selected_project_ids:
                         project_obj = Project.objects.get(object_id=project_id, organization=request.user.organization)
-                        ProjectAccess.objects.create(project=project_obj, user=user_to_edit)
+                        # When granular permissions are hidden, grant them for every accessible project.
+                        can_view_recording_content = project_id in can_access_recording_content_project_ids if settings.ENABLE_GRANULAR_PERMISSIONS else True
+                        can_manage_api_keys = project_id in can_manage_api_key_project_ids if settings.ENABLE_GRANULAR_PERMISSIONS else True
+                        ProjectAccess.objects.create(
+                            project=project_obj,
+                            user=user_to_edit,
+                            can_view_recording_content=can_view_recording_content,
+                            can_manage_api_keys=can_manage_api_keys,
+                        )
                 else:
                     # If user is now admin, remove all project access entries
                     # since admins have access to all projects
@@ -1052,6 +1178,7 @@ class InviteUserView(AdminRequiredMixin, ProjectUrlContextMixin, View):
     def get(self, request, object_id):
         project = get_project_for_user(user=request.user, project_object_id=object_id)
         context = self.get_project_context(object_id, project)
+        context["enable_granular_permissions"] = settings.ENABLE_GRANULAR_PERMISSIONS
         return render(request, "projects/project_team.html", context)
 
     def post(self, request, object_id):
@@ -1059,6 +1186,8 @@ class InviteUserView(AdminRequiredMixin, ProjectUrlContextMixin, View):
         email = request.POST.get("email")
         is_admin = request.POST.get("is_admin") == "true"
         selected_project_ids = request.POST.getlist("project_access")
+        can_access_recording_content_project_ids = set(request.POST.getlist("recording_content_access"))
+        can_manage_api_key_project_ids = set(request.POST.getlist("api_key_access"))
 
         if not email:
             return HttpResponse("Email is required", status=400)
@@ -1094,7 +1223,15 @@ class InviteUserView(AdminRequiredMixin, ProjectUrlContextMixin, View):
                 if not is_admin and selected_project_ids:
                     for project_id in selected_project_ids:
                         project = Project.objects.get(object_id=project_id, organization=request.user.organization)
-                        ProjectAccess.objects.create(project=project, user=user)
+                        # When granular permissions are hidden, grant them for every accessible project.
+                        can_view_recording_content = project_id in can_access_recording_content_project_ids if settings.ENABLE_GRANULAR_PERMISSIONS else True
+                        can_manage_api_keys = project_id in can_manage_api_key_project_ids if settings.ENABLE_GRANULAR_PERMISSIONS else True
+                        ProjectAccess.objects.create(
+                            project=project,
+                            user=user,
+                            can_view_recording_content=can_view_recording_content,
+                            can_manage_api_keys=can_manage_api_keys,
+                        )
 
                 # Send verification email
                 send_email_confirmation(request, user, email=email)
@@ -1184,10 +1321,54 @@ class ProjectUsageView(AdminRequiredMixin, ProjectUrlContextMixin, View):
         interval = request.GET.get("interval", "months")
         measure = request.GET.get("measure", "count")
         platform = request.GET.get("platform", "")
+        category_set = request.GET.get("category_set", "default")
 
         context = self.get_project_context(object_id, project)
-        context.update(get_usage_data(project, interval, measure, platform))
+        context.update(get_usage_data(project, interval, measure, platform, category_set))
+        context["show_category_selector"] = settings.SHOW_CATEGORY_SELECTOR_IN_USAGE_DASHBOARD
         return render(request, "projects/project_usage.html", context)
+
+
+class ProjectInstanceHealthView(AdminRequiredMixin, ProjectUrlContextMixin, View):
+    def get(self, request, object_id):
+        if not user_can_view_instance_health(request.user):
+            raise Http404("Instance health is not available.")
+
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
+        context = self.get_project_context(object_id, project)
+        context.update(get_instance_health_data(request.GET.get("window", DEFAULT_WINDOW)))
+        context["alert_configs"] = get_alert_configs(InstanceHealthAlertsState.load())
+        return render(request, "projects/project_instance_health.html", context)
+
+    def post(self, request, object_id):
+        if not user_can_view_instance_health(request.user):
+            raise Http404("Instance health is not available.")
+
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
+        update_alert_settings(InstanceHealthAlertsState.load(), request.POST)
+
+        context = self.get_project_context(object_id, project)
+        context["alert_configs"] = get_alert_configs(InstanceHealthAlertsState.load())
+        context["alerts_saved"] = True
+        return render(request, "projects/partials/instance_health_alerts_form.html", context)
+
+
+class ProjectBotResourceUsageView(AdminRequiredMixin, ProjectUrlContextMixin, View):
+    def get(self, request, object_id):
+        if not user_can_view_bot_resource_usage(request.user):
+            raise Http404("Bot resource usage is not available.")
+
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
+        context = self.get_project_context(object_id, project)
+        context.update(
+            get_bot_resource_usage_data(
+                project,
+                window=request.GET.get("window", BOT_RESOURCE_USAGE_DEFAULT_WINDOW),
+                platform=request.GET.get("platform", ""),
+                recording=request.GET.get("recording", ""),
+            )
+        )
+        return render(request, "projects/project_bot_resource_usage.html", context)
 
 
 class ProjectBillingView(AdminRequiredMixin, ProjectUrlContextMixin, ListView):
@@ -1197,12 +1378,26 @@ class ProjectBillingView(AdminRequiredMixin, ProjectUrlContextMixin, ListView):
 
     def get_queryset(self):
         project = get_project_for_user(user=self.request.user, project_object_id=self.kwargs["object_id"])
-        return CreditTransaction.objects.filter(organization=project.organization).order_by("-created_at")
+        queryset = CreditTransaction.objects.filter(organization=project.organization)
+
+        # Apply transaction type filter if provided. "added" shows only
+        # transactions where credits were added (positive delta), "deducted"
+        # shows only transactions where credits were deducted (negative delta).
+        transaction_type = self.request.GET.get("transaction_type", "").strip()
+        if transaction_type == "added":
+            queryset = queryset.filter(centicredits_delta__gt=0)
+        elif transaction_type == "deducted":
+            queryset = queryset.filter(centicredits_delta__lt=0)
+
+        return queryset.order_by("-created_at")
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         project = get_project_for_user(user=self.request.user, project_object_id=self.kwargs["object_id"])
         context.update(self.get_project_context(self.kwargs["object_id"], project))
+
+        # Add filter parameters to context for maintaining state
+        context["filter_params"] = {"transaction_type": self.request.GET.get("transaction_type", "")}
 
         # Check if organization has a valid payment method
         has_payment_method = False

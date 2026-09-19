@@ -1,6 +1,8 @@
+import json
 import os
 import threading
 import time
+from types import SimpleNamespace
 from unittest.mock import MagicMock, call, patch
 
 import kubernetes
@@ -42,6 +44,7 @@ from bots.models import (
 )
 from bots.tests.mock_data import create_mock_file_uploader, create_mock_google_meet_driver
 from bots.web_bot_adapter.ui_methods import UiLoginRequiredException, UiRetryableException
+from bots.web_bot_adapter.web_bot_adapter import WebBotAdapter
 
 
 @override_settings(
@@ -362,6 +365,80 @@ class TestGoogleMeetBot2(TransactionTestCase):
             # Close the database connection since we're in a thread
             connection.close()
 
+    @patch("bots.models.Bot.create_debug_recording", return_value=False)
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.AzureFileUploader")
+    def test_fatal_error_when_websocket_server_fails_to_start(
+        self,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+        mock_create_debug_recording,
+    ):
+        # Configure the mock uploader
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        # Mock the Chrome driver
+        mock_driver = create_mock_google_meet_driver()
+        MockChromeDriver.return_value = mock_driver
+
+        # Mock virtual display
+        mock_display = MagicMock()
+        MockDisplay.return_value = mock_display
+
+        # Keep a reference to the real implementation so we exercise its actual failure
+        # path (the timeout loop and the raised exception), just with a short timeout so
+        # the test doesn't block for the full 10 seconds.
+        real_wait_for_websocket_server_to_start = WebBotAdapter.wait_for_websocket_server_to_start
+
+        def wait_for_websocket_server_to_start_with_short_timeout(adapter_self, timeout_seconds=1):
+            return real_wait_for_websocket_server_to_start(adapter_self, timeout_seconds=1)
+
+        # Simulate the websocket server never coming up: run_websocket_server does nothing,
+        # so self.websocket_port is never set and wait_for_websocket_server_to_start() raises.
+        with (
+            patch.object(WebBotAdapter, "run_websocket_server", return_value=None),
+            patch.object(WebBotAdapter, "wait_for_websocket_server_to_start", wait_for_websocket_server_to_start_with_short_timeout),
+        ):
+            # Create bot controller
+            controller = BotController(self.bot.id)
+
+            # Run the bot in a separate thread since it has an event loop
+            bot_thread = threading.Thread(target=controller.run)
+            bot_thread.daemon = True
+            bot_thread.start()
+
+            # Give the bot time to attempt init, fail to start the websocket server,
+            # and transition to FATAL_ERROR
+            bot_thread.join(timeout=10)
+
+            # Refresh the bot from the database
+            self.bot.refresh_from_db()
+
+            # The bot should have transitioned to FATAL_ERROR because the websocket server never started
+            self.assertEqual(self.bot.state, BotStates.FATAL_ERROR)
+
+            # Verify that a FATAL_ERROR event was created with the internal error sub type
+            fatal_error_event = self.bot.bot_events.filter(
+                event_type=BotEventTypes.FATAL_ERROR,
+                event_sub_type=BotEventSubTypes.FATAL_ERROR_ATTENDEE_INTERNAL_ERROR,
+            ).first()
+            self.assertIsNotNone(fatal_error_event)
+            self.assertEqual(fatal_error_event.old_state, BotStates.JOINING)
+            self.assertEqual(fatal_error_event.new_state, BotStates.FATAL_ERROR)
+
+            # The websocket startup failure should be captured in the event metadata so it's diagnosable
+            self.assertIn("WebSocket server failed to start", fatal_error_event.metadata["error"])
+
+            # Cleanup
+            controller.cleanup()
+            bot_thread.join(timeout=5)
+
+            # Close the database connection since we're in a thread
+            connection.close()
+
     @patch("kubernetes.client.CoreV1Api")
     @patch("kubernetes.config.load_incluster_config")
     @patch("kubernetes.config.load_kube_config")
@@ -369,6 +446,30 @@ class TestGoogleMeetBot2(TransactionTestCase):
         # Set up mock Kubernetes API
         mock_k8s_api = MagicMock()
         MockCoreV1Api.return_value = mock_k8s_api
+
+        # The pod was created but its container never started (stuck Pending with
+        # ImagePullBackOff) — this is the failure mode the diagnostics capture targets.
+        mock_k8s_api.read_namespaced_pod.return_value = SimpleNamespace(
+            status=SimpleNamespace(
+                phase="Pending",
+                reason=None,
+                message=None,
+                conditions=[SimpleNamespace(type="PodScheduled", status="True", reason=None, message=None)],
+                container_statuses=[
+                    SimpleNamespace(
+                        name="bot",
+                        ready=False,
+                        restart_count=0,
+                        state=SimpleNamespace(
+                            waiting=SimpleNamespace(reason="ImagePullBackOff", message="Back-off pulling image"),
+                            terminated=None,
+                            running=None,
+                        ),
+                    )
+                ],
+            )
+        )
+        mock_k8s_api.list_namespaced_event.return_value = SimpleNamespace(items=[SimpleNamespace(type="Warning", reason="Failed", message="Failed to pull image", count=3, last_timestamp=None)])
 
         # Set up config.load_incluster_config to raise ConfigException so load_kube_config gets called
         mock_load_incluster_config.side_effect = kubernetes.config.config_exception.ConfigException("Mock ConfigException")
@@ -404,6 +505,45 @@ class TestGoogleMeetBot2(TransactionTestCase):
         # Verify Kubernetes pod deletion was attempted with the correct pod name
         pod_name = self.bot.k8s_pod_name()
         mock_k8s_api.delete_namespaced_pod.assert_called_once_with(name=pod_name, namespace="attendee", grace_period_seconds=0)
+
+        # Verify the launch failure was captured into the event metadata so it's diagnosable
+        diagnostics = json.loads(fatal_error_event.metadata["infrastructure_information"])
+        self.assertTrue(diagnostics["pod_found"])
+        self.assertEqual(diagnostics["phase"], "Pending")
+        self.assertEqual(diagnostics["container_statuses"][0]["reason"], "ImagePullBackOff")
+        self.assertEqual(diagnostics["events"][0]["reason"], "Failed")
+
+    @patch("kubernetes.client.CoreV1Api")
+    @patch("kubernetes.config.load_incluster_config")
+    @patch("kubernetes.config.load_kube_config")
+    def test_terminate_bots_that_never_launched_when_pod_already_gone(self, mock_load_kube_config, mock_load_incluster_config, MockCoreV1Api):
+        # If the pod has already disappeared (e.g. node scaled down), diagnostics capture
+        # must still record the failure rather than blow up.
+        mock_k8s_api = MagicMock()
+        MockCoreV1Api.return_value = mock_k8s_api
+        mock_k8s_api.read_namespaced_pod.side_effect = kubernetes.client.ApiException(status=404)
+        mock_k8s_api.list_namespaced_event.return_value = SimpleNamespace(items=[])
+        mock_load_incluster_config.side_effect = kubernetes.config.config_exception.ConfigException("Mock ConfigException")
+
+        two_days_ago = timezone.now() - timezone.timedelta(days=2)
+        self.bot.first_heartbeat_timestamp = None
+        self.bot.last_heartbeat_timestamp = None
+        self.bot.state = BotStates.JOINING
+        self.bot.created_at = two_days_ago
+        self.bot.save()
+
+        with patch.dict(os.environ, {"LAUNCH_BOT_METHOD": "kubernetes"}):
+            from bots.management.commands.clean_up_bots_with_heartbeat_timeout_or_that_never_launched import Command
+
+            Command().handle()
+
+        self.bot.refresh_from_db()
+        self.assertEqual(self.bot.state, BotStates.FATAL_ERROR)
+        fatal_error_event = self.bot.bot_events.filter(event_type=BotEventTypes.FATAL_ERROR, event_sub_type=BotEventSubTypes.FATAL_ERROR_BOT_NOT_LAUNCHED).first()
+        self.assertIsNotNone(fatal_error_event)
+        diagnostics = json.loads(fatal_error_event.metadata["infrastructure_information"])
+        self.assertFalse(diagnostics["pod_found"])
+        self.assertEqual(diagnostics["pod_read_error"], "not_found")
 
     def test_recent_bots_with_no_heartbeat_not_terminated(self):
         # Create a bot that was created 30 minutes ago but never launched
@@ -1754,6 +1894,7 @@ class TestGoogleMeetBot2(TransactionTestCase):
         controller.per_participant_non_streaming_audio_input_manager = MagicMock()
         controller.closed_caption_manager = MagicMock()
         controller.screen_and_audio_recorder = None
+        controller.room_sync_client = None
         adapter = controller.get_google_meet_bot_adapter()
 
         self.assertTrue(adapter.google_meet_bot_login_is_available)

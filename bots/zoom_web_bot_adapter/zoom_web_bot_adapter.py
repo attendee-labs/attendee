@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Callable
 
 import jwt
+from django.conf import settings
 
 from bots.meeting_url_utils import parse_zoom_join_url
 from bots.models import RecordingViews
@@ -72,10 +73,12 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
         should_ask_for_recording_permission: bool,
         zoom_tokens: dict,
         modify_dom_for_video_recording: bool,
+        webinar_user_email: str | None = None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
         self.modify_dom_for_video_recording = modify_dom_for_video_recording
+        self.webinar_user_email = webinar_user_email
         self.meeting_id, self.meeting_password = parse_zoom_join_url(self.meeting_url)
         self.zoom_oauth_credentials_callback = zoom_oauth_credentials_callback
 
@@ -138,6 +141,7 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
                 joinToken: {json.dumps(self.zoom_tokens.get("join_token", ""))},
                 appPrivilegeToken: {json.dumps(self.zoom_tokens.get("app_privilege_token", ""))},
                 onBehalfToken: {json.dumps(onbehalf_token or "")},
+                webinarUserEmail: {json.dumps(self.webinar_user_email or "")},
                 modifyDomForVideoRecording: {"true" if self.modify_dom_for_video_recording else "false"},
             }}
         """
@@ -219,3 +223,18 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
             return False
 
         return super().subclass_specific_use_disable_gpu_chrome_option()
+
+    def subclass_specific_domain_allowlist(self):
+        return [
+            "www.zoom.com",
+            "127.0.0.1",
+        ]
+
+    def subclass_specific_chrome_policies(self):
+        if not settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:
+            return {}
+
+        return {
+            "URLBlocklist": ["*"],
+            "URLAllowlist": self.subclass_specific_domain_allowlist(),
+        }

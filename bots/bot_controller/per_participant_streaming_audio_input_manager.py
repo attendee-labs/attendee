@@ -124,6 +124,7 @@ class PerParticipantStreamingAudioInputManager:
                 metadata=metadata_list,
                 redaction_settings=self.bot.transcription_settings.deepgram_redaction_settings(),
                 replace_settings=self.bot.transcription_settings.deepgram_replace_settings(),
+                mip_opt_out=self.bot.transcription_settings.deepgram_mip_opt_out(),
             )
         elif self.transcription_provider == TranscriptionProviders.KYUTAI:
 

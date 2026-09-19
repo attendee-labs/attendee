@@ -29,13 +29,15 @@ def launch_bot(bot):
         if not create_pod_result.get("created"):
             logger.error(f"Bot {bot.object_id} ({bot.id}) failed to launch via Kubernetes.")
             try:
+                event_metadata = None
+                if settings.STORE_INFRASTRUCTURE_INFORMATION_IN_BOT_EVENT_METADATA:
+                    event_metadata = {"create_pod_result": json.dumps(create_pod_result)}
+
                 BotEventManager.create_event(
                     bot=bot,
                     event_type=BotEventTypes.FATAL_ERROR,
                     event_sub_type=BotEventSubTypes.FATAL_ERROR_BOT_NOT_LAUNCHED,
-                    event_metadata={
-                        "create_pod_result": json.dumps(create_pod_result),
-                    },
+                    event_metadata=event_metadata,
                 )
             except Exception as e:
                 logger.error(f"Failed to create fatal error bot not launched event for bot {bot.object_id} ({bot.id}): {str(e)}")

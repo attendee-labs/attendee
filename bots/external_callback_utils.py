@@ -2,9 +2,10 @@ import logging
 from typing import Dict, Optional
 
 import requests
+from django.conf import settings
 
 from bots.models import WebhookSecret
-from bots.webhook_utils import sign_payload
+from bots.webhook_utils import sign_payload, url_is_public
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +71,9 @@ def make_callback_request(url: str, bot, callback_type: str, additional_data: Op
     try:
         logger.info(f"Making {callback_type} callback request for bot {bot.object_id} to {url}")
 
+        if settings.REQUIRE_PUBLIC_WEBHOOK_URLS and not url_is_public(url):
+            raise CallbackError("Callback URL must be public")
+
         response = requests.post(
             url,
             json=callback_data,
@@ -78,6 +82,7 @@ def make_callback_request(url: str, bot, callback_type: str, additional_data: Op
                 "User-Agent": "Attendee-Callback/1.0",
                 "X-Webhook-Signature": signature,
             },
+            allow_redirects=False,
             timeout=30,  # 30-second timeout
         )
 

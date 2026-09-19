@@ -12,6 +12,7 @@ https://docs.djangoproject.com/en/5.1/ref/settings/
 
 import copy
 import os
+import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -207,7 +208,9 @@ if os.getenv("LAUNCH_BOT_METHOD") != "kubernetes" and os.getenv("LAUNCH_BOT_METH
     # Needed because latest Zoom SDK has segfault issue unless we recreate the process after each bot.
     CELERY_WORKER_MAX_TASKS_PER_CHILD = 1
 
-if os.getenv("IS_A_BOT_POD", "false") == "true" and os.getenv("CONSERVE_BOT_POD_REDIS_CONNECTIONS", "false") == "true":
+IS_A_BOT_POD = os.getenv("IS_A_BOT_POD", "false") == "true"
+
+if IS_A_BOT_POD and os.getenv("CONSERVE_BOT_POD_REDIS_CONNECTIONS", "false") == "true":
     # Setting this to 1 means that bot pods keep one celery broker pool connection alive for the duration of the bot.
     # Note: this results in 2 underlying Redis connections (one for commands, one for pub/sub).
     # Setting this to 0 means that no dedicated redis connection is created.
@@ -224,6 +227,13 @@ REST_FRAMEWORK = {
 }
 
 DISABLE_RATE_LIMITING = os.getenv("DISABLE_RATE_LIMITING", "false") == "true"
+
+# When enabled, the team management UI exposes granular per-project permissions for viewing
+# recording content and managing API keys.
+ENABLE_GRANULAR_PERMISSIONS = os.getenv("ENABLE_GRANULAR_PERMISSIONS", "false") == "true"
+
+ENABLE_VIEWING_RECORDING_CONTENT = os.getenv("ENABLE_VIEWING_RECORDING_CONTENT", "true") == "true"
+
 SPECTACULAR_SETTINGS = {
     "TITLE": "Attendee API",
     "DESCRIPTION": "Meetings bots made easy",
@@ -247,6 +257,34 @@ LOG_FORMATTERS = {
     "json": {"class": "attendee.logging.ISOJsonFormatter", "format": "%(timestamp)s %(name)s %(levelname)s %(message)s"},
 }
 
+# When enabled on a bot pod, the pod's application logs are also written to a size capped file
+# which is attached to the bot's last event as a debug artifact when the bot cleans up.
+SAVE_BOT_LOGS_TO_DASHBOARD = os.getenv("SAVE_BOT_LOGS_TO_DASHBOARD", "false") == "true"
+BOT_POD_LOG_FILE_PATH = os.getenv("BOT_POD_LOG_FILE_PATH", "/tmp/bot_pod_logs.log")
+BOT_POD_LOG_FILE_MAX_BYTES = int(os.getenv("BOT_POD_LOG_FILE_MAX_BYTES", 25 * 1024 * 1024))
+
+# Log handlers - shared across environments
+LOG_HANDLERS = {
+    "console": {
+        "class": "logging.StreamHandler",
+        "stream": sys.stdout,
+        "formatter": os.getenv("ATTENDEE_LOG_FORMAT"),  # `None` (default formatter) is the default
+    },
+}
+
+if IS_A_BOT_POD and SAVE_BOT_LOGS_TO_DASHBOARD:
+    LOG_HANDLERS["bot_pod_log_file"] = {
+        "class": "logging.handlers.RotatingFileHandler",
+        "filename": BOT_POD_LOG_FILE_PATH,
+        # A single backup of half the cap keeps the most recent logs while staying under the cap.
+        "maxBytes": BOT_POD_LOG_FILE_MAX_BYTES // 2,
+        "backupCount": 1,
+        "formatter": os.getenv("ATTENDEE_LOG_FORMAT"),  # `None` (default formatter) is the default
+    }
+
+# The handlers every logger writes to.
+LOG_HANDLER_NAMES = list(LOG_HANDLERS)
+
 # Set up django storage backend
 # Use s3 by default, but if the STORAGE_PROTOCOL env var is set to "azure", use azure storage
 STORAGE_PROTOCOL = os.getenv("STORAGE_PROTOCOL", "s3")
@@ -258,6 +296,10 @@ USE_REMOTE_STORAGE_FOR_AUDIO_CHUNKS = os.getenv("USE_REMOTE_STORAGE_FOR_AUDIO_CH
 FALLBACK_TO_DB_STORAGE_FOR_AUDIO_CHUNKS_IF_REMOTE_STORAGE_FAILS = os.getenv("FALLBACK_TO_DB_STORAGE_FOR_AUDIO_CHUNKS_IF_REMOTE_STORAGE_FAILS", "false") == "true"
 AWS_AUDIO_CHUNK_STORAGE_BUCKET_NAME = os.getenv("AWS_AUDIO_CHUNK_STORAGE_BUCKET_NAME") or AWS_RECORDING_STORAGE_BUCKET_NAME
 AZURE_AUDIO_CHUNK_STORAGE_CONTAINER_NAME = os.getenv("AZURE_AUDIO_CHUNK_STORAGE_CONTAINER_NAME") or AZURE_RECORDING_STORAGE_CONTAINER_NAME
+
+# Bot debug screenshot storage settings
+AWS_BOT_DEBUG_SCREENSHOT_STORAGE_BUCKET_NAME = os.getenv("AWS_BOT_DEBUG_SCREENSHOT_STORAGE_BUCKET_NAME") or AWS_RECORDING_STORAGE_BUCKET_NAME
+AZURE_BOT_DEBUG_SCREENSHOT_STORAGE_CONTAINER_NAME = os.getenv("AZURE_BOT_DEBUG_SCREENSHOT_STORAGE_CONTAINER_NAME") or AZURE_RECORDING_STORAGE_CONTAINER_NAME
 
 if STORAGE_PROTOCOL == "azure":
     DEFAULT_STORAGE_BACKEND = {
@@ -274,6 +316,9 @@ if STORAGE_PROTOCOL == "azure":
 
     AUDIO_CHUNK_STORAGE_BACKEND = copy.deepcopy(DEFAULT_STORAGE_BACKEND)
     AUDIO_CHUNK_STORAGE_BACKEND["OPTIONS"]["azure_container"] = AZURE_AUDIO_CHUNK_STORAGE_CONTAINER_NAME
+
+    BOT_DEBUG_SCREENSHOT_STORAGE_BACKEND = copy.deepcopy(DEFAULT_STORAGE_BACKEND)
+    BOT_DEBUG_SCREENSHOT_STORAGE_BACKEND["OPTIONS"]["azure_container"] = AZURE_BOT_DEBUG_SCREENSHOT_STORAGE_CONTAINER_NAME
 else:
     DEFAULT_STORAGE_BACKEND = {
         "BACKEND": "storages.backends.s3.S3Storage",
@@ -290,11 +335,14 @@ else:
     AUDIO_CHUNK_STORAGE_BACKEND = copy.deepcopy(DEFAULT_STORAGE_BACKEND)
     AUDIO_CHUNK_STORAGE_BACKEND["OPTIONS"]["bucket_name"] = AWS_AUDIO_CHUNK_STORAGE_BUCKET_NAME
 
+    BOT_DEBUG_SCREENSHOT_STORAGE_BACKEND = copy.deepcopy(DEFAULT_STORAGE_BACKEND)
+    BOT_DEBUG_SCREENSHOT_STORAGE_BACKEND["OPTIONS"]["bucket_name"] = AWS_BOT_DEBUG_SCREENSHOT_STORAGE_BUCKET_NAME
+
 
 STORAGES = {
     "default": DEFAULT_STORAGE_BACKEND,
     "recordings": RECORDING_STORAGE_BACKEND,
-    "bot_debug_screenshots": RECORDING_STORAGE_BACKEND,
+    "bot_debug_screenshots": BOT_DEBUG_SCREENSHOT_STORAGE_BACKEND,
     "audio_chunks": AUDIO_CHUNK_STORAGE_BACKEND,
     "staticfiles": {
         "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
@@ -309,15 +357,35 @@ CHARGE_CREDITS_FOR_BOTS = os.getenv("CHARGE_CREDITS_FOR_BOTS", "false") == "true
 BOT_POD_NAMESPACE = os.getenv("BOT_POD_NAMESPACE", "attendee")
 WEBPAGE_STREAMER_POD_NAMESPACE = os.getenv("WEBPAGE_STREAMER_POD_NAMESPACE", "attendee-webpage-streamer")
 REQUIRE_HTTPS_WEBHOOKS = os.getenv("REQUIRE_HTTPS_WEBHOOKS", "true") == "true"
+REQUIRE_PUBLIC_WEBHOOK_URLS = os.getenv("REQUIRE_PUBLIC_WEBHOOK_URLS", "false") == "true"
+SHOW_CATEGORY_SELECTOR_IN_USAGE_DASHBOARD = os.getenv("SHOW_CATEGORY_SELECTOR_IN_USAGE_DASHBOARD", "false") == "true"
 REQUIRE_STRING_VALUES_IN_METADATA = os.getenv("REQUIRE_STRING_VALUES_IN_METADATA", "true") == "true"
 MAX_METADATA_LENGTH = int(os.getenv("MAX_METADATA_LENGTH", 1000))
 SITE_DOMAIN = os.getenv("SITE_DOMAIN", "app.attendee.dev")
 MASK_TRANSCRIPT_IN_LOGS = os.getenv("MASK_TRANSCRIPT_IN_LOGS", "false") == "true"
 ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME = os.getenv("ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME", "false") == "true"
+MONITOR_DOMAIN_ALLOWLIST_IN_CHROME = ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME or (os.getenv("MONITOR_DOMAIN_ALLOWLIST_IN_CHROME", "false") == "true")
 CUSTOM_BOT_POD_SPEC_TYPES = os.getenv("CUSTOM_BOT_POD_SPEC_TYPES", "").split(",") if os.getenv("CUSTOM_BOT_POD_SPEC_TYPES") else []
 GLOBAL_WEBHOOK_DELIVERIES_PER_SECOND_RATE_LIMIT = int(os.getenv("GLOBAL_WEBHOOK_DELIVERIES_PER_SECOND_RATE_LIMIT")) if os.getenv("GLOBAL_WEBHOOK_DELIVERIES_PER_SECOND_RATE_LIMIT") else None
 LOG_BOT_STATE_CHANGES = os.getenv("LOG_BOT_STATE_CHANGES", "false") == "true"
 LAUNCH_ADHOC_BOTS_ASYNC = os.getenv("LAUNCH_ADHOC_BOTS_ASYNC", "false") == "true"
+SHOW_TEAMS_BOT_IDENTIFICATION_CREDENTIALS = os.getenv("SHOW_TEAMS_BOT_IDENTIFICATION_CREDENTIALS", "false") == "true"
+
+STORE_INFRASTRUCTURE_INFORMATION_IN_BOT_EVENT_METADATA = os.getenv("STORE_INFRASTRUCTURE_INFORMATION_IN_BOT_EVENT_METADATA", "true") == "true"
+
+CONCURRENT_BOTS_LIMIT = int(os.getenv("CONCURRENT_BOTS_LIMIT", 2500))
+
+MAILGUN_VALIDATION_API_KEY = os.getenv("MAILGUN_VALIDATION_API_KEY")
+BYPASS_MAILGUN_VALIDATION_SUBSTRING = os.getenv("BYPASS_MAILGUN_VALIDATION_SUBSTRING")
+
+# After the bots recording exceeds this size, we will degrade the video recording to black to conserve storage space.
+BOT_RECORDING_VIDEO_DEGRADE_THRESHOLD_BYTES = int(os.getenv("BOT_RECORDING_VIDEO_DEGRADE_THRESHOLD_BYTES")) if os.getenv("BOT_RECORDING_VIDEO_DEGRADE_THRESHOLD_BYTES") else None
+
+SAVE_INSTANCE_HEALTH_SNAPSHOTS = os.getenv("SAVE_INSTANCE_HEALTH_SNAPSHOTS", "false") == "true"
+INSTANCE_HEALTH_ONLY_VIEWABLE_BY_SUPERUSERS = os.getenv("INSTANCE_HEALTH_ONLY_VIEWABLE_BY_SUPERUSERS", "false") == "true"
+
+SAVE_BOT_RESOURCE_SNAPSHOTS = str(os.getenv("SAVE_BOT_RESOURCE_SNAPSHOTS", "false")).lower() == "true"
+BOT_RESOURCE_USAGE_ONLY_VIEWABLE_BY_SUPERUSERS = os.getenv("BOT_RESOURCE_USAGE_ONLY_VIEWABLE_BY_SUPERUSERS", "false") == "true"
 
 # Content Security Policy
 if os.getenv("ENABLE_CSP", "false") == "true":
