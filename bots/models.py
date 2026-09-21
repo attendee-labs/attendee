@@ -1514,6 +1514,7 @@ class BotEventSubTypes(models.IntegerChoices):
     BOT_RECORDING_PERMISSION_DENIED_WEBINAR_ATTENDEE_NEEDS_PANELIST_PROMOTION = 29, "Bot recording permission denied - Bot joined webinar as attendee and needs to be promoted to panelist to record"
     COULD_NOT_JOIN_MEETING_ZOOM_APP_CANNOT_JOIN_ANONYMOUSLY = 30, "Bot could not join Zoom meeting - Zoom app cannot join anonymously. To fix pass OBF or ZAK token. See https://docs.attendee.dev/guides/zoom/zoomoauth"
     FATAL_ERROR_GLOBAL_RUNTIME_TIMEOUT = 31, "Fatal error - Global runtime timeout"
+    COULD_NOT_JOIN_MEETING_LEAVE_REQUESTED_BEFORE_BOT_JOINED = 32, "Bot could not join meeting - Leave requested before bot joined"
 
     @classmethod
     def sub_type_to_api_code(cls, value):
@@ -1550,6 +1551,7 @@ class BotEventSubTypes(models.IntegerChoices):
             cls.BOT_RECORDING_PERMISSION_DENIED_WEBINAR_ATTENDEE_NEEDS_PANELIST_PROMOTION: "webinar_attendee_needs_panelist_promotion",
             cls.COULD_NOT_JOIN_MEETING_ZOOM_APP_CANNOT_JOIN_ANONYMOUSLY: "zoom_app_cannot_join_anonymously",
             cls.FATAL_ERROR_GLOBAL_RUNTIME_TIMEOUT: "global_runtime_timeout",
+            cls.COULD_NOT_JOIN_MEETING_LEAVE_REQUESTED_BEFORE_BOT_JOINED: "leave_requested_before_bot_joined",
         }
         return mapping.get(value)
 
@@ -1610,6 +1612,7 @@ class BotEvent(models.Model):
                             | Q(event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_MEETING_NOT_FOUND)
                             | Q(event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_BLOCKED_BY_CAPTCHA)
                             | Q(event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_ZOOM_APP_CANNOT_JOIN_ANONYMOUSLY)
+                            | Q(event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_LEAVE_REQUESTED_BEFORE_BOT_JOINED)
                         )
                     )
                     |
@@ -1653,7 +1656,7 @@ class BotEventManager:
             "to": BotStates.STAGED,
         },
         BotEventTypes.COULD_NOT_JOIN: {
-            "from": [BotStates.JOINING, BotStates.WAITING_ROOM],
+            "from": [BotStates.JOINING, BotStates.WAITING_ROOM, BotStates.LEAVING],
             "to": BotStates.FATAL_ERROR,
         },
         BotEventTypes.FATAL_ERROR: {
@@ -1712,6 +1715,7 @@ class BotEventManager:
                 BotStates.JOINING,
                 BotStates.JOINING_BREAKOUT_ROOM,
                 BotStates.LEAVING_BREAKOUT_ROOM,
+                BotStates.STAGED,
             ],
             "to": BotStates.LEAVING,
         },

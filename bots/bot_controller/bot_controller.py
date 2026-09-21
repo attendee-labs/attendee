@@ -2094,8 +2094,17 @@ class BotController:
             logger.info("Received message that meeting ended")
             self.flush_utterances()
             if self.bot_in_db.state == BotStates.LEAVING:
-                # The bot decided to leave on its own, so naming a remover here would only muddy why it left.
-                new_bot_event = BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.BOT_LEFT_MEETING)
+                last_bot_event = self.bot_in_db.last_bot_event()
+                state_when_leave_requested = last_bot_event.old_state if last_bot_event else None
+                bot_was_staged_when_leave_requested = state_when_leave_requested == BotStates.STAGED
+                if bot_was_staged_when_leave_requested:
+                    new_bot_event = BotEventManager.create_event(
+                        bot=self.bot_in_db,
+                        event_type=BotEventTypes.COULD_NOT_JOIN,
+                        event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_LEAVE_REQUESTED_BEFORE_BOT_JOINED,
+                    )
+                else:
+                    new_bot_event = BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.BOT_LEFT_MEETING)
             else:
                 new_bot_event = BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.MEETING_ENDED, event_metadata=self.get_remover_metadata(message))
 
