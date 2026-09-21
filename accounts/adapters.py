@@ -29,52 +29,6 @@ def get_request_ip(request=None) -> str:
     return request.META.get("REMOTE_ADDR") or "unknown"
 
 
-def is_crowdsec_bad_for_signup(result: dict) -> bool:
-    try:
-        scores = result.get("scores") or {}
-        # An IP that has been quiet for a while has empty last_day scores, so fall back to
-        # overall to catch known offenders whose activity is stale.
-        windows = [scores.get("last_day") or {}, scores.get("overall") or {}]
-
-        return result.get("reputation") == "malicious" or (bool(result.get("behaviors")) and any(window.get("threat", 0) >= 3 or window.get("aggressiveness", 0) >= 3 for window in windows))
-    except Exception as exc:
-        logger.warning(
-            f"Could not interpret Crowdsec response {result}",
-            exc_info=exc,
-        )
-        return False
-
-
-def validate_ip_with_crowdsec(email: str, ip: str) -> None:
-    if not ip or ip == "unknown":
-        return
-
-    try:
-        response = requests.get(
-            f"https://cti.api.crowdsec.net/v2/smoke/{ip}",
-            headers={"x-api-key": settings.CROWDSEC_API_KEY},
-            timeout=(2, 3),  # connect timeout, read timeout
-        )
-        # Crowdsec returns 404 for addresses it has never seen, which means nothing bad is known about them.
-        if response.status_code == 404:
-            logger.warning(f"Ignoring Crowdsec validation for unknown IP {ip}")
-            return
-        response.raise_for_status()
-        result = response.json()
-    except Exception as exc:
-        logger.warning(
-            f"Crowdsec IP validation failed for email {email} from ip {ip}",
-            exc_info=exc,
-        )
-        return
-
-    logger.info(f"Crowdsec IP validation response for email {email} from ip {ip}: {result}")
-
-    if is_crowdsec_bad_for_signup(result):
-        logger.warning(f"Blocking signup for email {email} from ip {ip} flagged by Crowdsec")
-        raise ValidationError("We are unable to complete your sign up at this time.")
-
-
 def validate_ip_with_cleantalk(email: str, ip: str) -> None:
     if not ip or ip == "unknown":
         return
@@ -190,9 +144,6 @@ class StandardAccountAdapter(DefaultAccountAdapter):
 
         if settings.CLEANTALK_API_KEY:
             validate_ip_with_cleantalk(email, get_request_ip())
-
-        if settings.CROWDSEC_API_KEY:
-            validate_ip_with_crowdsec(email, get_request_ip())
 
         if settings.USERCHECK_API_KEY:
             validate_email_with_usercheck(email)
