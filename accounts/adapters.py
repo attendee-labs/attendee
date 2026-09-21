@@ -1,14 +1,74 @@
 import logging
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import quote, urlsplit, urlunsplit
 
 import requests
 from allauth.account.adapter import DefaultAccountAdapter
+from allauth.core import context
 from django.conf import settings
 from django.contrib.auth import login
 from django.core.exceptions import ValidationError
 from django.urls import reverse
 
 logger = logging.getLogger(__name__)
+
+
+def get_request_ip(request=None) -> str:
+    # Callers that have the request (e.g. views) should pass it. Allauth hooks like
+    # clean_email don't get one, so fall back to the contextvar allauth sets per request.
+    if request is None:
+        request = getattr(context, "request", None)
+    if request is None:
+        return "unknown"
+
+    # We sit behind a proxy, so REMOTE_ADDR is the proxy's address. The first entry in
+    # X-Forwarded-For is the client, the rest are the proxies it passed through.
+    forwarded_for = request.META.get("HTTP_X_FORWARDED_FOR")
+    if forwarded_for:
+        return forwarded_for.split(",")[0].strip()
+
+    return request.META.get("REMOTE_ADDR") or "unknown"
+
+
+def validate_ip_with_cleantalk(email: str, ip: str) -> None:
+    if not ip or ip == "unknown":
+        return
+
+    try:
+        response = requests.get(
+            "https://api.cleantalk.org/",
+            params={
+                "method_name": "spam_check",
+                "auth_key": settings.CLEANTALK_API_KEY,
+                "ip": ip,
+            },
+            timeout=(2, 3),
+        )
+        response.raise_for_status()
+        result = response.json()
+
+        if result.get("error_no"):
+            raise ValueError(f"CleanTalk API error {result.get('error_no')}: {result.get('error_message')}")
+
+        data = result.get("data")
+        if not isinstance(data, dict):
+            raise ValueError(f"Unexpected CleanTalk data: {data!r}")
+
+        record = data.get(ip)
+        if not isinstance(record, dict):
+            raise ValueError(f"Missing CleanTalk result for IP {ip}")
+
+    except Exception as exc:
+        logger.warning(
+            f"CleanTalk IP validation failed for email {email} from ip {ip}",
+            exc_info=exc,
+        )
+        return
+
+    logger.info(f"Cleantalk IP validation response for email {email} from ip {ip}: {record}")
+
+    if str(record.get("appears")) == "1":
+        logger.warning(f"Blocking signup for email {email} from ip {ip} flagged by Cleantalk")
+        raise ValidationError("We are unable to complete your sign up at this time.")
 
 
 def validate_email_with_mailgun(email: str) -> None:
@@ -43,9 +103,50 @@ def validate_email_with_mailgun(email: str) -> None:
         raise ValidationError("This email address does not appear to be valid.")
 
 
+def validate_email_with_usercheck(email: str) -> None:
+    if settings.BYPASS_MAILGUN_VALIDATION_SUBSTRING and settings.BYPASS_MAILGUN_VALIDATION_SUBSTRING in email:
+        return
+
+    try:
+        response = requests.get(
+            f"https://api.usercheck.com/email/{quote(email)}",
+            headers={"Authorization": f"Bearer {settings.USERCHECK_API_KEY}"},
+            timeout=(3, 15),  # connect timeout, read timeout,
+        )
+        response.raise_for_status()
+        validation = response.json()
+    except Exception as exc:
+        logger.warning(
+            f"UserCheck email validation failed for email {email}",
+            exc_info=exc,
+        )
+        return
+
+    logger.info(f"UserCheck email validation response for email {email}: {validation}")
+
+    if validation.get("disposable") or validation.get("relay_domain") or validation.get("free_subdomain"):
+        logger.warning(f"Blocking signup for email {email} flagged as disposable by UserCheck")
+        raise ValidationError("Please use a permanent email address.")
+
+    if validation.get("blocklisted") or validation.get("spam"):
+        logger.warning(f"Blocking signup for email {email} flagged by UserCheck")
+        raise ValidationError("We are unable to complete your sign up at this time.")
+
+    # A domain with no MX records cannot receive our verification email.
+    if validation.get("mx") is False:
+        logger.warning(f"Blocking signup for email {email} with no MX records")
+        raise ValidationError("This email address does not appear to be valid.")
+
+
 class StandardAccountAdapter(DefaultAccountAdapter):
     def clean_email(self, email: str) -> str:
         email = super().clean_email(email)
+
+        if settings.CLEANTALK_API_KEY:
+            validate_ip_with_cleantalk(email, get_request_ip())
+
+        if settings.USERCHECK_API_KEY:
+            validate_email_with_usercheck(email)
 
         if settings.MAILGUN_VALIDATION_API_KEY:
             validate_email_with_mailgun(email)
