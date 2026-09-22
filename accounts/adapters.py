@@ -70,6 +70,16 @@ def validate_ip_with_cleantalk(email: str, ip: str) -> None:
         logger.warning(f"Blocking signup for email {email} from ip {ip} flagged by Cleantalk")
         raise ValidationError("We are unable to complete your sign up at this time.")
 
+    try:
+        spam_frequency_24h = int(record.get("spam_frequency_24h") or 0)
+    except Exception:
+        spam_frequency_24h = 0
+
+    # An IP can be busy attacking other sites without being blacklisted (appears == 0) yet.
+    if spam_frequency_24h > 5:
+        logger.warning(f"Blocking signup for email {email} from ip {ip} with Cleantalk spam_frequency_24h {spam_frequency_24h}")
+        raise ValidationError("We are unable to complete your sign up at this time.")
+
 
 def validate_email_with_mailgun(email: str) -> None:
     if settings.BYPASS_MAILGUN_VALIDATION_SUBSTRING and settings.BYPASS_MAILGUN_VALIDATION_SUBSTRING in email:
