@@ -1949,6 +1949,23 @@ class BotEventManager:
         if bot.join_at.isoformat() != event_metadata["join_at"]:
             raise ValidationError(f"join_at in event_metadata for bot {bot.object_id} for transition to state {BotStates.state_to_api_code(new_state)} is different from the join_at in the database for bot {bot.object_id}")
 
+    @classmethod
+    def validate_could_not_join_event(cls, bot: Bot, old_state: BotStates):
+        # COULD_NOT_JOIN is only valid from LEAVING when the leave was requested before the bot
+        # ever joined. Otherwise a bot that was in the meeting and then left could end in fatal_error.
+        if old_state != BotStates.LEAVING:
+            return
+
+        last_bot_event = bot.last_bot_event()
+        leave_was_requested_before_bot_joined = (
+            last_bot_event is not None
+            and last_bot_event.event_type == BotEventTypes.LEAVE_REQUESTED
+            and last_bot_event.old_state in BotStates.running_but_has_not_joined_states()
+        )
+        if not leave_was_requested_before_bot_joined:
+            state_when_leave_requested = BotStates.state_to_api_code(last_bot_event.old_state) if last_bot_event else None
+            raise ValidationError(f"Event {BotEventTypes.type_to_api_code(BotEventTypes.COULD_NOT_JOIN)} not allowed when bot is leaving from state {state_when_leave_requested}. It is only allowed from leaving if the bot had not joined the meeting when the leave was requested.")
+
     # This method handles sets the state for recordings and credits for when the bot transitions to a post meeting state
     # It returns a dictionary of additional event metadata that should be added to the event
     @classmethod
@@ -2031,6 +2048,9 @@ class BotEventManager:
                     if old_state not in valid_from_states:
                         valid_states_labels = [BotStates.state_to_api_code(state) for state in valid_from_states]
                         raise ValidationError(f"Event {BotEventTypes.type_to_api_code(event_type)} not allowed when bot is in state {BotStates.state_to_api_code(old_state)}. It is only allowed in these states: {', '.join(valid_states_labels)}")
+
+                    if event_type == BotEventTypes.COULD_NOT_JOIN:
+                        cls.validate_could_not_join_event(bot=bot, old_state=old_state)
 
                     # Update bot state based on 'to' definition
                     if callable(transition["to"]):

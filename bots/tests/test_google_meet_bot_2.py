@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, call, patch
 
 import kubernetes
+from django.core.exceptions import ValidationError
 from django.db import connection
 from django.test import tag
 from django.test.testcases import TransactionTestCase, override_settings
@@ -2412,3 +2413,38 @@ class TestGoogleMeetBot2(TransactionTestCase):
         self.assertEqual(could_not_join_event.new_state, BotStates.FATAL_ERROR)
         self.assertEqual(could_not_join_event.event_sub_type, BotEventSubTypes.COULD_NOT_JOIN_MEETING_LEAVE_REQUESTED_BEFORE_BOT_JOINED)
         self.assertEqual(could_not_join_event.metadata["state_when_leave_requested"], "staged")
+
+    def test_could_not_join_rejected_when_leave_requested_after_bot_joined(self):
+        BotEventManager.create_event(bot=self.bot, event_type=BotEventTypes.BOT_JOINED_MEETING)
+        BotEventManager.create_event(bot=self.bot, event_type=BotEventTypes.LEAVE_REQUESTED, event_sub_type=BotEventSubTypes.LEAVE_REQUESTED_USER_REQUESTED)
+        self.bot.refresh_from_db()
+        self.assertEqual(self.bot.state, BotStates.LEAVING)
+
+        with self.assertRaises(ValidationError) as context:
+            BotEventManager.create_event(
+                bot=self.bot,
+                event_type=BotEventTypes.COULD_NOT_JOIN,
+                event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_LEAVE_REQUESTED_BEFORE_BOT_JOINED,
+            )
+        self.assertIn("not allowed when bot is leaving from state joined_not_recording", str(context.exception))
+
+        self.bot.refresh_from_db()
+        self.assertEqual(self.bot.state, BotStates.LEAVING)
+        self.assertEqual(
+            [event.event_type for event in self.bot.bot_events.order_by("created_at")],
+            [BotEventTypes.JOIN_REQUESTED, BotEventTypes.BOT_JOINED_MEETING, BotEventTypes.LEAVE_REQUESTED],
+        )
+
+    def test_could_not_join_allowed_when_leave_requested_before_bot_joined(self):
+        BotEventManager.create_event(bot=self.bot, event_type=BotEventTypes.LEAVE_REQUESTED, event_sub_type=BotEventSubTypes.LEAVE_REQUESTED_USER_REQUESTED)
+        self.bot.refresh_from_db()
+        self.assertEqual(self.bot.state, BotStates.LEAVING)
+
+        BotEventManager.create_event(
+            bot=self.bot,
+            event_type=BotEventTypes.COULD_NOT_JOIN,
+            event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_LEAVE_REQUESTED_BEFORE_BOT_JOINED,
+        )
+
+        self.bot.refresh_from_db()
+        self.assertEqual(self.bot.state, BotStates.FATAL_ERROR)
