@@ -2415,7 +2415,6 @@ class TestGoogleMeetBot2(TransactionTestCase):
         self.assertEqual(could_not_join_event.metadata["state_when_leave_requested"], "staged")
 
     def test_could_not_join_rejected_when_leave_requested_after_bot_joined(self):
-        BotEventManager.create_event(bot=self.bot, event_type=BotEventTypes.BOT_JOINED_MEETING)
         BotEventManager.create_event(bot=self.bot, event_type=BotEventTypes.LEAVE_REQUESTED, event_sub_type=BotEventSubTypes.LEAVE_REQUESTED_USER_REQUESTED)
         self.bot.refresh_from_db()
         self.assertEqual(self.bot.state, BotStates.LEAVING)
@@ -2424,15 +2423,15 @@ class TestGoogleMeetBot2(TransactionTestCase):
             BotEventManager.create_event(
                 bot=self.bot,
                 event_type=BotEventTypes.COULD_NOT_JOIN,
-                event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_LEAVE_REQUESTED_BEFORE_BOT_JOINED,
+                event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_WAITING_ROOM_TIMEOUT_EXCEEDED,
             )
-        self.assertIn("not allowed when bot is leaving from state joined_not_recording", str(context.exception))
+        self.assertIn("Event could_not_join_meeting with sub type waiting_room_timeout_exceeded not allowed when bot is in state leaving", str(context.exception))
 
         self.bot.refresh_from_db()
         self.assertEqual(self.bot.state, BotStates.LEAVING)
         self.assertEqual(
             [event.event_type for event in self.bot.bot_events.order_by("created_at")],
-            [BotEventTypes.JOIN_REQUESTED, BotEventTypes.BOT_JOINED_MEETING, BotEventTypes.LEAVE_REQUESTED],
+            [BotEventTypes.JOIN_REQUESTED, BotEventTypes.LEAVE_REQUESTED],
         )
 
     def test_could_not_join_allowed_when_leave_requested_before_bot_joined(self):
