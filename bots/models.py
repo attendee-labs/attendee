@@ -662,6 +662,10 @@ class BotStates(models.IntegerChoices):
     def pre_meeting_states(cls):
         return [cls.READY, cls.SCHEDULED, cls.STAGED]
 
+    @classmethod
+    def running_but_has_not_joined_states(cls):
+        return [cls.STAGED, cls.JOINING, cls.WAITING_ROOM]
+
 
 class RecordingFormats(models.TextChoices):
     MP4 = "mp4"
@@ -1515,6 +1519,7 @@ class BotEventSubTypes(models.IntegerChoices):
     COULD_NOT_JOIN_MEETING_ZOOM_APP_CANNOT_JOIN_ANONYMOUSLY = 30, "Bot could not join Zoom meeting - Zoom app cannot join anonymously. To fix pass OBF or ZAK token. See https://docs.attendee.dev/guides/zoom/zoomoauth"
     FATAL_ERROR_GLOBAL_RUNTIME_TIMEOUT = 31, "Fatal error - Global runtime timeout"
     COULD_NOT_JOIN_MEETING_LEAVE_REQUESTED_BEFORE_BOT_JOINED = 32, "Bot could not join meeting - Leave requested before bot joined"
+    COULD_NOT_JOIN_MEETING_MEETING_ENDED_BEFORE_BOT_JOINED = 33, "Bot could not join meeting - Meeting ended before bot joined"
 
     @classmethod
     def sub_type_to_api_code(cls, value):
@@ -1552,6 +1557,7 @@ class BotEventSubTypes(models.IntegerChoices):
             cls.COULD_NOT_JOIN_MEETING_ZOOM_APP_CANNOT_JOIN_ANONYMOUSLY: "zoom_app_cannot_join_anonymously",
             cls.FATAL_ERROR_GLOBAL_RUNTIME_TIMEOUT: "global_runtime_timeout",
             cls.COULD_NOT_JOIN_MEETING_LEAVE_REQUESTED_BEFORE_BOT_JOINED: "leave_requested_before_bot_joined",
+            cls.COULD_NOT_JOIN_MEETING_MEETING_ENDED_BEFORE_BOT_JOINED: "meeting_ended_before_bot_joined",
         }
         return mapping.get(value)
 
@@ -1613,6 +1619,7 @@ class BotEvent(models.Model):
                             | Q(event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_BLOCKED_BY_CAPTCHA)
                             | Q(event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_ZOOM_APP_CANNOT_JOIN_ANONYMOUSLY)
                             | Q(event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_LEAVE_REQUESTED_BEFORE_BOT_JOINED)
+                            | Q(event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_MEETING_ENDED_BEFORE_BOT_JOINED)
                         )
                     )
                     |

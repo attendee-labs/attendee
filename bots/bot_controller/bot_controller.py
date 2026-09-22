@@ -2097,16 +2097,35 @@ class BotController:
                 last_bot_event = self.bot_in_db.last_bot_event()
                 state_when_leave_requested = last_bot_event.old_state if last_bot_event else None
                 bot_was_staged_when_leave_requested = state_when_leave_requested == BotStates.STAGED
-                if bot_was_staged_when_leave_requested:
+                bot_was_running_but_had_not_joined_when_leave_requested = state_when_leave_requested in BotStates.running_but_has_not_joined_states() if settings.PREJOIN_LEAVE_OR_MEETING_END_IS_FATAL_ERROR else False
+                if bot_was_staged_when_leave_requested or bot_was_running_but_had_not_joined_when_leave_requested:
                     new_bot_event = BotEventManager.create_event(
                         bot=self.bot_in_db,
                         event_type=BotEventTypes.COULD_NOT_JOIN,
                         event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_LEAVE_REQUESTED_BEFORE_BOT_JOINED,
+                        event_metadata={
+                            "state_when_leave_requested": state_when_leave_requested.label,
+                        },
                     )
                 else:
-                    new_bot_event = BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.BOT_LEFT_MEETING)
+                    new_bot_event = BotEventManager.create_event(
+                        bot=self.bot_in_db,
+                        event_type=BotEventTypes.BOT_LEFT_MEETING,
+                    )
             else:
-                new_bot_event = BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.MEETING_ENDED, event_metadata=self.get_remover_metadata(message))
+                bot_was_running_but_had_not_joined_when_meeting_ended = self.bot_in_db.state in BotStates.running_but_has_not_joined_states() if settings.PREJOIN_LEAVE_OR_MEETING_END_IS_FATAL_ERROR else False
+                if bot_was_running_but_had_not_joined_when_meeting_ended:
+                    new_bot_event = BotEventManager.create_event(
+                        bot=self.bot_in_db,
+                        event_type=BotEventTypes.COULD_NOT_JOIN,
+                        event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_MEETING_ENDED_BEFORE_BOT_JOINED,
+                    )
+                else:
+                    new_bot_event = BotEventManager.create_event(
+                        bot=self.bot_in_db,
+                        event_type=BotEventTypes.MEETING_ENDED,
+                        event_metadata=self.get_remover_metadata(message),
+                    )
 
             self.save_debug_artifacts(message, new_bot_event)
 
