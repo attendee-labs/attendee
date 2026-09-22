@@ -354,6 +354,12 @@ if os.getenv("USE_IRSA_FOR_S3_STORAGE", "false") == "true":
 
 CHARGE_CREDITS_FOR_BOTS = os.getenv("CHARGE_CREDITS_FOR_BOTS", "false") == "true"
 
+# This flag controls whether a prejoin leave or meeting end causes the bot to finish in the fatal error state.
+# Previously a prejoin leave or meeting end caused the bot to finish in the ended state
+# which was misleading because that implies the bot did something useful.
+# This flag is temporary, in the future we will remove this flag and always map prejoin leave or meeting end to the fatal error state.
+PREJOIN_LEAVE_OR_MEETING_END_IS_FATAL_ERROR = os.getenv("PREJOIN_LEAVE_OR_MEETING_END_IS_FATAL_ERROR", "false") == "true"
+
 BOT_POD_NAMESPACE = os.getenv("BOT_POD_NAMESPACE", "attendee")
 WEBPAGE_STREAMER_POD_NAMESPACE = os.getenv("WEBPAGE_STREAMER_POD_NAMESPACE", "attendee-webpage-streamer")
 REQUIRE_HTTPS_WEBHOOKS = os.getenv("REQUIRE_HTTPS_WEBHOOKS", "true") == "true"
