@@ -522,10 +522,12 @@ class TeamsUIMethods:
         # Click the captions button
         self.click_captions_button()
 
-        self.set_layout(self.get_layout_to_select())
+        self.bot_is_in_meeting_and_can_record()
+
+        self.run_optional_ui_step("set_layout", self.set_layout, self.get_layout_to_select())
 
         if self.disable_incoming_video:
-            self.disable_incoming_video_in_ui()
+            self.run_optional_ui_step("disable_incoming_video", self.disable_incoming_video_in_ui)
 
         self.ready_to_show_bot_image()
 

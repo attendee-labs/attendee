@@ -109,8 +109,10 @@ class ZoomWebUIMethods:
             # No modal appeared or OK button not found within 2 seconds, continue
             logger.info("No modal appeared or OK button not found within 2 seconds, continuing")
 
+        self.bot_is_in_meeting_and_can_record()
+
         if self.disable_incoming_video:
-            self.disable_incoming_video_in_ui()
+            self.run_optional_ui_step("disable_incoming_video", self.disable_incoming_video_in_ui)
 
         self.ready_to_show_bot_image()
 
