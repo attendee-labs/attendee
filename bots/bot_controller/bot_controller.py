@@ -2104,7 +2104,7 @@ class BotController:
                         event_type=BotEventTypes.COULD_NOT_JOIN,
                         event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_LEAVE_REQUESTED_BEFORE_BOT_JOINED,
                         event_metadata={
-                            "state_when_leave_requested": state_when_leave_requested.label,
+                            "state_when_leave_requested": BotStates.state_to_api_code(state_when_leave_requested),
                         },
                     )
                 else:
