@@ -354,8 +354,8 @@ if os.getenv("USE_IRSA_FOR_S3_STORAGE", "false") == "true":
 
 CHARGE_CREDITS_FOR_BOTS = os.getenv("CHARGE_CREDITS_FOR_BOTS", "false") == "true"
 
-# This controls the bots state machine behavior. Specifically, it controls where a prejoin leave or meeting end
-# maps to the fatal error state. Previously it mapped to the ended state
+# This flag controls whether a prejoin leave or meeting end causes the bot to finish in the fatal error state. 
+# Previously a prejoin leave or meeting end caused the bot to finish in the ended state
 # which was misleading because that implies the bot did something useful.
 # This flag is temporary, in the future we will remove this flag and always map prejoin leave or meeting end to the fatal error state.
 PREJOIN_LEAVE_OR_MEETING_END_IS_FATAL_ERROR = os.getenv("PREJOIN_LEAVE_OR_MEETING_END_IS_FATAL_ERROR", "false") == "true"
