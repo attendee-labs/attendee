@@ -1189,17 +1189,21 @@ class GoogleMeetUIMethods:
 
         self.wait_for_host_if_needed()
 
-        if not self.disable_incoming_video:
-            self.set_layout(layout_to_select)
-
-        if self.disable_incoming_video:
-            self.disable_incoming_video_in_ui()
-
+        # The caption language decides what lands in the transcript, so it is still set
+        # before recording starts rather than being treated as an optional tweak.
         if self.google_meet_closed_captions_language:
             self.select_language(self.google_meet_closed_captions_language)
 
+        self.bot_is_in_meeting_and_can_record()
+
+        if not self.disable_incoming_video:
+            self.run_optional_ui_step("set_layout", self.set_layout, layout_to_select)
+
+        if self.disable_incoming_video:
+            self.run_optional_ui_step("disable_incoming_video", self.disable_incoming_video_in_ui)
+
         if os.getenv("DO_NOT_RECORD_MEETING_REACTIONS") == "true":
-            self.turn_off_reactions()
+            self.run_optional_ui_step("turn_off_reactions", self.turn_off_reactions)
 
         self.ready_to_show_bot_image()
 

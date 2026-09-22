@@ -1076,32 +1076,60 @@ class WebBotAdapter(BotAdapter):
 
             sleep(1)
 
+        self.bot_is_in_meeting_and_can_record()
+        self.stop_debug_screen_recording()
+
+    # Signals that the bot is in the meeting with its transcription sources live, which is
+    # what starts the recording. The platform join flows call this as soon as captions are
+    # up, so the optional UI tweaks that follow do not sit in front of the recording.
+    # Idempotent: attempt_to_join_meeting calls it again once the flow returns.
+    def bot_is_in_meeting_and_can_record(self):
         self.after_bot_joined_meeting()
         self.subclass_specific_after_bot_joined_meeting()
 
+    # Layout, incoming video and reactions are bandwidth and tidiness tweaks, not
+    # prerequisites for recording. Letting one abort the join throws away a meeting the bot
+    # is already sitting in, so a UI failure here is logged and skipped instead.
+    def run_optional_ui_step(self, description, step, *args):
+        try:
+            step(*args)
+        except UiRetryableException as e:
+            logger.warning(f"Optional UI step {description} failed, continuing without it. {e.__class__.__name__} at step {e.step}")
+
     def after_bot_joined_meeting(self):
+        if self.joined_at is not None:
+            return
+
         self.send_message_callback({"message": self.Messages.BOT_JOINED_MEETING})
         self.joined_at = time.time()
         self.update_only_one_participant_in_meeting_at()
-        self.stop_debug_screen_recording()
 
     def after_bot_recording_permission_denied(self):
         self.send_message_callback({"message": self.Messages.BOT_RECORDING_PERMISSION_DENIED, "denied_reason": BotAdapter.BOT_RECORDING_PERMISSION_DENIED_REASON.HOST_DENIED_PERMISSION})
 
     def after_bot_can_record_meeting(self):
-        if self.recording_permission_granted_at is not None:
-            return
+        granting_permission_for_the_first_time = self.recording_permission_granted_at is None
 
-        self.recording_permission_granted_at = time.time()
-        self.send_message_callback({"message": self.Messages.BOT_RECORDING_PERMISSION_GRANTED})
+        if granting_permission_for_the_first_time:
+            self.recording_permission_granted_at = time.time()
+            self.send_message_callback({"message": self.Messages.BOT_RECORDING_PERMISSION_GRANTED})
+
+        # Everything below wires up whichever Chrome is live right now. Recording can start
+        # before the join flow finishes, so a later failure can still retry the join and
+        # bring up a new driver, and that driver needs the wiring again even though the
+        # state transition above must only happen once.
         self.send_frames = True
         self.driver.execute_script("window.ws?.enableMediaSending();")
         self.first_buffer_timestamp_ms_offset = self.driver.execute_script("return performance.timeOrigin;")
 
-        if self.start_recording_screen_callback:
+        # The screen recorder follows the X display rather than the driver, so it survives a
+        # retry and starting it a second time would leave two recorders on one display.
+        if granting_permission_for_the_first_time and self.start_recording_screen_callback:
             sleep(2)
             self.start_recording_screen_callback(self.display_var_for_debug_recording)
 
+        # Anchors the media timeline to the page that is about to produce frames, so it is
+        # refreshed alongside first_buffer_timestamp_ms_offset when a new driver takes over.
         self.media_sending_enable_timestamp_ms = time.time() * 1000
 
     def stop_debug_screen_recording(self):
