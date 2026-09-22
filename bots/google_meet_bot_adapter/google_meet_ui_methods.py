@@ -567,6 +567,7 @@ class GoogleMeetUIMethods:
             "Invalid video call name",
             "Your meeting code has expired",
             "The meeting code you entered doesn’t work",
+            "The meeting code that you entered doesn’t work",
         ]
         meeting_not_found_xpath = "//*[" + " or ".join(f'contains(text(), "{text}")' for text in meeting_not_found_texts) + "]"
         meeting_not_found_element = self.find_element_by_selector(By.XPATH, meeting_not_found_xpath)
