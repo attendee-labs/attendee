@@ -186,9 +186,9 @@ class Command(BaseCommand):
         log.info(f"Found {len(pending_scheduled_bot_task_args)} pending launch scheduled bot tasks")
 
         join_at_upper_threshold = timezone.now() + timezone.timedelta(seconds=jitter_end_seconds)
-        # If we miss a scheduled bot by more than the past join_at tolerance, don't bother launching it, it's a failure
+        # If we miss a scheduled bot by more than the launch window, don't bother launching it, it's a failure
         # and it'll be cleaned up by the clean_up_bots_with_heartbeat_timeout_or_that_never_launched command
-        join_at_lower_threshold = timezone.now() - timezone.timedelta(seconds=settings.SCHEDULED_BOT_PAST_JOIN_AT_TOLERANCE_SECONDS)
+        join_at_lower_threshold = timezone.now() - timezone.timedelta(seconds=settings.SCHEDULED_BOT_LAUNCH_WINDOW_AFTER_JOIN_AT_SECONDS)
 
         join_at_jitter_threshold = timezone.now() + timezone.timedelta(seconds=jitter_start_seconds)
 
@@ -243,11 +243,11 @@ class Command(BaseCommand):
         can run safely (e.g. during rolling deploys).
         """
 
-        # Give the bots 5 minutes to spin up, before they join the meeting.
-        join_at_upper_threshold = timezone.now() + timezone.timedelta(minutes=5)
-        # If we miss a scheduled bot by more than the past join_at tolerance, don't bother launching it, it's a failure
+        # Give the bots time to spin up, before they join the meeting.
+        join_at_upper_threshold = timezone.now() + timezone.timedelta(seconds=settings.SCHEDULED_BOT_LAUNCH_WINDOW_BEFORE_JOIN_AT_SECONDS)
+        # If we miss a scheduled bot by more than the launch window, don't bother launching it, it's a failure
         # and it'll be cleaned up by the clean_up_bots_with_heartbeat_timeout_or_that_never_launched command
-        join_at_lower_threshold = timezone.now() - timezone.timedelta(seconds=settings.SCHEDULED_BOT_PAST_JOIN_AT_TOLERANCE_SECONDS)
+        join_at_lower_threshold = timezone.now() - timezone.timedelta(seconds=settings.SCHEDULED_BOT_LAUNCH_WINDOW_AFTER_JOIN_AT_SECONDS)
 
         with transaction.atomic():
             bots_to_launch = Bot.objects.filter(state=BotStates.SCHEDULED, join_at__lte=join_at_upper_threshold, join_at__gte=join_at_lower_threshold).select_for_update(skip_locked=True)

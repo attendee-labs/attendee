@@ -381,8 +381,11 @@ STORE_INFRASTRUCTURE_INFORMATION_IN_BOT_EVENT_METADATA = os.getenv("STORE_INFRAS
 
 CONCURRENT_BOTS_LIMIT = int(os.getenv("CONCURRENT_BOTS_LIMIT", 2500))
 
-# How far in the past a scheduled bot's join_at can be and still get launched.
-SCHEDULED_BOT_PAST_JOIN_AT_TOLERANCE_SECONDS = int(os.getenv("SCHEDULED_BOT_PAST_JOIN_AT_TOLERANCE_SECONDS", 300))
+# The scheduler launches a scheduled bot once the current time is within this window around its join_at.
+# BEFORE: how early the bot is launched, to give it time to spin up before join_at.
+# AFTER: how late a missed bot can still be launched.
+SCHEDULED_BOT_LAUNCH_WINDOW_BEFORE_JOIN_AT_SECONDS = int(os.getenv("SCHEDULED_BOT_LAUNCH_WINDOW_BEFORE_JOIN_AT_SECONDS", 300))
+SCHEDULED_BOT_LAUNCH_WINDOW_AFTER_JOIN_AT_SECONDS = int(os.getenv("SCHEDULED_BOT_LAUNCH_WINDOW_AFTER_JOIN_AT_SECONDS", 300))
 
 CLEANTALK_API_KEY = os.getenv("CLEANTALK_API_KEY")
 USERCHECK_API_KEY = os.getenv("USERCHECK_API_KEY")
