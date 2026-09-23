@@ -2099,12 +2099,12 @@ function handleConversationEnd(eventDataObject) {
         subCodeForNoParticipantsInTheOutgoingRoster
     ];
 
-    const callStatesThatShouldRetryJoin = [
+    const meetingEndedButShouldRetryJoinCallStates = [
         2, // Connecting
         10 // InLobby
     ];
 
-    if (meetingEndedButShouldRetryJoinSubCodes.includes(subCode) && callStatesThatShouldRetryJoin.includes(window.callManager?.getCallState()))
+    if (meetingEndedButShouldRetryJoinSubCodes.includes(subCode) && meetingEndedButShouldRetryJoinCallStates.includes(window.callManager?.getCallState()))
     {
         window.connectionStateManager?.setDidMeetingEndButShouldRetryJoin(true);
         window.ws?.sendJson({
