@@ -90,7 +90,9 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
             logger.error("In update_closed_captions_language, failed to set closed captions language programatically")
 
     def get_staged_bot_join_delay_seconds(self):
-        return 5
+        if self.google_meet_bot_login_should_be_used and self.google_meet_bot_login_is_available:
+            return 25
+        return 15
 
     def subclass_specific_initial_data_code(self):
         return f"""

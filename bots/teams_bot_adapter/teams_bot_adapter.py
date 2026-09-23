@@ -155,7 +155,9 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
             logger.error("In update_closed_captions_language, failed to set closed captions language programatically")
 
     def get_staged_bot_join_delay_seconds(self):
-        return 10
+        if self.teams_bot_login_should_be_used and self.teams_bot_login_is_available:
+            return 35
+        return 15
 
     def subclass_specific_after_bot_joined_meeting(self):
         self.after_bot_can_record_meeting()
