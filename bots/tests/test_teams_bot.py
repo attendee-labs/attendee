@@ -1313,6 +1313,150 @@ class TestTeamsBot(TransactionTestCase):
             # Close the database connection since we're in a thread
             connection.close()
 
+    @patch("bots.bot_controller.bot_controller.BotController.save_debug_recording", return_value=None)
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
+    def test_meeting_ended_but_should_retry_triggers_join_retry(
+        self,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+        MockSaveDebugRecording,
+    ):
+        """Test that when the Teams page stays in the "meeting ended but should retry join"
+        state for at least the threshold duration while waiting for the show more button,
+        check_if_meeting_ended_but_we_should_retry raises UiTeamsBlockingUsException and
+        the bot retries joining.
+
+        The real click_show_more_button loop and check_if_meeting_ended_but_we_should_retry
+        run unmocked — only WebDriverWait, find_element_by_selector and the value returned
+        by connectionStateManager.getSecondsSinceDidMeetingEndButShouldRetryJoin are controlled.
+
+        Flow:
+        1. First join attempt: WebDriverWait times out in click_show_more_button
+        2. getSecondsSinceDidMeetingEndButShouldRetryJoin returns 5 (below threshold) -> no exception
+        3. WebDriverWait times out again
+        4. getSecondsSinceDidMeetingEndButShouldRetryJoin returns 12 (above threshold) -> UiTeamsBlockingUsException
+        5. Exception caught in repeatedly_attempt_to_join_meeting, which retries
+        6. Second join attempt: WebDriverWait finds the show more button, join succeeds
+        """
+        self.bot.settings = {"recording_settings": {"format": "none"}}
+        self.bot.save()
+
+        # Configure the mock uploader
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        # Mock the Chrome driver
+        mock_driver = create_mock_teams_driver()
+        MockChromeDriver.return_value = mock_driver
+
+        seconds_since_meeting_ended_but_should_retry_values = [5, 12]
+        seconds_since_meeting_ended_but_should_retry_queries = []
+
+        def mock_execute_script(script, *args):
+            if "getSecondsSinceDidMeetingEndButShouldRetryJoin" in script:
+                seconds_since_meeting_ended_but_should_retry_queries.append(script)
+                if seconds_since_meeting_ended_but_should_retry_values:
+                    return seconds_since_meeting_ended_but_should_retry_values.pop(0)
+                return None
+            return "test_result"
+
+        mock_driver.execute_script.side_effect = mock_execute_script
+
+        # Mock virtual display
+        mock_display = MagicMock()
+        MockDisplay.return_value = mock_display
+
+        # The first two WebDriverWait.until calls (both in the first join attempt) time out so
+        # the meeting ended check runs; the next call (in the retry) finds the show more button.
+        webdriverwait_until_call_count = [0]
+
+        def create_mock_webdriverwait(*args, **kwargs):
+            mock_wait = MagicMock()
+
+            def mock_until(*args, **kwargs):
+                webdriverwait_until_call_count[0] += 1
+                if webdriverwait_until_call_count[0] <= 2:
+                    raise TimeoutException("Mocked timeout")
+                return MagicMock()
+
+            mock_wait.until = mock_until
+            return mock_wait
+
+        with (
+            patch.object(TeamsUIMethods, "attempt_to_join_meeting", autospec=True, side_effect=TeamsUIMethods.attempt_to_join_meeting) as mock_attempt_to_join,
+            patch.object(TeamsUIMethods, "check_if_meeting_ended_but_we_should_retry", autospec=True, side_effect=TeamsUIMethods.check_if_meeting_ended_but_we_should_retry) as mock_check_meeting_ended,
+            patch.object(TeamsUIMethods, "fill_out_name_input", return_value=None),
+            patch.object(TeamsUIMethods, "wiggle_mouse", return_value=None),
+            patch.object(TeamsUIMethods, "turn_off_media_inputs", return_value=None),
+            patch.object(TeamsUIMethods, "locate_element", return_value=MagicMock()),
+            patch.object(TeamsUIMethods, "click_element", return_value=None),
+            patch("bots.teams_bot_adapter.teams_ui_methods.WebDriverWait", side_effect=create_mock_webdriverwait),
+            patch.object(TeamsUIMethods, "find_element_by_selector", return_value=None),
+            patch.object(TeamsUIMethods, "click_captions_button", return_value=None),
+            patch.object(TeamsUIMethods, "set_layout", return_value=None),
+            patch.object(TeamsUIMethods, "disable_incoming_video_in_ui", return_value=None),
+            patch("bots.web_bot_adapter.web_bot_adapter.WebBotAdapter.ready_to_show_bot_image", return_value=None),
+        ):
+            # Create bot controller
+            controller = BotController(self.bot.id)
+
+            # Run the bot in a separate thread since it has an event loop
+            bot_thread = threading.Thread(target=controller.run)
+            bot_thread.daemon = True
+            bot_thread.start()
+
+            def simulate_join_flow():
+                # Sleep to allow initialization and join attempts
+                time.sleep(1)
+
+                # Add participants to keep the bot in the meeting
+                controller.adapter.participants_info["user1"] = {"deviceId": "user1", "fullName": "Test User", "active": True, "isCurrentUser": False}
+
+                # Let the bot run for a bit to "record"
+                time.sleep(1)
+
+                # Trigger auto-leave
+                controller.adapter.only_one_participant_in_meeting_at = time.time() - 10000000000
+                time.sleep(1)
+
+                # Clean up connections in thread
+                connection.close()
+
+            # Run join flow simulation after a short delay
+            threading.Timer(3, simulate_join_flow).start()
+
+            # Give the bot some time to process
+            bot_thread.join(timeout=20)
+
+            time.sleep(1.25)
+
+            # The meeting ended check ran twice during the first attempt: once below the threshold, once above it
+            self.assertEqual(mock_check_meeting_ended.call_count, 2)
+            self.assertEqual(len(seconds_since_meeting_ended_but_should_retry_queries), 2)
+            for call in mock_check_meeting_ended.call_args_list:
+                self.assertEqual(call.args[1], "click_show_more_button")
+
+            # The UiTeamsBlockingUsException caused exactly one retry, which succeeded
+            self.assertEqual(mock_attempt_to_join.call_count, 2, "attempt_to_join_meeting should be called twice - once for the meeting ended failure and once for the retry")
+
+            # Refresh the bot from the database
+            self.bot.refresh_from_db()
+
+            # Assert that the bot joined and then ended normally
+            self.assertEqual(self.bot.state, BotStates.ENDED)
+            self.assertTrue(self.bot.bot_events.filter(event_type=BotEventTypes.BOT_JOINED_MEETING).exists())
+            self.assertFalse(self.bot.bot_events.filter(event_type=BotEventTypes.FATAL_ERROR).exists())
+
+            # Cleanup
+            controller.cleanup()
+            bot_thread.join(timeout=5)
+
+            # Close the database connection since we're in a thread
+            connection.close()
+
     def test_get_teams_signed_in_bot_uses_named_login_group(self):
         first_group = BotLoginGroup.objects.create(project=self.project, platform=BotLoginPlatform.TEAMS, name="Primary Group")
         first_group_login = BotLogin.objects.create(group=first_group, email="primary@example.com")

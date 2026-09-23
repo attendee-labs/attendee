@@ -2099,14 +2099,29 @@ function handleConversationEnd(eventDataObject) {
         subCodeForNoParticipantsInTheOutgoingRoster
     ];
 
-    if (meetingEndedButShouldRetryJoinSubCodes.includes(subCode) && window.callManager?.getCallState() === 10) // 10 means in the lobby
+    const callStatesThatShouldRetryJoin = [
+        2, // Connecting
+        10 // InLobby
+    ];
+
+    if (meetingEndedButShouldRetryJoinSubCodes.includes(subCode) && callStatesThatShouldRetryJoin.includes(window.callManager?.getCallState()))
     {
-        connectionStateManager.setDidMeetingEndButShouldRetryJoin(true);
+        window.connectionStateManager?.setDidMeetingEndButShouldRetryJoin(true);
         window.ws?.sendJson({
             type: 'MeetingStatusChange',
             change: 'meeting_ended_but_should_retry_join',
             meetingId: meetingId
         });
+        // Hacky, but send the meeting end message with a delay in case the python side doesn't retry.
+        // If it does retry, chrome will be closed so the delayed message will not be sent.
+        setTimeout(() => {
+            window.ws?.sendJson({
+                type: 'MeetingStatusChange',
+                change: 'meeting_ended',
+                meetingId: meetingId,
+                remover: remover
+            });
+        }, 90000);
         return;
     }
 
@@ -3612,6 +3627,24 @@ class CallManager {
         if (!this.activeCall) {
             return;
         }
+
+        // Call states:
+        // 0 - None
+        // 1 - Notified
+        // 2 - Connecting
+        // 3 - Connected
+        // 4 - LocalHold
+        // 5 - RemoteHold
+        // 6 - Disconnecting
+        // 7 - Disconnected
+        // 8 - Observing
+        // 9 - EarlyMedia
+        // 10 - InLobby
+        // 11 - Preheating
+        // 12 - Preheated
+        // 13 - Staging
+        // 14 - NegotiatingEncryption
+        // 15 - NegotiatingEncryptionLobby
 
         return this.activeCall.state;
     }
