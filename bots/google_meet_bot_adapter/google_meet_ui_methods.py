@@ -5,7 +5,7 @@ import os
 import random
 import subprocess
 import time
-from urllib.parse import parse_qsl, quote, urlencode, urlparse, urlunparse
+from urllib.parse import quote, urlparse
 
 import redis
 import requests
@@ -20,18 +20,12 @@ from selenium.webdriver.support.ui import WebDriverWait
 from bots.bot_sso_utils import get_google_meet_set_cookie_url
 from bots.google_meet_bot_adapter.okta_authenticator import OktaAuthenticator, OktaSessionError
 from bots.models import RecordingViews
+from bots.utils import mask_url_query_param_values
 from bots.web_bot_adapter.ui_methods import UiCouldNotClickElementException, UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableExpectedException
 
 from .mocap_manager import MocapManager
 
 logger = logging.getLogger(__name__)
-
-
-def mask_url_query_param_values(url, mask="***"):
-    """Return the URL with each query parameter's value replaced by a mask, preserving the param keys."""
-    parsed_url = urlparse(url)
-    masked_query = urlencode([(key, mask) for key, _ in parse_qsl(parsed_url.query, keep_blank_values=True)])
-    return urlunparse(parsed_url._replace(query=masked_query, params="", fragment=""))
 
 
 class UiGoogleBlockingUsException(UiRetryableExpectedException):
@@ -113,6 +107,12 @@ class GoogleMeetUIMethods:
         if this_meeting_is_being_recorded_join_now_button:
             logger.info("Clicking this_meeting_is_being_recorded_join_now_button")
             self.click_element(this_meeting_is_being_recorded_join_now_button, step)
+            return
+
+        this_meeting_is_being_captured_join_button = self.find_element_by_selector(By.XPATH, '//div[@role="alertdialog"]//button[@data-mdc-dialog-action="ok"][.//span[text()="Join"]]')
+        if this_meeting_is_being_captured_join_button:
+            logger.info("Clicking this_meeting_is_being_captured_join_button")
+            self.click_element_forcefully(this_meeting_is_being_captured_join_button, step)
 
     # Some modal that google put up
     def click_others_may_see_your_meeting_differently_button(self, step):
@@ -148,19 +148,26 @@ class GoogleMeetUIMethods:
             raise UiLoginRequiredException("Login required", step)
 
     def look_for_denied_your_request_element(self, step):
+        # Google Meet inconsistently uses "in the call" / "on the call" and "denied" / "has denied",
+        # so we match against every combination.
+        actively_denied_texts = [f"Someone {preposition} the call {verb} your request to join" for preposition in ("in", "on") for verb in ("denied", "has denied")]
+        no_one_responded_texts = [f"No one {verb} to your request to join the call" for verb in ("responded", "has responded")]
+        left_meeting_texts = ["You left the meeting"]
+
+        all_texts = actively_denied_texts + no_one_responded_texts + left_meeting_texts
         denied_your_request_element = self.find_element_by_selector(
             By.XPATH,
-            '//*[contains(text(), "Someone in the call denied your request to join") or contains(text(), "No one responded to your request to join the call") or contains(text(), "You left the meeting")]',
+            "//*[" + " or ".join(f'contains(text(), "{text}")' for text in all_texts) + "]",
         )
         if not denied_your_request_element:
             return
 
         element_text = denied_your_request_element.text
 
-        if "Someone in the call denied your request to join" in element_text:
+        if any(text in element_text for text in actively_denied_texts):
             logger.warning("Someone in the call actively denied our request to join. Raising UiRequestToJoinDeniedException")
             raise UiRequestToJoinDeniedException("Someone in the call denied your request to join", step)
-        elif "No one responded to your request to join the call" in element_text:
+        elif any(text in element_text for text in no_one_responded_texts):
             logger.warning("No one responded to our request to join (timeout). Raising UiRequestToJoinDeniedException")
             raise UiRequestToJoinDeniedException("No one responded to your request to join the call", step)
         else:  # "You left the meeting"
@@ -560,6 +567,7 @@ class GoogleMeetUIMethods:
             "Invalid video call name",
             "Your meeting code has expired",
             "The meeting code you entered doesn’t work",
+            "The meeting code that you entered doesn’t work",
         ]
         meeting_not_found_xpath = "//*[" + " or ".join(f'contains(text(), "{text}")' for text in meeting_not_found_texts) + "]"
         meeting_not_found_element = self.find_element_by_selector(By.XPATH, meeting_not_found_xpath)

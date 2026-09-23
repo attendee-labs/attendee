@@ -175,6 +175,15 @@
         {% endif %}
     </div>
 
+    {% if not can_view_recording_content %}
+        <div class="alert alert-warning d-flex align-items-start gap-2" role="alert">
+            <i class="bi bi-eye-slash-fill"></i>
+            <div>
+                You do not have permission to view recording content for this project.
+            </div>
+        </div>
+    {% endif %}
+
     <div class="row mb-4">
         <div class="col-md-6">
             <p><strong>ID:</strong> {{ bot.object_id }}</p>

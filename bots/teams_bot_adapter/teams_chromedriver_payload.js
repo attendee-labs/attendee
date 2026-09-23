@@ -1357,6 +1357,8 @@ class ChatMessageManager {
                 type: 'ChatMessage',
                 message_uuid: chatMessage.clientMessageId,
                 participant_uuid: chatMessage.from,
+                participant_full_name: chatMessage.imDisplayName,
+                can_lazily_insert_participant: true,
                 timestamp: Math.floor(timestamp_ms / 1000),
                 text: this.stripHtml(chatMessage.content),
             });
@@ -1432,7 +1434,6 @@ class UserManager {
             deviceId: user.details.id,
             displayName: user.details.displayName,
             fullName: user.details.displayName,
-            profile: '',
             status: user.state,
             humanized_status: user.state === "active" ? "in_meeting" : "not_in_meeting",
             isCurrentUser: (!!currentUserId) && (user.details.id === currentUserId),
@@ -1442,16 +1443,40 @@ class UserManager {
     }
 
     singleUserSynced(user) {
-      const convertedUser = this.convertUser(user);
-      console.log('singleUserSynced called w', convertedUser);
-      // Create array with new user and existing users, then filter for unique deviceIds
-      // keeping the first occurrence (new user takes precedence)
-      const allUsers = [...this.currentUsersMap.values(), convertedUser];
-      console.log('allUsers', allUsers);
+        const convertedUser = this.convertUser(user);
+        console.log('singleUserSynced called w', convertedUser);
+        // Create array with new user and existing users, then filter for unique deviceIds
+        // keeping the first occurrence (new user takes precedence)
+        const allUsers = [...this.currentUsersMap.values(), convertedUser];
+        console.log('allUsers', allUsers);
+        const uniqueUsers = Array.from(
+          new Map(allUsers.map(singleUser => [singleUser.deviceId, singleUser])).values()
+        );
+        this.newUsersListSynced(uniqueUsers);
+      }
+
+    multipleUsersSynced(users) {
+      const convertedUsers = users.map(user => this.convertUser(user));
       const uniqueUsers = Array.from(
-        new Map(allUsers.map(singleUser => [singleUser.deviceId, singleUser])).values()
+        new Map(convertedUsers.map(singleUser => [singleUser.deviceId, singleUser])).values()
       );
       this.newUsersListSynced(uniqueUsers);
+    }
+
+    // Stored users are compared with JSON.stringify, so every user must pass through
+    // here to guarantee an identical key set and key order on both sides.
+    toUserRecord(user) {
+        return {
+            deviceId: user.deviceId,
+            displayName: user.displayName,
+            fullName: user.fullName,
+            status: user.status,
+            humanized_status: user.humanized_status,
+            parentDeviceId: user.parentDeviceId,
+            isCurrentUser: user.isCurrentUser,
+            isHost: user.isHost,
+            meetingId: user.meetingId
+        };
     }
 
     newUsersListSynced(newUsersList) {
@@ -1463,22 +1488,11 @@ class UserManager {
 
         // Update all users map
         for (const user of newUsersList) {
-            if (previousUserIds.has(user.deviceId) && JSON.stringify(this.currentUsersMap.get(user.deviceId)) !== JSON.stringify(user)) {
+            if (previousUserIds.has(user.deviceId) && JSON.stringify(this.currentUsersMap.get(user.deviceId)) !== JSON.stringify(this.toUserRecord(user))) {
                 updatedUserIds.add(user.deviceId);
             }
 
-            this.allUsersMap.set(user.deviceId, {
-                deviceId: user.deviceId,
-                displayName: user.displayName,
-                fullName: user.fullName,
-                profile: user.profile,
-                status: user.status,
-                humanized_status: user.humanized_status,
-                parentDeviceId: user.parentDeviceId,
-                isCurrentUser: user.isCurrentUser,
-                isHost: user.isHost,
-                meetingId: user.meetingId
-            });
+            this.allUsersMap.set(user.deviceId, this.toUserRecord(user));
         }
 
         // Calculate new, removed, and updated users
@@ -1494,18 +1508,7 @@ class UserManager {
         // Clear current users map and update with new list
         this.currentUsersMap.clear();
         for (const user of newUsersList) {
-            this.currentUsersMap.set(user.deviceId, {
-                deviceId: user.deviceId,
-                displayName: user.displayName,
-                fullName: user.fullName,
-                profilePicture: user.profilePicture,
-                status: user.status,
-                humanized_status: user.humanized_status,
-                parentDeviceId: user.parentDeviceId,
-                isCurrentUser: user.isCurrentUser,
-                isHost: user.isHost,
-                meetingId: user.meetingId
-            });
+            this.currentUsersMap.set(user.deviceId, this.toUserRecord(user));
         }
 
         const updatedUsers = Array.from(updatedUserIds).map(id => this.currentUsersMap.get(id));
@@ -1604,7 +1607,6 @@ class WebSocketClient {
         this.mediaSendingEnabled = true;
         window.receiverManager.startPollingReceivers();
         window.styleManager.start();
-        window.callManager.syncParticipants();
         // No longer need this because we're not using MediaStreamTrackProcessor's
         //this.startBlackFrameTimer();
     }
@@ -2116,7 +2118,9 @@ const wsInterceptor = new WebSocketInterceptor({
             
             realConsole?.log('Event Data Object:', eventDataObject);
             if (eventDataObject.url.endsWith("rosterUpdate/") || eventDataObject.url.endsWith("rosterUpdate")) {
-                handleRosterUpdate(eventDataObject);
+                // No longer doing this. We now poll participants instead.
+                //handleRosterUpdate(eventDataObject);
+                window.participantsPoller?.enableFastPolling();
             }
             if (eventDataObject.url.endsWith("conversation/conversationEnd/")) {
                 handleConversationEnd(eventDataObject);
@@ -3485,6 +3489,18 @@ window.botOutputManager = botOutputManager;
                         {
                             if (event?.message)
                             {
+                                const threadId = window.callManager?.getThreadId();
+                                const convIdFromEvent = event.convId ?? event.message?.conversationId;
+                                if (!threadId || (convIdFromEvent !== threadId))
+                                {
+                                    window.ws?.sendJson({
+                                        type: 'ChatMessageHadWrongThreadId',
+                                        message: event,
+                                        expectedThreadId: threadId,
+                                    });
+                                    continue;
+                                }
+
                                 realConsole?.log('chatMessage', event.message);
                                 window.chatMessageManager?.handleChatMessage(event.message);
                             }
@@ -3524,6 +3540,15 @@ class CallManager {
                 }
             }
         }
+    }
+
+    getThreadId() {
+        this.setActiveCall();
+        if (!this.activeCall) {
+            return;
+        }
+
+        return this.activeCall.threadId;
     }
 
     getCallId() {
@@ -3609,53 +3634,20 @@ class CallManager {
         return speakingParticipantIds;
     }
 
-    syncParticipants() {
+    getRemoteParticipants() {
         this.setActiveCall();
         if (!this.activeCall) {
-            return;
+            return [];
         }
+        return this.activeCall.participants || [];
+    }
 
-        const participantsRaw = this.activeCall.participants;
-        const participants = participantsRaw.map(participant => {
-            return {
-                id: participant.id,
-                displayName: participant.displayName,
-                endpoints: participant.endpoints,
-                meetingRole: participant.meetingRole
-            };
-        }).filter(participant => participant.displayName);
-
-        for (const participant of participants) {
-            const endpoints = (participant?.endpoints?.endpointDetails || []).map(endpoint => {
-                if (!endpoint.endpointId) {
-                    return null;
-                }
-
-                if (!endpoint.mediaStreams) {
-                    return null;
-                }
-
-                return [
-                    endpoint.endpointId,
-                    {
-                        call: {
-                            mediaStreams: endpoint.mediaStreams
-                        }
-                    }
-                ]
-            }).filter(endpoint => endpoint);
-
-            // Transform this funny format of a participant into Teams "standard" format
-            const participantConverted = {
-                details: {id: participant.id, displayName: participant.displayName},
-                meetingRole: participant.meetingRole,
-                state: "active",
-                endpoints: Object.fromEntries(endpoints),
-                callId: this.getCallId()
-            };
-            window.userManager.singleUserSynced(participantConverted);
-            syncVirtualStreamsFromParticipant(participantConverted);
+    getLocalParticipant() {
+        this.setActiveCall();
+        if (!this.activeCall) {
+            return null;
         }
+        return this.activeCall.localSignalingParticipant || null;
     }
 
     enableClosedCaptions() {
@@ -3732,8 +3724,154 @@ class CallManager {
     }
 }
 
+class ParticipantsPoller {
+    static tickIntervalMs = 200;
+    static normalPollIntervalMs = 1000;
+    static fastPollIntervalMs = 200;
+    static fastPollWindowMs = 1000;
+    // Participants in this state are waiting in the lobby and have not joined the meeting yet
+    static lobbyParticipantState = 7;
+
+    constructor() {
+        this.interval = null;
+        this.errorPollingParticipantsTicker = 0;
+        this.previousParticipantsChangeKey = null;
+        this.lastLogAllParticipantsRawTime = 0;
+        this.lastPollParticipantsTime = 0;
+        this.fastPollUntilTime = 0;
+    }
+
+    start() {
+        if (this.interval) {
+            return;
+        }
+        this.interval = setInterval(() => {
+            try {
+                const now = Date.now();
+                const pollIntervalMs = now < this.fastPollUntilTime ? ParticipantsPoller.fastPollIntervalMs : ParticipantsPoller.normalPollIntervalMs;
+                if (now - this.lastPollParticipantsTime < pollIntervalMs) {
+                    return;
+                }
+                this.lastPollParticipantsTime = now;
+                this.pollParticipants();
+            } catch (error) {
+                if (this.errorPollingParticipantsTicker % 500 === 0)
+                {
+                    window.ws?.sendJson({
+                        type: 'ErrorPollingParticipants',
+                        error: error.message
+                    });
+                }
+                this.errorPollingParticipantsTicker++;
+            }
+        }, ParticipantsPoller.tickIntervalMs);
+    }
+
+    // A roster update means the participant list is probably changing, so poll at the faster
+    // rate for a short window to pick up the changes sooner.
+    enableFastPolling() {
+        this.fastPollUntilTime = Date.now() + ParticipantsPoller.fastPollWindowMs;
+    }
+
+    pollParticipants() {
+        let participantsRaw = window.callManager.getRemoteParticipants();
+        
+        const localParticipantRaw = window.callManager.getLocalParticipant();
+
+        if (localParticipantRaw) {
+            // Local participant has different nesting of endpoint details vs remote participants
+            participantsRaw = [...participantsRaw, {
+                id: localParticipantRaw.id,
+                displayName: localParticipantRaw.displayName,
+                endpoints: {endpointDetails: localParticipantRaw.endpointDetails},
+                meetingRole: localParticipantRaw.meetingRole
+            }];
+        }
+
+        if (!participantsRaw) {
+            return;
+        }
+
+        const now = Date.now();
+        if (now - this.lastLogAllParticipantsRawTime >= 600 * 1000) {
+            this.lastLogAllParticipantsRawTime = now;
+            window.ws?.sendJson({
+                type: 'AllParticipantsRaw',
+                participantsRaw: participantsRaw.slice(0, 100).map(participant => ({
+                    id: participant.id,
+                    displayName: participant.displayName,
+                    state: participant.state,
+                }))
+            });
+        }
+
+        // Filter out participants in the lobby or with no display name. The bot's participant will not be affected
+        const participants = participantsRaw.filter(participant =>
+            participant.displayName && participant.state !== ParticipantsPoller.lobbyParticipantState
+        ).map(participant => {
+            return {
+                id: participant.id,
+                displayName: participant.displayName,
+                endpoints: participant.endpoints,
+                meetingRole: participant.meetingRole
+            };
+        });
+
+        const participantsConverted = participants.map(participant => {
+            const endpoints = (participant?.endpoints?.endpointDetails || []).map(endpoint => {
+                if (!endpoint.endpointId) {
+                    return null;
+                }
+
+                if (!endpoint.mediaStreams) {
+                    return null;
+                }
+
+                return [
+                    endpoint.endpointId,
+                    {
+                        call: {
+                            mediaStreams: endpoint.mediaStreams
+                        }
+                    }
+                ]
+            }).filter(endpoint => endpoint);
+
+            // Transform this funny format of a participant into Teams "standard" format
+            return {
+                details: {id: participant.id, displayName: participant.displayName},
+                meetingRole: participant.meetingRole,
+                state: "active",
+                endpoints: Object.fromEntries(endpoints),
+                callId: window.callManager.getCallId()
+            };
+        });
+
+        const changeKey = JSON.stringify(participantsConverted.map(p => [
+            p.details.id,
+            p.details.displayName,
+            p.meetingRole,
+            Object.entries(p.endpoints).map(([endpointId, e]) =>
+                [endpointId, e.call.mediaStreams.map(s => [s.sourceId, s.type, s.direction])]
+            )
+        ]));
+        if (changeKey === this.previousParticipantsChangeKey) {
+            return;
+        }
+        this.previousParticipantsChangeKey = changeKey;
+
+        window.userManager.multipleUsersSynced(participantsConverted);
+        for (const participantConverted of participantsConverted) {
+            syncVirtualStreamsFromParticipant(participantConverted);
+        }
+    }
+}
+
 const callManager = new CallManager();
 window.callManager = callManager;
+
+const participantsPoller = new ParticipantsPoller();
+window.participantsPoller = participantsPoller;
 
 if (window.teamsInitialData?.shouldLogNetworkRequests) {
     

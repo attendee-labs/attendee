@@ -28,7 +28,7 @@ from bots.models import ParticipantEventTypes, RecordingViews
 from bots.per_participant_realtime_video_configuration import PerParticipantRealtimeVideoConfiguration
 from bots.room_sync_source_participant_configuration import RoomSyncSourceParticipantConfiguration
 from bots.room_sync_utils import add_bot_indicator_to_display_name
-from bots.utils import half_ceil, scale_i420
+from bots.utils import half_ceil, mask_url_query_param_values, scale_i420
 
 from .debug_screen_recorder import DebugScreenRecorder
 from .livekit_websocket_bridge import LiveKitWebsocketBridge
@@ -112,6 +112,7 @@ class WebBotAdapter(BotAdapter):
         self.domains_seen_by_domain_allow_list_listener_where_domain_was_not_in_allow_list = set()
 
         self.participants_info = {}
+        self.participant_uuids_that_were_ever_in_meeting = set()
         self.only_one_participant_in_meeting_at = None
         self.video_frame_ticker = 0
 
@@ -176,11 +177,38 @@ class WebBotAdapter(BotAdapter):
 
         return False
 
+    # In Teams someone can send a chat message into the meeting even if
+    # they are not in the meeting. We lazily insert them as inactive participants
+    def lazily_insert_participant_for_chat_message(self, json_data):
+        if not json_data.get("participant_full_name"):
+            return
+
+        if not json_data.get("participant_uuid"):
+            return
+
+        if not json_data.get("can_lazily_insert_participant"):
+            return
+
+        if self.participants_info.get(json_data["participant_uuid"]):
+            return
+
+        logger.info(f"Lazily inserting participant for chat message: {json_data['participant_full_name']} {json_data['participant_uuid']}")
+
+        self.handle_participant_update(
+            {
+                "deviceId": json_data["participant_uuid"],
+                "active": False,
+                "fullName": json_data["participant_full_name"],
+                "isCurrentUser": False,
+                "isHost": False,
+            }
+        )
+
     def handle_participant_update(self, user):
         if self.meeting_uuid_mismatch(user):
             return
 
-        user_before = self.participants_info.get(user["deviceId"], {"active": False})
+        user_before = self.participants_info.get(user["deviceId"], {"active": False, "isHost": bool(user.get("isHost"))})
         self.participants_info[user["deviceId"]] = user
 
         if user_before.get("active") and not user["active"]:
@@ -188,8 +216,8 @@ class WebBotAdapter(BotAdapter):
             return
 
         if not user_before.get("active") and user["active"]:
+            self.participant_uuids_that_were_ever_in_meeting.add(user["deviceId"])
             self.add_participant_event_callback({"participant_uuid": user["deviceId"], "event_type": ParticipantEventTypes.JOIN, "event_data": {}, "timestamp_ms": int(time.time() * 1000)})
-            return
 
         if bool(user_before.get("isHost")) != bool(user.get("isHost")):
             changes = {
@@ -199,7 +227,6 @@ class WebBotAdapter(BotAdapter):
                 }
             }
             self.add_participant_event_callback({"participant_uuid": user["deviceId"], "event_type": ParticipantEventTypes.UPDATE, "event_data": changes, "timestamp_ms": int(time.time() * 1000)})
-            return
 
     def process_video_frame(self, message):
         if self.recording_paused:
@@ -294,7 +321,7 @@ class WebBotAdapter(BotAdapter):
             self.add_per_participant_video_frame_callback(video_frame, participant_id, source)
 
     def number_of_participants_ever_in_meeting_excluding_other_bots(self):
-        return len([participant for participant in self.participants_info.values() if not participant_is_another_bot(participant["fullName"], participant["isCurrentUser"], self.automatic_leave_configuration)])
+        return len([participant_uuid for participant_uuid, participant in self.participants_info.items() if participant_uuid in self.participant_uuids_that_were_ever_in_meeting and not participant_is_another_bot(participant["fullName"], participant["isCurrentUser"], self.automatic_leave_configuration)])
 
     def update_only_one_participant_in_meeting_at(self):
         if not self.joined_at:
@@ -363,6 +390,8 @@ class WebBotAdapter(BotAdapter):
     def handle_chat_message(self, json_data):
         if self.recording_paused and not self.record_chat_messages_when_paused:
             return
+
+        self.lazily_insert_participant_for_chat_message(json_data)
 
         self.upsert_chat_message_callback(json_data)
 
@@ -611,6 +640,9 @@ class WebBotAdapter(BotAdapter):
             }
         )
 
+    def subclass_specific_domain_allowlist(self):
+        return []
+
     def subclass_specific_chrome_policies(self):
         return {}
 
@@ -753,7 +785,7 @@ class WebBotAdapter(BotAdapter):
         }
         options.add_experimental_option("prefs", prefs)
 
-        if settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:
+        if settings.MONITOR_DOMAIN_ALLOWLIST_IN_CHROME:
             options.set_capability("webSocketUrl", True)
 
         self.add_subclass_specific_chrome_options(options)
@@ -815,7 +847,7 @@ class WebBotAdapter(BotAdapter):
             logger.exception("Error starting domain allow list listener")
 
     def start_domain_allow_list_listener_with_no_error_handling(self):
-        if not settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:
+        if not settings.MONITOR_DOMAIN_ALLOWLIST_IN_CHROME:
             return
 
         socket = connect(
@@ -849,7 +881,7 @@ class WebBotAdapter(BotAdapter):
                 logger.warning(
                     "%s: url=%s violates_domain_allow_list=%s",
                     message.get("method"),
-                    domain,
+                    mask_url_query_param_values(url),
                     violates_allow_list,
                 )
 
@@ -1165,30 +1197,35 @@ class WebBotAdapter(BotAdapter):
             return []
 
     def url_violates_domain_allow_list(self, url):
-        allowlist = self.subclass_specific_chrome_policies().get("URLAllowlist", [])
+        allowlist = self.subclass_specific_domain_allowlist()
+
         if not url or not allowlist:
             return False
 
         parsed = urlparse(url)
-        # Only http(s) navigations are subject to the allow list. Skip about:blank,
-        # chrome://, chrome-error://, data:, blob:, etc.
+
+        # Only http(s) navigations are subject to the allow list.
         if parsed.scheme not in ("http", "https"):
             return False
 
-        host = parsed.netloc.split("@")[-1].split(":")[0].lower()
+        host = (parsed.hostname or "").lower().rstrip(".")
+
         if not host:
             return False
 
         for entry in allowlist:
             allowed = str(entry).lower().strip()
-            if "://" in allowed:
-                allowed = urlparse(allowed).netloc
-            allowed = allowed.lstrip(".").split("/")[0].split(":")[0]
+
+            exact_host_only = allowed.startswith(".")
+            allowed = allowed.lstrip(".").rstrip(".")
+
             if not allowed:
                 continue
-            # "*" allows everything; otherwise match the host or any subdomain of it,
-            # mirroring Chrome's URLAllowlist matching semantics.
-            if allowed == "*" or host == allowed or host.endswith("." + allowed):
+
+            if allowed == "*" or host == allowed:
+                return False
+
+            if not exact_host_only and host.endswith("." + allowed):
                 return False
 
         return True
@@ -1199,7 +1236,7 @@ class WebBotAdapter(BotAdapter):
             nav_history_hosts = list(set([self.domain_for_history_entry_url(url) for url in nav_history_urls]))
             logger.info(f"Browser navigation history {nav_history_hosts}")
 
-            if not settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:
+            if not settings.MONITOR_DOMAIN_ALLOWLIST_IN_CHROME:
                 return
 
             # Only covers top-level navigations

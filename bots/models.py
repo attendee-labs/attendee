@@ -542,6 +542,14 @@ class CalendarEvent(models.Model):
 class ProjectAccess(models.Model):
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="project_accesses")
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="project_accesses")
+    can_view_recording_content = models.BooleanField(default=True, db_default=True)
+    can_manage_api_keys = models.BooleanField(default=True, db_default=True)
+
+    class Meta:
+        # A user should have at most one access row per project
+        constraints = [
+            models.UniqueConstraint(fields=["project", "user"], name="unique_project_access_project_user"),
+        ]
 
 
 class ApiKey(models.Model):
@@ -653,6 +661,10 @@ class BotStates(models.IntegerChoices):
     @classmethod
     def pre_meeting_states(cls):
         return [cls.READY, cls.SCHEDULED, cls.STAGED]
+
+    @classmethod
+    def running_but_has_not_joined_states(cls):
+        return [cls.STAGED, cls.JOINING, cls.WAITING_ROOM]
 
 
 class RecordingFormats(models.TextChoices):
@@ -1506,6 +1518,8 @@ class BotEventSubTypes(models.IntegerChoices):
     BOT_RECORDING_PERMISSION_DENIED_WEBINAR_ATTENDEE_NEEDS_PANELIST_PROMOTION = 29, "Bot recording permission denied - Bot joined webinar as attendee and needs to be promoted to panelist to record"
     COULD_NOT_JOIN_MEETING_ZOOM_APP_CANNOT_JOIN_ANONYMOUSLY = 30, "Bot could not join Zoom meeting - Zoom app cannot join anonymously. To fix pass OBF or ZAK token. See https://docs.attendee.dev/guides/zoom/zoomoauth"
     FATAL_ERROR_GLOBAL_RUNTIME_TIMEOUT = 31, "Fatal error - Global runtime timeout"
+    COULD_NOT_JOIN_MEETING_LEAVE_REQUESTED_BEFORE_BOT_JOINED = 32, "Bot could not join meeting - Leave requested before bot joined"
+    COULD_NOT_JOIN_MEETING_MEETING_ENDED_BEFORE_BOT_JOINED = 33, "Bot could not join meeting - Meeting ended before bot joined"
 
     @classmethod
     def sub_type_to_api_code(cls, value):
@@ -1542,6 +1556,8 @@ class BotEventSubTypes(models.IntegerChoices):
             cls.BOT_RECORDING_PERMISSION_DENIED_WEBINAR_ATTENDEE_NEEDS_PANELIST_PROMOTION: "webinar_attendee_needs_panelist_promotion",
             cls.COULD_NOT_JOIN_MEETING_ZOOM_APP_CANNOT_JOIN_ANONYMOUSLY: "zoom_app_cannot_join_anonymously",
             cls.FATAL_ERROR_GLOBAL_RUNTIME_TIMEOUT: "global_runtime_timeout",
+            cls.COULD_NOT_JOIN_MEETING_LEAVE_REQUESTED_BEFORE_BOT_JOINED: "leave_requested_before_bot_joined",
+            cls.COULD_NOT_JOIN_MEETING_MEETING_ENDED_BEFORE_BOT_JOINED: "meeting_ended_before_bot_joined",
         }
         return mapping.get(value)
 
@@ -1602,6 +1618,8 @@ class BotEvent(models.Model):
                             | Q(event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_MEETING_NOT_FOUND)
                             | Q(event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_BLOCKED_BY_CAPTCHA)
                             | Q(event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_ZOOM_APP_CANNOT_JOIN_ANONYMOUSLY)
+                            | Q(event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_LEAVE_REQUESTED_BEFORE_BOT_JOINED)
+                            | Q(event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_MEETING_ENDED_BEFORE_BOT_JOINED)
                         )
                     )
                     |
@@ -1645,7 +1663,7 @@ class BotEventManager:
             "to": BotStates.STAGED,
         },
         BotEventTypes.COULD_NOT_JOIN: {
-            "from": [BotStates.JOINING, BotStates.WAITING_ROOM],
+            "from": [BotStates.JOINING, BotStates.WAITING_ROOM, BotStates.LEAVING],
             "to": BotStates.FATAL_ERROR,
         },
         BotEventTypes.FATAL_ERROR: {
@@ -1704,6 +1722,7 @@ class BotEventManager:
                 BotStates.JOINING,
                 BotStates.JOINING_BREAKOUT_ROOM,
                 BotStates.LEAVING_BREAKOUT_ROOM,
+                BotStates.STAGED,
             ],
             "to": BotStates.LEAVING,
         },
@@ -1930,6 +1949,16 @@ class BotEventManager:
         if bot.join_at.isoformat() != event_metadata["join_at"]:
             raise ValidationError(f"join_at in event_metadata for bot {bot.object_id} for transition to state {BotStates.state_to_api_code(new_state)} is different from the join_at in the database for bot {bot.object_id}")
 
+    @classmethod
+    def validate_could_not_join_event(cls, bot: Bot, old_state: BotStates, event_sub_type: BotEventSubTypes):
+        # COULD_NOT_JOIN from LEAVING is only for the case where a leave was requested before the bot joined.
+        # Any other could-not-join cause arriving while the bot is leaving (waiting room timeout, request denied, ...)
+        # must not turn a bot that was in the meeting into a fatal error.
+        if old_state != BotStates.LEAVING:
+            return
+        if event_sub_type != BotEventSubTypes.COULD_NOT_JOIN_MEETING_LEAVE_REQUESTED_BEFORE_BOT_JOINED:
+            raise ValidationError(f"Event {BotEventTypes.type_to_api_code(BotEventTypes.COULD_NOT_JOIN)} with sub type {BotEventSubTypes.sub_type_to_api_code(event_sub_type)} not allowed when bot is in state {BotStates.state_to_api_code(old_state)}.")
+
     # This method handles sets the state for recordings and credits for when the bot transitions to a post meeting state
     # It returns a dictionary of additional event metadata that should be added to the event
     @classmethod
@@ -2012,6 +2041,9 @@ class BotEventManager:
                     if old_state not in valid_from_states:
                         valid_states_labels = [BotStates.state_to_api_code(state) for state in valid_from_states]
                         raise ValidationError(f"Event {BotEventTypes.type_to_api_code(event_type)} not allowed when bot is in state {BotStates.state_to_api_code(old_state)}. It is only allowed in these states: {', '.join(valid_states_labels)}")
+
+                    if event_type == BotEventTypes.COULD_NOT_JOIN:
+                        cls.validate_could_not_join_event(bot=bot, old_state=old_state, event_sub_type=event_sub_type)
 
                     # Update bot state based on 'to' definition
                     if callable(transition["to"]):
