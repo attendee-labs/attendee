@@ -307,7 +307,8 @@ class TeamsUIMethods:
 
         seconds_since_meeting_ended_but_we_should_retry = self.driver.execute_script("return window.connectionStateManager?.getSecondsSinceDidMeetingEndButShouldRetryJoin()")
         if seconds_since_meeting_ended_but_we_should_retry is not None and seconds_since_meeting_ended_but_we_should_retry >= meeting_ended_but_should_retry_join_duration_threshold_seconds:
-            logger.info(f"Meeting ended but we should retry for {seconds_since_meeting_ended_but_we_should_retry} seconds. Raising UiTeamsBlockingUsException")
+            logger.info(f"Meeting ended but we should retry for {seconds_since_meeting_ended_but_we_should_retry} seconds. Resetting self.meeting_uuid and raising UiTeamsBlockingUsException")
+            self.meeting_uuid = None
             raise UiTeamsBlockingUsException("Meeting ended but we should retry", step)
 
     def click_show_more_button(self):
