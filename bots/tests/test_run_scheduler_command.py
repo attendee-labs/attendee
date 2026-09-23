@@ -5,7 +5,7 @@ import signal
 import tempfile
 from unittest.mock import MagicMock, patch
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.utils import timezone as django_timezone
 
 from accounts.models import Organization
@@ -125,7 +125,7 @@ class RunSchedulerCommandTestCase(TestCase):
 
         command = Command()
 
-        with patch.dict("os.environ", {"SCHEDULED_BOT_PAST_JOIN_AT_TOLERANCE_SECONDS": "600"}):
+        with override_settings(SCHEDULED_BOT_PAST_JOIN_AT_TOLERANCE_SECONDS=600):
             with patch("bots.tasks.launch_scheduled_bot_task.launch_scheduled_bot.delay") as mock_delay:
                 with patch("django.utils.timezone.now", return_value=self.now):
                     command._run_scheduled_bots()
@@ -145,8 +145,8 @@ class RunSchedulerCommandTestCase(TestCase):
         mock_redis.hscan_iter.return_value = iter([])
         command._redis_client = mock_redis
 
-        env = {"SCHEDULED_BOT_JITTER_START_SECONDS": str(jitter_start), "SCHEDULED_BOT_JITTER_END_SECONDS": str(jitter_end), "SCHEDULED_BOT_PAST_JOIN_AT_TOLERANCE_SECONDS": "600"}
-        with patch.dict("os.environ", env):
+        env = {"SCHEDULED_BOT_JITTER_START_SECONDS": str(jitter_start), "SCHEDULED_BOT_JITTER_END_SECONDS": str(jitter_end)}
+        with patch.dict("os.environ", env), override_settings(SCHEDULED_BOT_PAST_JOIN_AT_TOLERANCE_SECONDS=600):
             with patch("bots.tasks.launch_scheduled_bot_task.launch_scheduled_bot.delay") as mock_delay:
                 with patch("bots.tasks.launch_scheduled_bot_task.launch_scheduled_bot.apply_async") as mock_apply_async:
                     with patch("django.utils.timezone.now", return_value=self.now):

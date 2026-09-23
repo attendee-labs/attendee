@@ -32,15 +32,6 @@ CALENDAR_SYNC_THRESHOLD_HOURS = 24  # The longest a calendar can go without havi
 # Opt-in: unset by default, so heartbeat writes are a no-op unless configured.
 SCHEDULER_HEARTBEAT_FILE = os.getenv("SCHEDULER_HEARTBEAT_FILE")
 
-# How far in the past a scheduled bot's join_at can be and still get launched. This covers short
-# scheduler outages (e.g. a restart or rolling deploy). Bots missed by more than this are treated
-# as failures and cleaned up by the clean_up_bots_with_heartbeat_timeout_or_that_never_launched command.
-DEFAULT_SCHEDULED_BOT_PAST_JOIN_AT_TOLERANCE_SECONDS = 300
-
-
-def get_scheduled_bot_past_join_at_tolerance_seconds():
-    return int(os.getenv("SCHEDULED_BOT_PAST_JOIN_AT_TOLERANCE_SECONDS", DEFAULT_SCHEDULED_BOT_PAST_JOIN_AT_TOLERANCE_SECONDS))
-
 
 class Command(BaseCommand):
     help = "Runs celery tasks for scheduled bots."
@@ -197,7 +188,7 @@ class Command(BaseCommand):
         join_at_upper_threshold = timezone.now() + timezone.timedelta(seconds=jitter_end_seconds)
         # If we miss a scheduled bot by more than the past join_at tolerance, don't bother launching it, it's a failure
         # and it'll be cleaned up by the clean_up_bots_with_heartbeat_timeout_or_that_never_launched command
-        join_at_lower_threshold = timezone.now() - timezone.timedelta(seconds=get_scheduled_bot_past_join_at_tolerance_seconds())
+        join_at_lower_threshold = timezone.now() - timezone.timedelta(seconds=settings.SCHEDULED_BOT_PAST_JOIN_AT_TOLERANCE_SECONDS)
 
         join_at_jitter_threshold = timezone.now() + timezone.timedelta(seconds=jitter_start_seconds)
 
@@ -256,7 +247,7 @@ class Command(BaseCommand):
         join_at_upper_threshold = timezone.now() + timezone.timedelta(minutes=5)
         # If we miss a scheduled bot by more than the past join_at tolerance, don't bother launching it, it's a failure
         # and it'll be cleaned up by the clean_up_bots_with_heartbeat_timeout_or_that_never_launched command
-        join_at_lower_threshold = timezone.now() - timezone.timedelta(seconds=get_scheduled_bot_past_join_at_tolerance_seconds())
+        join_at_lower_threshold = timezone.now() - timezone.timedelta(seconds=settings.SCHEDULED_BOT_PAST_JOIN_AT_TOLERANCE_SECONDS)
 
         with transaction.atomic():
             bots_to_launch = Bot.objects.filter(state=BotStates.SCHEDULED, join_at__lte=join_at_upper_threshold, join_at__gte=join_at_lower_threshold).select_for_update(skip_locked=True)
