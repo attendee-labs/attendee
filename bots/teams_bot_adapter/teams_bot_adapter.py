@@ -156,7 +156,7 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
 
     def get_staged_bot_join_delay_seconds(self):
         if self.teams_bot_login_should_be_used and self.teams_bot_login_is_available:
-            return 35
+            return 40
         return 15
 
     def subclass_specific_after_bot_joined_meeting(self):
