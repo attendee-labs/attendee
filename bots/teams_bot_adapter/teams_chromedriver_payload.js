@@ -3678,8 +3678,9 @@ class CallManager {
 
         const call = this.activeCall;
 
-        if (!callTogglingService.isIncomingVideoOn(call)) {
-            steps.push('signed-in user method: incoming video already off');
+        const initialIsIncomingVideoOn = callTogglingService.isIncomingVideoOn(call);
+        if (!initialIsIncomingVideoOn) {
+            steps.push('signed-in user method: incoming video already off (isIncomingVideoOn returned ' + String(initialIsIncomingVideoOn) + ')');
             return true;
         }
 
@@ -3688,15 +3689,17 @@ class CallManager {
 
         const startedAt = Date.now();
         const deadline = startedAt + 5000;
+        let lastIsIncomingVideoOn;
         while (Date.now() < deadline) {
             await new Promise(resolve => setTimeout(resolve, 250));
-            if (!callTogglingService.isIncomingVideoOn(call)) {
-                steps.push('signed-in user method: verified incoming video off after ' + (Date.now() - startedAt) + 'ms');
+            lastIsIncomingVideoOn = callTogglingService.isIncomingVideoOn(call);
+            if (!lastIsIncomingVideoOn) {
+                steps.push('signed-in user method: verified incoming video off after ' + (Date.now() - startedAt) + 'ms (isIncomingVideoOn returned ' + String(lastIsIncomingVideoOn) + ')');
                 return true;
             }
         }
 
-        steps.push('signed-in user method: incoming video still on after 5000ms');
+        steps.push('signed-in user method: incoming video still on after 5000ms (isIncomingVideoOn returned ' + String(lastIsIncomingVideoOn) + ')');
         return false;
     }
 
