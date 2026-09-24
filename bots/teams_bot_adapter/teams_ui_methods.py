@@ -534,7 +534,8 @@ class TeamsUIMethods:
         # Click the captions button
         self.click_captions_button()
 
-        self.set_layout(self.get_layout_to_select())
+        if not self.disable_incoming_video:
+            self.set_layout(self.get_layout_to_select())
 
         if self.disable_incoming_video:
             self.disable_incoming_video_programatically_with_fallback_to_ui()
