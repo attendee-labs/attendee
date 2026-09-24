@@ -2009,6 +2009,8 @@ const subCodeValueForDeniedRequestToJoin = 5854;
 const subCodeForAnonymousJoinDisabledForTenantByPolicy = 5723;
 const subCodeForRemovedFromConversationByAnotherParticipant = 5000;
 const subCodeForRemovedFromConversationByAnotherParticipantAlternate = 5300;
+const subCodeForNoNonHiddenParticipantsInTheIncomingRoster = 5020;
+const subCodeForNoParticipantsInTheOutgoingRoster = 5012;
 
 // A conversation end message names its sender when a participant ended the conversation for us,
 // by removing us from the meeting or from the lobby. It has no sender when the conversation
@@ -2060,7 +2062,8 @@ function handleConversationEnd(eventDataObject) {
         type: 'ConversationEndPayload',
         body: eventDataObjectBody,
         headers: eventDataObject?.headers,
-        currentCallId: window.callManager?.getCallId()
+        currentCallId: window.callManager?.getCallId(),
+        currentCallState: window.callManager?.getCallState()
     });
 
     const meetingId = extractCallIdFromEventDataObject(eventDataObject);
@@ -2088,6 +2091,38 @@ function handleConversationEnd(eventDataObject) {
             change: 'anonymous_join_disabled_for_tenant_by_policy',
             meetingId: meetingId
         });
+        return;
+    }
+
+    const meetingEndedButShouldRetryJoinSubCodes = [
+        subCodeForNoNonHiddenParticipantsInTheIncomingRoster,
+        subCodeForNoParticipantsInTheOutgoingRoster
+    ];
+
+    // Very rarely, Teams will send a meeting ended signal with two special subcodes. When we receive these, it marks a "false"
+    // ending of the meeting. So we should restart if we see this signal, not give up.
+    if (meetingEndedButShouldRetryJoinSubCodes.includes(subCode) && window.connectionStateManager?.getCanRetryJoinOnMeetingEnd())
+    {
+        // This doesn't do anything, it's just to show up in the logs.
+        window.ws?.sendJson({
+            type: 'MeetingStatusChange',
+            change: 'meeting_ended_but_should_retry_join',
+            meetingId: meetingId
+        });
+        // Wait a bit before signaling the retry, so that other signals have a chance to be processed first.
+        setTimeout(() => {
+            window.connectionStateManager.setDidMeetingEndButShouldRetryJoin(true);
+        }, 10000);
+        // Send the meeting ended message with a delay in case the signal to retry is not acted on.
+        // If it does retry, chrome will be closed so the delayed message will not be sent.
+        setTimeout(() => {
+            window.ws?.sendJson({
+                type: 'MeetingStatusChange',
+                change: 'meeting_ended',
+                meetingId: meetingId,
+                remover: remover
+            });
+        }, 90000);
         return;
     }
 
@@ -3514,6 +3549,30 @@ window.botOutputManager = botOutputManager;
     };
 })();
 
+class ConnectionStateManager {
+    constructor() {
+        this.didMeetingEndButShouldRetryJoin = false;
+        // Set to false by the python side once it stops polling getDidMeetingEndButShouldRetryJoin
+        this.canRetryJoinOnMeetingEnd = true;
+    }
+
+    getDidMeetingEndButShouldRetryJoin() {
+        return this.didMeetingEndButShouldRetryJoin;
+    }
+
+    setDidMeetingEndButShouldRetryJoin(didMeetingEndButShouldRetryJoin) {
+        this.didMeetingEndButShouldRetryJoin = didMeetingEndButShouldRetryJoin;
+    }
+
+    getCanRetryJoinOnMeetingEnd() {
+        return this.canRetryJoinOnMeetingEnd;
+    }
+
+    disableRetryJoinOnMeetingEnd() {
+        this.canRetryJoinOnMeetingEnd = false;
+    }
+}
+
 class CallManager {
     constructor() {
         this.activeCall = null;
@@ -3558,6 +3617,33 @@ class CallManager {
         }
 
         return this.activeCall._callId;
+    }
+
+    getCallState() {
+        this.setActiveCall();
+        if (!this.activeCall) {
+            return;
+        }
+
+        // Call states:
+        // 0 - None
+        // 1 - Notified
+        // 2 - Connecting
+        // 3 - Connected
+        // 4 - LocalHold
+        // 5 - RemoteHold
+        // 6 - Disconnecting
+        // 7 - Disconnected
+        // 8 - Observing
+        // 9 - EarlyMedia
+        // 10 - InLobby
+        // 11 - Preheating
+        // 12 - Preheated
+        // 13 - Staging
+        // 14 - NegotiatingEncryption
+        // 15 - NegotiatingEncryptionLobby
+
+        return this.activeCall.state;
     }
 
     getCurrentUserId() {
@@ -3872,6 +3958,9 @@ window.callManager = callManager;
 
 const participantsPoller = new ParticipantsPoller();
 window.participantsPoller = participantsPoller;
+
+const connectionStateManager = new ConnectionStateManager();
+window.connectionStateManager = connectionStateManager;
 
 if (window.teamsInitialData?.shouldLogNetworkRequests) {
     

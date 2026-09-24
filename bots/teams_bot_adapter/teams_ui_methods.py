@@ -301,6 +301,16 @@ class TeamsUIMethods:
             logger.info("Waiting room timeout exceeded. Raising UiCouldNotJoinMeetingWaitingRoomTimeoutException")
             raise UiCouldNotJoinMeetingWaitingRoomTimeoutException("Waiting room timeout exceeded", step)
 
+    def check_if_meeting_ended_but_we_should_retry(self, step):
+        did_meeting_end_but_we_should_retry = self.driver.execute_script("return window.connectionStateManager?.getDidMeetingEndButShouldRetryJoin()")
+        if did_meeting_end_but_we_should_retry:
+            logger.info("Meeting ended but we should retry. Resetting self.meeting_uuid and raising UiTeamsBlockingUsException")
+            self.meeting_uuid = None
+            raise UiTeamsBlockingUsException("Meeting ended but we should retry", step)
+
+    def disable_retry_join_on_meeting_end(self):
+        self.driver.execute_script("window.connectionStateManager?.disableRetryJoinOnMeetingEnd()")
+
     def click_show_more_button(self):
         waiting_room_timeout_started_at = time.time()
         num_attempts = self.automatic_leave_configuration.waiting_room_timeout_seconds * 10
@@ -310,12 +320,14 @@ class TeamsUIMethods:
                 show_more_button = WebDriverWait(self.driver, 1).until(EC.presence_of_element_located((By.ID, "callingButtons-showMoreBtn")))
                 logger.info("Clicking the show more button...")
                 self.click_element(show_more_button, "click_show_more_button")
+                self.disable_retry_join_on_meeting_end()
                 return
             except TimeoutException:
                 self.look_for_sign_in_required_element("click_show_more_button")
                 self.check_if_blocked_by_captcha("click_show_more_button")
                 self.look_for_denied_your_request_element("click_show_more_button")
                 self.look_for_we_could_not_connect_you_element("click_show_more_button")
+                self.check_if_meeting_ended_but_we_should_retry("click_show_more_button")
 
                 self.check_if_waiting_room_timeout_exceeded(waiting_room_timeout_started_at, "click_show_more_button")
                 self.check_if_waiting_room_connection_failed(waiting_room_timeout_started_at, "click_show_more_button")
