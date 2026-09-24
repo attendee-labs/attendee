@@ -2099,20 +2099,20 @@ function handleConversationEnd(eventDataObject) {
         subCodeForNoParticipantsInTheOutgoingRoster
     ];
 
-    const meetingEndedButShouldRetryJoinCallStates = [
-        2, // Connecting
-        10 // InLobby
-    ];
-
-    if (meetingEndedButShouldRetryJoinSubCodes.includes(subCode) && meetingEndedButShouldRetryJoinCallStates.includes(window.callManager?.getCallState()))
+    // Very rarely, Teams will send a meeting ended signal with two special subcodes. When we receive these, it marks a "false"
+    // ending of the meeting. So we should restart if we see this signal, not give up.
+    if (meetingEndedButShouldRetryJoinSubCodes.includes(subCode) && window.connectionStateManager?.getCanRetryJoinOnMeetingEnd())
     {
-        window.connectionStateManager?.setDidMeetingEndButShouldRetryJoin(true);
         window.ws?.sendJson({
             type: 'MeetingStatusChange',
             change: 'meeting_ended_but_should_retry_join',
             meetingId: meetingId
         });
-        // Hacky, but send the meeting end message with a delay in case the python side doesn't retry.
+        // Wait a bit before signaling the retry, so that other signals have a chance to be processed first.
+        setTimeout(() => {
+            window.connectionStateManager.setDidMeetingEndButShouldRetryJoin(true);
+        }, 10000);
+        // Send the meeting ended message with a delay in case the signal to retry is not acted on.
         // If it does retry, chrome will be closed so the delayed message will not be sent.
         setTimeout(() => {
             window.ws?.sendJson({
@@ -3551,28 +3551,24 @@ window.botOutputManager = botOutputManager;
 class ConnectionStateManager {
     constructor() {
         this.didMeetingEndButShouldRetryJoin = false;
-        this.didMeetingEndButShouldRetryJoinSetAt = null;
+        // Set to false by the python side once it stops polling getDidMeetingEndButShouldRetryJoin
+        this.canRetryJoinOnMeetingEnd = true;
     }
 
     getDidMeetingEndButShouldRetryJoin() {
         return this.didMeetingEndButShouldRetryJoin;
     }
 
-    getSecondsSinceDidMeetingEndButShouldRetryJoin() {
-        if (!this.didMeetingEndButShouldRetryJoin) {
-            return null;
-        }
-        return (performance.now() - this.didMeetingEndButShouldRetryJoinSetAt) / 1000;
+    setDidMeetingEndButShouldRetryJoin(didMeetingEndButShouldRetryJoin) {
+        this.didMeetingEndButShouldRetryJoin = didMeetingEndButShouldRetryJoin;
     }
 
-    setDidMeetingEndButShouldRetryJoin(didMeetingEndButShouldRetryJoin) {
-        if (didMeetingEndButShouldRetryJoin && !this.didMeetingEndButShouldRetryJoin) {
-            this.didMeetingEndButShouldRetryJoinSetAt = performance.now();
-        }
-        if (!didMeetingEndButShouldRetryJoin) {
-            this.didMeetingEndButShouldRetryJoinSetAt = null;
-        }
-        this.didMeetingEndButShouldRetryJoin = didMeetingEndButShouldRetryJoin;
+    getCanRetryJoinOnMeetingEnd() {
+        return this.canRetryJoinOnMeetingEnd;
+    }
+
+    disableRetryJoinOnMeetingEnd() {
+        this.canRetryJoinOnMeetingEnd = false;
     }
 }
 

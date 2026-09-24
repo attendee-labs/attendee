@@ -302,14 +302,14 @@ class TeamsUIMethods:
             raise UiCouldNotJoinMeetingWaitingRoomTimeoutException("Waiting room timeout exceeded", step)
 
     def check_if_meeting_ended_but_we_should_retry(self, step):
-        # How long the meeting must stay in the "ended but should retry join" state before we give up and retry
-        meeting_ended_but_should_retry_join_duration_threshold_seconds = 10
-
-        seconds_since_meeting_ended_but_we_should_retry = self.driver.execute_script("return window.connectionStateManager?.getSecondsSinceDidMeetingEndButShouldRetryJoin()")
-        if seconds_since_meeting_ended_but_we_should_retry is not None and seconds_since_meeting_ended_but_we_should_retry >= meeting_ended_but_should_retry_join_duration_threshold_seconds:
-            logger.info(f"Meeting ended but we should retry for {seconds_since_meeting_ended_but_we_should_retry} seconds. Resetting self.meeting_uuid and raising UiTeamsBlockingUsException")
+        did_meeting_end_but_we_should_retry = self.driver.execute_script("return window.connectionStateManager?.getDidMeetingEndButShouldRetryJoin()")
+        if did_meeting_end_but_we_should_retry:
+            logger.info("Meeting ended but we should retry. Resetting self.meeting_uuid and raising UiTeamsBlockingUsException")
             self.meeting_uuid = None
             raise UiTeamsBlockingUsException("Meeting ended but we should retry", step)
+
+    def disable_retry_join_on_meeting_end(self):
+        self.driver.execute_script("window.connectionStateManager?.disableRetryJoinOnMeetingEnd()")
 
     def click_show_more_button(self):
         waiting_room_timeout_started_at = time.time()
@@ -320,6 +320,7 @@ class TeamsUIMethods:
                 show_more_button = WebDriverWait(self.driver, 1).until(EC.presence_of_element_located((By.ID, "callingButtons-showMoreBtn")))
                 logger.info("Clicking the show more button...")
                 self.click_element(show_more_button, "click_show_more_button")
+                self.disable_retry_join_on_meeting_end()
                 return
             except TimeoutException:
                 self.look_for_sign_in_required_element("click_show_more_button")

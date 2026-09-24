@@ -1324,22 +1324,22 @@ class TestTeamsBot(TransactionTestCase):
         MockDisplay,
         MockSaveDebugRecording,
     ):
-        """Test that when the Teams page stays in the "meeting ended but should retry join"
-        state for at least the threshold duration while waiting for the show more button,
-        check_if_meeting_ended_but_we_should_retry raises UiTeamsBlockingUsException and
-        the bot retries joining.
+        """Test that when the Teams page signals "meeting ended but should retry join" while
+        waiting for the show more button, check_if_meeting_ended_but_we_should_retry raises
+        UiTeamsBlockingUsException and the bot retries joining.
 
         The real click_show_more_button loop and check_if_meeting_ended_but_we_should_retry
         run unmocked — only WebDriverWait, find_element_by_selector and the value returned
-        by connectionStateManager.getSecondsSinceDidMeetingEndButShouldRetryJoin are controlled.
+        by connectionStateManager.getDidMeetingEndButShouldRetryJoin are controlled.
 
         Flow:
         1. First join attempt: WebDriverWait times out in click_show_more_button
-        2. getSecondsSinceDidMeetingEndButShouldRetryJoin returns 5 (below threshold) -> no exception
+        2. getDidMeetingEndButShouldRetryJoin returns False -> no exception
         3. WebDriverWait times out again
-        4. getSecondsSinceDidMeetingEndButShouldRetryJoin returns 12 (above threshold) -> UiTeamsBlockingUsException
+        4. getDidMeetingEndButShouldRetryJoin returns True -> UiTeamsBlockingUsException
         5. Exception caught in repeatedly_attempt_to_join_meeting, which retries
-        6. Second join attempt: WebDriverWait finds the show more button, join succeeds
+        6. Second join attempt: WebDriverWait finds the show more button, join succeeds,
+           and disableRetryJoinOnMeetingEnd is called exactly once
         """
         self.bot.settings = {"recording_settings": {"format": "none"}}
         self.bot.save()
@@ -1352,14 +1352,18 @@ class TestTeamsBot(TransactionTestCase):
         mock_driver = create_mock_teams_driver()
         MockChromeDriver.return_value = mock_driver
 
-        seconds_since_meeting_ended_but_should_retry_values = [5, 12]
-        seconds_since_meeting_ended_but_should_retry_queries = []
+        did_meeting_end_but_should_retry_values = [False, True]
+        did_meeting_end_but_should_retry_queries = []
+        disable_retry_join_on_meeting_end_calls = []
 
         def mock_execute_script(script, *args):
-            if "getSecondsSinceDidMeetingEndButShouldRetryJoin" in script:
-                seconds_since_meeting_ended_but_should_retry_queries.append(script)
-                if seconds_since_meeting_ended_but_should_retry_values:
-                    return seconds_since_meeting_ended_but_should_retry_values.pop(0)
+            if "getDidMeetingEndButShouldRetryJoin" in script:
+                did_meeting_end_but_should_retry_queries.append(script)
+                if did_meeting_end_but_should_retry_values:
+                    return did_meeting_end_but_should_retry_values.pop(0)
+                return False
+            if "disableRetryJoinOnMeetingEnd" in script:
+                disable_retry_join_on_meeting_end_calls.append(script)
                 return None
             return "test_result"
 
@@ -1433,9 +1437,11 @@ class TestTeamsBot(TransactionTestCase):
 
             time.sleep(1.25)
 
-            # The meeting ended check ran twice during the first attempt: once below the threshold, once above it
+            # The meeting ended check ran twice during the first attempt: once before the retry was signaled, once after
             self.assertEqual(mock_check_meeting_ended.call_count, 2)
-            self.assertEqual(len(seconds_since_meeting_ended_but_should_retry_queries), 2)
+            self.assertEqual(len(did_meeting_end_but_should_retry_queries), 2)
+            # Only the successful second attempt disables the retry (the first attempt exited via the retry exception)
+            self.assertEqual(len(disable_retry_join_on_meeting_end_calls), 1)
             for call in mock_check_meeting_ended.call_args_list:
                 self.assertEqual(call.args[1], "click_show_more_button")
 
