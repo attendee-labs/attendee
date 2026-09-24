@@ -1288,7 +1288,7 @@ class GoogleMeetUIMethods:
             )
             logger.info("Clicking the leave button")
             try:
-                leave_button.click()
+                self.click_element_forcefully(leave_button, "click_leave_button")
                 return
             except Exception as e:
                 last_attempt = attempt_index == num_attempts - 1
