@@ -2103,6 +2103,7 @@ function handleConversationEnd(eventDataObject) {
     // ending of the meeting. So we should restart if we see this signal, not give up.
     if (meetingEndedButShouldRetryJoinSubCodes.includes(subCode) && window.connectionStateManager?.getCanRetryJoinOnMeetingEnd())
     {
+        // This doesn't do anything, it's just to show up in the logs.
         window.ws?.sendJson({
             type: 'MeetingStatusChange',
             change: 'meeting_ended_but_should_retry_join',
