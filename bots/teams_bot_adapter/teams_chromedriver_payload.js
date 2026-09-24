@@ -3657,6 +3657,131 @@ class CallManager {
         // return this.activeCall.currentUserSkypeIdentity?.id;
     }
 
+    async disableIncomingVideoForSignedInUser(steps) {
+        this.setActiveCall();
+        if (!this.activeCall) {
+            steps.push('signed-in user method: no active call');
+            return false;
+        }
+
+        if (!window.msteamscalling?.deref) {
+            steps.push('signed-in user method: window.msteamscalling.deref not available');
+            return false;
+        }
+
+        const microsoftCalling = window.msteamscalling.deref();
+        const callTogglingService = microsoftCalling?.callTogglingService;
+        if (!callTogglingService) {
+            steps.push('signed-in user method: callTogglingService not available');
+            return false;
+        }
+
+        const call = this.activeCall;
+
+        const initialIsIncomingVideoOn = callTogglingService.isIncomingVideoOn(call);
+        if (!initialIsIncomingVideoOn) {
+            steps.push('signed-in user method: incoming video already off (isIncomingVideoOn returned ' + String(initialIsIncomingVideoOn) + ')');
+            return true;
+        }
+
+        callTogglingService.toggleIncomingVideo(call);
+        steps.push('signed-in user method: called toggleIncomingVideo');
+
+        const startedAt = Date.now();
+        const deadline = startedAt + 5000;
+        let lastIsIncomingVideoOn;
+        while (Date.now() < deadline) {
+            await new Promise(resolve => setTimeout(resolve, 250));
+            lastIsIncomingVideoOn = callTogglingService.isIncomingVideoOn(call);
+            if (!lastIsIncomingVideoOn) {
+                steps.push('signed-in user method: verified incoming video off after ' + (Date.now() - startedAt) + 'ms (isIncomingVideoOn returned ' + String(lastIsIncomingVideoOn) + ')');
+                return true;
+            }
+        }
+
+        steps.push('signed-in user method: incoming video still on after 5000ms (isIncomingVideoOn returned ' + String(lastIsIncomingVideoOn) + ')');
+        return false;
+    }
+
+    findCallingScreenLayoutContext() {
+        for (const el of document.querySelectorAll('*')) {
+            const fiberKey = Object.keys(el).find(k => k.startsWith('__reactFiber$'));
+            if (!fiberKey) continue;
+            for (let fiber = el[fiberKey]; fiber; fiber = fiber.return) {
+                const value = fiber.memoizedProps?.value;
+                if (value && typeof value.updateCallingScreenLayout === 'function' && value.callingScreenLayout)
+                    return value;
+            }
+        }
+        return null;
+    }
+
+    async disableIncomingVideoForAnonymousUser(steps) {
+        const ctx = this.findCallingScreenLayoutContext();
+        if (!ctx) {
+            steps.push('anonymous user method: callingScreenLayout context not found');
+            return false;
+        }
+
+        if (ctx.callingScreenLayout.isIncomingVideoOn === false) {
+            steps.push('anonymous user method: incoming video already off');
+            return true;
+        }
+
+        await ctx.updateCallingScreenLayout({ isIncomingVideoOn: false });
+        steps.push('anonymous user method: called updateCallingScreenLayout({ isIncomingVideoOn: false })');
+
+        // The context value is replaced on re-render, so look it up again on each poll.
+        const startedAt = Date.now();
+        const deadline = startedAt + 5000;
+        while (Date.now() < deadline) {
+            await new Promise(resolve => setTimeout(resolve, 250));
+            if (this.findCallingScreenLayoutContext()?.callingScreenLayout?.isIncomingVideoOn === false) {
+                steps.push('anonymous user method: verified incoming video off after ' + (Date.now() - startedAt) + 'ms');
+                return true;
+            }
+        }
+
+        steps.push('anonymous user method: incoming video still on after 5000ms');
+        return false;
+    }
+
+    async disableIncomingVideo() {
+        const out = { ok: false, steps: [] };
+
+        try {
+            this.setActiveCall();
+            if (!this.activeCall) {
+                out.error = 'no active call';
+                return out;
+            }
+
+            try {
+                if (await this.disableIncomingVideoForSignedInUser(out.steps)) {
+                    out.ok = true;
+                    return out;
+                }
+            } catch (e) {
+                out.steps.push('signed-in user method: threw ' + ((e && e.message) ? e.message : String(e)));
+            }
+
+            try {
+                if (await this.disableIncomingVideoForAnonymousUser(out.steps)) {
+                    out.ok = true;
+                    return out;
+                }
+            } catch (e) {
+                out.steps.push('anonymous user method: threw ' + ((e && e.message) ? e.message : String(e)));
+            }
+
+            out.error = 'all methods failed to disable incoming video';
+        } catch (e) {
+            out.error = 'disableIncomingVideo threw: ' + ((e && e.message) ? e.message : String(e));
+        }
+
+        return out;
+    }
+
     disableVideoEffects() {
         try {
             this.setActiveCall();

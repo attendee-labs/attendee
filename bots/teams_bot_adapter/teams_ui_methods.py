@@ -534,10 +534,11 @@ class TeamsUIMethods:
         # Click the captions button
         self.click_captions_button()
 
-        self.set_layout(self.get_layout_to_select())
+        if not self.disable_incoming_video:
+            self.set_layout(self.get_layout_to_select())
 
         if self.disable_incoming_video:
-            self.disable_incoming_video_in_ui()
+            self.disable_incoming_video_programatically_with_fallback_to_ui()
 
         self.ready_to_show_bot_image()
 
@@ -555,6 +556,40 @@ class TeamsUIMethods:
             logger.info("Video effects disabled programmatically")
         else:
             logger.error("Failed to disable video effects programmatically")
+
+    def disable_incoming_video_programatically_with_fallback_to_ui(self):
+        """Stop incoming video via window.callManager.disableIncomingVideo in the chromedriver payload,
+        which uses the callTogglingService for signed-in bots and the callingScreenLayout context for
+        anonymous bots, instead of clicking through the View menu.
+
+        If the call fails or the state can't be verified, we fall back to driving the UI.
+        """
+        logger.info("Disabling incoming video programmatically")
+
+        try:
+            result = self.driver.execute_async_script(
+                """
+                const callback = arguments[arguments.length - 1];
+                if (!window.callManager?.disableIncomingVideo) {
+                    callback({ ok: false, error: 'window.callManager.disableIncomingVideo not available' });
+                    return;
+                }
+                window.callManager.disableIncomingVideo()
+                    .then(callback)
+                    .catch((e) => callback({ ok: false, error: (e && e.message) ? e.message : String(e) }));
+                """
+            )
+        except Exception as e:
+            logger.warning(f"Error running disableIncomingVideo: {e}. Falling back to the UI.")
+            self.disable_incoming_video_in_ui()
+            return
+
+        if not result or not result.get("ok"):
+            logger.warning(f"Failed to disable incoming video programmatically: {result.get('error') if result else 'no result'}. Steps: {result.get('steps') if result else None}. Falling back to the UI.")
+            self.disable_incoming_video_in_ui()
+            return
+
+        logger.info(f"Programmatic disable incoming video succeeded. Steps: {result.get('steps')}")
 
     def disable_incoming_video_in_ui(self):
         logger.info("Waiting for the view button...")
