@@ -1,0 +1,55 @@
+{
+  "platforms": {
+    "google_meet": {
+      "domain_allowlist": [
+        "accounts.google.com",
+        "accounts.google.co.in",
+        "accounts.google.co.id",
+        "accounts.google.com.br",
+        "accounts.google.com.mx",
+        "accounts.google.co.jp",
+        "accounts.google.de",
+        "accounts.google.co.uk",
+        "accounts.google.fr",
+        "accounts.google.ca",
+        "accounts.google.com.au",
+        "accounts.google.co.kr",
+        "accounts.google.es",
+        "accounts.google.it",
+        "accounts.google.com.ph",
+        "accounts.google.com.ng",
+        "accounts.google.com.pk",
+        "accounts.google.com.vn",
+        "accounts.google.nl",
+        "accounts.google.com.sg",
+        "workspace.google.com",
+        "mail.google.com",
+        "meet.google.com",
+        "www.google.com",
+        ".apps.google.com"
+      ]
+    },
+    "teams": {
+      "domain_allowlist": [
+        "teams.microsoft.com",
+        "teams.live.com",
+        "login.live.com",
+        "teams.microsoft.us",
+        "m365.cloud.microsoft",
+        "static.microsoft",
+        "login.microsoftonline.com",
+        "login.microsoftonline.us",
+        "www.office.com"
+      ],
+      "selectors": {
+        "show_more_button": "#callingButtons-showMoreBtn"
+      }
+    },
+    "zoom_web": {
+      "domain_allowlist": [
+        "www.zoom.com",
+        "127.0.0.1"
+      ]
+    }
+  }
+}
