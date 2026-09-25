@@ -145,4 +145,10 @@ SELECTOR_TYPE_TO_BY = {
 def get_platform_selector(platform, selector_name):
     """Returns a (By, selector) tuple usable with selenium's find_element and expected_conditions."""
     selector_config = _get_platform_config(platform)["selectors"][selector_name]
-    return (SELECTOR_TYPE_TO_BY[selector_config["type"]], selector_config["selector"])
+    selector_type = selector_config["type"]
+    selector = selector_config["selector"]
+    if isinstance(selector, list):
+        if selector_type != "xpath":
+            raise ValueError(f"Selector '{selector_name}' for platform '{platform}' is a list, which is only supported for xpath selectors")
+        selector = " | ".join(selector)
+    return (SELECTOR_TYPE_TO_BY[selector_type], selector)

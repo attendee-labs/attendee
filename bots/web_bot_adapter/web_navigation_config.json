@@ -61,7 +61,33 @@
         "login_username_input": { "type": "css", "selector": "input[name=\"loginfmt\"]" },
         "login_username_error": { "type": "id", "selector": "usernameError" },
         "login_password_input": { "type": "css", "selector": "input[name=\"passwd\"]" },
-        "login_submit_button": { "type": "css", "selector": "input[type=\"submit\"]" }
+        "login_submit_button": { "type": "css", "selector": "input[type=\"submit\"]" },
+        "login_incorrect_password_message": { "type": "xpath", "selector": "//*[contains(text(), \"Your account or password is incorrect\")]" },
+        "waiting_to_be_admitted_message": { "type": "xpath", "selector": "//*[contains(text(), \"Someone will let you in soon\")]" },
+        "captcha_message": { "type": "xpath", "selector": "//*[contains(text(), \"Verify you're a real person\")]" },
+        "invalid_meeting_url_message": { "type": "xpath", "selector": "//*[contains(text(), \"Looks like the meeting URL is incorrect. Please check the URL and try again.\")]" },
+        "could_not_connect_message": { "type": "xpath", "selector": "//*[contains(text(), \"we couldn't connect you\")]" },
+        "request_denied_message": {
+          "type": "xpath",
+          "selector": [
+            "//*[contains(text(), \"but you were denied access to the meeting\")]",
+            "//*[contains(text(), \"Your request to join was declined\")]"
+          ]
+        },
+        "sign_in_required_message": {
+          "type": "xpath",
+          "selector": [
+            "//*[contains(text(), \"We need to verify your info before you can join\")]",
+            "//*[contains(text(), \"To join, sign in or use Teams on the web\")]",
+            "//*[contains(text(), \"You need to be signed in to Teams to access this meeting. Sign in with a work or school account and try joining again.\")]",
+            "//*[contains(text(), \"If you're not signed in to a Teams (work or school) account, sign in and try joining again. If you still can't join, contact the organizer.\")]",
+            "//*[contains(text(), \"Sign in to Teams to join, or contact the meeting organizer\")]",
+            "//*[contains(text(), \"To join this Teams meeting, you need to be signed in to an account.\")]",
+            "//*[contains(text(), \"To join this meeting, sign in again or select another account.\")]",
+            "//*[contains(text(), \"Due to org policy, you need to sign in or use Teams on the web to join this meeting.\")]",
+            "//*[contains(text(), \"External participants are not permitted to join before the event begins. Please join after the event has started.\")]"
+          ]
+        }
       }
     },
     "zoom_web": {

@@ -5,7 +5,6 @@ import threading
 import time
 
 from selenium.common.exceptions import ElementClickInterceptedException, ElementNotInteractableException, InvalidSessionIdException, NoSuchElementException, StaleElementReferenceException, TimeoutException
-from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
@@ -58,7 +57,7 @@ class TeamsUIMethods:
             raise UiCouldNotClickElementException("Error occurred when clicking element", step, e)
 
     def look_for_waiting_to_be_admitted_element(self, step):
-        waiting_element = self.find_element_by_selector(By.XPATH, '//*[contains(text(), "Someone will let you in soon")]')
+        waiting_element = self.find_element_by_selector(*get_platform_selector("teams", "waiting_to_be_admitted_message"))
         if waiting_element:
             # Check if we've been waiting too long
             logger.info("Still waiting to be admitted to the meeting after waiting period expired. Raising UiRequestToJoinDeniedException")
@@ -339,27 +338,14 @@ class TeamsUIMethods:
                 raise UiCouldNotLocateElementException("Exception raised in locate_element for click_show_more_button", "click_show_more_button", e)
 
     def look_for_sign_in_required_element(self, step):
-        sign_in_required_messages = [
-            "We need to verify your info before you can join",
-            "To join, sign in or use Teams on the web",
-            "You need to be signed in to Teams to access this meeting. Sign in with a work or school account and try joining again.",
-            "If you're not signed in to a Teams (work or school) account, sign in and try joining again. If you still can't join, contact the organizer.",
-            "Sign in to Teams to join, or contact the meeting organizer",
-            "To join this Teams meeting, you need to be signed in to an account.",
-            "To join this meeting, sign in again or select another account.",
-            "Due to org policy, you need to sign in or use Teams on the web to join this meeting.",
-            "External participants are not permitted to join before the event begins. Please join after the event has started.",
-        ]
-        xpath_conditions = " or ".join([f'contains(text(), "{msg}")' for msg in sign_in_required_messages])
-        xpath_selector = f"//*[{xpath_conditions}]"
-        sign_in_required_element = self.find_element_by_selector(By.XPATH, xpath_selector)
+        sign_in_required_element = self.find_element_by_selector(*get_platform_selector("teams", "sign_in_required_message"))
 
         if sign_in_required_element:
             logger.info("Sign in required. Raising UiLoginRequiredException")
             raise UiLoginRequiredException("Sign in required", step)
 
     def check_if_blocked_by_captcha(self, step):
-        captcha_element = self.find_element_by_selector(By.XPATH, '//*[contains(text(), "Verify you\'re a real person")]')
+        captcha_element = self.find_element_by_selector(*get_platform_selector("teams", "captcha_message"))
         if captcha_element:
             # The captcha may be being shown because we need to login.
             # If a login is available, but we aren't using it, we should login and retry and see if the captcha goes away.
@@ -371,7 +357,7 @@ class TeamsUIMethods:
             raise UiBlockedByCaptchaException("Captcha detected", step)
 
     def look_for_invalid_url_element(self, step):
-        invalid_url_element = self.find_element_by_selector(By.XPATH, '//*[contains(text(), "Looks like the meeting URL is incorrect. Please check the URL and try again.")]')
+        invalid_url_element = self.find_element_by_selector(*get_platform_selector("teams", "invalid_meeting_url_message"))
         if invalid_url_element:
             logger.info("Invalid URL detected. Raising UiMeetingNotFoundException")
             raise UiMeetingNotFoundException("Invalid URL detected", step)
@@ -384,16 +370,13 @@ class TeamsUIMethods:
             raise UiMeetingNotFoundException("Microsoft login form detected", step)
 
     def look_for_we_could_not_connect_you_element(self, step):
-        we_could_not_connect_you_element = self.find_element_by_selector(By.XPATH, '//*[contains(text(), "we couldn\'t connect you")]')
+        we_could_not_connect_you_element = self.find_element_by_selector(*get_platform_selector("teams", "could_not_connect_message"))
         if we_could_not_connect_you_element:
             logger.info("Teams is blocking us for whatever reason, but we can retry. Raising UiTeamsBlockingUsException")
             raise UiTeamsBlockingUsException("Teams is blocking us for whatever reason, but we can retry", step)
 
     def look_for_denied_your_request_element(self, step):
-        denied_your_request_element = self.find_element_by_selector(
-            By.XPATH,
-            '//*[contains(text(), "but you were denied access to the meeting") or contains(text(), "Your request to join was declined")]',
-        )
+        denied_your_request_element = self.find_element_by_selector(*get_platform_selector("teams", "request_denied_message"))
 
         if denied_your_request_element:
             logger.info("Someone in the call denied our request to join. Raising UiRequestToJoinDeniedException")
@@ -740,7 +723,7 @@ class TeamsUIMethods:
         logger.info(f"Redirected to {self.driver.current_url}")
 
         # If we see the incorrect password error, then we should raise an exception
-        incorrect_password_element = self.find_element_by_selector(By.XPATH, '//*[contains(text(), "Your account or password is incorrect")]')
+        incorrect_password_element = self.find_element_by_selector(*get_platform_selector("teams", "login_incorrect_password_message"))
         if incorrect_password_element:
             logger.info("Incorrect password. Raising UiLoginAttemptFailedException")
             raise UiLoginAttemptFailedException("Incorrect password", "login_to_microsoft_account")
