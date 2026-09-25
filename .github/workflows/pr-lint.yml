@@ -2,6 +2,8 @@ name: "Lint PR"
 
 on:
   pull_request:
+    branches:
+      - spectrocloud
     types:
       - opened
       - reopened

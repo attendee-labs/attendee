@@ -2,7 +2,7 @@ name: Create Release
 
 on:
   push:
-    branches: [main]
+    branches: [spectrocloud]
 
 permissions:
   contents: read
@@ -55,6 +55,7 @@ jobs:
           release-type: python
           versioning-strategy: service-pack
           release-as: ${{ steps.version.outputs.release_as }}
+          target-branch: spectrocloud
 
   docker:
     needs: release-please

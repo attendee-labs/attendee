@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [ spectrocloud ]
   pull_request:
-    branches: [ main ]
+    branches: [ spectrocloud ]
 
 permissions:
   contents: read

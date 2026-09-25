@@ -1,5 +1,8 @@
 # Fork releases
 
+`main` tracks upstream. `spectrocloud` is the maintained fork branch; changes
+and release pull requests target it.
+
 Release Please creates service-pack releases from Conventional Commit titles:
 
 ```text
