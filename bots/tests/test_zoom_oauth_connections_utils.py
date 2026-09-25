@@ -14,6 +14,7 @@ from bots.models import (
 from bots.zoom_oauth_connections_utils import (
     ZoomAPIAuthenticationError,
     _handle_zoom_api_authentication_error,
+    _verify_zoom_webhook_signature,
     compute_zoom_webhook_validation_response,
     get_zoom_tokens_via_zoom_oauth_app,
 )
@@ -65,6 +66,38 @@ class TestComputeZoomWebhookValidationResponse(TestCase):
         result2 = compute_zoom_webhook_validation_response(plain_token, "secret2")
 
         self.assertNotEqual(result1["encryptedToken"], result2["encryptedToken"])
+
+
+class TestVerifyZoomWebhookSignature(TestCase):
+    """Test Zoom webhook signature verification with freshness window."""
+
+    def test_valid_signature_with_fresh_timestamp(self):
+        import hashlib
+        import hmac
+        import time
+
+        body = '{"event":"meeting.created"}'
+        secret = "test_secret"
+        timestamp = str(int(time.time()))
+        signature = f"v0={hmac.new(secret.encode(), f'v0:{timestamp}:{body}'.encode(), hashlib.sha256).hexdigest()}"
+
+        self.assertTrue(_verify_zoom_webhook_signature(body, timestamp, signature, secret))
+
+    def test_rejects_stale_timestamp(self):
+        import hashlib
+        import hmac
+        import time
+
+        body = '{"event":"meeting.created"}'
+        secret = "test_secret"
+        timestamp = str(int(time.time()) - 6 * 60)
+        signature = f"v0={hmac.new(secret.encode(), f'v0:{timestamp}:{body}'.encode(), hashlib.sha256).hexdigest()}"
+
+        self.assertFalse(_verify_zoom_webhook_signature(body, timestamp, signature, secret))
+
+    def test_rejects_missing_secret(self):
+        self.assertFalse(_verify_zoom_webhook_signature("{}", str(int(__import__('time').time())), "v0=abc", None))
+        self.assertFalse(_verify_zoom_webhook_signature("{}", str(int(__import__('time').time())), "v0=abc", ""))
 
 
 class TestHandleZoomApiAuthenticationError(TestCase):

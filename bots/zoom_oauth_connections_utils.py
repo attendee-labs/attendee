@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import logging
+import time
 
 import requests
 from django.db import transaction
@@ -12,6 +13,27 @@ from bots.webhook_payloads import zoom_oauth_connection_webhook_payload
 from bots.webhook_utils import trigger_webhook
 
 logger = logging.getLogger(__name__)
+
+# Zoom recommends rejecting webhooks whose timestamp is too far from now (replay protection).
+ZOOM_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS = 5 * 60
+
+
+def _verify_zoom_webhook_signature(body: str, timestamp: str, signature: str, secret: str):
+    """Verify the Zoom webhook signature and timestamp freshness."""
+    if not timestamp or not signature or not secret:
+        return False
+
+    try:
+        request_timestamp = int(timestamp)
+    except (TypeError, ValueError):
+        return False
+
+    if abs(int(time.time()) - request_timestamp) > ZOOM_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS:
+        return False
+
+    hmac_hash = hmac.new(secret.encode("utf-8"), f"v0:{timestamp}:{body}".encode("utf-8"), hashlib.sha256).hexdigest()
+    expected_signature = f"v0={hmac_hash}"
+    return hmac.compare_digest(expected_signature, signature)
 
 
 class ZoomAPIError(Exception):
@@ -44,13 +66,6 @@ def client_id_and_secret_is_valid(client_id: str, client_secret: str) -> bool:
     except Exception as e:
         logger.exception(f"Error validating Zoom OAuth client_id and client_secret: {e}")
         return False
-
-
-def _verify_zoom_webhook_signature(body: str, timestamp: str, signature: str, secret: str):
-    """Verify the Zoom webhook signature."""
-    hmac_hash = hmac.new(secret.encode("utf-8"), f"v0:{timestamp}:{body}".encode("utf-8"), hashlib.sha256).hexdigest()
-    expected_signature = f"v0={hmac_hash}"
-    return expected_signature == signature
 
 
 def compute_zoom_webhook_validation_response(plain_token: str, secret_token: str) -> dict:
