@@ -13,6 +13,7 @@ from bots.teams_bot_adapter.teams_ui_methods import (
     TeamsUIMethods,
 )
 from bots.web_bot_adapter import WebBotAdapter
+from bots.web_bot_adapter.web_navigation_config import get_platform_domain_allowlist
 
 logger = logging.getLogger(__name__)
 
@@ -174,17 +175,7 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
         """
 
     def subclass_specific_domain_allowlist(self):
-        return [
-            "teams.microsoft.com",
-            "teams.live.com",
-            "login.live.com",
-            "teams.microsoft.us",
-            "m365.cloud.microsoft",
-            "static.microsoft",
-            "login.microsoftonline.com",
-            "login.microsoftonline.us",
-            "www.office.com",
-        ]
+        return get_platform_domain_allowlist("teams")
 
     def subclass_specific_chrome_policies(self):
         if not settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:

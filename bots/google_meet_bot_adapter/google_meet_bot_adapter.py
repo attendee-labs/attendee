@@ -9,6 +9,7 @@ from bots.google_meet_bot_adapter.google_meet_ui_methods import (
     GoogleMeetUIMethods,
 )
 from bots.web_bot_adapter import WebBotAdapter
+from bots.web_bot_adapter.web_navigation_config import get_platform_domain_allowlist
 
 logger = logging.getLogger(__name__)
 
@@ -113,34 +114,8 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
             options.add_argument("--guest")
 
     def subclass_specific_domain_allowlist(self):
-        domain_allowlist = [
-            "accounts.google.com",
-            "accounts.google.co.in",  # India
-            "accounts.google.co.id",  # Indonesia
-            "accounts.google.com.br",  # Brazil
-            "accounts.google.com.mx",  # Mexico
-            "accounts.google.co.jp",  # Japan
-            "accounts.google.de",  # Germany
-            "accounts.google.co.uk",  # United Kingdom
-            "accounts.google.fr",  # France
-            "accounts.google.ca",  # Canada
-            "accounts.google.com.au",  # Australia
-            "accounts.google.co.kr",  # South Korea
-            "accounts.google.es",  # Spain
-            "accounts.google.it",  # Italy
-            "accounts.google.com.ph",  # Philippines
-            "accounts.google.com.ng",  # Nigeria
-            "accounts.google.com.pk",  # Pakistan
-            "accounts.google.com.vn",  # Vietnam
-            "accounts.google.nl",  # Netherlands
-            "accounts.google.com.sg",  # Singapore
-            "workspace.google.com",
-            "mail.google.com",
-            "meet.google.com",
-            "www.google.com",
-            ".apps.google.com",
-            settings.SITE_DOMAIN,
-        ]
+        domain_allowlist = get_platform_domain_allowlist("google_meet")
+        domain_allowlist.append(settings.SITE_DOMAIN)
 
         if os.getenv("INTERNAL_SITE_DOMAIN"):
             domain_allowlist.append(os.getenv("INTERNAL_SITE_DOMAIN"))
