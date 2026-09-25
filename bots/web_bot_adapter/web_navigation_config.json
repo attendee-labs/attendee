@@ -42,7 +42,26 @@
         "www.office.com"
       ],
       "selectors": {
-        "show_more_button": "#callingButtons-showMoreBtn"
+        "microphone_button": { "type": "css", "selector": "[data-tid=\"toggle-mute\"]" },
+        "camera_button": { "type": "css", "selector": "[data-tid=\"toggle-video\"]" },
+        "join_button": { "type": "css", "selector": "[data-tid=\"prejoin-join-button\"]" },
+        "cancel_join_button": { "type": "css", "selector": "[data-tid=\"prejoin-cancel-button\"]" },
+        "name_input": { "type": "css", "selector": "[data-tid=\"prejoin-display-name-input\"]" },
+        "language_and_speech_button": { "type": "id", "selector": "LanguageSpeechMenuControl-id" },
+        "closed_captions_button": { "type": "id", "selector": "closed-captions-button" },
+        "show_more_button": { "type": "css", "selector": "#callingButtons-showMoreBtn" },
+        "request_denied_dismiss_button": { "type": "css", "selector": "[data-tid=\"calling-retry-cancelbutton\"]" },
+        "view_button": { "type": "css", "selector": "#view-mode-button, #custom-view-button" },
+        "speaker_view_button": { "type": "css", "selector": "#custom-view-button-SpeakerViewButton, #SpeakerView-button" },
+        "gallery_view_button": { "type": "css", "selector": "#custom-view-button-MixedGridButton, #MixedGrid-button, #MixedGridView-button" },
+        "turn_off_incoming_video_button": { "type": "css", "selector": "#incoming-video-button, #toggle-incoming-video-button, [data-track-module-name=\"incomingVideoButton\"]" },
+        "view_more_options_button": { "type": "css", "selector": "#ViewModeMoreOptionsMenuControl-id" },
+        "leave_button": { "type": "css", "selector": "[data-inp=\"hangup-button\"], #hangup-button" },
+        "microsoft_login_form_email_input": { "type": "css", "selector": "input[name=\"loginfmt\"][type=\"email\"]" },
+        "login_username_input": { "type": "css", "selector": "input[name=\"loginfmt\"]" },
+        "login_username_error": { "type": "id", "selector": "usernameError" },
+        "login_password_input": { "type": "css", "selector": "input[name=\"passwd\"]" },
+        "login_submit_button": { "type": "css", "selector": "input[type=\"submit\"]" }
       }
     },
     "zoom_web": {

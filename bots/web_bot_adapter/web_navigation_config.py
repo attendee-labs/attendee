@@ -7,6 +7,7 @@ from functools import lru_cache
 import redis
 import requests
 from django.conf import settings
+from selenium.webdriver.common.by import By
 
 logger = logging.getLogger(__name__)
 
@@ -134,5 +135,14 @@ def get_platform_domain_allowlist(platform):
     return list(_get_platform_config(platform).get("domain_allowlist", []))
 
 
-def get_platform_css_selector(platform, selector_name):
-    return _get_platform_config(platform)["selectors"][selector_name]
+SELECTOR_TYPE_TO_BY = {
+    "css": By.CSS_SELECTOR,
+    "id": By.ID,
+    "xpath": By.XPATH,
+}
+
+
+def get_platform_selector(platform, selector_name):
+    """Returns a (By, selector) tuple usable with selenium's find_element and expected_conditions."""
+    selector_config = _get_platform_config(platform)["selectors"][selector_name]
+    return (SELECTOR_TYPE_TO_BY[selector_config["type"]], selector_config["selector"])
