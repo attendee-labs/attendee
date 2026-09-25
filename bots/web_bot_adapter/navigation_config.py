@@ -11,6 +11,13 @@ from selenium.webdriver.common.by import By
 
 logger = logging.getLogger(__name__)
 
+# Every navigation config has a "version" of the form "x.y":
+#   - Bump x (and reset y to 0) when attributes are added.
+#   - Bump y when existing attributes are changed.
+#   - Attributes must never be deleted, since older deployed code may still read them.
+# A remote config is only used if its version is >= the local config's version, so that
+# code never runs against a config that lacks attributes it expects or has staler values.
+
 NAVIGATION_CONFIGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "navigation_configs")
 REMOTE_NAVIGATION_CONFIGS_BASE_URL = "https://raw.githubusercontent.com/attendee-labs/attendee/main/bots/web_bot_adapter/navigation_configs"
 REMOTE_NAVIGATION_CONFIG_TIMEOUT_SECONDS = 3
@@ -38,10 +45,22 @@ def _redis_lock_key(config_filename):
     return f"{_redis_cache_key(config_filename)}:fetch_lock"
 
 
+def parse_navigation_config_version(config):
+    """Returns the config's "x.y" version as a (major, minor) tuple of ints."""
+    version = config.get("version")
+    if not isinstance(version, str):
+        raise ValueError(f"Navigation config version must be a string of the form 'x.y', got {version!r}")
+    parts = version.split(".")
+    if len(parts) != 2 or not all(part.isdigit() for part in parts):
+        raise ValueError(f"Navigation config version must be of the form 'x.y', got {version!r}")
+    return (int(parts[0]), int(parts[1]))
+
+
 def _load_local_navigation_config(config_filename):
     path = _local_config_path(config_filename)
     with open(path) as f:
         config = json.load(f)
+    parse_navigation_config_version(config)
     logger.info("Loaded navigation config from %s", path)
     return config
 
@@ -50,6 +69,7 @@ def _parse_remote_navigation_config(raw_config):
     config = json.loads(raw_config)
     if not isinstance(config, dict):
         raise ValueError("Remote navigation config is not a JSON object")
+    parse_navigation_config_version(config)
     return config
 
 
@@ -137,11 +157,27 @@ def _fetch_remote_navigation_config(redis_client, config_filename):
 
 @lru_cache(maxsize=None)
 def _load_navigation_config(config_filename):
-    if settings.LOAD_NAVIGATION_CONFIG_REMOTELY:
-        remote_config = _load_remote_navigation_config(config_filename)
-        if remote_config is not None:
-            return remote_config
-    return _load_local_navigation_config(config_filename)
+    local_config = _load_local_navigation_config(config_filename)
+    if not settings.LOAD_NAVIGATION_CONFIG_REMOTELY:
+        return local_config
+
+    remote_config = _load_remote_navigation_config(config_filename)
+    if remote_config is None:
+        return local_config
+
+    local_version = parse_navigation_config_version(local_config)
+    remote_version = parse_navigation_config_version(remote_config)
+    if remote_version < local_version:
+        logger.warning(
+            "Remote navigation config %s has version %s.%s which is older than local version %s.%s, using local config",
+            config_filename,
+            *remote_version,
+            *local_version,
+        )
+        return local_config
+
+    logger.info("Using remote navigation config %s (version %s.%s)", config_filename, *remote_version)
+    return remote_config
 
 
 def get_platform_domain_allowlist(config_filename):
