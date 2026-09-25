@@ -191,9 +191,18 @@ class RemoteNavigationConfigLoadingTest(RemoteNavigationConfigTestCase):
             self.assertIsNone(self._load())
 
     def test_signed_config_with_invalid_version_is_rejected_and_not_cached(self):
-        with self._mock_remote(_response(self._sign({"version": "99", "domain_allowlist": []}))):
+        with self._mock_remote(_response(self._sign({"version": "99", "domain_allowlist": ["remote.example.com"]}))):
             self.assertIsNone(self._load())
         self.assertEqual(self.redis.store, {})
+
+    def test_signed_config_not_matching_schema_is_rejected_and_not_cached(self):
+        with self._mock_remote(_response(self._sign({"version": "99.0", "domain_allowlist": [123]}))):
+            self.assertIsNone(self._load())
+        self.assertEqual(self.redis.store, {})
+
+    def test_cached_signed_config_not_matching_schema_is_rejected(self):
+        self._cache(self._sign({"version": "99.0", "domain_allowlist": ["remote.example.com"], "selectors": {"btn": {"type": "css", "selector": 5}}}))
+        self.assertIsNone(navigation_config._load_remote_navigation_config_from_redis_cache(self.redis, CONFIG_FILENAME))
 
     def test_fetch_lock_is_released_after_fetch(self):
         with self._mock_remote(_response(self.raw_signed_config)):
@@ -269,6 +278,62 @@ class ParseNavigationConfigVersionTest(SimpleTestCase):
     def test_versions_compare_numerically(self):
         self.assertGreater(navigation_config.parse_navigation_config_version({"version": "10.0"}), navigation_config.parse_navigation_config_version({"version": "9.9"}))
         self.assertGreater(navigation_config.parse_navigation_config_version({"version": "1.10"}), navigation_config.parse_navigation_config_version({"version": "1.9"}))
+
+
+class ValidateNavigationConfigTest(SimpleTestCase):
+    VALID_CONFIG = {
+        "version": "1.0",
+        "domain_allowlist": ["a.example.com"],
+        "selectors": {
+            "a": {"type": "css", "selector": "#a"},
+            "b": {"type": "xpath", "selector": ["//a", "//b"]},
+        },
+        "signature": "c2ln",
+    }
+
+    def _with(self, **overrides):
+        return {**self.VALID_CONFIG, **overrides}
+
+    def test_accepts_valid_config(self):
+        navigation_config.validate_navigation_config(self.VALID_CONFIG)
+
+    def test_accepts_config_without_selectors_or_signature(self):
+        navigation_config.validate_navigation_config({"version": "1.0", "domain_allowlist": ["a.example.com"]})
+
+    def test_accepts_unknown_attributes_for_forward_compatibility(self):
+        navigation_config.validate_navigation_config(self._with(new_attribute={"anything": 1}, selectors={"a": {"type": "css", "selector": "#a", "new_field": True}}))
+
+    def test_rejects_invalid_configs(self):
+        invalid_configs = {
+            "not an object": ["version"],
+            "missing version": {"domain_allowlist": ["a.example.com"]},
+            "missing domain_allowlist": {"version": "1.0"},
+            "numeric version": self._with(version=1.0),
+            "malformed version": self._with(version="1.0.0"),
+            "domain_allowlist not a list": self._with(domain_allowlist="a.example.com"),
+            "empty domain_allowlist": self._with(domain_allowlist=[]),
+            "integer domain": self._with(domain_allowlist=["a.example.com", 123]),
+            "empty domain": self._with(domain_allowlist=[""]),
+            "selectors not an object": self._with(selectors=[]),
+            "selector entry not an object": self._with(selectors={"a": "#a"}),
+            "selector missing type": self._with(selectors={"a": {"selector": "#a"}}),
+            "selector missing selector": self._with(selectors={"a": {"type": "css"}}),
+            "unknown selector type": self._with(selectors={"a": {"type": "link_text", "selector": "Join"}}),
+            "integer selector": self._with(selectors={"a": {"type": "id", "selector": 123}}),
+            "empty selector": self._with(selectors={"a": {"type": "css", "selector": ""}}),
+            "empty selector list": self._with(selectors={"a": {"type": "xpath", "selector": []}}),
+            "non-string in selector list": self._with(selectors={"a": {"type": "xpath", "selector": ["//a", 1]}}),
+            "selector list for non-xpath type": self._with(selectors={"a": {"type": "css", "selector": ["#a", "#b"]}}),
+            "non-string signature": self._with(signature=123),
+        }
+        for description, config in invalid_configs.items():
+            with self.subTest(description):
+                with self.assertRaises(ValueError):
+                    navigation_config.validate_navigation_config(config)
+
+    def test_error_message_includes_path_to_invalid_value(self):
+        with self.assertRaisesRegex(ValueError, r"domain_allowlist\.1"):
+            navigation_config.validate_navigation_config(self._with(domain_allowlist=["a.example.com", 123]))
 
 
 class LoadNavigationConfigTest(SimpleTestCase):
@@ -426,6 +491,15 @@ class CommittedNavigationConfigContentsTest(SimpleTestCase):
         config_filenames = sorted(f for f in os.listdir(navigation_config.NAVIGATION_CONFIGS_DIR) if f.endswith(".json"))
         self.assertTrue(config_filenames)
         return {config_filename: navigation_config._load_local_navigation_config(config_filename) for config_filename in config_filenames}
+
+    def test_every_committed_config_matches_schema(self):
+        config_filenames = sorted(f for f in os.listdir(navigation_config.NAVIGATION_CONFIGS_DIR) if f.endswith(".json"))
+        self.assertTrue(config_filenames)
+        for config_filename in config_filenames:
+            with self.subTest(config_filename=config_filename):
+                with open(os.path.join(navigation_config.NAVIGATION_CONFIGS_DIR, config_filename)) as f:
+                    config = json.load(f)
+                navigation_config.validate_navigation_config(config)
 
     def test_every_adapter_config_is_committed(self):
         self.assertTrue(set(ADAPTER_DIR_TO_CONFIG_FILENAME.values()).issubset(self._committed_configs()))
