@@ -6,8 +6,11 @@ from functools import lru_cache
 
 import redis
 import requests
+from cryptography.exceptions import InvalidSignature
 from django.conf import settings
 from selenium.webdriver.common.by import By
+
+from bots.web_bot_adapter.navigation_config_signing import verify_navigation_config_signature
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +20,9 @@ logger = logging.getLogger(__name__)
 #   - Attributes must never be deleted, since older deployed code may still read them.
 # A remote config is only used if its version is >= the local config's version, so that
 # code never runs against a config that lacks attributes it expects or has staler values.
+#
+# A remote config is also only used if it has a valid signature (see navigation_config_signing.py),
+# so that whoever controls the remote URL can't push configs to bots without the signing key.
 
 NAVIGATION_CONFIGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "navigation_configs")
 REMOTE_NAVIGATION_CONFIGS_BASE_URL = "https://raw.githubusercontent.com/attendee-labs/attendee/main/bots/web_bot_adapter/navigation_configs"
@@ -65,10 +71,11 @@ def _load_local_navigation_config(config_filename):
     return config
 
 
-def _parse_remote_navigation_config(raw_config):
+def _parse_verified_remote_navigation_config(config_filename, raw_config):
     config = json.loads(raw_config)
     if not isinstance(config, dict):
         raise ValueError("Remote navigation config is not a JSON object")
+    verify_navigation_config_signature(config_filename, config)
     parse_navigation_config_version(config)
     return config
 
@@ -82,7 +89,10 @@ def _load_remote_navigation_config_from_redis_cache(redis_client, config_filenam
         raw_config = redis_client.get(_redis_cache_key(config_filename))
         if raw_config is None:
             return None
-        config = _parse_remote_navigation_config(raw_config)
+        config = _parse_verified_remote_navigation_config(config_filename, raw_config)
+    except InvalidSignature as e:
+        logger.error("Rejecting navigation config %s from redis cache because its signature is invalid: %s", config_filename, e)
+        return None
     except Exception as e:
         logger.warning("Failed to load navigation config %s from redis cache: %s", config_filename, e)
         return None
@@ -146,7 +156,10 @@ def _fetch_remote_navigation_config(redis_client, config_filename):
         response = requests.get(url, timeout=REMOTE_NAVIGATION_CONFIG_TIMEOUT_SECONDS)
         response.raise_for_status()
         raw_config = response.text
-        config = _parse_remote_navigation_config(raw_config)
+        config = _parse_verified_remote_navigation_config(config_filename, raw_config)
+    except InvalidSignature as e:
+        logger.error("Rejecting navigation config from %s because its signature is invalid, falling back to local config: %s", url, e)
+        return None
     except Exception as e:
         logger.warning("Failed to load navigation config from %s, falling back to local config: %s", url, e)
         return None

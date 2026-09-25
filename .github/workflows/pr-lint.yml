@@ -225,8 +225,9 @@ jobs:
               continue;
             }
 
-            const { version: _b, ...baseAttrs } = baseConfig;
-            const { version: _p, ...prAttrs } = prConfig;
+            // "signature" is metadata about the config (checked by the signatures job), not an attribute.
+            const { version: _b, signature: _bs, ...baseAttrs } = baseConfig;
+            const { version: _p, signature: _ps, ...prAttrs } = prConfig;
             const baseFlat = flatten(baseAttrs);
             const prFlat = flatten(prAttrs);
             const removed = [...baseFlat.keys()].filter((k) => !prFlat.has(k));
@@ -262,3 +263,21 @@ jobs:
             process.exit(1);
           }
           NODE
+
+  navigation-config-signatures:
+    name: Validate navigation config signatures
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install cryptography
+        run: pip install "$(grep -E '^cryptography==' requirements.txt)"
+
+      - name: Verify every navigation config has a valid signature
+        run: python bots/web_bot_adapter/navigation_config_signing.py verify

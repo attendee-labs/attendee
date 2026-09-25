@@ -58,5 +58,6 @@
         "//*[contains(text(), \"External participants are not permitted to join before the event begins. Please join after the event has started.\")]"
       ]
     }
-  }
+  },
+  "signature": "RLeYDRi+VAM9HgZmIjA9QJBCTeteMOUZTBkSow1bv8qIL56Og66CtW/RHarkdJk8EVn3Ei8EDSX8mfegvtyhCQ=="
 }
