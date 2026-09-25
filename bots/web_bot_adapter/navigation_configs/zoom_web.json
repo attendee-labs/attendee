@@ -1,0 +1,6 @@
+{
+  "domain_allowlist": [
+    "www.zoom.com",
+    "127.0.0.1"
+  ]
+}

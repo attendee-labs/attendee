@@ -9,7 +9,6 @@ from bots.google_meet_bot_adapter.google_meet_ui_methods import (
     GoogleMeetUIMethods,
 )
 from bots.web_bot_adapter import WebBotAdapter
-from bots.web_bot_adapter.web_navigation_config import get_platform_domain_allowlist
 
 logger = logging.getLogger(__name__)
 
@@ -113,8 +112,11 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
         if self.google_meet_bot_login_should_be_used and not settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME and not settings.MONITOR_DOMAIN_ALLOWLIST_IN_CHROME:
             options.add_argument("--guest")
 
+    def subclass_specific_navigation_config_filename(self):
+        return "google_meet.json"
+
     def subclass_specific_domain_allowlist(self):
-        domain_allowlist = get_platform_domain_allowlist("google_meet")
+        domain_allowlist = self.navigation_config_domain_allowlist()
         domain_allowlist.append(settings.SITE_DOMAIN)
 
         if os.getenv("INTERNAL_SITE_DOMAIN"):

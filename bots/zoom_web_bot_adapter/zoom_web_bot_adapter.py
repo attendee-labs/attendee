@@ -12,7 +12,6 @@ from bots.meeting_url_utils import parse_zoom_join_url
 from bots.models import RecordingViews
 from bots.utils import select_from_comma_separated_list_with_wrapping_index
 from bots.web_bot_adapter import WebBotAdapter
-from bots.web_bot_adapter.web_navigation_config import get_platform_domain_allowlist
 from bots.zoom_web_bot_adapter.zoom_web_ui_methods import UiZoomWebGenericJoinErrorException, ZoomWebUIMethods
 
 logger = logging.getLogger(__name__)
@@ -225,8 +224,11 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
 
         return super().subclass_specific_use_disable_gpu_chrome_option()
 
+    def subclass_specific_navigation_config_filename(self):
+        return "zoom_web.json"
+
     def subclass_specific_domain_allowlist(self):
-        return get_platform_domain_allowlist("zoom_web")
+        return self.navigation_config_domain_allowlist()
 
     def subclass_specific_chrome_policies(self):
         if not settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:

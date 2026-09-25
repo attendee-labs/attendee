@@ -13,7 +13,6 @@ from bots.teams_bot_adapter.teams_ui_methods import (
     TeamsUIMethods,
 )
 from bots.web_bot_adapter import WebBotAdapter
-from bots.web_bot_adapter.web_navigation_config import get_platform_domain_allowlist
 
 logger = logging.getLogger(__name__)
 
@@ -174,8 +173,11 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
             }}
         """
 
+    def subclass_specific_navigation_config_filename(self):
+        return "teams.json"
+
     def subclass_specific_domain_allowlist(self):
-        return get_platform_domain_allowlist("teams")
+        return self.navigation_config_domain_allowlist()
 
     def subclass_specific_chrome_policies(self):
         if not settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:

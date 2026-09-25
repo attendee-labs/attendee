@@ -11,7 +11,6 @@ from selenium.webdriver.support.ui import WebDriverWait
 from bots.models import RecordingViews
 from bots.utils import cyrillicize_keywords_in_string, truncate_string_with_ellipsis
 from bots.web_bot_adapter.ui_methods import UiBlockedByCaptchaException, UiCouldNotClickElementException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableException, UiRetryableExpectedException
-from bots.web_bot_adapter.web_navigation_config import get_platform_selector
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +56,7 @@ class TeamsUIMethods:
             raise UiCouldNotClickElementException("Error occurred when clicking element", step, e)
 
     def look_for_waiting_to_be_admitted_element(self, step):
-        waiting_element = self.find_element_by_selector(*get_platform_selector("teams", "waiting_to_be_admitted_message"))
+        waiting_element = self.find_element_by_selector(*self.navigation_config_selector("waiting_to_be_admitted_message"))
         if waiting_element:
             # Check if we've been waiting too long
             logger.info("Still waiting to be admitted to the meeting after waiting period expired. Raising UiRequestToJoinDeniedException")
@@ -65,7 +64,7 @@ class TeamsUIMethods:
 
     def turn_off_media_inputs(self):
         logger.info("Waiting for the microphone button...")
-        microphone_button = self.locate_element(step="turn_off_microphone_button", condition=EC.presence_of_element_located(get_platform_selector("teams", "microphone_button")), wait_time_seconds=60)
+        microphone_button = self.locate_element(step="turn_off_microphone_button", condition=EC.presence_of_element_located(self.navigation_config_selector("microphone_button")), wait_time_seconds=60)
         logger.info("Clicking the microphone button...")
         if microphone_button.get_attribute("aria-checked") == "true" or microphone_button.get_attribute("checked") == "true":
             self.click_element(microphone_button, "turn_off_microphone_button")
@@ -73,7 +72,7 @@ class TeamsUIMethods:
             logger.info("Microphone button is already off, not clicking it")
 
         logger.info("Waiting for the camera button...")
-        camera_button = self.locate_element(step="turn_off_camera_button", condition=EC.presence_of_element_located(get_platform_selector("teams", "camera_button")), wait_time_seconds=6)
+        camera_button = self.locate_element(step="turn_off_camera_button", condition=EC.presence_of_element_located(self.navigation_config_selector("camera_button")), wait_time_seconds=6)
         logger.info("Clicking the camera button...")
         # if the aria-checked attribute of the element is true, then click the element
         if camera_button.get_attribute("aria-checked") == "true" or camera_button.get_attribute("checked") == "true":
@@ -82,7 +81,7 @@ class TeamsUIMethods:
             logger.info("Camera button is already off, not clicking it")
 
     def join_now_button_is_present(self):
-        join_button = self.find_element_by_selector(*get_platform_selector("teams", "join_button"))
+        join_button = self.find_element_by_selector(*self.navigation_config_selector("join_button"))
         if join_button:
             return True
         return False
@@ -134,7 +133,7 @@ class TeamsUIMethods:
         logger.info("Waiting for the name input field...")
         for attempt_index in range(num_attempts):
             try:
-                name_input = WebDriverWait(self.driver, 1).until(EC.presence_of_element_located(get_platform_selector("teams", "name_input")))
+                name_input = WebDriverWait(self.driver, 1).until(EC.presence_of_element_located(self.navigation_config_selector("name_input")))
                 logger.info("Name input found")
                 display_name_cyrillized = cyrillicize_keywords_in_string(
                     self.display_name,
@@ -178,14 +177,14 @@ class TeamsUIMethods:
 
         logger.info("Failed to enable closed captions programatically. Waiting for the Language and Speech button...")
         try:
-            language_and_speech_button = self.locate_element(step="language_and_speech_button", condition=EC.presence_of_element_located(get_platform_selector("teams", "language_and_speech_button")), wait_time_seconds=4)
+            language_and_speech_button = self.locate_element(step="language_and_speech_button", condition=EC.presence_of_element_located(self.navigation_config_selector("language_and_speech_button")), wait_time_seconds=4)
             logger.info("Clicking the language and speech button...")
             self.click_element(language_and_speech_button, "language_and_speech_button")
         except Exception:
             logger.info("Unable to find language and speech button. Exception will be caught because the caption button may be directly visible instead.")
 
         logger.info("Waiting for the closed captions button...")
-        closed_captions_button = self.locate_element(step="closed_captions_button", condition=EC.presence_of_element_located(get_platform_selector("teams", "closed_captions_button")), wait_time_seconds=10)
+        closed_captions_button = self.locate_element(step="closed_captions_button", condition=EC.presence_of_element_located(self.navigation_config_selector("closed_captions_button")), wait_time_seconds=10)
         logger.info("Clicking the closed captions button...")
         self.click_element(closed_captions_button, "closed_captions_button")
 
@@ -203,7 +202,7 @@ class TeamsUIMethods:
                 return
 
             # If the join button is present but it is NOT disabled, then we should assume the connection failed and things were reset.
-            join_button = self.find_element_by_selector(*get_platform_selector("teams", "join_button"))
+            join_button = self.find_element_by_selector(*self.navigation_config_selector("join_button"))
             issue_detected = join_button and join_button.is_enabled()
             should_raise_exception = os.getenv("RAISE_IF_TEAMS_WAITING_ROOM_CONNECTION_FAILED", "false") == "true"
             should_click_join_button = os.getenv("CLICK_JOIN_BUTTON_IF_TEAMS_WAITING_ROOM_CONNECTION_FAILED", "false") == "true"
@@ -223,7 +222,7 @@ class TeamsUIMethods:
                 logger.info("Join button is present but it is NOT disabled after entering waiting room. Assuming waiting room connection failed. Turning off media inputs and clicking join button.")
                 self.turn_off_media_inputs()
                 logger.info("Clicking join button...")
-                join_button_inner = self.find_element_by_selector(*get_platform_selector("teams", "join_button"))
+                join_button_inner = self.find_element_by_selector(*self.navigation_config_selector("join_button"))
                 if not join_button_inner.is_enabled():
                     logger.info("Join button is not enabled after turning off media inputs. Assuming waiting room connection failed. Not clicking join button.")
                     return
@@ -314,7 +313,7 @@ class TeamsUIMethods:
     def click_show_more_button(self):
         waiting_room_timeout_started_at = time.time()
         num_attempts = self.automatic_leave_configuration.waiting_room_timeout_seconds * 10
-        show_more_button_selector = get_platform_selector("teams", "show_more_button")
+        show_more_button_selector = self.navigation_config_selector("show_more_button")
         logger.info("Waiting for the show more button...")
         for attempt_index in range(num_attempts):
             try:
@@ -338,14 +337,14 @@ class TeamsUIMethods:
                 raise UiCouldNotLocateElementException("Exception raised in locate_element for click_show_more_button", "click_show_more_button", e)
 
     def look_for_sign_in_required_element(self, step):
-        sign_in_required_element = self.find_element_by_selector(*get_platform_selector("teams", "sign_in_required_message"))
+        sign_in_required_element = self.find_element_by_selector(*self.navigation_config_selector("sign_in_required_message"))
 
         if sign_in_required_element:
             logger.info("Sign in required. Raising UiLoginRequiredException")
             raise UiLoginRequiredException("Sign in required", step)
 
     def check_if_blocked_by_captcha(self, step):
-        captcha_element = self.find_element_by_selector(*get_platform_selector("teams", "captcha_message"))
+        captcha_element = self.find_element_by_selector(*self.navigation_config_selector("captcha_message"))
         if captcha_element:
             # The captcha may be being shown because we need to login.
             # If a login is available, but we aren't using it, we should login and retry and see if the captcha goes away.
@@ -357,30 +356,30 @@ class TeamsUIMethods:
             raise UiBlockedByCaptchaException("Captcha detected", step)
 
     def look_for_invalid_url_element(self, step):
-        invalid_url_element = self.find_element_by_selector(*get_platform_selector("teams", "invalid_meeting_url_message"))
+        invalid_url_element = self.find_element_by_selector(*self.navigation_config_selector("invalid_meeting_url_message"))
         if invalid_url_element:
             logger.info("Invalid URL detected. Raising UiMeetingNotFoundException")
             raise UiMeetingNotFoundException("Invalid URL detected", step)
 
     def look_for_microsoft_login_form_element(self, step):
         # Check for Microsoft login form (email input)
-        microsoft_login_element = self.find_element_by_selector(*get_platform_selector("teams", "microsoft_login_form_email_input"))
+        microsoft_login_element = self.find_element_by_selector(*self.navigation_config_selector("microsoft_login_form_email_input"))
         if microsoft_login_element:
             logger.info("Microsoft login form detected. Raising UiMeetingNotFoundException")
             raise UiMeetingNotFoundException("Microsoft login form detected", step)
 
     def look_for_we_could_not_connect_you_element(self, step):
-        we_could_not_connect_you_element = self.find_element_by_selector(*get_platform_selector("teams", "could_not_connect_message"))
+        we_could_not_connect_you_element = self.find_element_by_selector(*self.navigation_config_selector("could_not_connect_message"))
         if we_could_not_connect_you_element:
             logger.info("Teams is blocking us for whatever reason, but we can retry. Raising UiTeamsBlockingUsException")
             raise UiTeamsBlockingUsException("Teams is blocking us for whatever reason, but we can retry", step)
 
     def look_for_denied_your_request_element(self, step):
-        denied_your_request_element = self.find_element_by_selector(*get_platform_selector("teams", "request_denied_message"))
+        denied_your_request_element = self.find_element_by_selector(*self.navigation_config_selector("request_denied_message"))
 
         if denied_your_request_element:
             logger.info("Someone in the call denied our request to join. Raising UiRequestToJoinDeniedException")
-            dismiss_button = self.locate_element(step="closed_captions_button", condition=EC.presence_of_element_located(get_platform_selector("teams", "request_denied_dismiss_button")), wait_time_seconds=2)
+            dismiss_button = self.locate_element(step="closed_captions_button", condition=EC.presence_of_element_located(self.navigation_config_selector("request_denied_dismiss_button")), wait_time_seconds=2)
             if dismiss_button:
                 logger.info("Clicking the dismiss button...")
                 self.click_element(dismiss_button, "dismiss_button")
@@ -388,19 +387,19 @@ class TeamsUIMethods:
 
     def set_layout(self, layout_to_select):
         logger.info("Waiting for the view button...")
-        view_button = self.locate_element(step="view_button", condition=EC.presence_of_element_located(get_platform_selector("teams", "view_button")), wait_time_seconds=60)
+        view_button = self.locate_element(step="view_button", condition=EC.presence_of_element_located(self.navigation_config_selector("view_button")), wait_time_seconds=60)
         logger.info("Clicking the view button...")
         self.click_element(view_button, "view_button")
 
         if layout_to_select == "speaker":
             logger.info("Waiting for the speaker view button...")
-            speaker_view_button = self.locate_element(step="speaker_view_button", condition=EC.presence_of_element_located(get_platform_selector("teams", "speaker_view_button")), wait_time_seconds=10)
+            speaker_view_button = self.locate_element(step="speaker_view_button", condition=EC.presence_of_element_located(self.navigation_config_selector("speaker_view_button")), wait_time_seconds=10)
             logger.info("Clicking the speaker view button...")
             self.click_element(speaker_view_button, "speaker_view_button")
 
         if layout_to_select == "gallery":
             logger.info("Waiting for the gallery view button...")
-            gallery_view_button = self.locate_element(step="gallery_view_button", condition=EC.presence_of_element_located(get_platform_selector("teams", "gallery_view_button")), wait_time_seconds=10)
+            gallery_view_button = self.locate_element(step="gallery_view_button", condition=EC.presence_of_element_located(self.navigation_config_selector("gallery_view_button")), wait_time_seconds=10)
             logger.info("Clicking the gallery view button...")
             self.click_element(gallery_view_button, "gallery_view_button")
 
@@ -506,7 +505,7 @@ class TeamsUIMethods:
         self.disable_video_effects()
 
         logger.info("Waiting for the Join now button...")
-        join_button = self.locate_element(step="join_button", condition=EC.presence_of_element_located(get_platform_selector("teams", "join_button")), wait_time_seconds=10)
+        join_button = self.locate_element(step="join_button", condition=EC.presence_of_element_located(self.navigation_config_selector("join_button")), wait_time_seconds=10)
         logger.info("Clicking the Join now button...")
         self.click_element(join_button, "join_button")
 
@@ -578,7 +577,7 @@ class TeamsUIMethods:
 
     def disable_incoming_video_in_ui(self):
         logger.info("Waiting for the view button...")
-        view_button = self.locate_element(step="view_button", condition=EC.element_to_be_clickable(get_platform_selector("teams", "view_button")), wait_time_seconds=60)
+        view_button = self.locate_element(step="view_button", condition=EC.element_to_be_clickable(self.navigation_config_selector("view_button")), wait_time_seconds=60)
         logger.info("Clicking the view button...")
         self.click_element(view_button, "disable_incoming_video:view_button")
 
@@ -588,7 +587,7 @@ class TeamsUIMethods:
         logger.info("Waiting for the turn off incoming video button...")
         for attempt_index in range(num_attempts):
             try:
-                turn_off_incoming_video_button = WebDriverWait(self.driver, 1).until(EC.element_to_be_clickable(get_platform_selector("teams", "turn_off_incoming_video_button")))
+                turn_off_incoming_video_button = WebDriverWait(self.driver, 1).until(EC.element_to_be_clickable(self.navigation_config_selector("turn_off_incoming_video_button")))
                 logger.info("Turn off incoming video button found")
                 turn_off_incoming_video_button.click()
                 return
@@ -602,7 +601,7 @@ class TeamsUIMethods:
                 logger.warning(f"Turn off incoming video button was unclickable with error {e} of type {type(e)}. Retrying. Attempt #{attempt_index}...")
 
             except TimeoutException as e:
-                more_options_button = self.find_element_by_selector(*get_platform_selector("teams", "view_more_options_button"))
+                more_options_button = self.find_element_by_selector(*self.navigation_config_selector("view_more_options_button"))
                 if more_options_button:
                     logger.info("Clicking the more options button...")
                     self.click_element(more_options_button, "disable_incoming_video:more_options_button")
@@ -617,14 +616,14 @@ class TeamsUIMethods:
 
     def click_leave_button(self):
         logger.info("Waiting for the leave button")
-        leave_button = WebDriverWait(self.driver, 6).until(EC.presence_of_element_located(get_platform_selector("teams", "leave_button")))
+        leave_button = WebDriverWait(self.driver, 6).until(EC.presence_of_element_located(self.navigation_config_selector("leave_button")))
 
         logger.info("Clicking the leave button")
         leave_button.click()
 
     def click_cancel_join_button(self):
         logger.info("Waiting for the cancel button...")
-        cancel_button = self.locate_element(step="cancel_button", condition=EC.presence_of_element_located(get_platform_selector("teams", "cancel_join_button")), wait_time_seconds=10)
+        cancel_button = self.locate_element(step="cancel_button", condition=EC.presence_of_element_located(self.navigation_config_selector("cancel_join_button")), wait_time_seconds=10)
         logger.info("Clicking the cancel button...")
         self.click_element(cancel_button, "cancel_button")
         # You need to wait a bit after canceling because we close the browser immediately after this.
@@ -655,14 +654,14 @@ class TeamsUIMethods:
         self.driver.get("https://www.office.com/login")
 
         logger.info("Waiting for the username input...")
-        username_input = self.locate_element(step="username_input", condition=EC.presence_of_element_located(get_platform_selector("teams", "login_username_input")), wait_time_seconds=10)
+        username_input = self.locate_element(step="username_input", condition=EC.presence_of_element_located(self.navigation_config_selector("login_username_input")), wait_time_seconds=10)
         logger.info("Filling in the username...")
         username_input.send_keys(credentials["username"])
 
         time.sleep(1)
 
         logger.info("Looking for next button...")
-        next_button = self.locate_element(step="next_button", condition=EC.element_to_be_clickable(get_platform_selector("teams", "login_submit_button")), wait_time_seconds=10)
+        next_button = self.locate_element(step="next_button", condition=EC.element_to_be_clickable(self.navigation_config_selector("login_submit_button")), wait_time_seconds=10)
         logger.info("Clicking the next button...")
         self.click_element(next_button, "next_button")
 
@@ -674,10 +673,10 @@ class TeamsUIMethods:
         password_filled_in = False
         for password_attempt_index in range(num_password_attempts):
             try:
-                password_input = self.locate_element(step="password_input", condition=EC.element_to_be_clickable(get_platform_selector("teams", "login_password_input")), wait_time_seconds=10)
+                password_input = self.locate_element(step="password_input", condition=EC.element_to_be_clickable(self.navigation_config_selector("login_password_input")), wait_time_seconds=10)
             except UiCouldNotLocateElementException as e:
                 # If we see the incorrect username error, then we should raise a more specific exception
-                if self.find_element_by_selector(*get_platform_selector("teams", "login_username_error")):
+                if self.find_element_by_selector(*self.navigation_config_selector("login_username_error")):
                     logger.info("Incorrect username element found. Raising UiLoginAttemptFailedException")
                     raise UiLoginAttemptFailedException("Incorrect username", "login_to_microsoft_account")
                 raise e
@@ -704,7 +703,7 @@ class TeamsUIMethods:
         time.sleep(1)
 
         logger.info("Looking for sign in button...")
-        signin_button = self.locate_element(step="signin_button", condition=EC.element_to_be_clickable(get_platform_selector("teams", "login_submit_button")), wait_time_seconds=10)
+        signin_button = self.locate_element(step="signin_button", condition=EC.element_to_be_clickable(self.navigation_config_selector("login_submit_button")), wait_time_seconds=10)
         logger.info("Clicking the sign in button...")
         # Get the current page url
         url_before_signin = self.driver.current_url
@@ -723,7 +722,7 @@ class TeamsUIMethods:
         logger.info(f"Redirected to {self.driver.current_url}")
 
         # If we see the incorrect password error, then we should raise an exception
-        incorrect_password_element = self.find_element_by_selector(*get_platform_selector("teams", "login_incorrect_password_message"))
+        incorrect_password_element = self.find_element_by_selector(*self.navigation_config_selector("login_incorrect_password_message"))
         if incorrect_password_element:
             logger.info("Incorrect password. Raising UiLoginAttemptFailedException")
             raise UiLoginAttemptFailedException("Incorrect password", "login_to_microsoft_account")
