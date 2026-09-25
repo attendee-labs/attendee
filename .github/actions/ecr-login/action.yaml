@@ -1,0 +1,108 @@
+name: Login to Amazon ECR
+description: "Login to Amazon ECR"
+
+inputs:
+  aws_iam_role:
+    required: true
+    description: "AWS IAM role for ECR authentication"
+  aws_region:
+    required: true
+    description: "AWS region for ECR authentication"
+  registry_type:
+    required: false
+    default: "public"
+    description: "Type of registry to login to [public, private]"
+
+outputs:
+  aws_access_key_id:
+    description: "AWS access key ID"
+    value: ${{ steps.creds.outputs.aws-access-key-id }}
+  aws_secret_access_key:
+    description: "AWS secret access key"
+    value: ${{ steps.creds.outputs.aws-secret-access-key }}
+  aws_session_token:
+    description: "AWS session token"
+    value: ${{ steps.creds.outputs.aws-session-token }}
+  registry:
+    description: "AWS ECR registry"
+    value: ${{ steps.ecr-login.outputs.registry }}
+  docker_username_public_ecr_aws:
+    description: "Docker username for public AWS ECR"
+    value: ${{ steps.ecr-login.outputs.docker_username_public_ecr_aws }}
+  docker_password_public_ecr_aws:
+    description: "Docker password for public AWS ECR"
+    value: ${{ steps.ecr-login.outputs.docker_password_public_ecr_aws }}
+  docker_username_private_ecr_aws:
+    description: "Docker username for private AWS ECR"
+    value: ${{ steps.extract-private-creds.outputs.docker_username }}
+  docker_password_private_ecr_aws:
+    description: "Docker password for private AWS ECR"
+    value: ${{ steps.get-private-password.outputs.docker_password }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Configure AWS credentials
+      id: creds
+      uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6
+      with:
+        aws-region: ${{ inputs.aws_region }}
+        role-to-assume: ${{ inputs.aws_iam_role }}
+        output-credentials: true
+
+    - name: Login to Amazon ECR
+      id: ecr-login
+      uses: aws-actions/amazon-ecr-login@d539f0932e70871a027e9d5a9d8fc38589180a64 # v2
+      with:
+        registry-type: ${{ inputs.registry_type }}
+        mask-password: "false" # see https://github.com/aws-actions/amazon-ecr-login?tab=readme-ov-file#aws-credentials
+
+    - name: Extract Private ECR Credentials
+      id: extract-private-creds
+      shell: bash
+      run: |
+        set -e
+
+        if [ "${{ inputs.registry_type }}" = "private" ]; then
+          # Extract account ID from registry URL
+          registry="${{ steps.ecr-login.outputs.registry }}"
+          echo "DEBUG: Registry URL: $registry"
+
+          # Extract account ID from registry URL (format: 123456789012.dkr.ecr.region.amazonaws.com)
+          account_id=$(echo "$registry" | cut -d'.' -f1)
+          region="${{ inputs.aws_region }}"
+
+          # Convert region format (us-east-2 -> us_east_2)
+          region_formatted=$(echo "$region" | sed 's/-/_/g')
+
+          # Construct the output variable name for the password
+          password_var="docker_password_${account_id}_dkr_ecr_${region_formatted}_amazonaws_com"
+
+          echo "DEBUG: Account ID: $account_id"
+          echo "DEBUG: Region: $region (formatted: $region_formatted)"
+          echo "DEBUG: Password variable name: $password_var"
+
+          # Set outputs that can be used by consuming actions
+          echo "docker_username=AWS" >> $GITHUB_OUTPUT
+          echo "password_var_name=${password_var}" >> $GITHUB_OUTPUT
+        else
+          echo "docker_username=" >> $GITHUB_OUTPUT
+          echo "password_var_name=" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Get Private ECR Password
+      id: get-private-password
+      shell: bash
+      run: |
+        set -e
+
+        if [ "${{ inputs.registry_type }}" = "private" ]; then
+          password_var="${{ steps.extract-private-creds.outputs.password_var_name }}"
+          echo "DEBUG: Accessing password from variable: $password_var"
+
+          # Access the password directly using the dynamic output name
+          password_value="${{ steps.ecr-login.outputs[steps.extract-private-creds.outputs.password_var_name] }}"
+          echo "docker_password=${password_value}" >> $GITHUB_OUTPUT
+        else
+          echo "docker_password=" >> $GITHUB_OUTPUT
+        fi
