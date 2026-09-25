@@ -415,6 +415,10 @@ class ZoomBotAdapter(BotAdapter):
         self.set_video_input_manager_based_on_state()
 
     def cleanup(self):
+        if self.cleaned_up:
+            return
+        self.cleaned_up = True
+
         if self.audio_source:
             performance_data = self.audio_source.getPerformanceData()
             logger.info(f"totalProcessingTimeMicroseconds = {performance_data.totalProcessingTimeMicroseconds}")
@@ -432,6 +436,23 @@ class ZoomBotAdapter(BotAdapter):
                         bin_start = bin_idx * bin_size
                         bin_end = (bin_idx + 1) * bin_size
                         logger.info(f"{bin_start:6.0f} - {bin_end:6.0f} us: {count:5d} calls")
+        if self.send_image_timeout_id is not None:
+            GLib.source_remove(self.send_image_timeout_id)
+            self.send_image_timeout_id = None
+        if self.stuck_in_connecting_state_timeout_id is not None:
+            GLib.source_remove(self.stuck_in_connecting_state_timeout_id)
+            self.stuck_in_connecting_state_timeout_id = None
+
+        if self.realtime_per_participant_video_frame_generator:
+            self.realtime_per_participant_video_frame_generator.reset()
+        if self.video_input_manager:
+            self.video_input_manager.cleanup()
+        if self.mp4_demuxer:
+            self.mp4_demuxer.stop()
+
+        if self.audio_helper:
+            audio_helper_unsubscribe_result = self.audio_helper.unSubscribe()
+            logger.info(f"audio_helper.unSubscribe() returned {audio_helper_unsubscribe_result}")
 
         if self.meeting_service:
             zoom.DestroyMeetingService(self.meeting_service)
@@ -443,17 +464,9 @@ class ZoomBotAdapter(BotAdapter):
             zoom.DestroyAuthService(self.auth_service)
             logger.info("Destroyed Auth service")
 
-        if self.audio_helper:
-            audio_helper_unsubscribe_result = self.audio_helper.unSubscribe()
-            logger.info(f"audio_helper.unSubscribe() returned {audio_helper_unsubscribe_result}")
-
-        if self.video_input_manager:
-            self.video_input_manager.cleanup()
-
         logger.info("CleanUPSDK() called")
         zoom.CleanUPSDK()
         logger.info("CleanUPSDK() finished")
-        self.cleaned_up = True
 
     def init(self):
         init_param = zoom.InitParam()
@@ -1051,6 +1064,7 @@ class ZoomBotAdapter(BotAdapter):
         GLib.timeout_add_seconds(wait_time, self.leave_meeting_if_not_started_yet)
 
     def give_up_if_still_in_connecting_state(self):
+        self.stuck_in_connecting_state_timeout_id = None
         if self.meeting_status != zoom.MEETING_STATUS_CONNECTING:
             return
 

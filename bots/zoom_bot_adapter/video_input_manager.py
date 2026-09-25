@@ -176,7 +176,12 @@ class VideoInputStream:
         if self.renderer:
             logger.info(f"starting renderer unsubscription for user {self.user_id} and share source id {self.share_source_id}")
             self.renderer.unSubscribe()
+            zoom.destroyRenderer(self.renderer)
             logger.info(f"finished renderer unsubscription for user {self.user_id} and share source id {self.share_source_id}")
+
+        self.renderer_destroyed = True
+        self.renderer = None
+        self.renderer_delegate = None
 
     def on_renderer_destroyed_callback(self):
         self.renderer_destroyed = True
@@ -250,6 +255,7 @@ class VideoInputManager:
     def cleanup(self):
         for input_stream in self.input_streams:
             input_stream.cleanup()
+        self.input_streams.clear()
 
     def set_mode(self, *, mode, active_speaker_id, active_sharer_id, active_sharer_source_id):
         if mode != VideoInputManager.Mode.ACTIVE_SPEAKER and mode != VideoInputManager.Mode.ACTIVE_SHARER and mode != VideoInputManager.Mode.INACTIVE:
