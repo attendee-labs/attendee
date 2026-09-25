@@ -80,6 +80,7 @@ class StripeBillingTestCase(TestCase):
         mock_session = MagicMock()
         mock_session.payment_intent = "pi_test123"
         mock_session.amount_total = 5000  # $50.00 in cents
+        mock_session.payment_status = "paid"
         mock_session.metadata = {"organization_id": str(self.org.id), "user_id": str(self.user.id), "credit_amount": "100"}
         mock_retrieve.return_value = mock_session
 
@@ -103,6 +104,29 @@ class StripeBillingTestCase(TestCase):
         # Check we got redirected to billing page
         self.assertEqual(response.status_code, 302)
         self.assertEqual(response.url, reverse("bots:project-billing", kwargs={"object_id": self.project.object_id}))
+
+    @patch("bots.projects_views.process_checkout_session_completed")
+    @patch("stripe.checkout.Session.retrieve")
+    def test_checkout_success_rejects_unpaid_session(self, mock_retrieve, mock_process):
+        """Unpaid checkout sessions must not credit the organization."""
+        mock_session = MagicMock()
+        mock_session.payment_intent = "pi_unpaid123"
+        mock_session.amount_total = 5000
+        mock_session.payment_status = "unpaid"
+        mock_session.metadata = {"organization_id": str(self.org.id), "user_id": str(self.user.id), "credit_amount": "100"}
+        mock_retrieve.return_value = mock_session
+
+        initial_credits = self.org.centicredits
+
+        response = self.client.get(reverse("bots:checkout-success", kwargs={"object_id": self.project.object_id}), {"session_id": "cs_unpaid123"})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn(b"not paid", response.content)
+        mock_process.assert_not_called()
+
+        self.org.refresh_from_db()
+        self.assertEqual(self.org.centicredits, initial_credits)
+        self.assertFalse(CreditTransaction.objects.filter(organization=self.org, stripe_payment_intent_id="pi_unpaid123").exists())
 
     @patch("stripe.checkout.Session.retrieve")
     def test_checkout_success_error_handling(self, mock_retrieve):
