@@ -1,0 +1,29 @@
+# Run once per release, BEFORE rolling the deployments. Job names are immutable, so either
+# delete the old Job first or template the name with the release tag.
+#
+#   kubectl -n attendee delete job attendee-migrate --ignore-not-found
+#   kubectl -n attendee apply -f k8s/50-job-migrate.yaml
+#   kubectl -n attendee wait --for=condition=complete job/attendee-migrate --timeout=10m
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: attendee-migrate
+  namespace: attendee
+spec:
+  backoffLimit: 2
+  template:
+    spec:
+      restartPolicy: Never
+      serviceAccountName: attendee-app
+      imagePullSecrets: [{name: regcred}]
+      containers:
+        - name: migrate
+          image: REPLACE_WITH_REGISTRY/attendee:REPLACE_WITH_IMAGE_TAG
+          command: ["/tini", "--"]
+          args: ["python", "manage.py", "migrate", "--noinput"]
+          envFrom:
+            - configMapRef: {name: env}
+            - secretRef: {name: app-secrets}
+          resources:
+            requests: {cpu: "100m", memory: "256Mi"}
+            limits: {cpu: "1", memory: "1Gi"}

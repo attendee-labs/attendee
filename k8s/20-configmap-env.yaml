@@ -1,0 +1,123 @@
+# NON-SECRET configuration.
+#
+# The name `env` is not cosmetic: bot pods are built at runtime with
+#   envFrom: [configMapRef: {name: $BOT_POD_CONFIG_MAP_NAME}]   (default "env")
+# and that reference is not optional -- rename this without also setting
+# BOT_POD_CONFIG_MAP_NAME and every bot pod dies in CreateContainerConfigError.
+#
+# Equivalent to: kubectl -n attendee create configmap env --from-env-file=attendee.env
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: env
+  namespace: attendee
+data:
+  # ── Django ────────────────────────────────────────────────────────────────────────────
+  DJANGO_SETTINGS_MODULE: "attendee.settings.production"
+  # Public hostname. SITE_DOMAIN builds the links in outgoing email and the dashboard.
+  SITE_DOMAIN: "attendee.example.com"
+  ALLOWED_HOSTS: "attendee.example.com"
+  CSRF_TRUSTED_ORIGINS: "https://attendee.example.com"
+  # true => Django issues its own HTTP->HTTPS redirect and sets Secure cookies. Keep true when
+  # the ingress terminates TLS and forwards X-Forwarded-Proto (SECURE_PROXY_SSL_HEADER is
+  # already wired up in attendee/settings/production.py).
+  DJANGO_SSL_REQUIRE: "true"
+  TIME_ZONE: "Asia/Riyadh"
+  # Closes public registration. Leave "true" for a private deployment -- the signup page is
+  # otherwise open to anyone who can reach the ingress. Set "false" only while creating the
+  # first account, then set it back and roll the web deployment.
+  DISABLE_SIGNUP: "true"
+
+  # ── Postgres (external) ───────────────────────────────────────────────────────────────
+  # The URL itself is a secret and lives in app-secrets as DATABASE_URL.
+  POSTGRES_SSL_REQUIRE: "true"
+  # Set "true" only behind a transaction-pooling pooler (PgBouncer in transaction mode).
+  DISABLE_SERVER_SIDE_CURSORS: "false"
+
+  # ── Object storage: Oracle Cloud Object Storage, S3-compatible ────────────────────────
+  # Attendee reads AWS_* names; the values come from Mawrid's CLOUD_BUCKET_* variables.
+  #   CLOUD_BUCKET_REGION       -> AWS_DEFAULT_REGION
+  #   CLOUD_BUCKET_ENDPOINT_URL -> AWS_ENDPOINT_URL
+  #   CLOUD_BUCKET_NAME         -> AWS_RECORDING_STORAGE_BUCKET_NAME
+  # (the two key variables map into app-secrets, below)
+  STORAGE_PROTOCOL: "s3"
+  AWS_DEFAULT_REGION: "me-jeddah-1"
+  AWS_ENDPOINT_URL: "https://REPLACE_WITH_NAMESPACE.compat.objectstorage.me-jeddah-1.oraclecloud.com"
+  # Oracle's compat endpoint serves path style (<endpoint>/<bucket>/<key>); botocore would
+  # otherwise put the bucket in the hostname and every upload would fail to resolve. This is
+  # the default whenever AWS_ENDPOINT_URL is set, and is pinned here so it is visible.
+  AWS_S3_ADDRESSING_STYLE: "path"
+  AWS_RECORDING_STORAGE_BUCKET_NAME: "attendee-recordings"
+  # Optional split buckets; both fall back to the recording bucket when unset.
+  # AWS_AUDIO_CHUNK_STORAGE_BUCKET_NAME: ""
+  # AWS_BOT_DEBUG_SCREENSHOT_STORAGE_BUCKET_NAME: ""
+  USE_REMOTE_STORAGE_FOR_AUDIO_CHUNKS: "true"
+  FALLBACK_TO_DB_STORAGE_FOR_AUDIO_CHUNKS_IF_REMOTE_STORAGE_FAILS: "true"
+
+  # ── Bot launching (Kubernetes mode) ───────────────────────────────────────────────────
+  # This is what makes the app create one isolated pod per bot instead of running bots inside
+  # the celery workers.
+  LAUNCH_BOT_METHOD: "kubernetes"
+  CUBER_APP_NAME: "attendee"
+  # REQUIRED, and the app refuses to start bot pods without it. Bot pods are launched as
+  # "$BOT_POD_IMAGE:$CUBER_RELEASE_VERSION", so this MUST equal the image tag the deployments
+  # below are running -- bump both together on every release.
+  CUBER_RELEASE_VERSION: "REPLACE_WITH_IMAGE_TAG"
+  BOT_POD_IMAGE: "REPLACE_WITH_REGISTRY/attendee"
+  BOT_POD_IMAGE_PULL_POLICY: "IfNotPresent"
+  BOT_POD_NAMESPACE: "attendee"
+  WEBPAGE_STREAMER_POD_NAMESPACE: "attendee-webpage-streamer"
+  BOT_POD_SERVICE_ACCOUNT_NAME: "attendee-bot"
+  WEBPAGE_STREAMER_POD_SERVICE_ACCOUNT_NAME: "attendee-bot"
+  # Names of THIS ConfigMap and the Secret; bot pods inherit their env from both.
+  BOT_POD_CONFIG_MAP_NAME: "env"
+  BOT_POD_SECRETS_NAME: "app-secrets"
+  # "false" => bot pods reference the `regcred` pull secret (see README). Set "true" if the
+  # image lives in a public registry or the nodes authenticate to it themselves.
+  DISABLE_BOT_POD_IMAGE_PULL_SECRET: "false"
+  BOT_POD_IMAGE_PULL_SECRET_NAME: "regcred"
+  # Per-bot resources. A bot runs a full Chrome plus PulseAudio and records to local disk, so
+  # these are large by design; memory and ephemeral-storage are also the pod's limits.
+  BOT_CPU_REQUEST: "4"
+  BOT_MEMORY_REQUEST: "4Gi"
+  BOT_MEMORY_LIMIT: "4Gi"
+  BOT_EPHEMERAL_STORAGE_REQUEST: "10Gi"
+  # Ceiling on simultaneously running bots across the whole deployment.
+  CONCURRENT_BOTS_LIMIT: "50"
+  # Set "true" on clusters using Karpenter so it will not disrupt a pod mid-meeting.
+  USING_KARPENTER: "false"
+  # Chrome sandboxing needs an Unconfined seccomp profile; leave false unless you have
+  # confirmed your PodSecurity admission level permits it.
+  ENABLE_CHROME_SANDBOX: "false"
+  # Attaches the bot's own logs to its final event, visible in the dashboard. Very useful when
+  # diagnosing a bot that failed inside a real meeting.
+  SAVE_BOT_LOGS_TO_DASHBOARD: "true"
+  STORE_INFRASTRUCTURE_INFORMATION_IN_BOT_EVENT_METADATA: "true"
+
+  # ── Webhooks ──────────────────────────────────────────────────────────────────────────
+  # Mawrid registers an HTTPS callback per bot, so this stays true in production.
+  REQUIRE_HTTPS_WEBHOOKS: "true"
+  # Bot pods call back to the app over this in-cluster address, bypassing the public ingress.
+  INTERNAL_SITE_DOMAIN: "attendee-web.attendee.svc.cluster.local:8000"
+  MAX_WEBHOOK_DELIVERY_ATTEMPTS: "3"
+  DELIVER_WEBHOOK_VERIFY_SSL: "true"
+
+  # ── Email (account confirmation + password reset) ─────────────────────────────────────
+  # "true" prints emails to the pod log instead of sending them. Fine if DISABLE_SIGNUP=true
+  # and you create users with `manage.py createsuperuser`; otherwise configure SMTP.
+  DISABLE_EMAIL: "false"
+  EMAIL_HOST: "smtp.mailgun.org"
+  DEFAULT_FROM_EMAIL: "noreply@example.com"
+  SERVER_EMAIL: "noreply@example.com"
+
+  # ── Observability ─────────────────────────────────────────────────────────────────────
+  ATTENDEE_LOG_LEVEL: "INFO"
+  # "json" emits structured logs; leave empty for plain text.
+  ATTENDEE_LOG_FORMAT: "json"
+  # File the scheduler rewrites each cycle. The scheduler's liveness probe reads its mtime, so
+  # a stalled polling loop gets the pod restarted -- a plain process check would not catch it.
+  SCHEDULER_HEARTBEAT_FILE: "/tmp/scheduler-heartbeat"
+  SENTRY_ENVIRONMENT: "production"
+  SENTRY_TRACES_SAMPLE_RATE: "0.1"
+  SENTRY_PROFILES_SAMPLE_RATE: "0.1"
+  SENTRY_SEND_PII: "false"

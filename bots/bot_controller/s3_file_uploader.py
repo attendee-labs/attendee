@@ -4,6 +4,8 @@ from pathlib import Path
 
 import boto3
 
+from .s3_client_config import s3_client_config
+
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
@@ -16,7 +18,7 @@ class S3FileUploader:
             bucket (str): The name of the S3 bucket to upload to
             filename (str): The name of the to be stored file
         """
-        self.s3_client = boto3.client("s3", endpoint_url=endpoint_url, region_name=region_name, aws_access_key_id=access_key_id, aws_secret_access_key=access_key_secret)
+        self.s3_client = boto3.client("s3", endpoint_url=endpoint_url, region_name=region_name, aws_access_key_id=access_key_id, aws_secret_access_key=access_key_secret, config=s3_client_config(endpoint_url))
         self.bucket = bucket
         self.filename = filename
         self._upload_thread = None
