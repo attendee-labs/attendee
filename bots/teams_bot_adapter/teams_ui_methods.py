@@ -12,6 +12,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from bots.models import RecordingViews
 from bots.utils import cyrillicize_keywords_in_string, truncate_string_with_ellipsis
 from bots.web_bot_adapter.ui_methods import UiBlockedByCaptchaException, UiCouldNotClickElementException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableException, UiRetryableExpectedException
+from bots.web_bot_adapter.web_navigation_config import get_platform_css_selector
 
 logger = logging.getLogger(__name__)
 
@@ -314,10 +315,11 @@ class TeamsUIMethods:
     def click_show_more_button(self):
         waiting_room_timeout_started_at = time.time()
         num_attempts = self.automatic_leave_configuration.waiting_room_timeout_seconds * 10
+        show_more_button_selector = get_platform_css_selector("teams", "show_more_button")
         logger.info("Waiting for the show more button...")
         for attempt_index in range(num_attempts):
             try:
-                show_more_button = WebDriverWait(self.driver, 1).until(EC.presence_of_element_located((By.ID, "callingButtons-showMoreBtn")))
+                show_more_button = WebDriverWait(self.driver, 1).until(EC.presence_of_element_located((By.CSS_SELECTOR, show_more_button_selector)))
                 logger.info("Clicking the show more button...")
                 self.click_element(show_more_button, "click_show_more_button")
                 self.disable_retry_join_on_meeting_end()
