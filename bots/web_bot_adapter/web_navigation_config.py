@@ -40,9 +40,9 @@ def _get_redis_client():
     return redis.from_url(settings.REDIS_URL_WITH_PARAMS, socket_timeout=2, socket_connect_timeout=2)
 
 
-def _load_remote_web_navigation_config_from_redis_cache():
+def _load_remote_web_navigation_config_from_redis_cache(redis_client):
     try:
-        raw_config = _get_redis_client().get(REMOTE_WEB_NAVIGATION_CONFIG_REDIS_CACHE_KEY)
+        raw_config = redis_client.get(REMOTE_WEB_NAVIGATION_CONFIG_REDIS_CACHE_KEY)
         if raw_config is None:
             return None
         config = _parse_remote_web_navigation_config(raw_config)
@@ -53,18 +53,18 @@ def _load_remote_web_navigation_config_from_redis_cache():
     return config
 
 
-def _store_remote_web_navigation_config_in_redis_cache(raw_config):
+def _store_remote_web_navigation_config_in_redis_cache(redis_client, raw_config):
     try:
-        _get_redis_client().set(REMOTE_WEB_NAVIGATION_CONFIG_REDIS_CACHE_KEY, raw_config, ex=REMOTE_WEB_NAVIGATION_CONFIG_REDIS_CACHE_TTL_SECONDS)
+        redis_client.set(REMOTE_WEB_NAVIGATION_CONFIG_REDIS_CACHE_KEY, raw_config, ex=REMOTE_WEB_NAVIGATION_CONFIG_REDIS_CACHE_TTL_SECONDS)
     except Exception as e:
         logger.warning("Failed to store web navigation config in redis cache: %s", e)
 
 
-def _wait_for_remote_web_navigation_config_in_redis_cache():
+def _wait_for_remote_web_navigation_config_in_redis_cache(redis_client):
     deadline = time.time() + REMOTE_WEB_NAVIGATION_CONFIG_LOCK_WAIT_SECONDS
     while time.time() < deadline:
         time.sleep(REMOTE_WEB_NAVIGATION_CONFIG_LOCK_POLL_INTERVAL_SECONDS)
-        cached_config = _load_remote_web_navigation_config_from_redis_cache()
+        cached_config = _load_remote_web_navigation_config_from_redis_cache(redis_client)
         if cached_config is not None:
             return cached_config
     logger.warning("Timed out waiting for another bot to cache the web navigation config, falling back to local config")
@@ -72,21 +72,29 @@ def _wait_for_remote_web_navigation_config_in_redis_cache():
 
 
 def _load_remote_web_navigation_config():
-    cached_config = _load_remote_web_navigation_config_from_redis_cache()
+    redis_client = _get_redis_client()
+    try:
+        return _load_remote_web_navigation_config_with_redis_client(redis_client)
+    finally:
+        redis_client.close()
+
+
+def _load_remote_web_navigation_config_with_redis_client(redis_client):
+    cached_config = _load_remote_web_navigation_config_from_redis_cache(redis_client)
     if cached_config is not None:
         return cached_config
 
     fetch_lock = None
     try:
-        fetch_lock = _get_redis_client().lock(REMOTE_WEB_NAVIGATION_CONFIG_REDIS_LOCK_KEY, timeout=REMOTE_WEB_NAVIGATION_CONFIG_REDIS_LOCK_TTL_SECONDS)
+        fetch_lock = redis_client.lock(REMOTE_WEB_NAVIGATION_CONFIG_REDIS_LOCK_KEY, timeout=REMOTE_WEB_NAVIGATION_CONFIG_REDIS_LOCK_TTL_SECONDS)
         if not fetch_lock.acquire(blocking=False):
-            return _wait_for_remote_web_navigation_config_in_redis_cache()
+            return _wait_for_remote_web_navigation_config_in_redis_cache(redis_client)
     except Exception as e:
         logger.warning("Failed to acquire web navigation config fetch lock, fetching without it: %s", e)
         fetch_lock = None
 
     try:
-        return _fetch_remote_web_navigation_config()
+        return _fetch_remote_web_navigation_config(redis_client)
     finally:
         if fetch_lock is not None:
             try:
@@ -95,7 +103,7 @@ def _load_remote_web_navigation_config():
                 logger.warning("Failed to release web navigation config fetch lock: %s", e)
 
 
-def _fetch_remote_web_navigation_config():
+def _fetch_remote_web_navigation_config(redis_client):
     try:
         response = requests.get(REMOTE_WEB_NAVIGATION_CONFIG_URL, timeout=REMOTE_WEB_NAVIGATION_CONFIG_TIMEOUT_SECONDS)
         response.raise_for_status()
@@ -105,7 +113,7 @@ def _fetch_remote_web_navigation_config():
         logger.warning("Failed to load web navigation config from %s, falling back to local config: %s", REMOTE_WEB_NAVIGATION_CONFIG_URL, e)
         return None
     logger.info("Loaded web navigation config from %s", REMOTE_WEB_NAVIGATION_CONFIG_URL)
-    _store_remote_web_navigation_config_in_redis_cache(raw_config)
+    _store_remote_web_navigation_config_in_redis_cache(redis_client, raw_config)
     return config
 
 
