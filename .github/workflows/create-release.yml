@@ -100,3 +100,51 @@ jobs:
           context: .
           push: true
           tags: ${{ steps.image.outputs.name }}:${{ needs.release.outputs.tag }}
+
+  navigation-configs:
+    needs: release
+    if: needs.release.outputs.tag_exists == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    permissions:
+      contents: read
+
+    env:
+      CONFIG_DIR: bots/web_bot_adapter/navigation_configs
+      # Must match the path of REMOTE_NAVIGATION_CONFIGS_BASE_URL in bots/web_bot_adapter/navigation_config.py.
+      KEY_PREFIX: configs
+      # How long Cloudflare's edge may serve a stale config after a release.
+      CACHE_MAX_AGE_SECONDS: 300
+
+    steps:
+      - name: Checkout release
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release.outputs.tag }}
+          persist-credentials: false
+
+      - name: Upload navigation configs to R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          # R2 doesn't support all of the checksum headers newer AWS CLI versions send by default.
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+          R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          R2_BUCKET: ${{ secrets.R2_NAVIGATION_CONFIGS_BUCKET }}
+        run: |
+          set -euo pipefail
+          for path in "$CONFIG_DIR"/*.json; do
+            key="$KEY_PREFIX/$(basename "$path")"
+            aws s3api put-object \
+              --endpoint-url "$R2_ENDPOINT" \
+              --bucket "$R2_BUCKET" \
+              --key "$key" \
+              --body "$path" \
+              --content-type application/json \
+              --cache-control "public, max-age=$CACHE_MAX_AGE_SECONDS" \
+              > /dev/null
+            echo "Uploaded $path to r2://$R2_BUCKET/$key"
+          done
