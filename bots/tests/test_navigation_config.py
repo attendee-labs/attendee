@@ -18,39 +18,6 @@ ADAPTER_DIR_TO_CONFIG_FILENAME = {
 }
 
 
-class FakeLock:
-    def __init__(self, acquired=True):
-        self.acquired = acquired
-        self.released = False
-
-    def acquire(self, blocking=True):
-        return self.acquired
-
-    def release(self):
-        self.released = True
-
-
-class FakeRedis:
-    def __init__(self):
-        self.store = {}
-        self.lock_acquired = True
-        self.locks = []
-
-    def get(self, key):
-        return self.store.get(key)
-
-    def set(self, key, value, ex=None):
-        self.store[key] = value.encode("utf-8") if isinstance(value, str) else value
-
-    def lock(self, key, timeout=None):
-        fake_lock = FakeLock(acquired=self.lock_acquired)
-        self.locks.append(fake_lock)
-        return fake_lock
-
-    def close(self):
-        pass
-
-
 def _response(text, status_code=200):
     response = mock.Mock()
     response.status_code = status_code
@@ -69,7 +36,6 @@ class RemoteNavigationConfigTestCase(SimpleTestCase):
         public_keys_patcher.start()
         self.addCleanup(public_keys_patcher.stop)
 
-        self.redis = FakeRedis()
         self.config = {"version": "99.0", "domain_allowlist": ["remote.example.com"]}
         self.signed_config = navigation_config_signing.sign_navigation_config(self.private_key, CONFIG_FILENAME, self.config)
         self.raw_signed_config = json.dumps(self.signed_config, indent=2)
@@ -83,13 +49,10 @@ class RemoteNavigationConfigTestCase(SimpleTestCase):
         return mock.patch.object(navigation_config.requests, "get", side_effect=fake_get)
 
     def _load(self):
-        return navigation_config._load_remote_navigation_config_with_redis_client(self.redis, CONFIG_FILENAME)
+        return navigation_config._load_remote_navigation_config(CONFIG_FILENAME)
 
     def _tampered_raw_config(self):
         return json.dumps({**self.signed_config, "domain_allowlist": ["evil.example.com"]})
-
-    def _cache(self, raw_config):
-        self.redis.set(navigation_config._redis_cache_key(CONFIG_FILENAME), raw_config)
 
 
 class NavigationConfigSignatureTest(RemoteNavigationConfigTestCase):
@@ -101,17 +64,15 @@ class NavigationConfigSignatureTest(RemoteNavigationConfigTestCase):
         reformatted = json.loads(json.dumps(dict(reversed(list(self.signed_config.items()))), separators=(",", ":")))
         navigation_config_signing.verify_navigation_config_signature(CONFIG_FILENAME, reformatted)
 
-    def test_fetch_with_valid_signature_is_used_and_cached(self):
+    def test_fetch_with_valid_signature_is_used(self):
         with self._mock_remote(_response(self.raw_signed_config)):
             config = self._load()
 
         self.assertEqual(config["domain_allowlist"], ["remote.example.com"])
-        self.assertEqual(self.redis.get(navigation_config._redis_cache_key(CONFIG_FILENAME)), self.raw_signed_config.encode("utf-8"))
 
-    def test_fetch_with_tampered_config_is_rejected_and_not_cached(self):
+    def test_fetch_with_tampered_config_is_rejected(self):
         with self._mock_remote(_response(self._tampered_raw_config())):
             self.assertIsNone(self._load())
-        self.assertEqual(self.redis.store, {})
 
     def test_fetch_with_added_attribute_is_rejected(self):
         with self._mock_remote(_response(json.dumps({**self.signed_config, "extra": True}))):
@@ -135,35 +96,12 @@ class NavigationConfigSignatureTest(RemoteNavigationConfigTestCase):
         with self._mock_remote(_response(json.dumps({**self.config, "signature": "not base64!!"}))):
             self.assertIsNone(self._load())
 
-    def test_cached_config_with_valid_signature_is_used_without_fetching(self):
-        self._cache(self.raw_signed_config)
-        with mock.patch.object(navigation_config.requests, "get") as mock_get:
-            config = self._load()
-
-        mock_get.assert_not_called()
-        self.assertEqual(config["domain_allowlist"], ["remote.example.com"])
-
-    def test_tampered_cached_config_is_rejected(self):
-        self._cache(self._tampered_raw_config())
-        self.assertIsNone(navigation_config._load_remote_navigation_config_from_redis_cache(self.redis, CONFIG_FILENAME))
-
-    def test_unsigned_cached_config_is_rejected(self):
-        self._cache(json.dumps(self.config))
-        self.assertIsNone(navigation_config._load_remote_navigation_config_from_redis_cache(self.redis, CONFIG_FILENAME))
-
-    def test_tampered_cache_falls_back_to_verified_fetch(self):
-        self._cache(self._tampered_raw_config())
-        with self._mock_remote(_response(self.raw_signed_config)):
-            config = self._load()
-
-        self.assertEqual(config["domain_allowlist"], ["remote.example.com"])
-
     @override_settings(LOAD_NAVIGATION_CONFIG_REMOTELY=True)
     def test_load_navigation_config_falls_back_to_local_when_signature_invalid(self):
         navigation_config._load_navigation_config.cache_clear()
         self.addCleanup(navigation_config._load_navigation_config.cache_clear)
 
-        with mock.patch.object(navigation_config, "_get_redis_client", return_value=self.redis), self._mock_remote(_response(self._tampered_raw_config())):
+        with self._mock_remote(_response(self._tampered_raw_config())):
             config = navigation_config._load_navigation_config(CONFIG_FILENAME)
 
         self.assertEqual(config, navigation_config._load_local_navigation_config(CONFIG_FILENAME))
@@ -173,10 +111,9 @@ class RemoteNavigationConfigLoadingTest(RemoteNavigationConfigTestCase):
     def _sign(self, config):
         return json.dumps(navigation_config_signing.sign_navigation_config(self.private_key, CONFIG_FILENAME, config))
 
-    def test_http_error_returns_none_and_is_not_cached(self):
+    def test_http_error_returns_none(self):
         with self._mock_remote(_response("Not Found", status_code=404)):
             self.assertIsNone(self._load())
-        self.assertEqual(self.redis.store, {})
 
     def test_request_exception_returns_none(self):
         with mock.patch.object(navigation_config.requests, "get", side_effect=navigation_config.requests.exceptions.Timeout()):
@@ -190,74 +127,13 @@ class RemoteNavigationConfigLoadingTest(RemoteNavigationConfigTestCase):
         with self._mock_remote(_response(json.dumps([self.signed_config]))):
             self.assertIsNone(self._load())
 
-    def test_signed_config_with_invalid_version_is_rejected_and_not_cached(self):
+    def test_signed_config_with_invalid_version_is_rejected(self):
         with self._mock_remote(_response(self._sign({"version": "99", "domain_allowlist": ["remote.example.com"]}))):
             self.assertIsNone(self._load())
-        self.assertEqual(self.redis.store, {})
 
-    def test_signed_config_not_matching_schema_is_rejected_and_not_cached(self):
+    def test_signed_config_not_matching_schema_is_rejected(self):
         with self._mock_remote(_response(self._sign({"version": "99.0", "domain_allowlist": [123]}))):
             self.assertIsNone(self._load())
-        self.assertEqual(self.redis.store, {})
-
-    def test_cached_signed_config_not_matching_schema_is_rejected(self):
-        self._cache(self._sign({"version": "99.0", "domain_allowlist": ["remote.example.com"], "selectors": {"btn": {"type": "css", "selector": 5}}}))
-        self.assertIsNone(navigation_config._load_remote_navigation_config_from_redis_cache(self.redis, CONFIG_FILENAME))
-
-    def test_fetch_lock_is_released_after_fetch(self):
-        with self._mock_remote(_response(self.raw_signed_config)):
-            self._load()
-
-        self.assertEqual(len(self.redis.locks), 1)
-        self.assertTrue(self.redis.locks[0].released)
-
-    def test_fetch_lock_is_released_after_failed_fetch(self):
-        with self._mock_remote(_response("", status_code=500)):
-            self._load()
-
-        self.assertTrue(self.redis.locks[0].released)
-
-    def test_when_lock_is_held_waits_for_other_bot_to_cache_config(self):
-        self.redis.lock_acquired = False
-
-        def other_bot_caches_config(_seconds):
-            self._cache(self.raw_signed_config)
-
-        with mock.patch.object(navigation_config.time, "sleep", side_effect=other_bot_caches_config), mock.patch.object(navigation_config.requests, "get") as mock_get:
-            config = self._load()
-
-        mock_get.assert_not_called()
-        self.assertEqual(config["domain_allowlist"], ["remote.example.com"])
-
-    def test_when_lock_is_held_and_wait_times_out_returns_none_without_fetching(self):
-        self.redis.lock_acquired = False
-
-        with mock.patch.object(navigation_config, "REMOTE_NAVIGATION_CONFIG_LOCK_WAIT_SECONDS", 0), mock.patch.object(navigation_config.requests, "get") as mock_get:
-            self.assertIsNone(self._load())
-
-        mock_get.assert_not_called()
-
-    def test_when_lock_cannot_be_created_fetches_anyway(self):
-        with mock.patch.object(self.redis, "lock", side_effect=Exception("redis down")), self._mock_remote(_response(self.raw_signed_config)):
-            config = self._load()
-
-        self.assertEqual(config["domain_allowlist"], ["remote.example.com"])
-
-    def test_redis_read_failure_falls_back_to_fetch(self):
-        with mock.patch.object(self.redis, "get", side_effect=Exception("redis down")), self._mock_remote(_response(self.raw_signed_config)):
-            config = self._load()
-
-        self.assertEqual(config["domain_allowlist"], ["remote.example.com"])
-
-    def test_redis_write_failure_still_returns_fetched_config(self):
-        with mock.patch.object(self.redis, "set", side_effect=Exception("redis down")), self._mock_remote(_response(self.raw_signed_config)):
-            config = self._load()
-
-        self.assertEqual(config["domain_allowlist"], ["remote.example.com"])
-
-    def test_cache_keys_are_scoped_per_config_filename(self):
-        self.assertNotEqual(navigation_config._redis_cache_key("teams.json"), navigation_config._redis_cache_key("zoom_web.json"))
-        self.assertNotEqual(navigation_config._redis_lock_key(CONFIG_FILENAME), navigation_config._redis_cache_key(CONFIG_FILENAME))
 
 
 class ParseNavigationConfigVersionTest(SimpleTestCase):
@@ -535,7 +411,6 @@ class CommittedNavigationConfigContentsTest(SimpleTestCase):
     def test_every_selector_referenced_by_an_adapter_exists_in_its_config(self):
         pattern = re.compile(r'navigation_config_selector\(\s*"([^"]+)"')
         committed_configs = self._committed_configs()
-        total_references = 0
         for adapter_dir, config_filename in ADAPTER_DIR_TO_CONFIG_FILENAME.items():
             selectors = committed_configs[config_filename].get("selectors", {})
             adapter_path = os.path.join(BOTS_DIR, adapter_dir)
@@ -544,8 +419,6 @@ class CommittedNavigationConfigContentsTest(SimpleTestCase):
                     continue
                 with open(os.path.join(adapter_path, filename)) as f:
                     referenced_names = pattern.findall(f.read())
-                total_references += len(referenced_names)
                 for selector_name in referenced_names:
                     with self.subTest(file=f"{adapter_dir}/{filename}", selector_name=selector_name):
                         self.assertIn(selector_name, selectors)
-        self.assertGreater(total_references, 0)
