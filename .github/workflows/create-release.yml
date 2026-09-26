@@ -106,6 +106,7 @@ jobs:
     if: needs.release.outputs.tag_exists == 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    environment: navigation-configs-production
 
     permissions:
       contents: read
@@ -126,13 +127,13 @@ jobs:
 
       - name: Upload navigation configs to R2
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_NAVIGATION_CONFIGS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_NAVIGATION_CONFIGS_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: auto
           # R2 doesn't support all of the checksum headers newer AWS CLI versions send by default.
           AWS_REQUEST_CHECKSUM_CALCULATION: when_required
           AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
-          R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          R2_ENDPOINT: https://${{ secrets.R2_NAVIGATION_CONFIGS_ACCOUNT_ID }}.r2.cloudflarestorage.com
           R2_BUCKET: ${{ secrets.R2_NAVIGATION_CONFIGS_BUCKET }}
         run: |
           set -euo pipefail
