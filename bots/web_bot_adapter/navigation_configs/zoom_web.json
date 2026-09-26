@@ -1,0 +1,8 @@
+{
+  "version": "1.0",
+  "domain_allowlist": [
+    "www.zoom.com",
+    "127.0.0.1"
+  ],
+  "signature": "Fp8SdOyHP5Q07vNeuRYKsI5i0pVc1i0KSU1dcfbUj4dVXsXA9TVVe96n8aCHCE4ZYge+2PczkwY2xYzx2qClCA=="
+}
