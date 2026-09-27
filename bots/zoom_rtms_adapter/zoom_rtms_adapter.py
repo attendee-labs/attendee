@@ -4,7 +4,6 @@ import hashlib
 import hmac
 import json
 import logging
-import ssl
 import threading
 import time
 from datetime import datetime
@@ -144,6 +143,11 @@ def extract_join_info(join_payload: dict):
     if not (meeting_uuid and stream_id and signaling_url):
         raise ValueError(f"join_payload missing required fields. meeting_uuid={meeting_uuid}, rtms_stream_id={stream_id}, server_urls={server_urls}")
 
+    # API clients forward Zoom's meeting.rtms_started payload; reject SSRF to private nets.
+    from bots.ssrf import assert_safe_rtms_websocket_url
+
+    signaling_url = assert_safe_rtms_websocket_url(signaling_url)
+
     return meeting_uuid, stream_id, signaling_url
 
 
@@ -263,11 +267,9 @@ class RTMSClient:
 
     def _build_ssl_context(self, url: str):
         if url.startswith("wss://"):
-            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-            # You may want to change this in production:
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
-            return ctx
+            from bots.ssrf import rtms_ssl_context
+
+            return rtms_ssl_context()
         return None
 
     async def _connect_signaling(self) -> None:
@@ -323,6 +325,13 @@ class RTMSClient:
 
                         # Then connect to the media websocket (as before)
                         if media_url:
+                            from bots.ssrf import assert_safe_rtms_websocket_url
+
+                            try:
+                                media_url = assert_safe_rtms_websocket_url(media_url)
+                            except ValueError as e:
+                                logger.error("Rejecting unsafe RTMS media_url: %s", e)
+                                raise
                             logger.info("Connecting to media WebSocket at %s", media_url)
                             asyncio.create_task(self._connect_media(media_url))
                         else:
