@@ -32,6 +32,7 @@ from bots.utils import half_ceil, mask_url_query_param_values, scale_i420
 
 from .debug_screen_recorder import DebugScreenRecorder
 from .livekit_websocket_bridge import LiveKitWebsocketBridge
+from .navigation_config import get_platform_domain_allowlist, get_platform_selector
 from .ui_methods import UiAuthorizedUserNotInMeetingTimeoutExceededException, UiBlockedByCaptchaException, UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiIncorrectPasswordException, UiInfinitelyRetryableException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableException, UiRetryableExpectedException
 
 logger = logging.getLogger(__name__)
@@ -639,6 +640,15 @@ class WebBotAdapter(BotAdapter):
                 "inner_exception_message": inner_exception.__str__() if inner_exception else "inner_exception_message_not_available",
             }
         )
+
+    def subclass_specific_navigation_config_filename(self):
+        raise NotImplementedError("Subclasses must implement subclass_specific_navigation_config_filename")
+
+    def navigation_config_selector(self, selector_name):
+        return get_platform_selector(self.subclass_specific_navigation_config_filename(), selector_name)
+
+    def navigation_config_domain_allowlist(self):
+        return get_platform_domain_allowlist(self.subclass_specific_navigation_config_filename())
 
     def subclass_specific_domain_allowlist(self):
         return []
