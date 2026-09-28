@@ -15,7 +15,6 @@ jobs:
 
     outputs:
       tag: ${{ steps.get_version.outputs.tag }}
-      tag_exists: ${{ steps.tag_check.outputs.exists }}
 
     steps:
       - name: Checkout (full history + tags)
@@ -35,17 +34,14 @@ jobs:
           echo "tag=v$VERSION" >> $GITHUB_OUTPUT
 
       - name: Ensure tag does not already exist
-        id: tag_check
         run: |
           TAG="${{ steps.get_version.outputs.tag }}"
           if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null 2>&1; then
-            echo "exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "::error::Tag $TAG already exists. Bump the version in version.json."
+            exit 1
           fi
 
       - name: Create annotated tag and push
-        if: steps.tag_check.outputs.exists == 'false'
         run: |
           TAG="${{ steps.get_version.outputs.tag }}"
           git config user.name "github-actions"
@@ -54,7 +50,6 @@ jobs:
           git push origin "$TAG"
 
       - name: Create GitHub Release
-        if: steps.tag_check.outputs.exists == 'false'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -65,7 +60,6 @@ jobs:
 
   docker:
     needs: release
-    if: needs.release.outputs.tag_exists == 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
@@ -103,7 +97,6 @@ jobs:
 
   navigation-configs:
     needs: release
-    if: needs.release.outputs.tag_exists == 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment:
