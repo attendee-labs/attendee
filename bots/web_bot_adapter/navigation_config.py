@@ -132,8 +132,7 @@ def _load_remote_navigation_config(config_filename):
     return config
 
 
-@lru_cache(maxsize=None)
-def _load_navigation_config(config_filename):
+def _select_navigation_config(config_filename):
     local_config = _load_local_navigation_config(config_filename)
     if not settings.LOAD_NAVIGATION_CONFIG_REMOTELY:
         return local_config
@@ -155,6 +154,13 @@ def _load_navigation_config(config_filename):
 
     logger.info("Using remote navigation config %s (version %s.%s)", config_filename, *remote_version)
     return remote_config
+
+
+@lru_cache(maxsize=None)
+def _load_navigation_config(config_filename):
+    config = _select_navigation_config(config_filename)
+    logger.info("Navigation config in use for %s: %s", config_filename, json.dumps(config, sort_keys=True))
+    return config
 
 
 def get_platform_domain_allowlist(config_filename):
