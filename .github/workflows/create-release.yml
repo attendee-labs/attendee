@@ -106,7 +106,9 @@ jobs:
     if: needs.release.outputs.tag_exists == 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    environment: navigation-configs-production
+    environment:
+      name: release
+      deployment: false
 
     permissions:
       contents: read
