@@ -1332,7 +1332,7 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
         "properties": {
             "zoom_tokens_url": {
                 "type": "string",
-                "pattern": "^https://.*",
+                "pattern": "^https?://.*",  # local patch #4: allow http for internal network
             },
         },
         "required": [],
@@ -1348,10 +1348,10 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
         except jsonschema.exceptions.ValidationError as e:
             raise serializers.ValidationError(e.message)
 
-        # Validate that zoom_tokens_url is a proper HTTPS URL
+        # Validate that zoom_tokens_url is a proper HTTP(S) URL
         zoom_tokens_url = value.get("zoom_tokens_url")
-        if zoom_tokens_url and not zoom_tokens_url.lower().startswith("https://"):
-            raise serializers.ValidationError({"zoom_tokens_url": "URL must start with https://"})
+        if zoom_tokens_url and not zoom_tokens_url.lower().startswith(("https://", "http://")):  # patch #4
+            raise serializers.ValidationError({"zoom_tokens_url": "URL must start with http:// or https://"})
 
         return value
 

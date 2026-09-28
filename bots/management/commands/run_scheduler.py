@@ -25,7 +25,8 @@ from bots.tasks.sync_zoom_oauth_connection_task import enqueue_sync_zoom_oauth_c
 
 log = logging.getLogger(__name__)
 
-CALENDAR_SYNC_THRESHOLD_HOURS = 24  # The longest a calendar can go without having been synced
+# Local patch #2: env-var configurable poll cadence, in MINUTES.
+CALENDAR_SYNC_THRESHOLD_MINUTES = int(os.getenv("CALENDAR_SYNC_THRESHOLD_MINUTES", "1440"))
 
 # Heartbeat file the scheduler rewrites each cycle so a liveness probe can
 # restart the pod if the loop stalls (a process-liveness check wouldn't catch it).
@@ -121,12 +122,13 @@ class Command(BaseCommand):
     def _run_periodic_calendar_syncs(self):
         """
         Run periodic calendar syncs.
-        Launch sync tasks for calendars that haven't had a sync task enqueued in the last 24 hours.
+        Launch sync tasks for calendars that haven't had a sync task enqueued within
+        CALENDAR_SYNC_THRESHOLD_MINUTES.
         """
         now = timezone.now()
-        cutoff_time = now - timezone.timedelta(hours=CALENDAR_SYNC_THRESHOLD_HOURS)
+        cutoff_time = now - timezone.timedelta(minutes=CALENDAR_SYNC_THRESHOLD_MINUTES)
 
-        # Find connected calendars that haven't had a sync task enqueued in the last 24 hours
+        # Find connected calendars that haven't had a sync task enqueued within the threshold
         calendars = Calendar.objects.filter(
             state=CalendarStates.CONNECTED,
         ).filter(Q(sync_task_enqueued_at__isnull=True) | Q(sync_task_enqueued_at__lte=cutoff_time) | Q(sync_task_requested_at__isnull=False))

@@ -9,7 +9,7 @@ from django.test import TestCase, override_settings
 from django.utils import timezone as django_timezone
 
 from accounts.models import Organization
-from bots.management.commands.run_scheduler import CALENDAR_SYNC_THRESHOLD_HOURS, Command
+from bots.management.commands.run_scheduler import CALENDAR_SYNC_THRESHOLD_MINUTES, Command
 from bots.models import Bot, BotStates, Calendar, CalendarPlatform, CalendarStates, Project, ZoomOAuthApp, ZoomOAuthConnection, ZoomOAuthConnectionStates
 
 
@@ -187,11 +187,11 @@ class RunSchedulerCommandTestCase(TestCase):
     def test_run_periodic_calendar_syncs_handles_boundary_conditions(self):
         """Test calendar sync with calendars exactly at the threshold boundary"""
         # Calendar synced exactly at threshold (should be included)
-        exactly_at_threshold = self.now - django_timezone.timedelta(hours=CALENDAR_SYNC_THRESHOLD_HOURS)
+        exactly_at_threshold = self.now - django_timezone.timedelta(minutes=CALENDAR_SYNC_THRESHOLD_MINUTES)
         calendar_boundary = Calendar.objects.create(project=self.project, platform=CalendarPlatform.GOOGLE, state=CalendarStates.CONNECTED, sync_task_enqueued_at=exactly_at_threshold, client_id="test_client_id_boundary")
 
         # Calendar synced just under threshold (should be excluded)
-        just_under_threshold = self.now - django_timezone.timedelta(hours=CALENDAR_SYNC_THRESHOLD_HOURS, minutes=-1)
+        just_under_threshold = self.now - django_timezone.timedelta(minutes=CALENDAR_SYNC_THRESHOLD_MINUTES - 1)
         calendar_just_under = Calendar.objects.create(project=self.project, platform=CalendarPlatform.MICROSOFT, state=CalendarStates.CONNECTED, sync_task_enqueued_at=just_under_threshold, client_id="test_client_id_under")
 
         command = Command()

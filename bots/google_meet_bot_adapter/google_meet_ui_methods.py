@@ -919,6 +919,17 @@ class GoogleMeetUIMethods:
         logger.info(f"Navigating to domain-specific Google ServiceLogin: {google_login_url}")
         self.driver.get(google_login_url)
 
+        # Local patch #1: some Google Workspace SSO setups don't auto-redirect
+        # from /a/DOMAIN/ServiceLogin to the SAML IdP — Google's modern flow
+        # shows an identifier prompt first. Detect + fill it so SAML kicks in.
+        try:
+            _email_input = WebDriverWait(self.driver, 5).until(EC.element_to_be_clickable((By.CSS_SELECTOR, 'input[type="email"], input#identifierId')))
+            _email_input.send_keys(os.getenv("OKTA_BOT_LOGIN_USERNAME", ""))
+            _email_input.send_keys(Keys.ENTER)
+            logger.info("Typed Okta username into Google identifier prompt")
+        except TimeoutException:
+            logger.info("No Google identifier prompt (auto-SAML redirect happened)")
+
         # Wait for cookies indicating that we have logged in successfully
         start_waiting_at = time.time()
         saml_continue_clicked = False

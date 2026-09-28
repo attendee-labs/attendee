@@ -474,7 +474,13 @@ class WebBotAdapter(BotAdapter):
                         elif json_data.get("type") == "ChatStatusChange":
                             if json_data.get("change") == "ready_to_send":
                                 self.ready_to_send_chat_messages = True
-                                self.send_message_callback({"message": self.Messages.READY_TO_SEND_CHAT_MESSAGE})
+                                # Local patch #6: forward chat_space_id (from patch #5's iframe
+                                # extraction) via the callback pipeline. Adapter has no bot
+                                # reference — controller does the HTTP POST in its handler.
+                                _cb_msg = {"message": self.Messages.READY_TO_SEND_CHAT_MESSAGE}
+                                if json_data.get("chat_space_id"):
+                                    _cb_msg["chat_space_id"] = json_data["chat_space_id"]
+                                self.send_message_callback(_cb_msg)
 
                         elif json_data.get("type") == "MeetingStatusChange":
                             self.handle_remover_data(json_data)

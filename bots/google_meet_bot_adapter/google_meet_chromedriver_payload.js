@@ -744,12 +744,28 @@ class StyleManager {
             // Click to open the chat panel
             chatButton.click();
 
-            // Wait for the chat input element to appear
-            const numAttempts = 30;
+            // Local patch #3: 10s timeout + selector fallbacks
+            const numAttempts = 100;
+            let chatSpaceId = null;  // local patch #5
             for (let i = 0; i < numAttempts; i++) {
                 // Sleep for 100 milliseconds
                 await new Promise(resolve => setTimeout(resolve, 100));
-                const chatInput = document.querySelector('textarea[aria-label="Send a message"]');
+                // Local patch #5: as of Nov 2025 Meet renders the chat panel inside a
+                // cross-origin chat.google.com iframe. DOM typing is impossible (browser
+                // security), but the iframe.src attribute is readable and encodes the
+                // Chat space ID we need for API-based posting.
+                const chatIframe = document.querySelector('iframe[title="Chat"]');
+                if (chatIframe && chatIframe.src) {
+                    const m = chatIframe.src.match(/\/embed\/space\/([^?\/]+)/);
+                    if (m) {
+                        chatSpaceId = m[1];
+                        break;
+                    }
+                }
+                const chatInput = document.querySelector('textarea[aria-label="Send a message"]')
+                    || document.querySelector('textarea[aria-label*="message" i]')
+                    || document.querySelector('textarea[aria-label*="chat" i]')
+                    || document.querySelector('[contenteditable="true"][role="textbox"]');
                 if (chatInput) {
                     break;
                 }
@@ -767,10 +783,13 @@ class StyleManager {
             // Click the chat button again to close/minimize the panel
             chatButton.click();
 
-            window.ws.sendJson({
-                type: 'ChatStatusChange',
-                change: 'ready_to_send'
-            });
+            // Local patch #5: include chat_space_id when iframe extraction found it.
+            const _payload = { type: 'ChatStatusChange', change: 'ready_to_send' };
+            if (chatSpaceId) {
+                _payload.chat_space_id = chatSpaceId;
+                console.log('[atlas] Chat-integrated Meet, chat_space_id=' + chatSpaceId);
+            }
+            window.ws.sendJson(_payload);
         }
     }
 

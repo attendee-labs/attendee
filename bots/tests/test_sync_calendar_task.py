@@ -7,7 +7,7 @@ from django.test import TestCase, TransactionTestCase
 from django.utils import timezone
 
 from accounts.models import Organization
-from bots.management.commands.run_scheduler import CALENDAR_SYNC_THRESHOLD_HOURS
+from bots.management.commands.run_scheduler import CALENDAR_SYNC_THRESHOLD_MINUTES
 from bots.models import (
     Bot,
     BotStates,
@@ -942,7 +942,7 @@ class TestNotificationChannelRefreshWithScheduler(TransactionTestCase):
         command = Command()
 
         # Mock timezone.now() to return our test time
-        with patch("django.utils.timezone.now", return_value=self.calendar.sync_task_enqueued_at + timedelta(hours=CALENDAR_SYNC_THRESHOLD_HOURS)):
+        with patch("django.utils.timezone.now", return_value=self.calendar.sync_task_enqueued_at + timedelta(minutes=CALENDAR_SYNC_THRESHOLD_MINUTES)):
             # Assert that the latest notification channel for the calendar has NOT expired yet
             self.assertGreater(CalendarNotificationChannel.objects.filter(calendar=self.calendar).order_by("-expires_at").first().expires_at, timezone.now())
             command._run_periodic_calendar_syncs()
