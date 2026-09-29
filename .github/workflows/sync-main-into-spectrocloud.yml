@@ -28,7 +28,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Merge upstream, not origin/main: this repo is a fork, so its own
+          # Use upstream, not origin/main: this repo is a fork, so its own
           # main lags attendee-labs/attendee and would silently skip commits.
           git remote add upstream "$UPSTREAM_REPO"
           git fetch --no-tags upstream main
@@ -39,9 +39,9 @@ jobs:
             echo "upstream/main has no commits missing from origin/spectrocloud; nothing to sync."
           fi
 
-      - name: Create sync branch and merge main
+      - name: Create sync branch from upstream main
         if: steps.check.outputs.pending != '0'
-        id: merge
+        id: branch
         shell: bash
         run: |
           set -euo pipefail
@@ -51,19 +51,13 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git checkout -b "$branch" origin/spectrocloud
+          git checkout -b "$branch" upstream/main
 
-          if git merge --no-edit upstream/main; then
-            echo "conflicts=false" >> "$GITHUB_OUTPUT"
-          else
-            # Merge conflicts are shipped on purpose: the pull request is the
-            # resolution surface, so commit the markers instead of aborting.
-            files=$(git diff --name-only --diff-filter=U | paste -sd, -)
-            echo "conflicts=true" >> "$GITHUB_OUTPUT"
-            echo "conflict_files=$files" >> "$GITHUB_OUTPUT"
-            echo "::warning::Merge conflicts in: $files"
-            git add -A
-            git commit --no-edit
+          # GITHUB_TOKEN cannot push workflow changes. Keep this fork's workflows;
+          # GitHub will detect every other conflict when the pull request opens.
+          git restore --source=origin/spectrocloud --staged --worktree .github/workflows
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: preserve Spectro Cloud workflows"
           fi
 
           git push origin "HEAD:refs/heads/$branch"
@@ -75,26 +69,18 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          branch="${{ steps.branch.outputs.branch }}"
+          title="chore: sync main into spectrocloud"
 
-          if [[ "${{ steps.merge.outputs.conflicts }}" == "true" ]]; then
-            cat > /tmp/pr-body.md <<EOF
+          cat > /tmp/pr-body.md <<EOF
           Automated sync of upstream \`attendee-labs/attendee\` \`main\` into \`spectrocloud\` (${{ steps.check.outputs.pending }} commits).
 
-          **This merge had conflicts and was committed with conflict markers:** \`${{ steps.merge.outputs.conflict_files }}\`
-
-          Resolve them (GitHub's *Resolve conflicts* editor, or locally) before merging. Repo-specific guidance:
-
-          - \`version.json\` — take **upstream's** value. It must mirror attendee-labs, because \`create-release.yml\` derives the next \`v<upstream>-sp.N\` tag from it. Keeping the fork's bumped value mis-versions the next release.
-          - \`.github/workflows/*\` — take **spectrocloud's** value; the fork customises branch targeting and the release pipeline there.
+          GitHub will report any merge conflicts. This fork's \`.github/workflows/*\` files are preserved because \`GITHUB_TOKEN\` cannot push workflow changes.
           EOF
-          else
-            cat > /tmp/pr-body.md <<EOF
-          Automated sync of upstream \`attendee-labs/attendee\` \`main\` into \`spectrocloud\` (${{ steps.check.outputs.pending }} commits). Merged cleanly.
-          EOF
-          fi
 
           gh pr create \
+            --repo "${{ github.repository }}" \
             --base spectrocloud \
-            --head "${{ steps.merge.outputs.branch }}" \
-            --title "chore: sync main into spectrocloud" \
+            --head "$branch" \
+            --title "$title" \
             --body-file /tmp/pr-body.md
