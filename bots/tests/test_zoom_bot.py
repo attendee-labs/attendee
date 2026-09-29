@@ -1,5 +1,8 @@
 import base64
 import json
+import subprocess
+import sys
+import textwrap
 import threading
 import time
 from unittest.mock import ANY, MagicMock, call, patch
@@ -356,6 +359,73 @@ def create_mock_deepgram():
 
 
 @tag("zoom_tests")
+class TestZoomSDKShutdown(SimpleTestCase):
+    def test_run_bot_process_finalizes_normally_without_zoom_sdk(self):
+        script = """
+            import django
+
+            django.setup()
+
+            from bots.management.commands.run_bot import Command
+            from bots.tasks import run_bot
+
+            run_bot.run = lambda _bot_id: None
+            Command().handle(botid=1)
+            print("normal finalization completed")
+        """
+        completed = subprocess.run(
+            [sys.executable, "-c", textwrap.dedent(script)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertIn("normal finalization completed", completed.stdout)
+
+    def test_run_bot_process_exits_before_zoom_raw_helper_finalization(self):
+        script = """
+            import django
+            import zoom_meeting_sdk as zoom
+
+            django.setup()
+
+            from bots.management.commands.run_bot import Command
+            from bots.tasks import run_bot
+
+            raw_helper = None
+
+            def run_with_raw_helper(_bot_id):
+                global raw_helper
+                params = zoom.InitParam()
+                params.strWebDomain = "https://zoom.us"
+                params.strSupportUrl = "https://zoom.us"
+                params.enableGenerateDump = False
+                params.emLanguageID = zoom.SDK_LANGUAGE_ID.LANGUAGE_English
+                params.enableLogByDefault = False
+                assert zoom.InitSDK(params) == zoom.SDKERR_SUCCESS
+                raw_helper = zoom.GetAudioRawdataHelper()
+                assert raw_helper is not None
+                zoom.CleanUPSDK()
+
+            run_bot.run = run_with_raw_helper
+            Command().handle(botid=1)
+        """
+        completed = subprocess.run(
+            [sys.executable, "-c", textwrap.dedent(script)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        self.assertEqual(
+            completed.returncode,
+            0,
+            f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}",
+        )
+
+
+@tag("zoom_tests")
 class TestZoomParticipantTracking(SimpleTestCase):
     def test_missing_participant_does_not_start_only_participant_timer(self):
         adapter = ZoomBotAdapter.__new__(ZoomBotAdapter)
@@ -605,6 +675,7 @@ class TestZoomBot(TransactionTestCase):
         mock_zoom_sdk_adapter.CreateMeetingService.assert_called_once()
         mock_zoom_sdk_adapter.CreateAuthService.assert_called_once()
         controller.adapter.meeting_service.Join.assert_called_once()
+        mock_zoom_sdk_video.destroyRenderer.assert_called_once()
 
         # Cleanup
         controller.cleanup()
@@ -1088,6 +1159,7 @@ class TestZoomBot(TransactionTestCase):
         mock_zoom_sdk_adapter.CreateMeetingService.assert_called_once()
         mock_zoom_sdk_adapter.CreateAuthService.assert_called_once()
         controller.adapter.meeting_service.Join.assert_called_once()
+        mock_zoom_sdk_adapter.CleanUPSDK.assert_called_once()
 
         # Verify audio request was processed
         audio_request.refresh_from_db()
