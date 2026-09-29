@@ -3201,6 +3201,7 @@ new RTCInterceptor({
                 let localCandidate;
                 let remoteCandidate;
                 const inboundAudio = [];
+                const inboundVideo = [];
                 const dataChannels = [];
                 const transports = [];
 
@@ -3238,6 +3239,22 @@ new RTCInterceptor({
                             packetsReceived: report.packetsReceived,
                             packetsLost: report.packetsLost,
                             jitter: report.jitter,
+                        });
+                    }
+
+                    if (report.type === "inbound-rtp" && report.kind === "video") {
+                        inboundVideo.push({
+                            ssrc: report.ssrc,
+                            bytesReceived: report.bytesReceived,
+                            packetsReceived: report.packetsReceived,
+                            packetsLost: report.packetsLost,
+                            jitter: report.jitter,
+                            framesReceived: report.framesReceived,
+                            framesDecoded: report.framesDecoded,
+                            framesDropped: report.framesDropped,
+                            frameWidth: report.frameWidth,
+                            frameHeight: report.frameHeight,
+                            framesPerSecond: report.framesPerSecond,
                         });
                     }
 
@@ -3296,6 +3313,7 @@ new RTCInterceptor({
                     },
                     transports,
                     inboundAudio,
+                    inboundVideo,
                     dataChannels,
                 });
             } catch (error) {
@@ -4078,11 +4096,59 @@ class ParticipantsPoller {
     }
 }
 
+class CallStatePoller {
+    static pollIntervalMs = 1000;
+
+    constructor() {
+        this.interval = null;
+        this.errorPollingCallStateTicker = 0;
+        this.previousCallState = undefined;
+    }
+
+    start() {
+        if (this.interval) {
+            return;
+        }
+        this.interval = setInterval(() => {
+            try {
+                this.pollCallState();
+            } catch (error) {
+                if (this.errorPollingCallStateTicker % 500 === 0)
+                {
+                    window.ws?.sendJson({
+                        type: 'ErrorPollingCallState',
+                        error: error.message
+                    });
+                }
+                this.errorPollingCallStateTicker++;
+            }
+        }, CallStatePoller.pollIntervalMs);
+    }
+
+    pollCallState() {
+        const callState = window.callManager.getCallState();
+        if (callState === this.previousCallState) {
+            return;
+        }
+
+        window.ws?.sendJson({
+            type: 'CallStateChange',
+            previousCallState: this.previousCallState ?? null,
+            callState: callState ?? null,
+            callId: window.callManager.getCallId() ?? null
+        });
+        this.previousCallState = callState;
+    }
+}
+
 const callManager = new CallManager();
 window.callManager = callManager;
 
 const participantsPoller = new ParticipantsPoller();
 window.participantsPoller = participantsPoller;
+
+const callStatePoller = new CallStatePoller();
+window.callStatePoller = callStatePoller;
 
 const connectionStateManager = new ConnectionStateManager();
 window.connectionStateManager = connectionStateManager;

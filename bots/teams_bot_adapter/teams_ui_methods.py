@@ -520,6 +520,9 @@ class TeamsUIMethods:
 
         self.disable_video_effects()
 
+        # Start polling the call state, purely for logging purposes
+        self.start_call_state_poller()
+
         logger.info("Waiting for the Join now button...")
         join_button = self.locate_element(step="join_button", condition=EC.presence_of_element_located((By.CSS_SELECTOR, '[data-tid="prejoin-join-button"]')), wait_time_seconds=10)
         logger.info("Clicking the Join now button...")
@@ -544,6 +547,12 @@ class TeamsUIMethods:
 
     def start_participants_poller(self):
         self.driver.execute_script("window.participantsPoller.start()")
+
+    def start_call_state_poller(self):
+        try:
+            self.driver.execute_script("window.callStatePoller.start()")
+        except Exception as e:
+            logger.warning(f"Error starting call state poller: {e}")
 
     def disable_video_effects(self):
         if not (self.teams_bot_login_is_available and self.teams_bot_login_should_be_used):
