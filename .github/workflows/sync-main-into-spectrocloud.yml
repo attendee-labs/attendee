@@ -1,0 +1,89 @@
+name: Sync Main into SpectroCloud
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: spectrocloud
+          fetch-depth: 0
+
+      - name: Check for new commits on main
+        id: check
+        shell: bash
+        run: |
+          set -euo pipefail
+          pending=$(git rev-list --count origin/spectrocloud..origin/main)
+          echo "pending=$pending" >> "$GITHUB_OUTPUT"
+          if [[ "$pending" -eq 0 ]]; then
+            echo "origin/main has no commits missing from origin/spectrocloud; nothing to sync."
+          fi
+
+      - name: Create sync branch and merge main
+        if: steps.check.outputs.pending != '0'
+        id: merge
+        shell: bash
+        run: |
+          set -euo pipefail
+          branch="sync/main-into-spectrocloud-$(date -u +%Y%m%d-%H%M%S)"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git checkout -b "$branch" origin/spectrocloud
+
+          if git merge --no-edit origin/main; then
+            echo "conflicts=false" >> "$GITHUB_OUTPUT"
+          else
+            # Merge conflicts are shipped on purpose: the pull request is the
+            # resolution surface, so commit the markers instead of aborting.
+            files=$(git diff --name-only --diff-filter=U | paste -sd, -)
+            echo "conflicts=true" >> "$GITHUB_OUTPUT"
+            echo "conflict_files=$files" >> "$GITHUB_OUTPUT"
+            echo "::warning::Merge conflicts in: $files"
+            git add -A
+            git commit --no-edit
+          fi
+
+          git push origin "HEAD:refs/heads/$branch"
+
+      - name: Open pull request
+        if: steps.check.outputs.pending != '0'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ steps.merge.outputs.conflicts }}" == "true" ]]; then
+            cat > /tmp/pr-body.md <<EOF
+          Automated sync of \`main\` into \`spectrocloud\` (${{ steps.check.outputs.pending }} commits).
+
+          **This merge had conflicts and was committed with conflict markers:** \`${{ steps.merge.outputs.conflict_files }}\`
+
+          Resolve them (GitHub's *Resolve conflicts* editor, or locally) before merging.
+          EOF
+          else
+            cat > /tmp/pr-body.md <<EOF
+          Automated sync of \`main\` into \`spectrocloud\` (${{ steps.check.outputs.pending }} commits). Merged cleanly.
+          EOF
+          fi
+
+          gh pr create \
+            --base spectrocloud \
+            --head "${{ steps.merge.outputs.branch }}" \
+            --title "chore: sync main into spectrocloud" \
+            --body-file /tmp/pr-body.md

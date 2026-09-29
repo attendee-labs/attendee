@@ -173,18 +173,11 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
             }}
         """
 
+    def subclass_specific_navigation_config_filename(self):
+        return "teams.json"
+
     def subclass_specific_domain_allowlist(self):
-        return [
-            "teams.microsoft.com",
-            "teams.live.com",
-            "login.live.com",
-            "teams.microsoft.us",
-            "m365.cloud.microsoft",
-            "static.microsoft",
-            "login.microsoftonline.com",
-            "login.microsoftonline.us",
-            "www.office.com",
-        ]
+        return self.navigation_config_domain_allowlist()
 
     def subclass_specific_chrome_policies(self):
         if not settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:
