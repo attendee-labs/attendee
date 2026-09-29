@@ -549,7 +549,10 @@ class TeamsUIMethods:
         self.driver.execute_script("window.participantsPoller.start()")
 
     def start_call_state_poller(self):
-        self.driver.execute_script("window.callStatePoller.start()")
+        try:
+            self.driver.execute_script("window.callStatePoller.start()")
+        except Exception as e:
+            logger.warning(f"Error starting call state poller: {e}")
 
     def disable_video_effects(self):
         if not (self.teams_bot_login_is_available and self.teams_bot_login_should_be_used):
