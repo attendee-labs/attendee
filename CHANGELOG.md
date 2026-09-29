@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.80.0-sp.1](https://github.com/spectrocloud-public/attendee/compare/v1.79.4-sp.2...v1.80.0-sp.1) (2026-09-29)
+
+
+### Bug Fixes
+
+* updated fork ([#5](https://github.com/spectrocloud-public/attendee/issues/5)) ([6761154](https://github.com/spectrocloud-public/attendee/commit/67611542e435a13373de6bec4cde5a7631f77a9a))
+
 ## [1.79.4-sp.2](https://github.com/spectrocloud-public/attendee/compare/v1.79.4-sp.1...v1.79.4-sp.2) (2026-09-28)
 
 
