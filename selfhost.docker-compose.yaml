@@ -1,0 +1,135 @@
+# Local self-hosted Attendee, with rustfs standing in for S3.
+#
+# This is the upstream dev stack plus an S3-compatible object store, so nothing has to reach a
+# real cloud bucket to record a meeting. Production does NOT use this file -- see DEPLOYMENT.md.
+#
+#   docker compose -f selfhost.docker-compose.yaml build
+#   docker compose -f selfhost.docker-compose.yaml run --rm attendee-app python init_env.py >> .env
+#   docker compose -f selfhost.docker-compose.yaml up -d
+#   docker compose -f selfhost.docker-compose.yaml exec attendee-app python manage.py migrate
+#
+# Host ports are deliberately offset from Mawrid's compose stack, which already holds
+# 8000 (backend), 5432, 6379, 9000 and 9001 (its own rustfs). Both stacks can run at once.
+#   Attendee app     -> http://localhost:8100
+#   rustfs S3 API    -> http://localhost:9100
+#   rustfs console   -> http://localhost:9101
+
+x-attendee-base: &attendee-base
+  build: ./
+  volumes:
+    - .:/attendee
+  networks:
+    - attendee_network
+  env_file:
+    - .env
+  environment:
+    - DJANGO_SETTINGS_MODULE=attendee.settings.development
+    - POSTGRES_HOST=postgres
+    - REDIS_URL=redis://redis:6379/5
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_started
+    rustfs-init:
+      condition: service_completed_successfully
+
+services:
+  attendee-app:
+    <<: *attendee-base
+    ports:
+      - "8100:8000"
+    # entrypoint.sh boots PulseAudio, which only bot processes need.
+    entrypoint: []
+    command: python manage.py runserver 0.0.0.0:8000
+
+  # Bots run inside this worker (LAUNCH_BOT_METHOD is unset locally), so it KEEPS the default
+  # entrypoint -- without PulseAudio a bot has no audio device and fails to join.
+  attendee-worker:
+    <<: *attendee-base
+    environment:
+      - DJANGO_SETTINGS_MODULE=attendee.settings.development
+      - POSTGRES_HOST=postgres
+      - REDIS_URL=redis://redis:6379/5
+      - ENABLE_CHROME_SANDBOX=false
+    command: celery -A attendee worker -l INFO
+
+  attendee-scheduler:
+    <<: *attendee-base
+    entrypoint: []
+    command: python manage.py run_scheduler
+
+  postgres:
+    image: postgres:15.3-alpine
+    environment:
+      POSTGRES_DB: attendee_development
+      POSTGRES_USER: attendee_development_user
+      POSTGRES_PASSWORD: attendee_development_user
+      PGDATA: /data/postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U attendee_development_user -d attendee_development"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - postgres:/data/postgres
+    networks:
+      - attendee_network
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    networks:
+      - attendee_network
+    restart: unless-stopped
+    volumes:
+      - redis:/data/redis
+
+  # S3-compatible object storage, written in Rust (a MinIO alternative). Attendee reaches it
+  # over the compose network at http://rustfs:9000 -- that is AWS_ENDPOINT_URL in .env.
+  rustfs:
+    image: rustfs/rustfs:latest
+    networks:
+      - attendee_network
+    ports:
+      - "9100:9000"  # S3 API
+      - "9101:9001"  # Web console
+    environment:
+      # Boot rustfs with the same credentials Attendee uses, so they always match.
+      - RUSTFS_ACCESS_KEY=${AWS_ACCESS_KEY_ID:-attendeeadmin}
+      - RUSTFS_SECRET_KEY=${AWS_SECRET_ACCESS_KEY:-attendeeadmin}
+      - RUSTFS_VOLUMES=/data
+      - RUSTFS_CONSOLE_ENABLE=true
+    volumes:
+      - rustfs-data:/data
+
+  # One-shot init: wait for rustfs, then create the recording bucket. Attendee never creates its
+  # own bucket, so without this every upload fails with NoSuchBucket. `mb` on an existing bucket
+  # errors harmlessly -- commands are ';'-separated and the trailing echo makes the container
+  # exit 0, so a restart against the persisted volume still satisfies
+  # service_completed_successfully for the app containers.
+  rustfs-init:
+    image: rustfs/rc:latest
+    depends_on:
+      - rustfs
+    networks:
+      - attendee_network
+    environment:
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-attendeeadmin}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-attendeeadmin}
+      - AWS_RECORDING_STORAGE_BUCKET_NAME=${AWS_RECORDING_STORAGE_BUCKET_NAME:-attendee}
+    entrypoint: >
+      /bin/sh -c "
+      until rc alias set rustfs http://rustfs:9000 $${AWS_ACCESS_KEY_ID} $${AWS_SECRET_ACCESS_KEY}; do echo 'waiting for rustfs...'; sleep 2; done;
+      rc mb rustfs/$${AWS_RECORDING_STORAGE_BUCKET_NAME};
+      echo 'rustfs bucket ready';
+      "
+
+networks:
+  attendee_network:
+    driver: bridge
+
+volumes:
+  postgres:
+  redis:
+  rustfs-data:
