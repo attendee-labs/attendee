@@ -31,11 +31,6 @@ DEFAULT_ALERT_STATE = {"active": False}
 
 BYTES_PER_GIGABYTE = 1024 * 1024 * 1024
 
-# The percentage alert stays quiet until at least this many bots have finished inside
-# the window, so that one failure out of two bots on a quiet instance is not a 50%
-# alert. The count alert covers a burst of failures on an instance that quiet.
-BOT_FATAL_ERROR_PERCENTAGE_MINIMUM_FINISHED_BOTS = int(os.getenv("INSTANCE_HEALTH_BOT_FATAL_ERROR_PERCENTAGE_MINIMUM_FINISHED_BOTS", "10"))
-
 DEFAULT_ALERT_SETTINGS = {
     InstanceHealthAlertTypes.CONNECTIONS_USED_PERCENTAGE_EXCEEDS_THRESHOLD: {
         "enabled": True,
@@ -62,6 +57,11 @@ DEFAULT_ALERT_SETTINGS = {
         "threshold": 20,
     },
 }
+
+# The percentage alert stays quiet until at least this many bots have finished inside
+# the window, so that one failure out of two bots on a quiet instance is not a 50%
+# alert.
+BOT_FATAL_ERROR_PERCENTAGE_EXCEEDS_THRESHOLD_MINIMUM_FINISHED_BOTS_COUNT = 10
 
 # Presentation metadata for each alert, kept alongside the defaults so the settings UI
 # and its form parsing share one source of truth. Thresholds are stored raw (a
@@ -105,7 +105,7 @@ ALERT_METADATA = {
     },
     InstanceHealthAlertTypes.BOT_FATAL_ERROR_PERCENTAGE_EXCEEDS_THRESHOLD: {
         "label": "Share of bots with fatal errors",
-        "description": f"Fires when this share of the bots that finished in the last 10 minutes hit a fatal error. Needs at least {BOT_FATAL_ERROR_PERCENTAGE_MINIMUM_FINISHED_BOTS} finished bots.",
+        "description": f"Fires when this share of the bots that finished in the last 10 minutes hit a fatal error. Needs at least {BOT_FATAL_ERROR_PERCENTAGE_EXCEEDS_THRESHOLD_MINIMUM_FINISHED_BOTS_COUNT} finished bots.",
         "unit_label": "%",
         "step": "1",
         "display_factor": 1,
@@ -138,7 +138,7 @@ def _alert_is_firing(alert, config):
     if alert is InstanceHealthAlertTypes.BOT_FATAL_ERROR_PERCENTAGE_EXCEEDS_THRESHOLD:
         fatal_errors, _ = _latest_reading("bot_fatal_errors")
         fatal_errors = fatal_errors or {}
-        if (fatal_errors.get("finished_bot_count") or 0) < BOT_FATAL_ERROR_PERCENTAGE_MINIMUM_FINISHED_BOTS:
+        if (fatal_errors.get("finished_bot_count") or 0) < BOT_FATAL_ERROR_PERCENTAGE_EXCEEDS_THRESHOLD_MINIMUM_FINISHED_BOTS_COUNT:
             return False
         percentage = fatal_errors.get("fatal_error_percentage")
         return percentage is not None and percentage >= config["threshold"]

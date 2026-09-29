@@ -22,7 +22,6 @@ from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
 from bots.instance_health_snapshot_taker import (
-    BOT_FATAL_ERROR_STATS_SQL,
     CONNECTION_STATS_SQL,
     INSTANCE_HEALTH_CELERY_WORKER_STATS_INTERVAL_SECONDS,
     INSTANCE_HEALTH_CELERY_WORKER_STATS_TIMEOUT_SECONDS,
@@ -34,6 +33,7 @@ from bots.instance_health_snapshot_taker import (
     INSTANCE_HEALTH_TABLE_SIZE_INTERVAL_SECONDS,
     InstanceHealthSnapshotTaker,
     _fetch_with_timeout,
+    bot_fatal_error_stats_sql,
     delete_snapshots_outside_retention_window,
     get_bot_fatal_error_stats,
     get_celery_queue_depths,
@@ -358,7 +358,7 @@ class GetBotFatalErrorStatsTestCase(TestCase):
         # be a backwards walk of the primary key that ends at the LIMIT.
         with connection.cursor() as cursor:
             cursor.execute("SET LOCAL enable_seqscan = off")
-            cursor.execute("EXPLAIN " + BOT_FATAL_ERROR_STATS_SQL, [BotEventTypes.FATAL_ERROR, BotStates.FATAL_ERROR, BotStates.ENDED, 5000, timezone.now()])
+            cursor.execute("EXPLAIN " + bot_fatal_error_stats_sql())
             plan = "\n".join(row[0] for row in cursor.fetchall())
 
         self.assertIn("Limit", plan)

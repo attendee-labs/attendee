@@ -86,13 +86,13 @@ INSTANCE_HEALTH_CELERY_WORKER_STATS_TIMEOUT_SECONDS = float(os.getenv("INSTANCE_
 # happens to be due when it is collected.
 INSTANCE_HEALTH_CELERY_WORKER_STATS_INTERVAL_SECONDS = int(os.getenv("INSTANCE_HEALTH_CELERY_WORKER_STATS_INTERVAL_SECONDS", "300"))
 
-# How far back bot fatal errors are counted.
-INSTANCE_HEALTH_BOT_FATAL_ERROR_WINDOW_SECONDS = int(os.getenv("INSTANCE_HEALTH_BOT_FATAL_ERROR_WINDOW_SECONDS", "600"))
+# How far back bot fatal errors are counted. Defaults to 30 minutes.
+INSTANCE_HEALTH_BOT_FATAL_ERROR_WINDOW_SECONDS = int(os.getenv("INSTANCE_HEALTH_BOT_FATAL_ERROR_WINDOW_SECONDS", "1800"))
 
 # How many of the most recent bot events are read to find the ones inside the window.
 # This caps the cost of the query. When more events than this land inside the window,
 # only the most recent ones are counted, and the snapshot records that the sample was
-# full so the counts can be read as a lower bound.
+# full so the counts can be read as a lower bound. Defaults to 5000.
 INSTANCE_HEALTH_BOT_EVENTS_SAMPLE_SIZE = int(os.getenv("INSTANCE_HEALTH_BOT_EVENTS_SAMPLE_SIZE", "5000"))
 
 # Background workers (autovacuum, walwriter, ...) appear in pg_stat_activity but do
@@ -115,6 +115,7 @@ TABLE_SIZES_SQL = """
       AND n.nspname NOT IN ('pg_catalog', 'information_schema')
 """
 
+
 # The inner query must order by id: that is what lets Postgres read the primary key
 # index backwards and stop at the LIMIT. Ordering by created_at, which has no index,
 # would sort the whole table instead.
@@ -122,22 +123,25 @@ TABLE_SIZES_SQL = """
 # A bot that finished is one whose event moved it into FATAL_ERROR or ENDED. That
 # includes COULD_NOT_JOIN, which also lands in FATAL_ERROR but is not itself a fatal
 # error event, so it counts toward the total without counting as a failure.
-BOT_FATAL_ERROR_STATS_SQL = f"""
-    SELECT
-        count(DISTINCT bot_id) FILTER (WHERE event_type = %s),
-        count(DISTINCT bot_id) FILTER (WHERE new_state IN (%s, %s)),
-        count(*)
-    FROM (
-        SELECT bot_id, event_type, new_state, created_at
-        FROM {BotEvent._meta.db_table}
-        ORDER BY id DESC
-        LIMIT %s
-    ) AS recent_events
-    WHERE created_at >= %s
-"""
+#
+# Built at call time rather than import time so the settings it reads can be patched.
+def bot_fatal_error_stats_sql():
+    return f"""
+        SELECT
+            count(DISTINCT bot_id) FILTER (WHERE event_type = {int(BotEventTypes.FATAL_ERROR)}),
+            count(DISTINCT bot_id) FILTER (WHERE new_state IN ({int(BotStates.FATAL_ERROR)}, {int(BotStates.ENDED)})),
+            count(*)
+        FROM (
+            SELECT bot_id, event_type, new_state, created_at
+            FROM {BotEvent._meta.db_table}
+            ORDER BY id DESC
+            LIMIT {int(INSTANCE_HEALTH_BOT_EVENTS_SAMPLE_SIZE)}
+        ) AS recent_events
+        WHERE created_at >= now() - make_interval(secs => {int(INSTANCE_HEALTH_BOT_FATAL_ERROR_WINDOW_SECONDS)})
+    """
 
 
-def _fetch_with_timeout(sql, params=None):
+def _fetch_with_timeout(sql):
     """Run a read-only metric query under a transaction-local statement timeout.
 
     set_config() is used rather than SET LOCAL because SET does not accept bind
@@ -146,7 +150,7 @@ def _fetch_with_timeout(sql, params=None):
     with transaction.atomic():
         with connection.cursor() as cursor:
             cursor.execute("SELECT set_config('statement_timeout', %s, true)", [str(INSTANCE_HEALTH_METRIC_STATEMENT_TIMEOUT_MS)])
-            cursor.execute(sql, params)
+            cursor.execute(sql)
             return cursor.fetchall()
 
 
@@ -231,9 +235,7 @@ def get_bot_fatal_error_stats():
     percentage is still a fair estimate in that case, since it is taken over the
     most recent part of the window.
     """
-    cutoff = timezone.now() - timedelta(seconds=INSTANCE_HEALTH_BOT_FATAL_ERROR_WINDOW_SECONDS)
-    params = [BotEventTypes.FATAL_ERROR, BotStates.FATAL_ERROR, BotStates.ENDED, INSTANCE_HEALTH_BOT_EVENTS_SAMPLE_SIZE, cutoff]
-    fatal_error_bot_count, finished_bot_count, events_in_window = _fetch_with_timeout(BOT_FATAL_ERROR_STATS_SQL, params)[0]
+    fatal_error_bot_count, finished_bot_count, events_in_window = _fetch_with_timeout(bot_fatal_error_stats_sql())[0]
 
     return {
         "window_seconds": INSTANCE_HEALTH_BOT_FATAL_ERROR_WINDOW_SECONDS,
