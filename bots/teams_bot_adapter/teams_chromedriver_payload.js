@@ -3201,6 +3201,7 @@ new RTCInterceptor({
                 let localCandidate;
                 let remoteCandidate;
                 const inboundAudio = [];
+                const inboundVideo = [];
                 const dataChannels = [];
                 const transports = [];
 
@@ -3238,6 +3239,22 @@ new RTCInterceptor({
                             packetsReceived: report.packetsReceived,
                             packetsLost: report.packetsLost,
                             jitter: report.jitter,
+                        });
+                    }
+
+                    if (report.type === "inbound-rtp" && report.kind === "video") {
+                        inboundVideo.push({
+                            ssrc: report.ssrc,
+                            bytesReceived: report.bytesReceived,
+                            packetsReceived: report.packetsReceived,
+                            packetsLost: report.packetsLost,
+                            jitter: report.jitter,
+                            framesReceived: report.framesReceived,
+                            framesDecoded: report.framesDecoded,
+                            framesDropped: report.framesDropped,
+                            frameWidth: report.frameWidth,
+                            frameHeight: report.frameHeight,
+                            framesPerSecond: report.framesPerSecond,
                         });
                     }
 
@@ -3296,6 +3313,7 @@ new RTCInterceptor({
                     },
                     transports,
                     inboundAudio,
+                    inboundVideo,
                     dataChannels,
                 });
             } catch (error) {
