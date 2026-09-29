@@ -4078,11 +4078,59 @@ class ParticipantsPoller {
     }
 }
 
+class CallStatePoller {
+    static pollIntervalMs = 1000;
+
+    constructor() {
+        this.interval = null;
+        this.errorPollingCallStateTicker = 0;
+        this.previousCallState = undefined;
+    }
+
+    start() {
+        if (this.interval) {
+            return;
+        }
+        this.interval = setInterval(() => {
+            try {
+                this.pollCallState();
+            } catch (error) {
+                if (this.errorPollingCallStateTicker % 500 === 0)
+                {
+                    window.ws?.sendJson({
+                        type: 'ErrorPollingCallState',
+                        error: error.message
+                    });
+                }
+                this.errorPollingCallStateTicker++;
+            }
+        }, CallStatePoller.pollIntervalMs);
+    }
+
+    pollCallState() {
+        const callState = window.callManager.getCallState();
+        if (callState === this.previousCallState) {
+            return;
+        }
+
+        window.ws?.sendJson({
+            type: 'CallStateChange',
+            previousCallState: this.previousCallState ?? null,
+            callState: callState ?? null,
+            callId: window.callManager.getCallId() ?? null
+        });
+        this.previousCallState = callState;
+    }
+}
+
 const callManager = new CallManager();
 window.callManager = callManager;
 
 const participantsPoller = new ParticipantsPoller();
 window.participantsPoller = participantsPoller;
+
+const callStatePoller = new CallStatePoller();
+window.callStatePoller = callStatePoller;
 
 const connectionStateManager = new ConnectionStateManager();
 window.connectionStateManager = connectionStateManager;
