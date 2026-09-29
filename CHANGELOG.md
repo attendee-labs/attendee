@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.81.1-sp.1](https://github.com/spectrocloud-public/attendee/compare/v1.80.0-sp.1...v1.81.1-sp.1) (2026-09-29)
+
+
+### Bug Fixes
+
+* sync main into spectrocloud ([#8](https://github.com/spectrocloud-public/attendee/issues/8)) ([dc77ee7](https://github.com/spectrocloud-public/attendee/commit/dc77ee73755951a3be7efbde9f2b4253eb57ef0c))
+
 ## [1.80.0-sp.1](https://github.com/spectrocloud-public/attendee/compare/v1.79.4-sp.2...v1.80.0-sp.1) (2026-09-29)
 
 
