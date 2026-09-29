@@ -21,7 +21,7 @@ from django.utils import timezone
 
 from bots.instance_health_alert_manager import (
     ALERT_METADATA,
-    BOT_FATAL_ERROR_PERCENTAGE_MINIMUM_FINISHED_BOTS,
+    BOT_FATAL_ERROR_PERCENTAGE_EXCEEDS_THRESHOLD_MINIMUM_FINISHED_BOTS_COUNT,
     BYTES_PER_GIGABYTE,
     InstanceHealthAlertManager,
     InstanceHealthAlertTypes,
@@ -271,7 +271,7 @@ class CeleryQueueNotDrainingAlertTestCase(SingleAlertMixin, TestCase):
 def _create_fatal_error_reading(fatal_error_bot_count, finished_bot_count, created_at=None):
     percentage = round(fatal_error_bot_count / finished_bot_count * 100, 2) if finished_bot_count else None
     return _create_snapshot(
-        {"bot_fatal_errors": {"window_seconds": 600, "fatal_error_bot_count": fatal_error_bot_count, "finished_bot_count": finished_bot_count, "fatal_error_percentage": percentage, "sample_is_full": False}},
+        {"bot_fatal_errors": {"window_seconds": 1800, "fatal_error_bot_count": fatal_error_bot_count, "finished_bot_count": finished_bot_count, "fatal_error_percentage": percentage, "sample_is_full": False}},
         created_at=created_at,
     )
 
@@ -312,7 +312,7 @@ class BotFatalErrorPercentageAlertTestCase(SingleAlertMixin, TestCase):
 
     def test_too_few_finished_bots_does_not_fire_however_high_the_share(self):
         # One failure out of two bots on a quiet instance is not a 50% outage.
-        _create_fatal_error_reading(BOT_FATAL_ERROR_PERCENTAGE_MINIMUM_FINISHED_BOTS - 1, BOT_FATAL_ERROR_PERCENTAGE_MINIMUM_FINISHED_BOTS - 1)
+        _create_fatal_error_reading(BOT_FATAL_ERROR_PERCENTAGE_EXCEEDS_THRESHOLD_MINIMUM_FINISHED_BOTS_COUNT - 1, BOT_FATAL_ERROR_PERCENTAGE_EXCEEDS_THRESHOLD_MINIMUM_FINISHED_BOTS_COUNT - 1)
 
         self.assertNotFiring(threshold=20)
 

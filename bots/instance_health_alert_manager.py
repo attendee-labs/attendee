@@ -5,6 +5,7 @@ from enum import Enum
 import requests
 from django.conf import settings
 
+from .instance_health_snapshot_taker import INSTANCE_HEALTH_BOT_FATAL_ERROR_WINDOW_SECONDS
 from .instance_health_utils import (
     CONNECTION_DANGER_PERCENTAGE,
     QUEUE_NOT_DRAINING_CONFIRMED_AFTER_SECONDS,
@@ -50,18 +51,18 @@ DEFAULT_ALERT_SETTINGS = {
     },
     InstanceHealthAlertTypes.BOT_FATAL_ERROR_COUNT_EXCEEDS_THRESHOLD: {
         "enabled": True,
-        "threshold": 10,
+        "threshold": 5,
     },
     InstanceHealthAlertTypes.BOT_FATAL_ERROR_PERCENTAGE_EXCEEDS_THRESHOLD: {
         "enabled": True,
-        "threshold": 20,
+        "threshold": 10,
     },
 }
 
 # The percentage alert stays quiet until at least this many bots have finished inside
 # the window, so that one failure out of two bots on a quiet instance is not a 50%
 # alert.
-BOT_FATAL_ERROR_PERCENTAGE_EXCEEDS_THRESHOLD_MINIMUM_FINISHED_BOTS_COUNT = 10
+BOT_FATAL_ERROR_PERCENTAGE_EXCEEDS_THRESHOLD_MINIMUM_FINISHED_BOTS_COUNT = 5
 
 # Presentation metadata for each alert, kept alongside the defaults so the settings UI
 # and its form parsing share one source of truth. Thresholds are stored raw (a
@@ -98,14 +99,14 @@ ALERT_METADATA = {
     },
     InstanceHealthAlertTypes.BOT_FATAL_ERROR_COUNT_EXCEEDS_THRESHOLD: {
         "label": "Bots with fatal errors",
-        "description": "Fires when this many bots have hit a fatal error in the last 10 minutes.",
+        "description": f"Fires when this many bots have hit a fatal error in the last {INSTANCE_HEALTH_BOT_FATAL_ERROR_WINDOW_SECONDS // 60} minutes.",
         "unit_label": "bots",
         "step": "1",
         "display_factor": 1,
     },
     InstanceHealthAlertTypes.BOT_FATAL_ERROR_PERCENTAGE_EXCEEDS_THRESHOLD: {
         "label": "Share of bots with fatal errors",
-        "description": f"Fires when this share of the bots that finished in the last 10 minutes hit a fatal error. Needs at least {BOT_FATAL_ERROR_PERCENTAGE_EXCEEDS_THRESHOLD_MINIMUM_FINISHED_BOTS_COUNT} finished bots.",
+        "description": f"Fires when this share of the bots that finished in the last {INSTANCE_HEALTH_BOT_FATAL_ERROR_WINDOW_SECONDS // 60} minutes hit a fatal error. Needs at least {BOT_FATAL_ERROR_PERCENTAGE_EXCEEDS_THRESHOLD_MINIMUM_FINISHED_BOTS_COUNT} finished bots.",
         "unit_label": "%",
         "step": "1",
         "display_factor": 1,
