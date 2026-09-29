@@ -367,6 +367,11 @@ TRANSCRIPTION_SETTINGS_SCHEMA = {
                     "enum": ["ar-sa", "ar-ae", "bg-bg", "ca-es", "zh-cn", "zh-hk", "zh-tw", "hr-hr", "cs-cz", "da-dk", "nl-be", "nl-nl", "en-au", "en-ca", "en-in", "en-nz", "en-gb", "en-us", "et-ee", "fi-fi", "fr-ca", "fr-fr", "de-de", "de-ch", "el-gr", "he-il", "hi-in", "hu-hu", "id-id", "it-it", "ja-jp", "ko-kr", "lv-lv", "lt-lt", "nb-no", "pl-pl", "pt-br", "pt-pt", "ro-ro", "ru-ru", "sr-rs", "sk-sk", "sl-si", "es-mx", "es-es", "sv-se", "th-th", "tr-tr", "uk-ua", "vi-vn", "cy-gb"],
                     "description": "The language code for Teams closed captions (e.g. 'en-us'). This will change the closed captions language for everyone in the meeting, not just the bot. See here for available languages and codes: https://docs.google.com/spreadsheets/d/1F-1iLJ_4btUZJkZcD2m5sF3loqGbB0vTzgOubwQTb5o/edit?usp=sharing",
                 },
+                "teams_language_enforcement_duration_seconds": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Number of seconds after the bot sets the Teams closed captions language during which it will change the language back if another participant changes it. This is needed because in Teams the closed captions language is a single setting shared by everyone in the meeting rather than set per participant, so any participant can change the language the bot is transcribing in. Only relevant if teams_language is set. Defaults to 0, meaning the language is never changed back.",
+                },
                 "zoom_language": {
                     "type": "string",
                     "enum": ["Arabic", "Cantonese", "Chinese (Simplified)", "Czech", "Danish", "Dutch", "English", "Estonian", "Finnish", "French", "French (Canada)", "German", "Hebrew", "Hindi", "Hungarian", "Indonesian", "Italian", "Japanese", "Korean", "Malay", "Persian", "Polish", "Portuguese", "Romanian", "Russian", "Spanish", "Swedish", "Tagalog", "Tamil", "Telugu", "Thai", "Turkish", "Ukrainian", "Vietnamese"],
