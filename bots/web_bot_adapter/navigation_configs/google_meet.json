@@ -1,5 +1,5 @@
 {
-  "version": "1.0",
+  "version": "1.1",
   "domain_allowlist": [
     "accounts.google.com",
     "accounts.google.co.in",
@@ -21,11 +21,12 @@
     "accounts.google.com.vn",
     "accounts.google.nl",
     "accounts.google.com.sg",
+    "accounts.google.tn",
     "workspace.google.com",
     "mail.google.com",
     "meet.google.com",
     "www.google.com",
     ".apps.google.com"
   ],
-  "signature": "gDb198DOz5IjX+Xvq7BAgCEVnJMzJj5HQ7LVI++UIldyOBc+4ztM8Es6XYVbAYN2KVGAUPh9aputVZqU1duqAQ=="
+  "signature": "Ig08XG6donOr601lcyqpcBt/N+8s4hpUvibN5E1XzN5mRn95j5YAPhJvw7zlksJVNBUa4S1K5BAre0OYhlFvBA=="
 }

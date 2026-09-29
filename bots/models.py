@@ -846,6 +846,10 @@ class TranscriptionSettings:
     def teams_closed_captions_language(self):
         return self._settings.get("meeting_closed_captions", {}).get("teams_language", None)
 
+    def teams_closed_captions_language_enforcement_duration_seconds(self):
+        default_duration_seconds = int(os.getenv("ENFORCE_TEAMS_CLOSED_CAPTIONS_LANGUAGE_TIMEOUT_SECONDS", "0"))
+        return self._settings.get("meeting_closed_captions", {}).get("teams_language_enforcement_duration_seconds", default_duration_seconds)
+
     def zoom_closed_captions_language(self):
         return self._settings.get("meeting_closed_captions", {}).get("zoom_language", None)
 

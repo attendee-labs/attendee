@@ -70,7 +70,7 @@ jobs:
         run: |
           set -euo pipefail
           branch="${{ steps.branch.outputs.branch }}"
-          title="chore: sync main into spectrocloud"
+          title="fix: sync upstream main into spectrocloud"
 
           cat > /tmp/pr-body.md <<EOF
           Automated sync of upstream \`attendee-labs/attendee\` \`main\` into \`spectrocloud\` (${{ steps.check.outputs.pending }} commits).
