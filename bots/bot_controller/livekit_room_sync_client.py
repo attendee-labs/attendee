@@ -229,6 +229,32 @@ class LivekitRoomSyncClient:
         )
         return RoomSyncSourceParticipantConfiguration(livekit=livekit)
 
+    def _handle_room_disconnected(self, participant_uuid: str, room: rtc.Room, reason):
+        """Drop tracked state for a LiveKit connection that was closed out from under us.
+
+        Runs on the background event loop, which is the only place ``_rooms`` and
+        ``_audio_sources`` are mutated. Disconnects we initiate ourselves (in
+        ``_remove_participant`` / ``_disconnect_all``) pop the room before
+        disconnecting, so the identity check below makes them a no-op. It also
+        ensures a stale connection never clears state belonging to a newer
+        connection for the same participant.
+
+        The most common unexpected cause is ``DUPLICATE_IDENTITY``: another bot
+        mirroring the same meeting connected with the same participant identity
+        and LiveKit kicked this connection. That bot now owns the participant, so
+        we simply stop tracking it rather than reconnecting and fighting over it.
+        """
+        if self._rooms.get(participant_uuid) is not room:
+            return
+
+        self._rooms.pop(participant_uuid, None)
+        self._audio_sources.pop(participant_uuid, None)
+
+        if reason == rtc.DisconnectReason.DUPLICATE_IDENTITY:
+            logger.warning(f"LiveKit participant {participant_uuid} was taken over by another connection with the same identity, no longer syncing it from this bot")
+        else:
+            logger.warning(f"LiveKit participant {participant_uuid} was disconnected unexpectedly (reason: {reason}), no longer syncing it")
+
     async def _add_participant(self, participant_uuid: str, name: str | None):
         if participant_uuid in self._rooms:
             logger.info(f"LiveKit participant already synced for {participant_uuid}, skipping add")
@@ -236,6 +262,7 @@ class LivekitRoomSyncClient:
 
         token = self._build_participant_token(participant_uuid, name)
         room = rtc.Room()
+        room.on("disconnected", lambda reason: self._handle_room_disconnected(participant_uuid, room, reason))
 
         try:
             await room.connect(self.url, token, options=rtc.RoomOptions(auto_subscribe=False))
