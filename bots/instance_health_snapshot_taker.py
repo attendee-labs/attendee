@@ -21,6 +21,11 @@ Cost notes, since the caller polls this on every cycle:
   * Celery worker stats cost a flat second, because inspect() blocks for its whole
     timeout rather than returning once every worker has replied. Also sampled on a
     longer interval, since pool sizing only changes on deploys and restarts.
+  * Bot fatal error stats walk the bot events primary key index backwards and stop
+    after a fixed number of rows, so the cost is set by the sample size rather than
+    by how large the bot events table has grown. bots_botevent has no index on
+    created_at, so the time window is applied to that sample rather than used to
+    find the rows.
 
 The scheduler also trims this table to a fixed retention window as it goes, so the
 snapshots stay bounded without depending on a separate cleanup job.
@@ -37,7 +42,7 @@ from django.db import connection, transaction
 from django.utils import timezone
 
 from attendee.celery import app as celery_app
-from bots.models import InstanceHealthSnapshot
+from bots.models import BotEvent, BotEventTypes, BotStates, InstanceHealthSnapshot
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +86,15 @@ INSTANCE_HEALTH_CELERY_WORKER_STATS_TIMEOUT_SECONDS = float(os.getenv("INSTANCE_
 # happens to be due when it is collected.
 INSTANCE_HEALTH_CELERY_WORKER_STATS_INTERVAL_SECONDS = int(os.getenv("INSTANCE_HEALTH_CELERY_WORKER_STATS_INTERVAL_SECONDS", "300"))
 
+# How far back bot fatal errors are counted. Defaults to 30 minutes.
+INSTANCE_HEALTH_BOT_FATAL_ERROR_WINDOW_SECONDS = int(os.getenv("INSTANCE_HEALTH_BOT_FATAL_ERROR_WINDOW_SECONDS", "1800"))
+
+# How many of the most recent bot events are read to find the ones inside the window.
+# This caps the cost of the query. When more events than this land inside the window,
+# only the most recent ones are counted, and the snapshot records that the sample was
+# full so the counts can be read as a lower bound. Defaults to 5000.
+INSTANCE_HEALTH_BOT_EVENTS_SAMPLE_SIZE = int(os.getenv("INSTANCE_HEALTH_BOT_EVENTS_SAMPLE_SIZE", "5000"))
+
 # Background workers (autovacuum, walwriter, ...) appear in pg_stat_activity but do
 # not consume a max_connections slot, so they are excluded to keep the ratio honest.
 CONNECTION_STATS_SQL = """
@@ -100,6 +114,31 @@ TABLE_SIZES_SQL = """
     WHERE c.relkind = 'r'
       AND n.nspname NOT IN ('pg_catalog', 'information_schema')
 """
+
+
+# The inner query must order by id: that is what lets Postgres read the primary key
+# index backwards and stop at the LIMIT. Ordering by created_at, which has no index,
+# would sort the whole table instead.
+#
+# A bot that finished is one whose event moved it into FATAL_ERROR or ENDED. That
+# includes COULD_NOT_JOIN, which also lands in FATAL_ERROR but is not itself a fatal
+# error event, so it counts toward the total without counting as a failure.
+#
+# Built at call time rather than import time so the settings it reads can be patched.
+def bot_fatal_error_stats_sql():
+    return f"""
+        SELECT
+            count(DISTINCT bot_id) FILTER (WHERE event_type = {int(BotEventTypes.FATAL_ERROR)}),
+            count(DISTINCT bot_id) FILTER (WHERE new_state IN ({int(BotStates.FATAL_ERROR)}, {int(BotStates.ENDED)})),
+            count(*)
+        FROM (
+            SELECT bot_id, event_type, new_state, created_at
+            FROM {BotEvent._meta.db_table}
+            ORDER BY id DESC
+            LIMIT {int(INSTANCE_HEALTH_BOT_EVENTS_SAMPLE_SIZE)}
+        ) AS recent_events
+        WHERE created_at >= now() - make_interval(secs => {int(INSTANCE_HEALTH_BOT_FATAL_ERROR_WINDOW_SECONDS)})
+    """
 
 
 def _fetch_with_timeout(sql):
@@ -184,6 +223,26 @@ def get_database_table_sizes():
     return {
         "total_bytes": sum(tables.values()),
         "tables": dict(sorted(tables.items(), key=lambda item: item[1], reverse=True)),
+    }
+
+
+def get_bot_fatal_error_stats():
+    """Return how many bots hit a fatal error in the window, and what share of finished bots that is.
+
+    Only the most recent INSTANCE_HEALTH_BOT_EVENTS_SAMPLE_SIZE events are looked at.
+    sample_is_full means every one of them fell inside the window, so older events
+    in the window may have been missed and the counts are a lower bound. The
+    percentage is still a fair estimate in that case, since it is taken over the
+    most recent part of the window.
+    """
+    fatal_error_bot_count, finished_bot_count, events_in_window = _fetch_with_timeout(bot_fatal_error_stats_sql())[0]
+
+    return {
+        "window_seconds": INSTANCE_HEALTH_BOT_FATAL_ERROR_WINDOW_SECONDS,
+        "fatal_error_bot_count": fatal_error_bot_count,
+        "finished_bot_count": finished_bot_count,
+        "fatal_error_percentage": round(fatal_error_bot_count / finished_bot_count * 100, 2) if finished_bot_count else None,
+        "sample_is_full": events_in_window >= INSTANCE_HEALTH_BOT_EVENTS_SAMPLE_SIZE,
     }
 
 
@@ -274,6 +333,11 @@ class InstanceHealthSnapshotTaker:
             snapshot_data["database_connections"] = get_database_connection_stats()
         except Exception as e:
             logger.error(f"Error getting database connection stats: {e}. Continuing...")
+
+        try:
+            snapshot_data["bot_fatal_errors"] = get_bot_fatal_error_stats()
+        except Exception as e:
+            logger.error(f"Error getting bot fatal error stats: {e}. Continuing...")
 
         if self._last_table_size_sample_time is None or (now - self._last_table_size_sample_time) >= INSTANCE_HEALTH_TABLE_SIZE_INTERVAL_SECONDS:
             # Recorded up front so a failing collector can't turn into a retry loop.
