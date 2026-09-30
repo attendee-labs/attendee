@@ -104,6 +104,7 @@ class LivekitRoomSyncClient:
         self._watcher_task: asyncio.Task | None = None
         self._reconcile_task: asyncio.Task | None = None
         self._shutting_down = False
+        self._cleanup_called = False
 
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(target=self._run_event_loop, name="livekit-room-sync", daemon=True)
@@ -134,7 +135,7 @@ class LivekitRoomSyncClient:
         optional so that callers that only have the raw event can still use this
         method.
         """
-        if not self.sync_to_room:
+        if not self.sync_to_room or self._cleanup_called:
             return
 
         participant_uuid = event["participant_uuid"]
@@ -166,7 +167,7 @@ class LivekitRoomSyncClient:
         The message is sent from the LiveKit participant that mirrors the meeting
         participant who authored it, so the LiveKit room reflects the meeting chat.
         """
-        if not self.sync_to_room:
+        if not self.sync_to_room or self._cleanup_called:
             return
 
         participant_uuid = chat_message["participant_uuid"]
@@ -630,7 +631,7 @@ class LivekitRoomSyncClient:
         from the GLib main thread; the work is scheduled onto the background
         event loop.
         """
-        if not self.sync_to_room:
+        if not self.sync_to_room or self._cleanup_called:
             return
 
         self._run_coroutine(self._capture_audio(participant_uuid, chunk_bytes))
@@ -687,7 +688,13 @@ class LivekitRoomSyncClient:
                 logger.exception(f"Failed to disconnect LiveKit participant for {participant_uuid}: {e}")
 
     def cleanup(self):
-        """Disconnect all synced participants and stop the background loop."""
+        """Disconnect all synced participants and stop the background loop.
+
+        Safe to call more than once; calls after the first are no-ops.
+        """
+        if self._cleanup_called:
+            return
+        self._cleanup_called = True
         self._shutting_down = True
         try:
             future = self._run_coroutine(self._disconnect_all())
