@@ -244,6 +244,7 @@ class LivekitRoomSyncClient:
         and LiveKit kicked this connection. That bot now owns the participant, so
         we simply stop tracking it rather than reconnecting and fighting over it.
         """
+        logger.info(f"LiveKit participant {participant_uuid} was disconnected (reason: {reason})")
         if self._rooms.get(participant_uuid) is not room:
             return
 
