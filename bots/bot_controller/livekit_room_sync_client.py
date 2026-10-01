@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import json
 import logging
 import threading
 import time
@@ -54,10 +55,21 @@ class LivekitRoomSyncClient:
       a release (crash, lost connection) is taken over after a short fixed
       settle by rank.
 
+    - Before connecting a participant, a bot broadcasts a ``claiming`` message
+      from its watcher (hidden participants can exchange data messages). Other
+      bots treat it as a lease and hold off their fallbacks until the
+      participant appears or the lease expires, so a slow connection isn't
+      mistaken for a missed claim. A failed connection broadcasts
+      ``abandoned`` so the next bot can claim straight away.
+
     Bots that don't own anything are invisible to the others, so they rank
     themselves after all visible bots (with a deterministic offset to avoid
-    colliding with each other). If two bots still claim at once, LiveKit keeps
-    the newest connection for that identity and the other bot stands down.
+    colliding with each other), and before connecting they briefly wait for
+    rival claim announcements so that two such bots don't connect the same
+    identity at once. Avoiding that matters: when two connects for one identity
+    race, the LiveKit SDK leaves the dropped one hanging for 15-30s and then
+    reconnects it, kicking the winner. If it happens anyway, the kicked bot
+    stands down.
 
     ``url`` is the LiveKit server URL (e.g. wss://your-project.livekit.cloud)
     and ``room`` is the name of the room to sync participants into.
@@ -112,6 +124,20 @@ class LivekitRoomSyncClient:
         # How many times this bot has taken over each participant. A count that
         # keeps growing means bots are fighting over the participant.
         self._takeover_counts: dict[str, int] = {}
+        # Claims another bot announced and is still connecting
+        # (uuid -> (bot id, loop time the lease expires)).
+        self._claim_leases: dict[str, tuple[str, float]] = {}
+        # Participants whose owner released them because they left the meeting,
+        # while we wait for our own LEAVE event (uuid -> loop time to stop waiting).
+        self._left_meeting_releases: dict[str, float] = {}
+        # LiveKit connects that haven't finished yet (task -> room). The SDK
+        # panics if a connect is cancelled or its loop stops before it
+        # completes, so these are shielded from cancellation and drained on
+        # shutdown.
+        self._inflight_connects: dict[asyncio.Task, rtc.Room] = {}
+        # Tasks currently inside _add_participant, drained on shutdown so they
+        # can release and close anything they connected.
+        self._claim_tasks: set[asyncio.Task] = set()
 
         # Hidden connection used to observe the room roster.
         self._watcher_room: rtc.Room | None = None
@@ -244,6 +270,31 @@ class LivekitRoomSyncClient:
     # detect anyway, so this adds little to the overall gap.
     UNRELEASED_SETTLE_SECONDS = 0.5
 
+    # Data message topic watchers use to coordinate claims. Agents in the room
+    # receive these too but should ignore an unknown topic.
+    CONTROL_TOPIC = "attendee.room_sync"
+    # How long other bots defer to an announced claim before assuming the
+    # claiming bot died mid-connect. Must comfortably exceed connection time.
+    CLAIM_LEASE_SECONDS = 10.0
+    # How long to refuse to claim a participant whose owner reported that they
+    # left the meeting, while our own LEAVE event catches up. If it never
+    # arrives, the periodic reconcile claims the participant afterwards.
+    LEFT_MEETING_GRACE_SECONDS = 15.0
+    # Max time to wait for a coordination message to be sent.
+    BROADCAST_TIMEOUT_SECONDS = 1.0
+    # Max time shutdown waits for in-progress connects and claims to finish.
+    # Anything still running after this is left to finish in the background
+    # (see STRAGGLER_MAX_SECONDS) so cleanup() doesn't block for long.
+    SHUTDOWN_DRAIN_SECONDS = 5.0
+    # Upper bound on how long the background loop is kept alive after cleanup()
+    # for connects that are still in progress. The SDK can take 30s+ to give up
+    # on a connect, and stopping the loop before it finishes panics the process.
+    STRAGGLER_MAX_SECONDS = 120.0
+    # How long a bot that owns nothing waits after announcing a claim, to hear
+    # whether another invisible bot is claiming the same participant. Must
+    # exceed data message latency between bots.
+    CLAIM_CONFLICT_WINDOW_SECONDS = 0.3
+
     # How long a join waits for the first watcher connection attempt before
     # deciding whether to claim the participant.
     WATCHER_READY_TIMEOUT_SECONDS = 10
@@ -319,13 +370,15 @@ class LivekitRoomSyncClient:
         return self._build_token(identity, identity, {"canPublish": False, "canSubscribe": True, "hidden": True})
 
     def _build_watcher_token(self, identity: str) -> str:
-        """Mint a hidden, subscribe-only token for this bot's watcher connection.
+        """Mint a hidden token for this bot's watcher connection.
 
-        The watcher only observes the room roster. ``hidden`` keeps it out of the
-        roster seen by agents and other bots, and it never subscribes to media
-        because it connects with ``auto_subscribe=False``.
+        The watcher observes the room roster and exchanges claim messages with
+        other bots' watchers over the data channel (``canPublishData``).
+        ``hidden`` keeps it out of the roster seen by agents and other bots, and
+        it never subscribes to media because it connects with
+        ``auto_subscribe=False``.
         """
-        return self._build_token(identity, identity, {"canPublish": False, "canSubscribe": True, "hidden": True})
+        return self._build_token(identity, identity, {"canPublish": False, "canPublishData": True, "canSubscribe": True, "hidden": True})
 
     def build_source_participant_configuration(self) -> RoomSyncSourceParticipantConfiguration | None:
         """Build the configuration the in-browser LiveKit JS SDK uses to subscribe
@@ -357,6 +410,20 @@ class LivekitRoomSyncClient:
         )
         return RoomSyncSourceParticipantConfiguration(livekit=livekit)
 
+    async def _connect_room(self, room: rtc.Room, token: str):
+        """Connect a room without letting cancellation interrupt the connect.
+
+        The LiveKit SDK has to finish ``connect()`` after the native side
+        reports success, and panics the process if that never happens (for
+        example because the awaiting task was cancelled or the loop stopped).
+        So the connect runs as its own shielded task, and shutdown waits for
+        it via ``_inflight_connects``.
+        """
+        task = self._loop.create_task(room.connect(self.url, token, options=rtc.RoomOptions(auto_subscribe=False)))
+        self._inflight_connects[task] = room
+        task.add_done_callback(lambda done: self._inflight_connects.pop(done, None))
+        await asyncio.shield(task)
+
     @staticmethod
     def _format_disconnect_reason(reason) -> str:
         try:
@@ -371,6 +438,8 @@ class LivekitRoomSyncClient:
     async def _handle_join(self, participant_uuid: str, name: str | None):
         """Record a meeting participant and schedule a ranked claim check for it."""
         self._meeting_participants[participant_uuid] = name
+        # They're back (or it's a fresh join), so a previous release doesn't apply.
+        self._left_meeting_releases.pop(participant_uuid, None)
         logger.info(f"{self._log_prefix} Meeting participant {participant_uuid} joined, deciding whether to claim it")
 
         if not self._watcher_attempted.is_set():
@@ -401,6 +470,8 @@ class LivekitRoomSyncClient:
         """
         self._meeting_participants.pop(participant_uuid, None)
         self._takeover_counts.pop(participant_uuid, None)
+        self._claim_leases.pop(participant_uuid, None)
+        self._left_meeting_releases.pop(participant_uuid, None)
         logger.info(f"{self._log_prefix} Meeting participant {participant_uuid} left")
         await self._remove_participant(participant_uuid)
 
@@ -425,12 +496,13 @@ class LivekitRoomSyncClient:
                 "participant_attributes_changed",
                 lambda changed_attributes, participant, room=room: self._on_watcher_participant_attributes_changed(room, changed_attributes, participant),
             )
+            room.on("data_received", lambda packet, room=room: self._on_watcher_data_received(room, packet))
             room.on("reconnecting", lambda *_, room=room: self._on_watcher_reconnecting(room))
             room.on("reconnected", lambda *_, room=room: self._on_watcher_reconnected(room))
             room.on("disconnected", lambda reason, room=room: self._on_watcher_disconnected(room, reason))
 
             try:
-                await room.connect(self.url, self._build_watcher_token(identity), options=rtc.RoomOptions(auto_subscribe=False))
+                await self._connect_room(room, self._build_watcher_token(identity))
             except Exception as e:
                 logger.exception(f"{self._log_prefix} Failed to connect watcher (attempt {attempt}), retrying in {self.WATCHER_RETRY_SECONDS}s: {e}")
                 self._watcher_attempted.set()
@@ -452,6 +524,8 @@ class LivekitRoomSyncClient:
             logger.info(f"{self._log_prefix} Observed participant {participant.identity} connect to the LiveKit room, but not the watcher room")
             return
         identity = participant.identity
+        # Whoever was claiming it has finished.
+        self._claim_leases.pop(identity, None)
         if identity in self._meeting_participants:
             owner = (participant.attributes or {}).get(self.OWNER_ATTRIBUTE) or "unknown"
             logger.info(f"{self._log_prefix} Observed mirrored participant {identity} connect to the LiveKit room (owner: {owner})")
@@ -474,7 +548,10 @@ class LivekitRoomSyncClient:
 
         if release == self.RELEASE_LEFT_MEETING:
             # The owner saw the person leave the meeting. Our own LEAVE event
-            # should follow shortly; don't put a ghost back in the meeting.
+            # should follow shortly; don't put a ghost back in the meeting,
+            # including from a claim check that was already scheduled.
+            self._left_meeting_releases[identity] = self._loop.time() + self.LEFT_MEETING_GRACE_SECONDS
+            self._cancel_pending_claim(identity)
             logger.info(f"{self._log_prefix} Mirrored participant {identity} was released by bot {owner} because it left the meeting, not taking it over")
             return
 
@@ -487,6 +564,47 @@ class LivekitRoomSyncClient:
 
         logger.info(f"{self._log_prefix} Mirrored participant {identity} (owner: {owner}) left the LiveKit room without being released while still in the meeting")
         self._schedule_claim_check(identity, trigger="participant dropped from room", departed_owner=owner, settle=self.UNRELEASED_SETTLE_SECONDS)
+
+    def _on_watcher_data_received(self, room: rtc.Room, packet):
+        if room is not self._watcher_room or self._shutting_down:
+            return
+        if getattr(packet, "topic", None) != self.CONTROL_TOPIC:
+            return
+        try:
+            message = json.loads(bytes(packet.data))
+            kind = message["type"]
+            bot_id = message["bot"]
+            participant_uuid = message["participant"]
+        except Exception:
+            logger.debug(f"{self._log_prefix} Ignoring malformed room sync control message")
+            return
+        if bot_id == self._instance_id:
+            return
+
+        if kind == "claiming":
+            self._claim_leases[participant_uuid] = (bot_id, self._loop.time() + self.CLAIM_LEASE_SECONDS)
+            logger.info(f"{self._log_prefix} Bot {bot_id} is claiming {participant_uuid}, deferring to it for up to {self.CLAIM_LEASE_SECONDS:.0f}s")
+        elif kind == "abandoned":
+            lease = self._claim_leases.get(participant_uuid)
+            if lease is not None and lease[0] == bot_id:
+                self._claim_leases.pop(participant_uuid, None)
+            if participant_uuid in self._meeting_participants:
+                logger.info(f"{self._log_prefix} Bot {bot_id} failed to claim {participant_uuid}, re-ranking without it")
+                self._schedule_claim_check(participant_uuid, trigger=f"claim by {bot_id} failed", departed_owner=bot_id)
+
+    async def _broadcast(self, kind: str, participant_uuid: str):
+        """Send a claim coordination message to the other bots' watchers. Best effort."""
+        watcher = self._watcher_room
+        if watcher is None:
+            return
+        payload = json.dumps({"type": kind, "bot": self._instance_id, "participant": participant_uuid}).encode()
+        try:
+            await asyncio.wait_for(
+                watcher.local_participant.publish_data(payload, reliable=True, topic=self.CONTROL_TOPIC),
+                timeout=self.BROADCAST_TIMEOUT_SECONDS,
+            )
+        except Exception as e:
+            logger.warning(f"{self._log_prefix} Failed to broadcast {kind} for {participant_uuid}: {e}")
 
     def _on_watcher_participant_attributes_changed(self, room: rtc.Room, changed_attributes: dict, participant):
         if room is not self._watcher_room or self._shutting_down:
@@ -599,7 +717,10 @@ class LivekitRoomSyncClient:
             return
 
         delay, position = self._claim_delay(watcher, participant_uuid, departed_owner)
-        delay += settle
+        self._schedule_check_after(participant_uuid, delay + settle, trigger, position)
+
+    def _schedule_check_after(self, participant_uuid: str, delay: float, trigger: str, position: str):
+        """Run a claim check after ``delay``, unless one is already due sooner."""
         due = self._loop.time() + delay
 
         existing = self._pending_claims.get(participant_uuid)
@@ -613,6 +734,11 @@ class LivekitRoomSyncClient:
         task = self._loop.create_task(self._delayed_claim_check(participant_uuid, delay, trigger))
         self._pending_claims[participant_uuid] = (task, due)
         logger.info(f"{self._log_prefix} Scheduled claim check for {participant_uuid} in {delay:.2f}s ({position}, trigger: {trigger})")
+
+    def _cancel_pending_claim(self, participant_uuid: str):
+        entry = self._pending_claims.pop(participant_uuid, None)
+        if entry is not None and not entry[0].done():
+            entry[0].cancel()
 
     async def _delayed_claim_check(self, participant_uuid: str, delay: float, trigger: str):
         try:
@@ -643,6 +769,27 @@ class LivekitRoomSyncClient:
             logger.info(f"{self._log_prefix} Claim check for {participant_uuid}: present in the LiveKit room (owned by another bot), standing by")
             return
 
+        now = self._loop.time()
+        left_until = self._left_meeting_releases.get(participant_uuid)
+        if left_until is not None:
+            if now < left_until:
+                logger.info(f"{self._log_prefix} Claim check for {participant_uuid}: its owner reported it left the meeting, waiting for our own LEAVE event")
+                return
+            self._left_meeting_releases.pop(participant_uuid, None)
+
+        lease = self._claim_leases.get(participant_uuid)
+        if lease is not None:
+            lease_bot, lease_expires = lease
+            if now < lease_expires:
+                # Another bot is mid-connect. Check again when its lease runs out.
+                self._schedule_check_after(participant_uuid, lease_expires - now, trigger, f"waiting on claim by {lease_bot}")
+                return
+            # The claiming bot never showed up. Re-rank without it.
+            self._claim_leases.pop(participant_uuid, None)
+            logger.warning(f"{self._log_prefix} Claim of {participant_uuid} by bot {lease_bot} timed out, re-ranking without it")
+            self._schedule_claim_check(participant_uuid, trigger=f"claim by {lease_bot} timed out", departed_owner=lease_bot)
+            return
+
         name = self._meeting_participants[participant_uuid]
         if trigger == "join":
             logger.info(f"{self._log_prefix} Claiming {participant_uuid}: in the meeting but not in the LiveKit room")
@@ -651,7 +798,7 @@ class LivekitRoomSyncClient:
 
         count = self._takeover_counts.get(participant_uuid, 0) + 1
         self._takeover_counts[participant_uuid] = count
-        message = f"{self._log_prefix} Taking over {participant_uuid}: in the meeting but absent from the LiveKit room (trigger: {trigger}, takeover #{count} by this bot)"
+        message = f"{self._log_prefix} Taking over {participant_uuid}: in the meeting but not mirrored by a live owner (trigger: {trigger}, takeover #{count} by this bot)"
         if count >= self.TAKEOVER_FLAP_WARNING_THRESHOLD:
             logger.warning(f"{message}. Repeated takeovers of the same participant may mean bots are fighting over it")
         else:
@@ -723,21 +870,58 @@ class LivekitRoomSyncClient:
             return
 
         self._connecting.add(participant_uuid)
+        claim_task = asyncio.current_task()
+        self._claim_tasks.add(claim_task)
         try:
-            await self._connect_participant(participant_uuid, name, reason)
+            # Tell the other bots first, so their fallbacks don't fire while
+            # this (possibly slow) connection is in progress.
+            await self._broadcast("claiming", participant_uuid)
+            if await self._yield_to_rival_claim(participant_uuid):
+                return
+            connected = await self._connect_participant(participant_uuid, name, reason)
+            if not connected and not self._shutting_down:
+                await self._broadcast("abandoned", participant_uuid)
         finally:
             self._connecting.discard(participant_uuid)
+            self._claim_tasks.discard(claim_task)
 
-    async def _connect_participant(self, participant_uuid: str, name: str | None, reason: str):
+    async def _yield_to_rival_claim(self, participant_uuid: str) -> bool:
+        """Back off if a higher-ranked bot is claiming the same participant at the same time.
+
+        Only needed while this bot owns nothing: other bots can't see it, so
+        they may also believe they're first in line. Once a bot owns anything,
+        every bot ranks it the same way and the claim goes ahead immediately.
+        """
+        if self._rooms or self._watcher_room is None:
+            return False
+        await asyncio.sleep(self.CLAIM_CONFLICT_WINDOW_SECONDS)
+        lease = self._claim_leases.get(participant_uuid)
+        if lease is None:
+            return False
+        rival, lease_expires = lease
+        if self._rendezvous_score(participant_uuid, rival) <= self._rendezvous_score(participant_uuid, self._instance_id):
+            return False
+        logger.info(f"{self._log_prefix} Bot {rival} is also claiming {participant_uuid} and outranks this bot, backing off")
+        # Our own checks stay deferred by the rival's lease; recheck once it ends.
+        self._schedule_check_after(participant_uuid, max(lease_expires - self._loop.time(), 0), "rival claim", f"waiting on claim by {rival}")
+        return True
+
+    async def _connect_participant(self, participant_uuid: str, name: str | None, reason: str) -> bool:
+        """Connect and publish a mirrored participant.
+
+        Returns False if the connection failed, so other bots can be told to
+        claim it instead. Returns True otherwise, including when it was
+        deliberately dropped because the participant left mid-connect.
+        """
         token = self._build_participant_token(participant_uuid, name)
         room = rtc.Room()
         room.on("disconnected", lambda reason: self._handle_room_disconnected(participant_uuid, room, reason))
 
         try:
-            await room.connect(self.url, token, options=rtc.RoomOptions(auto_subscribe=False))
+            await self._connect_room(room, token)
         except Exception as e:
             logger.exception(f"Failed to connect LiveKit participant for {participant_uuid}: {e}")
-            return
+            return False
 
         try:
             source = rtc.AudioSource(self.sample_rate, self.num_channels)
@@ -749,7 +933,7 @@ class LivekitRoomSyncClient:
         except Exception as e:
             logger.exception(f"Failed to publish audio track for LiveKit participant {participant_uuid}: {e}")
             await room.disconnect()
-            return
+            return False
 
         # The participant may have left the meeting (or we may have started
         # shutting down) while we were connecting. Don't leave a ghost behind.
@@ -761,11 +945,12 @@ class LivekitRoomSyncClient:
                 await room.disconnect()
             except Exception as e:
                 logger.exception(f"Failed to disconnect LiveKit participant for {participant_uuid}: {e}")
-            return
+            return True
 
         self._rooms[participant_uuid] = room
         self._audio_sources[participant_uuid] = source
         logger.info(f"{self._log_prefix} Synced LiveKit participant {participant_uuid} into room {self.room_name} (reason: {reason})")
+        return True
 
     async def _mark_released(self, participant_uuid: str, room: rtc.Room, release: str):
         """Tell the other bots why this participant is about to disconnect.
@@ -845,6 +1030,16 @@ class LivekitRoomSyncClient:
                 task.cancel()
         self._pending_claims.clear()
 
+        # Let in-progress claims and connects finish. Claims notice we're
+        # shutting down once connected and release and close what they opened.
+        draining = [t for t in (*self._claim_tasks, *self._inflight_connects) if not t.done()]
+        inflight = dict(self._inflight_connects)
+        still_pending = set()
+        if draining:
+            logger.info(f"{self._log_prefix} Waiting for {len(draining)} in-progress LiveKit connects to finish before shutting down")
+            _, still_pending = await asyncio.wait(draining, timeout=self.SHUTDOWN_DRAIN_SECONDS)
+        await self._close_orphaned_connects(inflight)
+
         watcher = self._watcher_room
         self._watcher_room = None
         if watcher is not None:
@@ -870,8 +1065,40 @@ class LivekitRoomSyncClient:
             except Exception as e:
                 logger.exception(f"Failed to disconnect LiveKit participant for {participant_uuid}: {e}")
 
+        if still_pending:
+            logger.warning(f"{self._log_prefix} {len(still_pending)} LiveKit connects still in progress after {self.SHUTDOWN_DRAIN_SECONDS}s; keeping the event loop alive in the background until they finish")
+            self._loop.create_task(self._stop_after_stragglers(still_pending, inflight))
+            return False
+        return True
+
+    async def _close_orphaned_connects(self, inflight: dict):
+        """Close rooms whose connect finished after the task waiting on it was
+        cancelled (e.g. a watcher reconnect in progress at shutdown)."""
+        for task, room in inflight.items():
+            if not task.done() or task.cancelled() or task.exception() is not None:
+                continue
+            if room is self._watcher_room or room in self._rooms.values():
+                continue
+            try:
+                await room.disconnect()
+            except Exception as e:
+                logger.warning(f"{self._log_prefix} Failed to close a connection opened during shutdown: {e}")
+
+    async def _stop_after_stragglers(self, pending: set, inflight: dict):
+        _, still_pending = await asyncio.wait(pending, timeout=self.STRAGGLER_MAX_SECONDS)
+        await self._close_orphaned_connects(inflight)
+        if still_pending:
+            logger.error(f"{self._log_prefix} {len(still_pending)} LiveKit connects never finished; stopping the event loop anyway")
+        else:
+            logger.info(f"{self._log_prefix} Remaining LiveKit connects finished, stopping the event loop")
+        self._loop.stop()
+
     def cleanup(self):
         """Disconnect all synced participants and stop the background loop.
+
+        Blocks for at most a few seconds. If LiveKit connects are still in
+        progress after that, the background loop keeps running until they
+        finish and then stops itself.
 
         Safe to call more than once; calls after the first are no-ops.
         """
@@ -879,11 +1106,15 @@ class LivekitRoomSyncClient:
             return
         self._cleanup_called = True
         self._shutting_down = True
+        stop_now = True
         try:
             future = self._run_coroutine(self._disconnect_all())
-            future.result(timeout=10)
+            stop_now = future.result(timeout=self.SHUTDOWN_DRAIN_SECONDS + self.RELEASE_ATTRIBUTE_TIMEOUT_SECONDS + 10)
         except Exception as e:
             logger.exception(f"Error while disconnecting LiveKit participants during shutdown: {e}")
         finally:
-            self._loop.call_soon_threadsafe(self._loop.stop)
-            self._thread.join(timeout=10)
+            # If connects are still in flight, the loop stops itself once they
+            # finish; the thread is a daemon, so it won't block process exit.
+            if stop_now is not False:
+                self._loop.call_soon_threadsafe(self._loop.stop)
+                self._thread.join(timeout=10)
