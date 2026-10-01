@@ -1071,7 +1071,7 @@ class OpenAIModelValidationTest(TransactionTestCase):
         from bots.serializers import get_openai_model_enum
 
         models = get_openai_model_enum()
-        expected = ["gpt-4o-transcribe", "gpt-4o-mini-transcribe", "gpt-4o-transcribe-diarize"]
+        expected = ["gpt-4o-transcribe", "gpt-4o-mini-transcribe", "gpt-4o-transcribe-diarize", "gpt-transcribe"]
         self.assertEqual(models, expected)
 
     @mock.patch.dict("os.environ", {"OPENAI_MODEL_NAME": "custom-whisper-model"})
@@ -1080,7 +1080,7 @@ class OpenAIModelValidationTest(TransactionTestCase):
         from bots.serializers import get_openai_model_enum
 
         models = get_openai_model_enum()
-        expected = ["gpt-4o-transcribe", "gpt-4o-mini-transcribe", "gpt-4o-transcribe-diarize", "custom-whisper-model"]
+        expected = ["gpt-4o-transcribe", "gpt-4o-mini-transcribe", "gpt-4o-transcribe-diarize", "gpt-transcribe", "custom-whisper-model"]
         self.assertEqual(models, expected)
 
     @mock.patch.dict("os.environ", {}, clear=True)

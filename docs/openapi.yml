@@ -2345,6 +2345,7 @@ components:
                   - gpt-4o-transcribe
                   - gpt-4o-mini-transcribe
                   - gpt-4o-transcribe-diarize
+                  - gpt-transcribe
                   description: The OpenAI model to use for transcription
                 prompt:
                   type: string
