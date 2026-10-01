@@ -262,6 +262,7 @@ class StyleManager {
         this.silenceCheckInterval = null;
         this.memoryUsageCheckInterval = null;
         this.neededInteractionsInterval = null;
+        this.chatInitialization = null;
 
         // Stream used which combines the audio tracks from the meeting. Does NOT include the bot's audio
         this.meetingAudioStream = null;
@@ -516,6 +517,7 @@ class StyleManager {
     }
 
     stop() {
+        this.chatInitialization = null;
         this.showAllOfGMeetUI();
     }
 
@@ -739,38 +741,67 @@ class StyleManager {
     }
 
     async openChatPanel() {
-        const chatButton = document.querySelector('button[aria-label="Chat with everyone"]');
-        if (chatButton) {
-            // Click to open the chat panel
-            chatButton.click();
+        // A new initialization or stop() cancels any previous retry loop.
+        const initialization = {};
+        this.chatInitialization = initialization;
+        const isActive = () => this.chatInitialization === initialization;
+        const maxAttempts = 5;
+        let openedChatButton = null;
 
-            // Wait for the chat input element to appear
-            const numAttempts = 30;
-            for (let i = 0; i < numAttempts; i++) {
-                // Sleep for 100 milliseconds
-                await new Promise(resolve => setTimeout(resolve, 100));
-                const chatInput = document.querySelector('textarea[aria-label="Send a message"]');
-                if (chatInput) {
-                    break;
+        try {
+            for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+                if (!isActive()) return;
+
+                const chatButton = document.querySelector('button[aria-label="Chat with everyone"]');
+                if (chatButton && !chatButton.disabled) {
+                    // Keep the panel open while its input loads. Clicking the same
+                    // toggle on every retry would close a still-loading panel.
+                    if (chatButton !== openedChatButton && chatButton.getAttribute('aria-pressed') !== 'true') {
+                        chatButton.click();
+                        openedChatButton = chatButton;
+                    }
+
+                    for (let poll = 0; poll < 30; poll++) {
+                        await new Promise(resolve => setTimeout(resolve, 100));
+                        if (!isActive()) return;
+                        const chatInput = document.querySelector('textarea[aria-label="Send a message"]');
+                        if (chatInput && !chatInput.disabled) {
+                            // Preserve the existing minimized-panel behavior.
+                            const currentChatButton = document.querySelector('button[aria-label="Chat with everyone"]');
+                            if (currentChatButton) currentChatButton.click();
+                            window.ws.sendJson({
+                                type: 'ChatStatusChange',
+                                change: 'ready_to_send'
+                            });
+                            return;
+                        }
+                    }
                 }
-                const wasLastAttempt = i === numAttempts - 1;
-                if (wasLastAttempt) {
-                    console.log('Failed to find chat input after', numAttempts, 'attempts');
+
+                if (attempt < maxAttempts) {
                     window.ws.sendJson({
-                        type: 'Error',
-                        message: 'Failed to find chat input in openChatPanel'
+                        type: 'UiInteraction',
+                        message: 'Retrying chat initialization in openChatPanel',
+                        attempt,
+                        maxAttempts
                     });
-                    return;
+                    await new Promise(resolve => setTimeout(resolve, 1000 * 2 ** (attempt - 1)));
                 }
             }
 
-            // Click the chat button again to close/minimize the panel
-            chatButton.click();
-
             window.ws.sendJson({
-                type: 'ChatStatusChange',
-                change: 'ready_to_send'
+                type: 'Error',
+                message: 'Failed to find chat input in openChatPanel after ' + maxAttempts + ' attempts'
             });
+        } catch (error) {
+            if (isActive()) {
+                window.ws.sendJson({
+                    type: 'Error',
+                    message: 'Error initializing chat in openChatPanel: ' + error.message
+                });
+            }
+        } finally {
+            if (isActive()) this.chatInitialization = null;
         }
     }
 
@@ -783,7 +814,8 @@ class StyleManager {
             await new Promise(resolve => setTimeout(resolve, 500));
         }
 
-        await this.openChatPanel();
+        // Chat readiness must not delay audio capture or the rest of startup.
+        void this.openChatPanel();
 
         if (window.googleMeetInitialData.modifyDomForVideoRecording) {
             await this.onlyShowSubsetofGMeetUI();
