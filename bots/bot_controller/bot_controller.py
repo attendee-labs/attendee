@@ -560,6 +560,13 @@ class BotController:
 
         return self.room_sync_client.build_source_participant_configuration()
 
+    def cleanup_room_sync_client(self):
+        if not self.room_sync_client:
+            return
+
+        logger.info("Telling room sync client to shutdown...")
+        self.room_sync_client.cleanup()
+
     def get_bot_adapter(self):
         meeting_type = self.get_meeting_type()
         if meeting_type == MeetingTypes.ZOOM:
@@ -695,9 +702,7 @@ class BotController:
             logger.info("Telling rtmp client to cleanup...")
             self.rtmp_client.stop()
 
-        if self.room_sync_client:
-            logger.info("Telling room sync client to shutdown...")
-            self.room_sync_client.cleanup()
+        self.cleanup_room_sync_client()
 
         if self.adapter:
             logger.info("Telling adapter to leave meeting...")
@@ -1077,9 +1082,7 @@ class BotController:
         if self.bot_in_db.state == BotStates.LEAVING:
             logger.info("take_action_based_on_bot_in_db - LEAVING")
             BotEventManager.set_requested_bot_action_taken_at(self.bot_in_db)
-            if self.room_sync_client:
-                logger.info("Telling room sync client to shutdown before leaving meeting...")
-                self.room_sync_client.cleanup()
+            self.cleanup_room_sync_client()
             self.adapter.leave()
         if self.bot_in_db.state == BotStates.STAGED:
             logger.info(f"take_action_based_on_bot_in_db - STAGED. For now, this is a no-op. join_at = {self.bot_in_db.join_at.isoformat()}")
@@ -2091,9 +2094,7 @@ class BotController:
 
             BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.LEAVE_REQUESTED, event_sub_type=event_sub_type_for_reason)
             BotEventManager.set_requested_bot_action_taken_at(self.bot_in_db)
-            if self.room_sync_client:
-                logger.info("Telling room sync client to shutdown before leaving meeting...")
-                self.room_sync_client.cleanup()
+            self.cleanup_room_sync_client()
             self.adapter.leave()
             return
 
