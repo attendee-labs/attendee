@@ -1,6 +1,6 @@
 import asyncio
+import hashlib
 import logging
-import random
 import threading
 import time
 import uuid
@@ -34,13 +34,29 @@ class LivekitRoomSyncClient:
     return without blocking.
 
     When several bots mirror the same meeting into the same room, ownership of
-    each mirrored participant is coordinated through LiveKit presence rather
-    than explicit signalling. Every syncing bot keeps a hidden "watcher"
-    connection to the room. A bot only claims a participant that is missing
-    from the room, and when a mirrored participant drops out of the room while
-    still in the meeting (because the bot that owned it left, crashed or lost
-    its connection), the remaining bots recheck after a short random delay and
-    one of them takes it over. If two bots claim at the same time, LiveKit keeps
+    each mirrored participant is coordinated deterministically:
+
+    - Every mirrored participant carries an ``attendee.room_sync.owner``
+      attribute (set via its access token) naming the bot that owns it. Watcher
+      connections are hidden, so this is how bots discover each other: the set
+      of live bots is the set of owners visible on the room roster.
+    - For each meeting participant, the bots rank themselves with rendezvous
+      hashing over ``(participant_uuid, bot_id)``. Every bot computes the same
+      order, so the rank-0 bot claims immediately and the others only act as
+      staggered fallbacks (rank * ``TAKEOVER_STEP_SECONDS``) if it is still
+      missing by then. Hashing per participant spreads a failed bot's
+      participants across the survivors.
+    - Owners announce deliberate releases with an ``attendee.room_sync.release``
+      attribute before disconnecting. ``shutdown`` means "take this over now":
+      the next bot connects straight away, and LiveKit kicks the old connection
+      as a duplicate identity, so there is no gap. ``left_meeting`` means the
+      person left, so nobody takes it over. A participant that vanishes without
+      a release (crash, lost connection) is taken over after a short fixed
+      settle by rank.
+
+    Bots that don't own anything are invisible to the others, so they rank
+    themselves after all visible bots (with a deterministic offset to avoid
+    colliding with each other). If two bots still claim at once, LiveKit keeps
     the newest connection for that identity and the other bot stands down.
 
     ``url`` is the LiveKit server URL (e.g. wss://your-project.livekit.cloud)
@@ -77,10 +93,10 @@ class LivekitRoomSyncClient:
         # published audio track.
         self._audio_sources: dict[str, rtc.AudioSource] = {}
 
-        # Short random id for this client instance. Used in the watcher identity
-        # and in log lines so logs from different bots sharing a room can be
-        # told apart and correlated with the LiveKit dashboard.
-        self._instance_id = uuid.uuid4().hex[:8]
+        # Short random id for this client instance. Used as this bot's owner id
+        # in the takeover ranking, in the watcher identity and in log lines so
+        # logs from different bots sharing a room can be told apart.
+        self._instance_id = uuid.uuid4().hex[:12]
         self._log_prefix = f"[LiveKit room sync {self._instance_id} room={self.room_name}]"
 
         # Meeting participants that should be mirrored into the room, whether or
@@ -90,8 +106,9 @@ class LivekitRoomSyncClient:
         # Participants this bot is in the middle of connecting, so a join and a
         # takeover for the same participant can't open two connections at once.
         self._connecting: set[str] = set()
-        # Pending delayed reclaim checks, keyed by participant uuid.
-        self._pending_reclaims: dict[str, asyncio.Task] = {}
+        # Pending claim checks, keyed by participant uuid, with the loop time
+        # they are due at so an earlier check can replace a later one.
+        self._pending_claims: dict[str, tuple[asyncio.Task, float]] = {}
         # How many times this bot has taken over each participant. A count that
         # keeps growing means bots are fighting over the participant.
         self._takeover_counts: dict[str, int] = {}
@@ -111,7 +128,7 @@ class LivekitRoomSyncClient:
         self._thread.start()
 
         if self.sync_to_room:
-            logger.info(f"{self._log_prefix} Starting room sync with failover enabled")
+            logger.info(f"{self._log_prefix} Starting room sync with deterministic failover enabled")
             self._run_coroutine(self._connect_watcher())
             self._run_coroutine(self._periodic_reconcile())
 
@@ -198,13 +215,34 @@ class LivekitRoomSyncClient:
     # this topic as chat messages.
     CHAT_TOPIC = "lk.chat"
 
-    # When a mirrored participant drops out of the room, wait a random delay in
-    # this range before checking whether to take it over. The delay lets a
-    # takeover by another bot (which briefly removes and re-adds the identity)
-    # settle, lets a meeting LEAVE event arrive first if the person actually
-    # left, and the jitter makes it less likely that several bots claim at once.
-    RECLAIM_DELAY_MIN_SECONDS = 1.0
-    RECLAIM_DELAY_MAX_SECONDS = 3.0
+    # Participant attribute naming the bot (instance id) that owns a mirrored
+    # participant. Set through the access token, so it is present from the
+    # moment the participant joins. This is how bots discover each other.
+    OWNER_ATTRIBUTE = "attendee.room_sync.owner"
+    # Participant attribute an owner sets just before deliberately disconnecting
+    # a mirrored participant, so other bots know why it is going away.
+    RELEASE_ATTRIBUTE = "attendee.room_sync.release"
+    # The person left the meeting: nobody should take the participant over.
+    RELEASE_LEFT_MEETING = "left_meeting"
+    # The owning bot is shutting down: the next bot should take over right away.
+    RELEASE_SHUTDOWN = "shutdown"
+    # How long to wait for a release attribute to be acknowledged before
+    # disconnecting anyway.
+    RELEASE_ATTRIBUTE_TIMEOUT_SECONDS = 2
+
+    # Spacing between successive bots in the takeover order. The rank-0 bot for
+    # a participant claims immediately; the rank-N bot rechecks after
+    # N * TAKEOVER_STEP_SECONDS and only claims if it is still missing. This
+    # should comfortably exceed the time it takes a bot to connect a
+    # participant and for that to show up on the other bots' watchers.
+    TAKEOVER_STEP_SECONDS = 2.0
+
+    # Extra fixed wait before acting on a mirrored participant that vanished
+    # without its owner announcing a release (crash, lost connection, or a
+    # duplicate-identity swap between two bots). Gives a swap time to settle so
+    # it is not mistaken for a failure. Crashes take LiveKit several seconds to
+    # detect anyway, so this adds little to the overall gap.
+    UNRELEASED_SETTLE_SECONDS = 0.5
 
     # How long a join waits for the first watcher connection attempt before
     # deciding whether to claim the participant.
@@ -214,14 +252,14 @@ class LivekitRoomSyncClient:
     WATCHER_RETRY_SECONDS = 5
 
     # Safety net: periodically compare the meeting roster against the room and
-    # schedule reclaim checks for anything missing, in case an event was missed.
+    # schedule claim checks for anything missing, in case an event was missed.
     RECONCILE_INTERVAL_SECONDS = 30
 
     # Log takeovers at warning level once this bot has taken over the same
     # participant this many times, since that suggests bots are fighting over it.
     TAKEOVER_FLAP_WARNING_THRESHOLD = 3
 
-    def _build_token(self, identity: str, name: str | None, video_grants: dict) -> str:
+    def _build_token(self, identity: str, name: str | None, video_grants: dict, attributes: dict[str, str] | None = None) -> str:
         """Mint a LiveKit access token.
 
         A LiveKit access token is a JWT signed with the API secret (HS256). The
@@ -233,6 +271,9 @@ class LivekitRoomSyncClient:
         ``video_grants`` supplies the permission-specific grants (e.g.
         ``canPublish``/``canSubscribe``/``hidden``); ``roomJoin`` and ``room`` are
         always added since every token this client mints is for joining this room.
+
+        ``attributes`` become the participant's initial attributes, visible to
+        everyone in the room.
         """
         now = int(time.time())
         claims = {
@@ -247,6 +288,8 @@ class LivekitRoomSyncClient:
                 **video_grants,
             },
         }
+        if attributes:
+            claims["attributes"] = attributes
         return jwt.encode(claims, self.api_secret, algorithm="HS256")
 
     def _build_participant_token(self, participant_uuid: str, name: str | None) -> str:
@@ -254,8 +297,15 @@ class LivekitRoomSyncClient:
 
         ``canPublishData`` is granted in addition to ``canPublish`` so the synced
         participant can also mirror chat messages over LiveKit's data channel.
+        ``canUpdateOwnMetadata`` lets this bot set the release attribute before
+        disconnecting. The owner attribute advertises this bot to the others.
         """
-        return self._build_token(participant_uuid, name, {"canPublish": True, "canPublishData": True, "canSubscribe": False})
+        return self._build_token(
+            participant_uuid,
+            name,
+            {"canPublish": True, "canPublishData": True, "canSubscribe": False, "canUpdateOwnMetadata": True},
+            attributes={self.OWNER_ATTRIBUTE: self._instance_id},
+        )
 
     def _build_source_subscriber_token(self, identity: str) -> str:
         """Mint a hidden, subscribe-only LiveKit access token for the JS SDK.
@@ -319,7 +369,7 @@ class LivekitRoomSyncClient:
     # ------------------------------------------------------------------
 
     async def _handle_join(self, participant_uuid: str, name: str | None):
-        """Record a meeting participant and claim it unless another bot already owns it."""
+        """Record a meeting participant and schedule a ranked claim check for it."""
         self._meeting_participants[participant_uuid] = name
         logger.info(f"{self._log_prefix} Meeting participant {participant_uuid} joined, deciding whether to claim it")
 
@@ -336,21 +386,17 @@ class LivekitRoomSyncClient:
             logger.info(f"{self._log_prefix} Meeting participant {participant_uuid} is already owned by this bot")
             return
 
-        watcher = self._watcher_room
-        if watcher is None:
+        if self._watcher_room is None:
             logger.warning(f"{self._log_prefix} Watcher unavailable, claiming {participant_uuid} without checking whether another bot already owns it")
-        elif participant_uuid in watcher.remote_participants:
-            logger.info(f"{self._log_prefix} Meeting participant {participant_uuid} is already in the LiveKit room (owned by another bot), standing by")
+            await self._add_participant(participant_uuid, name, reason="join")
             return
-        else:
-            logger.info(f"{self._log_prefix} Meeting participant {participant_uuid} is not in the LiveKit room, claiming it")
 
-        await self._add_participant(participant_uuid, name, reason="join")
+        self._schedule_claim_check(participant_uuid, trigger="join")
 
     async def _handle_leave(self, participant_uuid: str):
         """Forget a meeting participant and release it if this bot owns it.
 
-        Any pending reclaim check for the participant is left to run; it will see
+        Any pending claim check for the participant is left to run; it will see
         the participant is no longer in the meeting and do nothing.
         """
         self._meeting_participants.pop(participant_uuid, None)
@@ -375,6 +421,10 @@ class LivekitRoomSyncClient:
             room = rtc.Room()
             room.on("participant_connected", lambda participant, room=room: self._on_watcher_participant_connected(room, participant))
             room.on("participant_disconnected", lambda participant, room=room: self._on_watcher_participant_disconnected(room, participant))
+            room.on(
+                "participant_attributes_changed",
+                lambda changed_attributes, participant, room=room: self._on_watcher_participant_attributes_changed(room, changed_attributes, participant),
+            )
             room.on("reconnecting", lambda *_, room=room: self._on_watcher_reconnecting(room))
             room.on("reconnected", lambda *_, room=room: self._on_watcher_reconnected(room))
             room.on("disconnected", lambda reason, room=room: self._on_watcher_disconnected(room, reason))
@@ -403,15 +453,13 @@ class LivekitRoomSyncClient:
             return
         identity = participant.identity
         if identity in self._meeting_participants:
-            owner = "this bot" if (identity in self._rooms or identity in self._connecting) else "another bot"
+            owner = (participant.attributes or {}).get(self.OWNER_ATTRIBUTE) or "unknown"
             logger.info(f"{self._log_prefix} Observed mirrored participant {identity} connect to the LiveKit room (owner: {owner})")
         else:
             logger.debug(f"{self._log_prefix} Observed non-mirrored participant {identity} connect to the LiveKit room")
 
     def _on_watcher_participant_disconnected(self, room: rtc.Room, participant):
-        logger.info(f"{self._log_prefix} LiveKit participant {participant.identity} with room {room.name} was disconnected")
         if room is not self._watcher_room or self._shutting_down:
-            logger.info(f"{self._log_prefix} Watcher participant {participant.identity} was disconnected")
             return
         identity = participant.identity
         if identity not in self._meeting_participants:
@@ -419,8 +467,41 @@ class LivekitRoomSyncClient:
             # already left the meeting. Nothing to take over.
             logger.debug(f"{self._log_prefix} Observed participant {identity} leave the LiveKit room, not in meeting roster so ignoring")
             return
-        logger.info(f"{self._log_prefix} Observed mirrored participant {identity} leave the LiveKit room while still in the meeting")
-        self._schedule_reclaim_check(identity, trigger="participant left room")
+
+        attributes = participant.attributes or {}
+        owner = attributes.get(self.OWNER_ATTRIBUTE)
+        release = attributes.get(self.RELEASE_ATTRIBUTE)
+
+        if release == self.RELEASE_LEFT_MEETING:
+            # The owner saw the person leave the meeting. Our own LEAVE event
+            # should follow shortly; don't put a ghost back in the meeting.
+            logger.info(f"{self._log_prefix} Mirrored participant {identity} was released by bot {owner} because it left the meeting, not taking it over")
+            return
+
+        if release == self.RELEASE_SHUTDOWN:
+            # Normally already handed over when the attribute changed; this is
+            # the fallback in case that check didn't claim it.
+            logger.info(f"{self._log_prefix} Mirrored participant {identity} left the LiveKit room after bot {owner} released it for shutdown")
+            self._schedule_claim_check(identity, trigger="owner shut down", departed_owner=owner)
+            return
+
+        logger.info(f"{self._log_prefix} Mirrored participant {identity} (owner: {owner}) left the LiveKit room without being released while still in the meeting")
+        self._schedule_claim_check(identity, trigger="participant dropped from room", departed_owner=owner, settle=self.UNRELEASED_SETTLE_SECONDS)
+
+    def _on_watcher_participant_attributes_changed(self, room: rtc.Room, changed_attributes: dict, participant):
+        if room is not self._watcher_room or self._shutting_down:
+            return
+        if (changed_attributes or {}).get(self.RELEASE_ATTRIBUTE) != self.RELEASE_SHUTDOWN:
+            return
+        identity = participant.identity
+        if identity not in self._meeting_participants:
+            return
+        owner = (participant.attributes or {}).get(self.OWNER_ATTRIBUTE)
+        # Make-before-break handoff: the next bot connects while the old
+        # connection is still up, and LiveKit kicks the old one as a duplicate
+        # identity, so the participant never disappears from the room.
+        logger.info(f"{self._log_prefix} Bot {owner} is shutting down and releasing {identity}, handing it over")
+        self._schedule_claim_check(identity, trigger="owner shutting down", departed_owner=owner)
 
     def _on_watcher_reconnecting(self, room: rtc.Room):
         if room is not self._watcher_room:
@@ -430,7 +511,7 @@ class LivekitRoomSyncClient:
 
     def _on_watcher_reconnected(self, room: rtc.Room):
         if room is not self._watcher_room:
-            logger.info(f"{self._log_prefix} Observed watcher room reconnecting, but not the watcher room")
+            logger.info(f"{self._log_prefix} Observed watcher room reconnected, but not the watcher room")
             return
         logger.info(f"{self._log_prefix} Watcher reconnected")
         # Roster events may have been missed while reconnecting.
@@ -438,7 +519,7 @@ class LivekitRoomSyncClient:
 
     def _on_watcher_disconnected(self, room: rtc.Room, reason):
         if room is not self._watcher_room:
-            logger.info(f"{self._log_prefix} Observed watcher room reconnecting, but not the watcher room")
+            logger.info(f"{self._log_prefix} Observed watcher room disconnected, but not the watcher room")
             return
         self._watcher_room = None
         if self._shutting_down:
@@ -447,48 +528,125 @@ class LivekitRoomSyncClient:
         self._watcher_task = self._loop.create_task(self._connect_watcher(initial_delay=self.WATCHER_RETRY_SECONDS))
 
     # ------------------------------------------------------------------
-    # Takeover logic
+    # Takeover ranking
     # ------------------------------------------------------------------
 
-    def _schedule_reclaim_check(self, participant_uuid: str, trigger: str):
-        """Schedule a jittered check of whether to take over a participant.
+    @staticmethod
+    def _rendezvous_score(participant_uuid: str, bot_id: str) -> int:
+        """Stable per-(participant, bot) score. Uses sha256 rather than ``hash()``
+        because ``hash()`` is randomized per process and bots must agree."""
+        digest = hashlib.sha256(f"{participant_uuid}:{bot_id}".encode()).digest()
+        return int.from_bytes(digest[:8], "big")
+
+    def _is_mirrored_in_room(self, watcher: rtc.Room, participant_uuid: str) -> bool:
+        """Whether a live, unreleased mirrored participant exists in the room."""
+        participant = watcher.remote_participants.get(participant_uuid)
+        if participant is None:
+            return False
+        # A participant its owner has released is on its way out, so treat it
+        # as absent. This is what lets a shutdown handoff happen without a gap.
+        return not (participant.attributes or {}).get(self.RELEASE_ATTRIBUTE)
+
+    def _visible_bot_ids(self, watcher: rtc.Room) -> set[str]:
+        """Bots currently owning at least one unreleased mirrored participant."""
+        bot_ids = set()
+        for participant in watcher.remote_participants.values():
+            attributes = participant.attributes or {}
+            owner = attributes.get(self.OWNER_ATTRIBUTE)
+            if owner and not attributes.get(self.RELEASE_ATTRIBUTE):
+                bot_ids.add(owner)
+        if self._rooms:
+            bot_ids.add(self._instance_id)
+        return bot_ids
+
+    def _claim_delay(self, watcher: rtc.Room, participant_uuid: str, departed_owner: str | None) -> tuple[float, str]:
+        """How long this bot should wait before claiming a missing participant.
+
+        Every bot ranks the visible bots by rendezvous score for this
+        participant, so they all agree on the order. ``departed_owner`` is
+        excluded because the participant just disappeared from it, even if its
+        other participants are still visible for a moment.
+        """
+        candidates = self._visible_bot_ids(watcher)
+        candidates.discard(departed_owner)
+
+        if not candidates:
+            # No other bot is visible (a single bot, or a cold start), so there
+            # is nobody to defer to.
+            return 0.0, "no other bots visible"
+
+        if self._instance_id in candidates:
+            order = sorted(candidates, key=lambda bot_id: (self._rendezvous_score(participant_uuid, bot_id), bot_id), reverse=True)
+            rank = order.index(self._instance_id)
+            return rank * self.TAKEOVER_STEP_SECONDS, f"rank {rank + 1} of {len(order)}"
+
+        # This bot owns nothing, so the other bots can't see it and don't count
+        # it in their ranking. Go after all of them, with a deterministic offset
+        # so several such bots don't all fire at the same moment.
+        offset = self._rendezvous_score(participant_uuid, self._instance_id) / 2**64
+        return (len(candidates) + offset) * self.TAKEOVER_STEP_SECONDS, f"after all {len(candidates)} visible bots"
+
+    def _schedule_claim_check(self, participant_uuid: str, trigger: str, departed_owner: str | None = None, settle: float = 0.0):
+        """Schedule a check of whether to claim a participant, delayed by this bot's rank.
 
         Must be called on the background event loop.
         """
         if self._shutting_down:
             return
-        if participant_uuid in self._pending_reclaims:
-            logger.debug(f"{self._log_prefix} Reclaim check for {participant_uuid} already pending, not scheduling another (trigger: {trigger})")
+        watcher = self._watcher_room
+        if watcher is None:
+            logger.warning(f"{self._log_prefix} Not scheduling claim check for {participant_uuid}: watcher unavailable; will reconcile once it reconnects (trigger: {trigger})")
             return
-        delay = random.uniform(self.RECLAIM_DELAY_MIN_SECONDS, self.RECLAIM_DELAY_MAX_SECONDS)
-        self._pending_reclaims[participant_uuid] = self._loop.create_task(self._delayed_reclaim_check(participant_uuid, delay, trigger))
-        logger.info(f"{self._log_prefix} Scheduled reclaim check for {participant_uuid} in {delay:.1f}s (trigger: {trigger})")
 
-    async def _delayed_reclaim_check(self, participant_uuid: str, delay: float, trigger: str):
+        delay, position = self._claim_delay(watcher, participant_uuid, departed_owner)
+        delay += settle
+        due = self._loop.time() + delay
+
+        existing = self._pending_claims.get(participant_uuid)
+        if existing is not None:
+            existing_task, existing_due = existing
+            if not existing_task.done() and existing_due <= due:
+                logger.debug(f"{self._log_prefix} Claim check for {participant_uuid} already pending sooner, not scheduling another (trigger: {trigger})")
+                return
+            existing_task.cancel()
+
+        task = self._loop.create_task(self._delayed_claim_check(participant_uuid, delay, trigger))
+        self._pending_claims[participant_uuid] = (task, due)
+        logger.info(f"{self._log_prefix} Scheduled claim check for {participant_uuid} in {delay:.2f}s ({position}, trigger: {trigger})")
+
+    async def _delayed_claim_check(self, participant_uuid: str, delay: float, trigger: str):
         try:
-            await asyncio.sleep(delay)
+            if delay > 0:
+                await asyncio.sleep(delay)
         finally:
-            if self._pending_reclaims.get(participant_uuid) is asyncio.current_task():
-                self._pending_reclaims.pop(participant_uuid, None)
-        await self._reclaim_if_absent(participant_uuid, trigger)
+            entry = self._pending_claims.get(participant_uuid)
+            if entry is not None and entry[0] is asyncio.current_task():
+                self._pending_claims.pop(participant_uuid, None)
+        await self._claim_if_absent(participant_uuid, trigger)
 
-    async def _reclaim_if_absent(self, participant_uuid: str, trigger: str):
-        """Take over a participant if it is still in the meeting but missing from the room."""
+    async def _claim_if_absent(self, participant_uuid: str, trigger: str):
+        """Claim a participant if it is still in the meeting but missing from the room."""
         if self._shutting_down:
             return
         if participant_uuid not in self._meeting_participants:
-            logger.info(f"{self._log_prefix} Reclaim check for {participant_uuid}: no longer in the meeting, nothing to do")
+            logger.info(f"{self._log_prefix} Claim check for {participant_uuid}: no longer in the meeting, nothing to do")
             return
         if participant_uuid in self._rooms or participant_uuid in self._connecting:
-            logger.info(f"{self._log_prefix} Reclaim check for {participant_uuid}: already owned by this bot, nothing to do")
+            logger.info(f"{self._log_prefix} Claim check for {participant_uuid}: already owned by this bot, nothing to do")
             return
 
         watcher = self._watcher_room
         if watcher is None:
-            logger.warning(f"{self._log_prefix} Reclaim check for {participant_uuid}: watcher unavailable, skipping; will reconcile once it reconnects")
+            logger.warning(f"{self._log_prefix} Claim check for {participant_uuid}: watcher unavailable, skipping; will reconcile once it reconnects")
             return
-        if participant_uuid in watcher.remote_participants:
-            logger.info(f"{self._log_prefix} Reclaim check for {participant_uuid}: present in the LiveKit room (owned by another bot), standing by")
+        if self._is_mirrored_in_room(watcher, participant_uuid):
+            logger.info(f"{self._log_prefix} Claim check for {participant_uuid}: present in the LiveKit room (owned by another bot), standing by")
+            return
+
+        name = self._meeting_participants[participant_uuid]
+        if trigger == "join":
+            logger.info(f"{self._log_prefix} Claiming {participant_uuid}: in the meeting but not in the LiveKit room")
+            await self._add_participant(participant_uuid, name, reason="join")
             return
 
         count = self._takeover_counts.get(participant_uuid, 0) + 1
@@ -499,10 +657,10 @@ class LivekitRoomSyncClient:
         else:
             logger.info(message)
 
-        await self._add_participant(participant_uuid, self._meeting_participants[participant_uuid], reason=f"takeover ({trigger})")
+        await self._add_participant(participant_uuid, name, reason=f"takeover ({trigger})")
 
     def _reconcile(self, trigger: str):
-        """Log current ownership and schedule reclaim checks for anything missing from the room.
+        """Log current ownership and schedule claim checks for anything missing from the room.
 
         Must be called on the background event loop.
         """
@@ -513,14 +671,13 @@ class LivekitRoomSyncClient:
             logger.info(f"{self._log_prefix} Skipping reconcile ({trigger}): watcher unavailable")
             return
 
-        present = watcher.remote_participants
         owned = [p for p in self._meeting_participants if p in self._rooms or p in self._connecting]
-        owned_elsewhere = [p for p in self._meeting_participants if p not in owned and p in present]
-        missing = [p for p in self._meeting_participants if p not in owned and p not in present]
+        owned_elsewhere = [p for p in self._meeting_participants if p not in owned and self._is_mirrored_in_room(watcher, p)]
+        missing = [p for p in self._meeting_participants if p not in owned and not self._is_mirrored_in_room(watcher, p)]
 
-        logger.info(f"{self._log_prefix} Ownership ({trigger}): {len(self._meeting_participants)} in meeting, {len(owned)} owned by this bot, {len(owned_elsewhere)} owned by other bots, {len(missing)} missing from room")
+        logger.info(f"{self._log_prefix} Ownership ({trigger}): {len(self._meeting_participants)} in meeting, {len(owned)} owned by this bot, {len(owned_elsewhere)} owned by other bots, {len(missing)} missing from room, {len(self._visible_bot_ids(watcher))} bots visible")
         for participant_uuid in missing:
-            self._schedule_reclaim_check(participant_uuid, trigger=trigger)
+            self._schedule_claim_check(participant_uuid, trigger=trigger)
 
     async def _periodic_reconcile(self):
         self._reconcile_task = asyncio.current_task()
@@ -543,11 +700,11 @@ class LivekitRoomSyncClient:
         connection for the same participant.
 
         The most common unexpected cause is ``DUPLICATE_IDENTITY``: another bot
-        mirroring the same meeting connected with the same participant identity
-        and LiveKit kicked this connection. That bot now owns the participant, so
-        we simply stop tracking it rather than reconnecting and fighting over it.
-        For any other reason the participant is now missing from the room, so the
-        watcher will notice and a reclaim check (on this bot or another) re-syncs it.
+        connected with the same participant identity and LiveKit kicked this
+        connection. That bot now owns the participant, so we simply stop
+        tracking it rather than reconnecting and fighting over it. For any other
+        reason the participant is now missing from the room, so the watchers
+        notice and the next bot in the takeover order re-syncs it.
         """
         if self._rooms.get(participant_uuid) is not room:
             return
@@ -558,7 +715,7 @@ class LivekitRoomSyncClient:
         if reason == rtc.DisconnectReason.DUPLICATE_IDENTITY:
             logger.warning(f"{self._log_prefix} LiveKit participant {participant_uuid} was taken over by another connection with the same identity (most likely another bot), standing down")
         else:
-            logger.warning(f"{self._log_prefix} LiveKit participant {participant_uuid} was disconnected unexpectedly (reason: {self._format_disconnect_reason(reason)}), a reclaim check will re-sync it if it is still in the meeting")
+            logger.warning(f"{self._log_prefix} LiveKit participant {participant_uuid} was disconnected unexpectedly (reason: {self._format_disconnect_reason(reason)}), the next bot in the takeover order will re-sync it if it is still in the meeting")
 
     async def _add_participant(self, participant_uuid: str, name: str | None, reason: str = "join"):
         if participant_uuid in self._rooms or participant_uuid in self._connecting:
@@ -598,6 +755,8 @@ class LivekitRoomSyncClient:
         # shutting down) while we were connecting. Don't leave a ghost behind.
         if self._shutting_down or participant_uuid not in self._meeting_participants:
             logger.info(f"{self._log_prefix} Meeting participant {participant_uuid} left (or client is shutting down) while connecting, disconnecting it")
+            release = self.RELEASE_SHUTDOWN if self._shutting_down else self.RELEASE_LEFT_MEETING
+            await self._mark_released(participant_uuid, room, release)
             try:
                 await room.disconnect()
             except Exception as e:
@@ -608,12 +767,29 @@ class LivekitRoomSyncClient:
         self._audio_sources[participant_uuid] = source
         logger.info(f"{self._log_prefix} Synced LiveKit participant {participant_uuid} into room {self.room_name} (reason: {reason})")
 
+    async def _mark_released(self, participant_uuid: str, room: rtc.Room, release: str):
+        """Tell the other bots why this participant is about to disconnect.
+
+        Best effort: if it fails, the other bots treat the disconnect as
+        unexplained and fall back to the settle-then-rank path.
+        """
+        try:
+            await asyncio.wait_for(
+                room.local_participant.set_attributes({self.RELEASE_ATTRIBUTE: release}),
+                timeout=self.RELEASE_ATTRIBUTE_TIMEOUT_SECONDS,
+            )
+        except Exception as e:
+            logger.warning(f"{self._log_prefix} Failed to mark LiveKit participant {participant_uuid} as released ({release}): {e}")
+
     async def _remove_participant(self, participant_uuid: str):
         self._audio_sources.pop(participant_uuid, None)
         room = self._rooms.pop(participant_uuid, None)
         if room is None:
             logger.info(f"{self._log_prefix} No LiveKit participant owned by this bot to remove for {participant_uuid}")
             return
+
+        # Let the other bots know the person left, so they don't take it over.
+        await self._mark_released(participant_uuid, room, self.RELEASE_LEFT_MEETING)
 
         try:
             await room.disconnect()
@@ -664,10 +840,10 @@ class LivekitRoomSyncClient:
         self._shutting_down = True
 
         # Stop background work first so nothing reacts to our own disconnects.
-        for task in (self._watcher_task, self._reconcile_task, *self._pending_reclaims.values()):
+        for task in (self._watcher_task, self._reconcile_task, *(task for task, _ in self._pending_claims.values())):
             if task is not None and not task.done():
                 task.cancel()
-        self._pending_reclaims.clear()
+        self._pending_claims.clear()
 
         watcher = self._watcher_room
         self._watcher_room = None
@@ -680,7 +856,14 @@ class LivekitRoomSyncClient:
         rooms = list(self._rooms.items())
         self._rooms.clear()
         self._audio_sources.clear()
-        logger.info(f"{self._log_prefix} Shutting down, releasing {len(rooms)} owned participants so other bots can take them over")
+        logger.info(f"{self._log_prefix} Shutting down, handing off {len(rooms)} owned participants to other bots")
+
+        # Announce the release first so other bots connect while ours are still
+        # up (make-before-break). If another bot takes one over in the meantime,
+        # LiveKit kicks ours as a duplicate identity, which is fine: we have
+        # already stopped tracking it, and disconnecting it again is harmless.
+        await asyncio.gather(*(self._mark_released(participant_uuid, room, self.RELEASE_SHUTDOWN) for participant_uuid, room in rooms))
+
         for participant_uuid, room in rooms:
             try:
                 await room.disconnect()
