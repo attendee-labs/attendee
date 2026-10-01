@@ -262,9 +262,11 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         return client
 
     async def until(self, condition, timeout=1):
-        async with asyncio.timeout(timeout):
+        async def poll():
             while not condition():
                 await asyncio.sleep(0.001)
+
+        await asyncio.wait_for(poll(), timeout)
 
     async def ready(self, *clients):
         await self.until(lambda: all(c._ready_watcher() for c in clients))
