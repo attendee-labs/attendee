@@ -51,6 +51,7 @@ class LivekitRoomSyncClient:
     CONTROL_TOPIC = "attendee.room_sync"
     OWNER_ATTRIBUTE = "attendee.room_sync.owner"
     RELEASE_ATTRIBUTE = "attendee.room_sync.release"
+    SOURCE_ATTRIBUTE = "attendee.room_sync.source"
     RELEASE_LEFT_MEETING = "left_meeting"
     RELEASE_SHUTDOWN = "shutdown"
     RELEASE_ATTRIBUTE_TIMEOUT_SECONDS = 2
@@ -196,11 +197,14 @@ class LivekitRoomSyncClient:
         return jwt.encode(claims, self.api_secret, algorithm="HS256")
 
     def _build_participant_token(self, participant_uuid: str, name: str | None) -> str:
+        attributes = {self.OWNER_ATTRIBUTE: self._instance_id}
+        if self.source_participant and self.source_participant.get("identity"):
+            attributes[self.SOURCE_ATTRIBUTE] = self.source_participant["identity"]
         return self._build_token(
             participant_uuid,
             name,
             {"canPublish": True, "canPublishData": True, "canSubscribe": False, "canUpdateOwnMetadata": True},
-            attributes={self.OWNER_ATTRIBUTE: self._instance_id},
+            attributes=attributes,
         )
 
     def _build_source_subscriber_token(self, identity: str) -> str:
