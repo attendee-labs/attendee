@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/5.1/ref/settings/
 """
 
 import copy
+import json
 import os
 import sys
 from pathlib import Path
@@ -173,9 +174,15 @@ elif os.getenv("REDIS_SSL_REQUIREMENTS"):
 redis_params_query_string = "&".join([f"{key}={value}" for key, value in redis_params.items()])
 
 REDIS_URL_WITH_PARAMS = os.getenv("REDIS_URL") + ("?" + redis_params_query_string if redis_params_query_string else "")
+REDIS_KEY_PREFIX = os.getenv("REDIS_KEY_PREFIX", "")
 
 CELERY_BROKER_URL = REDIS_URL_WITH_PARAMS
 CELERY_RESULT_BACKEND = REDIS_URL_WITH_PARAMS
+CELERY_BROKER_TRANSPORT_OPTIONS = json.loads(os.getenv("CELERY_BROKER_TRANSPORT_OPTIONS", "{}"))
+CELERY_RESULT_BACKEND_TRANSPORT_OPTIONS = {}
+if REDIS_KEY_PREFIX:
+    CELERY_BROKER_TRANSPORT_OPTIONS.setdefault("global_keyprefix", REDIS_KEY_PREFIX)
+    CELERY_RESULT_BACKEND_TRANSPORT_OPTIONS["global_keyprefix"] = REDIS_KEY_PREFIX
 CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"

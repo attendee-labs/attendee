@@ -118,6 +118,7 @@ This document lists all supported environment variables for the Attendee applica
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `REDIS_URL` | String | **Required** | Redis connection URL (format: `redis://user:password@host:port/db` or `rediss://` for SSL). |
+| `REDIS_KEY_PREFIX` | String | `""` | Prefix applied to every Redis key and pub/sub channel owned by Attendee. |
 | `DISABLE_REDIS_SSL` | Boolean | `false` | Disable SSL for Redis (backward compatibility). Deprecated; use `REDIS_SSL_REQUIREMENTS` instead. |
 | `REDIS_SSL_REQUIREMENTS` | String | (None) | Redis SSL requirements: `none`, `optional`, or `required`. |
 | `PROCESS_UTTERANCE_CELERY_QUEUE` | String | `celery` | Celery queue name for processing utterances. |

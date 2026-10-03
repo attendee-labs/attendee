@@ -2,9 +2,15 @@ import time
 
 import redis
 from django.conf import settings
-from django.test import TestCase
+from django.test import SimpleTestCase, TestCase, override_settings
 
-from bots.redis_utils import incr_and_expire_nx
+from bots.redis_utils import incr_and_expire_nx, redis_key
+
+
+class RedisKeyTest(SimpleTestCase):
+    @override_settings(REDIS_KEY_PREFIX="tricorder:")
+    def test_prefixes_key(self):
+        self.assertEqual(redis_key("celery"), "tricorder:celery")
 
 
 class IncrAndExpireNxTest(TestCase):

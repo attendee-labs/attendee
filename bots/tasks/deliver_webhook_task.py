@@ -9,7 +9,7 @@ from django.conf import settings
 from django.utils import timezone
 
 from bots.models import SessionTypes, WebhookDeliveryAttempt, WebhookDeliveryAttemptStatus, WebhookTriggerTypes
-from bots.redis_utils import incr_and_expire_nx
+from bots.redis_utils import incr_and_expire_nx, redis_key
 from bots.webhook_utils import sign_payload, url_is_public
 
 logger = logging.getLogger(__name__)
@@ -30,7 +30,7 @@ def is_global_webhook_rate_limit_reached():
         return False
 
     redis_client = get_deliver_webhook_task_redis_client()
-    rate_limit_key = f"global_webhook_rate_limit:{int(time.time())}"
+    rate_limit_key = redis_key(f"global_webhook_rate_limit:{int(time.time())}")
     count, _ = incr_and_expire_nx(redis_client, rate_limit_key, ttl=2)
 
     return count > settings.GLOBAL_WEBHOOK_DELIVERIES_PER_SECOND_RATE_LIMIT

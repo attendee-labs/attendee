@@ -61,6 +61,7 @@ from bots.per_participant_realtime_video_configuration import (
     PerParticipantRealtimeVideoConfiguration,
     PerParticipantRealtimeVideoSourceConfiguration,
 )
+from bots.redis_utils import redis_key
 from bots.webhook_payloads import chat_message_webhook_payload, participant_event_webhook_payload, utterance_webhook_payload
 from bots.webhook_utils import trigger_webhook
 from bots.websocket_payloads import mixed_audio_websocket_payload, per_participant_audio_websocket_payload, per_participant_video_websocket_payload
@@ -777,7 +778,7 @@ class BotController:
 
         self.redis_client = None
         self.pubsub = None
-        self.pubsub_channel = f"bot_{self.bot_in_db.id}"
+        self.pubsub_channel = redis_key(f"bot_{self.bot_in_db.id}")
 
         self.automatic_leave_configuration = AutomaticLeaveConfiguration(**self.bot_in_db.automatic_leave_settings())
 

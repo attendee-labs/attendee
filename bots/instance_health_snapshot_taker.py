@@ -38,6 +38,7 @@ from django.utils import timezone
 
 from attendee.celery import app as celery_app
 from bots.models import InstanceHealthSnapshot
+from bots.redis_utils import redis_key
 
 logger = logging.getLogger(__name__)
 
@@ -147,7 +148,7 @@ def get_celery_queue_depths(redis_client):
     depths = {}
     for queue_name in queue_names:
         try:
-            depths[queue_name] = redis_client.llen(queue_name)
+            depths[queue_name] = redis_client.llen(redis_key(queue_name))
         except Exception as e:
             logger.error(f"Error getting depth of Celery queue {queue_name}: {e}. Continuing...")
     return depths

@@ -34,6 +34,7 @@ from .models import (
     WebhookSubscription,
     WebhookTriggerTypes,
 )
+from .redis_utils import redis_key
 from .serializers import (
     CreateBotSerializer,
     PatchBotSerializer,
@@ -78,7 +79,7 @@ def build_internal_site_url(path=""):
 
 def send_sync_command(bot, command="sync"):
     redis_client = redis.from_url(settings.REDIS_URL_WITH_PARAMS)
-    channel = f"bot_{bot.id}"
+    channel = redis_key(f"bot_{bot.id}")
     message = {"command": command}
     redis_client.publish(channel, json.dumps(message))
 

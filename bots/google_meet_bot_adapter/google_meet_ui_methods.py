@@ -20,6 +20,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from bots.bot_sso_utils import get_google_meet_set_cookie_url
 from bots.google_meet_bot_adapter.okta_authenticator import OktaAuthenticator, OktaSessionError
 from bots.models import RecordingViews
+from bots.redis_utils import redis_key
 from bots.utils import mask_url_query_param_values
 from bots.web_bot_adapter.ui_methods import UiCouldNotClickElementException, UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableExpectedException
 
@@ -966,7 +967,7 @@ class GoogleMeetUIMethods:
         username = os.getenv("OKTA_BOT_LOGIN_USERNAME", "")
         totp_secret = os.getenv("OKTA_BOT_LOGIN_TOTP_SECRET", "")
         fingerprint = hashlib.sha256(f"{domain}|{username}|{totp_secret}".encode()).hexdigest()
-        return f"okta_session_cookie:{fingerprint}"
+        return redis_key(f"okta_session_cookie:{fingerprint}")
 
     def _clear_cached_okta_session(self, redis_client=None):
         """Remove the cached Okta session cookie and its usage counter from redis."""

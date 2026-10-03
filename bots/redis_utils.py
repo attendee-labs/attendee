@@ -1,3 +1,10 @@
+from django.conf import settings
+
+
+def redis_key(key):
+    return f"{settings.REDIS_KEY_PREFIX}{key}"
+
+
 # Lua fallback for Redis < 7 which doesn't support EXPIRE ... NX.
 _redis_lua_script_incr_and_expire_nx = None
 

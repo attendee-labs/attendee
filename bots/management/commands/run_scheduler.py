@@ -17,6 +17,7 @@ from accounts.models import Organization
 from bots.instance_health_alert_manager import InstanceHealthAlertManager
 from bots.instance_health_snapshot_taker import InstanceHealthSnapshotTaker
 from bots.models import Bot, BotStates, Calendar, CalendarStates, ZoomOAuthConnection, ZoomOAuthConnectionStates
+from bots.redis_utils import redis_key
 from bots.tasks.autopay_charge_task import enqueue_autopay_charge_task
 from bots.tasks.launch_scheduled_bot_task import launch_scheduled_bot
 from bots.tasks.refresh_zoom_oauth_connection_task import enqueue_refresh_zoom_oauth_connection_task
@@ -220,7 +221,7 @@ class Command(BaseCommand):
     def _get_args_for_pending_launch_scheduled_bot_tasks(self):
         try:
             scheduled_bot_task_args = set()
-            for delivery_tag, raw in self._get_redis_client().hscan_iter("unacked", match="*"):
+            for delivery_tag, raw in self._get_redis_client().hscan_iter(redis_key("unacked"), match="*"):
                 # Filter for this string being in the raw message: bots.tasks.launch_scheduled_bot_task.launch_scheduled_bot
                 if b"bots.tasks.launch_scheduled_bot_task.launch_scheduled_bot" not in raw:
                     continue
