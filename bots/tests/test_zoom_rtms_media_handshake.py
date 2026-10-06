@@ -54,7 +54,7 @@ class TestBuildMediaHandshake(SimpleTestCase):
 
         self.assertEqual(handshake["media_type"], 32)
         self.assertEqual(handshake["media_params"]["audio"]["data_opt"], 1)
-        self.assertEqual(handshake["media_params"]["audio"]["send_rate"], 100)
+        self.assertEqual(handshake["media_params"]["audio"]["send_rate"], 20)
         self.assertEqual(handshake["media_params"]["video"]["resolution"], 3)
 
     def test_video_rejects_an_unsupported_frame_size(self):

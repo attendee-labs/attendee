@@ -188,7 +188,7 @@ def build_media_handshake(
                 "channel": 1,
                 "codec": 1,
                 "data_opt": 1,
-                "send_rate": 100,
+                "send_rate": 20,
             },
             "video": {
                 "content_type": 3,
