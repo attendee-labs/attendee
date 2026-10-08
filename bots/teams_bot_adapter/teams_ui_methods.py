@@ -129,6 +129,16 @@ class TeamsUIMethods:
         # Tell the injected payload to allow this exact display name through Teams' validation regex.
         self.driver.execute_script("return window.setDisplayNameToAllowForTeamsNameValidationBypass?.(arguments[0]);", display_name)
 
+    def install_join_shield_bypass(self):
+        if self.teams_bot_login_is_available and self.teams_bot_login_should_be_used:
+            logger.info("Not installing JoinShield bypass because we are signed in")
+            return
+
+        if self.driver.execute_script("return window.installJoinShieldBypass?.();"):
+            logger.info("Installed JoinShield bypass")
+        else:
+            logger.warning("Could not install JoinShield bypass")
+
     def fill_out_name_input(self):
         num_attempts = 60
         logger.info("Waiting for the name input field...")
@@ -526,6 +536,7 @@ class TeamsUIMethods:
         logger.info("Waiting for the Join now button...")
         join_button = self.locate_element(step="join_button", condition=EC.presence_of_element_located((By.CSS_SELECTOR, '[data-tid="prejoin-join-button"]')), wait_time_seconds=10)
         logger.info("Clicking the Join now button...")
+        self.install_join_shield_bypass()
         self.click_element(join_button, "join_button")
 
         # Start polling participants
