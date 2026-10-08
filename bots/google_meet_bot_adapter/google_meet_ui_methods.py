@@ -541,6 +541,7 @@ class GoogleMeetUIMethods:
                 self.look_for_denied_your_request_element("click_captions_button")
                 self.click_this_meeting_is_being_recorded_join_now_button("click_captions_button")
                 self.click_others_may_see_your_meeting_differently_button("click_captions_button")
+                self.look_for_incoming_video_is_disabled_element()
                 self.check_if_waiting_room_timeout_exceeded(waiting_room_timeout_started_at, "click_captions_button")
 
                 last_check_timed_out = attempt_to_look_for_captions_button_index == num_attempts_to_look_for_captions_button - 1
@@ -644,11 +645,19 @@ class GoogleMeetUIMethods:
         logger.info("Clicking the close button")
         self.click_element(close_button, "close_button")
 
+    def look_for_incoming_video_is_disabled_element(self):
+        if not self.disable_incoming_video or self.confirmed_incoming_video_is_disabled:
+            return
+        incoming_video_is_set_to_audio_only_element = self.find_element_by_selector(By.XPATH, '//*[contains(text(), "Incoming video is set to audio only")]')
+        if incoming_video_is_set_to_audio_only_element:
+            logger.info("Confirmed incoming video is disabled")
+            self.confirmed_incoming_video_is_disabled = True
+
     def disable_incoming_video_in_ui(self):
         # First check if incoming video is already disabled. This is what we expect because
         # we are disabling it via setting localstorage.
-        incoming_video_is_set_to_audio_only_element = self.find_element_by_selector(By.XPATH, '//*[contains(text(), "Incoming video is set to audio only")]')
-        if incoming_video_is_set_to_audio_only_element:
+        self.look_for_incoming_video_is_disabled_element()
+        if self.confirmed_incoming_video_is_disabled:
             logger.info("No need to disable incoming video via the UI. It is already disabled.")
             return
 
@@ -1143,6 +1152,8 @@ class GoogleMeetUIMethods:
 
     # returns nothing if succeeded, raises an exception if failed
     def attempt_to_join_meeting(self):
+        self.confirmed_incoming_video_is_disabled = False
+
         if self.google_meet_bot_login_is_available and self.google_meet_bot_login_should_be_used:
             self.login_to_google_meet_account_with_retries()
 
