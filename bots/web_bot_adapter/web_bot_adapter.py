@@ -1288,6 +1288,8 @@ class WebBotAdapter(BotAdapter):
             return
         if not self.driver:
             return
+        if self.joined_at:
+            return
         if time.time() - self.last_domain_allow_list_violation_check_time < 30:
             return
 
