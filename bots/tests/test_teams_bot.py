@@ -1902,8 +1902,14 @@ class TestTeamsBot(TransactionTestCase):
 
             # Let the bot finish joining the meeting
             allow_join.set()
-            time.sleep(2)
+
+            # Wait for the join flow to finish, including starting the screen recorder,
+            # so it doesn't race with cleanup at the end of the test
+            deadline = time.time() + 10
+            while controller.adapter.media_sending_enable_timestamp_ms is None and time.time() < deadline:
+                time.sleep(0.1)
             self.assertIsNotNone(controller.adapter.joined_at)
+            self.assertIsNotNone(controller.adapter.media_sending_enable_timestamp_ms)
 
             # Once the bot has joined the meeting, the check is skipped and does not raise
             controller.adapter.last_domain_allow_list_violation_check_time = 0
