@@ -6,8 +6,9 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from django.db import connection
-from django.test import TransactionTestCase
+from django.test import SimpleTestCase, TransactionTestCase
 from django.test.utils import tag
+from rest_framework import serializers
 
 from bots.bot_controller import BotController
 from bots.jitsi_bot_adapter import JitsiBotAdapter
@@ -27,6 +28,7 @@ from bots.models import (
     TranscriptionProviders,
     TranscriptionTypes,
 )
+from bots.serializers import CreateBotSerializer
 from bots.web_bot_adapter.ui_methods import UiIncorrectPasswordException
 
 
@@ -330,3 +332,12 @@ class TestJitsiMeetingEndedReportedOnce(unittest.TestCase):
         adapter.handle_websocket([json_frame({"type": "MeetingStatusChange", "change": "meeting_ended"})])
 
         adapter.send_message_callback.assert_not_called()
+
+
+@tag("jitsi_tests")
+class TestJitsiRoomSyncRejected(SimpleTestCase):
+    def test_room_sync_settings_are_rejected_for_jitsi(self):
+        serializer = CreateBotSerializer(data={"meeting_url": "https://meet.jit.si/attendee-test-room"})
+
+        with self.assertRaisesMessage(serializers.ValidationError, "Room sync is not supported for Jitsi."):
+            serializer.validate_room_sync_settings({"livekit": {"room_name": "attendee-test-room"}})

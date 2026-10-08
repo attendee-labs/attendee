@@ -1460,6 +1460,9 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
             if meeting_type == MeetingTypes.ZOOM and not use_zoom_web_adapter:
                 raise serializers.ValidationError("Room sync is not supported for Zoom when using the native SDK. Please set 'zoom_settings.sdk' to 'web' in the bot creation request.")
 
+            if meeting_type == MeetingTypes.JITSI:
+                raise serializers.ValidationError("Room sync is not supported for Jitsi.")
+
         return value
 
     transcription_settings = TranscriptionSettingsJSONField(
