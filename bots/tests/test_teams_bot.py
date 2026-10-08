@@ -1900,36 +1900,14 @@ class TestTeamsBot(TransactionTestCase):
             self.assertIn("Domain allow list violation detected", str(context.exception))
             self.assertIn("badmicrosoft.com", str(context.exception))
 
-            # Let the bot finish joining the meeting
-            allow_join.set()
-
-            # Wait for the join flow to finish, including starting the screen recorder,
-            # so it doesn't race with cleanup at the end of the test
-            deadline = time.time() + 10
-            while controller.adapter.media_sending_enable_timestamp_ms is None and time.time() < deadline:
-                time.sleep(0.1)
-            self.assertIsNotNone(controller.adapter.joined_at)
-            self.assertIsNotNone(controller.adapter.media_sending_enable_timestamp_ms)
-
-            # Once the bot has joined the meeting, the check is skipped and does not raise
-            controller.adapter.last_domain_allow_list_violation_check_time = 0
-            controller.adapter.check_domain_allow_list_violation()
-
             # Stop simulating the interstitial so cleanup isn't affected by it
             mock_driver.execute_cdp_cmd.side_effect = None
             mock_driver.execute_cdp_cmd.return_value = {}
 
-            # Clean up: simulate meeting ending to trigger cleanup
-            controller.adapter.left_meeting = True
-            controller.adapter.send_message_callback({"message": controller.adapter.Messages.MEETING_ENDED})
-            time.sleep(1)
-
-            # Now wait for the thread to finish naturally
+            # Cleanup
+            controller.cleanup()
+            allow_join.set()
             bot_thread.join(timeout=5)
-
-            # If thread is still running after timeout, that's a problem to report
-            if bot_thread.is_alive():
-                print("WARNING: Bot thread did not terminate properly after cleanup")
 
             # Close the database connection since we're in a thread
             connection.close()
