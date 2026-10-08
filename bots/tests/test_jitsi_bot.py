@@ -2,6 +2,7 @@ import json
 import struct
 import threading
 import time
+import unittest
 from unittest.mock import MagicMock, patch
 
 from django.db import connection
@@ -9,6 +10,7 @@ from django.test import TransactionTestCase
 from django.test.utils import tag
 
 from bots.bot_controller import BotController
+from bots.jitsi_bot_adapter import JitsiBotAdapter
 from bots.models import (
     Bot,
     BotEventManager,
@@ -299,3 +301,32 @@ class TestJitsiBot(TransactionTestCase):
         self.assertEqual(self.bot.state, BotStates.ENDED)
         leave_requested_event = self.bot.bot_events.get(event_type=BotEventTypes.LEAVE_REQUESTED)
         self.assertEqual(leave_requested_event.event_sub_type, BotEventSubTypes.LEAVE_REQUESTED_AUTO_LEAVE_SILENCE)
+
+
+@tag("jitsi_tests")
+class TestJitsiMeetingEndedReportedOnce(unittest.TestCase):
+    def build_adapter(self):
+        # Real JitsiBotAdapter methods without the long __init__; only what handle_meeting_ended reads is set.
+        adapter = JitsiBotAdapter.__new__(JitsiBotAdapter)
+        adapter.left_meeting = False
+        adapter.meeting_uuid = None
+        adapter.remover = None
+        adapter.send_message_callback = MagicMock()
+        return adapter
+
+    def test_conference_destroyed_then_conference_left_reports_once(self):
+        adapter = self.build_adapter()
+
+        adapter.handle_websocket([json_frame({"type": "MeetingStatusChange", "change": "meeting_ended"})])
+        adapter.handle_websocket([json_frame({"type": "MeetingStatusChange", "change": "meeting_ended"})])
+
+        adapter.send_message_callback.assert_called_once_with({"message": JitsiBotAdapter.Messages.MEETING_ENDED, "remover": None})
+
+    def test_conference_left_after_own_leave_is_ignored(self):
+        adapter = self.build_adapter()
+        # leave() already reported the end and set left_meeting before hangup's CONFERENCE_LEFT arrives
+        adapter.left_meeting = True
+
+        adapter.handle_websocket([json_frame({"type": "MeetingStatusChange", "change": "meeting_ended"})])
+
+        adapter.send_message_callback.assert_not_called()

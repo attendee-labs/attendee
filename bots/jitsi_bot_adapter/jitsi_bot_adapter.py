@@ -48,6 +48,15 @@ class JitsiBotAdapter(WebBotAdapter, JitsiUIMethods):
     def subclass_specific_initial_data_code(self):
         return "window.jitsiInitialData = {}"
 
+    def handle_meeting_ended(self, meeting_id):
+        # The payload reports CONFERENCE_LEFT as meeting_ended, which also fires after our own
+        # hangup in leave(), after a kick and right after conference.destroyed. Each of those
+        # already reported the end (and set left_meeting), so report it only once.
+        if self.left_meeting:
+            logger.info("Ignoring meeting_ended, the end of the meeting was already reported")
+            return
+        super().handle_meeting_ended(meeting_id)
+
     def subclass_specific_after_bot_joined_meeting(self):
         # Jitsi has no recording permission concept — recording can start right away
         self.after_bot_can_record_meeting()
