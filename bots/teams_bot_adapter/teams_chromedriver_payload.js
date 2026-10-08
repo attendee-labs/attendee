@@ -1,3 +1,95 @@
+(function () {
+    const CONV_HOST_REGEX = /(^|\.)teams\.microsoft\.(com|us)$/;
+    const CONV_PATH_REGEX = /\/conv\/[^/]+\/?$/;
+
+    let installed = false;
+    let done = false;
+
+    function isTargetUrl(input) {
+      try {
+        const raw = typeof input === 'string' ? input : (input instanceof Request ? input.url : String(input));
+        const url = new URL(raw, window.location.href);
+        return CONV_HOST_REGEX.test(url.hostname) && CONV_PATH_REGEX.test(url.pathname);
+      } catch (_) {
+        return false;
+      }
+    }
+
+    // Telemetry must never break the intercepted fetch.
+    function safeSendJson(message) {
+      try { window.ws?.sendJson(message); } catch (_) {}
+    }
+
+    function getMethod(input, init) {
+      if (init?.method) return String(init.method).toUpperCase();
+      if (input instanceof Request) return input.method.toUpperCase();
+      return 'GET';
+    }
+
+    // Returns the rewritten body string, or null if the body isn't a conversation join request.
+    function rewriteBody(bodyText) {
+      let parsed;
+      try { parsed = JSON.parse(bodyText); } catch (_) { return null; }
+      if (!parsed?.conversationRequest) return null;
+      const v = parsed.participantPropertyBag?.participantScreening?.value;
+      if (!v) return null;
+
+      const shouldOverrideIsBot = v.isBot === true && v.source === 'JoinShield';
+      if (shouldOverrideIsBot) {
+        v.isBot = false;
+      }
+      safeSendJson({
+        type: 'JoinShieldBypassActivated',
+        value: v,
+        wasIsBotOverridden: shouldOverrideIsBot,
+      });
+      return shouldOverrideIsBot ? JSON.stringify(parsed) : bodyText;
+    }
+
+    window.installJoinShieldBypass = function () {
+      if (done || installed) return true;
+      installed = true;
+
+      const previousFetch = window.fetch;
+
+      function uninstall() {
+        done = true;
+        // If something wrapped fetch after us, we can't unwind it; the wrapper becomes a passthrough.
+        if (window.fetch === joinShieldBypassFetch) {
+          window.fetch = previousFetch;
+        }
+      }
+
+      function joinShieldBypassFetch(input, init) {
+        if (done || getMethod(input, init) !== 'POST' || !isTargetUrl(input)) {
+          return previousFetch.apply(this, arguments);
+        }
+
+        // Only synchronous string bodies are rewritten; anything else (e.g. a Request object)
+        // passes through untouched so the original fetch timing and semantics are preserved.
+        if (typeof init?.body !== 'string') {
+          return previousFetch.apply(this, arguments);
+        }
+
+        let newBody = null;
+        try { newBody = rewriteBody(init.body); } catch (err) { reportError(err); }
+        if (newBody === null) return previousFetch.apply(this, arguments);
+        uninstall();
+        return previousFetch.call(this, input, { ...init, body: newBody });
+      }
+
+      function reportError(err) {
+        safeSendJson({
+          type: 'JoinShieldBypassError',
+          error: err?.message || String(err),
+        });
+      }
+
+      window.fetch = joinShieldBypassFetch;
+      return true;
+    };
+  })();
+
 (() => {
     let PAYLOAD = null;
   
