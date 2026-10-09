@@ -190,7 +190,7 @@ class GoogleMeetUIMethods:
         try:
             in_waiting_room = self.driver.execute_script("return window.userManager?.currentUserIsInWaitingRoom() ?? false;")
         except Exception as e:
-            logger.debug(f"Could not check participant roster for waiting room status: {e}")
+            logger.info(f"Could not check participant roster for waiting room status: {e}")
             return
 
         if in_waiting_room:
