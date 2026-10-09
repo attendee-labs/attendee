@@ -32,7 +32,6 @@ from bots.models import (
     ChatMessage,
     ChatMessageToOptions,
     Credentials,
-    CreditTransaction,
     MediaBlob,
     Organization,
     ParticipantEvent,
@@ -382,7 +381,6 @@ class TestZoomBot(TransactionTestCase):
 
         # Instead of setting environment variables directly:
         # os.environ["MINIO_RECORDING_STORAGE_BUCKET_NAME"] = "test-bucket"
-        # os.environ["CHARGE_CREDITS_FOR_BOTS"] = "true"
 
         # The settings have already been loaded, so we need to override them
         # These will be applied to all tests in this class
@@ -590,15 +588,6 @@ class TestZoomBot(TransactionTestCase):
         self.assertEqual(post_processing_completed_event.event_type, BotEventTypes.POST_PROCESSING_COMPLETED)
         self.assertEqual(post_processing_completed_event.old_state, BotStates.POST_PROCESSING)
         self.assertEqual(post_processing_completed_event.new_state, BotStates.ENDED)
-
-        # Verify that a charge was created
-        credit_transaction = CreditTransaction.objects.filter(bot=self.bot).first()
-        self.assertIsNotNone(credit_transaction, "No credit transaction was created for the bot")
-        self.assertEqual(credit_transaction.organization, self.organization)
-        self.assertLess(credit_transaction.centicredits_delta, 0, "Credit transaction should have a negative delta (charge)")
-        self.assertEqual(credit_transaction.centicredits_delta, -self.bot.centicredits_consumed(), "Credit transaction should have a negative delta (charge)")
-        self.assertEqual(credit_transaction.bot, self.bot)
-        self.assertEqual(credit_transaction.organization.centicredits, 500 - self.bot.centicredits_consumed())
 
         # Verify expected SDK calls
         mock_zoom_sdk_adapter.InitSDK.assert_called_once()
@@ -1489,7 +1478,7 @@ class TestZoomBot(TransactionTestCase):
         )
         self.assertEqual(
             could_not_join_event.metadata,
-            {"zoom_result_code": str(mock_zoom_sdk_adapter.AUTHRET_JWTTOKENWRONG), "bot_duration_seconds": 30, "credits_consumed": 0.01},
+            {"zoom_result_code": str(mock_zoom_sdk_adapter.AUTHRET_JWTTOKENWRONG), "bot_duration_seconds": 30},
         )
         self.assertIsNone(could_not_join_event.requested_bot_action_taken_at)
 
@@ -1592,7 +1581,7 @@ class TestZoomBot(TransactionTestCase):
         )
         self.assertEqual(
             could_not_join_event.metadata,
-            {"zoom_result_code": str(mock_zoom_sdk_adapter.SDKERR_INVALID_PARAMETER), "bot_duration_seconds": 30, "credits_consumed": 0.01},
+            {"zoom_result_code": str(mock_zoom_sdk_adapter.SDKERR_INVALID_PARAMETER), "bot_duration_seconds": 30},
         )
         self.assertIsNone(could_not_join_event.requested_bot_action_taken_at)
 
@@ -1687,7 +1676,7 @@ class TestZoomBot(TransactionTestCase):
             could_not_join_event.event_sub_type,
             BotEventSubTypes.COULD_NOT_JOIN_MEETING_NOT_STARTED_WAITING_FOR_HOST,
         )
-        self.assertEqual(could_not_join_event.metadata, {"bot_duration_seconds": 30, "credits_consumed": 0.01})
+        self.assertEqual(could_not_join_event.metadata, {"bot_duration_seconds": 30})
         self.assertIsNone(could_not_join_event.requested_bot_action_taken_at)
 
         # Verify expected SDK calls
@@ -1781,7 +1770,7 @@ class TestZoomBot(TransactionTestCase):
         )
         self.assertEqual(
             could_not_join_event.metadata,
-            {"zoom_result_code": str(mock_zoom_sdk_adapter.MeetingFailCode.MEETING_FAIL_UNABLE_TO_JOIN_EXTERNAL_MEETING), "bot_duration_seconds": 30, "credits_consumed": 0.01},
+            {"zoom_result_code": str(mock_zoom_sdk_adapter.MeetingFailCode.MEETING_FAIL_UNABLE_TO_JOIN_EXTERNAL_MEETING), "bot_duration_seconds": 30},
         )
         self.assertIsNone(could_not_join_event.requested_bot_action_taken_at)
 
@@ -2051,10 +2040,6 @@ class TestZoomBot(TransactionTestCase):
         self.assertEqual(self.recording.transcription_state, RecordingTranscriptionStates.COMPLETE)
         self.assertEqual(self.recording.transcription_failure_data, None)
 
-        # Verify that the bot did not incur charges
-        credit_transaction = CreditTransaction.objects.filter(bot=self.bot).first()
-        self.assertIsNone(credit_transaction, "A credit transaction was created for the bot")
-
     @patch(
         "bots.zoom_bot_adapter.video_input_manager.zoom",
         new_callable=create_mock_zoom_sdk,
@@ -2121,7 +2106,7 @@ class TestZoomBot(TransactionTestCase):
         )
         self.assertEqual(
             could_not_join_event.metadata,
-            {"zoom_result_code": str(mock_zoom_sdk_adapter.SDKError.SDKERR_INTERNAL_ERROR), "bot_duration_seconds": 30, "credits_consumed": 0.01},
+            {"zoom_result_code": str(mock_zoom_sdk_adapter.SDKError.SDKERR_INTERNAL_ERROR), "bot_duration_seconds": 30},
         )
         self.assertIsNone(could_not_join_event.requested_bot_action_taken_at)
 
@@ -2968,7 +2953,7 @@ class TestZoomBot(TransactionTestCase):
             could_not_join_event.event_sub_type,
             BotEventSubTypes.COULD_NOT_JOIN_UNABLE_TO_CONNECT_TO_MEETING,
         )
-        self.assertEqual(could_not_join_event.metadata, {"bot_duration_seconds": 30, "credits_consumed": 0.01})
+        self.assertEqual(could_not_join_event.metadata, {"bot_duration_seconds": 30})
         self.assertIsNone(could_not_join_event.requested_bot_action_taken_at)
 
         # Verify recording state and transcription state is not started

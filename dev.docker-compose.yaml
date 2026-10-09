@@ -1,6 +1,9 @@
 services:
   attendee-worker-local:
     build: ./
+    depends_on:
+      storage-init:
+        condition: service_completed_successfully
     volumes:
      - .:/attendee
     networks:
@@ -12,6 +15,7 @@ services:
       - ENABLE_CHROME_SANDBOX=false
       - STORAGE_PROTOCOL=minio
       - MINIO_ENDPOINT_URL=http://minio:9000
+      - MINIO_PUBLIC_ENDPOINT_URL=http://localhost:9000
       - MINIO_ACCESS_KEY=minioadmin
       - MINIO_SECRET_KEY=minioadmin123
       - MINIO_RECORDING_STORAGE_BUCKET_NAME=attendee-recordings
@@ -29,6 +33,7 @@ services:
       - DJANGO_SETTINGS_MODULE=attendee.settings.development
       - STORAGE_PROTOCOL=minio
       - MINIO_ENDPOINT_URL=http://minio:9000
+      - MINIO_PUBLIC_ENDPOINT_URL=http://localhost:9000
       - MINIO_ACCESS_KEY=minioadmin
       - MINIO_SECRET_KEY=minioadmin123
       - MINIO_RECORDING_STORAGE_BUCKET_NAME=attendee-recordings
@@ -37,6 +42,9 @@ services:
 
   attendee-app-local:
     build: ./
+    depends_on:
+      storage-init:
+        condition: service_completed_successfully
     volumes:
      - .:/attendee
     networks:
@@ -49,6 +57,7 @@ services:
       - DJANGO_SETTINGS_MODULE=attendee.settings.development
       - STORAGE_PROTOCOL=minio
       - MINIO_ENDPOINT_URL=http://minio:9000
+      - MINIO_PUBLIC_ENDPOINT_URL=http://localhost:9000
       - MINIO_ACCESS_KEY=minioadmin
       - MINIO_SECRET_KEY=minioadmin123
       - MINIO_RECORDING_STORAGE_BUCKET_NAME=attendee-recordings
@@ -68,6 +77,7 @@ services:
       - ENABLE_CHROME_SANDBOX=true
       - STORAGE_PROTOCOL=minio
       - MINIO_ENDPOINT_URL=http://minio:9000
+      - MINIO_PUBLIC_ENDPOINT_URL=http://localhost:9000
       - MINIO_ACCESS_KEY=minioadmin
       - MINIO_SECRET_KEY=minioadmin123
       - MINIO_RECORDING_STORAGE_BUCKET_NAME=attendee-recordings
@@ -101,7 +111,8 @@ services:
       - redis:/data/redis
 
   minio:
-    image: minio/minio:latest
+    # MinIO no longer publishes Docker images, Chainguard builds this one from the MinIO sources
+    image: chainguard/minio:latest
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -111,27 +122,28 @@ services:
     command: server /data --console-address ":9001"
     volumes:
       - minio_data:/data
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
     networks:
       - attendee_network
 
-  minio-init:
-    image: minio/mc:latest
-    depends_on:
-      - minio
-    entrypoint: >
-      /bin/sh -c "
-      until (mc alias set local http://minio:9000 minioadmin minioadmin123) do sleep 1; done;
-      mc mb -p local/attendee-recordings;
-      mc anonymous set none local/attendee-recordings;
-      exit 0;
-      "
+  storage-init:
+    build: ./
+    volumes:
+     - .:/attendee
     networks:
       - attendee_network
+    environment:
+      - POSTGRES_HOST=postgres
+      - REDIS_URL=redis://redis:6379/5
+      - DJANGO_SETTINGS_MODULE=attendee.settings.development
+      - STORAGE_PROTOCOL=minio
+      - MINIO_ENDPOINT_URL=http://minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin123
+      - MINIO_RECORDING_STORAGE_BUCKET_NAME=attendee-recordings
+    command: python manage.py create_storage_buckets
+    entrypoint: []
+    depends_on:
+      - minio
 
 networks:
   attendee_network:

@@ -11,7 +11,12 @@ logger = logging.getLogger(__name__)
 
 class StreamingUploader:
     def __init__(self, bucket, key, chunk_size=5242880):  # 5MB chunks
-        self.s3_client = boto3.client("s3", endpoint_url=os.getenv("MINIO_ENDPOINT_URL"))
+        self.s3_client = boto3.client(
+            "s3",
+            endpoint_url=os.getenv("MINIO_ENDPOINT_URL"),
+            aws_access_key_id=os.getenv("MINIO_ACCESS_KEY"),
+            aws_secret_access_key=os.getenv("MINIO_SECRET_KEY"),
+        )
         self.bucket = bucket
         self.key = key
         self.chunk_size = chunk_size

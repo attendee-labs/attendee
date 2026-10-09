@@ -18,6 +18,7 @@ def main():
     print(f"DJANGO_SECRET_KEY={django_key}")
     print("STORAGE_PROTOCOL=minio")
     print("MINIO_ENDPOINT_URL=http://minio:9000")
+    print("MINIO_PUBLIC_ENDPOINT_URL=http://localhost:9000")
     print("MINIO_ACCESS_KEY=minioadmin")
     print("MINIO_SECRET_KEY=minioadmin123")
     print("MINIO_RECORDING_STORAGE_BUCKET_NAME=attendee-recordings")

@@ -38,8 +38,8 @@ class ObjectAccessIntegrationTest(TransactionTestCase):
         """Set up test environment with multiple organizations, users, and projects"""
 
         # Create two organizations
-        self.organization_a = Organization.objects.create(name="Organization A", centicredits=10000)
-        self.organization_b = Organization.objects.create(name="Organization B", centicredits=10000)
+        self.organization_a = Organization.objects.create(name="Organization A")
+        self.organization_b = Organization.objects.create(name="Organization B")
 
         # Create users in Organization A
         self.admin_user_a = User.objects.create_user(username="admin_a", email="admin_a@example.com", password="testpassword123", role=UserRole.ADMIN, organization=self.organization_a)

@@ -21,8 +21,8 @@ class ZoomOAuthConnectionsApiObjectAccessIntegrationTest(TransactionTestCase):
         """Set up test environment with multiple organizations, projects, and API keys"""
 
         # Create two organizations
-        self.organization_a = Organization.objects.create(name="Organization A", centicredits=10000)
-        self.organization_b = Organization.objects.create(name="Organization B", centicredits=10000)
+        self.organization_a = Organization.objects.create(name="Organization A")
+        self.organization_b = Organization.objects.create(name="Organization B")
 
         # Create projects in each organization
         self.project_a = Project.objects.create(name="Project A", organization=self.organization_a)

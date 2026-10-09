@@ -15,7 +15,7 @@ class ProjectBotsMetadataSearchTest(TransactionTestCase):
     """
 
     def setUp(self):
-        self.organization = Organization.objects.create(name="Org", centicredits=10000)
+        self.organization = Organization.objects.create(name="Org")
         self.user = User.objects.create_user(
             username="admin",
             email="admin@example.com",

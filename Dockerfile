@@ -1,4 +1,4 @@
-FROM ubuntu:22.04 AS base
+FROM --platform=linux/amd64 ubuntu:22.04 AS base
 
 SHELL ["/bin/bash", "-c"]
 
@@ -48,19 +48,18 @@ RUN apt-get update  \
 
 # Install Chrome dependencies
 RUN apt-get install -y xvfb xauth x11-xkb-utils xfonts-100dpi xfonts-75dpi xfonts-scalable xfonts-cyrillic x11-apps libvulkan1 fonts-liberation xdg-utils wget
-# Install Google Chrome from the official repository (supports both amd64 and arm64)
-RUN wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg \
-    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list \
-    && apt-get update \
-    && apt-get install -y google-chrome-stable
+# Install a specific version of Chrome.
+RUN wget --progress=dot:giga --timeout=30 --tries=3 https://build-assets.attendee.dev/google-chrome/pool/main/g/google-chrome-stable/google-chrome-stable_134.0.6998.88-1_amd64.deb
+# Verify that the package is correct, since this is a mirror.
+RUN echo "df557edb3d24d8dcaff9557d80733b42afb6626685200d3f34a3b6f528065cad  google-chrome-stable_134.0.6998.88-1_amd64.deb" | sha256sum -c -
+RUN apt-get install -y ./google-chrome-stable_134.0.6998.88-1_amd64.deb
 
-# Install ChromeDriver matching the installed Chrome version
-RUN CHROME_VERSION=$(google-chrome --version | awk '{print $3}') \
-    && wget -q "https://storage.googleapis.com/chrome-for-testing-public/${CHROME_VERSION}/linux64/chromedriver-linux64.zip" -O /tmp/chromedriver.zip \
-    && unzip /tmp/chromedriver.zip -d /tmp/ \
-    && mv /tmp/chromedriver-linux64/chromedriver /usr/local/bin/chromedriver \
+# Install a specific version of ChromeDriver.
+RUN wget -q https://storage.googleapis.com/chrome-for-testing-public/134.0.6998.88/linux64/chromedriver-linux64.zip \
+    && unzip chromedriver-linux64.zip \
+    && mv chromedriver-linux64/chromedriver /usr/local/bin/chromedriver \
     && chmod +x /usr/local/bin/chromedriver \
-    && rm -rf /tmp/chromedriver*
+    && rm -rf chromedriver-linux64 chromedriver-linux64.zip
 
 # Install ALSA
 RUN apt-get update && apt-get install -y libasound2 libasound2-plugins alsa alsa-utils alsa-oss

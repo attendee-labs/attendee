@@ -108,7 +108,7 @@ class BotSsoViewsIntegrationTest(TransactionTestCase):
     def setUp(self):
         """Set up test environment"""
         # Create organization, project, and bot
-        self.organization = Organization.objects.create(name="Test Organization", centicredits=10000)
+        self.organization = Organization.objects.create(name="Test Organization")
         self.project = Project.objects.create(name="Test Project", organization=self.organization)
         self.bot = Bot.objects.create(
             project=self.project,

@@ -1,4 +1,3 @@
-from .autopay_charge_task import autopay_charge
 from .deliver_webhook_task import deliver_webhook
 from .launch_adhoc_bot_task import launch_adhoc_bot
 from .launch_scheduled_bot_task import launch_scheduled_bot
@@ -22,7 +21,6 @@ __all__ = [
     "launch_scheduled_bot",
     "launch_adhoc_bot",
     "sync_calendar",
-    "autopay_charge",
     "process_async_transcription",
     "sync_zoom_oauth_connection",
     "refresh_zoom_oauth_connection",

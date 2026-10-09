@@ -202,9 +202,6 @@
                     {% endif %}
                 </span>
             </p>
-            {% if credits_consumed %}
-                <p><strong>Credits used:</strong> {{ credits_consumed|floatformat:2|default:"0.00" }}</p>
-            {% endif %}
             {% if bot.deduplication_key %}
                 <p><strong>Deduplication Key:</strong> {{ bot.deduplication_key }}</p>
             {% endif %}

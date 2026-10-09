@@ -1,7 +1,6 @@
 import hashlib
 import json
 import logging
-import math
 import os
 import secrets
 import string
@@ -20,7 +19,7 @@ from django.utils.crypto import get_random_string
 
 from accounts.models import Organization, User, UserRole
 from bots.bot_pod_creator.bot_pod_spec import BotPodSpecType
-from bots.storage import StorageAlias, download_blob_from_remote_storage, remote_storage_url
+from bots.storage import StorageAlias, download_blob_from_remote_storage, public_remote_storage_url, remote_storage_url
 from bots.webhook_utils import trigger_webhook
 
 logger = logging.getLogger(__name__)
@@ -1672,12 +1671,6 @@ class BotEventManager:
         return state in BotStates.post_meeting_states()
 
     @classmethod
-    def bot_event_type_should_incur_charges(cls, event_type: int):
-        if event_type == BotEventTypes.FATAL_ERROR:
-            return False
-        return True
-
-    @classmethod
     def get_post_meeting_states_q_filter(cls):
         """Returns a Q object to filter for post meeting states"""
         q_filter = models.Q()
@@ -1763,7 +1756,7 @@ class BotEventManager:
         if bot.join_at.isoformat() != event_metadata["join_at"]:
             raise ValidationError(f"join_at in event_metadata for bot {bot.object_id} for transition to state {BotStates.state_to_api_code(new_state)} is different from the join_at in the database for bot {bot.object_id}")
 
-    # This method handles sets the state for recordings and credits for when the bot transitions to a post meeting state
+    # This method handles sets the state for recordings for when the bot transitions to a post meeting state
     # It returns a dictionary of additional event metadata that should be added to the event
     @classmethod
     def after_transition_to_post_meeting_state(cls, bot: Bot, event_type: BotEventTypes, new_state: BotStates) -> dict:
@@ -1874,7 +1867,7 @@ class BotEventManager:
                     # If we transitioned to a post meeting state
                     transitioned_to_post_meeting_state = cls.is_post_meeting_state(new_state) and not cls.is_post_meeting_state(old_state)
                     if transitioned_to_post_meeting_state:
-                        # This helper method handles setting the state for recordings and credits for when the bot transitions to a post meeting state
+                        # This helper method handles setting the state for recordings for when the bot transitions to a post meeting state
                         # It returns a dictionary of additional event metadata that should be added to the event
                         additional_event_metadata = cls.after_transition_to_post_meeting_state(bot=bot, event_type=event_type, new_state=new_state)
                         if additional_event_metadata:
@@ -2199,15 +2192,7 @@ class Recording(models.Model):
         if not self.file.name:
             return None
 
-        if settings.STORAGE_PROTOCOL == "azure":
-            return self.file.url
-
-        # Generate a temporary signed URL that expires in 30 minutes (1800 seconds)
-        return self.file.storage.bucket.meta.client.generate_presigned_url(
-            "get_object",
-            Params={"Bucket": self.file.storage.bucket_name, "Key": self.file.name},
-            ExpiresIn=1800,
-        )
+        return public_remote_storage_url(self.file)
 
     OBJECT_ID_PREFIX = "rec_"
     object_id = models.CharField(max_length=32, unique=True, editable=False)
@@ -2930,15 +2915,7 @@ class BotDebugScreenshot(models.Model):
         if not self.file.name:
             return None
 
-        if settings.STORAGE_PROTOCOL == "azure":
-            return self.file.url
-
-        # Generate a temporary signed URL that expires in 30 minutes (1800 seconds)
-        return self.file.storage.bucket.meta.client.generate_presigned_url(
-            "get_object",
-            Params={"Bucket": self.file.storage.bucket_name, "Key": self.file.name},
-            ExpiresIn=1800,
-        )
+        return public_remote_storage_url(self.file)
 
     def __str__(self):
         return f"Debug Screenshot {self.object_id} for event {self.bot_event}"

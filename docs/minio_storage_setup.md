@@ -44,16 +44,21 @@ To use MinIO as your storage backend, you need to set the following environment 
    export MINIO_AUDIO_CHUNK_STORAGE_BUCKET_NAME=attendee-audio-chunks
    ```
 
+2. **MINIO_PUBLIC_ENDPOINT_URL**: URL used to sign the download links returned by the API (defaults to MINIO_ENDPOINT_URL). Set it when MINIO_ENDPOINT_URL is only reachable inside your network, e.g. `http://minio:9000` in Docker
+   ```bash
+   export MINIO_PUBLIC_ENDPOINT_URL=http://localhost:9000
+   ```
+
 ## Example Docker Compose Configuration
 
-Here's an example of how to configure MinIO with Docker Compose:
+Here's an example of how to configure MinIO with Docker Compose. MinIO no longer publishes Docker images, so this uses the image Chainguard builds from the MinIO sources. It runs as a non-root user (uid 65532), so a volume created by the old `minio/minio` image needs `chown -R 65532:65532` first.
 
 ```yaml
 version: '3.8'
 
 services:
   minio:
-    image: minio/minio:latest
+    image: chainguard/minio:latest
     ports:
       - "9000:9000"   # API S3
       - "9001:9001"   # Console web
@@ -63,11 +68,6 @@ services:
     command: server /data --console-address ":9001"
     volumes:
       - minio_data:/data
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
 
   attendee:
     image: attendee
@@ -93,7 +93,7 @@ Before starting Attendee, make sure to create the required buckets in MinIO:
 2. Create the buckets specified in your environment variables
 3. Ensure the access key and secret key have proper permissions
 
-You can also use the `minio-init` service in the Docker Compose stack to create the bucket automatically on first run.
+You can also run `python manage.py create_storage_buckets`, which waits for the server and creates the missing buckets. The `storage-init` service in `dev.docker-compose.yaml` runs it on every start.
 
 ## SSL/TLS Configuration
 

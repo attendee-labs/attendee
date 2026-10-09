@@ -252,6 +252,8 @@ LOG_FORMATTERS = {
 STORAGE_PROTOCOL = os.getenv("STORAGE_PROTOCOL", "minio")
 RECORDING_STORAGE_BUCKET_NAME = os.getenv("MINIO_RECORDING_STORAGE_BUCKET_NAME")
 AZURE_RECORDING_STORAGE_CONTAINER_NAME = os.getenv("AZURE_RECORDING_STORAGE_CONTAINER_NAME")
+# Endpoint used to sign download URLs handed out to clients, when MINIO_ENDPOINT_URL is not reachable from outside
+MINIO_PUBLIC_ENDPOINT_URL = os.getenv("MINIO_PUBLIC_ENDPOINT_URL")
 
 # Audio chunk storage settings
 USE_REMOTE_STORAGE_FOR_AUDIO_CHUNKS = os.getenv("USE_REMOTE_STORAGE_FOR_AUDIO_CHUNKS", "false") == "true"
@@ -302,9 +304,10 @@ STORAGES = {
         "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
     },
 }
-S3_SIGNATURE_VERSION = "s3v4"
+# These names are read by django-storages and must keep their AWS_ prefix
+AWS_S3_SIGNATURE_VERSION = "s3v4"
 if os.getenv("USE_IRSA_FOR_S3_STORAGE", "false") == "true":
-    S3_ADDRESSING_STYLE = "virtual"
+    AWS_S3_ADDRESSING_STYLE = "virtual"
 
 
 BOT_POD_NAMESPACE = os.getenv("BOT_POD_NAMESPACE", "attendee")

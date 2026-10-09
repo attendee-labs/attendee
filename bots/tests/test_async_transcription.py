@@ -49,7 +49,6 @@ class AsyncTranscriptionTestCase(TransactionTestCase):
         # Create organization and project
         self.organization = Organization.objects.create(
             name="Test Org",
-            centicredits=10000,
             is_async_transcription_enabled=True,
         )
         self.project = Project.objects.create(name="Test Project", organization=self.organization)

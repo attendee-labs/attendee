@@ -26,7 +26,6 @@ from bots.models import (
     BotEventTypes,
     BotStates,
     Credentials,
-    CreditTransaction,
     Organization,
     Project,
     Recording,
@@ -85,7 +84,6 @@ class TestGoogleMeetBot(TransactionTestCase):
 
         # Set required environment variables
         os.environ["MINIO_RECORDING_STORAGE_BUCKET_NAME"] = "test-bucket"
-        os.environ["CHARGE_CREDITS_FOR_BOTS"] = "false"
 
     def setUp(self):
         # Mock element_to_be_clickable to always return a truthy mock element
@@ -950,10 +948,6 @@ class TestGoogleMeetBot(TransactionTestCase):
 
             # Verify WebSocket media sending was enabled and performance.timeOrigin was queried
             mock_driver.execute_script.assert_has_calls([call("window.ws?.enableMediaSending();"), call("return performance.timeOrigin;")])
-
-            # Verify that no charge was created (since the env var is not set in this test suite)
-            credit_transaction = CreditTransaction.objects.filter(bot=self.bot).first()
-            self.assertIsNone(credit_transaction, "A credit transaction was created for the bot")
 
             # Verify file uploader was used
             mock_uploader.upload_file.assert_called_once()

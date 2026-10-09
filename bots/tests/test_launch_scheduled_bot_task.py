@@ -5,7 +5,7 @@ from django.test import TestCase
 from django.utils import timezone as django_timezone
 
 from accounts.models import Organization
-from bots.models import Bot, BotEventSubTypes, BotEventTypes, BotStates, Project
+from bots.models import Bot, BotStates, Project
 from bots.tasks.launch_scheduled_bot_task import launch_scheduled_bot
 
 
@@ -14,7 +14,6 @@ class LaunchScheduledBotTaskTestCase(TestCase):
         """Set up test data"""
         self.organization = Organization.objects.create(
             name="Test Organization",
-            centicredits=10000,  # 100 credits
         )
         self.project = Project.objects.create(name="Test Project", organization=self.organization)
 
@@ -50,24 +49,6 @@ class LaunchScheduledBotTaskTestCase(TestCase):
             # Verify the bot state didn't change
             self.bot.refresh_from_db()
             self.assertEqual(self.bot.state, BotStates.READY)
-
-            # Verify launch_bot was not called
-            mock_launch_bot.assert_not_called()
-
-    def test_bot_organization_out_of_credits(self):
-        """Test that task exits early if bot's organization is out of credits"""
-        self.organization.centicredits = -1000
-        self.organization.save()
-
-        with patch("bots.tasks.launch_scheduled_bot_task.launch_bot") as mock_launch_bot:
-            # Execute the task
-            launch_scheduled_bot(self.bot.id, self.original_join_at.isoformat())
-
-            # Verify the bot state didn't change
-            self.bot.refresh_from_db()
-            self.assertEqual(self.bot.state, BotStates.FATAL_ERROR)
-            self.assertEqual(self.bot.bot_events.last().event_type, BotEventTypes.FATAL_ERROR)
-            self.assertEqual(self.bot.bot_events.last().event_sub_type, BotEventSubTypes.FATAL_ERROR_OUT_OF_CREDITS)
 
             # Verify launch_bot was not called
             mock_launch_bot.assert_not_called()

@@ -49,7 +49,6 @@ from bots.web_bot_adapter.ui_methods import UiLoginRequiredException, UiRetryabl
 @override_settings(
     STORAGE_PROTOCOL="azure",
     AZURE_RECORDING_STORAGE_CONTAINER_NAME="test-container",
-    CHARGE_CREDITS_FOR_BOTS=False,
     STORAGES={  # build the exact structure your code expects
         "default": {
             "BACKEND": "storages.backends.azure_storage.AzureStorage",
@@ -92,7 +91,6 @@ class TestGoogleMeetBot2(TransactionTestCase):
         # Set required environment variables
         os.environ["STORAGE_PROTOCOL"] = "azure"
         os.environ["AZURE_RECORDING_STORAGE_CONTAINER_NAME"] = "test-container"
-        os.environ["CHARGE_CREDITS_FOR_BOTS"] = "false"
 
     def setUp(self):
         # Mock element_to_be_clickable to always return a truthy mock element

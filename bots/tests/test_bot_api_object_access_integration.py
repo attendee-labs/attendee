@@ -40,8 +40,8 @@ class BotApiObjectAccessIntegrationTest(TransactionTestCase):
         """Set up test environment with multiple organizations, projects, and API keys"""
 
         # Create two organizations
-        self.organization_a = Organization.objects.create(name="Organization A", centicredits=10000, is_async_transcription_enabled=True)
-        self.organization_b = Organization.objects.create(name="Organization B", centicredits=10000, is_async_transcription_enabled=True)
+        self.organization_a = Organization.objects.create(name="Organization A", is_async_transcription_enabled=True)
+        self.organization_b = Organization.objects.create(name="Organization B", is_async_transcription_enabled=True)
 
         # Create projects in each organization
         self.project_a = Project.objects.create(name="Project A", organization=self.organization_a)

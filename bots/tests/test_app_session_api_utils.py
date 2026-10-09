@@ -116,17 +116,6 @@ class TestCreateAppSession(TestCase):
         self.assertIn("Deduplication key already in use", error2["error"])
         self.assertEqual(Bot.objects.count(), 1)
 
-    def test_create_app_session_out_of_credits(self):
-        self.organization.centicredits = -200
-        self.organization.save()
-        self.assertTrue(self.organization.out_of_credits())
-
-        app_session, error = create_app_session(data={"zoom_rtms": zoom_rtms_data()}, source=BotCreationSource.API, project=self.project)
-
-        self.assertIsNone(app_session)
-        self.assertEqual(error, {"error": "Organization has run out of credits. Please add more credits in the Account -> Billing page."})
-        self.assertEqual(Bot.objects.count(), 0)
-
     @patch("bots.models.Project.concurrent_bots_limit")
     def test_create_app_session_respects_concurrency_limit(self, mock_limit):
         """A connecting app session counts toward the project's concurrent bot limit."""

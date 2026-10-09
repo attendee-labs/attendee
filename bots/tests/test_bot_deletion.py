@@ -140,34 +140,6 @@ class TestBotDeletion(TransactionTestCase):
         self.assertEqual(BotDebugScreenshot.objects.filter(bot_event__bot=self.bot1).count(), 1)
         self.assertEqual(WebhookSubscription.objects.filter(bot=self.bot1).count(), 1)
 
-    def test_hard_delete_bot_with_credit_transactions_fails(self):
-        """Test that hard deleting a bot fails when there are CreditTransaction references (PROTECT)"""
-        from django.db.models import ProtectedError
-
-        from bots.models import CreditTransactionManager
-
-        # Create a credit transaction for bot1
-        CreditTransactionManager.create_transaction(organization=self.organization, centicredits_delta=-100, bot=self.bot1, description="Test transaction")
-
-        # Verify credit transaction exists
-        self.assertEqual(self.bot1.credit_transactions.count(), 1)
-
-        # Remove utterances first to avoid that PROTECT constraint
-        Utterance.objects.filter(recording__bot=self.bot1).delete()
-
-        # Try to hard delete bot1 - this should fail due to CreditTransaction -> Bot PROTECT constraint
-        with self.assertRaises(ProtectedError):
-            self.bot1.delete()
-
-        # Verify bot1 still exists
-        self.assertTrue(Bot.objects.filter(id=self.bot1.id).exists())
-
-        # Verify credit transaction still exists
-        self.assertEqual(self.bot1.credit_transactions.count(), 1)
-
-        # Verify webhook subscription still exists
-        self.assertEqual(WebhookSubscription.objects.filter(bot=self.bot1).count(), 1)
-
     def test_hard_delete_clean_bot_success(self):
         """Test that hard deleting a bot succeeds when there are no PROTECT constraints"""
         # Create a clean bot without utterances or credit transactions
@@ -236,7 +208,6 @@ class TestBotDeletion(TransactionTestCase):
         # - WebhookSubscription (bot -> CASCADE)
 
         # PROTECT relationships (will prevent bot deletion):
-        # - CreditTransaction (bot -> PROTECT)
         # - Utterance (participant -> PROTECT, so indirectly protects bot)
 
         # SET_NULL relationships (will be set to NULL when bot is deleted):

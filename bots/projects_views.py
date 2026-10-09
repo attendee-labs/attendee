@@ -939,7 +939,6 @@ class ProjectBotDetailView(LoginRequiredMixin, ProjectUrlContextMixin, View):
                 "participants": participants,
                 "ParticipantEventTypes": ParticipantEventTypes,
                 "WebhookDeliveryAttemptStatus": WebhookDeliveryAttemptStatus,
-                "credits_consumed": -sum([t.credits_delta() for t in bot.credit_transactions.all()]) if bot.credit_transactions.exists() else None,
                 "resource_snapshots": resource_snapshots,
                 "max_ram_usage": max_ram_usage,
                 "max_cpu_usage": max_cpu_usage,

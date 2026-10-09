@@ -13,7 +13,7 @@ class AdminRoleIntegrationTest(TransactionTestCase):
     def setUp(self):
         """Set up test environment"""
         # Create test organization
-        self.organization = Organization.objects.create(name="Test Organization", centicredits=10000)
+        self.organization = Organization.objects.create(name="Test Organization")
 
         # Create admin user
         self.admin_user = User.objects.create_user(username="admin", email="admin@example.com", password="testpassword123", role=UserRole.ADMIN)
@@ -101,22 +101,6 @@ class AdminRoleIntegrationTest(TransactionTestCase):
         self.project.refresh_from_db()
         self.assertEqual(self.project.name, original_name)
 
-    def test_project_billing_admin_access(self):
-        """Test that admin users can access billing"""
-        self.client.force_login(self.admin_user)
-
-        response = self.client.get(reverse("bots:project-billing", kwargs={"object_id": self.project.object_id}))
-
-        self.assertEqual(response.status_code, 200)
-
-    def test_project_billing_non_admin_denied(self):
-        """Test that non-admin users cannot access billing"""
-        self.client.force_login(self.regular_user)
-
-        response = self.client.get(reverse("bots:project-billing", kwargs={"object_id": self.project.object_id}))
-
-        self.assertEqual(response.status_code, 403)
-
     def test_project_team_view_admin_access(self):
         """Test that admin users can access team management"""
         self.client.force_login(self.admin_user)
@@ -189,7 +173,6 @@ class AdminRoleIntegrationTest(TransactionTestCase):
         admin_endpoints = [
             ("bots:create-project", {}),
             ("bots:project-project", {"object_id": self.project.object_id}),
-            ("bots:project-billing", {"object_id": self.project.object_id}),
             ("bots:project-team", {"object_id": self.project.object_id}),
             ("bots:invite-user", {"object_id": self.project.object_id}),
         ]
