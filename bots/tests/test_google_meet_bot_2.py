@@ -2322,6 +2322,7 @@ class TestGoogleMeetBot2(TransactionTestCase):
         self.assertEqual(could_not_join_event.new_state, BotStates.FATAL_ERROR)
         self.assertEqual(could_not_join_event.event_sub_type, BotEventSubTypes.COULD_NOT_JOIN_MEETING_MEETING_ENDED_BEFORE_BOT_JOINED)
 
+    @override_settings(ENABLE_WAITING_ROOM_STATE_FOR_WEB_BOTS=True)
     @patch("bots.tasks.restart_bot_pod_task.restart_bot_pod.apply_async")
     @patch("bots.models.Bot.create_debug_recording", return_value=False)
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")

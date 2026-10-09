@@ -549,6 +549,9 @@ class WebBotAdapter(BotAdapter):
         if self.sent_bot_put_in_waiting_room_message:
             return
         self.sent_bot_put_in_waiting_room_message = True
+        if not settings.ENABLE_WAITING_ROOM_STATE_FOR_WEB_BOTS:
+            logger.info("Not sending BOT_PUT_IN_WAITING_ROOM message because ENABLE_WAITING_ROOM_STATE_FOR_WEB_BOTS is not enabled")
+            return
         logger.info("Sending BOT_PUT_IN_WAITING_ROOM message")
         self.send_message_callback({"message": self.Messages.BOT_PUT_IN_WAITING_ROOM})
 
