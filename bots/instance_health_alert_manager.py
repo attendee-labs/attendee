@@ -23,6 +23,8 @@ class InstanceHealthAlertTypes(str, Enum):
     DATABASE_SIZE_EXCEEDS_THRESHOLD = "database_size_exceeds_threshold"
     CELERY_WORKERS_DOWN = "celery_workers_down"
     CELERY_QUEUE_NOT_DRAINING = "celery_queue_not_draining"
+    BOT_FATAL_ERROR_COUNT_EXCEEDS_THRESHOLD = "bot_fatal_error_count_exceeds_threshold"
+    BOT_FATAL_ERROR_PERCENTAGE_EXCEEDS_THRESHOLD = "bot_fatal_error_percentage_exceeds_threshold"
 
 
 DEFAULT_ALERT_STATE = {"active": False}
@@ -46,7 +48,20 @@ DEFAULT_ALERT_SETTINGS = {
         "enabled": True,
         "threshold": QUEUE_NOT_DRAINING_CONFIRMED_AFTER_SECONDS,
     },
+    InstanceHealthAlertTypes.BOT_FATAL_ERROR_COUNT_EXCEEDS_THRESHOLD: {
+        "enabled": True,
+        "threshold": 5,
+    },
+    InstanceHealthAlertTypes.BOT_FATAL_ERROR_PERCENTAGE_EXCEEDS_THRESHOLD: {
+        "enabled": True,
+        "threshold": 10,
+    },
 }
+
+# The percentage alert stays quiet until at least this many bots have finished inside
+# the window, so that one failure out of two bots on a quiet instance is not a 50%
+# alert.
+BOT_FATAL_ERROR_PERCENTAGE_EXCEEDS_THRESHOLD_MINIMUM_FINISHED_BOTS_COUNT = 5
 
 # Presentation metadata for each alert, kept alongside the defaults so the settings UI
 # and its form parsing share one source of truth. Thresholds are stored raw (a
@@ -81,6 +96,20 @@ ALERT_METADATA = {
         "step": "1",
         "display_factor": 60,
     },
+    InstanceHealthAlertTypes.BOT_FATAL_ERROR_COUNT_EXCEEDS_THRESHOLD: {
+        "label": "Bots with fatal errors",
+        "description": "Fires when this many bots have hit a fatal error in the last 30 minutes.",
+        "unit_label": "bots",
+        "step": "1",
+        "display_factor": 1,
+    },
+    InstanceHealthAlertTypes.BOT_FATAL_ERROR_PERCENTAGE_EXCEEDS_THRESHOLD: {
+        "label": "Share of bots with fatal errors",
+        "description": f"Fires when this share of the bots that finished in the last 30 minutes hit a fatal error. Needs at least {BOT_FATAL_ERROR_PERCENTAGE_EXCEEDS_THRESHOLD_MINIMUM_FINISHED_BOTS_COUNT} finished bots.",
+        "unit_label": "%",
+        "step": "1",
+        "display_factor": 1,
+    },
 }
 
 
@@ -100,6 +129,19 @@ def _alert_is_firing(alert, config):
 
     if alert is InstanceHealthAlertTypes.CELERY_QUEUE_NOT_DRAINING:
         return celery_queue_has_not_decreased_for(config["threshold"])
+
+    if alert is InstanceHealthAlertTypes.BOT_FATAL_ERROR_COUNT_EXCEEDS_THRESHOLD:
+        fatal_errors, _ = _latest_reading("bot_fatal_errors")
+        count = (fatal_errors or {}).get("fatal_error_bot_count")
+        return count is not None and count >= config["threshold"]
+
+    if alert is InstanceHealthAlertTypes.BOT_FATAL_ERROR_PERCENTAGE_EXCEEDS_THRESHOLD:
+        fatal_errors, _ = _latest_reading("bot_fatal_errors")
+        fatal_errors = fatal_errors or {}
+        if (fatal_errors.get("finished_bot_count") or 0) < BOT_FATAL_ERROR_PERCENTAGE_EXCEEDS_THRESHOLD_MINIMUM_FINISHED_BOTS_COUNT:
+            return False
+        percentage = fatal_errors.get("fatal_error_percentage")
+        return percentage is not None and percentage >= config["threshold"]
 
     return False
 

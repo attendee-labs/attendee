@@ -108,6 +108,8 @@ This document lists all supported environment variables for the Attendee applica
 |----------|------|---------|-------------|
 | `DISABLE_SIGNUP` | Boolean | `false` | Disable new user sign-ups. When `true`, only existing users can log in. |
 | `DJANGO_SSL_REQUIRE` | Boolean | `true` | Require HTTPS connections in production. Set to `false` for local development. |
+| `ENABLE_GRANULAR_PERMISSIONS` | Boolean | `false` | Expose granular per-project permissions (viewing recording content, managing API keys) in the team management UI. When `false`, non-admin users are granted both permissions for every project they can access. |
+| `ENABLE_VIEWING_RECORDING_CONTENT` | Boolean | `true` | Allow viewing recording content (recordings, transcripts, chat messages) in the dashboard. When `false`, no user can view recording content, including admins. |
 
 ---
 
@@ -151,6 +153,7 @@ This document lists all supported environment variables for the Attendee applica
 | `DELIVER_WEBHOOK_TASK_MAX_RETRIES` | Integer | (Uses MAX_WEBHOOK_DELIVERY_ATTEMPTS) | Maximum number of times the webhook delivery task can be retried. Can differ from `MAX_WEBHOOK_DELIVERY_ATTEMPTS` for rate limiting or other retry scenarios. |
 | `GLOBAL_WEBHOOK_DELIVERIES_PER_SECOND_RATE_LIMIT` | Integer | (None) | Global rate limit for webhook deliveries per second. If not set, no rate limiting is applied. |
 | `GLOBAL_WEBHOOK_RATE_LIMIT_RETRY_DELAY_SECONDS` | Integer | `3` | Delay (in seconds) before retrying webhook delivery when rate limit is hit. |
+| `DELIVER_WEBHOOK_REQUEST_TIMEOUT` | Float | `10` | Seconds to wait for the webhook destination to respond before the delivery attempt counts as failed. |
 | `DELIVER_WEBHOOK_VERIFY_SSL` | Boolean | `true` | Verify SSL certificates when delivering webhooks. Set to `false` for self-signed certificates (not recommended for production). |
 
 ---

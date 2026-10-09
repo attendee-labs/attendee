@@ -63,7 +63,7 @@ def url_is_allowed_for_voice_agent(url):
 
 def get_openai_model_enum():
     """Get allowed OpenAI models including custom env var if set"""
-    default_models = ["gpt-4o-transcribe", "gpt-4o-mini-transcribe", "gpt-4o-transcribe-diarize"]
+    default_models = ["gpt-4o-transcribe", "gpt-4o-mini-transcribe", "gpt-4o-transcribe-diarize", "gpt-transcribe"]
     custom_model = os.getenv("OPENAI_MODEL_NAME")
     if custom_model and custom_model not in default_models:
         return default_models + [custom_model]
@@ -366,6 +366,11 @@ TRANSCRIPTION_SETTINGS_SCHEMA = {
                     "type": "string",
                     "enum": ["ar-sa", "ar-ae", "bg-bg", "ca-es", "zh-cn", "zh-hk", "zh-tw", "hr-hr", "cs-cz", "da-dk", "nl-be", "nl-nl", "en-au", "en-ca", "en-in", "en-nz", "en-gb", "en-us", "et-ee", "fi-fi", "fr-ca", "fr-fr", "de-de", "de-ch", "el-gr", "he-il", "hi-in", "hu-hu", "id-id", "it-it", "ja-jp", "ko-kr", "lv-lv", "lt-lt", "nb-no", "pl-pl", "pt-br", "pt-pt", "ro-ro", "ru-ru", "sr-rs", "sk-sk", "sl-si", "es-mx", "es-es", "sv-se", "th-th", "tr-tr", "uk-ua", "vi-vn", "cy-gb"],
                     "description": "The language code for Teams closed captions (e.g. 'en-us'). This will change the closed captions language for everyone in the meeting, not just the bot. See here for available languages and codes: https://docs.google.com/spreadsheets/d/1F-1iLJ_4btUZJkZcD2m5sF3loqGbB0vTzgOubwQTb5o/edit?usp=sharing",
+                },
+                "teams_language_enforcement_duration_seconds": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Number of seconds after the bot sets the Teams closed captions language during which it will change the language back if another participant changes it. This is needed because in Teams the closed captions language is a single setting shared by everyone in the meeting rather than set per participant, so any participant can change the language the bot is transcribing in. Only relevant if teams_language is set. Defaults to 0, meaning the language is never changed back.",
                 },
                 "zoom_language": {
                     "type": "string",
@@ -826,6 +831,10 @@ class TeamsSettingsJSONField(serializers.JSONField):
                 "additionalProperties": False,
                 "description": "The user ID of the Zoom OAuth Connection to use for the onbehalf token.",
             },
+            "webinar_user_email": {
+                "type": "string",
+                "description": "The email address to use when joining a Zoom webinar. When this is set, the bot joins using the webinar flow (accepting a promotion to panelist if the host offers one). Leave unset for regular meetings.",
+            },
         },
         "required": [],
         "additionalProperties": False,
@@ -1138,6 +1147,51 @@ class VoiceAgentSettingsJSONField(serializers.JSONField):
     pass
 
 
+ROOM_SYNC_SETTINGS_SCHEMA = {
+    "type": "object",
+    "description": "Settings for syncing meeting media and participants with an external real-time room. Currently only LiveKit is supported.",
+    "properties": {
+        "livekit": {
+            "type": "object",
+            "description": "LiveKit connection details. The LiveKit server URL is configured as part of the project's LiveKit credentials.",
+            "properties": {
+                "room_name": {
+                    "type": "string",
+                    "description": "The name of the LiveKit room the bot should join.",
+                },
+                "source_participant": {
+                    "type": "object",
+                    "description": "Identifies the LiveKit participant whose audio and video the bot should stream into the meeting. If omitted, no media will be streamed into the meeting. Exactly one of 'identity' or 'publish_on_behalf' must be provided.",
+                    "properties": {
+                        "identity": {
+                            "type": "string",
+                            "description": "The identity of the LiveKit participant to stream from.",
+                        },
+                        "publish_on_behalf": {
+                            "type": "string",
+                            "description": "The bot streams tracks from the first participant whose 'lk.publish_on_behalf' attribute equals this value, which is how a LiveKit agent publishes on behalf of another participant.",
+                        },
+                    },
+                    "oneOf": [
+                        {"required": ["identity"]},
+                        {"required": ["publish_on_behalf"]},
+                    ],
+                    "additionalProperties": False,
+                },
+            },
+            "required": ["room_name"],
+            "additionalProperties": False,
+        },
+    },
+    "additionalProperties": False,
+}
+
+
+@extend_schema_field(ROOM_SYNC_SETTINGS_SCHEMA)
+class RoomSyncSettingsJSONField(serializers.JSONField):
+    pass
+
+
 @extend_schema_field(
     {
         "type": "object",
@@ -1228,6 +1282,12 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
 
     voice_agent_settings = VoiceAgentSettingsJSONField(
         help_text="Settings for the voice agent that the bot should load.",
+        required=False,
+        default=None,
+    )
+
+    room_sync_settings = RoomSyncSettingsJSONField(
+        help_text="Settings for syncing meeting media and participants with an external real-time room. Currently only LiveKit is supported.",
         required=False,
         default=None,
     )
@@ -1364,6 +1424,25 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
 
         return value
 
+    def validate_room_sync_settings(self, value):
+        if value is None:
+            return value
+
+        try:
+            jsonschema.validate(instance=value, schema=ROOM_SYNC_SETTINGS_SCHEMA)
+        except jsonschema.exceptions.ValidationError as e:
+            raise serializers.ValidationError(e.message)
+
+        if value:
+            meeting_url = self.initial_data.get("meeting_url")
+            meeting_type = meeting_type_from_url(meeting_url)
+            use_zoom_web_adapter = self.initial_data.get("zoom_settings", {}).get("sdk", "native") == "web"
+
+            if meeting_type == MeetingTypes.ZOOM and not use_zoom_web_adapter:
+                raise serializers.ValidationError("Room sync is not supported for Zoom when using the native SDK. Please set 'zoom_settings.sdk' to 'web' in the bot creation request.")
+
+        return value
+
     transcription_settings = TranscriptionSettingsJSONField(
         help_text="The transcription settings for the bot, e.g. {'deepgram': {'language': 'en'}}",
         required=False,
@@ -1493,9 +1572,9 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
         # Define defaults
         defaults = {"use_login": False, "login_mode": "always", "ui_interaction_mode": "humanized", "login_group_name": None}
 
-        # If use_login is set to true, then ui_interaction_mode should default to "robotic" (when not
+        # If use_login is set to true and login mode is always, then ui_interaction_mode should default to "robotic" (when not
         # explicitly provided), because in this case humanized motion is not needed.
-        if value.get("use_login"):
+        if value.get("use_login") and value.get("login_mode", "always") == "always":
             defaults["ui_interaction_mode"] = "robotic"
 
         try:
@@ -1570,6 +1649,7 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
                 "additionalProperties": False,
                 "description": "The user ID of the Zoom OAuth Connection to use for the onbehalf token.",
             },
+            "webinar_user_email": {"type": "string"},
         },
         "required": [],
         "additionalProperties": False,

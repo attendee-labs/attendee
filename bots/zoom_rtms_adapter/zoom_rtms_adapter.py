@@ -147,6 +147,74 @@ def extract_join_info(join_payload: dict):
     return meeting_uuid, stream_id, signaling_url
 
 
+def build_media_handshake(
+    *,
+    meeting_uuid: str,
+    stream_id: str,
+    signature: str,
+    use_video: bool,
+    use_transcript: bool,
+    use_per_participant_audio: bool,
+    video_frame_size: tuple[int, int],
+) -> dict:
+    """
+    Builds the media socket handshake (DATA_HAND_SHAKE_REQ).
+
+    A media socket takes one media type, or 32 for all of them. Zoom rejects a combined
+    mask such as 17 (audio | chat) with "Media type invalid value" and stops the stream.
+    """
+    handshake = {
+        "msg_type": 3,  # DATA_HAND_SHAKE_REQ
+        "protocol_version": 1,
+        "meeting_uuid": meeting_uuid,
+        "rtms_stream_id": stream_id,
+        "signature": signature,
+        "media_type": 32,  # ALL
+        "payload_encryption": False,
+    }
+
+    if use_video or use_transcript:
+        if video_frame_size == (1280, 720):
+            video_resolution_for_media_params = 2
+        elif video_frame_size == (1920, 1080):
+            video_resolution_for_media_params = 3
+        else:
+            raise ValueError(f"Unsupported video frame size: {video_frame_size}")
+
+        handshake["media_params"] = {
+            "audio": {
+                "content_type": 2,
+                "sample_rate": 1,
+                "channel": 1,
+                "codec": 1,
+                "data_opt": 1,
+                "send_rate": 20,
+            },
+            "video": {
+                "content_type": 3,
+                "codec": 7,  # H264
+                "resolution": video_resolution_for_media_params,  # HD
+                "fps": 15,
+            },
+        }
+        return handshake
+
+    handshake["media_params"] = {
+        "audio": {
+            "content_type": 2,  # RAW_AUDIO
+            "sample_rate": 1,  # 16kHz
+            "channel": 1,  # mono
+            "codec": 1,  # L16
+            # The mixed stream (1) tags every frame with user_id 0, which leaves per-participant
+            # audio relying on an active speaker event; multi streams (2) tag each speaker's frames.
+            "data_opt": 2 if use_per_participant_audio else 1,
+            "send_rate": 20,
+        },
+        "chat": {"content_type": 5},  # TEXT
+    }
+    return handshake
+
+
 class RTMSClient:
     """
     A pure-Python RTMS client roughly equivalent to the Node rtms.Client usage.
@@ -175,6 +243,7 @@ class RTMSClient:
         use_audio: bool,
         use_video: bool,
         use_transcript: bool,
+        use_per_participant_audio: bool,
         adapter: "ZoomRTMSAdapter",
     ):
         if websockets is None:
@@ -187,6 +256,7 @@ class RTMSClient:
         self.use_audio = use_audio
         self.use_video = use_video
         self.use_transcript = use_transcript
+        self.use_per_participant_audio = use_per_participant_audio
 
         self.adapter = adapter
 
@@ -403,55 +473,15 @@ class RTMSClient:
                     self.zoom_client_secret,
                 )
 
-                # ---------------------------
-                # IMPORTANT: media_type
-                # ---------------------------
-                # Match your working JS client:
-                #
-                #  - audio-only: 17
-                #  - audio+video+transcript: 32
-                #
-                if self.use_video or self.use_transcript:
-                    media_type = 32  # AUDIO+VIDEO+TRANSCRIPT (as in JS example)
-                else:
-                    media_type = 17  # AUDIO only
-
-                handshake = {
-                    "msg_type": 3,  # DATA_HAND_SHAKE_REQ
-                    "protocol_version": 1,
-                    "meeting_uuid": self.meeting_uuid,
-                    "rtms_stream_id": self.stream_id,
-                    "signature": signature,
-                    "media_type": media_type,
-                    "payload_encryption": False,
-                }
-
-                # When we request video (or transcript), include media_params just
-                # like your working JS example does.
-                if media_type == 32:
-                    if self.adapter.video_frame_size == (1280, 720):
-                        video_resolution_for_media_params = 2
-                    elif self.adapter.video_frame_size == (1920, 1080):
-                        video_resolution_for_media_params = 3
-                    else:
-                        raise ValueError(f"Unsupported video frame size: {self.adapter.video_frame_size}")
-
-                    handshake["media_params"] = {
-                        "audio": {
-                            "content_type": 2,
-                            "sample_rate": 1,
-                            "channel": 1,
-                            "codec": 1,
-                            "data_opt": 1,
-                            "send_rate": 100,
-                        },
-                        "video": {
-                            "content_type": 3,
-                            "codec": 7,  # H264
-                            "resolution": video_resolution_for_media_params,  # HD
-                            "fps": 15,
-                        },
-                    }
+                handshake = build_media_handshake(
+                    meeting_uuid=self.meeting_uuid,
+                    stream_id=self.stream_id,
+                    signature=signature,
+                    use_video=self.use_video,
+                    use_transcript=self.use_transcript,
+                    use_per_participant_audio=self.use_per_participant_audio,
+                    video_frame_size=self.adapter.video_frame_size,
+                )
 
                 logger.info("Sending media handshake: %s", handshake)
                 await ws.send(json.dumps(handshake))
@@ -846,6 +876,8 @@ class ZoomRTMSAdapter(BotAdapter):
                 use_video=need_video,
                 # Only subscribe to transcript if we are NOT doing our own audio transcription
                 use_transcript=self.add_audio_chunk_callback is None,
+                # A mixed-audio consumer (recording, streaming) needs the mixed stream
+                use_per_participant_audio=self.use_one_way_audio and not self.use_mixed_audio,
                 adapter=self,
             )
 

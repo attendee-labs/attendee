@@ -42,6 +42,8 @@ MAX_WEBHOOK_DELIVERY_ATTEMPTS = int(os.getenv("MAX_WEBHOOK_DELIVERY_ATTEMPTS", 3
 # This is distinct from MAX_WEBHOOK_DELIVERY_ATTEMPTS because the task can also be retried for
 # reasons other than delivery failures (e.g., rate limiting enforced by Attendee via GLOBAL_WEBHOOK_DELIVERIES_PER_SECOND_RATE_LIMIT or unexpected exceptions).
 DELIVER_WEBHOOK_TASK_MAX_RETRIES = int(os.getenv("DELIVER_WEBHOOK_TASK_MAX_RETRIES", MAX_WEBHOOK_DELIVERY_ATTEMPTS))
+# This is how many seconds we will wait for the webhook destination to respond.
+DELIVER_WEBHOOK_REQUEST_TIMEOUT = float(os.getenv("DELIVER_WEBHOOK_REQUEST_TIMEOUT", 10))
 
 
 @shared_task(
@@ -147,7 +149,7 @@ def deliver_webhook(self, delivery_id):
                 "User-Agent": "Attendee-Webhook/1.0",
                 "X-Webhook-Signature": signature,
             },
-            timeout=10,  # 10-second timeout
+            timeout=DELIVER_WEBHOOK_REQUEST_TIMEOUT,
             verify=os.getenv("DELIVER_WEBHOOK_VERIFY_SSL", "true").lower() != "false",
             allow_redirects=False,
         )

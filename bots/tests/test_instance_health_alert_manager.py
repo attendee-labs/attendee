@@ -21,6 +21,7 @@ from django.utils import timezone
 
 from bots.instance_health_alert_manager import (
     ALERT_METADATA,
+    BOT_FATAL_ERROR_PERCENTAGE_EXCEEDS_THRESHOLD_MINIMUM_FINISHED_BOTS_COUNT,
     BYTES_PER_GIGABYTE,
     InstanceHealthAlertManager,
     InstanceHealthAlertTypes,
@@ -44,6 +45,8 @@ CONNECTIONS = InstanceHealthAlertTypes.CONNECTIONS_USED_PERCENTAGE_EXCEEDS_THRES
 DATABASE_SIZE = InstanceHealthAlertTypes.DATABASE_SIZE_EXCEEDS_THRESHOLD
 WORKERS_DOWN = InstanceHealthAlertTypes.CELERY_WORKERS_DOWN
 QUEUE_NOT_DRAINING = InstanceHealthAlertTypes.CELERY_QUEUE_NOT_DRAINING
+FATAL_ERROR_COUNT = InstanceHealthAlertTypes.BOT_FATAL_ERROR_COUNT_EXCEEDS_THRESHOLD
+FATAL_ERROR_PERCENTAGE = InstanceHealthAlertTypes.BOT_FATAL_ERROR_PERCENTAGE_EXCEEDS_THRESHOLD
 
 NO_WORKERS = {"worker_count": 0, "workers": {}}
 ONE_WORKER = {"worker_count": 1, "workers": {"celery@one": {"concurrency": 4, "processes_alive": 4}}}
@@ -265,6 +268,60 @@ class CeleryQueueNotDrainingAlertTestCase(SingleAlertMixin, TestCase):
         mock_has_not_decreased.assert_called_once_with(777)
 
 
+def _create_fatal_error_reading(fatal_error_bot_count, finished_bot_count, created_at=None):
+    percentage = round(fatal_error_bot_count / finished_bot_count * 100, 2) if finished_bot_count else None
+    return _create_snapshot(
+        {"bot_fatal_errors": {"window_seconds": 1800, "fatal_error_bot_count": fatal_error_bot_count, "finished_bot_count": finished_bot_count, "fatal_error_percentage": percentage, "sample_is_full": False}},
+        created_at=created_at,
+    )
+
+
+class BotFatalErrorCountAlertTestCase(SingleAlertMixin, TestCase):
+    alert = FATAL_ERROR_COUNT
+
+    def test_a_count_at_the_threshold_fires(self):
+        _create_fatal_error_reading(10, 40)
+
+        self.assertFiring(threshold=10)
+
+    def test_a_count_under_the_threshold_does_not_fire(self):
+        _create_fatal_error_reading(9, 9)
+
+        self.assertNotFiring(threshold=10)
+
+    def test_only_the_most_recent_reading_decides(self):
+        now = timezone.now()
+        _create_fatal_error_reading(50, 50, created_at=now - timedelta(minutes=5))
+        _create_fatal_error_reading(0, 50, created_at=now)
+
+        self.assertNotFiring(threshold=10)
+
+
+class BotFatalErrorPercentageAlertTestCase(SingleAlertMixin, TestCase):
+    alert = FATAL_ERROR_PERCENTAGE
+
+    def test_a_share_at_the_threshold_fires(self):
+        _create_fatal_error_reading(5, 25)
+
+        self.assertFiring(threshold=20)
+
+    def test_a_share_under_the_threshold_does_not_fire(self):
+        _create_fatal_error_reading(4, 25)
+
+        self.assertNotFiring(threshold=20)
+
+    def test_too_few_finished_bots_does_not_fire_however_high_the_share(self):
+        # One failure out of two bots on a quiet instance is not a 50% outage.
+        _create_fatal_error_reading(BOT_FATAL_ERROR_PERCENTAGE_EXCEEDS_THRESHOLD_MINIMUM_FINISHED_BOTS_COUNT - 1, BOT_FATAL_ERROR_PERCENTAGE_EXCEEDS_THRESHOLD_MINIMUM_FINISHED_BOTS_COUNT - 1)
+
+        self.assertNotFiring(threshold=20)
+
+    def test_no_finished_bots_does_not_fire(self):
+        _create_fatal_error_reading(0, 0)
+
+        self.assertNotFiring(threshold=0)
+
+
 class GetAlertConfigsTestCase(TestCase):
     def _configs_by_key(self, alerts_state):
         return {config["key"]: config for config in get_alert_configs(alerts_state)}
@@ -342,7 +399,7 @@ class ThresholdConversionTestCase(TestCase):
         self.assertIsInstance(_threshold_from_display(DATABASE_SIZE, 1.5), int)
 
     def test_a_threshold_survives_a_round_trip_through_storage(self):
-        for alert, display_value in [(CONNECTIONS, 90), (DATABASE_SIZE, 2.5), (WORKERS_DOWN, 20), (QUEUE_NOT_DRAINING, 15)]:
+        for alert, display_value in [(CONNECTIONS, 90), (DATABASE_SIZE, 2.5), (WORKERS_DOWN, 20), (QUEUE_NOT_DRAINING, 15), (FATAL_ERROR_COUNT, 10), (FATAL_ERROR_PERCENTAGE, 25)]:
             with self.subTest(alert=alert.value):
                 self.assertEqual(_threshold_to_display(alert, _threshold_from_display(alert, display_value)), display_value)
 

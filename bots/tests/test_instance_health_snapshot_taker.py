@@ -33,13 +33,15 @@ from bots.instance_health_snapshot_taker import (
     INSTANCE_HEALTH_TABLE_SIZE_INTERVAL_SECONDS,
     InstanceHealthSnapshotTaker,
     _fetch_with_timeout,
+    bot_fatal_error_stats_sql,
     delete_snapshots_outside_retention_window,
+    get_bot_fatal_error_stats,
     get_celery_queue_depths,
     get_celery_worker_stats,
     get_database_connection_stats,
     get_database_table_sizes,
 )
-from bots.models import InstanceHealthSnapshot
+from bots.models import Bot, BotEvent, BotEventSubTypes, BotEventTypes, BotStates, InstanceHealthSnapshot, Organization, Project
 
 # Doubles as the patch target for the module's own globals and as the name of the
 # logger it reports collector failures on.
@@ -285,6 +287,85 @@ class GetDatabaseTableSizesTestCase(TimingAssertionsMixin, TestCase):
         self.assertEqual(len(_statements_excluding_savepoints(captured.captured_queries)), 2)
 
 
+class GetBotFatalErrorStatsTestCase(TestCase):
+    def setUp(self):
+        organization = Organization.objects.create(name="Test Organization")
+        self.project = Project.objects.create(name="Test Project", organization=organization)
+
+    def _create_bot_event(self, event_type, new_state, event_sub_type=None, created_at=None):
+        bot = Bot.objects.create(project=self.project, name="Bot", meeting_url="https://meet.google.com/abc-defg-hij", state=new_state)
+        event = BotEvent.objects.create(bot=bot, event_type=event_type, event_sub_type=event_sub_type, old_state=BotStates.JOINED_RECORDING, new_state=new_state)
+        if created_at is not None:
+            BotEvent.objects.filter(pk=event.pk).update(created_at=created_at)
+        return bot
+
+    def _create_fatal_error(self, **kwargs):
+        return self._create_bot_event(BotEventTypes.FATAL_ERROR, BotStates.FATAL_ERROR, event_sub_type=BotEventSubTypes.FATAL_ERROR_PROCESS_TERMINATED, **kwargs)
+
+    def _create_ended(self, **kwargs):
+        return self._create_bot_event(BotEventTypes.POST_PROCESSING_COMPLETED, BotStates.ENDED, **kwargs)
+
+    def test_reports_fatal_errors_as_a_share_of_finished_bots(self):
+        self._create_fatal_error()
+        for _ in range(3):
+            self._create_ended()
+
+        stats = get_bot_fatal_error_stats()
+
+        self.assertEqual(stats["fatal_error_bot_count"], 1)
+        self.assertEqual(stats["finished_bot_count"], 4)
+        self.assertEqual(stats["fatal_error_percentage"], 25.0)
+        self.assertFalse(stats["sample_is_full"])
+
+    def test_could_not_join_counts_as_finished_but_not_as_a_fatal_error(self):
+        # It lands in the FATAL_ERROR state, but a meeting that could not be joined
+        # is an ordinary outcome rather than something breaking.
+        self._create_bot_event(BotEventTypes.COULD_NOT_JOIN, BotStates.FATAL_ERROR, event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_NOT_STARTED_WAITING_FOR_HOST)
+
+        stats = get_bot_fatal_error_stats()
+
+        self.assertEqual(stats["fatal_error_bot_count"], 0)
+        self.assertEqual(stats["finished_bot_count"], 1)
+
+    def test_events_older_than_the_window_are_left_out(self):
+        self._create_fatal_error(created_at=timezone.now() - timedelta(hours=1))
+
+        stats = get_bot_fatal_error_stats()
+
+        self.assertEqual(stats["fatal_error_bot_count"], 0)
+        self.assertIsNone(stats["fatal_error_percentage"])
+
+    def test_only_the_most_recent_events_are_sampled(self):
+        self._create_fatal_error()
+        self._create_ended()
+        self._create_ended()
+
+        with patch(f"{MODULE}.INSTANCE_HEALTH_BOT_EVENTS_SAMPLE_SIZE", 2):
+            stats = get_bot_fatal_error_stats()
+
+        self.assertEqual(stats["fatal_error_bot_count"], 0)
+        self.assertEqual(stats["finished_bot_count"], 2)
+        self.assertTrue(stats["sample_is_full"])
+
+    def test_costs_a_fixed_number_of_statements(self):
+        with CaptureQueriesContext(connection) as captured:
+            get_bot_fatal_error_stats()
+
+        self.assertEqual(len(_statements_excluding_savepoints(captured.captured_queries)), 2)
+
+    def test_the_query_stops_at_the_sample_size_instead_of_scanning_the_table(self):
+        # bots_botevent grows forever and has no created_at index, so the plan must
+        # be a backwards walk of the primary key that ends at the LIMIT.
+        with connection.cursor() as cursor:
+            cursor.execute("SET LOCAL enable_seqscan = off")
+            cursor.execute("EXPLAIN " + bot_fatal_error_stats_sql())
+            plan = "\n".join(row[0] for row in cursor.fetchall())
+
+        self.assertIn("Limit", plan)
+        self.assertIn("Index Scan Backward", plan)
+        self.assertNotIn("Sort", plan.split("Limit")[1])
+
+
 class MetricStatementTimeoutTestCase(TestCase):
     def test_the_configured_timeout_is_applied_to_the_query(self):
         with patch(f"{MODULE}.INSTANCE_HEALTH_METRIC_STATEMENT_TIMEOUT_MS", 250):
@@ -431,7 +512,7 @@ class SaveSnapshotIfNeededTestCase(TimingAssertionsMixin, TestCase):
         self.taker.save_snapshot_if_needed()
 
         data = self._latest_snapshot_data()
-        self.assertEqual(set(data), {"celery_queue_depths", "celery_worker_stats", "database_connections", "database_table_sizes"})
+        self.assertEqual(set(data), {"celery_queue_depths", "celery_worker_stats", "database_connections", "bot_fatal_errors", "database_table_sizes"})
         self.assertEqual(data["celery_worker_stats"]["worker_count"], 1)
         self.assertGreaterEqual(data["database_connections"]["total"], 1)
         self.assertGreater(data["database_table_sizes"]["total_bytes"], 0)
@@ -454,7 +535,7 @@ class SaveSnapshotIfNeededTestCase(TimingAssertionsMixin, TestCase):
         self._make_snapshot_due()
         self.taker.save_snapshot_if_needed()
 
-        self.assertEqual(set(self._latest_snapshot_data()), {"celery_queue_depths", "database_connections"})
+        self.assertEqual(set(self._latest_snapshot_data()), {"celery_queue_depths", "database_connections", "bot_fatal_errors"})
 
     def test_an_expensive_metric_lands_on_whichever_snapshot_is_due_when_it_comes_round(self):
         self.taker.save_snapshot_if_needed()
@@ -478,7 +559,7 @@ class SaveSnapshotIfNeededTestCase(TimingAssertionsMixin, TestCase):
             with self.assertLogs(MODULE, level="ERROR"):
                 self.taker.save_snapshot_if_needed()
 
-        self.assertEqual(set(self._latest_snapshot_data()), {"celery_queue_depths", "celery_worker_stats", "database_connections"})
+        self.assertEqual(set(self._latest_snapshot_data()), {"celery_queue_depths", "celery_worker_stats", "database_connections", "bot_fatal_errors"})
 
     def test_a_failing_collector_is_not_retried_until_it_is_next_due(self):
         with patch(f"{MODULE}.get_database_table_sizes", side_effect=Exception("canceling statement due to statement timeout")) as mock_table_sizes:
@@ -495,6 +576,7 @@ class SaveSnapshotIfNeededTestCase(TimingAssertionsMixin, TestCase):
             patch(f"{MODULE}.get_celery_queue_depths", side_effect=failure),
             patch(f"{MODULE}.get_celery_worker_stats", side_effect=failure),
             patch(f"{MODULE}.get_database_connection_stats", side_effect=failure),
+            patch(f"{MODULE}.get_bot_fatal_error_stats", side_effect=failure),
             patch(f"{MODULE}.get_database_table_sizes", side_effect=failure),
         ):
             with self.assertLogs(MODULE, level="ERROR"):

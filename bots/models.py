@@ -3,8 +3,10 @@ import json
 import logging
 import math
 import os
+import random
 import secrets
 import string
+import time
 from datetime import timedelta
 
 from concurrency.exceptions import RecordModifiedError
@@ -542,6 +544,14 @@ class CalendarEvent(models.Model):
 class ProjectAccess(models.Model):
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="project_accesses")
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="project_accesses")
+    can_view_recording_content = models.BooleanField(default=True, db_default=True)
+    can_manage_api_keys = models.BooleanField(default=True, db_default=True)
+
+    class Meta:
+        # A user should have at most one access row per project
+        constraints = [
+            models.UniqueConstraint(fields=["project", "user"], name="unique_project_access_project_user"),
+        ]
 
 
 class ApiKey(models.Model):
@@ -653,6 +663,10 @@ class BotStates(models.IntegerChoices):
     @classmethod
     def pre_meeting_states(cls):
         return [cls.READY, cls.SCHEDULED, cls.STAGED]
+
+    @classmethod
+    def running_but_has_not_joined_states(cls):
+        return [cls.STAGED, cls.JOINING, cls.WAITING_ROOM]
 
 
 class RecordingFormats(models.TextChoices):
@@ -833,6 +847,10 @@ class TranscriptionSettings:
 
     def teams_closed_captions_language(self):
         return self._settings.get("meeting_closed_captions", {}).get("teams_language", None)
+
+    def teams_closed_captions_language_enforcement_duration_seconds(self):
+        default_duration_seconds = int(os.getenv("ENFORCE_TEAMS_CLOSED_CAPTIONS_LANGUAGE_TIMEOUT_SECONDS", "0"))
+        return self._settings.get("meeting_closed_captions", {}).get("teams_language_enforcement_duration_seconds", default_duration_seconds)
 
     def zoom_closed_captions_language(self):
         return self._settings.get("meeting_closed_captions", {}).get("zoom_language", None)
@@ -1059,6 +1077,9 @@ class Bot(models.Model):
     def zoom_meeting_settings(self):
         return self.settings.get("zoom_settings", {}).get("meeting_settings", {})
 
+    def zoom_webinar_user_email(self):
+        return self.settings.get("zoom_settings", {}).get("webinar_user_email", None)
+
     def rtmp_destination_url(self):
         rtmp_settings = self.settings.get("rtmp_settings")
         if not rtmp_settings:
@@ -1107,6 +1128,22 @@ class Bot(models.Model):
         websocket_settings = self.settings.get("websocket_settings") or {}
         websocket_per_participant_video_settings = websocket_settings.get("per_participant_video") or {}
         return websocket_per_participant_video_settings.get("screenshare_resolution", "360p")
+
+    def should_use_room_sync(self):
+        return bool(self.room_sync_livekit_room_name())
+
+    def room_sync_livekit_room_name(self):
+        room_sync_settings = self.settings.get("room_sync_settings") or {}
+        livekit_settings = room_sync_settings.get("livekit") or {}
+        return livekit_settings.get("room_name", None)
+
+    def room_sync_livekit_source_participant(self):
+        room_sync_settings = self.settings.get("room_sync_settings") or {}
+        livekit_settings = room_sync_settings.get("livekit") or {}
+        return livekit_settings.get("source_participant", None)
+
+    def room_sync_sync_to_room(self):
+        return True
 
     def voice_agent_url(self):
         voice_agent_settings = self.settings.get("voice_agent_settings", {}) or {}
@@ -1320,6 +1357,8 @@ class CreditTransactionManager:
         """
         max_retries = 10
         retry_count = 0
+        max_total_sleep_seconds = 4.0
+        total_slept_seconds = 0.0
 
         while retry_count < max_retries:
             try:
@@ -1354,6 +1393,10 @@ class CreditTransactionManager:
                 retry_count += 1
                 if retry_count >= max_retries:
                     raise RuntimeError("Max retries exceeded while attempting to create credit transaction")
+                # Exponential backoff with full jitter so concurrent writers for the same org stop colliding on the same leaf
+                sleep_seconds = min(random.uniform(0, min(1.0, 0.05 * (2**retry_count))), max_total_sleep_seconds - total_slept_seconds)
+                time.sleep(sleep_seconds)
+                total_slept_seconds += sleep_seconds
                 continue
 
 
@@ -1486,6 +1529,8 @@ class BotEventSubTypes(models.IntegerChoices):
     BOT_RECORDING_PERMISSION_DENIED_WEBINAR_ATTENDEE_NEEDS_PANELIST_PROMOTION = 29, "Bot recording permission denied - Bot joined webinar as attendee and needs to be promoted to panelist to record"
     COULD_NOT_JOIN_MEETING_ZOOM_APP_CANNOT_JOIN_ANONYMOUSLY = 30, "Bot could not join Zoom meeting - Zoom app cannot join anonymously. To fix pass OBF or ZAK token. See https://docs.attendee.dev/guides/zoom/zoomoauth"
     FATAL_ERROR_GLOBAL_RUNTIME_TIMEOUT = 31, "Fatal error - Global runtime timeout"
+    COULD_NOT_JOIN_MEETING_LEAVE_REQUESTED_BEFORE_BOT_JOINED = 32, "Bot could not join meeting - Leave requested before bot joined"
+    COULD_NOT_JOIN_MEETING_MEETING_ENDED_BEFORE_BOT_JOINED = 33, "Bot could not join meeting - Meeting ended before bot joined"
 
     @classmethod
     def sub_type_to_api_code(cls, value):
@@ -1522,6 +1567,8 @@ class BotEventSubTypes(models.IntegerChoices):
             cls.BOT_RECORDING_PERMISSION_DENIED_WEBINAR_ATTENDEE_NEEDS_PANELIST_PROMOTION: "webinar_attendee_needs_panelist_promotion",
             cls.COULD_NOT_JOIN_MEETING_ZOOM_APP_CANNOT_JOIN_ANONYMOUSLY: "zoom_app_cannot_join_anonymously",
             cls.FATAL_ERROR_GLOBAL_RUNTIME_TIMEOUT: "global_runtime_timeout",
+            cls.COULD_NOT_JOIN_MEETING_LEAVE_REQUESTED_BEFORE_BOT_JOINED: "leave_requested_before_bot_joined",
+            cls.COULD_NOT_JOIN_MEETING_MEETING_ENDED_BEFORE_BOT_JOINED: "meeting_ended_before_bot_joined",
         }
         return mapping.get(value)
 
@@ -1582,6 +1629,8 @@ class BotEvent(models.Model):
                             | Q(event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_MEETING_NOT_FOUND)
                             | Q(event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_BLOCKED_BY_CAPTCHA)
                             | Q(event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_ZOOM_APP_CANNOT_JOIN_ANONYMOUSLY)
+                            | Q(event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_LEAVE_REQUESTED_BEFORE_BOT_JOINED)
+                            | Q(event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_MEETING_ENDED_BEFORE_BOT_JOINED)
                         )
                     )
                     |
@@ -1625,7 +1674,7 @@ class BotEventManager:
             "to": BotStates.STAGED,
         },
         BotEventTypes.COULD_NOT_JOIN: {
-            "from": [BotStates.JOINING, BotStates.WAITING_ROOM],
+            "from": [BotStates.JOINING, BotStates.WAITING_ROOM, BotStates.LEAVING],
             "to": BotStates.FATAL_ERROR,
         },
         BotEventTypes.FATAL_ERROR: {
@@ -1684,6 +1733,7 @@ class BotEventManager:
                 BotStates.JOINING,
                 BotStates.JOINING_BREAKOUT_ROOM,
                 BotStates.LEAVING_BREAKOUT_ROOM,
+                BotStates.STAGED,
             ],
             "to": BotStates.LEAVING,
         },
@@ -1912,6 +1962,16 @@ class BotEventManager:
         if bot.join_at.isoformat() != event_metadata["join_at"]:
             raise ValidationError(f"join_at in event_metadata for bot {bot.object_id} for transition to state {BotStates.state_to_api_code(new_state)} is different from the join_at in the database for bot {bot.object_id}")
 
+    @classmethod
+    def validate_could_not_join_event(cls, bot: Bot, old_state: BotStates, event_sub_type: BotEventSubTypes):
+        # COULD_NOT_JOIN from LEAVING is only for the case where a leave was requested before the bot joined.
+        # Any other could-not-join cause arriving while the bot is leaving (waiting room timeout, request denied, ...)
+        # must not turn a bot that was in the meeting into a fatal error.
+        if old_state != BotStates.LEAVING:
+            return
+        if event_sub_type != BotEventSubTypes.COULD_NOT_JOIN_MEETING_LEAVE_REQUESTED_BEFORE_BOT_JOINED:
+            raise ValidationError(f"Event {BotEventTypes.type_to_api_code(BotEventTypes.COULD_NOT_JOIN)} with sub type {BotEventSubTypes.sub_type_to_api_code(event_sub_type)} not allowed when bot is in state {BotStates.state_to_api_code(old_state)}.")
+
     # This method handles sets the state for recordings and credits for when the bot transitions to a post meeting state
     # It returns a dictionary of additional event metadata that should be added to the event
     @classmethod
@@ -1994,6 +2054,9 @@ class BotEventManager:
                     if old_state not in valid_from_states:
                         valid_states_labels = [BotStates.state_to_api_code(state) for state in valid_from_states]
                         raise ValidationError(f"Event {BotEventTypes.type_to_api_code(event_type)} not allowed when bot is in state {BotStates.state_to_api_code(old_state)}. It is only allowed in these states: {', '.join(valid_states_labels)}")
+
+                    if event_type == BotEventTypes.COULD_NOT_JOIN:
+                        cls.validate_could_not_join_event(bot=bot, old_state=old_state, event_sub_type=event_sub_type)
 
                     # Update bot state based on 'to' definition
                     if callable(transition["to"]):
@@ -2781,6 +2844,7 @@ class Credentials(models.Model):
         ELEVENLABS = 10, "ElevenLabs"
         KYUTAI = 11, "Kyutai"
         TEAMS_BOT_IDENTIFICATION_CREDENTIALS = 12, "Teams Bot Identification Credentials"
+        LIVEKIT = 13, "LiveKit"
 
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="credentials")
     credential_type = models.IntegerField(choices=CredentialTypes.choices, null=False)

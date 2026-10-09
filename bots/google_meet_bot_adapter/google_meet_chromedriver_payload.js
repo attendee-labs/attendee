@@ -308,9 +308,9 @@ class StyleManager {
 
     checkNeededInteractions() {
         // Check for recording notification dialog
-        const recordingDialog = document.querySelector('div[aria-modal="true"][role="dialog"]');
+        const recordingDialog = document.querySelector('div[aria-modal="true"][role="dialog"], div[aria-modal="true"][role="alertdialog"]');
         
-        if (recordingDialog && (recordingDialog.textContent.includes('This video call is being recorded') || recordingDialog.textContent.includes('Others may see your video differently') || recordingDialog.textContent.includes('This video call is being transcribed') || recordingDialog.textContent.includes('Gemini is taking notes'))) {           
+        if (recordingDialog && (recordingDialog.textContent.includes('This video call is being recorded') || recordingDialog.textContent.includes('Others may see your video differently') || recordingDialog.textContent.includes('This video call is being transcribed') || recordingDialog.textContent.includes('Gemini is taking notes') || recordingDialog.textContent.includes('This meeting is being captured'))) {           
             // Find and click the "Join now" button (usually the confirm/OK button)
             const joinNowButton = recordingDialog.querySelector('button[data-mdc-dialog-action="ok"]');
             
@@ -336,11 +336,19 @@ class StyleManager {
         }
 
         // Check if bot has been removed from the meeting
-        const removedFromMeetingElement = document.querySelector('.roSPhc');
-        if (removedFromMeetingElement && (removedFromMeetingElement.textContent.includes('You\'ve been removed from the meeting') || removedFromMeetingElement.textContent.includes('Your host ended the meeting for everyone'))) {
+        const callEndedMessageElement = document.querySelector('.roSPhc');
+        if (callEndedMessageElement && callEndedMessageElement.textContent.includes('You\'ve been removed from the meeting')) {
             window.ws.sendJson({
                 type: 'MeetingStatusChange',
                 change: 'removed_from_meeting'
+            });
+        }
+
+        // Check if the call ended for reasons other than the bot being removed
+        if (callEndedMessageElement && (callEndedMessageElement.textContent.includes('The call ended because everyone left') || callEndedMessageElement.textContent.includes('Your host ended the meeting for everyone'))) {
+            window.ws.sendJson({
+                type: 'MeetingStatusChange',
+                change: 'meeting_ended'
             });
         }
     }
@@ -798,6 +806,19 @@ class StyleManager {
         }
 
         console.log('Started StyleManager');
+
+        // If we have a room sync source participant, then start streaming its
+        // media into the meeting. The adapter is only loaded when this is
+        // configured, so guard on both the config and the function existing.
+        if (window.initialData.roomSyncSourceParticipantConfiguration && window.streamRoomSyncSourceParticipant) {
+            window.streamRoomSyncSourceParticipant().catch((error) => {
+                console.error('Failed to stream room sync source participant:', error);
+                window.ws?.sendJson({
+                    type: 'Error',
+                    message: 'Failed to stream room sync source participant: ' + error.message
+                });
+            });
+        }
     }
 
     /*
@@ -1556,6 +1577,9 @@ class RTCInterceptor {
             
             return peerConnection;
         };
+
+        window.RTCPeerConnection.prototype.addTransceiver = originalRTCPeerConnection.prototype.addTransceiver;
+        window.RTCPeerConnection.prototype.addTrack = originalRTCPeerConnection.prototype.addTrack;
     }
 }
 
@@ -1646,11 +1670,55 @@ const messageTypes = [
             { name: 'deviceId', fieldNumber: 1, type: 'string' },
             { name: 'fullName', fieldNumber: 2, type: 'string' },
             { name: 'profilePicture', fieldNumber: 3, type: 'string' },
-            { name: 'status', fieldNumber: 4, type: 'varint' }, // in meeting = 1 vs not in meeting = 6. kicked out = 7?
+            { name: 'status', fieldNumber: 4, type: 'varint' }, // in meeting = 1 vs not in meeting = 6. kicked out = 7? denied from lobby = 4?
             { name: 'isCurrentUserString', fieldNumber: 7, type: 'string' }, // Presence of this string indicates that this is the current user. The string itself seems to be a random uuid
             { name: 'displayName', fieldNumber: 29, type: 'string' },
             { name: 'parentDeviceId', fieldNumber: 21, type: 'string' }, // if this is present, then this is a screenshare device. The parentDevice is the person that is sharing
             { name: 'isHost', fieldNumber: 34, type: 'varint' } // Presence of this varint indicates that this is the host
+        ]
+    },
+    {
+        name: 'CaptionWrapperV2',
+        fields: [
+            { name: 'captionEventV2', fieldNumber: 1, type: 'message', messageType: 'CaptionEventV2' },
+            { name: 'timestampV2', fieldNumber: 6, type: 'message', messageType: 'CaptionTimestampV2' }
+        ]
+    },
+    {
+        name: 'CaptionEventV2',
+        fields: [
+            // Inferred from the samples:
+            // field 1 appears to identify the caption, while field 2 changes as
+            // revisions of that caption are produced.
+            { name: 'captionId', fieldNumber: 1, type: 'int64' },
+            { name: 'version', fieldNumber: 2, type: 'int64' },
+            { name: 'captionV2', fieldNumber: 3, type: 'message', messageType: 'CaptionV2' }
+        ]
+    },
+    {
+        name: 'CaptionV2',
+        fields: [
+            // This field is absent on an interim caption and 1 on the finalized
+            // caption in the supplied samples, so it appears to be isFinal.
+            { name: 'isFinal', fieldNumber: 2, type: 'varint' },
+    
+            { name: 'text', fieldNumber: 3, type: 'string' },
+    
+            // Both are "en-US" in the supplied samples. Keep both until their
+            // exact distinction is known.
+            { name: 'languageCode', fieldNumber: 4, type: 'string' },
+            { name: 'translatedLanguageCode', fieldNumber: 5, type: 'string' },
+    
+            { name: 'deviceId', fieldNumber: 6, type: 'string' },
+    
+            // Always 1 in the supplied samples. Meaning is not yet known.
+            { name: 'unknownField9', fieldNumber: 9, type: 'varint' }
+        ]
+    },
+    {
+        name: 'CaptionTimestampV2',
+        fields: [
+            { name: 'timestamp', fieldNumber: 1, type: 'int64' }
         ]
     },
     {
@@ -1842,6 +1910,37 @@ const handleCaptionEvent = (event) => {
   const captionWrapper = messageDecoders['CaptionWrapper'](decodedData);
   const caption = captionWrapper.caption;
   captionManager.singleCaptionSynced(caption);
+}
+
+function convertCaptionV2ToV1(captionWrapperV2) {
+    const captionEventV2 = captionWrapperV2?.captionEventV2;
+    const captionV2 = captionEventV2?.captionV2;
+
+    if (!captionEventV2 || !captionV2) {
+        return null;
+    }
+
+    return {
+        deviceId: captionV2.deviceId,
+        captionId: captionEventV2.captionId,
+        version: captionEventV2.version,
+        isFinal: captionV2.isFinal ?? 0,
+        text: captionV2.text ?? '',
+
+        // V1 has a numeric languageId, while V2 appears to use language-code
+        // strings such as "en-US". There is no demonstrated equivalent numeric
+        // value in the V2 payload, so don't invent one.
+        languageId: undefined
+    };
+}
+
+const handleCaptionEventV2 = (event) => {
+  const decodedData = new Uint8Array(event.data);
+  const captionWrapperV2 = messageDecoders['CaptionWrapperV2'](decodedData);
+  const captionV1 = convertCaptionV2ToV1(captionWrapperV2);
+  if (captionV1) {
+    captionManager.singleCaptionSynced(captionV1);
+  }
 }
 
 const handleMediaDirectorEvent = (event) => {
@@ -2206,6 +2305,11 @@ new RTCInterceptor({
         console.log('On PeerConnection:', peerConnection);
         console.log('Channel label:', dataChannel.label);
 
+        window.ws?.sendJson({
+            type: 'DataChannelCreate',
+            label: dataChannel.label,
+        });
+
         //if (dataChannel.label === 'collections') {
           //  dataChannel.addEventListener("message", (event) => {
          //       console.log('collectionsevent', event)
@@ -2224,6 +2328,12 @@ new RTCInterceptor({
                 handleCaptionEvent(captionEvent);
             });
         }
+
+        if (dataChannel.label === 'captions_v2' && window.initialData.collectCaptions) {
+             dataChannel.addEventListener("message", (captionEvent) => {
+                 handleCaptionEventV2(captionEvent);
+             });
+         }
     }
 });
 

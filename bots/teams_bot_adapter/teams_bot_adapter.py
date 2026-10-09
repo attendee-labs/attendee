@@ -1,6 +1,5 @@
 import json
 import logging
-import os
 import re
 import subprocess
 from typing import Callable
@@ -52,6 +51,7 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
         self,
         *args,
         teams_closed_captions_language: str | None,
+        teams_closed_captions_language_enforcement_duration_seconds: int,
         teams_bot_login_is_available: bool,
         teams_bot_login_should_be_used: bool,
         fetch_teams_bot_login_credentials_callback: Callable[[], dict],
@@ -61,6 +61,7 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
     ):
         super().__init__(*args, **kwargs)
         self.teams_closed_captions_language = teams_closed_captions_language
+        self.teams_closed_captions_language_enforcement_duration_seconds = teams_closed_captions_language_enforcement_duration_seconds
         self.teams_bot_login_is_available = teams_bot_login_is_available
         self.teams_bot_login_should_be_used = teams_bot_login_should_be_used and teams_bot_login_is_available
         self.fetch_teams_bot_login_credentials_callback = fetch_teams_bot_login_credentials_callback
@@ -155,40 +156,36 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
             logger.error("In update_closed_captions_language, failed to set closed captions language programatically")
 
     def get_staged_bot_join_delay_seconds(self):
-        return 10
+        if self.teams_bot_login_should_be_used and self.teams_bot_login_is_available:
+            return 35
+        return 15
 
     def subclass_specific_after_bot_joined_meeting(self):
         self.after_bot_can_record_meeting()
 
     def subclass_specific_initial_data_code(self):
-        enforce_teams_closed_captions_language_timeout_seconds = int(os.getenv("ENFORCE_TEAMS_CLOSED_CAPTIONS_LANGUAGE_TIMEOUT_SECONDS", "0"))
         return f"""
             window.teamsInitialData = {{
                 shouldLogNetworkRequests: {"true" if self.should_log_network_requests else "false"},
                 modifyDomForVideoRecording: {"true" if self.modify_dom_for_video_recording else "false"},
-                enforceTeamsClosedCaptionsLanguageTimeoutSeconds: {enforce_teams_closed_captions_language_timeout_seconds}
+                teamsClosedCaptionsLanguageEnforcementDurationSeconds: {json.dumps(self.teams_closed_captions_language_enforcement_duration_seconds)},
+                perParticipantAudioUtteranceDelayMs: {json.dumps(self.get_per_participant_audio_utterance_delay_ms())}
             }}
         """
+
+    def subclass_specific_navigation_config_filename(self):
+        return "teams.json"
+
+    def subclass_specific_domain_allowlist(self):
+        return self.navigation_config_domain_allowlist()
 
     def subclass_specific_chrome_policies(self):
         if not settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:
             return {}
 
         return {
-            "BrowserSwitcherEnabled": True,
-            "AlternativeBrowserPath": "/nonexistent-browser",
-            "AlternativeBrowserParameters": [],
-            "BrowserSwitcherDelay": 0,
-            "BrowserSwitcherParsingMode": 1,
-            "BrowserSwitcherUrlList": [
-                "*",
-                "!microsoft.com",
-                "!office.com",
-                "!cloud.microsoft",
-                "!microsoftonline.com",
-                "!live.com",
-                "!microsoft.us",
-            ],
+            "URLBlocklist": ["*"],
+            "URLAllowlist": self.subclass_specific_domain_allowlist(),
         }
 
     def get_teams_bot_identification_token(self):
@@ -228,3 +225,8 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
 
         logger.info("Successfully fetched Teams bot identification token")
         return token
+
+    def get_per_participant_audio_utterance_delay_ms(self):
+        if self.room_sync_source_participant_configuration:
+            return 750
+        return 2000

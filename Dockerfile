@@ -56,6 +56,7 @@ RUN apt-get install -y ./google-chrome-stable_134.0.6998.88-1_amd64.deb
 
 # Install a specific version of ChromeDriver.
 RUN wget -q https://storage.googleapis.com/chrome-for-testing-public/134.0.6998.88/linux64/chromedriver-linux64.zip \
+    && echo "58df717d51484b9f3ac188af5231cdc77255daa72d0b2b86481bee54e398ce2f  chromedriver-linux64.zip" | sha256sum -c - \
     && unzip chromedriver-linux64.zip \
     && mv chromedriver-linux64/chromedriver /usr/local/bin/chromedriver \
     && chmod +x /usr/local/bin/chromedriver \
@@ -102,6 +103,7 @@ RUN pip install -r requirements.txt
 
 ENV TINI_VERSION=v0.19.0
 ADD https://github.com/krallin/tini/releases/download/${TINI_VERSION}/tini /tini
+RUN echo "93dcc18adc78c65a028a84799ecf8ad40c936fdfc5f2a57b1acda5a8117fa82c  /tini" | sha256sum -c -
 RUN chmod +x /tini
 
 WORKDIR /opt

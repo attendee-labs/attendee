@@ -1,0 +1,15 @@
+{
+  "version": "1.0",
+  "domain_allowlist": [
+    "teams.microsoft.com",
+    "teams.live.com",
+    "login.live.com",
+    "teams.microsoft.us",
+    "m365.cloud.microsoft",
+    "static.microsoft",
+    "login.microsoftonline.com",
+    "login.microsoftonline.us",
+    "www.office.com"
+  ],
+  "signature": "2w182HrNa2qTcdAL0BLMzyT7rOp6cUGuP5sBd+SZKlDAtSAbqo/Kft/cm0d6wlvRY0/eddgXmxxZWVAjGRaOAQ=="
+}

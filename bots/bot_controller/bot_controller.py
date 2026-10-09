@@ -125,29 +125,35 @@ class BotController:
         return self.pipeline_configuration.record_video or self.pipeline_configuration.rtmp_stream_video
 
     # Constructs the callback we'll use to receive per-participant audio chunks
-    # For most cases, we'll feed them to the per-participant audio input manager which will transcribe them and store the audio chunks for post-meeting transcription
-    # If per participant audio is being streamed via websocket, we'll send them to the websocket client
+    # A single chunk can be routed to multiple sinks at once:
+    #   - the per-participant audio input manager, which transcribes it and stores the audio chunks for post-meeting transcription
+    #   - the websocket client, when per-participant audio is being streamed via websocket
+    #   - the room sync client, when per-participant audio is being mirrored into a LiveKit room
     def get_per_participant_audio_chunk_callback(self):
-        pass_to_per_participant_audio_input_manager = self.should_capture_audio_chunks()
-        pass_to_websocket_client = self.pipeline_configuration.websocket_stream_per_participant_audio
+        sinks = []
 
-        if pass_to_per_participant_audio_input_manager and pass_to_websocket_client:
-            logger.info("In get_per_participant_audio_chunk_callback, passing per-participant audio chunk to both per-participant audio input manager and websocket client")
-            per_participant_audio_input_manager = self.per_participant_audio_input_manager()
+        if self.should_capture_audio_chunks():
+            sinks.append(("per-participant audio input manager", self.per_participant_audio_input_manager().add_chunk))
+        if self.pipeline_configuration.websocket_stream_per_participant_audio:
+            sinks.append(("websocket client", self.send_per_participant_audio_chunk_to_websocket_client))
+        if self.pipeline_configuration.room_sync_stream_per_participant_audio:
+            sinks.append(("room sync client", self.send_per_participant_audio_chunk_to_room_sync_client))
 
-            def send_to_both(speaker_id, chunk_time, chunk_bytes):
-                per_participant_audio_input_manager.add_chunk(speaker_id, chunk_time, chunk_bytes)
-                self.send_per_participant_audio_chunk_to_websocket_client(speaker_id, chunk_time, chunk_bytes)
+        if not sinks:
+            return None
 
-            return send_to_both
-        elif pass_to_per_participant_audio_input_manager:
-            logger.info("In get_per_participant_audio_chunk_callback, passing per-participant audio chunk to per-participant audio input manager")
-            return self.per_participant_audio_input_manager().add_chunk
-        elif pass_to_websocket_client:
-            logger.info("In get_per_participant_audio_chunk_callback, passing per-participant audio chunk to websocket client")
-            return self.send_per_participant_audio_chunk_to_websocket_client
+        logger.info(f"In get_per_participant_audio_chunk_callback, passing per-participant audio chunk to: {', '.join(name for name, _ in sinks)}")
 
-        return None
+        if len(sinks) == 1:
+            return sinks[0][1]
+
+        callbacks = [callback for _, callback in sinks]
+
+        def send_to_all(speaker_id, chunk_time, chunk_bytes):
+            for callback in callbacks:
+                callback(speaker_id, chunk_time, chunk_bytes)
+
+        return send_to_all
 
     def send_per_participant_audio_chunk_to_websocket_client(self, speaker_id, chunk_time, chunk_bytes):
         if not self.websocket_client_manager:
@@ -162,6 +168,12 @@ class BotController:
         )
 
         self.websocket_client_manager.send_per_participant_audio(payload)
+
+    def send_per_participant_audio_chunk_to_room_sync_client(self, speaker_id, chunk_time, chunk_bytes):
+        if not self.room_sync_client:
+            return
+
+        self.room_sync_client.send_audio_chunk(speaker_id, chunk_bytes)
 
     def create_google_meet_bot_login_session(self):
         if not self.bot_in_db.google_meet_use_bot_login():
@@ -199,6 +211,7 @@ class BotController:
             add_participant_event_callback=self.on_new_participant_event,
             automatic_leave_configuration=self.automatic_leave_configuration,
             per_participant_realtime_video_configuration=self.per_participant_realtime_video_configuration,
+            room_sync_source_participant_configuration=self.get_room_sync_source_participant_configuration(),
             add_encoded_mp4_chunk_callback=None,
             recording_view=self.bot_in_db.recording_view(),
             google_meet_closed_captions_language=self.bot_in_db.transcription_settings.google_meet_closed_captions_language(),
@@ -271,9 +284,11 @@ class BotController:
             add_participant_event_callback=self.on_new_participant_event,
             automatic_leave_configuration=self.automatic_leave_configuration,
             per_participant_realtime_video_configuration=self.per_participant_realtime_video_configuration,
+            room_sync_source_participant_configuration=self.get_room_sync_source_participant_configuration(),
             add_encoded_mp4_chunk_callback=None,
             recording_view=self.bot_in_db.recording_view(),
             teams_closed_captions_language=self.bot_in_db.transcription_settings.teams_closed_captions_language(),
+            teams_closed_captions_language_enforcement_duration_seconds=self.bot_in_db.transcription_settings.teams_closed_captions_language_enforcement_duration_seconds(),
             should_create_debug_recording=self.bot_in_db.create_debug_recording(),
             start_recording_screen_callback=self.screen_and_audio_recorder.start_recording if self.screen_and_audio_recorder else None,
             stop_recording_screen_callback=self.screen_and_audio_recorder.stop_recording if self.screen_and_audio_recorder else None,
@@ -348,6 +363,7 @@ class BotController:
             add_participant_event_callback=self.on_new_participant_event,
             automatic_leave_configuration=self.automatic_leave_configuration,
             per_participant_realtime_video_configuration=self.per_participant_realtime_video_configuration,
+            room_sync_source_participant_configuration=self.get_room_sync_source_participant_configuration(),
             add_encoded_mp4_chunk_callback=None,
             recording_view=self.bot_in_db.recording_view(),
             should_create_debug_recording=self.bot_in_db.create_debug_recording(),
@@ -356,6 +372,7 @@ class BotController:
             video_frame_size=self.bot_in_db.recording_dimensions(),
             zoom_oauth_credentials_callback=self.get_zoom_oauth_credentials,
             zoom_closed_captions_language=self.bot_in_db.transcription_settings.zoom_closed_captions_language(),
+            webinar_user_email=self.bot_in_db.zoom_webinar_user_email(),
             should_ask_for_recording_permission=self.pipeline_configuration.record_audio or self.pipeline_configuration.rtmp_stream_audio or self.pipeline_configuration.websocket_stream_audio or self.pipeline_configuration.record_video or self.pipeline_configuration.rtmp_stream_video,
             record_chat_messages_when_paused=self.bot_in_db.record_chat_messages_when_paused(),
             disable_incoming_video=self.disable_incoming_video_for_web_bots(),
@@ -461,7 +478,7 @@ class BotController:
     def get_per_participant_audio_utterance_delay_ms(self):
         meeting_type = self.get_meeting_type()
         if meeting_type == MeetingTypes.TEAMS:
-            return 2000
+            return self.adapter.get_per_participant_audio_utterance_delay_ms()
         return 0
 
     def get_per_participant_audio_sample_rate(self):
@@ -511,6 +528,45 @@ class BotController:
         if meeting_type == MeetingTypes.ZOOM:
             return 0.9
         return 0.1
+
+    def get_room_sync_client(self):
+        if not self.bot_in_db.should_use_room_sync():
+            return None
+
+        from bots.bot_controller.livekit_room_sync_client import LivekitRoomSyncClient
+
+        # LiveKit is the only supported room sync provider for now
+
+        livekit_credentials_record = Credentials.objects.filter(project=self.bot_in_db.project, credential_type=Credentials.CredentialTypes.LIVEKIT).first()
+        if livekit_credentials_record is None:
+            logger.error("Room sync is enabled but no LiveKit credentials are configured for this project")
+            return None
+
+        livekit_credentials = livekit_credentials_record.get_credentials()
+        if not livekit_credentials or not livekit_credentials.get("url") or not livekit_credentials.get("api_key") or not livekit_credentials.get("api_secret"):
+            logger.error("Room sync is enabled but the configured LiveKit credentials are missing a url, api_key or api_secret")
+            return None
+
+        return LivekitRoomSyncClient(
+            room=self.bot_in_db.room_sync_livekit_room_name(),
+            source_participant=self.bot_in_db.room_sync_livekit_source_participant(),
+            credentials=livekit_credentials,
+            sample_rate=self.get_per_participant_audio_sample_rate(),
+            sync_to_room=self.bot_in_db.room_sync_sync_to_room(),
+        )
+
+    def get_room_sync_source_participant_configuration(self):
+        if not self.room_sync_client:
+            return None
+
+        return self.room_sync_client.build_source_participant_configuration()
+
+    def cleanup_room_sync_client(self):
+        if not self.room_sync_client:
+            return
+
+        logger.info("Telling room sync client to shutdown...")
+        self.room_sync_client.cleanup()
 
     def get_bot_adapter(self):
         meeting_type = self.get_meeting_type()
@@ -647,6 +703,8 @@ class BotController:
             logger.info("Telling rtmp client to cleanup...")
             self.rtmp_client.stop()
 
+        self.cleanup_room_sync_client()
+
         if self.adapter:
             logger.info("Telling adapter to leave meeting...")
             self.adapter.leave()
@@ -741,19 +799,20 @@ class BotController:
         if self.bot_in_db.rtmp_destination_url():
             return PipelineConfiguration.rtmp_streaming_bot()
 
-        websocket_kwargs = dict(
+        optional_add_ons_kwargs = dict(
             websocket_stream_audio=bool(self.bot_in_db.websocket_audio_url()),
             websocket_stream_per_participant_audio=bool(self.bot_in_db.websocket_per_participant_audio_url()),
             websocket_stream_per_participant_video=bool(self.bot_in_db.websocket_per_participant_video_url()),
+            room_sync_stream_per_participant_audio=self.bot_in_db.should_use_room_sync() and self.bot_in_db.room_sync_sync_to_room(),
         )
 
         if self.bot_in_db.recording_type() == RecordingTypes.AUDIO_ONLY:
-            return PipelineConfiguration.audio_recorder_bot(**websocket_kwargs)
+            return PipelineConfiguration.audio_recorder_bot(**optional_add_ons_kwargs)
 
         if self.bot_in_db.recording_type() == RecordingTypes.NO_RECORDING:
-            return PipelineConfiguration.pure_transcription_bot(**websocket_kwargs)
+            return PipelineConfiguration.pure_transcription_bot(**optional_add_ons_kwargs)
 
-        return PipelineConfiguration.recorder_bot(**websocket_kwargs)
+        return PipelineConfiguration.recorder_bot(**optional_add_ons_kwargs)
 
     def get_gstreamer_sink_type(self):
         if self.pipeline_configuration.rtmp_stream_audio or self.pipeline_configuration.rtmp_stream_video:
@@ -915,6 +974,8 @@ class BotController:
                 on_message_callback=self.on_message_from_websocket_audio,
             )
 
+        self.room_sync_client = self.get_room_sync_client()
+
         self.adapter = self.get_bot_adapter()
 
         self.audio_output_manager = AudioOutputManager(
@@ -1024,6 +1085,7 @@ class BotController:
         if self.bot_in_db.state == BotStates.LEAVING:
             logger.info("take_action_based_on_bot_in_db - LEAVING")
             BotEventManager.set_requested_bot_action_taken_at(self.bot_in_db)
+            self.cleanup_room_sync_client()
             self.adapter.leave()
         if self.bot_in_db.state == BotStates.STAGED:
             logger.info(f"take_action_based_on_bot_in_db - STAGED. For now, this is a no-op. join_at = {self.bot_in_db.join_at.isoformat()}")
@@ -1130,7 +1192,7 @@ class BotController:
             logger.info("Bot adapter is not ready to send chat messages, so not sending chat message requests")
             return
 
-        chat_message_requests = self.bot_in_db.chat_message_requests.filter(state=BotChatMessageRequestStates.ENQUEUED)
+        chat_message_requests = self.bot_in_db.chat_message_requests.filter(state=BotChatMessageRequestStates.ENQUEUED).order_by("created_at", "id")
         for chat_message_request in chat_message_requests:
             self.adapter.send_chat_message(text=chat_message_request.message, to_user_uuid=chat_message_request.to_user_uuid)
             BotChatMessageRequestManager.set_chat_message_request_sent(chat_message_request)
@@ -1167,6 +1229,9 @@ class BotController:
     def handle_glib_shutdown(self):
         logger.info("handle_glib_shutdown called")
 
+        if self.bot_was_restarted_instead_of_terminated():
+            return False
+
         try:
             BotEventManager.create_event(
                 bot=self.bot_in_db,
@@ -1178,6 +1243,41 @@ class BotController:
 
         self.cleanup()
         return False
+
+    def bot_was_restarted_instead_of_terminated(self):
+        # Only relevant for Kubernetes-launched bots
+        if os.getenv("LAUNCH_BOT_METHOD") != "kubernetes":
+            return False
+
+        if os.getenv("RESTART_PREJOIN_TERMINATED_BOTS", "false") != "true":
+            return False
+
+        # If the bot is still staged or joining (e.g. the pod was terminated early),
+        # restart the pod to recover instead of failing.
+        self.bot_in_db.refresh_from_db()
+        if self.bot_in_db.state not in [BotStates.STAGED, BotStates.JOINING]:
+            return False
+
+        # If bot never got a heartbeat, terminate normally.
+        if self.bot_in_db.last_heartbeat_timestamp is None:
+            logger.info("Bot never got a heartbeat, so terminating normally instead of restarting the bot pod")
+            return False
+
+        # Don't bother restarting if the bot is too old.
+        bot_start_time = self.bot_in_db.join_at or self.bot_in_db.created_at
+        if bot_start_time < timezone.now() - timedelta(minutes=15):
+            logger.info("Bot is still staged / joining but was created more than 15 minutes ago, so not restarting the bot pod")
+            return False
+
+        logger.info("Bot is still staged / joining, so restarting the bot pod instead of creating a fatal error event")
+        from bots.tasks.restart_bot_pod_task import restart_bot_pod
+
+        restart_bot_pod.apply_async(args=[self.bot_in_db.id], countdown=60)
+        # Don't do the normal cleanup tasks because we'll be restarting the pod
+        if self.main_loop and self.main_loop.is_running():
+            logger.info("Quitting main loop")
+            self.main_loop.quit()
+        return True
 
     def handle_redis_message(self, message):
         if message and message["type"] == "message":
@@ -1555,6 +1655,11 @@ class BotController:
             logger.warning(f"Warning: No participant found for participant event: {event}")
             return
 
+        # Mirror participant joins/leaves into the LiveKit room if room sync is enabled
+        # Don't sync the bot itself into the room
+        if self.room_sync_client is not None and not participant["participant_is_the_bot"]:
+            self.room_sync_client.handle_participant_event(event, participant=participant)
+
         # Create participant record if it doesn't exist
         participant, _ = Participant.objects.get_or_create(
             bot=self.bot_in_db,
@@ -1611,6 +1716,11 @@ class BotController:
         if participant is None:
             logger.warning(f"Warning: No participant found for chat message: {chat_message}")
             return
+
+        # Mirror participant chat messages into the LiveKit room if room sync is enabled
+        # Don't mirror messages sent by the bot itself
+        if self.room_sync_client is not None and not participant["participant_is_the_bot"]:
+            self.room_sync_client.handle_chat_message(chat_message)
 
         participant, _ = Participant.objects.get_or_create(
             bot=self.bot_in_db,
@@ -1987,6 +2097,7 @@ class BotController:
 
             BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.LEAVE_REQUESTED, event_sub_type=event_sub_type_for_reason)
             BotEventManager.set_requested_bot_action_taken_at(self.bot_in_db)
+            self.cleanup_room_sync_client()
             self.adapter.leave()
             return
 
@@ -1994,10 +2105,31 @@ class BotController:
             logger.info("Received message that meeting ended")
             self.flush_utterances()
             if self.bot_in_db.state == BotStates.LEAVING:
-                # The bot decided to leave on its own, so naming a remover here would only muddy why it left.
-                new_bot_event = BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.BOT_LEFT_MEETING)
+                last_bot_event = self.bot_in_db.last_bot_event()
+                state_when_leave_requested = last_bot_event.old_state if last_bot_event else None
+                bot_was_staged_when_leave_requested = state_when_leave_requested == BotStates.STAGED
+                bot_was_running_but_had_not_joined_when_leave_requested = state_when_leave_requested in BotStates.running_but_has_not_joined_states() if settings.PREJOIN_LEAVE_OR_MEETING_END_IS_FATAL_ERROR else False
+                if bot_was_staged_when_leave_requested or bot_was_running_but_had_not_joined_when_leave_requested:
+                    new_bot_event = BotEventManager.create_event(
+                        bot=self.bot_in_db,
+                        event_type=BotEventTypes.COULD_NOT_JOIN,
+                        event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_LEAVE_REQUESTED_BEFORE_BOT_JOINED,
+                        event_metadata={
+                            "state_when_leave_requested": BotStates.state_to_api_code(state_when_leave_requested),
+                        },
+                    )
+                else:
+                    new_bot_event = BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.BOT_LEFT_MEETING)
             else:
-                new_bot_event = BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.MEETING_ENDED, event_metadata=self.get_remover_metadata(message))
+                bot_was_running_but_had_not_joined_when_meeting_ended = self.bot_in_db.state in BotStates.running_but_has_not_joined_states() if settings.PREJOIN_LEAVE_OR_MEETING_END_IS_FATAL_ERROR else False
+                if bot_was_running_but_had_not_joined_when_meeting_ended:
+                    new_bot_event = BotEventManager.create_event(
+                        bot=self.bot_in_db,
+                        event_type=BotEventTypes.COULD_NOT_JOIN,
+                        event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_MEETING_ENDED_BEFORE_BOT_JOINED,
+                    )
+                else:
+                    new_bot_event = BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.MEETING_ENDED, event_metadata=self.get_remover_metadata(message))
 
             self.save_debug_artifacts(message, new_bot_event)
 

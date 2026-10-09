@@ -5,6 +5,7 @@ import os
 import tempfile
 import threading
 import time
+from datetime import timedelta
 from logging.handlers import RotatingFileHandler
 from unittest.mock import MagicMock, mock_open, patch
 from urllib.parse import urlparse
@@ -13,12 +14,14 @@ from django.conf import settings
 from django.core.files.storage import InMemoryStorage
 from django.db import connection
 from django.test import TransactionTestCase, tag
+from django.utils import timezone
 from selenium.common.exceptions import TimeoutException
+from websockets.sync.client import connect as ws_connect
 
 from bots.bot_adapter import BotAdapter
 from bots.bot_controller.bot_controller import BotController
 from bots.bots_api_views import send_sync_command
-from bots.models import Bot, BotChatMessageRequest, BotChatMessageRequestStates, BotChatMessageToOptions, BotDebugScreenshot, BotEventManager, BotEventSubTypes, BotEventTypes, BotLogin, BotLoginGroup, BotLoginPlatform, BotMediaRequest, BotMediaRequestMediaTypes, BotMediaRequestStates, BotStates, Credentials, MediaBlob, Organization, Participant, Project, Recording, RecordingStates, RecordingTypes, TranscriptionProviders, TranscriptionTypes
+from bots.models import Bot, BotChatMessageRequest, BotChatMessageRequestStates, BotChatMessageToOptions, BotDebugScreenshot, BotEventManager, BotEventSubTypes, BotEventTypes, BotLogin, BotLoginGroup, BotLoginPlatform, BotMediaRequest, BotMediaRequestMediaTypes, BotMediaRequestStates, BotStates, ChatMessage, ChatMessageToOptions, Credentials, MediaBlob, Organization, Participant, ParticipantEvent, ParticipantEventTypes, Project, Recording, RecordingStates, RecordingTypes, TranscriptionProviders, TranscriptionTypes, WebhookDeliveryAttempt, WebhookSubscription, WebhookTriggerTypes
 from bots.teams_bot_adapter.teams_ui_methods import TeamsUIMethods, UiTeamsBlockingUsException, UiWaitingRoomTransitionFailedException
 from bots.web_bot_adapter.ui_methods import UiLoginRequiredException
 
@@ -37,6 +40,12 @@ def create_mock_teams_driver():
     mock_driver = MagicMock()
     mock_driver.execute_script.return_value = "test_result"
     return mock_driver
+
+
+def send_json_websocket_message(websocket, message):
+    """Send a message to the adapter's websocket server the way the chromedriver payload does:
+    the message type as 4 little-endian bytes, where 1 means JSON, followed by the JSON itself."""
+    websocket.send((1).to_bytes(4, byteorder="little") + json.dumps(message).encode("utf-8"))
 
 
 @tag("teams_tests")
@@ -265,6 +274,194 @@ class TestTeamsBot(TransactionTestCase):
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
     @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
     @patch("bots.bot_controller.bot_controller.S3FileUploader")
+    def test_glib_shutdown_creates_process_terminated_fatal_error(
+        self,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+    ):
+        """Test that receiving a SIGTERM/SIGINT (via the GLib shutdown handler) after the bot
+        has joined creates a FATAL_ERROR / PROCESS_TERMINATED event and cleans the bot up.
+
+        This exercises the real handle_glib_shutdown() path registered with
+        GLib.unix_signal_add for SIGTERM/SIGINT. Because LAUNCH_BOT_METHOD is not "kubernetes"
+        in the test environment, bot_was_restarted_instead_of_terminated() returns False, so the
+        handler creates the fatal error event and runs cleanup rather than restarting the pod.
+
+        Flow:
+        1. Bot joins the meeting successfully.
+        2. The process is "terminated" by invoking the GLib shutdown handler directly, which is
+           what GLib does when the pod receives SIGTERM/SIGINT.
+        3. A FATAL_ERROR event with the PROCESS_TERMINATED sub-type is created.
+        4. cleanup() runs, finishing the recording and leaving the bot in the FATAL_ERROR state.
+        """
+        # Configure the mock uploader
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        # Mock the Chrome driver
+        mock_driver = create_mock_teams_driver()
+        MockChromeDriver.return_value = mock_driver
+
+        # Mock virtual display
+        mock_display = MagicMock()
+        MockDisplay.return_value = mock_display
+
+        # Create bot controller
+        controller = BotController(self.bot.id)
+
+        # Mock the attempt_to_join_meeting to succeed immediately
+        with patch("bots.teams_bot_adapter.teams_ui_methods.TeamsUIMethods.attempt_to_join_meeting") as mock_attempt_to_join:
+            mock_attempt_to_join.return_value = None  # Successful join
+
+            # Run the bot in a separate thread since it has an event loop
+            bot_thread = threading.Thread(target=controller.run)
+            bot_thread.daemon = True
+            bot_thread.start()
+
+            # Wait for the bot to join
+            time.sleep(3)
+
+            # Simulate the pod receiving SIGTERM/SIGINT - GLib invokes this handler
+            return_value = controller.handle_glib_shutdown()
+
+            # The handler must return False so GLib removes the signal source
+            self.assertFalse(return_value, "handle_glib_shutdown should return False")
+
+            # Give cleanup time to run
+            time.sleep(1)
+
+            # Now wait for the thread to finish naturally
+            bot_thread.join(timeout=5)
+
+            # If thread is still running after timeout, that's a problem to report
+            if bot_thread.is_alive():
+                print("WARNING: Bot thread did not terminate properly after cleanup")
+
+            # Close the database connection since we're in a thread
+            connection.close()
+
+            # Test that the last bot event is a FATAL_ERROR with the PROCESS_TERMINATED sub-type
+            self.bot.refresh_from_db()
+            last_bot_event = self.bot.bot_events.last()
+            self.assertEqual(last_bot_event.event_type, BotEventTypes.FATAL_ERROR)
+            self.assertEqual(last_bot_event.event_sub_type, BotEventSubTypes.FATAL_ERROR_PROCESS_TERMINATED)
+            self.assertEqual(self.bot.state, BotStates.FATAL_ERROR)
+
+            # Verify that cleanup terminated the recording (a fatal error fails the recording
+            # rather than completing it normally)
+            self.recording.refresh_from_db()
+            self.assertEqual(self.recording.state, RecordingStates.FAILED)
+
+    @patch.dict("os.environ", {"LAUNCH_BOT_METHOD": "kubernetes"})
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
+    @patch.dict("os.environ", {"RESTART_PREJOIN_TERMINATED_BOTS": "true"})
+    def test_glib_shutdown_restarts_pod_when_bot_still_staged(
+        self,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+    ):
+        """Test that receiving a SIGTERM/SIGINT while a Kubernetes-launched bot is still STAGED
+        restarts the bot pod instead of creating a fatal error event.
+
+        When a bot is still STAGED, it never started joining (e.g. the pod was terminated early),
+        so handle_glib_shutdown() -> bot_was_restarted_instead_of_terminated() schedules a pod
+        restart and quits the main loop rather than failing the bot. This only happens for
+        Kubernetes-launched bots, so LAUNCH_BOT_METHOD is patched to "kubernetes".
+
+        Flow:
+        1. A STAGED bot with a join_at an hour in the future runs, staying STAGED (a main-loop
+           no-op) because it isn't time to join yet.
+        2. The process is "terminated" by invoking the GLib shutdown handler directly.
+        3. Because the bot is still STAGED (and recently created), restart_bot_pod is scheduled
+           and the main loop is quit.
+        4. No FATAL_ERROR event is created and cleanup() is NOT run, since the pod is restarting.
+        """
+        # A staged bot with a future join_at stays STAGED (main loop no-op) until it's time to join
+        staged_bot = Bot.objects.create(
+            name="Test Teams Bot Staged",
+            meeting_url="https://teams.microsoft.com/meet/789789789?p=789789789",
+            state=BotStates.STAGED,
+            join_at=timezone.now() + timedelta(hours=1),
+            project=self.project,
+        )
+        Recording.objects.create(
+            bot=staged_bot,
+            recording_type=RecordingTypes.AUDIO_AND_VIDEO,
+            transcription_type=TranscriptionTypes.NON_REALTIME,
+            transcription_provider=TranscriptionProviders.DEEPGRAM,
+            is_default_recording=True,
+        )
+
+        # Configure the mock uploader
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        # Mock the Chrome driver
+        mock_driver = create_mock_teams_driver()
+        MockChromeDriver.return_value = mock_driver
+
+        # Mock virtual display
+        mock_display = MagicMock()
+        MockDisplay.return_value = mock_display
+
+        # Create bot controller
+        controller = BotController(staged_bot.id)
+
+        # Spy on cleanup to prove the restart path skips the normal shutdown cleanup, and mock the
+        # restart_bot_pod task so no real Kubernetes call is made.
+        with (
+            patch.object(controller, "cleanup") as mock_cleanup,
+            patch("bots.tasks.restart_bot_pod_task.restart_bot_pod.apply_async") as mock_restart_apply_async,
+        ):
+            # Run the bot in a separate thread since it has an event loop
+            bot_thread = threading.Thread(target=controller.run)
+            bot_thread.daemon = True
+            bot_thread.start()
+
+            # Wait for the bot to initialize; it stays STAGED because join_at is in the future
+            time.sleep(3)
+
+            # Confirm the bot is still staged before we terminate it
+            staged_bot.refresh_from_db()
+            self.assertEqual(staged_bot.state, BotStates.STAGED, "Bot should still be STAGED before termination")
+
+            # Simulate the pod receiving SIGTERM/SIGINT - GLib invokes this handler
+            return_value = controller.handle_glib_shutdown()
+
+            # The handler must return False so GLib removes the signal source
+            self.assertFalse(return_value, "handle_glib_shutdown should return False")
+
+            # Now wait for the thread to finish (the main loop was quit by the restart path)
+            bot_thread.join(timeout=5)
+
+            # If thread is still running after timeout, that's a problem to report
+            if bot_thread.is_alive():
+                print("WARNING: Bot thread did not terminate properly after cleanup")
+
+            # Close the database connection since we're in a thread
+            connection.close()
+
+            # A pod restart should have been scheduled with a countdown
+            mock_restart_apply_async.assert_called_once_with(args=[staged_bot.id], countdown=60)
+
+            # The normal shutdown cleanup should NOT run, since the pod is being restarted
+            mock_cleanup.assert_not_called()
+
+            # The bot should remain STAGED with no fatal error event
+            staged_bot.refresh_from_db()
+            self.assertEqual(staged_bot.state, BotStates.STAGED, "Bot should remain STAGED after the restart path runs")
+            self.assertFalse(
+                staged_bot.bot_events.filter(event_type=BotEventTypes.FATAL_ERROR).exists(),
+                "No FATAL_ERROR event should be created when the pod is restarted",
+            )
+
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
     def test_chat_message_delayed_until_adapter_ready(
         self,
         MockFileUploader,
@@ -344,6 +541,9 @@ class TestTeamsBot(TransactionTestCase):
                 self.assertEqual(call_args.kwargs["text"], "Test message")
                 self.assertEqual(call_args.kwargs["to_user_uuid"], None)
 
+                # Verify utterance delay is 2000ms
+                self.assertEqual(controller.adapter.get_per_participant_audio_utterance_delay_ms(), 2000, "Utterance delay should be 2000ms")
+
                 # Verify that the chat message request is now in SENT state
                 chat_message_request.refresh_from_db()
                 self.assertEqual(chat_message_request.state, BotChatMessageRequestStates.SENT, "Chat message should be in SENT state after being sent")
@@ -359,6 +559,248 @@ class TestTeamsBot(TransactionTestCase):
             # If thread is still running after timeout, that's a problem to report
             if bot_thread.is_alive():
                 print("WARNING: Bot thread did not terminate properly after cleanup")
+
+            # Close the database connection since we're in a thread
+            connection.close()
+
+    @patch("bots.web_bot_adapter.web_bot_adapter.connect")
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
+    @patch("bots.tasks.deliver_webhook_task.deliver_webhook")
+    def test_chat_message_from_someone_outside_the_meeting_lazily_inserts_them(
+        self,
+        mock_deliver_webhook,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+        MockBiDiConnect,
+    ):
+        """
+        In Teams someone can send a chat message into the meeting without being in it. The adapter
+        lazily inserts that sender as an inactive participant so their message can still be saved,
+        and when they later join the meeting the real participant data takes over their record.
+
+        The messages are sent over the adapter's websocket server, the way the chromedriver payload
+        sends them, so the whole path from a websocket message to the saved records runs.
+
+        Flow:
+        1. The bot joins the meeting and starts recording.
+        2. Someone the bot has never seen sends a chat message, and is lazily inserted as inactive.
+        3. A chat message whose sender may not be lazily inserted is dropped.
+        4. The sender joins the meeting as the host, which updates their record to say they are a host.
+        5. Someone the bot has never seen joins as a host, which is not an update to whether they are a host.
+        """
+        mock_deliver_webhook.return_value = None
+
+        # Configure the mock uploader
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        # Mock the Chrome driver
+        mock_driver = create_mock_teams_driver()
+        mock_driver.capabilities = {"webSocketUrl": "ws://localhost:9222/session/test-session"}
+        MockChromeDriver.return_value = mock_driver
+
+        # Mock virtual display
+        mock_display = MagicMock()
+        MockDisplay.return_value = mock_display
+
+        # Stub the BiDi websocket the domain allow list listener connects to, so it
+        # sees a successful session.subscribe response and then an empty message stream
+        mock_bidi_socket = MagicMock()
+        mock_bidi_socket.recv.return_value = json.dumps({"id": 1, "type": "success", "result": {}})
+        MockBiDiConnect.return_value = mock_bidi_socket
+
+        # Subscribe to the webhooks the saved records should trigger
+        WebhookSubscription.objects.create(
+            project=self.project,
+            url="https://example.com/webhook",
+            triggers=[WebhookTriggerTypes.CHAT_MESSAGES_UPDATE, WebhookTriggerTypes.PARTICIPANT_EVENTS_JOIN_LEAVE],
+            is_active=True,
+        )
+
+        chatter_uuid = "8:orgid:00000000-0000-0000-0000-000000000006"
+        lurker_uuid = "8:orgid:00000000-0000-0000-0000-000000000007"
+        host_uuid = "8:orgid:00000000-0000-0000-0000-000000000008"
+        message_timestamp = int(time.time())
+
+        # Create bot controller
+        controller = BotController(self.bot.id)
+
+        # Mock the attempt_to_join_meeting to succeed immediately
+        with patch("bots.teams_bot_adapter.teams_ui_methods.TeamsUIMethods.attempt_to_join_meeting") as mock_attempt_to_join:
+            mock_attempt_to_join.return_value = None  # Successful join
+
+            # Run the bot in a separate thread since it has an event loop
+            bot_thread = threading.Thread(target=controller.run)
+            bot_thread.daemon = True
+            bot_thread.start()
+
+            # Wait for the bot to join, start recording and start its websocket server
+            time.sleep(3)
+            self.assertIsNotNone(controller.adapter.websocket_port, "The adapter should have started its websocket server by now")
+
+            # Update events are not saved in the database, so record what the adapter emits
+            emitted_participant_events = []
+            emit_participant_event = controller.adapter.add_participant_event_callback
+
+            def record_participant_event(event):
+                emitted_participant_events.append(event)
+                return emit_participant_event(event)
+
+            controller.adapter.add_participant_event_callback = record_participant_event
+
+            def emitted_event_types_for(participant_uuid):
+                return [event["event_type"] for event in emitted_participant_events if event["participant_uuid"] == participant_uuid]
+
+            with ws_connect(f"ws://localhost:{controller.adapter.websocket_port}") as websocket:
+                # Someone who is not in the meeting sends a chat message
+                send_json_websocket_message(
+                    websocket,
+                    {
+                        "type": "ChatMessage",
+                        "message_uuid": "msg-from-outside-the-meeting",
+                        "participant_uuid": chatter_uuid,
+                        "participant_full_name": "Chatty Person",
+                        "can_lazily_insert_participant": True,
+                        "timestamp": message_timestamp,
+                        "text": "Running late, please start without me",
+                    },
+                )
+
+                # Wait for the message to be processed by the main loop
+                time.sleep(1)
+
+                # The sender was lazily inserted, so their message is saved and attributed to them
+                participant = Participant.objects.get(bot=self.bot, uuid=chatter_uuid)
+                self.assertEqual(participant.full_name, "Chatty Person")
+                self.assertFalse(participant.is_the_bot)
+                self.assertFalse(participant.is_host, "The sender should not be a host until the meeting says they are")
+
+                chat_message = ChatMessage.objects.get(bot=self.bot, participant=participant)
+                self.assertEqual(chat_message.text, "Running late, please start without me")
+                self.assertEqual(chat_message.timestamp, message_timestamp)
+                self.assertEqual(chat_message.to, ChatMessageToOptions.EVERYONE)
+                self.assertEqual(chat_message.source_uuid, f"{self.recording.object_id}-msg-from-outside-the-meeting")
+
+                chat_message_webhook = WebhookDeliveryAttempt.objects.get(bot=self.bot, webhook_trigger_type=WebhookTriggerTypes.CHAT_MESSAGES_UPDATE)
+                self.assertEqual(chat_message_webhook.payload["text"], "Running late, please start without me")
+                self.assertEqual(chat_message_webhook.payload["sender_name"], "Chatty Person")
+                self.assertEqual(chat_message_webhook.payload["sender_uuid"], chatter_uuid)
+
+                # The sender was never in the meeting, so nothing should report them as having joined
+                self.assertFalse(ParticipantEvent.objects.filter(participant=participant).exists(), "A lazy insert is not a join, so it should not be saved as a participant event")
+                self.assertEqual(controller.adapter.number_of_participants_ever_in_meeting_excluding_other_bots(), 0, "A lazily inserted sender was never in the meeting, so they should not be counted")
+
+                # A sender the adapter may not lazily insert stays unknown, so their message is dropped
+                send_json_websocket_message(
+                    websocket,
+                    {
+                        "type": "ChatMessage",
+                        "message_uuid": "msg-from-a-sender-we-cannot-insert",
+                        "participant_uuid": lurker_uuid,
+                        "participant_full_name": "Unknown Person",
+                        "timestamp": message_timestamp,
+                        "text": "Nobody knows who I am",
+                    },
+                )
+
+                time.sleep(1)
+
+                self.assertFalse(Participant.objects.filter(bot=self.bot, uuid=lurker_uuid).exists(), "No participant should be created for a sender without can_lazily_insert_participant")
+                self.assertEqual(ChatMessage.objects.filter(bot=self.bot).count(), 1, "Only the message from the lazily inserted sender should be saved")
+
+                # The sender now joins the meeting, as the host
+                send_json_websocket_message(
+                    websocket,
+                    {
+                        "type": "UsersUpdate",
+                        "newUsers": [
+                            {
+                                "deviceId": chatter_uuid,
+                                "displayName": "Chatty Person",
+                                "fullName": "Chatty Person",
+                                "status": "active",
+                                "humanized_status": "in_meeting",
+                                "isCurrentUser": False,
+                                "isHost": True,
+                                "meetingId": "meeting-123",
+                            }
+                        ],
+                        "removedUsers": [],
+                        "updatedUsers": [],
+                    },
+                )
+
+                time.sleep(1)
+
+            # The record created for their chat message is updated, not duplicated
+            self.assertEqual(Participant.objects.filter(bot=self.bot, uuid=chatter_uuid).count(), 1)
+            participant.refresh_from_db()
+            self.assertTrue(participant.is_host, "The sender should be a host once they join the meeting as one")
+            self.assertEqual(controller.adapter.number_of_participants_ever_in_meeting_excluding_other_bots(), 1, "The sender should be counted once they actually join the meeting")
+            self.assertEqual(emitted_event_types_for(chatter_uuid), [ParticipantEventTypes.JOIN, ParticipantEventTypes.UPDATE], "The sender was not a host when they were lazily inserted, so becoming one is an update")
+
+            # Their message stays attributed to the same record, which now says they are a host
+            chat_message.refresh_from_db()
+            self.assertEqual(chat_message.participant, participant)
+
+            # Joining the meeting is saved as a join event, and reported as one
+            join_event = ParticipantEvent.objects.get(participant=participant, event_type=ParticipantEventTypes.JOIN)
+            join_webhook = WebhookDeliveryAttempt.objects.get(bot=self.bot, webhook_trigger_type=WebhookTriggerTypes.PARTICIPANT_EVENTS_JOIN_LEAVE)
+            self.assertEqual(join_webhook.payload["event_type"], "join")
+            self.assertEqual(join_webhook.payload["participant_uuid"], chatter_uuid)
+            self.assertEqual(join_webhook.payload["id"], join_event.object_id)
+
+            # Someone the bot has never seen joins the meeting as a host, the normal way a host joins
+            with ws_connect(f"ws://localhost:{controller.adapter.websocket_port}") as websocket:
+                send_json_websocket_message(
+                    websocket,
+                    {
+                        "type": "UsersUpdate",
+                        "newUsers": [
+                            {
+                                "deviceId": host_uuid,
+                                "displayName": "Host Person",
+                                "fullName": "Host Person",
+                                "status": "active",
+                                "humanized_status": "in_meeting",
+                                "isCurrentUser": False,
+                                "isHost": True,
+                                "meetingId": "meeting-123",
+                            }
+                        ],
+                        "removedUsers": [],
+                        "updatedUsers": [],
+                    },
+                )
+
+                time.sleep(1)
+
+            # They were a host the first time the bot saw them, so nothing about them changed when
+            # they joined and only their join should be reported
+            host_participant = Participant.objects.get(bot=self.bot, uuid=host_uuid)
+            self.assertTrue(host_participant.is_host, "A host who joins normally should be recorded as a host from the moment they join")
+            self.assertEqual(emitted_event_types_for(host_uuid), [ParticipantEventTypes.JOIN], "Being a host is not a change for someone who was already a host when the bot first saw them")
+
+            # Clean up: simulate meeting ending to trigger cleanup
+            controller.adapter.left_meeting = True
+            controller.adapter.send_message_callback({"message": controller.adapter.Messages.MEETING_ENDED})
+            time.sleep(2)
+
+            # Now wait for the thread to finish naturally
+            bot_thread.join(timeout=5)
+
+            # If thread is still running after timeout, that's a problem to report
+            if bot_thread.is_alive():
+                print("WARNING: Bot thread did not terminate properly after cleanup")
+
+            # The records should survive the meeting ending, with the sender still a single
+            # participant who is a host
+            self.assertTrue(self.bot.bot_events.filter(event_type=BotEventTypes.MEETING_ENDED).exists())
+            self.assertEqual(ChatMessage.objects.filter(bot=self.bot).count(), 1)
+            self.assertEqual(Participant.objects.filter(bot=self.bot, uuid=chatter_uuid, is_host=True).count(), 1)
 
             # Close the database connection since we're in a thread
             connection.close()
@@ -871,6 +1313,156 @@ class TestTeamsBot(TransactionTestCase):
             # Close the database connection since we're in a thread
             connection.close()
 
+    @patch("bots.bot_controller.bot_controller.BotController.save_debug_recording", return_value=None)
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
+    def test_meeting_ended_but_should_retry_triggers_join_retry(
+        self,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+        MockSaveDebugRecording,
+    ):
+        """Test that when the Teams page signals "meeting ended but should retry join" while
+        waiting for the show more button, check_if_meeting_ended_but_we_should_retry raises
+        UiTeamsBlockingUsException and the bot retries joining.
+
+        The real click_show_more_button loop and check_if_meeting_ended_but_we_should_retry
+        run unmocked — only WebDriverWait, find_element_by_selector and the value returned
+        by connectionStateManager.getDidMeetingEndButShouldRetryJoin are controlled.
+
+        Flow:
+        1. First join attempt: WebDriverWait times out in click_show_more_button
+        2. getDidMeetingEndButShouldRetryJoin returns False -> no exception
+        3. WebDriverWait times out again
+        4. getDidMeetingEndButShouldRetryJoin returns True -> UiTeamsBlockingUsException
+        5. Exception caught in repeatedly_attempt_to_join_meeting, which retries
+        6. Second join attempt: WebDriverWait finds the show more button, join succeeds,
+           and disableRetryJoinOnMeetingEnd is called exactly once
+        """
+        self.bot.settings = {"recording_settings": {"format": "none"}}
+        self.bot.save()
+
+        # Configure the mock uploader
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        # Mock the Chrome driver
+        mock_driver = create_mock_teams_driver()
+        MockChromeDriver.return_value = mock_driver
+
+        did_meeting_end_but_should_retry_values = [False, True]
+        did_meeting_end_but_should_retry_queries = []
+        disable_retry_join_on_meeting_end_calls = []
+
+        def mock_execute_script(script, *args):
+            if "getDidMeetingEndButShouldRetryJoin" in script:
+                did_meeting_end_but_should_retry_queries.append(script)
+                if did_meeting_end_but_should_retry_values:
+                    return did_meeting_end_but_should_retry_values.pop(0)
+                return False
+            if "disableRetryJoinOnMeetingEnd" in script:
+                disable_retry_join_on_meeting_end_calls.append(script)
+                return None
+            return "test_result"
+
+        mock_driver.execute_script.side_effect = mock_execute_script
+
+        # Mock virtual display
+        mock_display = MagicMock()
+        MockDisplay.return_value = mock_display
+
+        # The first two WebDriverWait.until calls (both in the first join attempt) time out so
+        # the meeting ended check runs; the next call (in the retry) finds the show more button.
+        webdriverwait_until_call_count = [0]
+
+        def create_mock_webdriverwait(*args, **kwargs):
+            mock_wait = MagicMock()
+
+            def mock_until(*args, **kwargs):
+                webdriverwait_until_call_count[0] += 1
+                if webdriverwait_until_call_count[0] <= 2:
+                    raise TimeoutException("Mocked timeout")
+                return MagicMock()
+
+            mock_wait.until = mock_until
+            return mock_wait
+
+        with (
+            patch.object(TeamsUIMethods, "attempt_to_join_meeting", autospec=True, side_effect=TeamsUIMethods.attempt_to_join_meeting) as mock_attempt_to_join,
+            patch.object(TeamsUIMethods, "check_if_meeting_ended_but_we_should_retry", autospec=True, side_effect=TeamsUIMethods.check_if_meeting_ended_but_we_should_retry) as mock_check_meeting_ended,
+            patch.object(TeamsUIMethods, "fill_out_name_input", return_value=None),
+            patch.object(TeamsUIMethods, "wiggle_mouse", return_value=None),
+            patch.object(TeamsUIMethods, "turn_off_media_inputs", return_value=None),
+            patch.object(TeamsUIMethods, "locate_element", return_value=MagicMock()),
+            patch.object(TeamsUIMethods, "click_element", return_value=None),
+            patch("bots.teams_bot_adapter.teams_ui_methods.WebDriverWait", side_effect=create_mock_webdriverwait),
+            patch.object(TeamsUIMethods, "find_element_by_selector", return_value=None),
+            patch.object(TeamsUIMethods, "click_captions_button", return_value=None),
+            patch.object(TeamsUIMethods, "set_layout", return_value=None),
+            patch.object(TeamsUIMethods, "disable_incoming_video_in_ui", return_value=None),
+            patch("bots.web_bot_adapter.web_bot_adapter.WebBotAdapter.ready_to_show_bot_image", return_value=None),
+        ):
+            # Create bot controller
+            controller = BotController(self.bot.id)
+
+            # Run the bot in a separate thread since it has an event loop
+            bot_thread = threading.Thread(target=controller.run)
+            bot_thread.daemon = True
+            bot_thread.start()
+
+            def simulate_join_flow():
+                # Sleep to allow initialization and join attempts
+                time.sleep(1)
+
+                # Add participants to keep the bot in the meeting
+                controller.adapter.participants_info["user1"] = {"deviceId": "user1", "fullName": "Test User", "active": True, "isCurrentUser": False}
+
+                # Let the bot run for a bit to "record"
+                time.sleep(1)
+
+                # Trigger auto-leave
+                controller.adapter.only_one_participant_in_meeting_at = time.time() - 10000000000
+                time.sleep(1)
+
+                # Clean up connections in thread
+                connection.close()
+
+            # Run join flow simulation after a short delay
+            threading.Timer(3, simulate_join_flow).start()
+
+            # Give the bot some time to process
+            bot_thread.join(timeout=20)
+
+            time.sleep(1.25)
+
+            # The meeting ended check ran twice during the first attempt: once before the retry was signaled, once after
+            self.assertEqual(mock_check_meeting_ended.call_count, 2)
+            self.assertEqual(len(did_meeting_end_but_should_retry_queries), 2)
+            # Only the successful second attempt disables the retry (the first attempt exited via the retry exception)
+            self.assertEqual(len(disable_retry_join_on_meeting_end_calls), 1)
+            for call in mock_check_meeting_ended.call_args_list:
+                self.assertEqual(call.args[1], "click_show_more_button")
+
+            # The UiTeamsBlockingUsException caused exactly one retry, which succeeded
+            self.assertEqual(mock_attempt_to_join.call_count, 2, "attempt_to_join_meeting should be called twice - once for the meeting ended failure and once for the retry")
+
+            # Refresh the bot from the database
+            self.bot.refresh_from_db()
+
+            # Assert that the bot joined and then ended normally
+            self.assertEqual(self.bot.state, BotStates.ENDED)
+            self.assertTrue(self.bot.bot_events.filter(event_type=BotEventTypes.BOT_JOINED_MEETING).exists())
+            self.assertFalse(self.bot.bot_events.filter(event_type=BotEventTypes.FATAL_ERROR).exists())
+
+            # Cleanup
+            controller.cleanup()
+            bot_thread.join(timeout=5)
+
+            # Close the database connection since we're in a thread
+            connection.close()
+
     def test_get_teams_signed_in_bot_uses_named_login_group(self):
         first_group = BotLoginGroup.objects.create(project=self.project, platform=BotLoginPlatform.TEAMS, name="Primary Group")
         first_group_login = BotLogin.objects.create(group=first_group, email="primary@example.com")
@@ -894,6 +1486,7 @@ class TestTeamsBot(TransactionTestCase):
         controller.per_participant_non_streaming_audio_input_manager = MagicMock()
         controller.closed_caption_manager = MagicMock()
         controller.screen_and_audio_recorder = None
+        controller.room_sync_client = None
         adapter = controller.get_teams_bot_adapter()
 
         self.assertTrue(adapter.teams_bot_login_is_available)
@@ -902,6 +1495,46 @@ class TestTeamsBot(TransactionTestCase):
             adapter.fetch_teams_bot_login_credentials_callback(),
             {"username": "named@example.com", "password": "named-group-password"},
         )
+
+    def test_url_violates_domain_allow_list(self):
+        controller = BotController(self.bot.id)
+        controller.per_participant_non_streaming_audio_input_manager = MagicMock()
+        controller.closed_caption_manager = MagicMock()
+        controller.screen_and_audio_recorder = None
+        controller.room_sync_client = None
+        adapter = controller.get_teams_bot_adapter()
+
+        # Allowed domains and their subdomains pass, look-alike domains do not
+        self.assertFalse(adapter.url_violates_domain_allow_list("https://teams.microsoft.com/meet/123"))
+        self.assertFalse(adapter.url_violates_domain_allow_list("https://sub.teams.microsoft.com/meet/123"))
+        self.assertFalse(adapter.url_violates_domain_allow_list("http://WWW.Office.com/mail"))
+        self.assertTrue(adapter.url_violates_domain_allow_list("https://badmicrosoft.com/some-path"))
+        self.assertTrue(adapter.url_violates_domain_allow_list("https://teams.microsoft.com.evil.com/some-path"))
+
+        # A fully qualified hostname's trailing dot is normalized away
+        self.assertFalse(adapter.url_violates_domain_allow_list("https://teams.microsoft.com./meet/123"))
+
+        # Non http(s) URLs are not subject to the allow list
+        self.assertFalse(adapter.url_violates_domain_allow_list("about:blank"))
+        self.assertFalse(adapter.url_violates_domain_allow_list("chrome-error://chromewebdata/"))
+        self.assertFalse(adapter.url_violates_domain_allow_list(""))
+
+        # A leading dot disables subdomain matching, mirroring Chrome's filter format
+        with patch.object(adapter, "subclass_specific_domain_allowlist", return_value=[".teams.microsoft.com"]):
+            self.assertFalse(adapter.url_violates_domain_allow_list("https://teams.microsoft.com/meet/123"))
+            self.assertTrue(adapter.url_violates_domain_allow_list("https://sub.teams.microsoft.com/meet/123"))
+
+        # "*" allows everything
+        with patch.object(adapter, "subclass_specific_domain_allowlist", return_value=["*"]):
+            self.assertFalse(adapter.url_violates_domain_allow_list("https://badmicrosoft.com/some-path"))
+
+        # A port in the URL does not interfere with matching
+        with patch.object(adapter, "subclass_specific_domain_allowlist", return_value=["127.0.0.1"]):
+            self.assertFalse(adapter.url_violates_domain_allow_list("http://127.0.0.1:46812/some-path"))
+
+        # An empty allow list produces no violations
+        with patch.object(adapter, "subclass_specific_domain_allowlist", return_value=[]):
+            self.assertFalse(adapter.url_violates_domain_allow_list("https://badmicrosoft.com/some-path"))
 
     @patch("bots.bot_controller.bot_controller.BotController.save_debug_recording", return_value=None)
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
@@ -1134,9 +1767,11 @@ class TestTeamsBot(TransactionTestCase):
             # Close the database connection since we're in a thread
             connection.close()
 
-    @patch.dict("os.environ", {"ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME": "true"})
+    @patch("bots.web_bot_adapter.web_bot_adapter.settings.MONITOR_DOMAIN_ALLOWLIST_IN_CHROME", True)
+    @patch("bots.teams_bot_adapter.teams_bot_adapter.settings.MONITOR_DOMAIN_ALLOWLIST_IN_CHROME", True)
     @patch("bots.web_bot_adapter.web_bot_adapter.settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME", True)
     @patch("bots.teams_bot_adapter.teams_bot_adapter.settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME", True)
+    @patch("bots.web_bot_adapter.web_bot_adapter.connect")
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
     @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
     @patch("bots.bot_controller.bot_controller.S3FileUploader")
@@ -1145,15 +1780,17 @@ class TestTeamsBot(TransactionTestCase):
         MockFileUploader,
         MockChromeDriver,
         MockDisplay,
+        MockBiDiConnect,
     ):
         """Test that navigating to a URL not in the allow list raises an exception.
 
-        When Chrome's BrowserSwitcher policy blocks a URL, it redirects to
-        chrome://browser-switch?url=<blocked_url>. The check_domain_allow_list_violation()
-        method detects this in the navigation history and raises an exception.
+        Chrome's URLBlocklist policy blocks every URL that isn't in URLAllowlist and
+        replaces the page with an interstitial that says the organization doesn't allow
+        viewing the site. check_domain_allow_list_violation() detects that interstitial
+        on the top level page and raises an exception.
 
         Also verifies that the Chrome policy file would be written with the correct
-        BrowserSwitcher configuration for Teams.
+        URLBlocklist/URLAllowlist configuration for Teams.
         """
         # Configure the mock uploader
         mock_uploader = create_mock_file_uploader()
@@ -1161,11 +1798,172 @@ class TestTeamsBot(TransactionTestCase):
 
         # Mock the Chrome driver
         mock_driver = create_mock_teams_driver()
+        mock_driver.capabilities = {"webSocketUrl": "ws://localhost:9222/session/test-session"}
         MockChromeDriver.return_value = mock_driver
 
         # Mock virtual display
         mock_display = MagicMock()
         MockDisplay.return_value = mock_display
+
+        # Stub the BiDi websocket the domain allow list listener connects to, so it
+        # sees a successful session.subscribe response and then an empty message stream
+        mock_bidi_socket = MagicMock()
+        mock_bidi_socket.recv.return_value = json.dumps({"id": 1, "type": "success", "result": {}})
+        MockBiDiConnect.return_value = mock_bidi_socket
+
+        # Create bot controller
+        controller = BotController(self.bot.id)
+
+        # Mock the attempt_to_join_meeting to stay in the joining phase until allowed to finish
+        allow_join = threading.Event()
+        with patch("bots.teams_bot_adapter.teams_ui_methods.TeamsUIMethods.attempt_to_join_meeting") as mock_attempt_to_join:
+            mock_attempt_to_join.side_effect = lambda *args, **kwargs: allow_join.wait(timeout=30)
+
+            # Run the bot in a separate thread since it has an event loop
+            bot_thread = threading.Thread(target=controller.run)
+            bot_thread.daemon = True
+            bot_thread.start()
+
+            # Wait for the adapter to be created and start joining
+            time.sleep(3)
+            self.assertIsNone(controller.adapter.joined_at)
+
+            # Verify the listener subscribed over the driver's BiDi websocket
+            self.assertEqual(MockBiDiConnect.call_args[0][0], mock_driver.capabilities["webSocketUrl"])
+            subscribe_message = json.loads(mock_bidi_socket.send.call_args[0][0])
+            self.assertEqual(subscribe_message["method"], "session.subscribe")
+
+            # --- Verify the Chrome policy file would be written correctly ---
+            # Mock os.path.islink to return True so policy file writing code runs
+            # and mock open() to capture what would be written without touching filesystem
+            m = mock_open()
+            with patch("bots.web_bot_adapter.web_bot_adapter.os.path.islink", return_value=True):
+                with patch("bots.web_bot_adapter.web_bot_adapter.open", m, create=True):
+                    controller.adapter.write_chrome_policies_file()
+
+            # Verify open was called with the correct path
+            m.assert_called_once_with("/tmp/attendee-chrome-policies.json", "w")
+
+            # Get the data that would have been written via json.dump
+            # json.dump calls write() on the file handle, so we get what was written
+            write_calls = m().write.call_args_list
+            written_data = "".join(call[0][0] for call in write_calls)
+            policy = json.loads(written_data)
+
+            # Verify every URL is blocked by default
+            self.assertEqual(policy.get("URLBlocklist"), ["*"], "URLBlocklist should block all URLs by default")
+
+            # Verify the URL allow list contains the expected domains
+            url_allowlist = policy.get("URLAllowlist", [])
+            for allowed_domain in [
+                "teams.microsoft.com",
+                "teams.live.com",
+                "login.live.com",
+                "teams.microsoft.us",
+                "m365.cloud.microsoft",
+                "static.microsoft",
+                "login.microsoftonline.com",
+                "www.office.com",
+            ]:
+                self.assertIn(allowed_domain, url_allowlist, f"{allowed_domain} should be allowed")
+
+            # --- Now test the domain allow list violation detection ---
+
+            # Sanity check the allow list matching that backs the history and iframe checks:
+            # allowed domains and their subdomains pass, look-alike domains do not
+            blocked_url = "https://badmicrosoft.com/some-path"
+            self.assertFalse(controller.adapter.url_violates_domain_allow_list("https://teams.microsoft.com/meet/123"))
+            self.assertFalse(controller.adapter.url_violates_domain_allow_list("https://www.office.com/mail"))
+            self.assertTrue(controller.adapter.url_violates_domain_allow_list(blocked_url))
+
+            # Simulate Chrome replacing the top level page with the URLBlocklist
+            # interstitial, whose message is exposed via window.loadTimeDataRaw
+            mock_driver.current_url = blocked_url
+
+            def execute_cdp_cmd_side_effect(cmd, params):
+                if cmd == "Runtime.evaluate":
+                    return {"result": {"value": "Your organization doesn\u2019t allow you to view this site"}}
+                if cmd == "Page.getFrameTree":
+                    return {"frameTree": {"frame": {"url": blocked_url}, "childFrames": []}}
+                return {}
+
+            mock_driver.execute_cdp_cmd.side_effect = execute_cdp_cmd_side_effect
+
+            # Reset the last check time so the check runs immediately
+            controller.adapter.last_domain_allow_list_violation_check_time = 0
+
+            # While the bot is still joining, check_domain_allow_list_violation raises an exception
+            with self.assertRaises(Exception) as context:
+                controller.adapter.check_domain_allow_list_violation()
+
+            # Verify the exception message contains the blocked domain
+            self.assertIn("Domain allow list violation detected", str(context.exception))
+            self.assertIn("badmicrosoft.com", str(context.exception))
+
+            # Stop simulating the interstitial so cleanup isn't affected by it
+            mock_driver.execute_cdp_cmd.side_effect = None
+            mock_driver.execute_cdp_cmd.return_value = {}
+
+            # Cleanup
+            controller.cleanup()
+            allow_join.set()
+            bot_thread.join(timeout=5)
+
+            # Close the database connection since we're in a thread
+            connection.close()
+
+    @patch.dict("os.environ", {"MONITOR_DOMAIN_ALLOWLIST_IN_CHROME": "true", "ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME": "false"})
+    @patch("bots.web_bot_adapter.web_bot_adapter.settings.MONITOR_DOMAIN_ALLOWLIST_IN_CHROME", True)
+    @patch("bots.web_bot_adapter.web_bot_adapter.settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME", False)
+    @patch("bots.teams_bot_adapter.teams_bot_adapter.settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME", False)
+    @patch("bots.web_bot_adapter.web_bot_adapter.connect")
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
+    def test_domain_allow_list_violation_only_monitored_when_enforcement_is_off(
+        self,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+        MockBiDiConnect,
+    ):
+        """Test that with monitoring on but enforcement off, allow list violations are
+        observed and recorded but never block the bot.
+
+        In monitor-only mode Chrome gets no URLBlocklist/URLAllowlist policy, so nothing is
+        actually blocked, but the BiDi listener still runs and records which domains were
+        navigated to and which of them were outside the allow list. Even when the top level
+        page looks like the blocked-site interstitial, check_domain_allow_list_violation()
+        must not raise.
+        """
+        # Configure the mock uploader
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        # Mock the Chrome driver
+        mock_driver = create_mock_teams_driver()
+        mock_driver.capabilities = {"webSocketUrl": "ws://localhost:9222/session/test-session"}
+        MockChromeDriver.return_value = mock_driver
+
+        # Mock virtual display
+        mock_display = MagicMock()
+        MockDisplay.return_value = mock_display
+
+        blocked_url = "https://badmicrosoft.com/some-path"
+        allowed_url = "https://teams.microsoft.com/meet/123"
+
+        # Stub the BiDi websocket so the listener sees a successful session.subscribe
+        # response and then a navigation to an allowed domain followed by a failed
+        # navigation to a domain outside the allow list
+        mock_bidi_socket = MagicMock()
+        mock_bidi_socket.recv.return_value = json.dumps({"id": 1, "type": "success", "result": {}})
+        mock_bidi_socket.__iter__.return_value = iter(
+            [
+                json.dumps({"method": "browsingContext.navigationStarted", "params": {"url": allowed_url}}),
+                json.dumps({"method": "browsingContext.navigationFailed", "params": {"url": blocked_url}}),
+            ]
+        )
+        MockBiDiConnect.return_value = mock_bidi_socket
 
         # Create bot controller
         controller = BotController(self.bot.id)
@@ -1182,60 +1980,84 @@ class TestTeamsBot(TransactionTestCase):
             # Wait for the bot to join and adapter to be created
             time.sleep(3)
 
-            # --- Verify the Chrome policy file would be written correctly ---
-            # Mock os.path.islink to return True so policy file writing code runs
-            # and mock open() to capture what would be written without touching filesystem
+            # Verify Chrome was launched with the BiDi websocket capability the listener needs
+            chrome_options = MockChromeDriver.call_args.kwargs["options"]
+            self.assertTrue(chrome_options.to_capabilities().get("webSocketUrl"), "webSocketUrl capability should be requested when monitoring is enabled")
+
+            # Verify the listener subscribed over the driver's BiDi websocket
+            self.assertEqual(MockBiDiConnect.call_args[0][0], mock_driver.capabilities["webSocketUrl"])
+            subscribe_message = json.loads(mock_bidi_socket.send.call_args[0][0])
+            self.assertEqual(subscribe_message["method"], "session.subscribe")
+
+            # --- Verify Chrome is not given a blocking policy when enforcement is off ---
             m = mock_open()
             with patch("bots.web_bot_adapter.web_bot_adapter.os.path.islink", return_value=True):
                 with patch("builtins.open", m):
                     controller.adapter.write_chrome_policies_file()
 
-            # Verify open was called with the correct path
             m.assert_called_once_with("/tmp/attendee-chrome-policies.json", "w")
-
-            # Get the data that would have been written via json.dump
-            # json.dump calls write() on the file handle, so we get what was written
             write_calls = m().write.call_args_list
             written_data = "".join(call[0][0] for call in write_calls)
             policy = json.loads(written_data)
 
-            # Verify the BrowserSwitcher policy is correctly configured
-            self.assertTrue(policy.get("BrowserSwitcherEnabled"), "BrowserSwitcherEnabled should be True")
-            self.assertEqual(policy.get("AlternativeBrowserPath"), "/nonexistent-browser")
+            self.assertEqual(policy, {}, "No Chrome policies should be written when enforcement is off")
+            self.assertNotIn("URLBlocklist", policy, "URLs should not be blocked when enforcement is off")
+            self.assertNotIn("URLAllowlist", policy, "No URL allow list should be applied when enforcement is off")
 
-            # Verify the URL allow list contains the expected domains
-            url_list = policy.get("BrowserSwitcherUrlList", [])
-            self.assertIn("*", url_list, "URL list should block all URLs by default")
-            self.assertIn("!microsoft.com", url_list, "microsoft.com should be allowed")
-            self.assertIn("!office.com", url_list, "office.com should be allowed")
-            self.assertIn("!cloud.microsoft", url_list, "cloud.microsoft should be allowed")
-            self.assertIn("!microsoftonline.com", url_list, "microsoftonline.com should be allowed")
-            self.assertIn("!live.com", url_list, "live.com should be allowed")
+            # --- Verify the listener still recorded what it saw ---
+            self.assertEqual(
+                controller.adapter.domains_seen_by_domain_allow_list_listener,
+                {"teams.microsoft.com", "badmicrosoft.com"},
+                "Every navigated domain should be recorded while monitoring",
+            )
+            self.assertEqual(
+                controller.adapter.domains_seen_by_domain_allow_list_listener_where_navigation_failed,
+                {"badmicrosoft.com"},
+                "Only the failed navigation's domain should be recorded as failed",
+            )
+            self.assertEqual(
+                controller.adapter.domains_seen_by_domain_allow_list_listener_where_domain_was_not_in_allow_list,
+                {"badmicrosoft.com"},
+                "Only the domain outside the allow list should be recorded as a violation",
+            )
 
-            # --- Now test the domain allow list violation detection ---
+            # The allow list is still evaluated even though it isn't enforced
+            self.assertFalse(controller.adapter.url_violates_domain_allow_list(allowed_url))
+            self.assertTrue(controller.adapter.url_violates_domain_allow_list(blocked_url))
+
+            # --- Verify a violation does not stop the bot ---
 
             # Simulate the bot having joined and being in the meeting
             controller.adapter.joined_at = time.time()
 
-            # Mock the navigation history to include a disallowed URL
-            blocked_url = "chrome://browser-switch/?url=https%3A%2F%2Fbadmicrosoft.com"
-            mock_driver.execute_cdp_cmd.return_value = {
-                "entries": [
-                    {"url": "https://teams.microsoft.com/meet/123"},
-                    {"url": blocked_url},
-                ]
-            }
+            # Simulate the top level page showing the blocked-site interstitial, which is
+            # what would happen if the policy were being enforced
+            mock_driver.current_url = blocked_url
+
+            def execute_cdp_cmd_side_effect(cmd, params):
+                if cmd == "Runtime.evaluate":
+                    return {"result": {"value": "Your organization doesn\u2019t allow you to view this site"}}
+                if cmd == "Page.getFrameTree":
+                    return {"frameTree": {"frame": {"url": blocked_url}, "childFrames": []}}
+                return {}
+
+            mock_driver.execute_cdp_cmd.side_effect = execute_cdp_cmd_side_effect
 
             # Reset the last check time so the check runs immediately
             controller.adapter.last_domain_allow_list_violation_check_time = 0
 
-            # Verify that check_domain_allow_list_violation raises an exception
-            with self.assertRaises(Exception) as context:
-                controller.adapter.check_domain_allow_list_violation()
+            # The check should be a no-op rather than raising
+            self.assertIsNone(controller.adapter.check_domain_allow_list_violation())
 
-            # Verify the exception message contains the blocked domain
-            self.assertIn("Domain allow list violation detected", str(context.exception))
-            self.assertIn("badmicrosoft.com", str(context.exception))
+            # Let the main loop tick with the interstitial in place to confirm the bot
+            # keeps running instead of failing
+            time.sleep(1)
+            self.bot.refresh_from_db()
+            self.assertNotEqual(self.bot.state, BotStates.FATAL_ERROR, "The bot should not fail when a violation is only monitored")
+
+            # Stop simulating the interstitial so cleanup isn't affected by it
+            mock_driver.execute_cdp_cmd.side_effect = None
+            mock_driver.execute_cdp_cmd.return_value = {}
 
             # Clean up: simulate meeting ending to trigger cleanup
             controller.adapter.left_meeting = True
