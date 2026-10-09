@@ -84,8 +84,6 @@ class WebBotAdapter(BotAdapter):
         self.disable_incoming_video = disable_incoming_video
         self.record_participant_speech_start_stop_events = record_participant_speech_start_stop_events
         self.meeting_url = meeting_url
-        # The lobby is detected inside a polling loop, but joining -> waiting_room is a
-        # one-shot transition, so only the first sighting is reported.
         self.sent_bot_put_in_waiting_room_message = False
 
         # This is an internal ID that comes from the platform. It is currently only used for MS Teams.

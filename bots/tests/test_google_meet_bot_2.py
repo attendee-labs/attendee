@@ -2360,7 +2360,8 @@ class TestGoogleMeetBot2(TransactionTestCase):
         fatal_error_event = bot_events[2]
         self.assertEqual(fatal_error_event.old_state, BotStates.WAITING_ROOM)
         self.assertEqual(fatal_error_event.event_sub_type, BotEventSubTypes.FATAL_ERROR_UI_ELEMENT_NOT_FOUND)
-        self.assertEqual(fatal_error_event.metadata, {"blocked_by_platform_while_in_waiting_room": True})
+        self.assertTrue(fatal_error_event.metadata["blocked_by_platform_while_in_waiting_room"])
+        self.assertIn("bot_duration_seconds", fatal_error_event.metadata)
 
     @override_settings(PREJOIN_LEAVE_OR_MEETING_END_IS_FATAL_ERROR=False)
     @patch("bots.models.Bot.create_debug_recording", return_value=False)
