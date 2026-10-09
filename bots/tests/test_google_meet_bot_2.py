@@ -4,6 +4,7 @@ import threading
 import time
 from datetime import timedelta
 from types import SimpleNamespace
+from unittest import TestCase
 from unittest.mock import MagicMock, call, patch
 
 import kubernetes
@@ -2447,3 +2448,51 @@ class TestGoogleMeetBot2(TransactionTestCase):
 
         self.bot.refresh_from_db()
         self.assertEqual(self.bot.state, BotStates.FATAL_ERROR)
+
+
+class TestGoogleMeetCaptionDialogClose(TestCase):
+    def test_select_language_skips_hidden_and_disabled_close_buttons(self):
+        ui = GoogleMeetUIMethods.__new__(GoogleMeetUIMethods)
+        ui.driver = MagicMock()
+        ui.driver.execute_script.return_value = True
+        hidden, disabled, visible = MagicMock(), MagicMock(), MagicMock()
+        hidden.is_displayed.return_value = False
+        disabled.is_displayed.return_value = True
+        disabled.is_enabled.return_value = False
+        visible.is_displayed.return_value = True
+        visible.is_enabled.return_value = True
+        ui.driver.find_elements.return_value = [hidden, disabled, visible]
+        ui.driver.find_element.return_value = hidden
+
+        def locate_element(step, condition, wait_time_seconds):
+            if step == "close_button_for_language_selection":
+                return condition(ui.driver)
+            return MagicMock()
+
+        ui.locate_element = locate_element
+        ui.select_language("en-US")
+
+        hidden.click.assert_not_called()
+        disabled.click.assert_not_called()
+        visible.click.assert_called_once_with()
+
+    def test_select_language_waits_for_a_clickable_close_button(self):
+        ui = GoogleMeetUIMethods.__new__(GoogleMeetUIMethods)
+        ui.driver = MagicMock()
+        ui.driver.execute_script.return_value = True
+        button = MagicMock()
+        button.is_displayed.return_value = True
+        button.is_enabled.return_value = True
+        ui.driver.find_elements.side_effect = [[], [button]]
+        ui.driver.find_element.return_value = button
+
+        def locate_element(step, condition, wait_time_seconds):
+            if step == "close_button_for_language_selection":
+                self.assertFalse(condition(ui.driver))
+                return condition(ui.driver)
+            return MagicMock()
+
+        ui.locate_element = locate_element
+        ui.select_language("en-US")
+
+        button.click.assert_called_once_with()

@@ -1267,9 +1267,18 @@ class GoogleMeetUIMethods:
             raise UiCouldNotLocateElementException(f"Could not find language option {language}", "language_option")
 
         logger.info("Waiting for the close button")
+
+        def clickable_close_button(driver):
+            # Meet can retain hidden close buttons from other dialogs in the DOM.
+            try:
+                buttons = driver.find_elements(By.CSS_SELECTOR, 'button[aria-label="Close dialog"], button[aria-label="Close dialogue"]')
+                return next((button for button in buttons if button.is_displayed() and button.is_enabled()), False)
+            except StaleElementReferenceException:
+                return False
+
         close_button = self.locate_element(
             step="close_button_for_language_selection",
-            condition=EC.presence_of_element_located((By.CSS_SELECTOR, 'button[aria-label="Close dialog"], button[aria-label="Close dialogue"]')),
+            condition=clickable_close_button,
             wait_time_seconds=6,
         )
         logger.info("Clicking the close button")
