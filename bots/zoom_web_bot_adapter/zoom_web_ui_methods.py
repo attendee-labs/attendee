@@ -216,6 +216,7 @@ class ZoomWebUIMethods:
                 self.check_if_login_required()
                 self.check_if_failed_to_join_because_onbehalf_token_user_not_in_meeting()
                 self.check_if_failed_to_join_because_generic_join_error()
+                self.check_if_in_waiting_room()
 
                 previous_is_waiting_for_host_to_start_meeting = is_waiting_for_host_to_start_meeting
                 try:
@@ -230,8 +231,6 @@ class ZoomWebUIMethods:
                 if previous_is_waiting_for_host_to_start_meeting != is_waiting_for_host_to_start_meeting:
                     logger.info(f"is_waiting_for_host_to_start_meeting changed from {previous_is_waiting_for_host_to_start_meeting} to {is_waiting_for_host_to_start_meeting}. Resetting timeout")
                     timeout_started_at = time.time()
-
-                self.check_if_in_waiting_room()
 
                 self.check_if_timeout_exceeded(timeout_started_at=timeout_started_at, step="wait_to_be_admitted_to_meeting", is_waiting_for_host_to_start_meeting=is_waiting_for_host_to_start_meeting)
 
