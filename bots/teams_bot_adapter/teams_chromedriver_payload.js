@@ -1,5 +1,5 @@
 (function () {
-    const CONV_HOST_REGEX = /(^|\.)teams\.microsoft\.(com|us)$/;
+    const CONV_HOST_REGEX = /(^|\.)(teams\.microsoft\.(com|us)|skype\.com)$/;
     const CONV_PATH_REGEX = /\/conv\/[^/]+\/?$/;
 
     let installed = false;

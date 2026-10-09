@@ -1814,17 +1814,19 @@ class TestTeamsBot(TransactionTestCase):
         # Create bot controller
         controller = BotController(self.bot.id)
 
-        # Mock the attempt_to_join_meeting to succeed immediately
+        # Mock the attempt_to_join_meeting to stay in the joining phase until allowed to finish
+        allow_join = threading.Event()
         with patch("bots.teams_bot_adapter.teams_ui_methods.TeamsUIMethods.attempt_to_join_meeting") as mock_attempt_to_join:
-            mock_attempt_to_join.return_value = None  # Successful join
+            mock_attempt_to_join.side_effect = lambda *args, **kwargs: allow_join.wait(timeout=30)
 
             # Run the bot in a separate thread since it has an event loop
             bot_thread = threading.Thread(target=controller.run)
             bot_thread.daemon = True
             bot_thread.start()
 
-            # Wait for the bot to join and adapter to be created
+            # Wait for the adapter to be created and start joining
             time.sleep(3)
+            self.assertIsNone(controller.adapter.joined_at)
 
             # Verify the listener subscribed over the driver's BiDi websocket
             self.assertEqual(MockBiDiConnect.call_args[0][0], mock_driver.capabilities["webSocketUrl"])
@@ -1836,7 +1838,7 @@ class TestTeamsBot(TransactionTestCase):
             # and mock open() to capture what would be written without touching filesystem
             m = mock_open()
             with patch("bots.web_bot_adapter.web_bot_adapter.os.path.islink", return_value=True):
-                with patch("builtins.open", m):
+                with patch("bots.web_bot_adapter.web_bot_adapter.open", m, create=True):
                     controller.adapter.write_chrome_policies_file()
 
             # Verify open was called with the correct path
@@ -1867,9 +1869,6 @@ class TestTeamsBot(TransactionTestCase):
 
             # --- Now test the domain allow list violation detection ---
 
-            # Simulate the bot having joined and being in the meeting
-            controller.adapter.joined_at = time.time()
-
             # Sanity check the allow list matching that backs the history and iframe checks:
             # allowed domains and their subdomains pass, look-alike domains do not
             blocked_url = "https://badmicrosoft.com/some-path"
@@ -1893,7 +1892,7 @@ class TestTeamsBot(TransactionTestCase):
             # Reset the last check time so the check runs immediately
             controller.adapter.last_domain_allow_list_violation_check_time = 0
 
-            # Verify that check_domain_allow_list_violation raises an exception
+            # While the bot is still joining, check_domain_allow_list_violation raises an exception
             with self.assertRaises(Exception) as context:
                 controller.adapter.check_domain_allow_list_violation()
 
@@ -1905,17 +1904,10 @@ class TestTeamsBot(TransactionTestCase):
             mock_driver.execute_cdp_cmd.side_effect = None
             mock_driver.execute_cdp_cmd.return_value = {}
 
-            # Clean up: simulate meeting ending to trigger cleanup
-            controller.adapter.left_meeting = True
-            controller.adapter.send_message_callback({"message": controller.adapter.Messages.MEETING_ENDED})
-            time.sleep(1)
-
-            # Now wait for the thread to finish naturally
+            # Cleanup
+            controller.cleanup()
+            allow_join.set()
             bot_thread.join(timeout=5)
-
-            # If thread is still running after timeout, that's a problem to report
-            if bot_thread.is_alive():
-                print("WARNING: Bot thread did not terminate properly after cleanup")
 
             # Close the database connection since we're in a thread
             connection.close()
