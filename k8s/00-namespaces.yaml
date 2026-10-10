@@ -1,0 +1,16 @@
+# Two namespaces. `attendee` runs the app (web/worker/scheduler) AND the per-bot pods the app
+# creates at runtime -- they must share a namespace because bot pods read their environment
+# from the `env` ConfigMap and `app-secrets` Secret that live here (see 20-/21-).
+#
+# `attendee-webpage-streamer` only receives pods when a bot streams a webpage into a meeting
+# (voice agents). Create it regardless: clean_up_completed_bot_pods sweeps both namespaces on
+# every run, so a missing one is permanent noise in the logs.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: attendee
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: attendee-webpage-streamer
