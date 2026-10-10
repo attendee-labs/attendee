@@ -2322,6 +2322,48 @@ class TestGoogleMeetBot2(TransactionTestCase):
         self.assertEqual(could_not_join_event.new_state, BotStates.FATAL_ERROR)
         self.assertEqual(could_not_join_event.event_sub_type, BotEventSubTypes.COULD_NOT_JOIN_MEETING_MEETING_ENDED_BEFORE_BOT_JOINED)
 
+    @override_settings(ENABLE_WAITING_ROOM_STATE_FOR_WEB_BOTS=True)
+    @patch("bots.tasks.restart_bot_pod_task.restart_bot_pod.apply_async")
+    @patch("bots.models.Bot.create_debug_recording", return_value=False)
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.AzureFileUploader")
+    def test_blocked_by_platform_repeatedly_while_in_waiting_room_is_fatal_error(
+        self,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+        mock_create_debug_recording,
+        mock_restart_bot_pod_apply_async,
+    ):
+        MockFileUploader.return_value = create_mock_file_uploader()
+        MockChromeDriver.return_value = create_mock_google_meet_driver()
+        MockDisplay.return_value = MagicMock()
+
+        controller, bot_thread, release_join_attempt = self._start_bot_that_is_stuck_joining()
+
+        controller.adapter.send_message_callback({"message": BotAdapter.Messages.BOT_PUT_IN_WAITING_ROOM})
+        self._wait_for_bot_state(BotStates.WAITING_ROOM)
+
+        controller.adapter.send_message_callback({"message": BotAdapter.Messages.BLOCKED_BY_PLATFORM_REPEATEDLY})
+
+        self._finish_bot(controller, bot_thread, release_join_attempt)
+
+        mock_restart_bot_pod_apply_async.assert_not_called()
+        self.assertEqual(self.bot.state, BotStates.FATAL_ERROR)
+
+        bot_events = list(self.bot.bot_events.order_by("created_at"))
+        self.assertEqual(
+            [event.event_type for event in bot_events],
+            [BotEventTypes.JOIN_REQUESTED, BotEventTypes.BOT_PUT_IN_WAITING_ROOM, BotEventTypes.FATAL_ERROR],
+        )
+
+        fatal_error_event = bot_events[2]
+        self.assertEqual(fatal_error_event.old_state, BotStates.WAITING_ROOM)
+        self.assertEqual(fatal_error_event.event_sub_type, BotEventSubTypes.FATAL_ERROR_UI_ELEMENT_NOT_FOUND)
+        self.assertTrue(fatal_error_event.metadata["blocked_by_platform_while_in_waiting_room"])
+        self.assertIn("bot_duration_seconds", fatal_error_event.metadata)
+
     @override_settings(PREJOIN_LEAVE_OR_MEETING_END_IS_FATAL_ERROR=False)
     @patch("bots.models.Bot.create_debug_recording", return_value=False)
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")

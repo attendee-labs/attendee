@@ -63,6 +63,22 @@ class TeamsUIMethods:
             logger.info("Still waiting to be admitted to the meeting after waiting period expired. Raising UiRequestToJoinDeniedException")
             raise UiRequestToJoinDeniedException("Bot was not let in after waiting period expired", step)
 
+    def check_if_in_waiting_room(self):
+        if self.sent_bot_put_in_waiting_room_message:
+            return
+
+        # The caller's loop turns any exception into a failed join, so this must not raise.
+        try:
+            call_state = self.driver.execute_script("return window.callManager?.getCallState();")
+        except Exception as e:
+            logger.info(f"Unknown error occurred in check_if_in_waiting_room. Exception type = {type(e)}")
+            return
+
+        # Values of callManager.getCallState() in the chromedriver payload: InLobby, NegotiatingEncryptionLobby.
+        teams_lobby_call_states = (10, 15)
+        if call_state in teams_lobby_call_states:
+            self.send_bot_put_in_waiting_room_message()
+
     def turn_off_media_inputs(self):
         logger.info("Waiting for the microphone button...")
         microphone_button = self.locate_element(step="turn_off_microphone_button", condition=EC.presence_of_element_located((By.CSS_SELECTOR, '[data-tid="toggle-mute"]')), wait_time_seconds=60)
@@ -339,6 +355,7 @@ class TeamsUIMethods:
                 self.look_for_we_could_not_connect_you_element("click_show_more_button")
                 self.check_if_meeting_ended_but_we_should_retry("click_show_more_button")
 
+                self.check_if_in_waiting_room()
                 self.check_if_waiting_room_timeout_exceeded(waiting_room_timeout_started_at, "click_show_more_button")
                 self.check_if_waiting_room_connection_failed(waiting_room_timeout_started_at, "click_show_more_button")
 

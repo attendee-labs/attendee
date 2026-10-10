@@ -183,6 +183,19 @@ class GoogleMeetUIMethods:
             logger.warning("Bot was not let in after waiting period expired. Raising UiRequestToJoinDeniedException")
             raise UiRequestToJoinDeniedException("Bot was not let in after waiting period expired", step)
 
+    def check_if_in_waiting_room(self, step):
+        if self.sent_bot_put_in_waiting_room_message:
+            return
+
+        try:
+            in_waiting_room = self.driver.execute_script("return window.userManager?.currentUserIsInWaitingRoom() ?? false;")
+        except Exception as e:
+            logger.info(f"Could not check participant roster for waiting room status: {e}")
+            return
+
+        if in_waiting_room:
+            self.send_bot_put_in_waiting_room_message()
+
     def check_if_waiting_room_timeout_exceeded(self, waiting_room_timeout_started_at, step):
         waiting_room_timeout_exceeded = time.time() - waiting_room_timeout_started_at > self.automatic_leave_configuration.waiting_room_timeout_seconds
         if waiting_room_timeout_exceeded:
@@ -541,6 +554,7 @@ class GoogleMeetUIMethods:
                 self.look_for_denied_your_request_element("click_captions_button")
                 self.click_this_meeting_is_being_recorded_join_now_button("click_captions_button")
                 self.click_others_may_see_your_meeting_differently_button("click_captions_button")
+                self.check_if_in_waiting_room("click_captions_button")
                 self.look_for_incoming_video_is_disabled_element()
                 self.check_if_waiting_room_timeout_exceeded(waiting_room_timeout_started_at, "click_captions_button")
 

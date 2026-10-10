@@ -2025,6 +2025,22 @@ class BotController:
                 self.cleanup()
                 return
 
+            # restart_bot_pod only recreates pods for bots whose last event is JOIN_REQUESTED or STAGED,
+            # so a bot in the waiting room would be left without a running pod.
+            if self.bot_in_db.state == BotStates.WAITING_ROOM:
+                logger.info("Received message that we were blocked by platform repeatedly but bot is in the waiting room, so not recreating pod")
+
+                new_bot_event = BotEventManager.create_event(
+                    bot=self.bot_in_db,
+                    event_type=BotEventTypes.FATAL_ERROR,
+                    event_sub_type=BotEventSubTypes.FATAL_ERROR_UI_ELEMENT_NOT_FOUND,
+                    event_metadata={
+                        "blocked_by_platform_while_in_waiting_room": True,
+                    },
+                )
+                self.cleanup()
+                return
+
             logger.info("Received message that we were blocked by platform repeatedly, so recreating pod")
             # Run task to restart the bot pod with 1 minute delay
             restart_bot_pod.apply_async(args=[self.bot_in_db.id], countdown=60)
@@ -2211,7 +2227,11 @@ class BotController:
 
         if message.get("message") == BotAdapter.Messages.BOT_PUT_IN_WAITING_ROOM:
             logger.info("Received message to put bot in waiting room")
-            BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.BOT_PUT_IN_WAITING_ROOM)
+            # Being put in the waiting room is a "cosmetic" event. so it's okay if it fails to record.
+            try:
+                BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.BOT_PUT_IN_WAITING_ROOM)
+            except Exception:
+                logger.exception("Could not record the bot as put in waiting room, continuing")
             return
 
         if message.get("message") == BotAdapter.Messages.BOT_JOINED_MEETING:

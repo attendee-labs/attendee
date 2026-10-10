@@ -179,6 +179,20 @@ class ZoomWebUIMethods:
         if failed_to_join_because_generic_join_error or network_timeout_shown:
             self.handle_generic_join_error()
 
+    def check_if_in_waiting_room(self):
+        if self.sent_bot_put_in_waiting_room_message:
+            return
+
+        # The caller's loop turns any exception into a failed join, so this must not raise.
+        try:
+            user_is_in_waiting_room = self.driver.execute_script("return window.userIsInWaitingRoom && window.userIsInWaitingRoom()")
+        except Exception as e:
+            logger.info(f"Unknown error occurred in check_if_in_waiting_room. Exception type = {type(e)}")
+            return
+
+        if user_is_in_waiting_room:
+            self.send_bot_put_in_waiting_room_message()
+
     def wait_to_be_admitted_to_meeting(self):
         num_attempts_to_look_for_more_meeting_control_button = (self.automatic_leave_configuration.waiting_room_timeout_seconds + self.automatic_leave_configuration.wait_for_host_to_start_meeting_timeout_seconds) * 10
         logger.info("Waiting to be admitted to the meeting...")
@@ -202,6 +216,7 @@ class ZoomWebUIMethods:
                 self.check_if_login_required()
                 self.check_if_failed_to_join_because_onbehalf_token_user_not_in_meeting()
                 self.check_if_failed_to_join_because_generic_join_error()
+                self.check_if_in_waiting_room()
 
                 previous_is_waiting_for_host_to_start_meeting = is_waiting_for_host_to_start_meeting
                 try:

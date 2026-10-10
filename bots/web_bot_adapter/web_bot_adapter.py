@@ -84,6 +84,7 @@ class WebBotAdapter(BotAdapter):
         self.disable_incoming_video = disable_incoming_video
         self.record_participant_speech_start_stop_events = record_participant_speech_start_stop_events
         self.meeting_url = meeting_url
+        self.sent_bot_put_in_waiting_room_message = False
 
         # This is an internal ID that comes from the platform. It is currently only used for MS Teams.
         self.meeting_uuid = None
@@ -543,6 +544,16 @@ class WebBotAdapter(BotAdapter):
                         raise Exception(f"Could not find available port after {max_retries} attempts")
                     continue
                 raise  # Re-raise other OSErrors
+
+    def send_bot_put_in_waiting_room_message(self):
+        if self.sent_bot_put_in_waiting_room_message:
+            return
+        self.sent_bot_put_in_waiting_room_message = True
+        if not settings.ENABLE_WAITING_ROOM_STATE_FOR_WEB_BOTS:
+            logger.info("Not sending BOT_PUT_IN_WAITING_ROOM message because ENABLE_WAITING_ROOM_STATE_FOR_WEB_BOTS is not enabled")
+            return
+        logger.info("Sending BOT_PUT_IN_WAITING_ROOM message")
+        self.send_message_callback({"message": self.Messages.BOT_PUT_IN_WAITING_ROOM})
 
     def send_request_to_join_denied_message(self):
         self.send_message_callback({"message": self.Messages.REQUEST_TO_JOIN_DENIED, "remover": self.remover})

@@ -16,6 +16,7 @@ var zakToken = zoomInitialData.zakToken;
 var onBehalfToken = zoomInitialData.onBehalfToken;
 var leaveUrl = 'https://zoom.us';
 var userEnteredMeeting = false;
+var latestJoinSpeedLevel = null;
 var userEncounteredOnBehalfTokenUserNotInMeetingError = false;
 var userEncounteredGenericJoinError = false;
 var recordingPermissionGranted = false;
@@ -66,6 +67,12 @@ function userHasEnteredMeeting() {
 }
 
 window.userHasEnteredMeeting = userHasEnteredMeeting;
+
+function userIsInWaitingRoom() {
+    return latestJoinSpeedLevel == 6;
+}
+
+window.userIsInWaitingRoom = userIsInWaitingRoom;
 
 function userHasEncounteredOnBehalfTokenUserNotInMeetingError() {
     return userEncounteredOnBehalfTokenUserNotInMeetingError;
@@ -198,9 +205,14 @@ function startMeeting(signature) {
 
     ZoomMtg.inMeetingServiceListener('onJoinSpeed', function (data) {
         console.log('onJoinSpeed', data);
+        latestJoinSpeedLevel = data.level;
         // This means that the user was initially in the waiting room
         if (data.level == 6) {
             console.log('onJoinSpeed: level 6, user was in waiting room');
+        }
+        // This means the user left the waiting room
+        if (data.level == 7) {
+            console.log('onJoinSpeed: level 7, user left waiting room');
         }
         //joinMeeting
         // Level 13 means "user start join audio" which means we actually got into the meeting and are out of the waiting room
