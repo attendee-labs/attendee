@@ -1,5 +1,5 @@
 {
-  "version": "1.1",
+  "version": "1.2",
   "domain_allowlist": [
     "accounts.google.com",
     "accounts.google.co.in",
@@ -109,5 +109,5 @@
     "www.google.com",
     ".apps.google.com"
   ],
-  "signature": "c9GSlktRrhth2toja2fSSNvlBzRrO6M0p7ry55oe380Nt+F/znqDecwYQWoBb0+Y7k9s3d3s+2J9XKHPvaYZCw=="
+  "signature": "XyZ17fYxMdfQpFQ0L+/v1YfDP1IhVqNBdfRX1/ynsYMp+q/SQJ1+nc9F0gV1KPTYgEArt79US8wGwKkZggTZCA=="
 }
