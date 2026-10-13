@@ -293,6 +293,12 @@ class TestCreateOrUpdateZoomOAuthApp(TestCase):
         self.assertEqual(credentials["client_secret"], "existing_client_secret")
         self.assertEqual(credentials["webhook_secret"], "existing_webhook_secret")
 
+    def test_credential_properties_when_encrypted_data_missing(self):
+        """Missing encrypted credentials should return None, not AttributeError."""
+        zoom_oauth_app = ZoomOAuthApp.objects.create(project=self.project, client_id="test_client_id_no_creds")
+        self.assertIsNone(zoom_oauth_app.client_secret)
+        self.assertIsNone(zoom_oauth_app.webhook_secret)
+
 
 class TestZoomOAuthAppDeletion(TestCase):
     """Test deletion constraints for ZoomOAuthApp."""
