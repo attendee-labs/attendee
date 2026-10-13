@@ -959,7 +959,7 @@ class UserManager {
         this.deviceOutputMap = new Map();
         this.currentUserId = null;
         // Track the set of parentDeviceIds (real participant deviceIds) currently screen sharing
-        this.previousScreenSharerParentDeviceIds = new Set();
+        this.activeScreenSharerParentDeviceIds = new Set();
 
         this.ws = ws;
     }
@@ -1125,31 +1125,7 @@ class UserManager {
 
         const updatedUsers = Array.from(updatedUserIds).map(id => this.currentUsersMap.get(id));
 
-        // Detect screenshare start/stop events
-        const currentScreenSharerParentDeviceIds = new Set(
-            this.getCurrentUsersInMeetingWhoAreScreenSharing().map(user => user.parentDeviceId)
-        );
-        for (const parentDeviceId of currentScreenSharerParentDeviceIds) {
-            if (!this.previousScreenSharerParentDeviceIds.has(parentDeviceId)) {
-                this.ws.sendJson({
-                    type: 'ScreenshareStartStopEvent',
-                    participantId: parentDeviceId,
-                    isScreenshareStart: true,
-                    timestamp: Date.now()
-                });
-            }
-        }
-        for (const parentDeviceId of this.previousScreenSharerParentDeviceIds) {
-            if (!currentScreenSharerParentDeviceIds.has(parentDeviceId)) {
-                this.ws.sendJson({
-                    type: 'ScreenshareStartStopEvent',
-                    participantId: parentDeviceId,
-                    isScreenshareStart: false,
-                    timestamp: Date.now()
-                });
-            }
-        }
-        this.previousScreenSharerParentDeviceIds = currentScreenSharerParentDeviceIds;
+        this.detectScreenShareChanges();
 
         const newUsersToSend = this.removeScreenshareUsers(newUsers);
         const removedUsersToSend = this.removeScreenshareUsers(removedUsers);
@@ -1163,6 +1139,33 @@ class UserManager {
                 updatedUsers: updatedUsersToSend
             });
         }
+    }
+
+    detectScreenShareChanges() {
+        const currentScreenSharerParentDeviceIds = new Set(
+            this.getCurrentUsersInMeetingWhoAreScreenSharing().map(user => user.parentDeviceId)
+        );
+        for (const parentDeviceId of currentScreenSharerParentDeviceIds) {
+            if (!this.activeScreenSharerParentDeviceIds.has(parentDeviceId)) {
+                this.ws.sendJson({
+                    type: 'ScreenshareStartStopEvent',
+                    participantId: parentDeviceId,
+                    isScreenshareStart: true,
+                    timestamp: Date.now()
+                });
+            }
+        }
+        for (const parentDeviceId of this.activeScreenSharerParentDeviceIds) {
+            if (!currentScreenSharerParentDeviceIds.has(parentDeviceId)) {
+                this.ws.sendJson({
+                    type: 'ScreenshareStartStopEvent',
+                    participantId: parentDeviceId,
+                    isScreenshareStart: false,
+                    timestamp: Date.now()
+                });
+            }
+        }
+        this.activeScreenSharerParentDeviceIds = currentScreenSharerParentDeviceIds;
     }
 }
 
