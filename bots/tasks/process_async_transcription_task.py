@@ -24,15 +24,14 @@ def create_utterances_for_transcription_without_using_groups(async_transcription
 
     # Get all the audio chunks for the recording
     # then create utterances for each audio chunk
-    # Use defer() to exclude large audio_blob field and iterator() to stream results
-    # instead of loading all chunks into memory at once (can be >1GB of audio data)
+    # Do NOT load the audio blob field, because it's not needed and can consume significant memory
     utterance_task_delay_seconds = 0
-    for audio_chunk in recording.audio_chunks.defer("audio_blob").iterator(chunk_size=100):
+    for audio_chunk in recording.audio_chunks.defer("audio_blob").all():
         utterance = Utterance.objects.create(
             source=Utterance.Sources.PER_PARTICIPANT_AUDIO,
             recording=recording,
             async_transcription=async_transcription,
-            participant=audio_chunk.participant,
+            participant_id=audio_chunk.participant_id,
             audio_chunk=audio_chunk,
             timestamp_ms=audio_chunk.timestamp_ms,
             duration_ms=audio_chunk.duration_ms,
@@ -60,7 +59,7 @@ def create_utterances_for_transcription_using_groups(async_transcription):
             source=Utterance.Sources.PER_PARTICIPANT_AUDIO,
             recording=recording,
             async_transcription=async_transcription,
-            participant=audio_chunk.participant,
+            participant_id=audio_chunk.participant_id,
             audio_chunk=audio_chunk,
             timestamp_ms=audio_chunk.timestamp_ms,
             duration_ms=audio_chunk.duration_ms,
@@ -70,7 +69,7 @@ def create_utterances_for_transcription_using_groups(async_transcription):
     # Group utterances into evenly-sized groups based on total duration
     # Calculate number of groups needed, then divide duration evenly.
     # This avoids creating tiny groups.
-    max_group_duration_ms = 30 * 60 * 1000  # 30 minutes in milliseconds
+    max_group_duration_ms = int(os.getenv("ASYNC_TRANSCRIPTION_MAX_UTTERANCE_GROUP_DURATION_MS", 30 * 60 * 1000))  # 30 minutes in milliseconds
     total_duration_ms = sum(u.duration_ms for u in utterances)
     if total_duration_ms == 0:
         total_duration_ms = 1
@@ -128,9 +127,11 @@ def check_for_transcription_completion(async_transcription):
     in_progress_utterances = async_transcription.utterances.filter(transcription__isnull=True, failure_data__isnull=True)
 
     # If no in progress utterances exist or it's been more than max_runtime_seconds, then we need to terminate the transcription
-    max_runtime_seconds = max(1800, async_transcription.utterances.count() * 3)
+    timeout_seconds = int(os.getenv("ASYNC_TRANSCRIPTION_TIMEOUT_SECONDS", 30 * 60))  # 30 minutes in seconds
+    timeout_seconds_per_utterance = int(os.getenv("ASYNC_TRANSCRIPTION_TIMEOUT_SECONDS_PER_UTTERANCE", 3))
+    max_runtime_seconds = max(timeout_seconds, async_transcription.utterances.count() * timeout_seconds_per_utterance)
     if not in_progress_utterances.exists() or timezone.now() - async_transcription.started_at > timezone.timedelta(seconds=max_runtime_seconds):
-        logger.info(f"Terminating transcription for recording artifact {async_transcription.id} because no in progress utterances exist or it's been more than 30 minutes")
+        logger.info(f"Terminating transcription for recording artifact {async_transcription.id} because no in progress utterances exist or it's been more than {max_runtime_seconds} seconds")
         terminate_transcription(async_transcription)
         return
 

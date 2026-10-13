@@ -161,8 +161,8 @@ def _get_local_recording_token(meeting_id: str, access_token: str) -> str:
     return response_data.get("token")
 
 
-def _get_onbehalf_token(access_token: str) -> str:
-    base_url = "https://api.zoom.us/v2/users/me/token?type=onbehalf"
+def _get_onbehalf_token(meeting_id: str, access_token: str) -> str:
+    base_url = f"https://api.zoom.us/v2/users/me/token?type=onbehalf&meeting_id={meeting_id}"
     response_data = _make_zoom_api_request(base_url, access_token, {})
     return response_data.get("token")
 
@@ -302,9 +302,16 @@ def get_onbehalf_token_via_zoom_oauth_app(bot: Bot) -> str | None:
         logger.info(f"Zoom oauth connection {zoom_oauth_connection.object_id} does not support onbehalf tokens, skipping")
         return None
 
+    meeting_url = bot.meeting_url
+
+    meeting_id, password = parse_zoom_join_url(meeting_url)
+    if not meeting_id:
+        logger.info(f"No meeting id found in join url {meeting_url}")
+        return None
+
     try:
         access_token = _get_access_token(zoom_oauth_connection)
-        onbehalf_token = _get_onbehalf_token(access_token)
+        onbehalf_token = _get_onbehalf_token(meeting_id, access_token)
         return onbehalf_token
 
     except ZoomAPIAuthenticationError as e:
@@ -319,17 +326,7 @@ def get_onbehalf_token_via_zoom_oauth_app(bot: Bot) -> str | None:
 
 def get_zoom_tokens_via_zoom_oauth_app(bot: Bot) -> dict | None:
     onbehalf_token = get_onbehalf_token_via_zoom_oauth_app(bot)
-
-    # The version of the Zoom Linux SDK we are using cannot handle the scenario of both onbehalf_token and local_recording token.
-    # Upgrading to the latest version of the latest version of the Zoom Linux SDK is not viable because it is unstable. See here
-    # https://devforum.zoom.us/t/latest-version-of-linux-meeting-sdk-6-6-10-crashes-in-certain-conditions/139587
-    # So sticking with the version we are using now is the lesser of two evils.
-    # So if we have an onbehalf token AND we are using the linux sdk, we will not attempt to get the local recording token.
-    if onbehalf_token and not bot.use_zoom_web_adapter():
-        logger.info("Not attempting to get local recording token because we have an onbehalf token and are using the linux sdk")
-        local_recording_token = None
-    else:
-        local_recording_token = get_local_recording_token_via_zoom_oauth_app(bot)
+    local_recording_token = get_local_recording_token_via_zoom_oauth_app(bot)
 
     return {
         "zak_token": None,

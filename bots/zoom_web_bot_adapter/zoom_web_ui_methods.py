@@ -1,13 +1,15 @@
 import logging
+import os
 import time
 
 from selenium.common.exceptions import TimeoutException
+from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
-from bots.web_bot_adapter.ui_methods import UiAuthorizedUserNotInMeetingTimeoutExceededException, UiBlockedByCaptchaException, UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiIncorrectPasswordException, UiInfinitelyRetryableException
+from bots.web_bot_adapter.ui_methods import UiAuthorizedUserNotInMeetingTimeoutExceededException, UiBlockedByCaptchaException, UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiIncorrectPasswordException, UiInfinitelyRetryableException, UiLoginRequiredException
 
 from .zoom_web_static_server import start_zoom_web_static_server
 
@@ -43,6 +45,14 @@ class ZoomWebUIMethods:
         self.driver.execute_script("joinMeeting()")
 
         self.wait_to_be_admitted_to_meeting()
+
+        # A webinar_user_email is only ever supplied for webinar joins. When it is present, run a
+        # fully self-contained webinar flow and return early so the standard meeting
+        # "happy path" below is never entered or altered for regular meetings.
+        if self.webinar_user_email:
+            logger.info(f"webinar_user_email {self.webinar_user_email} provided, joining as a webinar participant.")
+            self.attempt_to_join_webinar()
+            return
 
         # Then find a button with the arial-label "More meeting control " and click it
         logger.info("Waiting for more meeting control button")
@@ -104,20 +114,84 @@ class ZoomWebUIMethods:
 
         self.ready_to_show_bot_image()
 
+    def attempt_to_join_webinar(self):
+        # Webinar attendees are promoted to panelist before they can enable captions.
+        if self.is_webinar_attendee():
+            try:
+                dialog = WebDriverWait(self.driver, 1800).until(EC.presence_of_element_located((By.CSS_SELECTOR, '[aria-label="The host would like to promote you to be a panelist"]')))
+                logger.info("Webinar: Panelist promotion modal appeared, clicking 'Join as Panelist'.")
+                join_as_panelist_btn = dialog.find_element(By.XPATH, './/button[contains(@class, "zm-btn--primary")]')
+                self.driver.execute_script("arguments[0].click();", join_as_panelist_btn)
+                logger.info("Webinar: Clicked 'Join as Panelist' button.")
+            except TimeoutException:
+                logger.info("Webinar: Panelist promotion modal did not appear within timeout; continuing as attendee.")
+
+        logger.info("Webinar: Waiting for captions button")
+        try:
+            # Caption button is different for webinar panelists: "Show Captions" when off, "Hide Captions" when on.
+            WebDriverWait(self.driver, 2).until(EC.presence_of_element_located((By.CSS_SELECTOR, "button[aria-label='Hide Captions']")))
+            logger.info("Webinar: Hide Captions button found, CC already enabled.")
+        except TimeoutException:
+            try:
+                show_captions = WebDriverWait(self.driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, "button[aria-label='Show Captions']")))
+                logger.info("Webinar: Show Captions button found, clicking to enable CC.")
+                self.driver.execute_script("arguments[0].click();", show_captions)
+            except TimeoutException:
+                logger.info("Webinar: Captions button not found, unable to transcribe via closed-captions.")
+                self.could_not_enable_closed_captions()
+
+        self.set_zoom_webinar_closed_captions_language()
+
+        self.ready_to_show_bot_image()
+
+    def is_webinar_attendee(self):
+        try:
+            WebDriverWait(self.driver, 5).until(EC.presence_of_element_located((By.CSS_SELECTOR, "button[aria-label='audio setting']")))
+        except TimeoutException:
+            return False
+
+        logger.info("UI indicates that the bot is a webinar attendee, based on presence of 'Audio Setting' button.")
+        return True
+
     def click_leave_button(self):
         self.driver.execute_script("leaveMeeting()")
 
     def check_if_failed_to_join_because_onbehalf_token_user_not_in_meeting(self):
         failed_to_join_because_onbehalf_token_user_not_in_meeting = self.driver.execute_script("return window.userHasEncounteredOnBehalfTokenUserNotInMeetingError && window.userHasEncounteredOnBehalfTokenUserNotInMeetingError()")
         if failed_to_join_because_onbehalf_token_user_not_in_meeting:
-            logger.warning("Bot failed to join because onbehalf token user not in meeting. Raising UiAuthorizedUserNotInMeetingTimeoutExceededException after sleeping for 5 seconds.")
-            time.sleep(5)  # Sleep for 5 seconds, so we're not constantly retrying
+            retry_time_seconds = int(os.getenv("ZOOM_ONBEHALF_TOKEN_RETRY_TIME_SECONDS", 5))
+            logger.warning(f"Bot failed to join because onbehalf token user not in meeting. Raising UiAuthorizedUserNotInMeetingTimeoutExceededException after sleeping for {retry_time_seconds} seconds.")
+            time.sleep(retry_time_seconds)  # Sleep for some seconds, so we're not constantly retrying
+            self.authorized_user_not_in_meeting_retries += 1
             raise UiAuthorizedUserNotInMeetingTimeoutExceededException("Bot failed to join because onbehalf token user not in meeting")
 
     def check_if_failed_to_join_because_generic_join_error(self):
         failed_to_join_because_generic_join_error = self.driver.execute_script("return window.userHasEncounteredGenericJoinError && window.userHasEncounteredGenericJoinError()")
-        if failed_to_join_because_generic_join_error:
+
+        try:
+            network_timeout_shown = self.driver.find_element(
+                By.XPATH,
+                '//*[contains(text(), "Your network connection has timed out or your organization has disabled access to Zoom from the browser")]',
+            ).is_displayed()
+        except Exception:
+            network_timeout_shown = False
+
+        if failed_to_join_because_generic_join_error or network_timeout_shown:
             self.handle_generic_join_error()
+
+    def check_if_in_waiting_room(self):
+        if self.sent_bot_put_in_waiting_room_message:
+            return
+
+        # The caller's loop turns any exception into a failed join, so this must not raise.
+        try:
+            user_is_in_waiting_room = self.driver.execute_script("return window.userIsInWaitingRoom && window.userIsInWaitingRoom()")
+        except Exception as e:
+            logger.info(f"Unknown error occurred in check_if_in_waiting_room. Exception type = {type(e)}")
+            return
+
+        if user_is_in_waiting_room:
+            self.send_bot_put_in_waiting_room_message()
 
     def wait_to_be_admitted_to_meeting(self):
         num_attempts_to_look_for_more_meeting_control_button = (self.automatic_leave_configuration.waiting_room_timeout_seconds + self.automatic_leave_configuration.wait_for_host_to_start_meeting_timeout_seconds) * 10
@@ -139,8 +213,10 @@ class ZoomWebUIMethods:
             except TimeoutException as e:
                 self.check_if_blocked_by_captcha()
                 self.check_if_passcode_incorrect()
+                self.check_if_login_required()
                 self.check_if_failed_to_join_because_onbehalf_token_user_not_in_meeting()
                 self.check_if_failed_to_join_because_generic_join_error()
+                self.check_if_in_waiting_room()
 
                 previous_is_waiting_for_host_to_start_meeting = is_waiting_for_host_to_start_meeting
                 try:
@@ -230,6 +306,20 @@ class ZoomWebUIMethods:
             logger.info("Passcode incorrect. Raising UiIncorrectPasswordException")
             raise UiIncorrectPasswordException("Passcode incorrect")
 
+    def check_if_login_required(self):
+        login_required_element = None
+        try:
+            login_required_element = self.driver.find_element(
+                By.XPATH,
+                '//*[contains(text(), "The host requires authentication on the commercial Zoom platform to join this meeting")] | //button[contains(@class, "login-btn-zoom") and contains(text(), "Sign in Zoom")]',
+            )
+        except:
+            return
+
+        if login_required_element and login_required_element.is_displayed():
+            logger.info("Login required. Raising UiLoginRequiredException")
+            raise UiLoginRequiredException("Login required")
+
     def check_if_blocked_by_captcha(self):
         """
         Detects the Zoom Web SDK captcha/verification challenge UI.
@@ -288,6 +378,45 @@ class ZoomWebUIMethods:
             logger.warning("Could not find transcription language input element")
         except Exception as e:
             logger.warning(f"Error setting transcription language: {e}")
+
+    def set_zoom_webinar_closed_captions_language(self):
+        if not self.zoom_closed_captions_language:
+            return
+
+        logger.info(f"Webinar: Setting closed captions language to {self.zoom_closed_captions_language}")
+
+        try:
+            # Open the captions options dropdown
+            more_options_btn = WebDriverWait(self.driver, 20).until(EC.element_to_be_clickable((By.CSS_SELECTOR, "button[aria-label='More options for captions, menu button']")))
+            self.driver.execute_script("arguments[0].click();", more_options_btn)
+
+            # Enable translation if currently off. aria-label changes between "translation is off" / "translation is on"
+            translation_toggle = WebDriverWait(self.driver, 5).until(EC.presence_of_element_located((By.CSS_SELECTOR, "input[aria-label*='translation is']")))
+            if not translation_toggle.is_selected():
+                logger.info("Translation toggle is OFF, clicking to enable")
+                self.driver.execute_script("arguments[0].click();", translation_toggle)
+                # Reopen dropdown using ActionChains to maintain focus after enabling translation.
+                more_options_btn = WebDriverWait(self.driver, 5).until(EC.element_to_be_clickable((By.CSS_SELECTOR, "button[aria-label='More options for captions, menu button']")))
+                ActionChains(self.driver).move_to_element(more_options_btn).click().perform()
+            else:
+                logger.info("Translation toggle is already ON")
+
+            # Open the language sub-dropdown
+            my_caption_language = WebDriverWait(self.driver, 10).until(EC.element_to_be_clickable((By.CSS_SELECTOR, "a[aria-label='Host controls grouping My Caption Language']")))
+            self.driver.execute_script("arguments[0].click();", my_caption_language)
+
+            # Select the target language if not already checked
+            try:
+                language_option = WebDriverWait(self.driver, 5).until(EC.presence_of_element_located((By.XPATH, f"//a[@aria-checked='false' and contains(@aria-label, '{self.zoom_closed_captions_language}')]")))
+                self.driver.execute_script("arguments[0].click();", language_option)
+                logger.info(f"Successfully set webinar closed captions language to {self.zoom_closed_captions_language}")
+            except TimeoutException:
+                logger.info(f"Language '{self.zoom_closed_captions_language}' is already selected or not found in list")
+
+        except TimeoutException:
+            logger.warning("Could not set webinar closed captions language — UI element not found")
+        except Exception as e:
+            logger.warning(f"Error setting webinar closed captions language: {e}")
 
     def retrieve_language_input_from_bottom_panel(self):
         # Then find a button with the arial-label "More meeting control " and click it

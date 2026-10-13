@@ -8,10 +8,12 @@ which uses the grouped utterances approach rather than individual utterance proc
 import os
 from unittest import mock
 
-from django.test import override_settings
+from django.test import Client, override_settings
 from django.test.testcases import TransactionTestCase
+from django.utils import timezone
 
 from bots.models import (
+    ApiKey,
     AsyncTranscription,
     AsyncTranscriptionStates,
     AudioChunk,
@@ -34,6 +36,7 @@ from bots.models import (
     WebhookTriggerTypes,
 )
 from bots.tasks.process_async_transcription_task import (
+    check_for_transcription_completion,
     create_utterances_for_transcription_using_groups,
     process_async_transcription,
 )
@@ -127,24 +130,24 @@ class TestAsyncTranscriptionUsesGroupedUtterances(AsyncTranscriptionTestCase):
         self.assertEqual(async_transcription.transcription_provider, TranscriptionProviders.ASSEMBLY_AI)
         self.assertTrue(async_transcription.use_grouped_utterances)
 
-    def test_deepgram_transcription_does_not_use_grouped_utterances(self):
+    def test_gladia_transcription_does_not_use_grouped_utterances(self):
         """Verify that other providers do NOT use grouped utterances."""
-        # Create a recording with Deepgram
-        deepgram_recording = Recording.objects.create(
+        # Create a recording with Gladia
+        gladia_recording = Recording.objects.create(
             bot=self.bot,
             recording_type=RecordingTypes.AUDIO_AND_VIDEO,
             transcription_type=TranscriptionTypes.NON_REALTIME,
-            transcription_provider=TranscriptionProviders.DEEPGRAM,
+            transcription_provider=TranscriptionProviders.GLADIA,
             is_default_recording=False,
             state=RecordingStates.COMPLETE,
         )
 
         async_transcription = AsyncTranscription.objects.create(
-            recording=deepgram_recording,
-            settings={"transcription_settings": {"deepgram": {}}},
+            recording=gladia_recording,
+            settings={"transcription_settings": {"gladia": {}}},
         )
 
-        self.assertEqual(async_transcription.transcription_provider, TranscriptionProviders.DEEPGRAM)
+        self.assertEqual(async_transcription.transcription_provider, TranscriptionProviders.GLADIA)
         self.assertFalse(async_transcription.use_grouped_utterances)
 
 
@@ -380,7 +383,7 @@ class TestSplitTranscriptionByUtterance(AsyncTranscriptionTestCase):
 class TestProcessUtteranceGroup(AsyncTranscriptionTestCase):
     """Tests for the process_utterance_group_for_async_transcription task."""
 
-    @mock.patch("bots.tasks.process_utterance_group_for_async_transcription_task.get_transcription_via_assemblyai_for_utterance_group")
+    @mock.patch("bots.tasks.process_utterance_group_for_async_transcription_task.get_transcription_for_utterance_group")
     def test_successful_transcription_writes_to_all_utterances(self, mock_get_transcription):
         """Verify successful transcription writes results to all utterances in the group."""
         chunks = self._create_audio_chunks(count=3, duration_ms=1000)
@@ -424,7 +427,7 @@ class TestProcessUtteranceGroup(AsyncTranscriptionTestCase):
         utterances[0].refresh_from_db()
         self.assertEqual(utterances[0].transcription["transcript"], "hello")
 
-    @mock.patch("bots.tasks.process_utterance_group_for_async_transcription_task.get_transcription_via_assemblyai_for_utterance_group")
+    @mock.patch("bots.tasks.process_utterance_group_for_async_transcription_task.get_transcription_for_utterance_group")
     def test_failed_transcription_marks_all_utterances_failed(self, mock_get_transcription):
         """Verify failed transcription marks all utterances in the group as failed."""
         chunks = self._create_audio_chunks(count=2, duration_ms=1000)
@@ -561,6 +564,64 @@ class TestEndToEndAsyncTranscriptionAssemblyAI(AsyncTranscriptionTestCase):
         self.assertEqual(webhook_attempts.count(), 2)  # IN_PROGRESS and COMPLETE
 
     @mock.patch("bots.tasks.deliver_webhook_task.deliver_webhook")
+    @mock.patch("bots.transcription_utils.requests.delete")
+    @mock.patch("bots.transcription_utils.requests.get")
+    @mock.patch("bots.transcription_utils.requests.post")
+    @mock.patch("bots.transcription_utils.get_mp3_for_utterance_group")
+    def test_prompt_is_forwarded_to_transcribe_request(
+        self,
+        mock_get_mp3,
+        mock_post,
+        mock_get,
+        mock_delete,
+        mock_deliver_webhook,
+    ):
+        """The assembly_ai.prompt setting is forwarded to the transcribe request body."""
+        mock_deliver_webhook.return_value = None
+
+        self._create_audio_chunks(count=1, duration_ms=1000)
+
+        async_transcription = AsyncTranscription.objects.create(
+            recording=self.recording,
+            settings={"transcription_settings": {"assembly_ai": {"prompt": "Q3 planning for the Acme logistics platform; participants discuss the Helsinki rollout."}}},
+        )
+
+        mock_get_mp3.return_value = b"fake-mp3-data"
+
+        upload_response = mock.Mock()
+        upload_response.status_code = 200
+        upload_response.json.return_value = {"upload_url": "https://assemblyai.com/upload/123"}
+
+        transcribe_response = mock.Mock()
+        transcribe_response.status_code = 200
+        transcribe_response.json.return_value = {"id": "transcript-123"}
+
+        mock_post.side_effect = [upload_response, transcribe_response]
+
+        poll_response = mock.Mock()
+        poll_response.status_code = 200
+        poll_response.json.return_value = {
+            "status": "completed",
+            "text": "hello world test",
+            "language_code": "en",
+            "words": [{"text": "hello", "start": 0, "end": 500, "confidence": 0.99}],
+        }
+        mock_get.return_value = poll_response
+
+        delete_response = mock.Mock()
+        delete_response.status_code = 200
+        mock_delete.return_value = delete_response
+
+        process_async_transcription.delay(async_transcription.id)
+
+        # The second POST is the /transcript request carrying the settings.
+        transcribe_call = mock_post.call_args_list[1]
+        self.assertEqual(
+            transcribe_call.kwargs["json"]["prompt"],
+            "Q3 planning for the Acme logistics platform; participants discuss the Helsinki rollout.",
+        )
+
+    @mock.patch("bots.tasks.deliver_webhook_task.deliver_webhook")
     @mock.patch("bots.transcription_utils.requests.post")
     @mock.patch("bots.transcription_utils.get_mp3_for_utterance_group")
     def test_async_transcription_fails_with_invalid_credentials(
@@ -630,3 +691,148 @@ class TestEndToEndAsyncTranscriptionAssemblyAI(AsyncTranscriptionTestCase):
         self.assertEqual(async_transcription.state, AsyncTranscriptionStates.FAILED)
         self.assertIsNotNone(async_transcription.failure_data)
         self.assertIn(TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND, async_transcription.failure_data.get("failure_reasons", []))
+
+
+class TestAsyncTranscriptionTimeout(AsyncTranscriptionTestCase):
+    """Tests for how long an async transcription is allowed to run before it is terminated."""
+
+    def _create_in_progress_async_transcription(self, seconds_ago, utterance_count=1):
+        async_transcription = AsyncTranscription.objects.create(
+            recording=self.recording,
+            settings={"transcription_settings": {"assembly_ai": {}}},
+            state=AsyncTranscriptionStates.IN_PROGRESS,
+            started_at=timezone.now() - timezone.timedelta(seconds=seconds_ago),
+        )
+        # Utterances that were queued for transcription and have not come back yet.
+        Utterance.objects.bulk_create(
+            [
+                Utterance(
+                    source=Utterance.Sources.PER_PARTICIPANT_AUDIO,
+                    recording=self.recording,
+                    async_transcription=async_transcription,
+                    participant=self.participant,
+                    timestamp_ms=i * 1000,
+                    duration_ms=1000,
+                )
+                for i in range(utterance_count)
+            ]
+        )
+        return async_transcription
+
+    def _check_for_completion(self, async_transcription):
+        """Runs the timeout check and reports whether the transcription was terminated."""
+        with mock.patch("bots.tasks.process_async_transcription_task.process_async_transcription") as mock_task:
+            mock_task.apply_async = mock.MagicMock()
+            check_for_transcription_completion(async_transcription)
+
+        async_transcription.refresh_from_db()
+        return async_transcription.state == AsyncTranscriptionStates.FAILED
+
+    @mock.patch("bots.tasks.deliver_webhook_task.deliver_webhook", mock.MagicMock())
+    def test_transcription_is_terminated_after_the_default_timeout_of_30_minutes(self):
+        self.assertFalse(self._check_for_completion(self._create_in_progress_async_transcription(seconds_ago=1799)))
+        self.assertTrue(self._check_for_completion(self._create_in_progress_async_transcription(seconds_ago=1801)))
+
+    @mock.patch.dict(os.environ, {"ASYNC_TRANSCRIPTION_TIMEOUT_SECONDS": "7200"})
+    @mock.patch("bots.tasks.deliver_webhook_task.deliver_webhook", mock.MagicMock())
+    def test_the_timeout_can_be_raised_with_an_env_var(self):
+        self.assertFalse(self._check_for_completion(self._create_in_progress_async_transcription(seconds_ago=7199)))
+        self.assertTrue(self._check_for_completion(self._create_in_progress_async_transcription(seconds_ago=7201)))
+
+    @mock.patch("bots.tasks.deliver_webhook_task.deliver_webhook", mock.MagicMock())
+    def test_the_timeout_grows_by_three_seconds_per_utterance_by_default(self):
+        # 700 utterances buy 2100 seconds, which is more than the 1800 second floor.
+        self.assertFalse(self._check_for_completion(self._create_in_progress_async_transcription(seconds_ago=2099, utterance_count=700)))
+        self.assertTrue(self._check_for_completion(self._create_in_progress_async_transcription(seconds_ago=2101, utterance_count=700)))
+
+    @mock.patch.dict(os.environ, {"ASYNC_TRANSCRIPTION_TIMEOUT_SECONDS_PER_UTTERANCE": "60"})
+    @mock.patch("bots.tasks.deliver_webhook_task.deliver_webhook", mock.MagicMock())
+    def test_the_seconds_per_utterance_can_be_raised_with_an_env_var(self):
+        # 100 utterances at 60 seconds each buy 6000 seconds.
+        self.assertFalse(self._check_for_completion(self._create_in_progress_async_transcription(seconds_ago=5999, utterance_count=100)))
+        self.assertTrue(self._check_for_completion(self._create_in_progress_async_transcription(seconds_ago=6001, utterance_count=100)))
+
+    @mock.patch.dict(os.environ, {"ASYNC_TRANSCRIPTION_TIMEOUT_SECONDS": "600", "ASYNC_TRANSCRIPTION_TIMEOUT_SECONDS_PER_UTTERANCE": "1"})
+    @mock.patch("bots.tasks.deliver_webhook_task.deliver_webhook", mock.MagicMock())
+    def test_the_timeout_is_the_floor_when_the_utterances_do_not_reach_it(self):
+        # 100 utterances at 1 second each buy 100 seconds, so the 600 second floor wins.
+        self.assertFalse(self._check_for_completion(self._create_in_progress_async_transcription(seconds_ago=599, utterance_count=100)))
+        self.assertTrue(self._check_for_completion(self._create_in_progress_async_transcription(seconds_ago=601, utterance_count=100)))
+
+    @mock.patch("bots.tasks.deliver_webhook_task.deliver_webhook", mock.MagicMock())
+    def test_a_terminated_transcription_records_that_utterances_were_still_in_progress(self):
+        async_transcription = self._create_in_progress_async_transcription(seconds_ago=1801)
+
+        self.assertTrue(self._check_for_completion(async_transcription))
+        self.assertIn(
+            TranscriptionFailureReasons.UTTERANCES_STILL_IN_PROGRESS_WHEN_TRANSCRIPTION_TERMINATED,
+            async_transcription.failure_data.get("failure_reasons", []),
+        )
+
+
+class TestGetTranscriptForAsyncTranscription(AsyncTranscriptionTestCase):
+    """Tests for reading the transcript of an async transcription over the API."""
+
+    def setUp(self):
+        super().setUp()
+        self.api_key, self.api_key_plain = ApiKey.create(project=self.project, name="Test API Key")
+        self.client = Client()
+
+    def _create_async_transcription(self, state, failure_data=None):
+        async_transcription = AsyncTranscription.objects.create(
+            recording=self.recording,
+            settings={"transcription_settings": {"assembly_ai": {}}},
+            state=state,
+            failure_data=failure_data,
+        )
+        # One utterance came back from the provider and one never did.
+        Utterance.objects.create(
+            source=Utterance.Sources.PER_PARTICIPANT_AUDIO,
+            recording=self.recording,
+            async_transcription=async_transcription,
+            participant=self.participant,
+            timestamp_ms=0,
+            duration_ms=1000,
+            transcription={"transcript": "Partial transcript"},
+        )
+        Utterance.objects.create(
+            source=Utterance.Sources.PER_PARTICIPANT_AUDIO,
+            recording=self.recording,
+            async_transcription=async_transcription,
+            participant=self.participant,
+            timestamp_ms=1000,
+            duration_ms=1000,
+        )
+        return async_transcription
+
+    def _get_transcript(self, async_transcription):
+        return self.client.get(
+            f"/api/v1/bots/{self.bot.object_id}/transcript?async_transcription_id={async_transcription.object_id}",
+            HTTP_AUTHORIZATION=f"Token {self.api_key_plain}",
+        )
+
+    def test_returns_the_transcript_when_the_transcription_is_complete(self):
+        response = self._get_transcript(self._create_async_transcription(AsyncTranscriptionStates.COMPLETE))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([utterance["transcription"]["transcript"] for utterance in response.json()], ["Partial transcript"])
+
+    def test_returns_the_partial_transcript_when_the_transcription_failed(self):
+        async_transcription = self._create_async_transcription(
+            AsyncTranscriptionStates.FAILED,
+            failure_data={"failure_reasons": [TranscriptionFailureReasons.UTTERANCES_STILL_IN_PROGRESS_WHEN_TRANSCRIPTION_TERMINATED]},
+        )
+
+        response = self._get_transcript(async_transcription)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([utterance["transcription"]["transcript"] for utterance in response.json()], ["Partial transcript"])
+
+    def test_returns_an_error_when_the_transcription_has_not_finished(self):
+        for state in [AsyncTranscriptionStates.NOT_STARTED, AsyncTranscriptionStates.IN_PROGRESS]:
+            with self.subTest(state=state):
+                response = self._get_transcript(self._create_async_transcription(state))
+
+                self.assertEqual(response.status_code, 400)
+                self.assertIn("is not complete or failed", response.json()["error"])
+                self.assertIn(AsyncTranscriptionStates.state_to_api_code(state), response.json()["error"])

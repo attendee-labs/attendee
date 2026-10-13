@@ -70,7 +70,7 @@ class BotVideoOutputStream {
             );
         }
 
-        const blob = new Blob([buffer], { type: "image/png" });
+        const blob = new Blob([buffer], { type: this._detectImageType(buffer) });
         const url = URL.createObjectURL(blob);
         try {
             this.imageToDraw = await this._loadImage(url);
@@ -102,6 +102,14 @@ class BotVideoOutputStream {
         });
     }
 
+    _detectImageType(buffer) {
+        const bytes = new Uint8Array(buffer);
+        if (bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF) {
+            return "image/jpeg";
+        }
+        return "image/png";
+    }
+
     ensureInputOn() {
         try {
             this.turnOnInput && this.turnOnInput();
@@ -129,7 +137,7 @@ class BotVideoOutputStream {
      * @param {boolean} loop - Whether to loop the video.
      * @returns {Promise<void>}
      */
-    async playVideo(videoUrl, loop) {
+    async playVideo(videoUrl, loop, muteVideo) {
         if (!videoUrl) {
             throw new Error("playVideo: videoUrl is required.");
         }
@@ -142,7 +150,7 @@ class BotVideoOutputStream {
             this.videoElement.playsInline = true;
         }
 
-        this.videoElement.muted = false;
+        this.videoElement.muted = muteVideo;
         this.videoElement.src = videoUrl;
         this.videoElement.loop = loop;
         this.videoElement.autoplay = true;
@@ -163,7 +171,8 @@ class BotVideoOutputStream {
 
         await this.videoElement.play();
         this.ensureInputOn();
-        this.ensureMicOn();
+        if (!muteVideo)
+            this.ensureMicOn();
 
         this._startVideoDrawingLoop();
 
@@ -191,7 +200,7 @@ class BotVideoOutputStream {
      * @param {boolean} loop - Whether to loop the video.
      * @returns {Promise<void>}
      */
-    async playVideoWithBlobUrl(videoUrl, loop) {
+    async playVideoWithBlobUrl(videoUrl, loop, muteVideo) {
         if (!videoUrl) {
             throw new Error("playVideoWithBlobUrl: videoUrl is required.");
         }
@@ -235,7 +244,7 @@ class BotVideoOutputStream {
 
         this.videoBlobUrl = videoBlobUrl;
 
-        this.videoElement.muted = false;
+        this.videoElement.muted = muteVideo;
         this.videoElement.src = videoBlobUrl;
         this.videoElement.loop = loop;
         this.videoElement.autoplay = true;
@@ -256,7 +265,8 @@ class BotVideoOutputStream {
 
         await this.videoElement.play();
         this.ensureInputOn();
-        this.ensureMicOn();
+        if (!muteVideo)
+            this.ensureMicOn();
 
         this._startVideoDrawingLoop();
 
@@ -572,11 +582,25 @@ class BotOutputManager {
 
             let originalStream;
             if (self.callOriginalGetUserMedia) {
-                try {
-                    // Call the *original* getUserMedia to trigger permissions, etc.
-                    originalStream = await self._originalGetUserMedia(constraints);
+              try {
+                  // We discard the real tracks anyway and substitute our own virtual
+                  // stream, so call the *original* getUserMedia with relaxed constraints
+                  // just to trigger permissions. This avoids OverconstrainedError when
+                  // the app (e.g. Zoom) requests a specific { deviceId: { exact: ... } }
+                  // device that doesn't exist in the bot's container.
+                  originalStream = await self._originalGetUserMedia({
+                      audio: needAudio,
+                      video: needVideo,
+                  });
                 } catch (err) {
                     console.error("Error from original getUserMedia:", err);
+                    window.ws?.sendJson({
+                        type: 'GET_USER_MEDIA_ERROR',
+                        name: err?.name,
+                        message: err?.message,
+                        constraint: err?.constraint,
+                        requestedConstraints: { audio: needAudio, video: needVideo },
+                    });
                     throw err; // propagate the same error to the caller
                 }
 
@@ -659,12 +683,12 @@ class BotOutputManager {
         return this.webcamVideoOutputStream.isVideoPlaying();
     }
 
-    async playVideo(videoUrl, loop) {
-        return this.webcamVideoOutputStream.playVideo(videoUrl, loop);
+    async playVideo(videoUrl, loop, muteVideo) {
+        return this.webcamVideoOutputStream.playVideo(videoUrl, loop, muteVideo);
     }
 
-    async playVideoWithBlobUrl(videoUrl, loop) {
-        return this.webcamVideoOutputStream.playVideoWithBlobUrl(videoUrl, loop);
+    async playVideoWithBlobUrl(videoUrl, loop, muteVideo) {
+        return this.webcamVideoOutputStream.playVideoWithBlobUrl(videoUrl, loop, muteVideo);
     }
 
     /**
@@ -789,6 +813,10 @@ class BotOutputManager {
 
     botOutputMediaStreamIsReady() {
         return this.botOutputMediaStream.getVideoTracks().length > 0 && this.botOutputMediaStream.getAudioTracks().length > 0;
+    }
+
+    setBotOutputMediaStream(mediaStream) {
+        this.botOutputMediaStream = mediaStream;
     }
 
     async playBotOutputMediaStream(outputDestination) {

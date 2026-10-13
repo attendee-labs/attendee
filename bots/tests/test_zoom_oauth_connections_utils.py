@@ -220,13 +220,12 @@ class TestGetZoomTokensViaZoomOAuthApp(TestCase):
 
     @patch("bots.zoom_oauth_connections_utils.requests.Session")
     @patch("bots.zoom_oauth_connections_utils.requests.post")
-    def test_skips_local_recording_token_when_onbehalf_and_linux_sdk(self, mock_post, mock_session):
-        """Test that local recording token is skipped when using Linux SDK with onbehalf token."""
+    def test_returns_both_tokens_when_using_native_adapter(self, mock_post, mock_session):
+        """Test that both tokens are fetched when using native adapter."""
         bot = self._create_bot(use_web_adapter=False, onbehalf_user_id="test_user_id")
         self._mock_zoom_api_responses(mock_post, mock_session, local_recording_token="local_rec_token_123", onbehalf_token="onbehalf_token_456")
 
         result = get_zoom_tokens_via_zoom_oauth_app(bot)
 
-        # Should have onbehalf token but NOT local recording token (due to Linux SDK limitation)
-        self.assertIsNone(result["app_privilege_token"])
+        self.assertEqual(result["app_privilege_token"], "local_rec_token_123")
         self.assertEqual(result["onbehalf_token"], "onbehalf_token_456")

@@ -1,16 +1,19 @@
+import json
 import os
+import struct
 import threading
 import time
 from unittest.mock import MagicMock, patch
 
 import requests
 from django.db import connection
-from django.test import TransactionTestCase
+from django.test import TransactionTestCase, override_settings, tag
 from selenium.common.exceptions import NoSuchElementException
 
 from bots.bot_adapter import BotAdapter
 from bots.bot_controller.bot_controller import BotController
 from bots.models import Bot, BotEventManager, BotEventSubTypes, BotEventTypes, BotStates, Credentials, Organization, ParticipantEvent, ParticipantEventTypes, Project, Recording, RecordingTypes, TranscriptionProviders, TranscriptionTypes, WebhookDeliveryAttempt, WebhookSecret, WebhookSubscription, WebhookTriggerTypes, ZoomMeetingToZoomOAuthConnectionMapping, ZoomOAuthApp, ZoomOAuthConnection, ZoomOAuthConnectionStates
+from bots.web_bot_adapter.web_bot_adapter import WebBotAdapter
 
 
 # Helper functions for creating mocks
@@ -29,6 +32,7 @@ def create_mock_zoom_web_driver():
     return mock_driver
 
 
+@tag("zoom_web_tests")
 class TestZoomWebBot(TransactionTestCase):
     def setUp(self):
         # Recreate organization and project for each test
@@ -635,6 +639,24 @@ class TestZoomWebBot(TransactionTestCase):
         could_not_join_event = could_not_join_events[0]
         self.assertEqual(could_not_join_event.event_sub_type, BotEventSubTypes.COULD_NOT_JOIN_MEETING_AUTHORIZED_USER_NOT_IN_MEETING_TIMEOUT_EXCEEDED)
 
+        # Verify the onbehalf token wrapping logic in subclass_specific_initial_data_code: each retry
+        # caused by the authorized user not being in the meeting should advance through the
+        # comma-separated onbehalf token list, wrapping back to the start once it runs off the end.
+        adapter = controller.adapter
+        self.assertIsNotNone(adapter, "Adapter should be available after the join attempt")
+        adapter.zoom_tokens = {"onbehalf_token": "fake_onbehalf_token_a,fake_onbehalf_token_b,fake_onbehalf_token_c"}
+        expected_tokens = [
+            "fake_onbehalf_token_a",  # retry 0 -> index 0
+            "fake_onbehalf_token_b",  # retry 1 -> index 1
+            "fake_onbehalf_token_c",  # retry 2 -> index 2
+            "fake_onbehalf_token_a",  # retry 3 -> index 0 (wraps)
+            "fake_onbehalf_token_b",  # retry 4 -> index 1 (wraps)
+        ]
+        for retries, expected_token in enumerate(expected_tokens):
+            adapter.authorized_user_not_in_meeting_retries = retries
+            initial_data_code = adapter.subclass_specific_initial_data_code()
+            self.assertIn(f"onBehalfToken: {json.dumps(expected_token)}", initial_data_code, f"Expected onbehalf token {expected_token} for retry {retries}")
+
         # Cleanup
         controller.cleanup()
         bot_thread.join(timeout=5)
@@ -757,6 +779,127 @@ class TestZoomWebBot(TransactionTestCase):
 
         # Close the database connection since we're in a thread
         connection.close()
+
+    @override_settings(ENABLE_WAITING_ROOM_STATE_FOR_WEB_BOTS=True, MONITOR_DOMAIN_ALLOWLIST_IN_CHROME=False, ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME=False)
+    @patch("bots.zoom_web_bot_adapter.zoom_web_ui_methods.WebDriverWait")
+    @patch("bots.zoom_web_bot_adapter.zoom_web_ui_methods.start_zoom_web_static_server", return_value=8080)
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
+    def test_bot_put_in_waiting_room_then_admitted(
+        self,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+        mock_start_static_server,
+        MockWebDriverWait,
+    ):
+        """Test that a bot which lands in the Zoom waiting room records a BOT_PUT_IN_WAITING_ROOM event
+        and then joins normally once it is admitted.
+
+        The real wait_to_be_admitted_to_meeting loop and check_if_in_waiting_room run unmocked — only
+        the values returned by window.userHasEnteredMeeting and window.userIsInWaitingRoom are controlled.
+
+        Flow:
+        1. userHasEnteredMeeting returns False while the bot is in the waiting room
+        2. userIsInWaitingRoom returns True -> BOT_PUT_IN_WAITING_ROOM is sent exactly once
+        3. Subsequent loop iterations do not resend the waiting room message
+        4. The bot is admitted: userHasEnteredMeeting returns True and the join succeeds
+        5. The bot transitions WAITING_ROOM -> JOINED and later leaves normally
+        """
+        # Configure the mock uploader
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        # Mock the Chrome driver
+        mock_driver = create_mock_zoom_web_driver()
+        MockChromeDriver.return_value = mock_driver
+
+        # Mock virtual display
+        mock_display = MagicMock()
+        MockDisplay.return_value = mock_display
+
+        # Mock WebDriverWait to return mock elements for post-admission UI
+        mock_wait_instance = MagicMock()
+        mock_element = MagicMock()
+        mock_element.is_displayed.return_value = True
+        mock_wait_instance.until.return_value = mock_element
+        MockWebDriverWait.return_value = mock_wait_instance
+
+        # The first three userHasEnteredMeeting checks happen while the bot sits in the waiting room;
+        # the next check reports that the bot was admitted.
+        user_has_entered_meeting_call_count = [0]
+        user_is_in_waiting_room_queries = []
+
+        def execute_script_side_effect(script, *args):
+            if "userHasEnteredMeeting" in script:
+                user_has_entered_meeting_call_count[0] += 1
+                return user_has_entered_meeting_call_count[0] > 3
+            if "userIsInWaitingRoom" in script:
+                user_is_in_waiting_room_queries.append(script)
+                return True
+            if "userHasEncounteredOnBehalfTokenUserNotInMeetingError" in script:
+                return False
+            if "userHasEncounteredGenericJoinError" in script:
+                return False
+            return None
+
+        mock_driver.execute_script.side_effect = execute_script_side_effect
+
+        # Not waiting for the host, no passcode/login prompts, no captcha
+        mock_driver.find_element.side_effect = NoSuchElementException("Element not found")
+        mock_driver.find_elements.return_value = []
+
+        with patch.object(WebBotAdapter, "send_bot_put_in_waiting_room_message", autospec=True, side_effect=WebBotAdapter.send_bot_put_in_waiting_room_message) as mock_send_waiting_room_message:
+            # Create bot controller
+            controller = BotController(self.bot.id)
+
+            # Run the bot in a separate thread since it has an event loop
+            bot_thread = threading.Thread(target=controller.run)
+            bot_thread.daemon = True
+            bot_thread.start()
+
+            # Allow time for the bot to sit in the waiting room and then be admitted
+            time.sleep(10)
+
+            # The waiting room state is only queried until the waiting room message has been sent
+            self.assertEqual(len(user_is_in_waiting_room_queries), 1)
+            self.assertEqual(mock_send_waiting_room_message.call_count, 1)
+            self.assertTrue(controller.adapter.sent_bot_put_in_waiting_room_message)
+            self.assertEqual(user_has_entered_meeting_call_count[0], 4)
+
+            # The bot entered the waiting room and was then admitted
+            self.bot.refresh_from_db()
+            self.assertEqual(self.bot.state, BotStates.JOINED_NOT_RECORDING)
+            event_types = list(self.bot.bot_events.order_by("created_at").values_list("event_type", flat=True))
+            self.assertEqual(event_types, [BotEventTypes.JOIN_REQUESTED, BotEventTypes.BOT_PUT_IN_WAITING_ROOM, BotEventTypes.BOT_JOINED_MEETING])
+
+            waiting_room_event = self.bot.bot_events.get(event_type=BotEventTypes.BOT_PUT_IN_WAITING_ROOM)
+            self.assertEqual(waiting_room_event.old_state, BotStates.JOINING)
+            self.assertEqual(waiting_room_event.new_state, BotStates.WAITING_ROOM)
+
+            joined_event = self.bot.bot_events.get(event_type=BotEventTypes.BOT_JOINED_MEETING)
+            self.assertEqual(joined_event.old_state, BotStates.WAITING_ROOM)
+            self.assertEqual(joined_event.new_state, BotStates.JOINED_NOT_RECORDING)
+
+            # Simulate meeting ending to trigger cleanup
+            controller.adapter.only_one_participant_in_meeting_at = time.time() - 10000000000
+            time.sleep(4)
+
+            self.bot.refresh_from_db()
+            self.assertFalse(self.bot.bot_events.filter(event_type=BotEventTypes.FATAL_ERROR).exists())
+            self.assertFalse(self.bot.bot_events.filter(event_type=BotEventTypes.COULD_NOT_JOIN).exists())
+
+            # Cleanup
+            controller.cleanup()
+            bot_thread.join(timeout=5)
+
+            # If thread is still running after timeout, that's a problem to report
+            if bot_thread.is_alive():
+                print("WARNING: Bot thread did not terminate properly after cleanup")
+
+            # Close the database connection since we're in a thread
+            connection.close()
 
     @patch("bots.zoom_web_bot_adapter.zoom_web_ui_methods.WebDriverWait")
     @patch("bots.zoom_web_bot_adapter.zoom_web_ui_methods.start_zoom_web_static_server", return_value=8080)
@@ -941,6 +1084,108 @@ class TestZoomWebBot(TransactionTestCase):
         bot_thread.join(timeout=5)
 
         # Close the database connection since we're in a thread
+        connection.close()
+
+    @patch("bots.zoom_web_bot_adapter.zoom_web_ui_methods.ZoomWebUIMethods.attempt_to_join_meeting")
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
+    def test_bot_detects_removal_from_meeting_via_users_update(
+        self,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+        mock_attempt_to_join,
+    ):
+        """
+        Test that the bot detects when it has been removed from the meeting
+        via a UsersUpdate WebSocket message where the current user's
+        humanized_status is "removed_from_meeting".
+
+        Also verifies that when a *different* user is removed, the bot
+        does NOT treat it as its own removal.
+
+        This exercises the detection path in handle_websocket where an
+        updatedUsers entry with humanized_status="removed_from_meeting"
+        and isCurrentUser=True triggers handle_removed_from_meeting().
+        """
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        mock_driver = create_mock_zoom_web_driver()
+        MockChromeDriver.return_value = mock_driver
+
+        mock_display = MagicMock()
+        MockDisplay.return_value = mock_display
+
+        mock_attempt_to_join.return_value = None
+
+        controller = BotController(self.bot.id)
+
+        bot_thread = threading.Thread(target=controller.run)
+        bot_thread.daemon = True
+        bot_thread.start()
+
+        time.sleep(2)
+
+        adapter = controller.adapter
+        self.assertFalse(adapter.left_meeting)
+
+        # Step 1: Another participant is removed — the bot should NOT
+        # consider itself removed from the meeting.
+        other_user_removed = {
+            "type": "UsersUpdate",
+            "newUsers": [],
+            "removedUsers": [],
+            "updatedUsers": [
+                {
+                    "deviceId": "other_device",
+                    "fullName": "Some Other User",
+                    "isCurrentUser": False,
+                    "humanized_status": "removed_from_meeting",
+                    "isHost": False,
+                }
+            ],
+        }
+        json_bytes = json.dumps(other_user_removed).encode("utf-8")
+        message = struct.pack("<I", 1) + json_bytes
+
+        adapter.handle_websocket([message])
+
+        self.assertFalse(adapter.left_meeting, "Bot should not treat another user's removal as its own")
+
+        # Step 2: The bot's own user is removed — this should be detected.
+        bot_user_removed = {
+            "type": "UsersUpdate",
+            "newUsers": [],
+            "removedUsers": [],
+            "updatedUsers": [
+                {
+                    "deviceId": "bot_device",
+                    "fullName": "Test Zoom Web Bot",
+                    "isCurrentUser": True,
+                    "humanized_status": "removed_from_meeting",
+                    "isHost": False,
+                }
+            ],
+        }
+        json_bytes = json.dumps(bot_user_removed).encode("utf-8")
+        message = struct.pack("<I", 1) + json_bytes
+
+        adapter.handle_websocket([message])
+
+        self.assertTrue(adapter.left_meeting)
+
+        time.sleep(3)
+
+        self.bot.refresh_from_db()
+
+        bot_events = self.bot.bot_events.all()
+        meeting_ended_events = [e for e in bot_events if e.event_type == BotEventTypes.MEETING_ENDED]
+        self.assertEqual(len(meeting_ended_events), 1, "Expected exactly one MEETING_ENDED event")
+
+        bot_thread.join(timeout=5)
+
         connection.close()
 
     @patch.dict(os.environ, {"ZOOM_WEB_GENERIC_JOIN_ERROR_SLEEP_TIME_SECONDS": "0.5"})

@@ -1,21 +1,14 @@
 import os
-import sys
-
-import dj_database_url
 
 from .base import *
-from .base import LOG_FORMATTERS
+from .base import LOG_FORMATTERS, LOG_HANDLER_NAMES, LOG_HANDLERS
+from .db import default_database
 
 DEBUG = False
-ALLOWED_HOSTS = ["*"]
+ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "*").split(",")
 
 DATABASES = {
-    "default": dj_database_url.config(
-        env="DATABASE_URL",
-        conn_max_age=600,
-        conn_health_checks=True,
-        ssl_require=os.getenv("POSTGRES_SSL_REQUIRE", "true") == "true",
-    ),
+    "default": default_database(ssl_require=os.getenv("POSTGRES_SSL_REQUIRE", "true") == "true"),
 }
 
 # PRESERVE CELERY TASKS IF WORKER IS SHUT DOWN
@@ -60,27 +53,23 @@ if os.getenv("ERROR_REPORTS_RECEIVER_EMAIL_ADDRESS"):
 
 SERVER_EMAIL = os.getenv("SERVER_EMAIL", "noreply@mail.attendee.dev")
 
+CSRF_TRUSTED_ORIGINS = os.getenv("CSRF_TRUSTED_ORIGINS").split(",") if os.getenv("CSRF_TRUSTED_ORIGINS") else []
+
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
     "formatters": LOG_FORMATTERS,
-    "handlers": {
-        "console": {
-            "class": "logging.StreamHandler",
-            "stream": sys.stdout,
-            "formatter": os.getenv("ATTENDEE_LOG_FORMAT"),  # `None` (default formatter) is the default
-        },
-    },
+    "handlers": LOG_HANDLERS,
     "root": {
-        "handlers": ["console"],
+        "handlers": LOG_HANDLER_NAMES,
         "level": os.getenv("ATTENDEE_LOG_LEVEL", "INFO"),
     },
     "loggers": {
         "django": {
-            "handlers": ["console"],
+            "handlers": LOG_HANDLER_NAMES,
             "level": os.getenv("ATTENDEE_LOG_LEVEL", "INFO"),
             "propagate": False,
         },
-        "xmlschema": {"level": "WARNING", "handlers": ["console"], "propagate": False},
+        "xmlschema": {"level": "WARNING", "handlers": LOG_HANDLER_NAMES, "propagate": False},
     },
 }

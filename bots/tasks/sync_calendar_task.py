@@ -1,6 +1,7 @@
 import copy
 import json
 import logging
+import os
 import re
 import uuid
 from datetime import datetime, timedelta
@@ -197,7 +198,7 @@ class CalendarSyncHandler:
             # Step 1: Set time window
             now = timezone.now()
             self.time_window_start = now - timedelta(days=1)
-            self.time_window_end = now + timedelta(days=28)
+            self.time_window_end = now + timedelta(days=int(os.getenv("CALENDAR_SYNC_TIME_WINDOW_END_DAYS", 28)))
             logger.info(f"Set time window for calendar {self.calendar.object_id}: {self.time_window_start.isoformat()} to {self.time_window_end.isoformat()}")
 
             # Get access token
@@ -386,7 +387,7 @@ class GoogleCalendarSyncHandler(CalendarSyncHandler):
 
     def _raise_if_error_is_authentication_error(self, e: requests.RequestException):
         error_code = e.response.json().get("error")
-        if error_code == "invalid_grant" or error_code == "invalid_client":
+        if error_code == "invalid_grant" or error_code == "invalid_client" or error_code == "deleted_client":
             raise CalendarAPIAuthenticationError(f"Google Authentication error: {e.response.json()}")
         if "ACCESS_TOKEN_SCOPE_INSUFFICIENT" in e.response.text:
             raise CalendarAPIAuthenticationError(f"Google Authentication error: {e.response.json()}")
@@ -663,6 +664,7 @@ class MicrosoftCalendarSyncHandler(CalendarSyncHandler):
             "ErrorAccessDenied",
             "The mailbox is either inactive, soft-deleted, or is hosted on-premise.",
             "This indicate that a subscription within the tenant has lapsed, or that the administrator for this tenant has disabled the application, preventing tokens from being issued for it",
+            "is not configured as a multi-tenant application.",
         ]
 
         for substring in authentication_error_substrings:

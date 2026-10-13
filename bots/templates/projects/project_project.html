@@ -30,6 +30,10 @@
       </button>
     </form>
   </div>
+
+  {% if project.concurrent_bots_limit_override is not None %}
+  <p class="mt-4">Concurrent bots limit: {{ project.concurrent_bots_limit_override }}</p>
+  {% endif %}
   
   <!-- Users with access section -->
   <div class="card mt-4">
@@ -44,6 +48,10 @@
               <tr>
                 <th>Email</th>
                 <th>Role</th>
+                {% if enable_granular_permissions %}
+                  <th class="text-center">View recording content</th>
+                  <th class="text-center">Manage API keys</th>
+                {% endif %}
               </tr>
             </thead>
             <tbody>
@@ -57,6 +65,21 @@
                       <span class="badge bg-secondary">Regular User</span>
                     {% endif %}
                   </td>
+                  {% if enable_granular_permissions %}
+                    {% if user.role == 'admin' %}
+                      <td class="text-center">Yes</td>
+                      <td class="text-center">Yes</td>
+                    {% else %}
+                      {% with access=user.access_for_project|first %}
+                        <td class="text-center">
+                          {% if access.can_view_recording_content %}Yes{% else %}<span class="text-muted">No</span>{% endif %}
+                        </td>
+                        <td class="text-center">
+                          {% if access.can_manage_api_keys %}Yes{% else %}<span class="text-muted">No</span>{% endif %}
+                        </td>
+                      {% endwith %}
+                    {% endif %}
+                  {% endif %}
                 </tr>
               {% endfor %}
             </tbody>
