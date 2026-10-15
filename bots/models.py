@@ -595,6 +595,7 @@ class MeetingTypes(models.TextChoices):
     ZOOM = "zoom"
     GOOGLE_MEET = "google_meet"
     TEAMS = "teams"
+    WEBEX = "webex"
 
 
 class BotStates(models.IntegerChoices):
