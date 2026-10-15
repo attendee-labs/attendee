@@ -1125,8 +1125,6 @@ class UserManager {
 
         const updatedUsers = Array.from(updatedUserIds).map(id => this.currentUsersMap.get(id));
 
-        this.detectScreenShareChanges();
-
         const newUsersToSend = this.removeScreenshareUsers(newUsers);
         const removedUsersToSend = this.removeScreenshareUsers(removedUsers);
         const updatedUsersToSend = this.removeScreenshareUsers(updatedUsers);
@@ -1139,6 +1137,8 @@ class UserManager {
                 updatedUsers: updatedUsersToSend
             });
         }
+
+        this.detectScreenShareChanges();
     }
 
     detectScreenShareChanges() {

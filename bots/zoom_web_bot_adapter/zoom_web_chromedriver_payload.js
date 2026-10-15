@@ -1424,7 +1424,6 @@ class UserManager {
     }
 
     singleUserSynced(user) {
-      this.detectScreenShareChange(user);
       const convertedUser = this.convertUser(user);
       console.log('singleUserSynced called w', convertedUser);
       // Create array with new user and existing users, then filter for unique deviceIds
@@ -1435,6 +1434,7 @@ class UserManager {
         new Map(allUsers.map(singleUser => [singleUser.deviceId, singleUser])).values()
       );
       this.newUsersListSynced(uniqueUsers);
+      this.detectScreenShareChange(user);
     }
 
     newUsersListSynced(newUsersList) {
