@@ -48,7 +48,7 @@ Bot-level webhooks are created via the API when creating a bot. Include a `webho
 | `chat_messages.update` | Chat message updates in the meeting |
 | `participant_events.join_leave` | A participant joins or leaves the meeting |
 | `participant_events.speech_start_stop` | A participant starts or stops speaking |
-| `participant_events.screenshare_start_stop` | A participant starts or stops sharing their screen (not supported on Zoom Web or Zoom RTMS) |
+| `participant_events.screenshare_start_stop` | A participant starts or stops sharing their screen (not supported on Zoom RTMS) |
 | `calendar.events_update` | Calendar events have been synced and updated |
 | `calendar.state_change` | Calendar connection state has changed (connected/disconnected) |
 | `bot_logs.update` | A log entry associated with a bot has been created |
@@ -185,7 +185,7 @@ For webhooks triggered by `chat_messages.update`, the `data` field contains a si
 }
 ```
 
-### Payload for `participant_events.join_leave`, `participant_events.speech_start_stop`, and `participant_events.screenshare_start_stop` triggers
+### Payload for participant event triggers
 
 For webhooks triggered by `participant_events.join_leave`, `participant_events.speech_start_stop`, and `participant_events.screenshare_start_stop`, the `data` field contains a single participant event:
 
