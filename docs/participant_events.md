@@ -15,7 +15,7 @@ Currently, there are six types of participant events:
 - **Screenshare Start**: A participant has started sharing their screen.
 - **Screenshare Stop**: A participant has stopped sharing their screen.
 
-> **Note:** Screenshare start/stop events are supported on Zoom Google Meet, and Microsoft Teams, but not Zoom RTMS.
+> **Note:** Screenshare start/stop events are supported on Zoom, Google Meet, and Microsoft Teams, but not Zoom RTMS.
 
 ## Fetching Participant Events
 
