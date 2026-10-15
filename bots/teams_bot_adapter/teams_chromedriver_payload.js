@@ -1002,6 +1002,8 @@ class VirtualStreamToPhysicalStreamMappingManager {
 
         this.physicalClientStreamIdToVirtualStreamIdMapping = {}
         this.virtualStreamIdToPhysicalClientStreamIdMapping = {}
+        // Track participant IDs currently sharing their screen
+        this.activeScreenSharerParticipantIds = new Set();
     }
 
     getVirtualVideoStreamIdToSend() {
@@ -1094,6 +1096,7 @@ class VirtualStreamToPhysicalStreamMappingManager {
     upsertVirtualStream(virtualStream) {
         realConsole?.log('upsertVirtualStream', virtualStream, 'this.virtualStreams', this.virtualStreams);
         this.virtualStreams.set(virtualStream.sourceId.toString(), {...virtualStream, sourceId: virtualStream.sourceId.toString()});
+        this.detectScreenShareChanges();
     }
     
     removeVirtualStreamsForParticipant(participantId) {
@@ -1101,6 +1104,36 @@ class VirtualStreamToPhysicalStreamMappingManager {
         for (const virtualStream of virtualStreamsToRemove) {
             this.virtualStreams.delete(virtualStream.sourceId.toString());
         }
+        this.detectScreenShareChanges();
+    }
+
+    detectScreenShareChanges() {
+        const currentScreenSharerIds = new Set(
+            Array.from(this.virtualStreams.values())
+                .filter(vs => vs.isScreenShare && vs.isActive && vs.participant?.id)
+                .map(vs => vs.participant.id)
+        );
+        for (const participantId of currentScreenSharerIds) {
+            if (!this.activeScreenSharerParticipantIds.has(participantId)) {
+                window.ws?.sendJson({
+                    type: 'ScreenshareStartStopEvent',
+                    participantId: participantId,
+                    isScreenshareStart: true,
+                    timestamp: Date.now()
+                });
+            }
+        }
+        for (const participantId of this.activeScreenSharerParticipantIds) {
+            if (!currentScreenSharerIds.has(participantId)) {
+                window.ws?.sendJson({
+                    type: 'ScreenshareStartStopEvent',
+                    participantId: participantId,
+                    isScreenshareStart: false,
+                    timestamp: Date.now()
+                });
+            }
+        }
+        this.activeScreenSharerParticipantIds = currentScreenSharerIds;
     }
 
     upsertPhysicalClientStreamIdToVirtualStreamIdMapping(physicalClientStreamId, virtualStreamId) {
