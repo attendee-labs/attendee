@@ -729,6 +729,9 @@ class TranscriptionSettings:
     def assembly_ai_language_detection(self):
         return self._settings.get("assembly_ai", {}).get("language_detection", False)
 
+    def assembly_ai_language_codes(self):
+        return self._settings.get("assembly_ai", {}).get("language_codes", None)
+
     def assemblyai_keyterms_prompt(self):
         return self._settings.get("assembly_ai", {}).get("keyterms_prompt", None)
 
@@ -759,10 +762,18 @@ class TranscriptionSettings:
         language_detection_options = self._settings.get("assembly_ai", {}).get("language_detection_options", None)
         if not language_detection_options:
             return None
-        return {
+        options = {
             "expected_languages": language_detection_options.get("expected_languages", ["all"]),
             "fallback_language": language_detection_options.get("fallback_language", "auto"),
         }
+        if "code_switching" in language_detection_options:
+            options["code_switching"] = language_detection_options["code_switching"]
+        if "code_switching_confidence_threshold" in language_detection_options:
+            options["code_switching_confidence_threshold"] = language_detection_options["code_switching_confidence_threshold"]
+        return options
+
+    def assemblyai_language_confidence_threshold(self):
+        return self._settings.get("assembly_ai", {}).get("language_confidence_threshold", None)
 
     def sarvam_language_code(self):
         return self._settings.get("sarvam", {}).get("language_code", None)
