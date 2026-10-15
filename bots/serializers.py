@@ -797,6 +797,25 @@ class TeamsSettingsJSONField(serializers.JSONField):
     pass
 
 
+JITSI_SETTINGS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "room_password": {
+            "type": ["string", "null"],
+            "description": "Password for the Jitsi room, if the room is password-protected. Also used to bypass the lobby if one is enabled.",
+            "default": None,
+        },
+    },
+    "required": [],
+    "additionalProperties": False,
+}
+
+
+@extend_schema_field(JITSI_SETTINGS_SCHEMA)
+class JitsiSettingsJSONField(serializers.JSONField):
+    pass
+
+
 @extend_schema_field(
     {
         "type": "object",
@@ -1441,6 +1460,9 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
             if meeting_type == MeetingTypes.ZOOM and not use_zoom_web_adapter:
                 raise serializers.ValidationError("Room sync is not supported for Zoom when using the native SDK. Please set 'zoom_settings.sdk' to 'web' in the bot creation request.")
 
+            if meeting_type == MeetingTypes.JITSI:
+                raise serializers.ValidationError("Room sync is not supported for Jitsi.")
+
         return value
 
     transcription_settings = TranscriptionSettingsJSONField(
@@ -1464,6 +1486,10 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
             elif meeting_type == MeetingTypes.GOOGLE_MEET:
                 value = {"meeting_closed_captions": {}}
             elif meeting_type == MeetingTypes.TEAMS:
+                value = {"meeting_closed_captions": {}}
+            elif meeting_type == MeetingTypes.JITSI:
+                # Jitsi has no server-side captions (no Jigasi assumed) — this default means
+                # "no external transcription provider"; captions simply never arrive.
                 value = {"meeting_closed_captions": {}}
             else:
                 return None
@@ -1613,6 +1639,23 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
             for key, default_value in defaults.items():
                 if key not in value:
                     value[key] = default_value
+
+        return value
+
+    jitsi_settings = JitsiSettingsJSONField(
+        help_text="The Jitsi-specific settings for the bot.",
+        required=False,
+        default={},
+    )
+
+    def validate_jitsi_settings(self, value):
+        if value is None:
+            return value
+
+        try:
+            jsonschema.validate(instance=value, schema=JITSI_SETTINGS_SCHEMA)
+        except jsonschema.exceptions.ValidationError as e:
+            raise serializers.ValidationError(e.message)
 
         return value
 
