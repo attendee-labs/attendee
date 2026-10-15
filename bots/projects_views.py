@@ -217,6 +217,8 @@ def get_partial_for_credential_type(credential_type, request, context):
         return render(request, "projects/partials/teams_bot_identification_credentials.html", context)
     elif credential_type == Credentials.CredentialTypes.LIVEKIT:
         return render(request, "projects/partials/livekit_credentials.html", context)
+    elif credential_type == Credentials.CredentialTypes.WEBEX_SERVICE_APP:
+        return render(request, "projects/partials/webex_service_app_credentials.html", context)
     else:
         return HttpResponse("Cannot render the partial for this credential type", status=400)
 
@@ -451,6 +453,15 @@ class CreateCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 
                 if not all(credentials_data.values()):
                     return HttpResponse("Missing required credentials data", status=400)
+            elif credential_type == Credentials.CredentialTypes.WEBEX_SERVICE_APP:
+                credentials_data = {
+                    "client_id": request.POST.get("client_id"),
+                    "client_secret": request.POST.get("client_secret"),
+                    "refresh_token": request.POST.get("refresh_token"),
+                }
+
+                if not all(credentials_data.values()):
+                    return HttpResponse("Missing required credentials data", status=400)
             else:
                 return HttpResponse("Unsupported credential type", status=400)
 
@@ -530,6 +541,8 @@ class ProjectCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 
         livekit_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.LIVEKIT).first()
 
+        webex_service_app_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.WEBEX_SERVICE_APP).first()
+
         context = self.get_project_context(object_id, project)
         context.update(
             {
@@ -559,6 +572,8 @@ class ProjectCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
                 "show_teams_bot_identification_credentials": settings.SHOW_TEAMS_BOT_IDENTIFICATION_CREDENTIALS,
                 "livekit_credentials": livekit_credentials.get_credentials() if livekit_credentials else None,
                 "livekit_credential_type": Credentials.CredentialTypes.LIVEKIT,
+                "webex_service_app_credentials": webex_service_app_credentials.get_credentials() if webex_service_app_credentials else None,
+                "webex_service_app_credential_type": Credentials.CredentialTypes.WEBEX_SERVICE_APP,
             }
         )
 

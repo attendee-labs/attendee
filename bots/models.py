@@ -2844,6 +2844,7 @@ class Credentials(models.Model):
         KYUTAI = 11, "Kyutai"
         TEAMS_BOT_IDENTIFICATION_CREDENTIALS = 12, "Teams Bot Identification Credentials"
         LIVEKIT = 13, "LiveKit"
+        WEBEX_SERVICE_APP = 14, "Webex Service App"
 
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="credentials")
     credential_type = models.IntegerField(choices=CredentialTypes.choices, null=False)
