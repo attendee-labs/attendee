@@ -100,3 +100,4 @@ db.sqlite3
 custom/
 docker-compose.yaml
 .idea/
+bots/webex_bot_adapter/dev/out/
