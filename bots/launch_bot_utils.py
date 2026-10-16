@@ -94,6 +94,7 @@ def _launch_bot_via_pod_creator(bot):
         except Exception as e:
             logger.error(f"Failed to create fatal error bot not launched event for bot {bot.object_id} ({bot.id}): {str(e)}")
 
+
 def launch_adhoc_bot_from_view(bot):
     """Launch an adhoc (non-scheduled) bot from a webserver view.
 
