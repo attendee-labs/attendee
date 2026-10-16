@@ -45,6 +45,7 @@ from .models import (
     CreditTransaction,
     InstanceHealthAlertsState,
     Participant,
+    ParticipantEvent,
     ParticipantEventTypes,
     Project,
     ProjectAccess,
@@ -936,7 +937,7 @@ class ProjectBotDetailView(LoginRequiredMixin, ProjectUrlContextMixin, View):
             chat_messages = obfuscate_chat_messages_for_bot_detail_view(chat_messages)
 
         # Get participants and participant events for this bot
-        participants = Participant.objects.filter(bot=bot, is_the_bot=False).prefetch_related("events").order_by("created_at")
+        participants = Participant.objects.filter(bot=bot, is_the_bot=False).prefetch_related(models.Prefetch("events", queryset=ParticipantEvent.objects.order_by("timestamp_ms", "id"))).order_by("created_at")
 
         # Get resource snapshots for this bot
         resource_snapshots = bot.resource_snapshots.all().order_by("created_at")

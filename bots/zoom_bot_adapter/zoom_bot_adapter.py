@@ -176,6 +176,7 @@ class ZoomBotAdapter(BotAdapter):
         self.active_speaker_id = None
         self.active_sharer_id = None
         self.active_sharer_source_id = None
+        self.screensharing_user_ids_for_participant_events = set()
 
         self._participant_cache = {}
 
@@ -292,6 +293,7 @@ class ZoomBotAdapter(BotAdapter):
         self.update_only_one_participant_in_meeting_at()
 
         for left_user_id in left_user_ids:
+            self.set_user_screensharing_for_participant_events(left_user_id, False)
             self.send_participant_event(left_user_id, event_type=ParticipantEventTypes.LEAVE)
 
     def on_host_request_start_audio_callback(self, handler):
@@ -406,6 +408,9 @@ class ZoomBotAdapter(BotAdapter):
         self.active_sharer_id = None
         self.active_sharer_source_id = None
 
+        for sharing_user_id in viewable_sharing_user_list or []:
+            self.set_user_screensharing_for_participant_events(sharing_user_id, True)
+
         if viewable_sharing_user_list:
             sharing_source_info_list = self.meeting_sharing_controller.GetSharingSourceInfoList(viewable_sharing_user_list[0])
             if sharing_source_info_list:
@@ -489,10 +494,24 @@ class ZoomBotAdapter(BotAdapter):
     def number_of_participants_ever_in_meeting_excluding_other_bots(self):
         return len([participant for participant in self._participant_cache.values() if not participant_is_another_bot(participant["participant_full_name"], participant["participant_is_the_bot"], self.automatic_leave_configuration)])
 
+    def set_user_screensharing_for_participant_events(self, user_id, is_sharing):
+        if is_sharing and user_id not in self.screensharing_user_ids_for_participant_events:
+            self.screensharing_user_ids_for_participant_events.add(user_id)
+            self.send_participant_event(user_id, event_type=ParticipantEventTypes.SCREENSHARE_START)
+        elif not is_sharing and user_id in self.screensharing_user_ids_for_participant_events:
+            self.screensharing_user_ids_for_participant_events.discard(user_id)
+            self.send_participant_event(user_id, event_type=ParticipantEventTypes.SCREENSHARE_STOP)
+
     def on_sharing_status_callback(self, sharing_info):
         user_id = sharing_info.userid
         sharing_status = sharing_info.status
         logger.info(f"on_sharing_status_callback called. sharing_status = {sharing_status}, user_id = {user_id}")
+
+        # Pause/Resume, the bot's own shares (Self_Send_*) and the Pure_Audio_* statuses deliberately produce no participant events
+        if sharing_status == zoom.Sharing_Other_Share_Begin or sharing_status == zoom.Sharing_View_Other_Sharing:
+            self.set_user_screensharing_for_participant_events(user_id, True)
+        elif sharing_status == zoom.Sharing_Other_Share_End:
+            self.set_user_screensharing_for_participant_events(user_id, False)
 
         if sharing_status == zoom.Sharing_Other_Share_Begin or sharing_status == zoom.Sharing_View_Other_Sharing:
             new_active_sharer_id = user_id

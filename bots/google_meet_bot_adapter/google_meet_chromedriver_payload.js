@@ -958,6 +958,8 @@ class UserManager {
         this.currentUsersMap = new Map();
         this.deviceOutputMap = new Map();
         this.currentUserId = null;
+        // Track the set of parentDeviceIds (real participant deviceIds) currently screen sharing
+        this.activeScreenSharerParentDeviceIds = new Set();
 
         this.ws = ws;
     }
@@ -1135,6 +1137,35 @@ class UserManager {
                 updatedUsers: updatedUsersToSend
             });
         }
+
+        this.detectScreenShareChanges();
+    }
+
+    detectScreenShareChanges() {
+        const currentScreenSharerParentDeviceIds = new Set(
+            this.getCurrentUsersInMeetingWhoAreScreenSharing().map(user => user.parentDeviceId)
+        );
+        for (const parentDeviceId of currentScreenSharerParentDeviceIds) {
+            if (!this.activeScreenSharerParentDeviceIds.has(parentDeviceId)) {
+                this.ws.sendJson({
+                    type: 'ScreenshareStartStopEvent',
+                    participantId: parentDeviceId,
+                    isScreenshareStart: true,
+                    timestamp: Date.now()
+                });
+            }
+        }
+        for (const parentDeviceId of this.activeScreenSharerParentDeviceIds) {
+            if (!currentScreenSharerParentDeviceIds.has(parentDeviceId)) {
+                this.ws.sendJson({
+                    type: 'ScreenshareStartStopEvent',
+                    participantId: parentDeviceId,
+                    isScreenshareStart: false,
+                    timestamp: Date.now()
+                });
+            }
+        }
+        this.activeScreenSharerParentDeviceIds = currentScreenSharerParentDeviceIds;
     }
 }
 
