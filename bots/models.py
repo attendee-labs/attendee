@@ -1172,6 +1172,9 @@ class Bot(models.Model):
         else:
             return None
 
+    def should_launch_bot_pod_with_runner_pool(self):
+        return os.getenv("USE_BOT_RUNNER_POOL", "false") == "true" and self.join_at is None and not self.should_launch_webpage_streamer()
+
     def should_launch_webpage_streamer(self):
         voice_agent_settings = self.settings.get("voice_agent_settings", {}) or {}
         return voice_agent_settings.get("reserve_resources", False)
