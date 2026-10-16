@@ -276,14 +276,24 @@ TRANSCRIPTION_SETTINGS_SCHEMA = {
         "gladia": {
             "type": "object",
             "properties": {
+                "languages": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "uniqueItems": True,
+                    "description": "ISO 639-1 codes of the languages expected in the audio. Pass a single language to pin the transcription language. Pass several to have Gladia detect the language among them. If omitted, Gladia detects the language across all supported languages. See here for available languages: https://docs.gladia.io/chapters/language/supported-languages",
+                },
+                "code_switching": {
+                    "type": "boolean",
+                    "description": "Whether to detect the language of each utterance, for audio where speakers switch languages. If false, the language is detected once at the start of the audio. Has no effect when a single language is passed in languages. Gladia recommends also passing the expected languages. Defaults to false. See details: https://docs.gladia.io/chapters/language/code-switching",
+                },
                 "code_switching_languages": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "The languages to transcribe the meeting in when using code switching. See here for available languages: https://docs.gladia.io/chapters/limits-and-specifications/languages",
+                    "description": "Deprecated, use languages instead. The languages to transcribe the meeting in when using code switching. Ignored if languages or code_switching is set. See here for available languages: https://docs.gladia.io/chapters/language/supported-languages",
                 },
                 "enable_code_switching": {
                     "type": "boolean",
-                    "description": "Whether to use code switching to transcribe the meeting in multiple languages.",
+                    "description": "Deprecated, use code_switching instead. Whether to use code switching to transcribe the meeting in multiple languages. Ignored if languages or code_switching is set.",
                 },
             },
             "required": [],
