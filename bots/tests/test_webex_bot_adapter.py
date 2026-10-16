@@ -211,3 +211,12 @@ class WebexPayloadContractTest(SimpleTestCase):
         for method in called_methods:
             with self.subTest(method=method):
                 self.assertRegex(payload_source, rf"(?m)^    {method}\(", msg=f"webex_chromedriver_payload.js does not define WebSocketClient.{method}, which WebBotAdapter calls")
+
+    def test_the_page_only_sends_the_audio_the_controller_asked_for(self):
+        # Sending audio that has no callback crashes the websocket handler of WebBotAdapter, and with it every later message
+        with open(os.path.join(os.path.dirname(inspect.getfile(WebexBotAdapter)), "webex_chromedriver_page.js")) as page:
+            page_source = page.read()
+
+        for flag in ("sendMixedAudio", "sendPerParticipantAudio"):
+            with self.subTest(flag=flag):
+                self.assertIn(flag, re.search(r"const \{[^}]*\} = window\.initialData;", page_source).group(0))

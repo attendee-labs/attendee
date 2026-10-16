@@ -3,6 +3,8 @@
 // reading window.webexJoinState.
 
 const initialData = window.webexInitialData;
+// Which audio the controller wants over the websocket. The adapter has no callback for audio nobody asked for.
+const { sendMixedAudio: wantsMixedAudio, sendPerParticipantAudio: wantsPerParticipantAudio } = window.initialData;
 
 const AUDIO_SAMPLE_RATE = 48000;
 const NUM_ACTIVE_SPEAKER_AUDIO_SLOTS = 3;
@@ -208,13 +210,13 @@ async function forEachAudioFrame(track, onSamples) {
 // Webex does not say which member is in which audio slot (the slots never report a source and the RTP packets carry
 // no contributing source), so per participant audio is emulated from the mixed audio like the Teams bot does: each
 // frame is attributed to the active speaker. Overlapping speakers are attributed to whoever started speaking first.
-function sendMixedAudio(samples) {
+function sendAudio(samples) {
     // Summing the slots can exceed full scale, and the adapter's float to int16 conversion wraps on overflow
     for (let i = 0; i < samples.length; i++) samples[i] = Math.max(-1, Math.min(1, samples[i]));
-    window.ws.sendMixedAudio(samples);
+    if (wantsMixedAudio) window.ws.sendMixedAudio(samples);
 
     const speakerId = [...activeSpeakerIds].find((id) => id !== meeting.members.selfId);
-    if (speakerId) window.ws.sendPerParticipantAudio(speakerId, samples);
+    if (wantsPerParticipantAudio && speakerId) window.ws.sendPerParticipantAudio(speakerId, samples);
 }
 
 function addAudioSlot(remoteMedia) {
@@ -225,10 +227,12 @@ function addAudioSlot(remoteMedia) {
     element.srcObject = remoteMedia.stream;
     document.getElementById('remoteMedia').appendChild(element);
 
+    if (!wantsMixedAudio && !wantsPerParticipantAudio) return;
+
     if (!audioContext) {
         audioContext = new AudioContext({ sampleRate: AUDIO_SAMPLE_RATE });
         mixedAudioDestination = audioContext.createMediaStreamDestination();
-        forEachAudioFrame(mixedAudioDestination.stream.getAudioTracks()[0], sendMixedAudio);
+        forEachAudioFrame(mixedAudioDestination.stream.getAudioTracks()[0], sendAudio);
     }
     audioContext.createMediaStreamSource(remoteMedia.stream).connect(mixedAudioDestination);
 }
