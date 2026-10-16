@@ -2286,6 +2286,77 @@ components:
                   description: Deprecated, use code_switching instead. Whether to
                     use code switching to transcribe the meeting in multiple languages.
                     Ignored if languages or code_switching is set.
+                model:
+                  type: string
+                  enum:
+                  - solaria-1
+                  - solaria-3
+                  - solaria-fusion
+                  description: 'The Gladia model to use for transcription. Defaults
+                    to Gladia''s default model, solaria-1. solaria-3 supports only
+                    the languages en, fr, de, es, it and does not support code switching.
+                    See details: https://docs.gladia.io/chapters/introduction/models'
+                custom_vocabulary:
+                  type: array
+                  items:
+                    oneOf:
+                    - type: string
+                    - type: object
+                      properties:
+                        value:
+                          type: string
+                          description: The word or phrase to favor in the transcript.
+                        pronunciations:
+                          type: array
+                          items:
+                            type: string
+                          description: Plain-text spellings of how the term sounds,
+                            used to widen the match.
+                        intensity:
+                          type: number
+                          minimum: 0
+                          maximum: 1
+                          description: How readily the term replaces similar-sounding
+                            words. Overrides custom_vocabulary_default_intensity for
+                            this term.
+                        language:
+                          type: string
+                          description: ISO 639-1 code of the language the term is
+                            pronounced in, if it differs from the transcription language.
+                      required:
+                      - value
+                      additionalProperties: false
+                  description: 'List of words or phrases (e.g. names, product names,
+                    domain terms) that Gladia should favor in the transcript. Each
+                    entry is a string or an object with value and optional pronunciations,
+                    intensity and language. See details: https://docs.gladia.io/chapters/audio-intelligence/custom-vocabulary'
+                custom_vocabulary_default_intensity:
+                  type: number
+                  minimum: 0
+                  maximum: 1
+                  description: Intensity applied to custom_vocabulary entries that
+                    do not set their own. Higher values replace words more readily,
+                    but cause more false replacements. Gladia suggests 0.4 to 0.6.
+                    Only used with custom_vocabulary.
+                custom_spelling:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      from:
+                        type: array
+                        items:
+                          type: string
+                      to:
+                        type: string
+                    required:
+                    - from
+                    - to
+                    additionalProperties: false
+                  description: 'List of {from: [...], to: ...} entries that replace
+                    known misspellings with the correct spelling. Matching on the
+                    from variants is case-insensitive and the to spelling is written
+                    as given. See details: https://docs.gladia.io/chapters/audio-intelligence/custom-spelling'
               required: []
               additionalProperties: false
             meeting_closed_captions:

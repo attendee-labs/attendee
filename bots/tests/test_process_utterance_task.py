@@ -969,6 +969,71 @@ class GladiaProviderTest(TransactionTestCase):
         self.assertFalse(serializer.is_valid())
         self.assertIn("non-unique", str(serializer.errors))
 
+    def test_model_is_sent(self):
+        body, _, _ = self._run_gladia({"model": "solaria-3", "languages": ["de"]})
+        self.assertEqual(body, {"audio_url": "https://api.gladia.io/file/123", "model": "solaria-3", "language_config": {"languages": ["de"], "code_switching": False}})
+
+    def test_custom_vocabulary_is_sent(self):
+        vocabulary = ["Kubernetes", {"value": "Jyväskylä", "pronunciations": ["yuvaskula"], "intensity": 0.6, "language": "fi"}]
+        body, _, _ = self._run_gladia({"custom_vocabulary": vocabulary, "custom_vocabulary_default_intensity": 0.4})
+        self.assertEqual(body, {"audio_url": "https://api.gladia.io/file/123", "custom_vocabulary": True, "custom_vocabulary_config": {"vocabulary": vocabulary, "default_intensity": 0.4}})
+
+    def test_custom_vocabulary_without_default_intensity_leaves_it_to_gladia(self):
+        body, _, _ = self._run_gladia({"custom_vocabulary": ["Kubernetes"]})
+        self.assertEqual(body, {"audio_url": "https://api.gladia.io/file/123", "custom_vocabulary": True, "custom_vocabulary_config": {"vocabulary": ["Kubernetes"]}})
+
+    def test_custom_spelling_is_converted_to_a_spelling_dictionary(self):
+        custom_spelling = [
+            {"from": ["sequel", "s q l"], "to": "SQL"},
+            {"from": ["gettleman"], "to": "Gettleman"},
+            {"from": ["sequel", "esque el"], "to": "SQL"},
+        ]
+        body, _, _ = self._run_gladia({"custom_spelling": custom_spelling})
+        self.assertEqual(body, {"audio_url": "https://api.gladia.io/file/123", "custom_spelling": True, "custom_spelling_config": {"spelling_dictionary": {"SQL": ["sequel", "s q l", "esque el"], "Gettleman": ["gettleman"]}}})
+
+    def test_empty_vocabulary_and_spelling_are_not_sent(self):
+        body, _, _ = self._run_gladia({"custom_vocabulary": [], "custom_spelling": []})
+        self.assertEqual(body, {"audio_url": "https://api.gladia.io/file/123"})
+
+    def test_schema_accepts_vocabulary_spelling_and_model(self):
+        gladia_settings = {
+            "model": "solaria-1",
+            "custom_vocabulary": ["Kubernetes", {"value": "Jyväskylä", "pronunciations": ["yuvaskula"], "intensity": 0.6, "language": "fi"}],
+            "custom_vocabulary_default_intensity": 0.5,
+            "custom_spelling": [{"from": ["sequel"], "to": "SQL"}],
+        }
+        serializer = CreateAsyncTranscriptionSerializer(data={"transcription_settings": {"gladia": gladia_settings}})
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+
+    def test_schema_rejects_unknown_model_and_out_of_range_intensity(self):
+        for gladia_settings in [{"model": "solaria-2"}, {"custom_vocabulary": ["Kubernetes"], "custom_vocabulary_default_intensity": 1.5}, {"custom_vocabulary": [{"value": "Kubernetes", "intensity": -0.1}]}, {"custom_vocabulary": [{"pronunciations": ["a"]}]}]:
+            serializer = CreateAsyncTranscriptionSerializer(data={"transcription_settings": {"gladia": gladia_settings}})
+            self.assertFalse(serializer.is_valid(), gladia_settings)
+            self.assertNotIn("Additional properties are not allowed", str(serializer.errors))
+
+    def test_solaria_3_rejects_code_switching(self):
+        for gladia_settings in [{"model": "solaria-3", "languages": ["en", "fr"], "code_switching": True}, {"model": "solaria-3", "enable_code_switching": True, "code_switching_languages": ["en", "fr"]}]:
+            serializer = CreateAsyncTranscriptionSerializer(data={"transcription_settings": {"gladia": gladia_settings}})
+            self.assertFalse(serializer.is_valid(), gladia_settings)
+            self.assertIn("does not support code switching", str(serializer.errors))
+
+    def test_solaria_3_rejects_unsupported_languages(self):
+        serializer = CreateAsyncTranscriptionSerializer(data={"transcription_settings": {"gladia": {"model": "solaria-3", "languages": ["fi"]}}})
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("does not support the languages fi", str(serializer.errors))
+
+    def test_solaria_3_accepts_supported_languages(self):
+        for gladia_settings in [{"model": "solaria-3", "languages": ["de"]}, {"model": "solaria-3", "languages": ["de"], "code_switching": True}, {"model": "solaria-3", "languages": ["en", "fr"]}, {"model": "solaria-3"}]:
+            serializer = CreateAsyncTranscriptionSerializer(data={"transcription_settings": {"gladia": gladia_settings}})
+            self.assertTrue(serializer.is_valid(), serializer.errors)
+
+    def test_solaria_3_limits_are_checked_when_creating_a_bot(self):
+        from bots.serializers import CreateBotSerializer
+
+        serializer = CreateBotSerializer(data={"meeting_url": "https://meet.google.com/abc-defg-hij", "bot_name": "Test Bot", "transcription_settings": {"gladia": {"model": "solaria-3", "languages": ["fi"]}}})
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("does not support the languages fi", str(serializer.errors))
+
     # ------------------------------------------------------------------ INVALID CREDENTIALS
 
     def test_upload_401_returns_credentials_invalid(self):

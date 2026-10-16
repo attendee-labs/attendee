@@ -137,6 +137,18 @@ def process_utterance(self, utterance_id):
         RecordingManager.set_recording_transcription_complete(utterance.recording)
 
 
+def gladia_spelling_dictionary(custom_spelling):
+    """
+    Convert [{"from": [variants], "to": "Canonical"}] entries (the same shape as the AssemblyAI setting)
+    to Gladia's spelling dictionary, which maps each canonical spelling to its variants.
+    """
+    spelling_dictionary = {}
+    for entry in custom_spelling:
+        variants = spelling_dictionary.setdefault(entry["to"], [])
+        variants.extend(variant for variant in entry["from"] if variant not in variants)
+    return spelling_dictionary
+
+
 def get_transcription_via_gladia(utterance):
     recording = utterance.recording
     transcription_settings = utterance.transcription_settings
@@ -171,6 +183,20 @@ def get_transcription_via_gladia(utterance):
     language_config = transcription_settings.gladia_language_config()
     if language_config:
         transcribe_request_body["language_config"] = language_config
+    model = transcription_settings.gladia_model()
+    if model:
+        transcribe_request_body["model"] = model
+    custom_vocabulary = transcription_settings.gladia_custom_vocabulary()
+    if custom_vocabulary:
+        transcribe_request_body["custom_vocabulary"] = True
+        transcribe_request_body["custom_vocabulary_config"] = {"vocabulary": custom_vocabulary}
+        default_intensity = transcription_settings.gladia_custom_vocabulary_default_intensity()
+        if default_intensity is not None:
+            transcribe_request_body["custom_vocabulary_config"]["default_intensity"] = default_intensity
+    custom_spelling = transcription_settings.gladia_custom_spelling()
+    if custom_spelling:
+        transcribe_request_body["custom_spelling"] = True
+        transcribe_request_body["custom_spelling_config"] = {"spelling_dictionary": gladia_spelling_dictionary(custom_spelling)}
     transcribe_response = requests.request("POST", transcribe_url, headers=headers, json=transcribe_request_body)
 
     if transcribe_response.status_code != 200 and transcribe_response.status_code != 201:

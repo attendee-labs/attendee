@@ -741,6 +741,18 @@ class TranscriptionSettings:
 
         return {"languages": languages, "code_switching": code_switching}
 
+    def gladia_custom_vocabulary(self):
+        return self._settings.get("gladia", {}).get("custom_vocabulary", None)
+
+    def gladia_custom_vocabulary_default_intensity(self):
+        return self._settings.get("gladia", {}).get("custom_vocabulary_default_intensity", None)
+
+    def gladia_custom_spelling(self):
+        return self._settings.get("gladia", {}).get("custom_spelling", None)
+
+    def gladia_model(self):
+        return self._settings.get("gladia", {}).get("model", None)
+
     def assembly_ai_language_code(self):
         return self._settings.get("assembly_ai", {}).get("language_code", None)
 
