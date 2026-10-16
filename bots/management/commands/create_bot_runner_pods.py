@@ -9,6 +9,7 @@ from django.core.management.base import BaseCommand
 from django.db import connection
 from kubernetes import client, config
 
+from bots.bot_pod_creator.bot_pod_assigner import BOT_RUNNER_HTTP_PORT
 from bots.bot_pod_creator.bot_pod_creator import BotPodCreator
 
 logger = logging.getLogger(__name__)
@@ -218,7 +219,12 @@ class Command(BaseCommand):
 
             bot_runner_uuid = uuid.uuid4().hex[:12]
             try:
-                result = (bot_pod_creator.create_bot_pod(bot_id=None, bot_runner_uuid=bot_runner_uuid, add_webpage_streamer=os.getenv("ADD_WEBPAGE_STREAMER_TO_BOT_RUNNER_PODS", "false") == "true"),)
+                result = bot_pod_creator.create_bot_pod(
+                    bot_pod_cmd=["python", "manage.py", "wait_for_bot_runner_assignment", "--port", str(BOT_RUNNER_HTTP_PORT)],
+                    bot_pod_name=f"bot-runner-{bot_runner_uuid}",
+                    bot_pod_extra_labels={"is-bot-runner": "true", "assigned-bot-id": "none"},
+                    add_webpage_streamer=False,
+                )
 
                 if result.get("created"):
                     logger.info(
