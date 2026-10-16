@@ -1033,6 +1033,9 @@ class Bot(models.Model):
         centicredits_active = hours_active * 100
         return math.ceil(centicredits_active)
 
+    def k8s_pod_cmd(self):
+        return ["python", "manage.py", "run_bot", "--botid", str(self.id)]
+
     def cpu_request(self):
         from bots.meeting_url_utils import meeting_type_from_url
 

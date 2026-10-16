@@ -3,8 +3,7 @@ import logging
 import os
 import random
 import time
-import uuid
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 import jsonpatch
 from django.conf import settings
@@ -232,18 +231,16 @@ class BotPodCreator:
             )  
 
     def get_bot_container(self):
-        cpu_request = self.bot_cpu_request or os.getenv("BOT_CPU_REQUEST", "4")
+        cpu_request = self.bot_pod_cpu_request or os.getenv("BOT_CPU_REQUEST", "4")
         memory_request = os.getenv("BOT_MEMORY_REQUEST", "4Gi")
         memory_limit = os.getenv("BOT_MEMORY_LIMIT", "4Gi")
         ephemeral_storage_request = os.getenv("BOT_EPHEMERAL_STORAGE_REQUEST", "10Gi")
-
-        args = ["python", "manage.py", "run_bot", "--botid", str(self.bot_id)]
 
         return client.V1Container(
                         name="bot-proc",
                         image=self.image,
                         image_pull_policy=os.getenv("BOT_POD_IMAGE_PULL_POLICY", "Always"),
-                        args=args,
+                        args=self.bot_pod_cmd,
                         termination_message_policy="FallbackToLogsOnError",
                         resources=client.V1ResourceRequirements(
                             requests={
@@ -336,30 +333,29 @@ class BotPodCreator:
 
     def create_bot_pod(
         self,
-        bot_id: int,
-        bot_name: Optional[str] = None,
-        bot_cpu_request: Optional[int] = None,
+        bot_pod_cmd: List[str],
+        bot_pod_name: str,
+        bot_pod_cpu_request: Optional[int] = None,
+        bot_pod_spec_type: Optional[str] = BotPodSpecType.DEFAULT,
+        bot_pod_extra_labels: Dict[str, str] = {},
         add_webpage_streamer: Optional[bool] = False,
         add_persistent_storage: Optional[bool] = False,
-        bot_pod_spec_type: Optional[str] = BotPodSpecType.DEFAULT,
     ) -> Dict:
         """
         Create a bot pod with configuration from environment.
         
         Args:
-            bot_id: Integer ID of the bot to run
-            bot_name: Optional name for the bot (will generate if not provided)
-            bot_cpu_request: Optional CPU request override for the bot
+            bot_pod_cmd: Command (as a list of args) to run in the bot container
+            bot_pod_name: Name for the bot pod
+            bot_pod_cpu_request: Optional CPU request override for the bot pod
             add_webpage_streamer: Whether to create a webpage streamer pod
             add_persistent_storage: Whether to add persistent storage to the bot pod
             bot_pod_spec_type: Name of the bot pod spec to use (e.g. DEFAULT, SCHEDULED, or any custom name).
                               Will look up BOT_POD_SPEC_{name} from environment variables.
+            bot_pod_extra_labels: Additional labels to add to the bot pod
         """
-        if bot_name is None:
-            bot_name = f"bot-{bot_id}-{uuid.uuid4().hex[:8]}"
-
-        self.bot_id = bot_id
-        self.bot_cpu_request = bot_cpu_request
+        self.bot_pod_cmd = bot_pod_cmd
+        self.bot_pod_cpu_request = bot_pod_cpu_request
         self.add_persistent_storage = add_persistent_storage
 
         # Fetch bot pod spec from the bot_pod_spec_type passed in. Fall back to BotPodSpecType.DEFAULT if the type in the argument is not defined.
@@ -377,6 +373,7 @@ class BotPodCreator:
         }
         if add_webpage_streamer:
             bot_pod_labels["network-role"] = "attendee-webpage-streamer-receiver"
+        bot_pod_labels.update(bot_pod_extra_labels)
 
         annotations = {}
         
@@ -391,7 +388,7 @@ class BotPodCreator:
 
         bot_pod = client.V1Pod(
             metadata=client.V1ObjectMeta(
-                name=bot_name,
+                name=bot_pod_name,
                 namespace=self.namespace,
                 labels=bot_pod_labels,
                 annotations=annotations
@@ -414,12 +411,12 @@ class BotPodCreator:
             # Create specific labels for the webpage streamer pod
             webpage_streamer_labels = {
                 "app": "webpage-streamer",
-                "bot-id": bot_name
+                "bot-id": bot_pod_name
             }
             
             webpage_streamer_pod = client.V1Pod(
                 metadata=client.V1ObjectMeta(
-                    name=f"{bot_name}-webpage-streamer",
+                    name=f"{bot_pod_name}-webpage-streamer",
                     namespace=self.webpage_streamer_namespace,
                     labels=webpage_streamer_labels,
                     annotations=annotations
@@ -439,14 +436,14 @@ class BotPodCreator:
             bot_pod_api_response = self._create_namespaced_pod_with_retry(
                 namespace=self.namespace,
                 body=bot_pod_after_spec_applied,
-                pod_description=f"bot pod {bot_name}",
+                pod_description=f"bot pod {bot_pod_name}",
             )
 
             if add_webpage_streamer:
                 webpage_streamer_pod_api_response = self._create_namespaced_pod_with_retry(
                     namespace=self.webpage_streamer_namespace,
                     body=webpage_streamer_pod,
-                    pod_description=f"webpage streamer pod for {bot_name}",
+                    pod_description=f"webpage streamer pod for {bot_pod_name}",
                 )
                 logger.info(f"Webpage streamer pod created: {webpage_streamer_pod_api_response}")
             
@@ -468,7 +465,7 @@ class BotPodCreator:
                     ),
                     spec=client.V1ServiceSpec(
                         # Selector is used to connect the service to the streaming pod
-                        selector={"app": "webpage-streamer", "bot-id": bot_name},
+                        selector={"app": "webpage-streamer", "bot-id": bot_pod_name},
                         ports=[client.V1ServicePort(name="http", port=8000, target_port=8000)],
                         type="ClusterIP",
                     ),
@@ -486,7 +483,7 @@ class BotPodCreator:
             
         except client.ApiException as e:
             return {
-                "name": bot_name,
+                "name": bot_pod_name,
                 "status": "Error",
                 "created": False,
                 "error": str(e)
