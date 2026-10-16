@@ -1351,6 +1351,7 @@ class UserManager {
         this.allUsersMap = new Map();
         this.currentUsersMap = new Map();
         this.deviceOutputMap = new Map();
+        this.activeScreenSharerDeviceIds = new Set();
 
         this.ws = ws;
     }
@@ -1401,6 +1402,27 @@ class UserManager {
         };
     }
 
+    detectScreenShareChange(zoomUser) {
+      const deviceId = zoomUser.userId.toString();
+      const wasSharing = this.activeScreenSharerDeviceIds.has(deviceId);
+      // Some events (e.g. onUserJoin) may not include sharingStatus, in which case we keep the previous value
+      const isSharing = zoomUser.state === 'active' && (zoomUser.sharingStatus === undefined ? wasSharing : zoomUser.sharingStatus !== 'stopped');
+      if (isSharing === wasSharing) {
+        return;
+      }
+      if (isSharing) {
+        this.activeScreenSharerDeviceIds.add(deviceId);
+      } else {
+        this.activeScreenSharerDeviceIds.delete(deviceId);
+      }
+      this.ws.sendJson({
+        type: 'ScreenshareStartStopEvent',
+        participantId: deviceId,
+        isScreenshareStart: isSharing,
+        timestamp: Date.now()
+      });
+    }
+
     singleUserSynced(user) {
       const convertedUser = this.convertUser(user);
       console.log('singleUserSynced called w', convertedUser);
@@ -1412,6 +1434,7 @@ class UserManager {
         new Map(allUsers.map(singleUser => [singleUser.deviceId, singleUser])).values()
       );
       this.newUsersListSynced(uniqueUsers);
+      this.detectScreenShareChange(user);
     }
 
     newUsersListSynced(newUsersList) {

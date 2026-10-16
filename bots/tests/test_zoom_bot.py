@@ -171,6 +171,10 @@ def create_mock_zoom_sdk():
     base_mock.LEAVE_MEETING = zoom.LeaveMeetingCmd.LEAVE_MEETING
     base_mock.AUTHRET_JWTTOKENWRONG = zoom.AuthResult.AUTHRET_JWTTOKENWRONG
     base_mock.SDKERR_INVALID_PARAMETER = zoom.SDKError.SDKERR_INVALID_PARAMETER
+    base_mock.Sharing_Other_Share_Begin = zoom.Sharing_Other_Share_Begin
+    base_mock.Sharing_View_Other_Sharing = zoom.Sharing_View_Other_Sharing
+    base_mock.Sharing_Other_Share_End = zoom.Sharing_Other_Share_End
+    base_mock.Sharing_Pause = zoom.Sharing_Pause
 
     # Mock SDK_LANGUAGE_ID
     base_mock.SDK_LANGUAGE_ID = MagicMock()
@@ -994,6 +998,25 @@ class TestZoomBot(TransactionTestCase):
             # Simulate chat message received
             adapter.on_chat_msg_notification_callback(mock_chat_msg_info, mock_chat_msg_info.GetContent())
 
+            # Simulate the test user starting a screenshare. The View_Other_Sharing and Pause statuses
+            # that follow should not produce duplicate participant events.
+            def simulate_sharing_status(status):
+                mock_sharing_info = MagicMock()
+                mock_sharing_info.userid = 2
+                mock_sharing_info.shareSourceID = 42
+                mock_sharing_info.status = status
+                adapter.on_sharing_status_callback(mock_sharing_info)
+
+            simulate_sharing_status(mock_zoom_sdk_adapter.Sharing_Other_Share_Begin)
+            simulate_sharing_status(mock_zoom_sdk_adapter.Sharing_View_Other_Sharing)
+            simulate_sharing_status(mock_zoom_sdk_adapter.Sharing_Pause)
+            simulate_sharing_status(mock_zoom_sdk_adapter.Sharing_Other_Share_End)
+            # A second end status should be ignored
+            simulate_sharing_status(mock_zoom_sdk_adapter.Sharing_Other_Share_End)
+
+            # Simulate the test user starting another screenshare and leaving without ending it
+            simulate_sharing_status(mock_zoom_sdk_adapter.Sharing_Other_Share_Begin)
+
             # Simulate user leaving
             adapter.on_user_left_callback([2], [])
 
@@ -1177,10 +1200,18 @@ class TestZoomBot(TransactionTestCase):
         self.assertEqual(other_participant.full_name, "Test User")
 
         # Verify that the expected participant events were created
-        participant_events = ParticipantEvent.objects.filter(participant__bot=self.bot, participant__user_uuid="test_persistent_id_123")
-        self.assertEqual(participant_events.count(), 2)
-        self.assertEqual(participant_events[0].event_type, ParticipantEventTypes.JOIN)
-        self.assertEqual(participant_events[1].event_type, ParticipantEventTypes.LEAVE)
+        participant_events = ParticipantEvent.objects.filter(participant__bot=self.bot, participant__user_uuid="test_persistent_id_123").order_by("id")
+        self.assertEqual(
+            [participant_event.event_type for participant_event in participant_events],
+            [
+                ParticipantEventTypes.JOIN,
+                ParticipantEventTypes.SCREENSHARE_START,
+                ParticipantEventTypes.SCREENSHARE_STOP,
+                ParticipantEventTypes.SCREENSHARE_START,
+                ParticipantEventTypes.SCREENSHARE_STOP,
+                ParticipantEventTypes.LEAVE,
+            ],
+        )
 
         bot_participant_events = ParticipantEvent.objects.filter(participant__bot=self.bot, participant__user_uuid="bot_persistent_id")
         self.assertEqual(bot_participant_events.count(), 1)

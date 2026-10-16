@@ -314,6 +314,8 @@ def get_transcription_via_assemblyai_from_mp3(
 
     if transcription_settings.assembly_ai_language_detection():
         data["language_detection"] = True
+    elif transcription_settings.assembly_ai_language_codes():
+        data["language_codes"] = transcription_settings.assembly_ai_language_codes()
     elif transcription_settings.assembly_ai_language_code():
         data["language_code"] = transcription_settings.assembly_ai_language_code()
 
@@ -344,6 +346,10 @@ def get_transcription_via_assemblyai_from_mp3(
     language_detection_options = transcription_settings.assemblyai_language_detection_options()
     if language_detection_options:
         data["language_detection_options"] = language_detection_options
+
+    language_confidence_threshold = transcription_settings.assemblyai_language_confidence_threshold()
+    if language_confidence_threshold is not None:
+        data["language_confidence_threshold"] = language_confidence_threshold
 
     url = f"{base_url}/transcript"
     response = requests.post(url, json=data, headers=headers)

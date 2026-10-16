@@ -659,7 +659,7 @@ paths:
   /api/v1/bots/{object_id}/participant_events:
     get:
       operationId: Get Participant Events
-      description: Returns the participant events (join/leave) for a bot. Results
+      description: Returns the participant events (join/leave, speech start/stop, screenshare start/stop) for a bot. Results
         are paginated using cursor pagination.
       summary: Get participant events for a bot
       parameters:
@@ -2108,6 +2108,8 @@ components:
                   - transcript.update
                   - chat_messages.update
                   - participant_events.join_leave
+                  - participant_events.speech_start_stop
+                  - participant_events.screenshare_start_stop
                   - calendar.events_update
                   - calendar.state_change
                 description: List of webhook trigger types
@@ -2410,9 +2412,22 @@ components:
                   type: string
                   description: 'The language code to use for transcription. See here
                     for available languages: https://www.assemblyai.com/docs/speech-to-text/pre-recorded-audio/supported-languages'
+                language_codes:
+                  type: array
+                  items:
+                    type: string
+                  description: 'The languages spoken in the multi-language audio.
+                    Cannot be combined with language_code or language_detection.
+                    See details: https://www.assemblyai.com/docs/pre-recorded-audio/set-language-manually'
                 language_detection:
                   type: boolean
                   description: Whether to automatically detect the spoken language.
+                language_confidence_threshold:
+                  type: number
+                  minimum: 0
+                  maximum: 1
+                  description: 'Fail if the confidence is below the threshold. Only used with language_detection.
+                    See details: https://www.assemblyai.com/docs/pre-recorded-audio/language-detection'
                 keyterms_prompt:
                   type: array
                   items:
@@ -2470,6 +2485,12 @@ components:
                         type: string
                     fallback_language:
                       type: string
+                    code_switching:
+                      type: boolean
+                    code_switching_confidence_threshold:
+                      type: number
+                      minimum: 0
+                      maximum: 1
                   description: Options for controlling the automatic language detection.
                     See AssemblyAI docs for details.
                   additionalProperties: false
