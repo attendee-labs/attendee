@@ -845,6 +845,62 @@ class GladiaProviderTest(TransactionTestCase):
             self.assertEqual(m_request.call_count, 3)
             m_get.assert_called_once_with("https://api.gladia.io/result/abc", headers=mock.ANY)
 
+    # ------------------------------------------------------------------ CLEAN-UP
+
+    def _run_gladia_failure(self, poll_result=None, transcribe_response=None):
+        """Run the Gladia adapter with a failing job and return (failure, DELETE request URLs)."""
+        with (
+            self._patch_creds(),
+            mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3"),
+            mock.patch("bots.tasks.process_utterance_task.time.sleep"),
+            mock.patch("bots.tasks.process_utterance_task.requests.request") as m_request,
+            mock.patch("bots.tasks.process_utterance_task.requests.get") as m_get,
+        ):
+
+            def _request_side_effect(method, url, **_):
+                if url.endswith("/upload"):
+                    resp = mock.Mock(status_code=200)
+                    resp.json.return_value = {"audio_url": "https://api.gladia.io/file/123"}
+                    return resp
+                if url.endswith("/pre-recorded"):
+                    if transcribe_response:
+                        return transcribe_response
+                    resp = mock.Mock(status_code=201)
+                    resp.json.return_value = {"id": "abc", "result_url": "https://api.gladia.io/v2/pre-recorded/abc"}
+                    return resp
+                if method == "DELETE":
+                    return mock.Mock(status_code=202)
+                raise AssertionError(f"unexpected {method} {url}")
+
+            m_request.side_effect = _request_side_effect
+            m_get.return_value = mock.Mock(status_code=200, json=mock.Mock(return_value=poll_result))
+
+            transcript, failure = get_transcription_via_gladia(self.utterance)
+
+        self.assertIsNone(transcript)
+        return failure, [c.args[1] for c in m_request.call_args_list if c.args[0] == "DELETE"]
+
+    def test_failed_job_is_deleted(self):
+        failure, deleted_urls = self._run_gladia_failure(poll_result={"status": "error", "error_code": 500})
+        self.assertEqual(failure, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "step": "transcribe_result_poll", "error_code": 500})
+        self.assertEqual(deleted_urls, ["https://api.gladia.io/v2/pre-recorded/abc"])
+
+    def test_job_with_unknown_status_is_deleted(self):
+        failure, deleted_urls = self._run_gladia_failure(poll_result={"status": "unexpected"})
+        self.assertEqual(failure, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "step": "transcribe_result_poll", "status": "unexpected"})
+        self.assertEqual(deleted_urls, ["https://api.gladia.io/v2/pre-recorded/abc"])
+
+    def test_timed_out_job_is_deleted(self):
+        failure, deleted_urls = self._run_gladia_failure(poll_result={"status": "processing"})
+        self.assertEqual(failure, {"reason": TranscriptionFailureReasons.TIMED_OUT, "step": "transcribe_result_poll"})
+        self.assertEqual(deleted_urls, ["https://api.gladia.io/v2/pre-recorded/abc"])
+
+    def test_rejected_transcribe_request_keeps_gladia_error_message(self):
+        rejected = mock.Mock(status_code=400, text='{"message": "Invalid parameter", "validation_errors": ["language_config.languages must be an array"]}')
+        failure, deleted_urls = self._run_gladia_failure(transcribe_response=rejected)
+        self.assertEqual(failure, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "step": "transcribe_request", "status_code": 400, "response_text": rejected.text})
+        self.assertEqual(deleted_urls, [])
+
     # ------------------------------------------------------------------ INVALID CREDENTIALS
 
     def test_upload_401_returns_credentials_invalid(self):
