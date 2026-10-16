@@ -1,0 +1,216 @@
+<style>
+    /* Metadata chip + popover styles */
+    .metadata-chip {
+        display: inline-flex;
+        align-items: center;
+        background-color: #e9ecef;
+        border: 1px solid #ced4da;
+        border-radius: 12px;
+        padding: 1px 4px 1px 10px;
+        font-size: 0.8rem;
+        line-height: 1.5;
+    }
+    .metadata-chip-text {
+        cursor: pointer;
+        white-space: nowrap;
+        max-width: 240px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .metadata-chip-remove {
+        border: none;
+        background: transparent;
+        color: #6c757d;
+        font-size: 1.1rem;
+        line-height: 1;
+        padding: 0 2px 0 6px;
+        cursor: pointer;
+    }
+    .metadata-chip-remove:hover {
+        color: #dc3545;
+    }
+    .metadata-popover {
+        position: absolute;
+        z-index: 1050;
+        top: 100%;
+        left: 0;
+        margin-top: 6px;
+        width: 260px;
+        background-color: #fff;
+        border: 1px solid #ced4da;
+        border-radius: 6px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        padding: 12px;
+    }
+</style>
+
+<div style="display: flex; align-items: flex-start; flex-grow: 1;">
+    <label class="form-label me-2 mb-0" style="flex-shrink: 0; padding-top: 5px;">Metadata</label>
+    <div style="flex-grow: 1; position: relative;">
+        <div id="metadataChips" class="d-flex flex-wrap align-items-center" style="gap: 6px; min-height: 31px;">
+            {% for pair in filter_params.metadata_pairs %}
+            <span class="metadata-chip" data-key="{{ pair.key }}" data-value="{{ pair.value }}">
+                <span class="metadata-chip-text" title="{{ pair.key }} = {{ pair.value }}">{{ pair.key }} = {{ pair.value }}</span>
+                <button type="button" class="metadata-chip-remove" title="Remove">&times;</button>
+                <input type="hidden" name="metadata_key" value="{{ pair.key }}">
+                <input type="hidden" name="metadata_value" value="{{ pair.value }}">
+            </span>
+            {% endfor %}
+            <button type="button" class="btn btn-sm btn-outline-secondary d-inline-flex align-items-center justify-content-center p-0" id="addMetadataBtn" title="Add metadata filter" style="width: 24px; height: 24px; line-height: 1;">
+                <i class="bi bi-plus" style="font-size: 1rem;"></i>
+            </button>
+        </div>
+        <!-- Add/edit metadata popover -->
+        <div id="metadataPopover" class="metadata-popover" style="display: none;">
+            <div class="mb-2">
+                <label for="metadataPopoverKey" class="form-label mb-1" style="font-size: 0.8rem;">Key</label>
+                <input type="text" class="form-control form-control-sm" id="metadataPopoverKey" placeholder="Key" autocomplete="off">
+            </div>
+            <div class="mb-2">
+                <label for="metadataPopoverValue" class="form-label mb-1" style="font-size: 0.8rem;">Value</label>
+                <input type="text" class="form-control form-control-sm" id="metadataPopoverValue" placeholder="Value" autocomplete="off">
+            </div>
+            <div class="d-flex justify-content-end" style="gap: 6px;">
+                <button type="button" class="btn btn-sm btn-outline-secondary" id="metadataPopoverCancel">Cancel</button>
+                <button type="button" class="btn btn-sm btn-primary" id="metadataPopoverSave">Add</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    (function () {
+        // This partial's script is re-executed on every htmx swap, but the
+        // listeners below are bound to `document`, which persists across swaps.
+        // Guard so we only ever attach them once to avoid duplicate handlers.
+        if (window.__botMetadataFilterInitialized) return;
+        window.__botMetadataFilterInitialized = true;
+
+        // Tracks the chip currently being edited; null means we're adding a new pair.
+        let editingChip = null;
+
+        function getElements() {
+            return {
+                chips: document.getElementById('metadataChips'),
+                addBtn: document.getElementById('addMetadataBtn'),
+                popover: document.getElementById('metadataPopover'),
+                keyInput: document.getElementById('metadataPopoverKey'),
+                valueInput: document.getElementById('metadataPopoverValue'),
+                saveBtn: document.getElementById('metadataPopoverSave'),
+                cancelBtn: document.getElementById('metadataPopoverCancel'),
+            };
+        }
+
+        function createChip(key, value) {
+            const chip = document.createElement('span');
+            chip.className = 'metadata-chip';
+            chip.dataset.key = key;
+            chip.dataset.value = value;
+
+            const text = document.createElement('span');
+            text.className = 'metadata-chip-text';
+            text.textContent = key + ' = ' + value;
+            text.title = key + ' = ' + value;
+
+            const remove = document.createElement('button');
+            remove.type = 'button';
+            remove.className = 'metadata-chip-remove';
+            remove.title = 'Remove';
+            remove.innerHTML = '&times;';
+
+            const keyHidden = document.createElement('input');
+            keyHidden.type = 'hidden';
+            keyHidden.name = 'metadata_key';
+            keyHidden.value = key;
+
+            const valueHidden = document.createElement('input');
+            valueHidden.type = 'hidden';
+            valueHidden.name = 'metadata_value';
+            valueHidden.value = value;
+
+            chip.append(text, remove, keyHidden, valueHidden);
+            return chip;
+        }
+
+        function openPopover(chip) {
+            const { popover, keyInput, valueInput, saveBtn } = getElements();
+            if (!popover) return;
+            editingChip = chip || null;
+            keyInput.value = editingChip ? editingChip.dataset.key : '';
+            valueInput.value = editingChip ? editingChip.dataset.value : '';
+            saveBtn.textContent = editingChip ? 'Save' : 'Add';
+            popover.style.display = 'block';
+            keyInput.focus();
+        }
+
+        function closePopover() {
+            const { popover } = getElements();
+            if (popover) popover.style.display = 'none';
+            editingChip = null;
+        }
+
+        function savePopover() {
+            const { chips, addBtn, keyInput, valueInput } = getElements();
+            const key = keyInput.value.trim();
+            const value = valueInput.value;
+            if (!key) {
+                keyInput.focus();
+                return;
+            }
+            if (editingChip) {
+                editingChip.replaceWith(createChip(key, value));
+            } else {
+                chips.insertBefore(createChip(key, value), addBtn);
+            }
+            closePopover();
+        }
+
+        document.addEventListener('click', function (event) {
+            const { popover } = getElements();
+            if (!popover) return;
+
+            if (event.target.closest('#addMetadataBtn')) {
+                openPopover(null);
+                return;
+            }
+
+            const chipText = event.target.closest('.metadata-chip-text');
+            if (chipText) {
+                openPopover(chipText.closest('.metadata-chip'));
+                return;
+            }
+
+            const removeBtn = event.target.closest('.metadata-chip-remove');
+            if (removeBtn) {
+                removeBtn.closest('.metadata-chip')?.remove();
+                return;
+            }
+
+            if (event.target.closest('#metadataPopoverSave')) {
+                savePopover();
+                return;
+            }
+
+            if (event.target.closest('#metadataPopoverCancel')) {
+                closePopover();
+                return;
+            }
+
+            // Click outside the popover (and not on the add button) closes it.
+            if (popover.style.display !== 'none' && !event.target.closest('#metadataPopover')) {
+                closePopover();
+            }
+        });
+
+        document.addEventListener('keydown', function (event) {
+            const { popover, keyInput, valueInput } = getElements();
+            if (!popover || popover.style.display === 'none') return;
+            if (event.key === 'Escape') {
+                closePopover();
+            } else if (event.key === 'Enter' && (event.target === keyInput || event.target === valueInput)) {
+                event.preventDefault();
+                savePopover();
+            }
+        });
+    })();
+</script>

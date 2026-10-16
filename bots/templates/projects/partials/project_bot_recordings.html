@@ -25,7 +25,7 @@
                         {% endfor %}
                     </div>
                                                     
-                    {% if recording.recording_type != RecordingTypes.NO_RECORDING %}
+                    {% if recording.recording_type != RecordingTypes.NO_RECORDING and can_view_recording_content %}
                         <div class="video-column">
                             {% if recording.state == RecordingStates.COMPLETE %}
                                 <video preload="auto" width="100%" controls id="recording-video">

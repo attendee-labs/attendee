@@ -1,13 +1,16 @@
+import json
 import logging
 import os
 
 import docker
+from django.conf import settings
 from django.core.management.base import BaseCommand
 from django.db import models
 from django.utils import timezone
 from kubernetes import client, config
 
 from bots.bot_pod_creator.bot_pod_utils import locate_pod_for_bot
+from bots.k8s_utils import retrieve_bot_pod_information
 from bots.models import Bot, BotEventManager, BotEventSubTypes, BotEventTypes
 
 logger = logging.getLogger(__name__)
@@ -16,12 +19,44 @@ logger = logging.getLogger(__name__)
 class Command(BaseCommand):
     help = "Terminates bots that have not sent a heartbeat in the last ten minutes or that never launched"
 
+    def create_k8s_client(self):
+        try:
+            config.load_incluster_config()
+        except config.ConfigException:
+            config.load_kube_config()
+        return client.CoreV1Api()
+
+    def retrieve_bot_infrastructure_information(self, bot) -> dict | None:
+        if os.getenv("LAUNCH_BOT_METHOD") == "kubernetes":
+            try:
+                v1 = self.create_k8s_client()
+                pod_info = locate_pod_for_bot(v1, bot)
+                if not pod_info:
+                    return None
+                return retrieve_bot_pod_information(v1, pod_info.namespace, pod_info.pod_name)
+            except Exception:
+                logger.exception(f"Failed to gather bot pod information for bot {bot.object_id}")
+        return None
+
     def terminate_bot(self, bot, event_sub_type):
         try:
+            # Retrieve the bot infrastructure information this may help understand why it needed to be terminated
+            infrastructure_information = self.retrieve_bot_infrastructure_information(bot)
+            event_metadata = None
+            if settings.STORE_INFRASTRUCTURE_INFORMATION_IN_BOT_EVENT_METADATA:
+                event_metadata = {"infrastructure_information": json.dumps(infrastructure_information)}
+            else:
+                logger.warning(
+                    "Infrastructure information for bot %s (not stored in event metadata because STORE_INFRASTRUCTURE_INFORMATION_IN_BOT_EVENT_METADATA is false): %s",
+                    bot.object_id,
+                    json.dumps(infrastructure_information),
+                )
+
             BotEventManager.create_event(
                 bot=bot,
                 event_type=BotEventTypes.FATAL_ERROR,
                 event_sub_type=event_sub_type,
+                event_metadata=event_metadata,
             )
         except Exception as e:
             logger.error(f"Failed to create fatal error {event_sub_type} event for bot {bot.id}: {str(e)}")
@@ -33,12 +68,7 @@ class Command(BaseCommand):
             self._terminate_ephemeral_docker_container(bot)
 
     def _terminate_kubernetes_pod(self, bot):
-        # Initialize kubernetes client
-        try:
-            config.load_incluster_config()
-        except config.ConfigException:
-            config.load_kube_config()
-        v1 = client.CoreV1Api()
+        v1 = self.create_k8s_client()
 
         # Locate the pod (checks both bot-specific and bot runner pods)
         pod_info = locate_pod_for_bot(v1, bot)
@@ -81,7 +111,30 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         self.terminate_bots_with_heartbeat_timeout()
+        self.terminate_bots_with_global_runtime_timeout()
         self.terminate_bots_that_never_launched()
+
+    def terminate_bots_with_global_runtime_timeout(self):
+        logger.info("Terminating bots with global runtime timeout...")
+        global_runtime_timeout_seconds = int(os.getenv("GLOBAL_BOT_RUNTIME_TIMEOUT_SECONDS", "108000"))
+
+        try:
+            runtime_q_filter = models.Q(first_heartbeat_timestamp__isnull=False) & models.Q(last_heartbeat_timestamp__isnull=False)
+            problem_bots = Bot.objects.filter(~BotEventManager.get_post_meeting_states_q_filter() & runtime_q_filter).annotate(runtime_seconds=models.F("last_heartbeat_timestamp") - models.F("first_heartbeat_timestamp")).filter(runtime_seconds__gt=global_runtime_timeout_seconds)
+
+            logger.info(f"Found {problem_bots.count()} bots with global runtime timeout")
+
+            for bot in problem_bots:
+                try:
+                    logger.info(f"Terminating bot {bot.object_id} due to global runtime timeout (runtime: {bot.runtime_seconds}s, limit: {global_runtime_timeout_seconds}s)")
+                    self.terminate_bot(bot, BotEventSubTypes.FATAL_ERROR_GLOBAL_RUNTIME_TIMEOUT)
+                except Exception as e:
+                    logger.error(f"Failed to terminate bot {bot.object_id}: {str(e)}")
+
+            logger.info("Finished terminating bots with global runtime timeout")
+
+        except client.ApiException as e:
+            logger.error(f"Failed to terminate bots with global runtime timeout: {str(e)}")
 
     def terminate_bots_with_heartbeat_timeout(self):
         logger.info("Terminating bots with heartbeat timeout...")

@@ -4,22 +4,8 @@ from celery import shared_task
 
 logger = logging.getLogger(__name__)
 
-from bots.models import TranscriptionFailureReasons, TranscriptionProviders, Utterance
-from bots.transcription_utils import get_transcription_via_assemblyai_for_utterance_group, is_retryable_failure
-
-
-def get_transcription(utterances):
-    try:
-        # Regular transcription providers that support async transcription
-        transcription_provider = utterances[0].transcription_provider
-        if transcription_provider == TranscriptionProviders.ASSEMBLY_AI:
-            transcriptions, failure_data = get_transcription_via_assemblyai_for_utterance_group(utterances)
-        else:
-            raise Exception(f"Unknown or unsupported transcription provider: {transcription_provider}")
-
-        return transcriptions, failure_data
-    except Exception as e:
-        return None, {"reason": TranscriptionFailureReasons.INTERNAL_ERROR, "error": str(e)}
+from bots.models import Utterance
+from bots.transcription_utils import get_transcription_for_utterance_group, is_retryable_failure
 
 
 @shared_task(
@@ -53,7 +39,7 @@ def process_utterance_group_for_async_transcription(self, utterance_ids):
     if first_utterance.transcription is None:
         first_utterance.transcription_attempt_count += 1
 
-        transcriptions, failure_data = get_transcription(utterances)
+        transcriptions, failure_data = get_transcription_for_utterance_group(utterances)
 
         if failure_data:
             if first_utterance.transcription_attempt_count < 5 and is_retryable_failure(failure_data):

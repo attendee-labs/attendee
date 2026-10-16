@@ -1,9 +1,13 @@
+import json
 import os
 import threading
 import time
+from datetime import timedelta
+from types import SimpleNamespace
 from unittest.mock import MagicMock, call, patch
 
 import kubernetes
+from django.core.exceptions import ValidationError
 from django.db import connection
 from django.test import tag
 from django.test.testcases import TransactionTestCase, override_settings
@@ -18,11 +22,12 @@ from bots.models import (
     BotEventManager,
     BotEventSubTypes,
     BotEventTypes,
+    BotLogin,
+    BotLoginGroup,
+    BotLoginPlatform,
     BotStates,
     ChatMessage,
     Credentials,
-    GoogleMeetBotLogin,
-    GoogleMeetBotLoginGroup,
     Organization,
     Participant,
     ParticipantEvent,
@@ -41,6 +46,7 @@ from bots.models import (
 )
 from bots.tests.mock_data import create_mock_file_uploader, create_mock_google_meet_driver
 from bots.web_bot_adapter.ui_methods import UiLoginRequiredException, UiRetryableException
+from bots.web_bot_adapter.web_bot_adapter import WebBotAdapter
 
 
 @override_settings(
@@ -96,6 +102,31 @@ class TestGoogleMeetBot2(TransactionTestCase):
         patcher = patch("bots.google_meet_bot_adapter.google_meet_ui_methods.EC.element_to_be_clickable", return_value=MagicMock(return_value=MagicMock()))
         patcher.start()
         self.addCleanup(patcher.stop)
+
+        # Mock humanized_navigate_to_and_click_element to avoid real interactions
+        patcher2 = patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.humanized_navigate_to_and_click_element", return_value=MagicMock())
+        patcher2.start()
+        self.addCleanup(patcher2.stop)
+
+        # Mock human_type to avoid real interactions
+        patcher3 = patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.human_type", return_value=MagicMock())
+        patcher3.start()
+        self.addCleanup(patcher3.stop)
+
+        # Mock verify_expected_audio_configuration
+        patcher4 = patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.verify_expected_audio_configuration", return_value=MagicMock())
+        patcher4.start()
+        self.addCleanup(patcher4.stop)
+
+        # Mock position_mouse_for_humanized_interaction to avoid real interactions
+        patcher5 = patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.position_mouse_for_humanized_interaction", return_value=MagicMock())
+        patcher5.start()
+        self.addCleanup(patcher5.stop)
+
+        # Mock human_copy_and_paste to avoid real interactions
+        patcher6 = patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.human_copy_and_paste", return_value=MagicMock())
+        patcher6.start()
+        self.addCleanup(patcher6.stop)
 
         # Recreate organization and project for each test
         self.organization = Organization.objects.create(name="Test Org")
@@ -204,6 +235,80 @@ class TestGoogleMeetBot2(TransactionTestCase):
         fatal_error_event = self.bot.bot_events.filter(event_type=BotEventTypes.FATAL_ERROR, event_sub_type=BotEventSubTypes.FATAL_ERROR_HEARTBEAT_TIMEOUT).first()
         self.assertIsNone(fatal_error_event)
 
+    @patch("kubernetes.client.CoreV1Api")
+    @patch("kubernetes.config.load_incluster_config")
+    @patch("kubernetes.config.load_kube_config")
+    def test_terminate_bots_with_global_runtime_timeout(self, mock_load_kube_config, mock_load_incluster_config, MockCoreV1Api):
+        mock_k8s_api = MagicMock()
+        MockCoreV1Api.return_value = mock_k8s_api
+
+        mock_load_incluster_config.side_effect = kubernetes.config.config_exception.ConfigException("Mock ConfigException")
+
+        current_time = int(timezone.now().timestamp())
+        # Bot started over 30 hours ago (108001 seconds)
+        self.bot.first_heartbeat_timestamp = current_time - 200000
+        self.bot.last_heartbeat_timestamp = current_time
+        self.bot.state = BotStates.JOINED_RECORDING
+        self.bot.save()
+
+        with patch.dict(os.environ, {"LAUNCH_BOT_METHOD": "kubernetes"}):
+            from bots.management.commands.clean_up_bots_with_heartbeat_timeout_or_that_never_launched import Command
+
+            command = Command()
+            command.handle()
+
+        self.bot.refresh_from_db()
+
+        self.assertEqual(self.bot.state, BotStates.FATAL_ERROR)
+
+        fatal_error_event = self.bot.bot_events.filter(event_type=BotEventTypes.FATAL_ERROR, event_sub_type=BotEventSubTypes.FATAL_ERROR_GLOBAL_RUNTIME_TIMEOUT).first()
+        self.assertIsNotNone(fatal_error_event)
+        self.assertEqual(fatal_error_event.old_state, BotStates.JOINED_RECORDING)
+        self.assertEqual(fatal_error_event.new_state, BotStates.FATAL_ERROR)
+
+        pod_name = self.bot.k8s_pod_name()
+        mock_k8s_api.delete_namespaced_pod.assert_called_once_with(name=pod_name, namespace="attendee", grace_period_seconds=0)
+
+    def test_bots_within_global_runtime_timeout_not_terminated(self):
+        current_time = int(timezone.now().timestamp())
+        # Bot has been running for 1 hour (3600 seconds), well under the 108000 second default
+        self.bot.first_heartbeat_timestamp = current_time - 3600
+        self.bot.last_heartbeat_timestamp = current_time
+        self.bot.state = BotStates.JOINED_RECORDING
+        self.bot.save()
+
+        from bots.management.commands.clean_up_bots_with_heartbeat_timeout_or_that_never_launched import Command
+
+        command = Command()
+        command.handle()
+
+        self.bot.refresh_from_db()
+
+        self.assertEqual(self.bot.state, BotStates.JOINED_RECORDING)
+
+        fatal_error_event = self.bot.bot_events.filter(event_type=BotEventTypes.FATAL_ERROR, event_sub_type=BotEventSubTypes.FATAL_ERROR_GLOBAL_RUNTIME_TIMEOUT).first()
+        self.assertIsNone(fatal_error_event)
+
+    def test_bots_exceeding_global_runtime_timeout_in_post_meeting_state_not_terminated(self):
+        current_time = int(timezone.now().timestamp())
+        # Bot has been running for longer than the 108000 second default
+        self.bot.first_heartbeat_timestamp = current_time - 200000
+        self.bot.last_heartbeat_timestamp = current_time
+        self.bot.state = BotStates.ENDED
+        self.bot.save()
+
+        from bots.management.commands.clean_up_bots_with_heartbeat_timeout_or_that_never_launched import Command
+
+        command = Command()
+        command.handle()
+
+        self.bot.refresh_from_db()
+
+        self.assertEqual(self.bot.state, BotStates.ENDED)
+
+        fatal_error_event = self.bot.bot_events.filter(event_type=BotEventTypes.FATAL_ERROR, event_sub_type=BotEventSubTypes.FATAL_ERROR_GLOBAL_RUNTIME_TIMEOUT).first()
+        self.assertIsNone(fatal_error_event)
+
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
     @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
     @patch("bots.bot_controller.bot_controller.AzureFileUploader")
@@ -262,6 +367,80 @@ class TestGoogleMeetBot2(TransactionTestCase):
             # Close the database connection since we're in a thread
             connection.close()
 
+    @patch("bots.models.Bot.create_debug_recording", return_value=False)
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.AzureFileUploader")
+    def test_fatal_error_when_websocket_server_fails_to_start(
+        self,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+        mock_create_debug_recording,
+    ):
+        # Configure the mock uploader
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        # Mock the Chrome driver
+        mock_driver = create_mock_google_meet_driver()
+        MockChromeDriver.return_value = mock_driver
+
+        # Mock virtual display
+        mock_display = MagicMock()
+        MockDisplay.return_value = mock_display
+
+        # Keep a reference to the real implementation so we exercise its actual failure
+        # path (the timeout loop and the raised exception), just with a short timeout so
+        # the test doesn't block for the full 10 seconds.
+        real_wait_for_websocket_server_to_start = WebBotAdapter.wait_for_websocket_server_to_start
+
+        def wait_for_websocket_server_to_start_with_short_timeout(adapter_self, timeout_seconds=1):
+            return real_wait_for_websocket_server_to_start(adapter_self, timeout_seconds=1)
+
+        # Simulate the websocket server never coming up: run_websocket_server does nothing,
+        # so self.websocket_port is never set and wait_for_websocket_server_to_start() raises.
+        with (
+            patch.object(WebBotAdapter, "run_websocket_server", return_value=None),
+            patch.object(WebBotAdapter, "wait_for_websocket_server_to_start", wait_for_websocket_server_to_start_with_short_timeout),
+        ):
+            # Create bot controller
+            controller = BotController(self.bot.id)
+
+            # Run the bot in a separate thread since it has an event loop
+            bot_thread = threading.Thread(target=controller.run)
+            bot_thread.daemon = True
+            bot_thread.start()
+
+            # Give the bot time to attempt init, fail to start the websocket server,
+            # and transition to FATAL_ERROR
+            bot_thread.join(timeout=10)
+
+            # Refresh the bot from the database
+            self.bot.refresh_from_db()
+
+            # The bot should have transitioned to FATAL_ERROR because the websocket server never started
+            self.assertEqual(self.bot.state, BotStates.FATAL_ERROR)
+
+            # Verify that a FATAL_ERROR event was created with the internal error sub type
+            fatal_error_event = self.bot.bot_events.filter(
+                event_type=BotEventTypes.FATAL_ERROR,
+                event_sub_type=BotEventSubTypes.FATAL_ERROR_ATTENDEE_INTERNAL_ERROR,
+            ).first()
+            self.assertIsNotNone(fatal_error_event)
+            self.assertEqual(fatal_error_event.old_state, BotStates.JOINING)
+            self.assertEqual(fatal_error_event.new_state, BotStates.FATAL_ERROR)
+
+            # The websocket startup failure should be captured in the event metadata so it's diagnosable
+            self.assertIn("WebSocket server failed to start", fatal_error_event.metadata["error"])
+
+            # Cleanup
+            controller.cleanup()
+            bot_thread.join(timeout=5)
+
+            # Close the database connection since we're in a thread
+            connection.close()
+
     @patch("kubernetes.client.CoreV1Api")
     @patch("kubernetes.config.load_incluster_config")
     @patch("kubernetes.config.load_kube_config")
@@ -269,6 +448,30 @@ class TestGoogleMeetBot2(TransactionTestCase):
         # Set up mock Kubernetes API
         mock_k8s_api = MagicMock()
         MockCoreV1Api.return_value = mock_k8s_api
+
+        # The pod was created but its container never started (stuck Pending with
+        # ImagePullBackOff) — this is the failure mode the diagnostics capture targets.
+        mock_k8s_api.read_namespaced_pod.return_value = SimpleNamespace(
+            status=SimpleNamespace(
+                phase="Pending",
+                reason=None,
+                message=None,
+                conditions=[SimpleNamespace(type="PodScheduled", status="True", reason=None, message=None)],
+                container_statuses=[
+                    SimpleNamespace(
+                        name="bot",
+                        ready=False,
+                        restart_count=0,
+                        state=SimpleNamespace(
+                            waiting=SimpleNamespace(reason="ImagePullBackOff", message="Back-off pulling image"),
+                            terminated=None,
+                            running=None,
+                        ),
+                    )
+                ],
+            )
+        )
+        mock_k8s_api.list_namespaced_event.return_value = SimpleNamespace(items=[SimpleNamespace(type="Warning", reason="Failed", message="Failed to pull image", count=3, last_timestamp=None)])
 
         # Set up config.load_incluster_config to raise ConfigException so load_kube_config gets called
         mock_load_incluster_config.side_effect = kubernetes.config.config_exception.ConfigException("Mock ConfigException")
@@ -304,6 +507,45 @@ class TestGoogleMeetBot2(TransactionTestCase):
         # Verify Kubernetes pod deletion was attempted with the correct pod name
         pod_name = self.bot.k8s_pod_name()
         mock_k8s_api.delete_namespaced_pod.assert_called_once_with(name=pod_name, namespace="attendee", grace_period_seconds=0)
+
+        # Verify the launch failure was captured into the event metadata so it's diagnosable
+        diagnostics = json.loads(fatal_error_event.metadata["infrastructure_information"])
+        self.assertTrue(diagnostics["pod_found"])
+        self.assertEqual(diagnostics["phase"], "Pending")
+        self.assertEqual(diagnostics["container_statuses"][0]["reason"], "ImagePullBackOff")
+        self.assertEqual(diagnostics["events"][0]["reason"], "Failed")
+
+    @patch("kubernetes.client.CoreV1Api")
+    @patch("kubernetes.config.load_incluster_config")
+    @patch("kubernetes.config.load_kube_config")
+    def test_terminate_bots_that_never_launched_when_pod_already_gone(self, mock_load_kube_config, mock_load_incluster_config, MockCoreV1Api):
+        # If the pod has already disappeared (e.g. node scaled down), diagnostics capture
+        # must still record the failure rather than blow up.
+        mock_k8s_api = MagicMock()
+        MockCoreV1Api.return_value = mock_k8s_api
+        mock_k8s_api.read_namespaced_pod.side_effect = kubernetes.client.ApiException(status=404)
+        mock_k8s_api.list_namespaced_event.return_value = SimpleNamespace(items=[])
+        mock_load_incluster_config.side_effect = kubernetes.config.config_exception.ConfigException("Mock ConfigException")
+
+        two_days_ago = timezone.now() - timezone.timedelta(days=2)
+        self.bot.first_heartbeat_timestamp = None
+        self.bot.last_heartbeat_timestamp = None
+        self.bot.state = BotStates.JOINING
+        self.bot.created_at = two_days_ago
+        self.bot.save()
+
+        with patch.dict(os.environ, {"LAUNCH_BOT_METHOD": "kubernetes"}):
+            from bots.management.commands.clean_up_bots_with_heartbeat_timeout_or_that_never_launched import Command
+
+            Command().handle()
+
+        self.bot.refresh_from_db()
+        self.assertEqual(self.bot.state, BotStates.FATAL_ERROR)
+        fatal_error_event = self.bot.bot_events.filter(event_type=BotEventTypes.FATAL_ERROR, event_sub_type=BotEventSubTypes.FATAL_ERROR_BOT_NOT_LAUNCHED).first()
+        self.assertIsNotNone(fatal_error_event)
+        diagnostics = json.loads(fatal_error_event.metadata["infrastructure_information"])
+        self.assertFalse(diagnostics["pod_found"])
+        self.assertEqual(diagnostics["pod_read_error"], "not_found")
 
     def test_recent_bots_with_no_heartbeat_not_terminated(self):
         # Create a bot that was created 30 minutes ago but never launched
@@ -1450,8 +1692,8 @@ class TestGoogleMeetBot2(TransactionTestCase):
         """
 
         # Set up Google Meet bot login credentials
-        google_meet_bot_login_group = GoogleMeetBotLoginGroup.objects.create(project=self.project)
-        google_meet_bot_login = GoogleMeetBotLogin.objects.create(
+        google_meet_bot_login_group = BotLoginGroup.objects.create(project=self.project, platform=BotLoginPlatform.GOOGLE_MEET, name="Google Meet Group 1")
+        google_meet_bot_login = BotLogin.objects.create(
             group=google_meet_bot_login_group,
             workspace_domain="example.com",
             email="bot@example.com",
@@ -1601,6 +1843,75 @@ class TestGoogleMeetBot2(TransactionTestCase):
 
             # Close the database connection since we're in a thread
             connection.close()
+
+    @patch("bots.bot_controller.bot_controller.create_google_meet_sign_in_session", return_value="test-session-id")
+    def test_google_meet_signed_in_bot_uses_named_login_group(
+        self,
+        mock_create_google_meet_sign_in_session,
+    ):
+        first_group = BotLoginGroup.objects.create(
+            project=self.project,
+            platform=BotLoginPlatform.GOOGLE_MEET,
+            name="Primary Group",
+        )
+        first_group_login = BotLogin.objects.create(
+            group=first_group,
+            workspace_domain="primary.example.com",
+            email="primary@example.com",
+        )
+        first_group_login.set_credentials(
+            {
+                "cert": "primary-cert",
+                "private_key": "primary-private-key",
+            }
+        )
+
+        named_group = BotLoginGroup.objects.create(
+            project=self.project,
+            platform=BotLoginPlatform.GOOGLE_MEET,
+            name="Named Group",
+        )
+        named_group_login = BotLogin.objects.create(
+            group=named_group,
+            workspace_domain="named.example.com",
+            email="named@example.com",
+        )
+        named_group_login.set_credentials(
+            {
+                "cert": "named-cert",
+                "private_key": "named-private-key",
+            }
+        )
+
+        self.bot.settings = {
+            "google_meet_settings": {
+                "use_login": True,
+                "login_mode": "always",
+                "login_group_name": "Named Group",
+            }
+        }
+        self.bot.save()
+
+        controller = BotController(self.bot.id)
+        controller.per_participant_non_streaming_audio_input_manager = MagicMock()
+        controller.closed_caption_manager = MagicMock()
+        controller.screen_and_audio_recorder = None
+        controller.room_sync_client = None
+        adapter = controller.get_google_meet_bot_adapter()
+
+        self.assertTrue(adapter.google_meet_bot_login_is_available)
+        self.assertTrue(adapter.google_meet_bot_login_should_be_used)
+
+        login_session = controller.create_google_meet_bot_login_session()
+
+        self.assertEqual(
+            login_session,
+            {
+                "session_id": "test-session-id",
+                "login_email": "named@example.com",
+                "login_domain": "named.example.com",
+            },
+        )
 
     @patch("bots.models.Bot.create_debug_recording", return_value=False)
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
@@ -1757,6 +2068,584 @@ class TestGoogleMeetBot2(TransactionTestCase):
         self.assertEqual(bot_speech_webhooks.count(), 0, "Expected no speech webhooks for the bot participant")
 
         # Verify join/leave webhooks were also created (ensuring speech events don't interfere)
+        join_leave_webhook_attempts = WebhookDeliveryAttempt.objects.filter(
+            bot=self.bot,
+            webhook_trigger_type=WebhookTriggerTypes.PARTICIPANT_EVENTS_JOIN_LEAVE,
+        )
+        self.assertGreater(join_leave_webhook_attempts.count(), 0, "Expected join/leave webhook delivery attempts")
+
+        controller.cleanup()
+        bot_thread.join(timeout=5)
+
+        connection.close()
+
+    def _start_bot_that_is_stuck_joining(self):
+        join_attempt_started = threading.Event()
+        release_join_attempt = threading.Event()
+
+        def attempt_to_join_meeting_that_blocks_until_released(*args, **kwargs):
+            join_attempt_started.set()
+            release_join_attempt.wait(timeout=30)
+            raise UiRetryableException("Simulated join attempt that never completed", "test_step")
+
+        patcher = patch(
+            "bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.attempt_to_join_meeting",
+            side_effect=attempt_to_join_meeting_that_blocks_until_released,
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.addCleanup(release_join_attempt.set)
+
+        controller = BotController(self.bot.id)
+
+        bot_thread = threading.Thread(target=controller.run)
+        bot_thread.daemon = True
+        bot_thread.start()
+
+        self.assertTrue(join_attempt_started.wait(timeout=10), "Bot never started attempting to join the meeting")
+
+        return controller, bot_thread, release_join_attempt
+
+    def _wait_for_bot_state(self, expected_state, timeout_seconds=10):
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            self.bot.refresh_from_db()
+            if self.bot.state == expected_state:
+                return
+            time.sleep(0.1)
+        self.fail(f"Bot never reached state {BotStates.state_to_api_code(expected_state)}. Current state: {BotStates.state_to_api_code(self.bot.state)}")
+
+    def _request_leave_like_api(self, controller):
+        BotEventManager.create_event(bot=self.bot, event_type=BotEventTypes.LEAVE_REQUESTED, event_sub_type=BotEventSubTypes.LEAVE_REQUESTED_USER_REQUESTED)
+        controller.handle_redis_message({"type": "message", "data": json.dumps({"command": "sync"}).encode("utf-8")})
+
+    def _finish_bot(self, controller, bot_thread, release_join_attempt=None):
+        bot_thread.join(timeout=15)
+        if release_join_attempt:
+            release_join_attempt.set()
+        self.bot.refresh_from_db()
+        controller.cleanup()
+        bot_thread.join(timeout=5)
+        connection.close()
+
+    @override_settings(PREJOIN_LEAVE_OR_MEETING_END_IS_FATAL_ERROR=True)
+    @patch("bots.models.Bot.create_debug_recording", return_value=False)
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.AzureFileUploader")
+    def test_leave_requested_while_joining_is_could_not_join_when_flag_enabled(
+        self,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+        mock_create_debug_recording,
+    ):
+        MockFileUploader.return_value = create_mock_file_uploader()
+        MockChromeDriver.return_value = create_mock_google_meet_driver()
+        MockDisplay.return_value = MagicMock()
+
+        controller, bot_thread, release_join_attempt = self._start_bot_that_is_stuck_joining()
+
+        self.bot.refresh_from_db()
+        self.assertEqual(self.bot.state, BotStates.JOINING)
+
+        self._request_leave_like_api(controller)
+
+        self._finish_bot(controller, bot_thread, release_join_attempt)
+
+        self.assertEqual(self.bot.state, BotStates.FATAL_ERROR)
+
+        bot_events = list(self.bot.bot_events.order_by("created_at"))
+        self.assertEqual(
+            [event.event_type for event in bot_events],
+            [BotEventTypes.JOIN_REQUESTED, BotEventTypes.LEAVE_REQUESTED, BotEventTypes.COULD_NOT_JOIN],
+        )
+
+        leave_requested_event = bot_events[1]
+        self.assertEqual(leave_requested_event.old_state, BotStates.JOINING)
+        self.assertEqual(leave_requested_event.new_state, BotStates.LEAVING)
+        self.assertIsNotNone(leave_requested_event.requested_bot_action_taken_at)
+
+        could_not_join_event = bot_events[2]
+        self.assertEqual(could_not_join_event.old_state, BotStates.LEAVING)
+        self.assertEqual(could_not_join_event.new_state, BotStates.FATAL_ERROR)
+        self.assertEqual(could_not_join_event.event_sub_type, BotEventSubTypes.COULD_NOT_JOIN_MEETING_LEAVE_REQUESTED_BEFORE_BOT_JOINED)
+        self.assertEqual(could_not_join_event.metadata["state_when_leave_requested"], "joining")
+
+    @override_settings(PREJOIN_LEAVE_OR_MEETING_END_IS_FATAL_ERROR=False)
+    @patch("bots.models.Bot.create_debug_recording", return_value=False)
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.AzureFileUploader")
+    def test_leave_requested_while_joining_ends_normally_when_flag_disabled(
+        self,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+        mock_create_debug_recording,
+    ):
+        MockFileUploader.return_value = create_mock_file_uploader()
+        MockChromeDriver.return_value = create_mock_google_meet_driver()
+        MockDisplay.return_value = MagicMock()
+
+        controller, bot_thread, release_join_attempt = self._start_bot_that_is_stuck_joining()
+
+        self._request_leave_like_api(controller)
+
+        self._finish_bot(controller, bot_thread, release_join_attempt)
+
+        self.assertEqual(self.bot.state, BotStates.ENDED)
+
+        bot_events = list(self.bot.bot_events.order_by("created_at"))
+        self.assertEqual(
+            [event.event_type for event in bot_events],
+            [BotEventTypes.JOIN_REQUESTED, BotEventTypes.LEAVE_REQUESTED, BotEventTypes.BOT_LEFT_MEETING, BotEventTypes.POST_PROCESSING_COMPLETED],
+        )
+
+        bot_left_meeting_event = bot_events[2]
+        self.assertEqual(bot_left_meeting_event.old_state, BotStates.LEAVING)
+        self.assertEqual(bot_left_meeting_event.new_state, BotStates.POST_PROCESSING)
+
+    @override_settings(PREJOIN_LEAVE_OR_MEETING_END_IS_FATAL_ERROR=True)
+    @patch("bots.models.Bot.create_debug_recording", return_value=False)
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.AzureFileUploader")
+    def test_leave_requested_while_in_waiting_room_is_could_not_join_when_flag_enabled(
+        self,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+        mock_create_debug_recording,
+    ):
+        MockFileUploader.return_value = create_mock_file_uploader()
+        MockChromeDriver.return_value = create_mock_google_meet_driver()
+        MockDisplay.return_value = MagicMock()
+
+        controller, bot_thread, release_join_attempt = self._start_bot_that_is_stuck_joining()
+
+        controller.adapter.send_message_callback({"message": BotAdapter.Messages.BOT_PUT_IN_WAITING_ROOM})
+        self._wait_for_bot_state(BotStates.WAITING_ROOM)
+
+        self._request_leave_like_api(controller)
+
+        self._finish_bot(controller, bot_thread, release_join_attempt)
+
+        self.assertEqual(self.bot.state, BotStates.FATAL_ERROR)
+
+        bot_events = list(self.bot.bot_events.order_by("created_at"))
+        self.assertEqual(
+            [event.event_type for event in bot_events],
+            [BotEventTypes.JOIN_REQUESTED, BotEventTypes.BOT_PUT_IN_WAITING_ROOM, BotEventTypes.LEAVE_REQUESTED, BotEventTypes.COULD_NOT_JOIN],
+        )
+
+        leave_requested_event = bot_events[2]
+        self.assertEqual(leave_requested_event.old_state, BotStates.WAITING_ROOM)
+        self.assertEqual(leave_requested_event.new_state, BotStates.LEAVING)
+
+        could_not_join_event = bot_events[3]
+        self.assertEqual(could_not_join_event.old_state, BotStates.LEAVING)
+        self.assertEqual(could_not_join_event.new_state, BotStates.FATAL_ERROR)
+        self.assertEqual(could_not_join_event.event_sub_type, BotEventSubTypes.COULD_NOT_JOIN_MEETING_LEAVE_REQUESTED_BEFORE_BOT_JOINED)
+        self.assertEqual(could_not_join_event.metadata["state_when_leave_requested"], "waiting_room")
+
+    @override_settings(PREJOIN_LEAVE_OR_MEETING_END_IS_FATAL_ERROR=True)
+    @patch("bots.models.Bot.create_debug_recording", return_value=False)
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.AzureFileUploader")
+    def test_meeting_ended_while_joining_is_could_not_join_when_flag_enabled(
+        self,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+        mock_create_debug_recording,
+    ):
+        MockFileUploader.return_value = create_mock_file_uploader()
+        MockChromeDriver.return_value = create_mock_google_meet_driver()
+        MockDisplay.return_value = MagicMock()
+
+        controller, bot_thread, release_join_attempt = self._start_bot_that_is_stuck_joining()
+
+        controller.adapter.handle_meeting_ended(None)
+
+        self._finish_bot(controller, bot_thread, release_join_attempt)
+
+        self.assertEqual(self.bot.state, BotStates.FATAL_ERROR)
+
+        bot_events = list(self.bot.bot_events.order_by("created_at"))
+        self.assertEqual(
+            [event.event_type for event in bot_events],
+            [BotEventTypes.JOIN_REQUESTED, BotEventTypes.COULD_NOT_JOIN],
+        )
+
+        could_not_join_event = bot_events[1]
+        self.assertEqual(could_not_join_event.old_state, BotStates.JOINING)
+        self.assertEqual(could_not_join_event.new_state, BotStates.FATAL_ERROR)
+        self.assertEqual(could_not_join_event.event_sub_type, BotEventSubTypes.COULD_NOT_JOIN_MEETING_MEETING_ENDED_BEFORE_BOT_JOINED)
+
+    @override_settings(PREJOIN_LEAVE_OR_MEETING_END_IS_FATAL_ERROR=True)
+    @patch("bots.models.Bot.create_debug_recording", return_value=False)
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.AzureFileUploader")
+    def test_meeting_ended_while_in_waiting_room_is_could_not_join_when_flag_enabled(
+        self,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+        mock_create_debug_recording,
+    ):
+        MockFileUploader.return_value = create_mock_file_uploader()
+        MockChromeDriver.return_value = create_mock_google_meet_driver()
+        MockDisplay.return_value = MagicMock()
+
+        controller, bot_thread, release_join_attempt = self._start_bot_that_is_stuck_joining()
+
+        controller.adapter.send_message_callback({"message": BotAdapter.Messages.BOT_PUT_IN_WAITING_ROOM})
+        self._wait_for_bot_state(BotStates.WAITING_ROOM)
+
+        controller.adapter.handle_meeting_ended(None)
+
+        self._finish_bot(controller, bot_thread, release_join_attempt)
+
+        self.assertEqual(self.bot.state, BotStates.FATAL_ERROR)
+
+        bot_events = list(self.bot.bot_events.order_by("created_at"))
+        self.assertEqual(
+            [event.event_type for event in bot_events],
+            [BotEventTypes.JOIN_REQUESTED, BotEventTypes.BOT_PUT_IN_WAITING_ROOM, BotEventTypes.COULD_NOT_JOIN],
+        )
+
+        could_not_join_event = bot_events[2]
+        self.assertEqual(could_not_join_event.old_state, BotStates.WAITING_ROOM)
+        self.assertEqual(could_not_join_event.new_state, BotStates.FATAL_ERROR)
+        self.assertEqual(could_not_join_event.event_sub_type, BotEventSubTypes.COULD_NOT_JOIN_MEETING_MEETING_ENDED_BEFORE_BOT_JOINED)
+
+    @override_settings(ENABLE_WAITING_ROOM_STATE_FOR_WEB_BOTS=True)
+    @patch("bots.tasks.restart_bot_pod_task.restart_bot_pod.apply_async")
+    @patch("bots.models.Bot.create_debug_recording", return_value=False)
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.AzureFileUploader")
+    def test_blocked_by_platform_repeatedly_while_in_waiting_room_is_fatal_error(
+        self,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+        mock_create_debug_recording,
+        mock_restart_bot_pod_apply_async,
+    ):
+        MockFileUploader.return_value = create_mock_file_uploader()
+        MockChromeDriver.return_value = create_mock_google_meet_driver()
+        MockDisplay.return_value = MagicMock()
+
+        controller, bot_thread, release_join_attempt = self._start_bot_that_is_stuck_joining()
+
+        controller.adapter.send_message_callback({"message": BotAdapter.Messages.BOT_PUT_IN_WAITING_ROOM})
+        self._wait_for_bot_state(BotStates.WAITING_ROOM)
+
+        controller.adapter.send_message_callback({"message": BotAdapter.Messages.BLOCKED_BY_PLATFORM_REPEATEDLY})
+
+        self._finish_bot(controller, bot_thread, release_join_attempt)
+
+        mock_restart_bot_pod_apply_async.assert_not_called()
+        self.assertEqual(self.bot.state, BotStates.FATAL_ERROR)
+
+        bot_events = list(self.bot.bot_events.order_by("created_at"))
+        self.assertEqual(
+            [event.event_type for event in bot_events],
+            [BotEventTypes.JOIN_REQUESTED, BotEventTypes.BOT_PUT_IN_WAITING_ROOM, BotEventTypes.FATAL_ERROR],
+        )
+
+        fatal_error_event = bot_events[2]
+        self.assertEqual(fatal_error_event.old_state, BotStates.WAITING_ROOM)
+        self.assertEqual(fatal_error_event.event_sub_type, BotEventSubTypes.FATAL_ERROR_UI_ELEMENT_NOT_FOUND)
+        self.assertTrue(fatal_error_event.metadata["blocked_by_platform_while_in_waiting_room"])
+        self.assertIn("bot_duration_seconds", fatal_error_event.metadata)
+
+    @override_settings(PREJOIN_LEAVE_OR_MEETING_END_IS_FATAL_ERROR=False)
+    @patch("bots.models.Bot.create_debug_recording", return_value=False)
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.AzureFileUploader")
+    def test_meeting_ended_while_joining_ends_normally_when_flag_disabled(
+        self,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+        mock_create_debug_recording,
+    ):
+        MockFileUploader.return_value = create_mock_file_uploader()
+        MockChromeDriver.return_value = create_mock_google_meet_driver()
+        MockDisplay.return_value = MagicMock()
+
+        controller, bot_thread, release_join_attempt = self._start_bot_that_is_stuck_joining()
+
+        controller.adapter.handle_meeting_ended(None)
+
+        self._finish_bot(controller, bot_thread, release_join_attempt)
+
+        self.assertEqual(self.bot.state, BotStates.ENDED)
+
+        bot_events = list(self.bot.bot_events.order_by("created_at"))
+        self.assertEqual(
+            [event.event_type for event in bot_events],
+            [BotEventTypes.JOIN_REQUESTED, BotEventTypes.MEETING_ENDED, BotEventTypes.POST_PROCESSING_COMPLETED],
+        )
+
+        meeting_ended_event = bot_events[1]
+        self.assertEqual(meeting_ended_event.old_state, BotStates.JOINING)
+        self.assertEqual(meeting_ended_event.new_state, BotStates.POST_PROCESSING)
+
+    @override_settings(PREJOIN_LEAVE_OR_MEETING_END_IS_FATAL_ERROR=False)
+    @patch("bots.models.Bot.create_debug_recording", return_value=False)
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.AzureFileUploader")
+    def test_leave_requested_while_staged_is_could_not_join_regardless_of_flag(
+        self,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+        mock_create_debug_recording,
+    ):
+        MockFileUploader.return_value = create_mock_file_uploader()
+        MockChromeDriver.return_value = create_mock_google_meet_driver()
+        MockDisplay.return_value = MagicMock()
+
+        # Far enough in the future that the bot will not transition to JOINING during the test
+        join_at = timezone.now() + timedelta(hours=1)
+        self.bot.state = BotStates.SCHEDULED
+        self.bot.join_at = join_at
+        self.bot.save()
+        self.bot.bot_events.all().delete()
+        BotEventManager.create_event(bot=self.bot, event_type=BotEventTypes.STAGED, event_metadata={"join_at": join_at.isoformat()})
+
+        controller = BotController(self.bot.id)
+
+        bot_thread = threading.Thread(target=controller.run)
+        bot_thread.daemon = True
+        bot_thread.start()
+
+        # Give the controller time to start its main loop
+        time.sleep(2)
+
+        self.bot.refresh_from_db()
+        self.assertEqual(self.bot.state, BotStates.STAGED)
+
+        self._request_leave_like_api(controller)
+
+        self._finish_bot(controller, bot_thread)
+
+        self.assertEqual(self.bot.state, BotStates.FATAL_ERROR)
+
+        bot_events = list(self.bot.bot_events.order_by("created_at"))
+        self.assertEqual(
+            [event.event_type for event in bot_events],
+            [BotEventTypes.STAGED, BotEventTypes.LEAVE_REQUESTED, BotEventTypes.COULD_NOT_JOIN],
+        )
+
+        leave_requested_event = bot_events[1]
+        self.assertEqual(leave_requested_event.old_state, BotStates.STAGED)
+        self.assertEqual(leave_requested_event.new_state, BotStates.LEAVING)
+
+        could_not_join_event = bot_events[2]
+        self.assertEqual(could_not_join_event.old_state, BotStates.LEAVING)
+        self.assertEqual(could_not_join_event.new_state, BotStates.FATAL_ERROR)
+        self.assertEqual(could_not_join_event.event_sub_type, BotEventSubTypes.COULD_NOT_JOIN_MEETING_LEAVE_REQUESTED_BEFORE_BOT_JOINED)
+        self.assertEqual(could_not_join_event.metadata["state_when_leave_requested"], "staged")
+
+    def test_could_not_join_rejected_when_leave_requested_after_bot_joined(self):
+        BotEventManager.create_event(bot=self.bot, event_type=BotEventTypes.LEAVE_REQUESTED, event_sub_type=BotEventSubTypes.LEAVE_REQUESTED_USER_REQUESTED)
+        self.bot.refresh_from_db()
+        self.assertEqual(self.bot.state, BotStates.LEAVING)
+
+        with self.assertRaises(ValidationError) as context:
+            BotEventManager.create_event(
+                bot=self.bot,
+                event_type=BotEventTypes.COULD_NOT_JOIN,
+                event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_WAITING_ROOM_TIMEOUT_EXCEEDED,
+            )
+        self.assertIn("Event could_not_join_meeting with sub type waiting_room_timeout_exceeded not allowed when bot is in state leaving", str(context.exception))
+
+        self.bot.refresh_from_db()
+        self.assertEqual(self.bot.state, BotStates.LEAVING)
+        self.assertEqual(
+            [event.event_type for event in self.bot.bot_events.order_by("created_at")],
+            [BotEventTypes.JOIN_REQUESTED, BotEventTypes.LEAVE_REQUESTED],
+        )
+
+    def test_could_not_join_allowed_when_leave_requested_before_bot_joined(self):
+        BotEventManager.create_event(bot=self.bot, event_type=BotEventTypes.LEAVE_REQUESTED, event_sub_type=BotEventSubTypes.LEAVE_REQUESTED_USER_REQUESTED)
+        self.bot.refresh_from_db()
+        self.assertEqual(self.bot.state, BotStates.LEAVING)
+
+        BotEventManager.create_event(
+            bot=self.bot,
+            event_type=BotEventTypes.COULD_NOT_JOIN,
+            event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_LEAVE_REQUESTED_BEFORE_BOT_JOINED,
+        )
+
+        self.bot.refresh_from_db()
+        self.assertEqual(self.bot.state, BotStates.FATAL_ERROR)
+
+    @patch("bots.models.Bot.create_debug_recording", return_value=False)
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.AzureFileUploader")
+    @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.check_if_meeting_is_found", return_value=None)
+    @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.wait_for_host_if_needed", return_value=None)
+    @patch("time.time")
+    @patch("bots.tasks.deliver_webhook_task.deliver_webhook")
+    def test_bot_sends_screenshare_start_stop_participant_event_webhooks(
+        self,
+        mock_deliver_webhook,
+        mock_time,
+        mock_wait_for_host_if_needed,
+        mock_check_if_meeting_is_found,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+        mock_create_debug_recording,
+    ):
+        mock_deliver_webhook.return_value = None
+
+        self.webhook_subscription = WebhookSubscription.objects.create(
+            project=self.project,
+            url="https://example.com/webhook",
+            triggers=[
+                WebhookTriggerTypes.BOT_STATE_CHANGE,
+                WebhookTriggerTypes.PARTICIPANT_EVENTS_JOIN_LEAVE,
+                WebhookTriggerTypes.PARTICIPANT_EVENTS_SCREENSHARE_START_STOP,
+            ],
+            is_active=True,
+        )
+
+        current_time = 1000.0
+        mock_time.return_value = current_time
+
+        self.recording.transcription_provider = TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM
+        self.recording.save()
+
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        mock_driver = create_mock_google_meet_driver()
+        MockChromeDriver.return_value = mock_driver
+
+        mock_display = MagicMock()
+        MockDisplay.return_value = mock_display
+
+        controller = BotController(self.bot.id)
+
+        bot_thread = threading.Thread(target=controller.run)
+        bot_thread.daemon = True
+        bot_thread.start()
+
+        def simulate_join_flow():
+            nonlocal current_time
+
+            # Simulate participants joining
+            bot_participant_data = {"deviceId": "bot1", "fullName": "Test Bot", "active": True, "isCurrentUser": True}
+            controller.adapter.handle_participant_update(bot_participant_data)
+
+            participant_data = {"deviceId": "user1", "fullName": "Test User", "active": True, "isCurrentUser": False}
+            controller.adapter.handle_participant_update(participant_data)
+
+            controller.adapter.last_audio_message_processed_time = current_time
+
+            time.sleep(3)
+
+            # Simulate screenshare start event for the user participant
+            controller.adapter.handle_screenshare_start_stop_event(
+                {
+                    "participantId": "user1",
+                    "isScreenshareStart": True,
+                    "timestamp": int(current_time * 1000),
+                }
+            )
+
+            time.sleep(0.5)
+
+            # Simulate screenshare stop event for the user participant
+            controller.adapter.handle_screenshare_start_stop_event(
+                {
+                    "participantId": "user1",
+                    "isScreenshareStart": False,
+                    "timestamp": int(current_time * 1000) + 30000,
+                }
+            )
+
+            # Also simulate a screenshare event for the bot (should NOT produce a webhook)
+            controller.adapter.handle_screenshare_start_stop_event(
+                {
+                    "participantId": "bot1",
+                    "isScreenshareStart": True,
+                    "timestamp": int(current_time * 1000) + 31000,
+                }
+            )
+
+            time.sleep(1)
+
+            # Simulate participant leaving
+            participant_data = {"deviceId": "user1", "fullName": "Test User", "active": False, "isCurrentUser": False}
+            controller.adapter.handle_participant_update(participant_data)
+
+            # Trigger auto-leave
+            controller.adapter.only_one_participant_in_meeting_at = time.time() - 10000000000
+            time.sleep(4)
+
+            connection.close()
+
+        threading.Timer(2, simulate_join_flow).start()
+
+        bot_thread.join(timeout=15)
+
+        self.bot.refresh_from_db()
+        self.assertEqual(self.bot.state, BotStates.ENDED)
+
+        # Verify ParticipantEvent records for screenshare start/stop were created for the user
+        user_participant_events = ParticipantEvent.objects.filter(participant__bot=self.bot, participant__uuid="user1")
+        screenshare_start_event = user_participant_events.filter(event_type=ParticipantEventTypes.SCREENSHARE_START).first()
+        self.assertIsNotNone(screenshare_start_event, "Expected a SCREENSHARE_START participant event for the user")
+        self.assertEqual(screenshare_start_event.participant.full_name, "Test User")
+        self.assertEqual(screenshare_start_event.timestamp_ms, int(current_time * 1000))
+
+        screenshare_stop_event = user_participant_events.filter(event_type=ParticipantEventTypes.SCREENSHARE_STOP).first()
+        self.assertIsNotNone(screenshare_stop_event, "Expected a SCREENSHARE_STOP participant event for the user")
+        self.assertEqual(screenshare_stop_event.participant.full_name, "Test User")
+        self.assertEqual(screenshare_stop_event.timestamp_ms, int(current_time * 1000) + 30000)
+
+        # Verify that a SCREENSHARE_START event was also created for the bot participant
+        bot_screenshare_events = ParticipantEvent.objects.filter(participant__bot=self.bot, participant__uuid="bot1", event_type=ParticipantEventTypes.SCREENSHARE_START)
+        self.assertEqual(bot_screenshare_events.count(), 1, "Expected a SCREENSHARE_START event for the bot participant")
+
+        # Verify webhook delivery attempts for screenshare start/stop
+        screenshare_webhook_attempts = WebhookDeliveryAttempt.objects.filter(
+            bot=self.bot,
+            webhook_trigger_type=WebhookTriggerTypes.PARTICIPANT_EVENTS_SCREENSHARE_START_STOP,
+        )
+        # Only user events should trigger webhooks (bot events are suppressed)
+        self.assertEqual(screenshare_webhook_attempts.count(), 2, "Expected exactly 2 screenshare webhook delivery attempts (screenshare_start and screenshare_stop for the user)")
+
+        screenshare_start_webhook = screenshare_webhook_attempts.filter(payload__event_type="screenshare_start").first()
+        self.assertIsNotNone(screenshare_start_webhook)
+        self.assertEqual(screenshare_start_webhook.payload["participant_name"], "Test User")
+        self.assertEqual(screenshare_start_webhook.payload["participant_uuid"], "user1")
+        self.assertEqual(screenshare_start_webhook.payload["timestamp_ms"], int(current_time * 1000))
+
+        screenshare_stop_webhook = screenshare_webhook_attempts.filter(payload__event_type="screenshare_stop").first()
+        self.assertIsNotNone(screenshare_stop_webhook)
+        self.assertEqual(screenshare_stop_webhook.payload["participant_name"], "Test User")
+        self.assertEqual(screenshare_stop_webhook.payload["participant_uuid"], "user1")
+        self.assertEqual(screenshare_stop_webhook.payload["timestamp_ms"], int(current_time * 1000) + 30000)
+
+        # Verify that no screenshare webhook was created for the bot participant
+        bot_screenshare_webhooks = screenshare_webhook_attempts.filter(payload__participant_uuid="bot1")
+        self.assertEqual(bot_screenshare_webhooks.count(), 0, "Expected no screenshare webhooks for the bot participant")
+
+        # Verify join/leave webhooks were also created (ensuring screenshare events don't interfere)
         join_leave_webhook_attempts = WebhookDeliveryAttempt.objects.filter(
             bot=self.bot,
             webhook_trigger_type=WebhookTriggerTypes.PARTICIPANT_EVENTS_JOIN_LEAVE,

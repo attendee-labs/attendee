@@ -19,7 +19,7 @@ from rest_framework.views import APIView
 
 from .authentication import ApiKeyAuthentication
 from .bots_api_utils import BotCreationSource, create_bot, create_bot_chat_message_request, create_bot_media_request_for_image, delete_bot, patch_bot, patch_bot_transcription_settings, patch_bot_voice_agent_settings, send_sync_command
-from .launch_bot_utils import launch_bot
+from .launch_bot_utils import launch_adhoc_bot_from_view
 from .meeting_url_utils import meeting_type_from_url
 from .models import (
     AsyncTranscription,
@@ -301,7 +301,7 @@ class BotListCreateView(GenericAPIView):
 
         # If this is a scheduled bot, we don't want to launch it yet.
         if bot.state == BotStates.JOINING:
-            launch_bot(bot)
+            launch_adhoc_bot_from_view(bot)
 
         return Response(BotSerializer(bot).data, status=status.HTTP_201_CREATED)
 
@@ -432,6 +432,7 @@ class OutputVideoView(APIView):
             media_type=BotMediaRequestMediaTypes.VIDEO,
             media_url=serializer.validated_data["url"],
             loop=serializer.validated_data["loop"],
+            mute_video=serializer.validated_data["mute_video"],
         )
 
         # Send sync command to notify bot of new media request
@@ -785,8 +786,10 @@ class TranscriptView(APIView):
                 async_transcription = recording.async_transcriptions.get(
                     object_id=request.query_params.get("async_transcription_id"),
                 )
-                if async_transcription.state != AsyncTranscriptionStates.COMPLETE:
-                    return Response({"error": f"Async transcription {async_transcription.object_id} is not complete. It is in state {AsyncTranscriptionStates.state_to_api_code(async_transcription.state)}"}, status=status.HTTP_400_BAD_REQUEST)
+                # A failed async transcription can still hold a partial transcript, so we return whatever was transcribed
+                # instead of an error. The caller learns the transcription failed from the async transcription webhook.
+                if async_transcription.state not in [AsyncTranscriptionStates.COMPLETE, AsyncTranscriptionStates.FAILED]:
+                    return Response({"error": f"Async transcription {async_transcription.object_id} is not complete or failed. It is in state {AsyncTranscriptionStates.state_to_api_code(async_transcription.state)}"}, status=status.HTTP_400_BAD_REQUEST)
 
             # Get all utterances with transcriptions, sorted by timeline
             utterances_query = Utterance.objects.select_related("participant").filter(recording=recording, transcription__isnull=False, async_transcription=async_transcription)
@@ -1364,7 +1367,7 @@ class PauseRecordingView(APIView):
     @extend_schema(
         operation_id="Pause Recording",
         summary="Pause the bot's recording",
-        description="Pauses the recording for the specified bot. This functionality is in beta and only supported for Google Meet and MS Teamsbots.",
+        description="Pauses the recording for the specified bot.",
         responses={
             200: OpenApiResponse(
                 response=BotSerializer,

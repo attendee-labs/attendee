@@ -27,7 +27,7 @@ class DebugScreenRecorder:
             "-f",
             "x11grab",
             "-draw_mouse",
-            "0",
+            "1",
             "-framerate",
             str(fps),
             "-video_size",

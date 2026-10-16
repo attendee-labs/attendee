@@ -9,13 +9,14 @@ var meetingNumber = zoomInitialData.meetingNumber;
 var passWord = zoomInitialData.meetingPassword;
 var role = 0;
 var userName = initialData.botName;
-var userEmail = '';
+var userEmail = zoomInitialData.webinarUserEmail || '';
 var registrantToken = '';
 var recordingToken = zoomInitialData.joinToken || zoomInitialData.appPrivilegeToken;
 var zakToken = zoomInitialData.zakToken;
 var onBehalfToken = zoomInitialData.onBehalfToken;
 var leaveUrl = 'https://zoom.us';
 var userEnteredMeeting = false;
+var latestJoinSpeedLevel = null;
 var userEncounteredOnBehalfTokenUserNotInMeetingError = false;
 var userEncounteredGenericJoinError = false;
 var recordingPermissionGranted = false;
@@ -66,6 +67,12 @@ function userHasEnteredMeeting() {
 }
 
 window.userHasEnteredMeeting = userHasEnteredMeeting;
+
+function userIsInWaitingRoom() {
+    return latestJoinSpeedLevel == 6;
+}
+
+window.userIsInWaitingRoom = userIsInWaitingRoom;
 
 function userHasEncounteredOnBehalfTokenUserNotInMeetingError() {
     return userEncounteredOnBehalfTokenUserNotInMeetingError;
@@ -198,9 +205,14 @@ function startMeeting(signature) {
 
     ZoomMtg.inMeetingServiceListener('onJoinSpeed', function (data) {
         console.log('onJoinSpeed', data);
+        latestJoinSpeedLevel = data.level;
         // This means that the user was initially in the waiting room
         if (data.level == 6) {
             console.log('onJoinSpeed: level 6, user was in waiting room');
+        }
+        // This means the user left the waiting room
+        if (data.level == 7) {
+            console.log('onJoinSpeed: level 7, user left waiting room');
         }
         //joinMeeting
         // Level 13 means "user start join audio" which means we actually got into the meeting and are out of the waiting room
@@ -217,6 +229,20 @@ function startMeeting(signature) {
     ZoomMtg.inMeetingServiceListener('onMeetingStatus', function (data) {
         console.log('onMeetingStatus', data);
 
+        // Purely for logging purposes, doesn't trigger anything
+        window.ws?.sendJson({
+            type: 'ZoomWebMeetingStatusChange',
+            statusChangeData: data,
+        });
+
+        // The 4017 code indicates that we are not able to enter the meeting because the OBF token user is not present
+        if (data.errorCode == 4017)
+        {
+            userEncounteredOnBehalfTokenUserNotInMeetingError = true;
+            console.log('handleJoinFailureFromConsoleIntercept: user encountered onbehalf token user not in meeting error');
+            return;
+        }
+
         // 3 means disconnected
         if (data.meetingStatus === 3) {
             // Only send the message if we've got into the meeting
@@ -228,6 +254,7 @@ function startMeeting(signature) {
         }
     });
 
+    /* Disabled because we are using the redux interceptor instead
     ZoomMtg.inMeetingServiceListener('onReceiveTranscriptionMsg', function (item) {
         console.log('onReceiveTranscriptionMsg', item);
 
@@ -254,6 +281,7 @@ function startMeeting(signature) {
 
         transcriptMessageFinalizationManager.addMessage(item);
     });
+    */
 
     ZoomMtg.inMeetingServiceListener('onReceiveChatMsg', function (chatMessage) {
         console.log('onReceiveChatMsg', chatMessage);

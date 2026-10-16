@@ -15,7 +15,7 @@ To create a project-level webhook via the UI:
 1. Click on "Settings → Webhooks" in the sidebar
 2. Click "Create Webhook" 
 3. Provide an HTTPS URL that will receive webhook events
-4. Select the triggers you want to receive notifications for (we currently have seven triggers: `bot.state_change`, `transcript.update`, `chat_messages.update`, `participant_events.join_leave`, `participant_events.speech_start_stop`, `calendar.events_update`, `calendar.state_change`, and `bot_logs.update`)
+4. Select the triggers you want to receive notifications for (we currently have the following triggers: `bot.state_change`, `transcript.update`, `chat_messages.update`, `participant_events.join_leave`, `participant_events.speech_start_stop`, `participant_events.screenshare_start_stop`, `calendar.events_update`, `calendar.state_change`, and `bot_logs.update`)
 5. Click "Create" to save your subscription
 
 ## Creating Bot-Level Webhooks
@@ -48,6 +48,7 @@ Bot-level webhooks are created via the API when creating a bot. Include a `webho
 | `chat_messages.update` | Chat message updates in the meeting |
 | `participant_events.join_leave` | A participant joins or leaves the meeting |
 | `participant_events.speech_start_stop` | A participant starts or stops speaking |
+| `participant_events.screenshare_start_stop` | A participant starts or stops sharing their screen (not supported on Zoom RTMS) |
 | `calendar.events_update` | Calendar events have been synced and updated |
 | `calendar.state_change` | Calendar connection state has changed (connected/disconnected) |
 | `bot_logs.update` | A log entry associated with a bot has been created |
@@ -102,6 +103,7 @@ For webhooks triggered by `bot.state_change`, the `data` field contains:
   "created_at": < The timestamp when the state change occurred >,
   "event_type": < The type of event that triggered the state change >,
   "event_sub_type": < The sub-type of event that triggered the state change >,
+  "event_metadata": < Extra details about the event, when there are any >,
 }
 ```
 
@@ -120,6 +122,31 @@ The data field will look like this
   "event_sub_type": null,
 }
 ```
+
+### Knowing who removed the bot
+
+This is only supported for Microsoft Teams. Google Meet and Zoom tell the bot that it was removed but not by whom.
+
+When a participant denies the bot's request to join, or removes the bot from the meeting,
+`event_metadata` contains `remover_` fields naming them:
+
+```json
+{
+  "new_state": "post_processing",
+  "old_state": "joined_recording",
+  "created_at": "2023-07-15T14:30:45.123456Z",
+  "event_type": "meeting_ended",
+  "event_sub_type": null,
+  "event_metadata": {
+    "remover_name": "Test User",
+    "remover_uuid": "8:orgid:00000000-0000-0000-0000-000000000001",
+    "remover_user_uuid": null,
+    "remover_is_host": true
+  }
+}
+```
+
+On a `meeting_ended` event, these fields mean a participant removed the bot, so the meeting itself may still be going.
 
 ### Payload for `transcript.update` trigger
 
@@ -158,9 +185,9 @@ For webhooks triggered by `chat_messages.update`, the `data` field contains a si
 }
 ```
 
-### Payload for `participant_events.join_leave` and `participant_events.speech_start_stop` triggers
+### Payload for participant event triggers
 
-For webhooks triggered by `participant_events.join_leave` and `participant_events.speech_start_stop`, the `data` field contains a single participant event:
+For webhooks triggered by `participant_events.join_leave`, `participant_events.speech_start_stop`, and `participant_events.screenshare_start_stop`, the `data` field contains a single participant event:
 
 ```
 {
@@ -169,7 +196,7 @@ For webhooks triggered by `participant_events.join_leave` and `participant_event
   "participant_uuid": <The UUID of the participant who joined or left the meeting>,
   "participant_user_uuid": <The UUID of the participant's user account within the meeting platform>,
   "participant_is_host": <Whether the participant is the host of the meeting>,
-  "event_type": <The type of event that occurred. Either "join", "leave", "speech_start", or "speech_stop">,
+  "event_type": <The type of event that occurred. One of "join", "leave", "speech_start", "speech_stop", "screenshare_start", or "screenshare_stop">,
   "event_data": <Any additional data associated with the event. This is empty for join and leave events>,
   "timestamp_ms": <The timestamp of the event in milliseconds>,
 }

@@ -10,7 +10,8 @@ logger = logging.getLogger(__name__)
 
 
 def calculate_normalized_rms(audio_bytes):
-    samples = np.frombuffer(audio_bytes, dtype=np.int16)
+    # Square as floats: int16 squares overflow, which reads loud audio as silent and quiet audio as NaN.
+    samples = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float64)
     rms = np.sqrt(np.mean(np.square(samples)))
     # Normalize by max possible value for 16-bit audio (32768)
     return rms / 32768
@@ -80,8 +81,8 @@ class PerParticipantNonStreamingAudioInputManager:
 
     def is_speech(self, chunk_bytes):
         try:
-            # The VAD can handle a max of 30 ms of audio. If it is larger than that, just return True
-            if len(chunk_bytes) > 30 * self.sample_rate // 1000:
+            # The VAD can handle a max of 30 ms of audio (16-bit samples, so 2 bytes each). If it is larger than that, just return True
+            if len(chunk_bytes) > 30 * self.sample_rate // 1000 * 2:
                 self.diagnostic_info["total_chunks_too_large_for_vad"] += 1
                 return True
             return self.vad.is_speech(chunk_bytes, self.sample_rate)

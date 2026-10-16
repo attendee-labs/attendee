@@ -1,10 +1,13 @@
 import base64
 import hashlib
 import hmac
+import ipaddress
 import json
 import logging
+import socket
 import uuid
 from functools import partial
+from urllib.parse import urlsplit
 
 from django.db import transaction
 
@@ -84,3 +87,27 @@ def verify_signature(payload, signature, secret):
 
     # Use constant-time comparison to prevent timing attacks
     return hmac.compare_digest(signature, expected_signature)
+
+
+def url_is_public(url: str) -> bool:
+    parsed = urlsplit(url)
+
+    if not parsed.hostname:
+        return False
+
+    try:
+        addresses = socket.getaddrinfo(
+            parsed.hostname,
+            parsed.port or 443,
+            type=socket.SOCK_STREAM,
+        )
+    except socket.gaierror:
+        return False
+
+    for address in addresses:
+        ip = ipaddress.ip_address(address[4][0])
+
+        if not ip.is_global:
+            return False
+
+    return True

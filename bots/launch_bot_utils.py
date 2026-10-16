@@ -2,6 +2,8 @@ import json
 import logging
 import os
 
+from django.conf import settings
+
 from bots.models import BotEventManager, BotEventSubTypes, BotEventTypes
 
 logger = logging.getLogger(__name__)
@@ -75,23 +77,33 @@ def _launch_bot_via_pod_creator(bot):
         add_persistent_storage=bot.reserve_additional_storage(),
         bot_pod_spec_type=bot.bot_pod_spec_type,
     )
-    logger.info("Bot %s (%s) launched via Kubernetes: %s", bot.object_id, bot.id, create_pod_result)
-
+    logger.info(f"Bot {bot.object_id} ({bot.id}) launched via Kubernetes: {create_pod_result}")
     if not create_pod_result.get("created"):
-        logger.error("Bot %s (%s) failed to launch via Kubernetes.", bot.object_id, bot.id)
+        logger.error(f"Bot {bot.object_id} ({bot.id}) failed to launch via Kubernetes.")
         try:
+            event_metadata = None
+            if settings.STORE_INFRASTRUCTURE_INFORMATION_IN_BOT_EVENT_METADATA:
+                event_metadata = {"create_pod_result": json.dumps(create_pod_result)}
+
             BotEventManager.create_event(
                 bot=bot,
                 event_type=BotEventTypes.FATAL_ERROR,
                 event_sub_type=BotEventSubTypes.FATAL_ERROR_BOT_NOT_LAUNCHED,
-                event_metadata={
-                    "create_pod_result": json.dumps(create_pod_result),
-                },
+                event_metadata=event_metadata,
             )
         except Exception as e:
-            logger.error(
-                "Failed to create fatal error bot not launched event for bot %s (%s): %s",
-                bot.object_id,
-                bot.id,
-                str(e),
-            )
+            logger.error(f"Failed to create fatal error bot not launched event for bot {bot.object_id} ({bot.id}): {str(e)}")
+
+def launch_adhoc_bot_from_view(bot):
+    """Launch an adhoc (non-scheduled) bot from a webserver view.
+
+    When ``settings.LAUNCH_ADHOC_BOTS_ASYNC`` is enabled, the actual launch is
+    handed off to a Celery worker so the request thread returns immediately.
+    Otherwise the bot is launched inline in the current (webserver) process.
+    """
+    if settings.LAUNCH_ADHOC_BOTS_ASYNC:
+        from .tasks.launch_adhoc_bot_task import launch_adhoc_bot
+
+        launch_adhoc_bot.delay(bot.id)
+    else:
+        launch_bot(bot)

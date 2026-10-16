@@ -1,9 +1,11 @@
 import base64
 import json
+import os
 import signal
+import tempfile
 from unittest.mock import MagicMock, patch
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.utils import timezone as django_timezone
 
 from accounts.models import Organization
@@ -67,6 +69,38 @@ class RunSchedulerCommandTestCase(TestCase):
         # Verify the shutdown flag was set
         self.assertFalse(command._keep_running)
 
+    def test_write_heartbeat_creates_file_with_timestamp(self):
+        """_write_heartbeat writes the current time to the heartbeat file."""
+        command = Command()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            heartbeat_path = os.path.join(tmpdir, "scheduler_heartbeat")
+            with patch("bots.management.commands.run_scheduler.SCHEDULER_HEARTBEAT_FILE", heartbeat_path):
+                with patch("bots.management.commands.run_scheduler.time.time", return_value=1234567890.0):
+                    command._write_heartbeat()
+
+                self.assertTrue(os.path.exists(heartbeat_path))
+                with open(heartbeat_path) as f:
+                    self.assertEqual(f.read(), "1234567890.0")
+
+    def test_write_heartbeat_swallows_errors(self):
+        """A failed heartbeat write must never raise, so it can't crash the scheduler loop."""
+        command = Command()
+
+        with patch("bots.management.commands.run_scheduler.SCHEDULER_HEARTBEAT_FILE", "/tmp/scheduler_heartbeat"):
+            with patch("builtins.open", side_effect=OSError("read-only file system")):
+                # Should not raise
+                command._write_heartbeat()
+
+    def test_write_heartbeat_noop_when_unset(self):
+        """With SCHEDULER_HEARTBEAT_FILE unset, heartbeat writes are a no-op (opt-in)."""
+        command = Command()
+
+        with patch("bots.management.commands.run_scheduler.SCHEDULER_HEARTBEAT_FILE", None):
+            with patch("builtins.open") as mock_open:
+                command._write_heartbeat()
+                mock_open.assert_not_called()
+
     def test_run_scheduled_bots_ignores_bots_outside_time_threshold(self):
         """Test that bots outside the 5-minute time window are ignored"""
         # Create a bot that's too late (missed by more than 5 minutes)
@@ -83,6 +117,57 @@ class RunSchedulerCommandTestCase(TestCase):
 
             # Verify no bots were launched since they're all outside the time threshold
             mock_delay.assert_not_called()
+
+    def test_run_scheduled_bots_respects_launch_window_before_join_at_setting(self):
+        """Test that SCHEDULED_BOT_LAUNCH_WINDOW_BEFORE_JOIN_AT_SECONDS extends how far in the future a bot's join_at can be"""
+        # 7 minutes in the future: outside the default 5-minute window, inside a 10-minute window
+        bot = Bot.objects.create(project=self.project, name="Early Bot", meeting_url="https://example.zoom.us/j/777888999", state=BotStates.SCHEDULED, join_at=self.join_at_too_early)
+
+        command = Command()
+
+        with override_settings(SCHEDULED_BOT_LAUNCH_WINDOW_BEFORE_JOIN_AT_SECONDS=600):
+            with patch("bots.tasks.launch_scheduled_bot_task.launch_scheduled_bot.delay") as mock_delay:
+                with patch("django.utils.timezone.now", return_value=self.now):
+                    command._run_scheduled_bots()
+
+                mock_delay.assert_called_once_with(bot.id, bot.join_at.isoformat())
+
+    def test_run_scheduled_bots_respects_launch_window_after_join_at_setting(self):
+        """Test that SCHEDULED_BOT_LAUNCH_WINDOW_AFTER_JOIN_AT_SECONDS extends how far in the past a bot's join_at can be"""
+        # Missed by 7 minutes: outside the default 5-minute window, inside a 10-minute window
+        bot = Bot.objects.create(project=self.project, name="Missed Bot", meeting_url="https://example.zoom.us/j/444555666", state=BotStates.SCHEDULED, join_at=self.join_at_too_late)
+
+        command = Command()
+
+        with override_settings(SCHEDULED_BOT_LAUNCH_WINDOW_AFTER_JOIN_AT_SECONDS=600):
+            with patch("bots.tasks.launch_scheduled_bot_task.launch_scheduled_bot.delay") as mock_delay:
+                with patch("django.utils.timezone.now", return_value=self.now):
+                    command._run_scheduled_bots()
+
+                mock_delay.assert_called_once_with(bot.id, bot.join_at.isoformat())
+
+    def test_run_scheduled_bots_with_jitter_respects_launch_window_after_join_at_setting(self):
+        """Test that the jitter code path also honors SCHEDULED_BOT_LAUNCH_WINDOW_AFTER_JOIN_AT_SECONDS"""
+        jitter_start = 300
+        jitter_end = 600
+
+        # Missed by 7 minutes: outside the default 5-minute window, inside a 10-minute window
+        bot = Bot.objects.create(project=self.project, name="Missed Bot", meeting_url="https://example.zoom.us/j/444555666", state=BotStates.SCHEDULED, join_at=self.join_at_too_late)
+
+        command = Command()
+        mock_redis = MagicMock()
+        mock_redis.hscan_iter.return_value = iter([])
+        command._redis_client = mock_redis
+
+        env = {"SCHEDULED_BOT_JITTER_START_SECONDS": str(jitter_start), "SCHEDULED_BOT_JITTER_END_SECONDS": str(jitter_end)}
+        with patch.dict("os.environ", env), override_settings(SCHEDULED_BOT_LAUNCH_WINDOW_AFTER_JOIN_AT_SECONDS=600):
+            with patch("bots.tasks.launch_scheduled_bot_task.launch_scheduled_bot.delay") as mock_delay:
+                with patch("bots.tasks.launch_scheduled_bot_task.launch_scheduled_bot.apply_async") as mock_apply_async:
+                    with patch("django.utils.timezone.now", return_value=self.now):
+                        command._run_scheduled_bots_with_jitter()
+
+                    mock_delay.assert_called_once_with(bot.id, bot.join_at.isoformat())
+                    mock_apply_async.assert_not_called()
 
     def test_run_periodic_calendar_syncs_with_no_eligible_calendars(self):
         """Test that _run_periodic_calendar_syncs handles the case when no calendars need syncing"""

@@ -105,6 +105,8 @@ The websocket message payload is identical to the mixed audio payload, except th
 }
 ```
 
+ See [here](https://github.com/attendee-labs/realtime-per-participant-video-and-audio-example) for an example program showing how use per-participant audio streaming.
+
 ## Retries on Websocket Connections
 
 Attendee will automatically retry to connect to your websocket server if the connection is lost or the initial connection attempt fails. We will retry up to 30 times with a 2 second delay between retries.
