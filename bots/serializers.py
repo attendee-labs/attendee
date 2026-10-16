@@ -43,6 +43,7 @@ from .models import (
     RecordingTranscriptionStates,
     RecordingViews,
     TranscriptionProviders,
+    TranscriptionSettings,
     ZoomOAuthConnection,
     ZoomOAuthConnectionStates,
 )
@@ -254,6 +255,23 @@ BOT_IMAGE_SCHEMA = {
     "additionalProperties": False,
 }
 
+# The languages Gladia's solaria-3 model supports, see https://docs.gladia.io/chapters/introduction/models
+GLADIA_SOLARIA_3_LANGUAGES = ["en", "fr", "de", "es", "it"]
+
+
+def validate_gladia_transcription_settings(transcription_settings):
+    if "gladia" not in transcription_settings or transcription_settings["gladia"].get("model") != "solaria-3":
+        return
+
+    language_config = TranscriptionSettings(transcription_settings).gladia_language_config() or {}
+    if language_config.get("code_switching"):
+        raise serializers.ValidationError({"transcription_settings": "Gladia's solaria-3 model does not support code switching. Pass a single language or use the solaria-1 model."})
+
+    unsupported_languages = [language for language in language_config.get("languages", []) if language not in GLADIA_SOLARIA_3_LANGUAGES]
+    if unsupported_languages:
+        raise serializers.ValidationError({"transcription_settings": f"Gladia's solaria-3 model does not support the languages {', '.join(unsupported_languages)}. It supports {', '.join(GLADIA_SOLARIA_3_LANGUAGES)}. Use the solaria-1 model for other languages."})
+
+
 # Define the schema once
 TRANSCRIPTION_SETTINGS_SCHEMA = {
     "type": "object",
@@ -276,15 +294,52 @@ TRANSCRIPTION_SETTINGS_SCHEMA = {
         "gladia": {
             "type": "object",
             "properties": {
+                "languages": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "uniqueItems": True,
+                    "description": "ISO 639-1 codes of the languages expected in the audio. Pass a single language to pin the transcription language. Pass several to have Gladia detect the language among them. If omitted, Gladia detects the language across all supported languages. See here for available languages: https://docs.gladia.io/chapters/language/supported-languages",
+                },
+                "code_switching": {
+                    "type": "boolean",
+                    "description": "Whether to detect the language of each utterance, for audio where speakers switch languages. If false, the language is detected once at the start of the audio. Has no effect when a single language is passed in languages. Gladia recommends also passing the expected languages. Defaults to false. See details: https://docs.gladia.io/chapters/language/code-switching",
+                },
                 "code_switching_languages": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "The languages to transcribe the meeting in when using code switching. See here for available languages: https://docs.gladia.io/chapters/limits-and-specifications/languages",
+                    "description": "Deprecated, use languages instead. The languages to transcribe the meeting in when using code switching. Ignored if languages or code_switching is set. See here for available languages: https://docs.gladia.io/chapters/language/supported-languages",
                 },
                 "enable_code_switching": {
                     "type": "boolean",
-                    "description": "Whether to use code switching to transcribe the meeting in multiple languages.",
+                    "description": "Deprecated, use code_switching instead. Whether to use code switching to transcribe the meeting in multiple languages. Ignored if languages or code_switching is set.",
                 },
+                "model": {
+                    "type": "string",
+                    "enum": ["solaria-1", "solaria-3", "solaria-fusion"],
+                    "description": f"The Gladia model to use for transcription. Defaults to Gladia's default model, solaria-1. solaria-3 supports only the languages {', '.join(GLADIA_SOLARIA_3_LANGUAGES)} and does not support code switching. See details: https://docs.gladia.io/chapters/introduction/models",
+                },
+                "custom_vocabulary": {
+                    "type": "array",
+                    "items": {
+                        "oneOf": [
+                            {"type": "string"},
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "value": {"type": "string", "description": "The word or phrase to favor in the transcript."},
+                                    "pronunciations": {"type": "array", "items": {"type": "string"}, "description": "Plain-text spellings of how the term sounds, used to widen the match."},
+                                    "intensity": {"type": "number", "minimum": 0, "maximum": 1, "description": "How readily the term replaces similar-sounding words. Overrides custom_vocabulary_default_intensity for this term."},
+                                    "language": {"type": "string", "description": "ISO 639-1 code of the language the term is pronounced in, if it differs from the transcription language."},
+                                },
+                                "required": ["value"],
+                                "additionalProperties": False,
+                            },
+                        ]
+                    },
+                    "description": "List of words or phrases (e.g. names, product names, domain terms) that Gladia should favor in the transcript. Each entry is a string or an object with value and optional pronunciations, intensity and language. See details: https://docs.gladia.io/chapters/audio-intelligence/custom-vocabulary",
+                },
+                "custom_vocabulary_default_intensity": {"type": "number", "minimum": 0, "maximum": 1, "description": "Intensity applied to custom_vocabulary entries that do not set their own. Higher values replace words more readily, but cause more false replacements. Gladia suggests 0.4 to 0.6. Only used with custom_vocabulary."},
+                "custom_spelling": {"type": "array", "items": {"type": "object", "properties": {"from": {"type": "array", "items": {"type": "string"}}, "to": {"type": "string"}}, "required": ["from", "to"], "additionalProperties": False}, "description": "List of {from: [...], to: ...} entries that replace known misspellings with the correct spelling. Matching on the from variants is case-insensitive and the to spelling is written as given. See details: https://docs.gladia.io/chapters/audio-intelligence/custom-spelling"},
             },
             "required": [],
             "additionalProperties": False,
@@ -1243,6 +1298,8 @@ class CreateAsyncTranscriptionSerializer(serializers.Serializer):
         if value.get("deepgram", {}).get("callback"):
             raise serializers.ValidationError({"transcription_settings": "Deepgram callback is not available for async transcription."})
 
+        validate_gladia_transcription_settings(value)
+
         if ("custom_async" in value or "custom_async_v2" in value) and not os.getenv("CUSTOM_ASYNC_TRANSCRIPTION_URL"):
             raise serializers.ValidationError({"transcription_settings": "CUSTOM_ASYNC_TRANSCRIPTION_URL environment variable is not set. Please set the CUSTOM_ASYNC_TRANSCRIPTION_URL environment variable to the URL of your custom async transcription service."})
 
@@ -1496,6 +1553,8 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
 
         if value.get("deepgram", {}).get("callback") and value.get("deepgram", {}).get("detect_language"):
             raise serializers.ValidationError({"transcription_settings": "Language detection is not supported for streaming transcription. Please pass language='multi' instead of detect_language=true."})
+
+        validate_gladia_transcription_settings(value)
 
         if ("custom_async" in value or "custom_async_v2" in value) and not os.getenv("CUSTOM_ASYNC_TRANSCRIPTION_URL"):
             raise serializers.ValidationError({"transcription_settings": "CUSTOM_ASYNC_TRANSCRIPTION_URL environment variable is not set. Please set the CUSTOM_ASYNC_TRANSCRIPTION_URL environment variable to the URL of your custom async transcription service."})
