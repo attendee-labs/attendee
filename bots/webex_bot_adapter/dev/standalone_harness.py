@@ -38,8 +38,7 @@ sys.path.insert(0, ADAPTER_DIR)
 
 from webex_guest_token import create_guest_token, create_guest_token_from_refresh_token, issue_service_app_tokens  # noqa: E402
 
-PAGE_FILES = {"/webex_chromedriver_page.html", "/webex_chromedriver_page.js"}
-STATIC_PAGE_SERVER_PATH = os.path.join(ADAPTER_DIR, "..", "web_bot_adapter", "static_page_server.py")
+STATIC_SERVER_PATH = os.path.join(ADAPTER_DIR, "webex_static_server.py")
 SHARED_PAYLOAD_PATH = os.path.join(ADAPTER_DIR, "..", "web_bot_adapter", "shared_chromedriver_payload.js")
 PAYLOAD_PATH = os.path.join(ADAPTER_DIR, "webex_chromedriver_payload.js")
 
@@ -110,10 +109,10 @@ def serve_websocket_in_background(messages):
 
 def start_page_server():
     # Loaded by path because importing it as part of the bots package would import Django
-    spec = importlib.util.spec_from_file_location("static_page_server", STATIC_PAGE_SERVER_PATH)
-    static_page_server = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(static_page_server)
-    return static_page_server.start_static_page_server(ADAPTER_DIR, PAGE_FILES)
+    spec = importlib.util.spec_from_file_location("webex_static_server", STATIC_SERVER_PATH)
+    static_server = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(static_server)
+    return static_server.start_webex_static_server()
 
 
 def mint_guest_token(display_name):

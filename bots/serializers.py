@@ -1474,7 +1474,9 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
                     value = {"deepgram": {"language": "multi"}}
             elif meeting_type == MeetingTypes.GOOGLE_MEET:
                 value = {"meeting_closed_captions": {}}
-            elif meeting_type in (MeetingTypes.TEAMS, MeetingTypes.WEBEX):
+            elif meeting_type == MeetingTypes.TEAMS:
+                value = {"meeting_closed_captions": {}}
+            elif meeting_type == MeetingTypes.WEBEX:
                 value = {"meeting_closed_captions": {}}
             else:
                 return None

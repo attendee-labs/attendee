@@ -1,8 +1,6 @@
 import logging
-import os
 import time
 
-from bots.web_bot_adapter.static_page_server import start_static_page_server
 from bots.web_bot_adapter.ui_methods import (
     UiBlockedByCaptchaException,
     UiCouldNotJoinMeetingWaitingForHostException,
@@ -13,11 +11,9 @@ from bots.web_bot_adapter.ui_methods import (
     UiRetryableException,
 )
 
-logger = logging.getLogger(__name__)
+from .webex_static_server import start_webex_static_server
 
-PAGE_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
-PAGE_FILE_NAME = "webex_chromedriver_page.html"
-PAGE_PATHS = {f"/{PAGE_FILE_NAME}", "/webex_chromedriver_page.js"}
+logger = logging.getLogger(__name__)
 
 # The page reports why joining failed as one of these methods. Anything else, such as a dropped network
 # connection, is retried.
@@ -37,8 +33,8 @@ class WebexUIMethods:
     def attempt_to_join_meeting(self):
         self.failed_to_join_reason = None
 
-        port = start_static_page_server(PAGE_DIRECTORY, PAGE_PATHS)
-        page_url = f"http://127.0.0.1:{port}/{PAGE_FILE_NAME}"
+        port = start_webex_static_server()
+        page_url = f"http://127.0.0.1:{port}/webex_chromedriver_page.html"
         logger.info(f"Serving Webex SDK HTML from {page_url}")
         self.driver.get(page_url)
 

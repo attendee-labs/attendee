@@ -541,7 +541,9 @@ class BotController:
                 return 32000
         elif meeting_type == MeetingTypes.GOOGLE_MEET:
             return 48000
-        elif meeting_type in (MeetingTypes.TEAMS, MeetingTypes.WEBEX):
+        elif meeting_type == MeetingTypes.TEAMS:
+            return 48000
+        elif meeting_type == MeetingTypes.WEBEX:
             return 48000
 
     def mixed_audio_sample_rate(self):
@@ -555,7 +557,9 @@ class BotController:
                 return 32000
         elif meeting_type == MeetingTypes.GOOGLE_MEET:
             return 48000
-        elif meeting_type in (MeetingTypes.TEAMS, MeetingTypes.WEBEX):
+        elif meeting_type == MeetingTypes.TEAMS:
+            return 48000
+        elif meeting_type == MeetingTypes.WEBEX:
             return 48000
 
     def get_audio_format(self):
@@ -569,7 +573,9 @@ class BotController:
                 return GstreamerPipeline.AUDIO_FORMAT_PCM
         elif meeting_type == MeetingTypes.GOOGLE_MEET:
             return GstreamerPipeline.AUDIO_FORMAT_FLOAT
-        elif meeting_type in (MeetingTypes.TEAMS, MeetingTypes.WEBEX):
+        elif meeting_type == MeetingTypes.TEAMS:
+            return GstreamerPipeline.AUDIO_FORMAT_FLOAT
+        elif meeting_type == MeetingTypes.WEBEX:
             return GstreamerPipeline.AUDIO_FORMAT_FLOAT
 
     def get_sleep_time_between_audio_output_chunks_seconds(self):
@@ -913,7 +919,9 @@ class BotController:
                 return True
         elif meeting_type == MeetingTypes.GOOGLE_MEET:
             return False
-        elif meeting_type in (MeetingTypes.TEAMS, MeetingTypes.WEBEX):
+        elif meeting_type == MeetingTypes.TEAMS:
+            return False
+        elif meeting_type == MeetingTypes.WEBEX:
             return False
 
     def should_create_websocket_client_manager(self):

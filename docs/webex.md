@@ -125,7 +125,7 @@ The websocket messages are the same ones the other web bots use, so `WebBotAdapt
 - It drives an SDK, not the meeting's web UI, so there are no selectors, no navigation config for the UI, and nothing to break when Webex changes its page.
 - The domain allowlist is a fixed list in the adapter (`webex.com`, `ciscospark.com`, `wbx2.com`, `unpkg.com`, `127.0.0.1`), recorded from a real join. The other platforms read theirs from signed navigation configs, and a contributor cannot sign one. Moving it to a `webex.json` is a follow-up for a maintainer.
 - The SDK is loaded from unpkg at a pinned version with a Subresource Integrity hash, because the page holds a guest token. Zoom also loads its SDK from a CDN. To upgrade, change the version and recompute the hash (the command is in the page).
-- Pieces that were copied between adapters were shared instead: `static_page_server.py`, the video output methods in `WebBotAdapter`, and the enforced-allowlist Chrome policy.
+- Like the Zoom adapter it has its own small static server for the page (`webex_static_server.py`), and like the other adapters it defines its own `send_video`, `is_sent_video_still_playing` and Chrome policy. These are duplicates of the other adapters on purpose, to keep this change separate from a cleanup of them.
 
 **Not tried at all:** webinars and Webex Events, breakout rooms, a lobby that is turned off (the bot should skip the lobby phase), screen share content, reconnecting after a network drop, and meetings where the bot is the only participant for a long time.
 

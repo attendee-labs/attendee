@@ -2,6 +2,8 @@ import json
 import logging
 from typing import Callable
 
+from django.conf import settings
+
 from bots.web_bot_adapter import WebBotAdapter
 from bots.web_bot_adapter.ui_methods import UiInfinitelyRetryableException
 from bots.webex_bot_adapter.webex_guest_token import WebexAuthError
@@ -59,6 +61,24 @@ class WebexBotAdapter(WebBotAdapter, WebexUIMethods):
 
     def subclass_specific_domain_allowlist(self):
         return list(WEBEX_DOMAIN_ALLOWLIST)
+
+    def subclass_specific_chrome_policies(self):
+        if not settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:
+            return {}
+
+        return {
+            "URLBlocklist": ["*"],
+            "URLAllowlist": self.subclass_specific_domain_allowlist(),
+        }
+
+    def is_sent_video_still_playing(self):
+        result = self.driver.execute_script("return window.botOutputManager.isVideoPlaying();")
+        logger.info(f"is_sent_video_still_playing result = {result}")
+        return result
+
+    def send_video(self, video_url, loop=False, mute_video=False):
+        logger.info(f"send_video called with video_url = {video_url}, loop = {loop}, mute_video = {mute_video}")
+        self.driver.execute_script(f"window.botOutputManager.playVideo({json.dumps(video_url)}, {json.dumps(loop)}, {json.dumps(mute_video)})")
 
     def subclass_specific_after_bot_joined_meeting(self):
         self.after_bot_can_record_meeting()

@@ -122,7 +122,7 @@ class WebexJoinFailureTest(SimpleTestCase):
         adapter.handle_failed_to_join({"method": "meeting_not_found"})
         join_states(adapter, JOINED)
 
-        with patch("bots.webex_bot_adapter.webex_ui_methods.start_static_page_server", return_value=8080):
+        with patch("bots.webex_bot_adapter.webex_ui_methods.start_webex_static_server", return_value=8080):
             adapter.attempt_to_join_meeting()
 
         adapter.driver.get.assert_called_once_with("http://127.0.0.1:8080/webex_chromedriver_page.html")
@@ -222,3 +222,22 @@ class WebexPayloadContractTest(SimpleTestCase):
         for flag in ("sendMixedAudio", "sendPerParticipantAudio"):
             with self.subTest(flag=flag):
                 self.assertIn(flag, re.search(r"const \{[^}]*\} = window\.initialData;", page_source).group(0))
+
+
+class WebexVideoOutputTest(SimpleTestCase):
+    def test_send_video_plays_the_video_through_the_bot_output_manager(self):
+        adapter = create_adapter()
+
+        adapter.send_video("https://example.com/video.mp4", loop=True, mute_video=False)
+
+        adapter.driver.execute_script.assert_called_once_with('window.botOutputManager.playVideo("https://example.com/video.mp4", true, false)')
+
+    def test_is_sent_video_still_playing_asks_the_bot_output_manager(self):
+        for is_playing in (True, False):
+            with self.subTest(is_playing=is_playing):
+                adapter = create_adapter()
+                adapter.driver.execute_script.return_value = is_playing
+
+                self.assertEqual(adapter.is_sent_video_still_playing(), is_playing)
+
+                adapter.driver.execute_script.assert_called_once_with("return window.botOutputManager.isVideoPlaying();")

@@ -1,11 +1,7 @@
-from unittest.mock import patch
-
 from django.test import SimpleTestCase, override_settings
 
-from bots.teams_bot_adapter import TeamsBotAdapter
 from bots.webex_bot_adapter import WebexBotAdapter
 from bots.webex_bot_adapter.webex_bot_adapter import WEBEX_DOMAIN_ALLOWLIST
-from bots.zoom_web_bot_adapter import ZoomWebBotAdapter
 
 # The hosts a Webex bot contacted while joining a meeting, taking part in it and receiving captions, as seen in Chrome's network log
 HOSTS_CONTACTED_BY_A_WEBEX_BOT = [
@@ -46,16 +42,14 @@ class WebexDomainAllowlistTest(SimpleTestCase):
         self.assertNotIn("example.com", WEBEX_DOMAIN_ALLOWLIST)
 
 
-class ChromePoliciesTest(SimpleTestCase):
+class WebexChromePoliciesTest(SimpleTestCase):
+    def setUp(self):
+        self.adapter = object.__new__(WebexBotAdapter)
+
+    @override_settings(ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME=True)
     def test_chrome_blocks_everything_but_the_allowlist_when_it_is_enforced(self):
-        for adapter_class in (WebexBotAdapter, ZoomWebBotAdapter, TeamsBotAdapter):
-            with self.subTest(adapter=adapter_class.__name__), override_settings(ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME=True):
-                adapter = object.__new__(adapter_class)
+        self.assertEqual(self.adapter.subclass_specific_chrome_policies(), {"URLBlocklist": ["*"], "URLAllowlist": WEBEX_DOMAIN_ALLOWLIST})
 
-                with patch.object(adapter_class, "subclass_specific_domain_allowlist", return_value=["allowed.example.com"]):
-                    self.assertEqual(adapter.subclass_specific_chrome_policies(), {"URLBlocklist": ["*"], "URLAllowlist": ["allowed.example.com"]})
-
+    @override_settings(ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME=False)
     def test_chrome_has_no_policies_when_the_allowlist_is_not_enforced(self):
-        for adapter_class in (WebexBotAdapter, ZoomWebBotAdapter, TeamsBotAdapter):
-            with self.subTest(adapter=adapter_class.__name__), override_settings(ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME=False):
-                self.assertEqual(object.__new__(adapter_class).subclass_specific_chrome_policies(), {})
+        self.assertEqual(self.adapter.subclass_specific_chrome_policies(), {})

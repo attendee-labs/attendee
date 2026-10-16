@@ -5,6 +5,7 @@ import subprocess
 from typing import Callable
 
 import requests
+from django.conf import settings
 from selenium.webdriver.common.keys import Keys
 
 from bots.teams_bot_adapter.teams_ui_methods import (
@@ -91,6 +92,11 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
     def get_websocket_port(self):
         return 8097
 
+    def is_sent_video_still_playing(self):
+        result = self.driver.execute_script("return window.botOutputManager.isVideoPlaying();")
+        logger.info(f"is_sent_video_still_playing result = {result}")
+        return result
+
     def send_video(self, video_url, loop=False, mute_video=False):
         logger.info(f"send_video called with video_url = {video_url}, loop = {loop}, mute_video = {mute_video}")
         self.driver.execute_script(f"window.botOutputManager.playVideoWithBlobUrl({json.dumps(video_url)}, {json.dumps(loop)}, {json.dumps(mute_video)})")
@@ -172,6 +178,15 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
 
     def subclass_specific_domain_allowlist(self):
         return self.navigation_config_domain_allowlist()
+
+    def subclass_specific_chrome_policies(self):
+        if not settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:
+            return {}
+
+        return {
+            "URLBlocklist": ["*"],
+            "URLAllowlist": self.subclass_specific_domain_allowlist(),
+        }
 
     def get_teams_bot_identification_token(self):
         credentials = self.teams_bot_identification_credentials

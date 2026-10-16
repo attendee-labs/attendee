@@ -670,15 +670,8 @@ class WebBotAdapter(BotAdapter):
     def subclass_specific_domain_allowlist(self):
         return []
 
-    # By default, when the allow list is enforced Chrome blocks every url that is not on the subclass's domain allow list
     def subclass_specific_chrome_policies(self):
-        if not settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:
-            return {}
-
-        return {
-            "URLBlocklist": ["*"],
-            "URLAllowlist": self.subclass_specific_domain_allowlist(),
-        }
+        return {}
 
     def write_chrome_policies_file(self):
         # Check if the /etc/.../attendee-chrome-policies.json symlink exists. If not, skip this, we are not running in the docker container.
@@ -1422,15 +1415,6 @@ class WebBotAdapter(BotAdapter):
 
         # Call the JavaScript function to enqueue the PCM chunk
         self.driver.execute_script("window.botOutputManager.playPCMAudio(arguments[0], arguments[1]);", audio_data, sample_rate)
-
-    def is_sent_video_still_playing(self):
-        result = self.driver.execute_script("return window.botOutputManager.isVideoPlaying();")
-        logger.info(f"is_sent_video_still_playing result = {result}")
-        return result
-
-    def send_video(self, video_url, loop=False, mute_video=False):
-        logger.info(f"send_video called with video_url = {video_url}, loop = {loop}, mute_video = {mute_video}")
-        self.driver.execute_script(f"window.botOutputManager.playVideo({json.dumps(video_url)}, {json.dumps(loop)}, {json.dumps(mute_video)})")
 
     def send_chat_message(self, text, to_user_uuid):
         logger.info("send_chat_message not supported in web bots")
