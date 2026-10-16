@@ -46,7 +46,9 @@ class WebexBotAdapter(WebBotAdapter, WebexUIMethods):
 
     def create_guest_token(self):
         try:
-            return self.create_guest_token_callback()
+            guest_token = self.create_guest_token_callback()
+            logger.info("Created a Webex guest token")
+            return guest_token
         except WebexAuthError as e:
             logger.error(f"Could not create a Webex guest token: {e}")
             # The controller cleans the bot up once it has the message, which ends the retries of this exception

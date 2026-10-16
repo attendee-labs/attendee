@@ -29,6 +29,7 @@ import numpy as np
 from dotenv import load_dotenv
 from selenium import webdriver
 from selenium.common.exceptions import WebDriverException
+from selenium.webdriver.chrome.service import Service
 from websockets.sync.server import serve
 
 ADAPTER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -132,8 +133,9 @@ def start_chrome():
     options.add_argument("--use-fake-ui-for-media-stream")
     options.add_argument("--window-size=1280,800")
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    # Selenium Manager downloads a chromedriver that matches the installed Chrome
-    return webdriver.Chrome(options=options)
+    # Chrome gets its own session, so closing the terminal does not kill it before the bot has left the meeting.
+    # Selenium Manager downloads a chromedriver that matches the installed Chrome.
+    return webdriver.Chrome(options=options, service=Service(popen_kw={"start_new_session": True}))
 
 
 def inject_page_scripts(driver, websocket_port, webex_initial_data):
@@ -230,8 +232,9 @@ def main():
     args = parser.parse_args()
 
     load_dotenv(os.path.join(REPO_ROOT, ".env"))
-    # Turn a terminate request into a normal exit, so the bot still leaves the meeting
-    signal.signal(signal.SIGTERM, lambda *_: sys.exit(1))
+    # Turn being terminated, or losing the terminal, into a normal exit so the bot still leaves the meeting. Ctrl+C already is one.
+    for stop_signal in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(stop_signal, lambda *_: sys.exit(1))
 
     messages = BotMessages()
     websocket_port = serve_websocket_in_background(messages)

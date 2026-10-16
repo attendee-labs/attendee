@@ -153,10 +153,12 @@ class WebexWaitToBeAdmittedTest(SimpleTestCase):
         adapter.driver.execute_script.return_value = LOBBY_WITH_OTHERS
         adapter.abort_join_attempt = MagicMock()
 
-        with self.assertRaises(UiCouldNotJoinMeetingWaitingRoomTimeoutException):
+        with self.assertLogs("bots.webex_bot_adapter.webex_ui_methods", level="INFO") as logs, self.assertRaises(UiCouldNotJoinMeetingWaitingRoomTimeoutException):
             adapter.wait_to_be_admitted_to_meeting()
 
         adapter.abort_join_attempt.assert_called_once()
+        self.assertIn("Webex join phase is now lobby", "\n".join(logs.output))
+        self.assertIn("Waiting room timeout exceeded. Raising UiCouldNotJoinMeetingWaitingRoomTimeoutException", "\n".join(logs.output))
 
     @patch("bots.webex_bot_adapter.webex_ui_methods.time", new_callable=FakeClock)
     def test_waiting_in_the_lobby_alone_times_out_as_waiting_for_the_host(self, clock):
