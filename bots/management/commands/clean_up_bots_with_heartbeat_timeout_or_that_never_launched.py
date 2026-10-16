@@ -9,6 +9,7 @@ from django.db import models
 from django.utils import timezone
 from kubernetes import client, config
 
+from bots.bot_pod_creator.bot_pod_utils import locate_pod_for_bot
 from bots.k8s_utils import retrieve_bot_pod_information
 from bots.models import Bot, BotEventManager, BotEventSubTypes, BotEventTypes
 
@@ -17,10 +18,6 @@ logger = logging.getLogger(__name__)
 
 class Command(BaseCommand):
     help = "Terminates bots that have not sent a heartbeat in the last ten minutes or that never launched"
-
-    def __init__(self):
-        super().__init__()
-        self.namespace = settings.BOT_POD_NAMESPACE
 
     def create_k8s_client(self):
         try:
@@ -32,7 +29,11 @@ class Command(BaseCommand):
     def retrieve_bot_infrastructure_information(self, bot) -> dict | None:
         if os.getenv("LAUNCH_BOT_METHOD") == "kubernetes":
             try:
-                return retrieve_bot_pod_information(self.create_k8s_client(), self.namespace, bot.k8s_pod_name())
+                v1 = self.create_k8s_client()
+                pod_info = locate_pod_for_bot(v1, bot)
+                if not pod_info:
+                    return None
+                return retrieve_bot_pod_information(v1, pod_info.namespace, pod_info.pod_name)
             except Exception:
                 logger.exception(f"Failed to gather bot pod information for bot {bot.object_id}")
         return None
@@ -69,19 +70,25 @@ class Command(BaseCommand):
     def _terminate_kubernetes_pod(self, bot):
         v1 = self.create_k8s_client()
 
-        # Try to delete the pod if it exists
+        # Locate the pod (checks both bot-specific and bot runner pods)
+        pod_info = locate_pod_for_bot(v1, bot)
+
+        if not pod_info:
+            logger.info(f"No pod found for bot {bot.id}, skipping pod deletion")
+            return
+
+        # Try to delete the pod
         try:
-            pod_name = bot.k8s_pod_name()
             v1.delete_namespaced_pod(
-                name=pod_name,
-                namespace=self.namespace,
+                name=pod_info.pod_name,
+                namespace=pod_info.namespace,
                 grace_period_seconds=0,
             )
-            logger.info(f"Deleted pod: {pod_name}")
+            logger.info(f"Deleted pod: {pod_info.pod_name}")
         except client.ApiException as pod_error:
             # 404 means pod doesn't exist, which is fine
             if pod_error.status != 404:
-                logger.warning(f"Error deleting pod {pod_name}: {str(pod_error)}")
+                logger.warning(f"Error deleting pod {pod_info.pod_name}: {str(pod_error)}")
 
     def _terminate_ephemeral_docker_container(self, bot):
         """Remove the ephemeral Docker container for this bot (container name: bot-{id})."""

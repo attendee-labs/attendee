@@ -2,12 +2,12 @@ import logging
 import signal
 import time
 
-from django.conf import settings
 from django.core.management.base import BaseCommand
 from django.db import connection, models
 from django.utils import timezone
 from kubernetes import client, config
 
+from bots.bot_pod_creator.bot_pod_utils import locate_pod_for_bot
 from bots.launch_bot_utils import launch_bot
 from bots.models import Bot, BotEventTypes, BotStates
 
@@ -41,7 +41,6 @@ class Command(BaseCommand):
         except config.ConfigException:
             config.load_kube_config()
         self.v1 = client.CoreV1Api()
-        self.namespace = settings.BOT_POD_NAMESPACE
 
         # Trap SIGINT / SIGTERM so Kubernetes or Heroku can stop the container cleanly
         signal.signal(signal.SIGINT, self._graceful_exit)
@@ -77,17 +76,22 @@ class Command(BaseCommand):
 
         logger.info("Correct failed bot launches daemon exited")
 
-    def bot_pod_is_active(self, pod_name: str) -> bool:
+    def bot_pod_is_active(self, bot) -> bool:
+        pod_info = locate_pod_for_bot(self.v1, bot)
+        if not pod_info:
+            return False
+
+        pod_name = pod_info.pod_name
         try:
             logger.info(f"Checking if pod {pod_name} is active...")
-            pod = self.v1.read_namespaced_pod(name=pod_name, namespace=self.namespace)
+            pod = self.v1.read_namespaced_pod(name=pod_name, namespace=pod_info.namespace)
             # Log all the info about the pod
             logger.info(f"Pod {pod_name} phase: {pod.status.phase}")
             # Return that it is active if pod is not in succeeded or failed phase
             if pod.status.phase not in ["Succeeded", "Failed"]:
                 return True
             # Otherwise it is in one of these phases, but it needs to be deleted
-            self.v1.delete_namespaced_pod(name=pod_name, namespace=self.namespace, grace_period_seconds=5)
+            self.v1.delete_namespaced_pod(name=pod_name, namespace=pod_info.namespace, grace_period_seconds=5)
             logger.info(f"Deleted pod so that it can be re-launched: {pod_name}")
             return False
         except client.ApiException as e:
@@ -118,7 +122,7 @@ class Command(BaseCommand):
             # Re-launch each bot
             for bot in problem_non_scheduled_bots:
                 try:
-                    if self.bot_pod_is_active(bot.k8s_pod_name()):
+                    if self.bot_pod_is_active(bot):
                         logger.info(f"Bot {bot.object_id} already has a pod, skipping re-launch")
                         continue
                     if bot.should_launch_webpage_streamer():
@@ -138,7 +142,7 @@ class Command(BaseCommand):
 
             for bot in problem_scheduled_bots:
                 try:
-                    if self.bot_pod_is_active(bot.k8s_pod_name()):
+                    if self.bot_pod_is_active(bot):
                         logger.info(f"Bot {bot.object_id} already has a pod, skipping re-launch")
                         continue
                     if bot.should_launch_webpage_streamer():
