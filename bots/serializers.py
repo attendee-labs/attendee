@@ -1476,6 +1476,8 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
                 value = {"meeting_closed_captions": {}}
             elif meeting_type == MeetingTypes.TEAMS:
                 value = {"meeting_closed_captions": {}}
+            elif meeting_type == MeetingTypes.WEBEX:
+                value = {"meeting_closed_captions": {}}
             else:
                 return None
 

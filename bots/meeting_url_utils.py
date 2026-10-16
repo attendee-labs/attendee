@@ -9,6 +9,13 @@ from .models import (
     MeetingTypes,
 )
 
+# Webex meeting URLs are served from the customer's own site, e.g. acme.my.webex.com. Two shapes join a meeting:
+# - personal room: https://<site>/meet/<room>
+# - invitation link: https://<site>/<site-name>/j.php?MTID=<meeting token>
+WEBEX_PERSONAL_ROOM_PATH_RE = re.compile(r"^/meet/([A-Za-z0-9._-]+)/?$")
+WEBEX_INVITATION_PATH_RE = re.compile(r"^/([A-Za-z0-9.-]+)/j\.php$")
+WEBEX_MEETING_TOKEN_RE = re.compile(r"^[A-Za-z0-9]+$")
+
 HTTP_URL_RE = re.compile(r"https?://[^\s<>\"']+")
 
 # Hosts that serve Microsoft Teams meeting URLs, including the US government/DoD clouds.
@@ -68,6 +75,23 @@ def domain_and_subdomain_from_url(url):
     return extract_from_url.subdomain + "." + extract_from_url.registered_domain
 
 
+def normalize_webex_url(url):
+    """Returns the canonical Webex meeting URL, or None if the URL is not one the Webex SDK can join."""
+    parsed_url = urlparse(url if "//" in url else f"https://{url}")
+    host = parsed_url.netloc.lower()
+
+    personal_room_match = WEBEX_PERSONAL_ROOM_PATH_RE.match(parsed_url.path)
+    if personal_room_match:
+        return f"https://{host}/meet/{personal_room_match.group(1)}"
+
+    invitation_match = WEBEX_INVITATION_PATH_RE.match(parsed_url.path)
+    meeting_token = parse_qs(parsed_url.query).get("MTID", [""])[0]
+    if invitation_match and WEBEX_MEETING_TOKEN_RE.match(meeting_token):
+        return f"https://{host}/{invitation_match.group(1)}/j.php?MTID={meeting_token}"
+
+    return None
+
+
 def meeting_type_from_url(url):
     meeting_type, normalized_url = normalize_meeting_url(url)
     return meeting_type
@@ -106,6 +130,10 @@ def normalize_meeting_url_raw(url):
 
     root_domain = root_domain_from_url(url)
     domain_and_subdomain = domain_and_subdomain_from_url(url)
+
+    if root_domain == "webex.com":
+        normalized_webex_url = normalize_webex_url(url)
+        return (MeetingTypes.WEBEX, normalized_webex_url) if normalized_webex_url else (None, None)
 
     if root_domain == "zoom.us" or root_domain == "zoom.com":
         # Parse the URL and keep only the 'pwd' query parameter

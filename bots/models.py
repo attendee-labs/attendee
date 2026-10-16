@@ -595,6 +595,7 @@ class MeetingTypes(models.TextChoices):
     ZOOM = "zoom"
     GOOGLE_MEET = "google_meet"
     TEAMS = "teams"
+    WEBEX = "webex"
 
 
 class BotStates(models.IntegerChoices):
@@ -1041,6 +1042,7 @@ class Bot(models.Model):
             MeetingTypes.GOOGLE_MEET: "GOOGLE_MEET",
             MeetingTypes.TEAMS: "TEAMS",
             MeetingTypes.ZOOM: "ZOOM",
+            MeetingTypes.WEBEX: "WEBEX",
         }.get(bot_meeting_type, "UNKNOWN")
 
         recording_mode_env_var_substring = {
@@ -2858,6 +2860,7 @@ class Credentials(models.Model):
         KYUTAI = 11, "Kyutai"
         TEAMS_BOT_IDENTIFICATION_CREDENTIALS = 12, "Teams Bot Identification Credentials"
         LIVEKIT = 13, "LiveKit"
+        WEBEX_SERVICE_APP = 14, "Webex Service App"
 
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="credentials")
     credential_type = models.IntegerField(choices=CredentialTypes.choices, null=False)
