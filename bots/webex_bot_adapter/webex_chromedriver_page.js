@@ -20,6 +20,7 @@ window.webexJoinState = joinState;
 let webex;
 let meeting;
 let wasAdmitted = false;
+let isLeaving = false;
 const knownMembers = new Map();
 
 function send(message) {
@@ -71,7 +72,8 @@ async function verifyMeetingPassword() {
 
 // Webex reports why the meeting was destroyed, and whether that is a denial or a removal depends on whether we were admitted
 function handleMeetingDestroyed({ reason }) {
-    if (reason === 'CLIENT_LEAVE_REQUEST' || reason === 'CLIENT_LEAVE_REQUEST_TAB_CLOSED') return;
+    // When the bot leaves by itself Webex reports no reason, and then reports it as a removal
+    if (isLeaving) return;
 
     if (reason === 'SELF_REMOVED') {
         if (wasAdmitted) sendMeetingStatusChange('removed_from_meeting');
@@ -422,7 +424,6 @@ async function main() {
     try {
         if (!(await joinMeeting())) return;
         joinState.phase = 'joined';
-        send({ type: 'RecordingPermissionChange', change: 'granted' });
         setUpBotOutput();
         await startCaptions();
     } catch (error) {
@@ -431,6 +432,7 @@ async function main() {
 }
 
 window.leaveMeeting = async () => {
+    isLeaving = true;
     try {
         await meeting?.leave();
     } catch (error) {

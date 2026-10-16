@@ -15,6 +15,7 @@ Credentials come from the environment or from a .env file at the repo root:
 """
 
 import argparse
+import importlib.util
 import json
 import os
 import signal
@@ -23,8 +24,6 @@ import threading
 import time
 import wave
 from collections import Counter, defaultdict
-from functools import partial
-from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 import numpy as np
 from dotenv import load_dotenv
@@ -39,6 +38,7 @@ sys.path.insert(0, ADAPTER_DIR)
 from webex_guest_token import create_guest_token, issue_service_app_tokens, refresh_service_app_tokens  # noqa: E402
 
 PAGE_FILES = {"/webex_chromedriver_page.html", "/webex_chromedriver_page.js"}
+STATIC_PAGE_SERVER_PATH = os.path.join(ADAPTER_DIR, "..", "web_bot_adapter", "static_page_server.py")
 SHARED_PAYLOAD_PATH = os.path.join(ADAPTER_DIR, "..", "web_bot_adapter", "shared_chromedriver_payload.js")
 PAYLOAD_PATH = os.path.join(ADAPTER_DIR, "webex_chromedriver_payload.js")
 
@@ -51,17 +51,6 @@ MEETING_OVER_CHANGES = ("removed_from_meeting", "meeting_ended")
 # The webcam is published before the tone starts, so each can be observed on its own
 BOT_OUTPUT_SETTLE_SECONDS = 3
 SCREENSHOT_DELAY_SECONDS = 20
-
-
-class PageRequestHandler(SimpleHTTPRequestHandler):
-    def do_GET(self):
-        if self.path in PAGE_FILES:
-            super().do_GET()
-        else:
-            self.send_error(404)
-
-    def log_message(self, *args):
-        pass
 
 
 class BotMessages:
@@ -112,9 +101,18 @@ class BotMessages:
         return summary
 
 
-def serve_in_background(server):
+def serve_websocket_in_background(messages):
+    server = serve(messages.handle, "localhost", 0, compression=None, max_size=None)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server.socket.getsockname()[1]
+
+
+def start_page_server():
+    # Loaded by path because importing it as part of the bots package would import Django
+    spec = importlib.util.spec_from_file_location("static_page_server", STATIC_PAGE_SERVER_PATH)
+    static_page_server = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(static_page_server)
+    return static_page_server.start_static_page_server(ADAPTER_DIR, PAGE_FILES)
 
 
 def mint_guest_token(display_name):
@@ -236,8 +234,8 @@ def main():
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(1))
 
     messages = BotMessages()
-    websocket_port = serve_in_background(serve(messages.handle, "localhost", 0, compression=None, max_size=None))
-    http_port = serve_in_background(ThreadingHTTPServer(("127.0.0.1", 0), partial(PageRequestHandler, directory=ADAPTER_DIR)))
+    websocket_port = serve_websocket_in_background(messages)
+    http_port = start_page_server()
 
     webex_initial_data = {"meetingUrl": args.meeting_url, "meetingPassword": args.password, "botName": args.bot_name}
     if args.meeting_url:

@@ -18,7 +18,11 @@
       <div id="remoteMedia"></div>
     </main>
 
-    <script src="https://unpkg.com/webex@3.12.0/umd/webex.min.js"></script>
+    <!-- Pinned with an integrity hash, because this page holds a guest token. To upgrade, change the version and set the hash to
+         `curl -s <url> | openssl dgst -sha384 -binary | openssl base64 -A`, prefixed with sha384- -->
+    <script src="https://unpkg.com/webex@3.12.0/umd/webex.min.js"
+            integrity="sha384-nVUWNxB9ljc5Vl3WzDIuPVCw7BxyuNaend5go2BX6a2d3efoIyJ5tZVWXUQThKJ9"
+            crossorigin="anonymous"></script>
     <script src="webex_chromedriver_page.js"></script>
   </body>
 </html>

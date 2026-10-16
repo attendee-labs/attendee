@@ -21,6 +21,10 @@ class WebSocketClient {
         this.mediaSendingEnabled = true;
     }
 
+    disableMediaSending() {
+        this.mediaSendingEnabled = false;
+    }
+
     sendBinary(messageType, ...parts) {
         const message = new Uint8Array(4 + parts.reduce((length, part) => length + part.byteLength, 0));
         new DataView(message.buffer).setInt32(0, messageType, true);
