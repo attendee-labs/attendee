@@ -31,8 +31,9 @@ class MocapManager:
     produce smooth, varied, human-like UI automation without storing mocap files.
     """
 
-    _MIN_DT_SECONDS = 0.006
-    _MAX_DT_SECONDS = 0.018
+    _SPEED_FACTOR = 2.0
+    _MIN_DT_SECONDS = 0.006 / _SPEED_FACTOR
+    _MAX_DT_SECONDS = 0.018 / _SPEED_FACTOR
 
     def __init__(self, video_frame_size: tuple[int, int]):
         self.video_frame_size = video_frame_size
@@ -223,7 +224,7 @@ class MocapManager:
             movements.append(
                 {
                     "type": "mouse_move",
-                    "dt": max(pending_dt, random.uniform(0.006, 0.014)),
+                    "dt": max(pending_dt, random.uniform(self._MIN_DT_SECONDS, self._MAX_DT_SECONDS)),
                     "dx": residual_dx,
                     "dy": residual_dy,
                     "global_x": current_x + total_dx,
@@ -253,7 +254,7 @@ class MocapManager:
         py = ux
 
         mass = random.uniform(0.8, 1.25)
-        natural_frequency = random.uniform(18.0, 28.0)
+        natural_frequency = random.uniform(18.0, 28.0) * self._SPEED_FACTOR
         damping_ratio = random.uniform(0.78, 1.02)
         stiffness = mass * natural_frequency**2
         damping = 2.0 * damping_ratio * mass * natural_frequency
@@ -314,7 +315,7 @@ class MocapManager:
             positions.append((x, y))
 
         settle_time = 0.0
-        while settle_time < 0.28:
+        while settle_time < 0.28 / self._SPEED_FACTOR:
             remaining = math.hypot(target_dx - x, target_dy - y)
             speed = math.hypot(vx, vy)
             if remaining <= 0.35 and speed <= 8.0:
@@ -373,7 +374,7 @@ class MocapManager:
 
         lower = 0.11 if distance < 20.0 else 0.18
         upper = 0.75 if distance < 600.0 else 1.25
-        return self._clamp(duration, lower, upper)
+        return self._clamp(duration, lower, upper) / self._SPEED_FACTOR
 
     def _sample_frame_dts(self, duration: float) -> list[float]:
         dts: list[float] = []
