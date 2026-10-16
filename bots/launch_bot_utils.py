@@ -18,9 +18,9 @@ def launch_bot(bot):
 
         bot_pod_creator = BotPodCreator()
         create_pod_result = bot_pod_creator.create_bot_pod(
-            bot_id=bot.id,
-            bot_name=bot.k8s_pod_name(),
-            bot_cpu_request=bot.cpu_request(),
+            bot_pod_cmd=bot.k8s_pod_cmd(),
+            bot_pod_name=bot.k8s_pod_name(),
+            bot_pod_cpu_request=bot.cpu_request(),
             add_webpage_streamer=bot.should_launch_webpage_streamer(),
             add_persistent_storage=bot.reserve_additional_storage(),
             bot_pod_spec_type=bot.bot_pod_spec_type,
