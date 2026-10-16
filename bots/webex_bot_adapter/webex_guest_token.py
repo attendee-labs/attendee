@@ -48,3 +48,8 @@ def create_guest_token(service_app_access_token: str, subject: str, display_name
         json={"subject": subject, "displayName": display_name},
     )
     return response["accessToken"]
+
+
+def create_guest_token_from_refresh_token(client_id: str, client_secret: str, refresh_token: str, subject: str, display_name: str) -> str:
+    access_token = refresh_service_app_tokens(client_id, client_secret, refresh_token)["access_token"]
+    return create_guest_token(access_token, subject, display_name)

@@ -1031,6 +1031,7 @@ class Bot(models.Model):
             MeetingTypes.GOOGLE_MEET: "GOOGLE_MEET",
             MeetingTypes.TEAMS: "TEAMS",
             MeetingTypes.ZOOM: "ZOOM",
+            MeetingTypes.WEBEX: "WEBEX",
         }.get(bot_meeting_type, "UNKNOWN")
 
         recording_mode_env_var_substring = {

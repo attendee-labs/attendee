@@ -5,7 +5,6 @@ import subprocess
 from typing import Callable
 
 import requests
-from django.conf import settings
 from selenium.webdriver.common.keys import Keys
 
 from bots.teams_bot_adapter.teams_ui_methods import (
@@ -173,15 +172,6 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
 
     def subclass_specific_domain_allowlist(self):
         return self.navigation_config_domain_allowlist()
-
-    def subclass_specific_chrome_policies(self):
-        if not settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:
-            return {}
-
-        return {
-            "URLBlocklist": ["*"],
-            "URLAllowlist": self.subclass_specific_domain_allowlist(),
-        }
 
     def get_teams_bot_identification_token(self):
         credentials = self.teams_bot_identification_credentials

@@ -664,8 +664,15 @@ class WebBotAdapter(BotAdapter):
     def subclass_specific_domain_allowlist(self):
         return []
 
+    # By default, when the allow list is enforced Chrome blocks every url that is not on the subclass's domain allow list
     def subclass_specific_chrome_policies(self):
-        return {}
+        if not settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:
+            return {}
+
+        return {
+            "URLBlocklist": ["*"],
+            "URLAllowlist": self.subclass_specific_domain_allowlist(),
+        }
 
     def write_chrome_policies_file(self):
         # Check if the /etc/.../attendee-chrome-policies.json symlink exists. If not, skip this, we are not running in the docker container.

@@ -9,6 +9,10 @@ from bots.webex_bot_adapter.webex_ui_methods import WebexUIMethods
 
 logger = logging.getLogger(__name__)
 
+# The hosts the page contacts to load the SDK, to join the meeting and to receive captions and participants. Webex serves all of
+# them from its own domains. A domain also allows its subdomains.
+WEBEX_DOMAIN_ALLOWLIST = ["webex.com", "ciscospark.com", "wbx2.com", "unpkg.com", "127.0.0.1"]
+
 
 class UiWebexAuthorizationFailedException(UiInfinitelyRetryableException):
     pass
@@ -50,6 +54,9 @@ class WebexBotAdapter(WebBotAdapter, WebexUIMethods):
                 self.sent_authorization_failed_message = True
                 self.send_message_callback({"message": self.Messages.COULD_NOT_CONNECT_TO_MEETING})
             raise UiWebexAuthorizationFailedException("Could not create a Webex guest token") from e
+
+    def subclass_specific_domain_allowlist(self):
+        return list(WEBEX_DOMAIN_ALLOWLIST)
 
     def subclass_specific_after_bot_joined_meeting(self):
         self.after_bot_can_record_meeting()

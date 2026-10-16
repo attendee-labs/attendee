@@ -35,7 +35,7 @@ ADAPTER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPO_ROOT = os.path.dirname(os.path.dirname(ADAPTER_DIR))
 sys.path.insert(0, ADAPTER_DIR)
 
-from webex_guest_token import create_guest_token, issue_service_app_tokens, refresh_service_app_tokens  # noqa: E402
+from webex_guest_token import create_guest_token, create_guest_token_from_refresh_token, issue_service_app_tokens  # noqa: E402
 
 PAGE_FILES = {"/webex_chromedriver_page.html", "/webex_chromedriver_page.js"}
 STATIC_PAGE_SERVER_PATH = os.path.join(ADAPTER_DIR, "..", "web_bot_adapter", "static_page_server.py")
@@ -118,11 +118,11 @@ def start_page_server():
 def mint_guest_token(display_name):
     refresh_token = os.getenv("WEBEX_SERVICE_APP_REFRESH_TOKEN")
     client_id, client_secret = os.environ["WEBEX_CLIENT_ID"], os.environ["WEBEX_CLIENT_SECRET"]
+    subject = f"attendee-dev-bot-{int(time.time())}"
     if refresh_token:
-        tokens = refresh_service_app_tokens(client_id, client_secret, refresh_token)
-    else:
-        tokens = issue_service_app_tokens(os.environ["WEBEX_SERVICE_APP_ID"], client_id, client_secret, os.environ["WEBEX_TARGET_ORG_ID"], os.environ["WEBEX_PERSONAL_ACCESS_TOKEN"])
-    return create_guest_token(tokens["access_token"], f"attendee-dev-bot-{int(time.time())}", display_name)
+        return create_guest_token_from_refresh_token(client_id, client_secret, refresh_token, subject, display_name)
+    tokens = issue_service_app_tokens(os.environ["WEBEX_SERVICE_APP_ID"], client_id, client_secret, os.environ["WEBEX_TARGET_ORG_ID"], os.environ["WEBEX_PERSONAL_ACCESS_TOKEN"])
+    return create_guest_token(tokens["access_token"], subject, display_name)
 
 
 def start_chrome():
