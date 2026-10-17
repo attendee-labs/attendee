@@ -4,22 +4,18 @@ import random
 import time
 from typing import Dict
 
-import requests
 from django.conf import settings
 from kubernetes import client, config
 
 logger = logging.getLogger(__name__)
-
-# Default port for bot runner HTTP server
-BOT_RUNNER_HTTP_PORT = int(os.getenv("BOT_RUNNER_HTTP_PORT", "8080"))
 
 
 class BotPodAssigner:
     """
     Assigns bots to existing unassigned bot runner pods instead of creating new pods.
 
-    Bot runner pods are pre-created pods that wait for assignment via HTTP.
-    This class finds an available runner and sends the assignment command.
+    Bot runner pods are pre-created pods that watch their own assigned-bot-id label
+    through a downward API volume. This class finds an available runner and sets that label.
     """
 
     def __init__(self):
@@ -86,37 +82,6 @@ class BotPodAssigner:
             logger.error("Failed to assign pod %s to bot %s: %s", pod_name, bot_object_id, e)
             return False
 
-    def _send_assignment_command(self, pod_ip: str, bot_object_id: str) -> bool:
-        """
-        Send the assignment command to a bot runner via HTTP POST.
-
-        Returns True if the request was successful.
-        """
-        url = f"http://{pod_ip}:{BOT_RUNNER_HTTP_PORT}/assign"
-        payload = {"bot_object_id": bot_object_id}
-
-        try:
-            response = requests.post(url, json=payload, timeout=10)
-            response.raise_for_status()
-
-            logger.info(
-                "Sent assignment command to %s (bot_object_id=%s, status=%s)",
-                url,
-                bot_object_id,
-                response.status_code,
-            )
-            return True
-
-        except requests.exceptions.Timeout:
-            logger.error("Timeout sending assignment command to %s", url)
-            return False
-        except requests.exceptions.ConnectionError as e:
-            logger.error("Connection error sending assignment command to %s: %s", url, e)
-            return False
-        except requests.exceptions.RequestException as e:
-            logger.error("Failed to send assignment command to %s: %s", url, e)
-            return False
-
     def assign_bot(self, bot_object_id: str) -> Dict:
         """
         Assign a bot to an available bot runner pod with one retry.
@@ -130,7 +95,6 @@ class BotPodAssigner:
             A dict with assignment result:
             - assigned: True if assignment was successful
             - pod_name: Name of the assigned pod (if successful)
-            - pod_ip: IP address of the assigned pod (if successful)
             - error: Error message (if failed)
         """
         result = self._attempt_to_assign_bot(bot_object_id)
@@ -153,7 +117,6 @@ class BotPodAssigner:
             A dict with assignment result:
             - assigned: True if assignment was successful
             - pod_name: Name of the assigned pod (if successful)
-            - pod_ip: IP address of the assigned pod (if successful)
             - error: Error message (if failed)
         """
         # Find an unassigned bot runner pod
@@ -169,51 +132,16 @@ class BotPodAssigner:
         # Use a random unassigned pod
         pod = random.choice(unassigned_pods)
         pod_name = pod.metadata.name
-        pod_ip = pod.status.pod_ip
 
-        if not pod_ip:
-            logger.error("Pod %s has no IP address assigned", pod_name)
-            return {
-                "assigned": False,
-                "error": f"Pod {pod_name} has no IP address",
-            }
-
-        # Update the pod label to mark it as assigned
+        # The bot runner picks up the label change through its downward API volume
         if not self._claim_pod_if_unassigned(pod_name, bot_object_id):
             return {
                 "assigned": False,
                 "error": f"Failed to update pod label for {pod_name}",
             }
 
-        # Send the assignment command via HTTP
-        if not self._send_assignment_command(pod_ip, bot_object_id):
-            # Rollback the label update
-            logger.warning("Rolling back label update for pod %s", pod_name)
-            self._release_pod_if_owned(pod_name, bot_object_id)
-            return {
-                "assigned": False,
-                "error": f"Failed to send assignment command to {pod_name} ({pod_ip})",
-            }
-
-        logger.info("Successfully assigned bot %s to pod %s (%s)", bot_object_id, pod_name, pod_ip)
+        logger.info("Successfully assigned bot %s to pod %s", bot_object_id, pod_name)
         return {
             "assigned": True,
             "pod_name": pod_name,
-            "pod_ip": pod_ip,
         }
-
-    def _release_pod_if_owned(self, pod_name: str, bot_object_id: str) -> bool:
-        patch = [
-            {"op": "test", "path": "/metadata/labels/assigned-bot-id", "value": bot_object_id},
-            {"op": "replace", "path": "/metadata/labels/assigned-bot-id", "value": "none"},
-        ]
-        try:
-            self.v1.patch_namespaced_pod(
-                name=pod_name,
-                namespace=self.namespace,
-                body=patch,
-            )
-            return True
-        except client.ApiException as e:
-            logger.error("Failed to release pod %s: %s", pod_name, e)
-            return False

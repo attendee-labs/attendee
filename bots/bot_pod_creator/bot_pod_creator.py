@@ -19,6 +19,9 @@ TRANSIENT_K8S_ADMISSION_ERROR_MARKERS = (
     "Internal error occurred",
 )
 
+POD_LABELS_VOLUME_MOUNT_PATH = "/etc/podinfo"
+POD_LABELS_FILE_PATH = f"{POD_LABELS_VOLUME_MOUNT_PATH}/labels"
+
 # fmt: off
 
 
@@ -97,15 +100,34 @@ class BotPodCreator:
         self.image = f"{os.getenv('BOT_POD_IMAGE', default_pod_image)}:{self.app_version}"
 
     def get_bot_pod_volumes(self):
+        volumes = []
+        if self.add_persistent_storage:
+            volumes.append(self.get_bot_persistent_storage_volume())
+        if self.add_downward_api_volume_for_labels:
+            volumes.append(self.get_pod_labels_volume())
+        return volumes or None
+
+    def get_pod_labels_volume(self):
+        # The kubelet rewrites this file when the pod's labels change
+        return client.V1Volume(
+            name="pod-labels",
+            downward_api=client.V1DownwardAPIVolumeSource(
+                items=[
+                    client.V1DownwardAPIVolumeFile(
+                        path="labels",
+                        field_ref=client.V1ObjectFieldSelector(field_path="metadata.labels"),
+                    )
+                ]
+            ),
+        )
+
+    def get_bot_persistent_storage_volume(self):
         """
         Use a generic ephemeral volume backed by PD so we can exceed
         the 10Gi Autopilot local ephemeral-storage cap.
 
         BOT_PERSISTENT_STORAGE_SIZE: e.g. "50Gi"
         """
-        if not self.add_persistent_storage:
-            return None
-        
         size = os.getenv("BOT_PERSISTENT_STORAGE_SIZE", "50Gi")
 
         pvc_spec = client.V1PersistentVolumeClaimSpec(
@@ -122,19 +144,20 @@ class BotPodCreator:
             spec=pvc_spec,
         )
 
-        return [client.V1Volume(
+        return client.V1Volume(
             name="bot-persistent-storage",
             ephemeral=client.V1EphemeralVolumeSource(
                 volume_claim_template=pvc_template
             ),
-        ),]
+        )
 
     def get_bot_container_volume_mounts(self):
-        if not self.add_persistent_storage:
-            return None
-        return [
-            client.V1VolumeMount(name="bot-persistent-storage", mount_path="/bot-persistent-storage"),
-        ]
+        volume_mounts = []
+        if self.add_persistent_storage:
+            volume_mounts.append(client.V1VolumeMount(name="bot-persistent-storage", mount_path="/bot-persistent-storage"))
+        if self.add_downward_api_volume_for_labels:
+            volume_mounts.append(client.V1VolumeMount(name="pod-labels", mount_path=POD_LABELS_VOLUME_MOUNT_PATH, read_only=True))
+        return volume_mounts or None
 
     def get_bot_pod_security_context(self):
         if not self.add_persistent_storage:
@@ -341,6 +364,7 @@ class BotPodCreator:
         add_webpage_streamer: Optional[bool] = False,
         add_persistent_storage: Optional[bool] = False,
         assigned_bot_object_id: Optional[str] = None,
+        add_downward_api_volume_for_labels: Optional[bool] = False,
     ) -> Dict:
         """
         Create a bot pod with configuration from environment.
@@ -355,10 +379,12 @@ class BotPodCreator:
                               Will look up BOT_POD_SPEC_{name} from environment variables.
             bot_pod_extra_labels: Additional labels to add to the bot pod
             assigned_bot_object_id: Object ID of the bot this pod runs. Leave as None for unassigned bot runner pods.
+            add_downward_api_volume_for_labels: Whether to mount the pod's labels into the bot container at POD_LABELS_FILE_PATH
         """
         self.bot_pod_cmd = bot_pod_cmd
         self.bot_pod_cpu_request = bot_pod_cpu_request
         self.add_persistent_storage = add_persistent_storage
+        self.add_downward_api_volume_for_labels = add_downward_api_volume_for_labels
 
         # Fetch bot pod spec from the bot_pod_spec_type passed in. Fall back to BotPodSpecType.DEFAULT if the type in the argument is not defined.
         self.bot_pod_spec = fetch_bot_pod_spec(bot_pod_spec_type) or fetch_bot_pod_spec(BotPodSpecType.DEFAULT)

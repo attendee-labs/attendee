@@ -1,137 +1,89 @@
-import json
 import logging
 import signal
-import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
+import time
 
 from django.core.management.base import BaseCommand
 
+from bots.bot_pod_creator.bot_pod_creator import POD_LABELS_FILE_PATH
 from bots.models import Bot
 from bots.tasks import run_bot
 
 logger = logging.getLogger(__name__)
 
+ASSIGNED_BOT_ID_LABEL = "assigned-bot-id"
+UNASSIGNED_LABEL_VALUE = "none"
 
-class AssignmentHandler(BaseHTTPRequestHandler):
-    """HTTP request handler for bot assignment requests."""
 
-    def log_message(self, format, *args):
-        """Override to use our logger instead of stderr."""
-        logger.info("%s - %s", self.address_string(), format % args)
-
-    def do_POST(self):
-        if self.path != "/assign":
-            self.send_error(404, "Not Found")
-            return
-
-        try:
-            content_length = int(self.headers.get("Content-Length", 0))
-            body = self.rfile.read(content_length)
-            data = json.loads(body.decode("utf-8"))
-        except (json.JSONDecodeError, ValueError) as e:
-            logger.warning("Failed to parse request body: %s", e)
-            self.send_error(400, f"Invalid JSON: {e}")
-            return
-
-        bot_object_id = data.get("bot_object_id")
-        if not isinstance(bot_object_id, str) or not bot_object_id:
-            logger.warning("Received assign request without a valid bot_object_id: %s", bot_object_id)
-            self.send_error(400, "bot_object_id must be a non-empty string")
-            return
-
-        bot_id = Bot.objects.filter(object_id=bot_object_id).values_list("id", flat=True).first()
-        if bot_id is None:
-            logger.warning("Received assign request for unknown bot_object_id=%s", bot_object_id)
-            self.send_error(404, "Bot not found")
-            return
-
-        logger.info("Received assignment request for bot %s (%s)", bot_object_id, bot_id)
-
-        # Store the bot_id on the server instance
-        self.server.assigned_bot_id = bot_id
-
-        # Send success response
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.end_headers()
-        response = json.dumps({"status": "assigned", "bot_object_id": bot_object_id})
-        self.wfile.write(response.encode("utf-8"))
-
-        # Signal the server to shut down (in a separate thread to avoid deadlock)
-        threading.Thread(target=self.server.shutdown, daemon=True).start()
-
-    def do_GET(self):
-        if self.path == "/health":
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            response = json.dumps({"status": "waiting"})
-            self.wfile.write(response.encode("utf-8"))
-        else:
-            self.send_error(404, "Not Found")
+def read_pod_labels(labels_file_path: str) -> dict[str, str]:
+    """
+    Parse a downward API labels file. Each line has the form key="value".
+    """
+    labels = {}
+    with open(labels_file_path) as f:
+        for line in f:
+            key, sep, value = line.strip().partition("=")
+            if not sep:
+                continue
+            # Label values can only contain alphanumerics, '-', '_' and '.', so stripping the quotes is enough
+            labels[key] = value.strip('"')
+    return labels
 
 
 class Command(BaseCommand):
-    help = "Waits for bot assignment via HTTP POST request, then runs the bot"
+    help = "Waits for the pod's assigned-bot-id label to be set (via a downward API volume), then runs the bot"
 
     _keep_running = True
-    _server = None
 
     def _graceful_exit(self, signum, frame):
         logger.info("Received signal %s, shutting down...", signum)
         self._keep_running = False
-        if self._server:
-            threading.Thread(target=self._server.shutdown, daemon=True).start()
 
     def add_arguments(self, parser):
         parser.add_argument(
-            "--port",
-            type=int,
-            default=8080,
-            help="Port to listen on for assignment requests (default: 8080)",
+            "--labels-file",
+            type=str,
+            default=POD_LABELS_FILE_PATH,
+            help=f"Path to the downward API file containing the pod's labels (default: {POD_LABELS_FILE_PATH})",
         )
         parser.add_argument(
-            "--host",
-            type=str,
-            default="0.0.0.0",
-            help="Host to bind to (default: 0.0.0.0)",
+            "--poll-interval",
+            type=float,
+            default=0.25,
+            help="Seconds between checks of the labels file (default: 0.25)",
         )
 
     def handle(self, *args, **options):
-        host = options["host"]
-        port = options["port"]
-
-        # Set up signal handlers for graceful shutdown
         signal.signal(signal.SIGINT, self._graceful_exit)
         signal.signal(signal.SIGTERM, self._graceful_exit)
 
-        bot_id = self._wait_for_assignment(host, port)
-
-        if bot_id is None:
+        bot_object_id = self._wait_for_assignment(options["labels_file"], options["poll_interval"])
+        if bot_object_id is None:
             logger.info("Bot runner exiting without assignment")
             return
 
-        logger.info("Running run bot task for bot %s...", bot_id)
+        bot_id = Bot.objects.filter(object_id=bot_object_id).values_list("id", flat=True).first()
+        if bot_id is None:
+            logger.error("Pod was assigned to unknown bot_object_id=%s, exiting", bot_object_id)
+            return
+
+        logger.info("Running run bot task for bot %s (%s)...", bot_object_id, bot_id)
         result = run_bot.run(bot_id)
         logger.info("Run bot task completed with result: %s", result)
 
-    def _wait_for_assignment(self, host: str, port: int) -> int | None:
+    def _wait_for_assignment(self, labels_file_path: str, poll_interval: float) -> str | None:
         """
-        Start HTTP server and wait for assignment POST request.
+        Poll the labels file until the assigned-bot-id label is set.
 
-        Returns the assigned bot_id when received, or None if shutdown requested.
+        Returns the assigned bot object id, or None if shutdown was requested.
         """
-        self._server = HTTPServer((host, port), AssignmentHandler)
-        self._server.assigned_bot_id = None
+        logger.info("Bot runner waiting for %s label in %s...", ASSIGNED_BOT_ID_LABEL, labels_file_path)
 
-        logger.info("Bot runner HTTP server listening on %s:%s, waiting for assignment...", host, port)
+        while self._keep_running:
+            assigned_bot_object_id = read_pod_labels(labels_file_path).get(ASSIGNED_BOT_ID_LABEL)
+            if assigned_bot_object_id and assigned_bot_object_id != UNASSIGNED_LABEL_VALUE:
+                logger.info("Pod was assigned to bot %s", assigned_bot_object_id)
+                return assigned_bot_object_id
 
-        try:
-            self._server.serve_forever()
-        except Exception as e:
-            logger.error("Server error: %s", e)
-            return None
-        finally:
-            self._server.server_close()
+            time.sleep(poll_interval)
 
-        return self._server.assigned_bot_id
+        return None
