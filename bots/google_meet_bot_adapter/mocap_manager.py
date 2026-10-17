@@ -3,6 +3,8 @@ import math
 import random
 from dataclasses import dataclass, field
 
+from django.conf import settings
+
 logger = logging.getLogger(__name__)
 
 
@@ -31,7 +33,7 @@ class MocapManager:
     produce smooth, varied, human-like UI automation without storing mocap files.
     """
 
-    _SPEED_FACTOR = 2.0
+    _SPEED_FACTOR = settings.GOOGLE_MEET_MOCAP_SPEED_FACTOR
     _MIN_DT_SECONDS = 0.006 / _SPEED_FACTOR
     _MAX_DT_SECONDS = 0.018 / _SPEED_FACTOR
 
