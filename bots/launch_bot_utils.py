@@ -40,7 +40,7 @@ def _launch_bot_pod_with_runner_pool(bot):
     from .bot_pod_creator import BotPodAssigner
 
     assigner = BotPodAssigner()
-    assign_result = assigner.assign_bot(bot_id=bot.id)
+    assign_result = assigner.assign_bot(bot_object_id=bot.object_id)
 
     if assign_result.get("assigned"):
         logger.info(
@@ -71,6 +71,7 @@ def _launch_bot_pod_directly(bot):
         add_webpage_streamer=bot.should_launch_webpage_streamer(),
         add_persistent_storage=bot.reserve_additional_storage(),
         bot_pod_spec_type=bot.bot_pod_spec_type,
+        assigned_bot_object_id=bot.object_id,
     )
     logger.info(f"Bot {bot.object_id} ({bot.id}) launched via Kubernetes: {create_pod_result}")
     if not create_pod_result.get("created"):

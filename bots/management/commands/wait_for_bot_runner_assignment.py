@@ -6,6 +6,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from django.core.management.base import BaseCommand
 
+from bots.models import Bot
 from bots.tasks import run_bot
 
 logger = logging.getLogger(__name__)
@@ -32,20 +33,19 @@ class AssignmentHandler(BaseHTTPRequestHandler):
             self.send_error(400, f"Invalid JSON: {e}")
             return
 
-        bot_id = data.get("bot_id")
+        bot_object_id = data.get("bot_object_id")
+        if not isinstance(bot_object_id, str) or not bot_object_id:
+            logger.warning("Received assign request without a valid bot_object_id: %s", bot_object_id)
+            self.send_error(400, "bot_object_id must be a non-empty string")
+            return
+
+        bot_id = Bot.objects.filter(object_id=bot_object_id).values_list("id", flat=True).first()
         if bot_id is None:
-            logger.warning("Received assign request without bot_id")
-            self.send_error(400, "Missing bot_id in request body")
+            logger.warning("Received assign request for unknown bot_object_id=%s", bot_object_id)
+            self.send_error(404, "Bot not found")
             return
 
-        try:
-            bot_id = int(bot_id)
-        except (ValueError, TypeError):
-            logger.warning("Invalid bot_id value: %s", bot_id)
-            self.send_error(400, "bot_id must be an integer")
-            return
-
-        logger.info("Received assignment request for bot_id=%s", bot_id)
+        logger.info("Received assignment request for bot %s (%s)", bot_object_id, bot_id)
 
         # Store the bot_id on the server instance
         self.server.assigned_bot_id = bot_id
@@ -54,7 +54,7 @@ class AssignmentHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
-        response = json.dumps({"status": "assigned", "bot_id": bot_id})
+        response = json.dumps({"status": "assigned", "bot_object_id": bot_object_id})
         self.wfile.write(response.encode("utf-8"))
 
         # Signal the server to shut down (in a separate thread to avoid deadlock)

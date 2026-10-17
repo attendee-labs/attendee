@@ -222,7 +222,7 @@ class Command(BaseCommand):
                 result = bot_pod_creator.create_bot_pod(
                     bot_pod_cmd=["python", "manage.py", "wait_for_bot_runner_assignment", "--port", str(BOT_RUNNER_HTTP_PORT)],
                     bot_pod_name=f"bot-runner-{bot_runner_uuid}",
-                    bot_pod_extra_labels={"is-bot-runner": "true", "assigned-bot-id": "none"},
+                    bot_pod_extra_labels={"is-bot-runner": "true"},
                     add_webpage_streamer=False,
                 )
 

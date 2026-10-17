@@ -340,6 +340,7 @@ class BotPodCreator:
         bot_pod_extra_labels: Dict[str, str] = {},
         add_webpage_streamer: Optional[bool] = False,
         add_persistent_storage: Optional[bool] = False,
+        assigned_bot_object_id: Optional[str] = None,
     ) -> Dict:
         """
         Create a bot pod with configuration from environment.
@@ -353,6 +354,7 @@ class BotPodCreator:
             bot_pod_spec_type: Name of the bot pod spec to use (e.g. DEFAULT, SCHEDULED, or any custom name).
                               Will look up BOT_POD_SPEC_{name} from environment variables.
             bot_pod_extra_labels: Additional labels to add to the bot pod
+            assigned_bot_object_id: Object ID of the bot this pod runs. Leave as None for unassigned bot runner pods.
         """
         self.bot_pod_cmd = bot_pod_cmd
         self.bot_pod_cpu_request = bot_pod_cpu_request
@@ -370,6 +372,7 @@ class BotPodCreator:
             "app.kubernetes.io/component": "bot-proc",
             "app": "bot-proc",
             "bot-pod-spec-type": bot_pod_spec_type,
+            "assigned-bot-id": assigned_bot_object_id or "none",
         }
         if add_webpage_streamer:
             bot_pod_labels["network-role"] = "attendee-webpage-streamer-receiver"
