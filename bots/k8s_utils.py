@@ -6,6 +6,26 @@ from kubernetes import client
 logger = logging.getLogger(__name__)
 
 
+def find_bot_pod(v1, namespace, bot):
+    """Return the pod running this bot, or None if there isn't one.
+
+    The bot may be running on a pod created specifically for it or on a bot runner pod
+    that was assigned to it, so we look up by the assigned-bot-id label first. Older pods
+    may not have that label, so we fall back to looking up the pod by the bot's pod name.
+    Assumes there is at most one pod per bot.
+    """
+    pods = v1.list_namespaced_pod(namespace=namespace, label_selector=f"assigned-bot-id={bot.object_id}")
+    if pods.items:
+        return pods.items[0]
+
+    try:
+        return v1.read_namespaced_pod(name=bot.k8s_pod_name(), namespace=namespace)
+    except client.ApiException as e:
+        if e.status == 404:
+            return None
+        raise
+
+
 def retrieve_bot_pod_information(v1, namespace, pod_name):
     """Best-effort snapshot of a bot pod's infrastructure state.
 
