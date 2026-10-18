@@ -37,9 +37,9 @@ def _launch_bot_pod_with_runner_pool(bot):
     Launch a bot by assigning it to an existing bot runner pod from the pool.
     Falls back to creating a new pod if no runners are available.
     """
-    from .bot_pod_creator import BotPodAssigner
+    from .bot_pod_creator import BotRunnerPodAssigner
 
-    assigner = BotPodAssigner()
+    assigner = BotRunnerPodAssigner()
     assign_result = assigner.assign_bot(bot_object_id=bot.object_id)
 
     if assign_result.get("assigned"):

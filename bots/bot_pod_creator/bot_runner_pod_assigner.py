@@ -10,7 +10,7 @@ from kubernetes import client, config
 logger = logging.getLogger(__name__)
 
 
-class BotPodAssigner:
+class BotRunnerPodAssigner:
     """
     Assigns bots to existing unassigned bot runner pods instead of creating new pods.
 
@@ -33,7 +33,7 @@ class BotPodAssigner:
         if not self.app_version:
             raise ValueError("CUBER_RELEASE_VERSION environment variable is required")
 
-        logger.info("BotPodAssigner initialized for namespace %s with version %s", self.namespace, self.app_version)
+        logger.info("BotRunnerPodAssigner initialized for namespace %s with version %s", self.namespace, self.app_version)
 
     def _get_unassigned_bot_runner_pods(self) -> list:
         """
