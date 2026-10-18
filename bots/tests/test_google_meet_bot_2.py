@@ -171,6 +171,7 @@ class TestGoogleMeetBot2(TransactionTestCase):
         mock_k8s_api = MagicMock()
         MockCoreV1Api.return_value = mock_k8s_api
         mock_k8s_api.list_namespaced_pod.return_value = SimpleNamespace(items=[])
+        mock_k8s_api.read_namespaced_pod.side_effect = kubernetes.client.ApiException(status=404)
 
         # Set up config.load_incluster_config to raise ConfigException so load_kube_config gets called
         mock_load_incluster_config.side_effect = kubernetes.config.config_exception.ConfigException("Mock ConfigException")
@@ -243,6 +244,7 @@ class TestGoogleMeetBot2(TransactionTestCase):
         mock_k8s_api = MagicMock()
         MockCoreV1Api.return_value = mock_k8s_api
         mock_k8s_api.list_namespaced_pod.return_value = SimpleNamespace(items=[])
+        mock_k8s_api.read_namespaced_pod.side_effect = kubernetes.client.ApiException(status=404)
 
         mock_load_incluster_config.side_effect = kubernetes.config.config_exception.ConfigException("Mock ConfigException")
 
@@ -473,7 +475,7 @@ class TestGoogleMeetBot2(TransactionTestCase):
                         ),
                     )
                 ],
-            )
+            ),
         )
         mock_k8s_api.list_namespaced_event.return_value = SimpleNamespace(items=[SimpleNamespace(type="Warning", reason="Failed", message="Failed to pull image", count=3, last_timestamp=None)])
 
@@ -628,6 +630,7 @@ class TestGoogleMeetBot2(TransactionTestCase):
         mock_k8s_api = MagicMock()
         MockCoreV1Api.return_value = mock_k8s_api
         mock_k8s_api.list_namespaced_pod.return_value = SimpleNamespace(items=[])
+        mock_k8s_api.read_namespaced_pod.side_effect = kubernetes.client.ApiException(status=404)
 
         # Set up config.load_incluster_config to raise ConfigException so load_kube_config gets called
         mock_load_incluster_config.side_effect = kubernetes.config.config_exception.ConfigException("Mock ConfigException")
