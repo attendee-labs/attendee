@@ -9,7 +9,7 @@ from django.db import models
 from django.utils import timezone
 from kubernetes import client, config
 
-from bots.k8s_utils import find_bot_pod, find_bot_pod_name, retrieve_bot_pod_information
+from bots.k8s_utils import find_bot_pod_name, retrieve_bot_pod_information
 from bots.models import Bot, BotEventManager, BotEventSubTypes, BotEventTypes
 
 logger = logging.getLogger(__name__)
@@ -71,12 +71,8 @@ class Command(BaseCommand):
         v1 = self.create_k8s_client()
 
         # Try to delete the pod if it exists
-        pod_name = None
         try:
-            pod = find_bot_pod(v1, self.namespace, bot)
-            if pod is None:
-                return
-            pod_name = pod.metadata.name
+            pod_name = find_bot_pod_name(v1, self.namespace, bot)
             v1.delete_namespaced_pod(
                 name=pod_name,
                 namespace=self.namespace,
@@ -86,7 +82,7 @@ class Command(BaseCommand):
         except client.ApiException as pod_error:
             # 404 means pod doesn't exist, which is fine
             if pod_error.status != 404:
-                logger.warning(f"Error deleting pod {pod_name} for bot {bot.object_id}: {str(pod_error)}")
+                logger.warning(f"Error deleting pod for bot {bot.object_id}: {str(pod_error)}")
 
     def _terminate_ephemeral_docker_container(self, bot):
         """Remove the ephemeral Docker container for this bot (container name: bot-{id})."""
