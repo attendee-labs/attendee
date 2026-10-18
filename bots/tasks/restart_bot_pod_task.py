@@ -4,7 +4,7 @@ import time
 from celery import shared_task
 from kubernetes import client, config
 
-from bots.k8s_utils import find_bot_pod
+from bots.k8s_utils import find_bot_pod_name
 from bots.models import Bot, BotEventTypes
 
 logger = logging.getLogger(__name__)
@@ -40,9 +40,7 @@ def restart_bot_pod(self, bot_id):
     # Check if a pod already exists for this bot
     pod_name = bot.k8s_pod_name()
     try:
-        existing_pod = find_bot_pod(v1, namespace, bot)
-        if existing_pod is not None:
-            pod_name = existing_pod.metadata.name
+        pod_name = find_bot_pod_name(v1, namespace, bot)
 
         # Directly read the specific pod by name instead of listing all pods
         v1.read_namespaced_pod(name=pod_name, namespace=namespace)

@@ -26,6 +26,12 @@ def find_bot_pod(v1, namespace, bot):
         raise
 
 
+def find_bot_pod_name(v1, namespace, bot):
+    """Return the name of the pod running this bot, falling back to the bot's default pod name if no pod is found."""
+    pod = find_bot_pod(v1, namespace, bot)
+    return pod.metadata.name if pod else bot.k8s_pod_name()
+
+
 def retrieve_bot_pod_information(v1, namespace, pod_name):
     """Best-effort snapshot of a bot pod's infrastructure state.
 
