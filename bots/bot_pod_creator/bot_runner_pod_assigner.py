@@ -70,8 +70,11 @@ class BotRunnerPodAssigner:
             logger.error("Failed to list bot runner pods: %s", e)
             return []
 
-    def _claim_pod_if_unassigned(self, pod_name: str, bot_object_id: str) -> bool:
+    def _claim_pod_if_unassigned(self, pod_name: str, resource_version: str, bot_object_id: str) -> bool:
+        # Testing resourceVersion rejects the claim if the pod changed since it was listed,
+        # e.g. a deletionTimestamp was set after we filtered out terminating pods.
         patch = [
+            {"op": "test", "path": "/metadata/resourceVersion", "value": resource_version},
             {"op": "test", "path": "/metadata/labels/assigned-bot-id", "value": "none"},
             {"op": "replace", "path": "/metadata/labels/assigned-bot-id", "value": bot_object_id},
         ]
@@ -139,7 +142,7 @@ class BotRunnerPodAssigner:
         pod_name = pod.metadata.name
 
         # The bot runner picks up the label change through its downward API volume
-        if not self._claim_pod_if_unassigned(pod_name, bot_object_id):
+        if not self._claim_pod_if_unassigned(pod_name, pod.metadata.resource_version, bot_object_id):
             return {
                 "assigned": False,
                 "error": f"Failed to update pod label for {pod_name}",

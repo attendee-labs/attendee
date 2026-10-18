@@ -122,7 +122,9 @@ class FakeCoreV1Api:
 
     def mark_pod_terminating(self, name, namespace=NAMESPACE):
         """Simulate a graceful delete in progress: the pod keeps its phase but gets a deletionTimestamp."""
-        self.pods[(namespace, name)]["metadata"]["deletionTimestamp"] = "2026-01-01T00:00:00Z"
+        metadata = self.pods[(namespace, name)]["metadata"]
+        metadata["deletionTimestamp"] = "2026-01-01T00:00:00Z"
+        metadata["resourceVersion"] = str(int(metadata["resourceVersion"]) + 1)
 
     def labels(self, name, namespace=NAMESPACE):
         return self.pods[(namespace, name)]["metadata"]["labels"]
@@ -402,6 +404,20 @@ class BotRunnerPoolEndToEndTest(TestCase):
         self.assertEqual(self.fake_v1.labels("bot-runner-terminating")["assigned-bot-id"], "none")
         self.assertEqual(self._pods_assigned_to(self.bot.object_id), ["bot-runner-healthy"])
 
+    def test_does_not_assign_to_runner_that_starts_terminating_after_listing(self):
+        self._add_runner_pod("bot-runner-a")
+
+        def runner_starts_terminating_before_claim(pod_name):
+            self.fake_v1.mark_pod_terminating(pod_name)
+
+        self.fake_v1.before_patch = runner_starts_terminating_before_claim
+
+        launch_bot(self.bot)
+
+        # The resourceVersion "test" op rejected the stale claim, and the retry's listing skips the terminating pod
+        self.assertEqual(self.fake_v1.labels("bot-runner-a")["assigned-bot-id"], "none")
+        self.assertEqual(self._pods_assigned_to(self.bot.object_id), [self.bot.k8s_pod_name()])
+
     def test_retries_on_another_runner_when_claimed_runner_is_taken_concurrently(self):
         self._add_runner_pod("bot-runner-a")
         self._add_runner_pod("bot-runner-b")
@@ -487,7 +503,8 @@ class BotRunnerPoolEndToEndTest(TestCase):
         self._add_runner_pod("bot-runner-stale", version="old-1600000000")
 
         def stale_runner_gets_assigned_before_delete(pod_name):
-            claimed = BotRunnerPodAssigner()._claim_pod_if_unassigned(pod_name, self.bot.object_id)
+            resource_version = self.fake_v1.raw_pod(pod_name)["metadata"]["resourceVersion"]
+            claimed = BotRunnerPodAssigner()._claim_pod_if_unassigned(pod_name, resource_version, self.bot.object_id)
             self.assertTrue(claimed)
 
         self.fake_v1.before_delete = stale_runner_gets_assigned_before_delete
