@@ -43,6 +43,7 @@ class BotRunnerPodAssigner:
         - It has the label "is-bot-runner=true"
         - It has the label "assigned-bot-id" set to "none"
         - It is in Running phase (ready to accept assignments)
+        - It is not being deleted (no deletion_timestamp)
         - It has the same app.kubernetes.io/version label as this pod assigner
         """
         try:
@@ -55,6 +56,10 @@ class BotRunnerPodAssigner:
             for pod in pods.items:
                 # Only consider pods that are Running
                 if pod.status.phase != "Running":
+                    continue
+
+                # Terminating pods (eviction, node scale-down, etc.) still report Running until they exit
+                if pod.metadata.deletion_timestamp is not None:
                     continue
 
                 unassigned_pods.append(pod)

@@ -120,6 +120,10 @@ class FakeCoreV1Api:
             if pod_namespace == namespace:
                 self.set_pod_phase(name, phase, namespace)
 
+    def mark_pod_terminating(self, name, namespace=NAMESPACE):
+        """Simulate a graceful delete in progress: the pod keeps its phase but gets a deletionTimestamp."""
+        self.pods[(namespace, name)]["metadata"]["deletionTimestamp"] = "2026-01-01T00:00:00Z"
+
     def labels(self, name, namespace=NAMESPACE):
         return self.pods[(namespace, name)]["metadata"]["labels"]
 
@@ -152,6 +156,7 @@ class FakeCoreV1Api:
                 labels=dict(metadata.get("labels") or {}),
                 uid=metadata.get("uid"),
                 resource_version=metadata.get("resourceVersion"),
+                deletion_timestamp=metadata.get("deletionTimestamp"),
             ),
             status=SimpleNamespace(phase=pod["status"]["phase"]),
         )
@@ -377,6 +382,25 @@ class BotRunnerPoolEndToEndTest(TestCase):
 
         self.assertEqual(self.fake_v1.labels("bot-runner-old")["assigned-bot-id"], "none")
         self.assertEqual(self._pods_assigned_to(self.bot.object_id), [self.bot.k8s_pod_name()])
+
+    def test_ignores_runner_pods_that_are_terminating(self):
+        self._add_runner_pod("bot-runner-terminating")
+        self.fake_v1.mark_pod_terminating("bot-runner-terminating")
+
+        launch_bot(self.bot)
+
+        self.assertEqual(self.fake_v1.labels("bot-runner-terminating")["assigned-bot-id"], "none")
+        self.assertEqual(self._pods_assigned_to(self.bot.object_id), [self.bot.k8s_pod_name()])
+
+    def test_assigns_to_healthy_runner_when_another_is_terminating(self):
+        self._add_runner_pod("bot-runner-terminating")
+        self._add_runner_pod("bot-runner-healthy")
+        self.fake_v1.mark_pod_terminating("bot-runner-terminating")
+
+        launch_bot(self.bot)
+
+        self.assertEqual(self.fake_v1.labels("bot-runner-terminating")["assigned-bot-id"], "none")
+        self.assertEqual(self._pods_assigned_to(self.bot.object_id), ["bot-runner-healthy"])
 
     def test_retries_on_another_runner_when_claimed_runner_is_taken_concurrently(self):
         self._add_runner_pod("bot-runner-a")
