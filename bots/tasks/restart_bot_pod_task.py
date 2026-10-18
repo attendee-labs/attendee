@@ -46,7 +46,7 @@ def restart_bot_pod(self, bot_id):
         v1.read_namespaced_pod(name=pod_name, namespace=namespace)
 
         # Delete the pod if it exists (we'll only get here if the pod exists)
-        logger.info(f"Found existing pod {pod_name}, deleting it before creating a new one")
+        logger.info(f"Found existing pod {pod_name} for bot {bot_id}, deleting it before creating a new one")
         v1.delete_namespaced_pod(name=pod_name, namespace=namespace, grace_period_seconds=60)
 
         # Sleep until the pod is no longer found
