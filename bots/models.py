@@ -1173,7 +1173,22 @@ class Bot(models.Model):
             return None
 
     def should_launch_bot_pod_with_runner_pool(self):
-        return os.getenv("USE_BOT_RUNNER_POOL", "false") == "true" and self.join_at is None and not self.should_launch_webpage_streamer()
+        if os.getenv("USE_BOT_RUNNER_POOL", "false") != "true":
+            return False
+        if self.join_at is not None:
+            return False
+        # Runner pods are created with the default spec type, the default BOT_CPU_REQUEST and no
+        # persistent storage, so bots that need anything else must get a dedicated pod.
+        if self.should_launch_webpage_streamer():
+            return False
+        if self.reserve_additional_storage():
+            return False
+        if self.bot_pod_spec_type != BotPodSpecType.DEFAULT:
+            return False
+        default_cpu_request = os.getenv("BOT_CPU_REQUEST", "4") or "4"
+        if self.cpu_request() != default_cpu_request:
+            return False
+        return True
 
     def should_launch_webpage_streamer(self):
         voice_agent_settings = self.settings.get("voice_agent_settings", {}) or {}
