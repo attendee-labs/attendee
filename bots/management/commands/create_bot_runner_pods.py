@@ -102,11 +102,13 @@ class Command(BaseCommand):
     def _get_unassigned_bot_runner_pods(self):
         """
         Get all unassigned bot runner pods in the namespace that match the current version.
+        Returns None if the pods could not be listed.
 
         A pod is considered an unassigned bot runner if:
         - It has the label "is-bot-runner=true"
         - It has the label "assigned-bot-id" set to "none"
         - It is in a Running or Pending phase (not completed/failed)
+        - It is not being deleted (no deletion_timestamp)
         - It has the same app.kubernetes.io/version label as this command
         """
         try:
@@ -115,11 +117,11 @@ class Command(BaseCommand):
                 label_selector=f"is-bot-runner=true,assigned-bot-id=none,app.kubernetes.io/version={self.app_version}",
             )
 
-            return pods.items
+            return [pod for pod in pods.items if pod.status.phase in ("Running", "Pending") and pod.metadata.deletion_timestamp is None]
 
         except client.ApiException as e:
             logger.error("Failed to list bot runner pods: %s", e)
-            return []
+            return None
 
     def _get_stale_unassigned_bot_runner_pods(self):
         """
@@ -195,6 +197,9 @@ class Command(BaseCommand):
                 self._delete_pod_if_unchanged(pod)
 
         unassigned_pods = self._get_unassigned_bot_runner_pods()
+        if unassigned_pods is None:
+            # Don't create pods blindly when we can't see the current pool
+            return
         current_count = len(unassigned_pods)
 
         logger.info(

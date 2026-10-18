@@ -498,6 +498,41 @@ class BotRunnerPoolEndToEndTest(TestCase):
         self.assertEqual(self.fake_v1.pod_names(), ["bot-runner-stale"])
         self.assertEqual(self.fake_v1.labels("bot-runner-stale")["assigned-bot-id"], self.bot.object_id)
 
+    def test_pool_manager_does_not_count_finished_runners(self):
+        for i in range(3):
+            self._add_runner_pod(f"bot-runner-failed-{i}", phase="Failed")
+        self._add_runner_pod("bot-runner-succeeded", phase="Succeeded")
+        finished_pod_names = self.fake_v1.pod_names()
+
+        self._maintain_pool(desired_count=3)
+
+        # Finished runners are kept around for debugging, but new runners are created alongside them
+        new_pod_names = [name for name in self.fake_v1.pod_names() if name not in finished_pod_names]
+        self.assertEqual(len(new_pod_names), 3)
+        self.assertTrue(set(finished_pod_names).issubset(self.fake_v1.pod_names()))
+
+        for name in new_pod_names:
+            self.fake_v1.set_pod_phase(name, "Running")
+        launch_bot(self.bot)
+        assigned_pod_names = self._pods_assigned_to(self.bot.object_id)
+        self.assertEqual(len(assigned_pod_names), 1)
+        self.assertIn(assigned_pod_names[0], new_pod_names)
+
+    def test_pool_manager_does_not_count_terminating_runners(self):
+        self._add_runner_pod("bot-runner-terminating")
+        self.fake_v1.mark_pod_terminating("bot-runner-terminating")
+
+        self._maintain_pool(desired_count=1)
+
+        self.assertIn("bot-runner-terminating", self.fake_v1.pod_names())
+        self.assertEqual(len(self._unassigned_runner_pods()), 2)
+
+    def test_pool_manager_does_not_create_pods_when_listing_fails(self):
+        with patch.object(self.fake_v1, "list_namespaced_pod", side_effect=client.ApiException(status=500)):
+            self._maintain_pool(desired_count=3)
+
+        self.assertEqual(self.fake_v1.pod_names(), [])
+
     def test_pool_manager_does_nothing_when_pool_is_full(self):
         self._maintain_pool(desired_count=3)
         pod_names = self.fake_v1.pod_names()
