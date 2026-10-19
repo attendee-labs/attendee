@@ -526,19 +526,46 @@ class WebBotAdapter(BotAdapter):
 
         websocket_handler = self.handle_websocket if self.livekit_websocket_bridge is None else self.handle_websocket_with_livekit_bridge
 
-        # Port 0 lets the OS pick a free port, so bots sharing a network namespace
-        # (celery workers, host networking) can't collide on a fixed port.
-        self.websocket_server = serve(
-            websocket_handler,
-            "localhost",
-            0,
-            compression=None,
-            max_size=None,
-        )
-        port = self.websocket_server.socket.getsockname()[1]
-        logger.info(f"Websocket server started on ws://localhost:{port}")
-        self.websocket_port = port
-        self.websocket_server.serve_forever()
+        if settings.ENABLE_BOT_WEBSOCKET_PORT_SELECTION_BY_OS:
+            # Port 0 lets the OS pick a free port, so bots sharing a network namespace
+            # (celery workers, host networking) can't collide on a fixed port.
+            self.websocket_server = serve(
+                websocket_handler,
+                "localhost",
+                0,
+                compression=None,
+                max_size=None,
+            )
+            port = self.websocket_server.socket.getsockname()[1]
+            logger.info(f"Websocket server started on ws://localhost:{port}")
+            self.websocket_port = port
+            self.websocket_server.serve_forever()
+            return
+
+        port = self.get_websocket_port()
+        max_retries = 10
+
+        for attempt in range(max_retries):
+            try:
+                self.websocket_server = serve(
+                    websocket_handler,
+                    "localhost",
+                    port,
+                    compression=None,
+                    max_size=None,
+                )
+                logger.info(f"Websocket server started on ws://localhost:{port}")
+                self.websocket_port = port
+                self.websocket_server.serve_forever()
+                break
+            except OSError as e:
+                if e.errno == 98:  # Address already in use
+                    logger.info(f"Port {port} is already in use, trying next port...")
+                    port += 1
+                    if attempt == max_retries - 1:
+                        raise Exception(f"Could not find available port after {max_retries} attempts")
+                    continue
+                raise  # Re-raise other OSErrors
 
     def send_bot_put_in_waiting_room_message(self):
         if self.sent_bot_put_in_waiting_room_message:

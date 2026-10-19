@@ -170,6 +170,7 @@ This document lists all supported environment variables for the Attendee applica
 | `CUSTOM_BOT_POD_SPEC_TYPES` | String | (Empty) | Comma-separated list of custom bot pod specification types. |
 | `ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME` | Boolean | `false` | Enforce domain allowlist in Chrome web bot. |
 | `MASK_TRANSCRIPT_IN_LOGS` | Boolean | `false` | Mask transcript content in application logs for privacy. |
+| `ENABLE_BOT_WEBSOCKET_PORT_SELECTION_BY_OS` | Boolean | `false` | Let the OS pick the port of the web bot websocket server instead of using a fixed port per platform (with up to 10 retries). Enable it when many bots share a network namespace, e.g. celery workers or `docker-compose-multi-host` with host networking. |
 
 ---
 
