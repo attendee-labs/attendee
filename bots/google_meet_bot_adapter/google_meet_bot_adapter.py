@@ -122,8 +122,8 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
         if os.getenv("INTERNAL_SITE_DOMAIN"):
             domain_allowlist.append(os.getenv("INTERNAL_SITE_DOMAIN"))
 
-        if os.getenv("USE_OKTA_LOGIN_FOR_SIGNED_IN_GOOGLE_MEET_BOTS", "false") == "true" and os.getenv("OKTA_DOMAIN"):
-            domain_allowlist.append(os.getenv("OKTA_DOMAIN"))
+        if os.getenv("USE_OKTA_LOGIN_FOR_SIGNED_IN_GOOGLE_MEET_BOTS", "false") == "true" and os.getenv("OKTA_BOT_LOGIN_DOMAIN"):
+            domain_allowlist.append(os.getenv("OKTA_BOT_LOGIN_DOMAIN"))
 
         return domain_allowlist
 
