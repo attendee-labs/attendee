@@ -55,9 +55,6 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
     def get_chromedriver_payload_file_names(self):
         return ["google_meet_bot_adapter/google_meet_chromedriver_payload.js"]
 
-    def get_websocket_port(self):
-        return 8765
-
     def is_sent_video_still_playing(self):
         result = self.driver.execute_script("return window.botOutputManager.isVideoPlaying();")
         logger.info(f"is_sent_video_still_playing result = {result}")
