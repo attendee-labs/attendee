@@ -123,6 +123,7 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
 
         if settings.USE_OKTA_LOGIN_FOR_SIGNED_IN_GOOGLE_MEET_BOTS and settings.OKTA_BOT_LOGIN_DOMAIN:
             domain_allowlist.append(settings.OKTA_BOT_LOGIN_DOMAIN)
+            domain_allowlist.append("login.okta.com")
 
         return domain_allowlist
 
