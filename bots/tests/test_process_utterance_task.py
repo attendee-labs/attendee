@@ -892,17 +892,10 @@ class GladiaProviderTest(TransactionTestCase):
         body, _, _ = self._run_gladia({})
         self.assertEqual(body, {"audio_url": "https://api.gladia.io/file/123"})
 
-    def test_languages_and_code_switching_are_sent_as_language_config(self):
-        body, _, _ = self._run_gladia({"languages": ["fi", "sv", "en"], "code_switching": True})
-        self.assertEqual(body, {"audio_url": "https://api.gladia.io/file/123", "language_config": {"languages": ["fi", "sv", "en"], "code_switching": True}})
-
-    def test_languages_without_code_switching_detects_once_among_them(self):
-        body, _, _ = self._run_gladia({"languages": ["fi", "sv"]})
-        self.assertEqual(body, {"audio_url": "https://api.gladia.io/file/123", "language_config": {"languages": ["fi", "sv"], "code_switching": False}})
-
-    def test_single_language_pins_the_language_and_turns_off_code_switching(self):
-        body, _, _ = self._run_gladia({"languages": ["fi"], "code_switching": True})
-        self.assertEqual(body, {"audio_url": "https://api.gladia.io/file/123", "language_config": {"languages": ["fi"], "code_switching": False}})
+    def test_language_config_is_sent_as_given(self):
+        for language_config in [{"languages": ["fi", "sv", "en"], "code_switching": True}, {"languages": ["fi"]}, {"languages": ["fi"], "code_switching": True}]:
+            body, _, _ = self._run_gladia({"language_config": language_config})
+            self.assertEqual(body, {"audio_url": "https://api.gladia.io/file/123", "language_config": language_config})
 
     def test_deprecated_code_switching_fields_are_sent_as_language_config(self):
         body, _, _ = self._run_gladia({"enable_code_switching": True, "code_switching_languages": ["en", "fr"]})
@@ -916,13 +909,13 @@ class GladiaProviderTest(TransactionTestCase):
         body, _, _ = self._run_gladia({"enable_code_switching": False, "code_switching_languages": ["en", "fr"]})
         self.assertEqual(body, {"audio_url": "https://api.gladia.io/file/123"})
 
-    def test_new_language_fields_take_precedence_over_deprecated_ones(self):
-        body, _, _ = self._run_gladia({"languages": ["de"], "enable_code_switching": True, "code_switching_languages": ["en", "fr"]})
-        self.assertEqual(body, {"audio_url": "https://api.gladia.io/file/123", "language_config": {"languages": ["de"], "code_switching": False}})
+    def test_language_config_takes_precedence_over_deprecated_fields(self):
+        body, _, _ = self._run_gladia({"language_config": {"languages": ["de"]}, "enable_code_switching": True, "code_switching_languages": ["en", "fr"]})
+        self.assertEqual(body, {"audio_url": "https://api.gladia.io/file/123", "language_config": {"languages": ["de"]}})
 
     def test_stored_transcription_includes_the_dominant_language(self):
         _, transcript, failure = self._run_gladia(
-            {"languages": ["fi", "en"], "code_switching": True},
+            {"language_config": {"languages": ["fi", "en"], "code_switching": True}},
             transcription_result={
                 "full_transcript": "moi hello hei",
                 "languages": ["fi", "en"],
@@ -960,14 +953,13 @@ class GladiaProviderTest(TransactionTestCase):
         self.assertEqual(transcript, {"transcript": "", "languages": [], "language": None, "words": []})
 
     def test_schema_accepts_language_settings(self):
-        for gladia_settings in [{"languages": ["fi"]}, {"languages": ["fi", "sv"], "code_switching": True}, {"enable_code_switching": True, "code_switching_languages": ["en"]}]:
+        for gladia_settings in [{"language_config": {"languages": ["fi"]}}, {"language_config": {"languages": ["fi", "sv"], "code_switching": True}}, {"enable_code_switching": True, "code_switching_languages": ["en"]}]:
             serializer = CreateAsyncTranscriptionSerializer(data={"transcription_settings": {"gladia": gladia_settings}})
             self.assertTrue(serializer.is_valid(), serializer.errors)
 
-    def test_schema_rejects_duplicate_languages(self):
-        serializer = CreateAsyncTranscriptionSerializer(data={"transcription_settings": {"gladia": {"languages": ["fi", "fi"]}}})
+    def test_schema_rejects_unknown_language_config_fields(self):
+        serializer = CreateAsyncTranscriptionSerializer(data={"transcription_settings": {"gladia": {"language_config": {"language": "fi"}}}})
         self.assertFalse(serializer.is_valid())
-        self.assertIn("non-unique", str(serializer.errors))
 
     # ------------------------------------------------------------------ INVALID CREDENTIALS
 

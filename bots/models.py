@@ -725,21 +725,12 @@ class TranscriptionSettings:
 
     def gladia_language_config(self):
         gladia_settings = self._settings.get("gladia", {})
-        if "languages" in gladia_settings or "code_switching" in gladia_settings:
-            languages = gladia_settings.get("languages", [])
-            code_switching = gladia_settings.get("code_switching", False)
-        elif self.gladia_enable_code_switching():
-            # Deprecated fields, kept so existing callers get the same behavior
-            languages = self.gladia_code_switching_languages() or []
-            code_switching = True
-        else:
-            return None
-
-        # A single language pins the transcription language, so there is nothing to switch between
-        if len(languages) == 1:
-            code_switching = False
-
-        return {"languages": languages, "code_switching": code_switching}
+        if "language_config" in gladia_settings:
+            return gladia_settings["language_config"]
+        # Deprecated fields, kept so existing callers get the same behavior
+        if self.gladia_enable_code_switching():
+            return {"languages": self.gladia_code_switching_languages() or [], "code_switching": True}
+        return None
 
     def assembly_ai_language_code(self):
         return self._settings.get("assembly_ai", {}).get("language_code", None)
