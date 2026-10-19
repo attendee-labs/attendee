@@ -364,6 +364,10 @@ PREJOIN_LEAVE_OR_MEETING_END_IS_FATAL_ERROR = os.getenv("PREJOIN_LEAVE_OR_MEETIN
 # This flag is temporary, in the future we will remove this flag and always report the BOT_PUT_IN_WAITING_ROOM event for web bots.
 ENABLE_WAITING_ROOM_STATE_FOR_WEB_BOTS = os.getenv("ENABLE_WAITING_ROOM_STATE_FOR_WEB_BOTS", "false") == "true"
 
+# Web bots bind their websocket server to a fixed port per platform and try the next 10 ports if it is taken.
+# When enabled, the OS picks a free port instead, so any number of bots can share a network namespace.
+ENABLE_BOT_WEBSOCKET_PORT_SELECTION_BY_OS = os.getenv("ENABLE_BOT_WEBSOCKET_PORT_SELECTION_BY_OS", "false") == "true"
+
 BOT_POD_NAMESPACE = os.getenv("BOT_POD_NAMESPACE", "attendee")
 WEBPAGE_STREAMER_POD_NAMESPACE = os.getenv("WEBPAGE_STREAMER_POD_NAMESPACE", "attendee-webpage-streamer")
 REQUIRE_HTTPS_WEBHOOKS = os.getenv("REQUIRE_HTTPS_WEBHOOKS", "true") == "true"
