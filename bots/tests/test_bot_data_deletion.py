@@ -2,8 +2,9 @@ import uuid
 from unittest.mock import PropertyMock, patch
 
 from django.core.files.base import ContentFile
+from django.db import connection
 from django.test import Client, TransactionTestCase
-from django.test.utils import override_settings
+from django.test.utils import CaptureQueriesContext, override_settings
 from rest_framework import status
 
 from bots.models import ApiKey, AudioChunk, Bot, BotDebugScreenshot, BotEvent, BotEventTypes, BotStates, ChatMessage, ChatMessageToOptions, Organization, Participant, ParticipantEvent, ParticipantEventTypes, Project, Recording, RecordingStates, Utterance, WebhookDeliveryAttempt, WebhookSubscription, WebhookTriggerTypes
@@ -286,6 +287,21 @@ class TestBotDataDeletion(TransactionTestCase):
         # Check files are deleted
         for recording in Recording.objects.filter(bot=self.bot1):
             self.assertFalse(recording.file)
+
+    def test_delete_audio_chunks_does_not_load_audio_blobs(self):
+        """Test that deleting audio chunks never selects the audio_blob column and works across multiple batches"""
+        for i in range(5):
+            audio_chunk = AudioChunk.objects.create(recording=self.recording1, participant=self.participant1, audio_blob=b"test audio", timestamp_ms=2000 + i, duration_ms=500, sample_rate=16000)
+            Utterance.objects.create(recording=self.recording1, participant=self.participant1, audio_chunk=audio_chunk, timestamp_ms=2000 + i, duration_ms=500)
+
+        with CaptureQueriesContext(connection) as captured_queries:
+            self.recording1.delete_audio_chunks(batch_size=2)
+
+        self.assertEqual(AudioChunk.objects.filter(recording=self.recording1).count(), 0)
+        self.assertEqual(Utterance.objects.filter(recording=self.recording1, audio_chunk__isnull=True).count(), 6)
+        self.assertEqual(AudioChunk.objects.filter(recording=self.recording2).count(), 1)
+        for query in captured_queries.captured_queries:
+            self.assertNotIn('"bots_audiochunk"."audio_blob"', query["sql"])
 
     def test_fatal_error_to_data_deleted_transition(self):
         """Test that a bot in FATAL_ERROR state can transition to DATA_DELETED"""
