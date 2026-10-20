@@ -54,15 +54,13 @@ class BotRunnerPodAssigner:
             pods = self.v1.list_namespaced_pod(
                 namespace=self.namespace,
                 label_selector=f"is-bot-runner=true,assigned-bot-id=none,app.kubernetes.io/version={self.app_version}",
+                field_selector="status.phase=Running",
             )
 
             unassigned_pods = []
             for pod in pods.items:
-                # Only consider pods that are Running
-                if pod.status.phase != "Running":
-                    continue
-
-                # Terminating pods (eviction, node scale-down, etc.) still report Running until they exit
+                # Terminating pods (eviction, node scale-down, etc.) still report Running until they exit.
+                # deletionTimestamp isn't a selectable field, so this filter has to stay client-side.
                 if pod.metadata.deletion_timestamp is not None:
                     continue
 
@@ -108,10 +106,10 @@ class BotRunnerPodAssigner:
             if assigned_bot_id == bot_object_id:
                 logger.info("Claim of pod %s for bot %s was applied despite the error response", pod_name, bot_object_id)
                 return True
-            if assigned_bot_id != "none" or pod.metadata.resource_version != resource_version:
+            if pod.metadata.resource_version != resource_version:
                 return False
-            # The pod is unchanged, so our patch may still be applied. Resending it to the same pod is safe
-            # because at most one of the two can apply.
+            # The pod is unchanged (so still assigned-bot-id=none), and our patch may still be applied.
+            # Resending it to the same pod is safe because at most one of the two can apply.
 
         raise ClaimOutcomeUnknownError(f"Claim of pod {pod_name} for bot {bot_object_id} may still be applied")
 
