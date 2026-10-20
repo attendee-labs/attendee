@@ -69,7 +69,7 @@ def build_internal_site_url(path=""):
     When unset, fall back to the public site URL, preserving behavior for
     deployments that do not configure an internal route.
     """
-    internal_site_domain = os.getenv("INTERNAL_SITE_DOMAIN")
+    internal_site_domain = settings.INTERNAL_SITE_DOMAIN
     if internal_site_domain:
         return f"http://{internal_site_domain}{path}"
 
