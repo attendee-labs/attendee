@@ -66,6 +66,12 @@ class WebexBotControllerTest(WebexBotTestCase):
         self.assertEqual(self.controller.get_per_participant_audio_sample_rate(), 48000)
         self.assertEqual(self.controller.get_audio_format(), GstreamerPipeline.AUDIO_FORMAT_FLOAT)
 
+    def test_utterances_are_moved_back_by_the_per_participant_audio_delay(self):
+        self.controller.adapter = MagicMock()
+        self.controller.adapter.get_per_participant_audio_utterance_delay_ms.return_value = 2000
+
+        self.assertEqual(self.controller.get_per_participant_audio_utterance_delay_ms(), 2000)
+
     def test_recording_is_done_by_the_browser_not_by_a_gstreamer_pipeline(self):
         self.controller.pipeline_configuration = SimpleNamespace(record_audio=True, record_video=True, rtmp_stream_audio=False, rtmp_stream_video=False)
 

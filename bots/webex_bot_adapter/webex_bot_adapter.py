@@ -43,6 +43,7 @@ class WebexBotAdapter(WebBotAdapter, WebexUIMethods):
                 guestToken: {json.dumps(self.create_guest_token())},
                 meetingUrl: {json.dumps(self.meeting_url)},
                 botName: {json.dumps(self.display_name)},
+                perParticipantAudioUtteranceDelayMs: {json.dumps(self.get_per_participant_audio_utterance_delay_ms())},
             }}
         """
 
@@ -79,6 +80,11 @@ class WebexBotAdapter(WebBotAdapter, WebexUIMethods):
     def send_video(self, video_url, loop=False, mute_video=False):
         logger.info(f"send_video called with video_url = {video_url}, loop = {loop}, mute_video = {mute_video}")
         self.driver.execute_script(f"window.botOutputManager.playVideo({json.dumps(video_url)}, {json.dumps(loop)}, {json.dumps(mute_video)})")
+
+    def get_per_participant_audio_utterance_delay_ms(self):
+        if self.room_sync_source_participant_configuration:
+            return 750
+        return 2000
 
     def subclass_specific_after_bot_joined_meeting(self):
         self.after_bot_can_record_meeting()

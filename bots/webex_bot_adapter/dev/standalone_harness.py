@@ -47,6 +47,8 @@ MESSAGE_TYPE_MIXED_AUDIO = 3
 MESSAGE_TYPE_PER_PARTICIPANT_AUDIO = 5
 
 AUDIO_SAMPLE_RATE = 48000
+# The adapter's default, see WebexBotAdapter.get_per_participant_audio_utterance_delay_ms
+PER_PARTICIPANT_AUDIO_DELAY_MS = 2000
 MEETING_OVER_CHANGES = ("removed_from_meeting", "meeting_ended")
 # The webcam is published before the tone starts, so each can be observed on its own
 BOT_OUTPUT_SETTLE_SECONDS = 3
@@ -239,7 +241,7 @@ def main():
     websocket_port = serve_websocket_in_background(messages)
     http_port = start_page_server()
 
-    webex_initial_data = {"meetingUrl": args.meeting_url, "meetingPassword": args.password, "botName": args.bot_name}
+    webex_initial_data = {"meetingUrl": args.meeting_url, "meetingPassword": args.password, "botName": args.bot_name, "perParticipantAudioUtteranceDelayMs": PER_PARTICIPANT_AUDIO_DELAY_MS}
     if args.meeting_url:
         webex_initial_data["guestToken"] = mint_guest_token(args.bot_name)
 

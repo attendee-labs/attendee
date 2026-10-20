@@ -79,6 +79,14 @@ class WebexInitialDataTest(SimpleTestCase):
         self.assertIn(f"meetingUrl: {json.dumps(MEETING_URL)}", initial_data_code)
         bot_name_literal = json.dumps('Bot "Quote"')
         self.assertIn(f"botName: {bot_name_literal}", initial_data_code)
+        self.assertIn("perParticipantAudioUtteranceDelayMs: 2000", initial_data_code)
+
+    def test_per_participant_audio_is_delayed_less_when_syncing_to_a_room(self):
+        adapter = create_adapter()
+        self.assertEqual(adapter.get_per_participant_audio_utterance_delay_ms(), 2000)
+
+        adapter.room_sync_source_participant_configuration = MagicMock()
+        self.assertEqual(adapter.get_per_participant_audio_utterance_delay_ms(), 750)
 
     def test_every_attempt_gets_a_new_guest_token(self):
         callback = MagicMock(side_effect=["first", "second"])

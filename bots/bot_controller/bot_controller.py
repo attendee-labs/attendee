@@ -528,6 +528,8 @@ class BotController:
         meeting_type = self.get_meeting_type()
         if meeting_type == MeetingTypes.TEAMS:
             return self.adapter.get_per_participant_audio_utterance_delay_ms()
+        elif meeting_type == MeetingTypes.WEBEX:
+            return self.adapter.get_per_participant_audio_utterance_delay_ms()
         return 0
 
     def get_per_participant_audio_sample_rate(self):
