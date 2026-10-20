@@ -137,24 +137,25 @@ def create_bot_media_request_for_image(bot, image):
     )
 
 
-def project_credentials_url(project):
-    return build_site_url(reverse("bots:project-credentials", kwargs={"object_id": project.object_id}))
-
-
 def validate_meeting_url_and_credentials(meeting_url, project):
     """
     Validates meeting URL format and required credentials.
     Returns error message if validation fails, None if validation succeeds.
     """
 
-    meeting_type = meeting_type_from_url(meeting_url)
-    if meeting_type == MeetingTypes.ZOOM:
+    if meeting_type_from_url(meeting_url) == MeetingTypes.ZOOM:
         zoom_credentials = project.credentials.filter(credential_type=Credentials.CredentialTypes.ZOOM_OAUTH).first() or project.zoom_oauth_apps.first()
         if not zoom_credentials:
-            return {"error": f"Zoom App credentials are required to create a Zoom bot. Please add Zoom credentials at {project_credentials_url(project)}"}
+            relative_url = reverse("bots:project-credentials", kwargs={"object_id": project.object_id})
+            settings_url = build_site_url(relative_url)
+            return {"error": f"Zoom App credentials are required to create a Zoom bot. Please add Zoom credentials at {settings_url}"}
 
-    if meeting_type == MeetingTypes.WEBEX and not project.credentials.filter(credential_type=Credentials.CredentialTypes.WEBEX_SERVICE_APP).exists():
-        return {"error": f"Webex Service App credentials are required to create a Webex bot. Please add them at {project_credentials_url(project)}"}
+    if meeting_type_from_url(meeting_url) == MeetingTypes.WEBEX:
+        webex_credentials = project.credentials.filter(credential_type=Credentials.CredentialTypes.WEBEX_SERVICE_APP).first()
+        if not webex_credentials:
+            relative_url = reverse("bots:project-credentials", kwargs={"object_id": project.object_id})
+            settings_url = build_site_url(relative_url)
+            return {"error": f"Webex Service App credentials are required to create a Webex bot. Please add them at {settings_url}"}
 
     return None
 

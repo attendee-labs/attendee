@@ -22,7 +22,7 @@ You need a Webex organization with a paid plan: Webex only lets paid organizatio
    Keep the `refresh_token` from the response.
 4. In Attendee, open the project's credentials page and add the **Webex Service App Credentials**: client ID, client secret and refresh token.
 
-**The refresh token expires after about 90 days** (measured: 7,763,462 seconds). It does not rotate and using it does not extend it, so Attendee never has to write a new one back, but you must repeat step 3 and update the credential before it expires. Access tokens last about 14 days. Attendee refreshes one for every bot that starts, then creates a guest token for that bot.
+**The refresh token lasts 90 days, and using it resets that to 90 days**, so you only add it once. Attendee's scheduler refreshes every Webex credential that has not been refreshed in 7 days, and saves the refresh token Webex returns. Webex only resets the lifetime once the token is a few days old: a token used repeatedly on its first day kept counting down, while the same token at 5 days old went from 84.97 back to 90 days after a single call. If a refresh token does expire or is revoked anyway, repeat step 3 and update the credential. Access tokens last about 14 days. Attendee refreshes one for every bot that starts, then creates a guest token for that bot.
 
 Creating a bot for a Webex meeting without these credentials is rejected with an error that points to the credentials page.
 
@@ -119,7 +119,7 @@ The websocket messages are the same ones the other web bots use, so `WebBotAdapt
 
 **Captions need Webex Assistant.** They were verified on one site. Sites or meetings that don't allow captions will give no transcript, and the bot reports that it could not enable them. The caption language is fixed to English; there is no setting for it yet.
 
-**The Service App needs maintenance.** The refresh token has to be replaced about every 90 days, and an expired one only shows up as bots that cannot connect. A dedicated "Webex authorization failed" bot event would be clearer, but it needs a new event subtype and a migration.
+**The refresh token's reset is not documented by Webex.** Attendee relies on the observed behavior that using a refresh token resets its 90 day lifetime. If Webex changes that, the token expires 90 days after it was issued, and an expired one only shows up as bots that cannot connect and an error in the scheduler's logs. A dedicated "Webex authorization failed" bot event would be clearer, but it needs a new event subtype and a migration.
 
 **Deviations from how the other bots work.**
 - It drives an SDK, not the meeting's web UI, so there are no selectors, no navigation config for the UI, and nothing to break when Webex changes its page.
