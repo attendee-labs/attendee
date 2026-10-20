@@ -360,7 +360,7 @@ class BotPodCreator:
         bot_pod_name: str,
         bot_pod_cpu_request: Optional[int] = None,
         bot_pod_spec_type: Optional[str] = BotPodSpecType.DEFAULT,
-        bot_pod_extra_labels: Dict[str, str] = {},
+        bot_pod_extra_labels: Optional[Dict[str, str]] = None,
         add_webpage_streamer: Optional[bool] = False,
         add_persistent_storage: Optional[bool] = False,
         assigned_bot_object_id: Optional[str] = None,
@@ -377,7 +377,7 @@ class BotPodCreator:
             add_persistent_storage: Whether to add persistent storage to the bot pod
             bot_pod_spec_type: Name of the bot pod spec to use (e.g. DEFAULT, SCHEDULED, or any custom name).
                               Will look up BOT_POD_SPEC_{name} from environment variables.
-            bot_pod_extra_labels: Additional labels to add to the bot pod
+            bot_pod_extra_labels: Additional labels to add to the bot pod. Cannot override the reserved labels set by this method.
             assigned_bot_object_id: Object ID of the bot this pod runs. Leave as None for unassigned bot runner pods.
             add_downward_api_volume_for_labels: Whether to mount the pod's labels into the bot container at POD_LABELS_FILE_PATH
         """
@@ -391,6 +391,7 @@ class BotPodCreator:
 
         # Metadata labels matching the deployment
         bot_pod_labels = {
+            **(bot_pod_extra_labels or {}),
             "app.kubernetes.io/name": self.app_name,
             "app.kubernetes.io/instance": self.app_instance,
             "app.kubernetes.io/version": self.app_version,
@@ -402,7 +403,6 @@ class BotPodCreator:
         }
         if add_webpage_streamer:
             bot_pod_labels["network-role"] = "attendee-webpage-streamer-receiver"
-        bot_pod_labels.update(bot_pod_extra_labels)
 
         annotations = {}
         
