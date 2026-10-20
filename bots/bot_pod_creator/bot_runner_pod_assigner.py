@@ -10,6 +10,10 @@ from kubernetes import client, config
 logger = logging.getLogger(__name__)
 
 
+class ClaimOutcomeUnknownError(Exception):
+    pass
+
+
 class BotRunnerPodAssigner:
     """
     Assigns bots to existing unassigned bot runner pods instead of creating new pods.
@@ -79,16 +83,37 @@ class BotRunnerPodAssigner:
             {"op": "replace", "path": "/metadata/labels/assigned-bot-id", "value": bot_object_id},
         ]
 
-        try:
-            self.v1.patch_namespaced_pod(
-                name=pod_name,
-                namespace=self.namespace,
-                body=patch,
-            )
-            return True
-        except client.ApiException as e:
-            logger.error("Failed to assign pod %s to bot %s: %s", pod_name, bot_object_id, e)
-            return False
+        # An error response doesn't mean the patch wasn't applied: the API server can commit it and still
+        # return e.g. a 504, or commit it after responding. Because of the resourceVersion test, the patch can
+        # only ever apply while the pod is unchanged, so we read the pod back to find out where we stand.
+        for attempt in range(2):
+            try:
+                self.v1.patch_namespaced_pod(
+                    name=pod_name,
+                    namespace=self.namespace,
+                    body=patch,
+                )
+                return True
+            except client.ApiException as e:
+                logger.error("Failed to assign pod %s to bot %s (attempt %d): %s", pod_name, bot_object_id, attempt + 1, e)
+
+            try:
+                pod = self.v1.read_namespaced_pod(name=pod_name, namespace=self.namespace)
+            except client.ApiException as e:
+                if e.status == 404:
+                    return False
+                raise ClaimOutcomeUnknownError(f"Could not read pod {pod_name} to verify claim for bot {bot_object_id}: {e}")
+
+            assigned_bot_id = (pod.metadata.labels or {}).get("assigned-bot-id")
+            if assigned_bot_id == bot_object_id:
+                logger.info("Claim of pod %s for bot %s was applied despite the error response", pod_name, bot_object_id)
+                return True
+            if assigned_bot_id != "none" or pod.metadata.resource_version != resource_version:
+                return False
+            # The pod is unchanged, so our patch may still be applied. Resending it to the same pod is safe
+            # because at most one of the two can apply.
+
+        raise ClaimOutcomeUnknownError(f"Claim of pod {pod_name} for bot {bot_object_id} may still be applied")
 
     def assign_bot(self, bot_object_id: str) -> Dict:
         """
@@ -104,9 +129,11 @@ class BotRunnerPodAssigner:
             - assigned: True if assignment was successful
             - pod_name: Name of the assigned pod (if successful)
             - error: Error message (if failed)
+            - outcome_unknown: True if a claim may still be applied to a runner pod. The bot must not be
+              launched anywhere else, or it could end up running twice.
         """
         result = self._attempt_to_assign_bot(bot_object_id)
-        if result["assigned"]:
+        if result["assigned"] or result.get("outcome_unknown"):
             return result
 
         logger.info("First assignment attempt failed for bot %s, retrying in 1 second...", bot_object_id)
@@ -142,7 +169,16 @@ class BotRunnerPodAssigner:
         pod_name = pod.metadata.name
 
         # The bot runner picks up the label change through its downward API volume
-        if not self._claim_pod_if_unassigned(pod_name, pod.metadata.resource_version, bot_object_id):
+        try:
+            claimed = self._claim_pod_if_unassigned(pod_name, pod.metadata.resource_version, bot_object_id)
+        except ClaimOutcomeUnknownError as e:
+            logger.error("%s", e)
+            return {
+                "assigned": False,
+                "outcome_unknown": True,
+                "error": str(e),
+            }
+        if not claimed:
             return {
                 "assigned": False,
                 "error": f"Failed to update pod label for {pod_name}",

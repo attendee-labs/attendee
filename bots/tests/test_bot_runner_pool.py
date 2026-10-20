@@ -454,6 +454,116 @@ class BotRunnerPoolEndToEndTest(TestCase):
         self.assertEqual(self.fake_v1.labels("bot-runner-a")["assigned-bot-id"], "bot_someoneelse")
         self.assertEqual(self._pods_assigned_to(self.bot.object_id), [self.bot.k8s_pod_name()])
 
+    def _simulate_gateway_timeouts_on_patch(self, outcomes):
+        """
+        Make the client see a 504 for some patch calls. Each entry in outcomes applies to one call, in order:
+        - "ok": the patch is applied and the response is returned
+        - "committed": the patch is applied, but the client gets a 504
+        - "in_flight": the client gets a 504 before the API server has applied the patch. The request is
+          appended to the returned list so the test can let it reach the API server later.
+        Calls beyond the list behave normally.
+        """
+        real_patch = self.fake_v1.patch_namespaced_pod
+        outcomes = iter(outcomes)
+        in_flight_patches = []
+
+        def patch_namespaced_pod(name, namespace, body):
+            outcome = next(outcomes, "ok")
+            if outcome == "in_flight":
+                in_flight_patches.append({"name": name, "namespace": namespace, "body": body})
+                raise client.ApiException(status=504, reason="Gateway Timeout")
+            result = real_patch(name=name, namespace=namespace, body=body)
+            if outcome == "committed":
+                raise client.ApiException(status=504, reason="Gateway Timeout")
+            return result
+
+        return patch.object(self.fake_v1, "patch_namespaced_pod", side_effect=patch_namespaced_pod), in_flight_patches
+
+    def test_does_not_claim_second_runner_when_claim_committed_but_reported_failure(self):
+        self._add_runner_pod("bot-runner-a")
+        self._add_runner_pod("bot-runner-b")
+        patcher, _ = self._simulate_gateway_timeouts_on_patch(["committed"])
+
+        with patcher:
+            launch_bot(self.bot)
+
+        self.assertEqual(len(self._pods_assigned_to(self.bot.object_id)), 1)
+        self.assertEqual(len(self._unassigned_runner_pods()), 1)
+        self.assertEqual(self.fake_v1.pod_names(), ["bot-runner-a", "bot-runner-b"])
+        self.mock_sleep.assert_not_called()
+
+    def test_resends_claim_to_same_runner_when_claim_is_still_in_flight(self):
+        self._add_runner_pod("bot-runner-a")
+        self._add_runner_pod("bot-runner-b")
+        patcher, in_flight_patches = self._simulate_gateway_timeouts_on_patch(["in_flight"])
+
+        with patcher:
+            launch_bot(self.bot)
+
+        claimed_pod_name = in_flight_patches[0]["name"]
+        self.assertEqual(self._pods_assigned_to(self.bot.object_id), [claimed_pod_name])
+
+        # The original request reaching the API server late is rejected by the resourceVersion test
+        with self.assertRaises(client.ApiException) as context:
+            self.fake_v1.patch_namespaced_pod(**in_flight_patches[0])
+        self.assertEqual(context.exception.status, 422)
+        self.assertEqual(self._pods_assigned_to(self.bot.object_id), [claimed_pod_name])
+        self.assertEqual(self.fake_v1.pod_names(), ["bot-runner-a", "bot-runner-b"])
+        self.mock_sleep.assert_not_called()
+
+    def test_does_not_launch_elsewhere_when_claim_outcome_stays_unknown(self):
+        self._add_runner_pod("bot-runner-a")
+        self._add_runner_pod("bot-runner-b")
+        patcher, in_flight_patches = self._simulate_gateway_timeouts_on_patch(["in_flight", "in_flight"])
+
+        with patcher:
+            launch_bot(self.bot)
+
+        # Neither another runner nor a dedicated pod was used
+        self.assertEqual(self._pods_assigned_to(self.bot.object_id), [])
+        self.assertEqual(self.fake_v1.pod_names(), ["bot-runner-a", "bot-runner-b"])
+
+        # Both requests went to the same runner, so whichever lands, the bot runs on exactly one pod
+        claimed_pod_name = in_flight_patches[0]["name"]
+        self.assertEqual(in_flight_patches[1]["name"], claimed_pod_name)
+        self.fake_v1.patch_namespaced_pod(**in_flight_patches[1])
+        with self.assertRaises(client.ApiException):
+            self.fake_v1.patch_namespaced_pod(**in_flight_patches[0])
+        self.assertEqual(self._pods_assigned_to(self.bot.object_id), [claimed_pod_name])
+
+    def test_does_not_launch_elsewhere_when_claim_cannot_be_verified(self):
+        self._add_runner_pod("bot-runner-a")
+        self._add_runner_pod("bot-runner-b")
+        patcher, in_flight_patches = self._simulate_gateway_timeouts_on_patch(["in_flight"])
+
+        with patcher, patch.object(self.fake_v1, "read_namespaced_pod", side_effect=client.ApiException(status=500)):
+            launch_bot(self.bot)
+
+        self.assertEqual(len(in_flight_patches), 1)
+        self.assertEqual(self._pods_assigned_to(self.bot.object_id), [])
+        self.assertEqual(self.fake_v1.pod_names(), ["bot-runner-a", "bot-runner-b"])
+
+    def test_retries_on_another_runner_when_retry_claim_committed_but_reported_failure(self):
+        self._add_runner_pod("bot-runner-a")
+        self._add_runner_pod("bot-runner-b")
+        stolen_pod_names = []
+
+        def another_assigner_claims_pod_first(pod_name):
+            stolen_pod_names.append(pod_name)
+            self.fake_v1.labels(pod_name)["assigned-bot-id"] = "bot_someoneelse"
+
+        self.fake_v1.before_patch = another_assigner_claims_pod_first
+        # The first patch is rejected by the "test" op, the retry's patch is committed but reported as failed
+        patcher, _ = self._simulate_gateway_timeouts_on_patch(["ok", "committed"])
+
+        with patcher:
+            launch_bot(self.bot)
+
+        remaining_pod_name = "bot-runner-b" if stolen_pod_names[0] == "bot-runner-a" else "bot-runner-a"
+        self.assertEqual(self._pods_assigned_to(self.bot.object_id), [remaining_pod_name])
+        self.assertEqual(self.fake_v1.pod_names(), ["bot-runner-a", "bot-runner-b"])
+        self.mock_sleep.assert_called_once_with(1)
+
     def test_scheduled_bot_does_not_use_runner_pool(self):
         self._add_runner_pod("bot-runner-a")
         self.bot.join_at = timezone.now() + timedelta(minutes=10)

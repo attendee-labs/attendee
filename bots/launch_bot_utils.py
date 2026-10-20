@@ -49,6 +49,13 @@ def _launch_bot_pod_with_runner_pool(bot):
             bot.id,
             assign_result.get("pod_name"),
         )
+    elif assign_result.get("outcome_unknown"):
+        logger.error(
+            "Bot %s (%s) may or may not have been assigned to a runner pod: %s. Not falling back to pod creation.",
+            bot.object_id,
+            bot.id,
+            assign_result.get("error"),
+        )
     else:
         logger.warning(
             "Bot %s (%s) could not be assigned to a runner pod: %s. Falling back to pod creation.",
