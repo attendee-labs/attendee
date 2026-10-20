@@ -934,9 +934,10 @@ class Bot(models.Model):
 
         # Delete all utterances and recording files for each recording
         for recording in self.recordings.all():
-            # Delete all audio chunks and utterances first
-            recording.audio_chunks.all().delete()
+            # Delete utterances before audio chunks so the SET_NULL cascade from Utterance.audio_chunk has nothing to update
             recording.utterances.all().delete()
+            # Only load the id, so the audio blobs aren't pulled into memory
+            recording.audio_chunks.only("id").delete()
 
             # Delete the actual recording file if it exists
             if recording.file and recording.file.name:
