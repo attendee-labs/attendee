@@ -130,6 +130,12 @@ class FakeCoreV1Api:
         metadata["deletionTimestamp"] = "2026-01-01T00:00:00Z"
         metadata["resourceVersion"] = str(int(metadata["resourceVersion"]) + 1)
 
+    def set_label(self, name, key, value, namespace=NAMESPACE):
+        """Simulate another client changing a label, which bumps resourceVersion like any real write."""
+        metadata = self.pods[(namespace, name)]["metadata"]
+        metadata["labels"][key] = value
+        metadata["resourceVersion"] = str(int(metadata["resourceVersion"]) + 1)
+
     def labels(self, name, namespace=NAMESPACE):
         return self.pods[(namespace, name)]["metadata"]["labels"]
 
@@ -438,7 +444,7 @@ class BotRunnerPoolEndToEndTest(TestCase):
 
         def another_assigner_claims_pod_first(pod_name):
             stolen_pod_names.append(pod_name)
-            self.fake_v1.labels(pod_name)["assigned-bot-id"] = "bot_someoneelse"
+            self.fake_v1.set_label(pod_name, "assigned-bot-id", "bot_someoneelse")
 
         self.fake_v1.before_patch = another_assigner_claims_pod_first
 
@@ -458,7 +464,7 @@ class BotRunnerPoolEndToEndTest(TestCase):
         self._add_runner_pod("bot-runner-a")
 
         def another_assigner_claims_pod_first(pod_name):
-            self.fake_v1.labels(pod_name)["assigned-bot-id"] = "bot_someoneelse"
+            self.fake_v1.set_label(pod_name, "assigned-bot-id", "bot_someoneelse")
 
         self.fake_v1.before_patch = another_assigner_claims_pod_first
 
@@ -563,7 +569,7 @@ class BotRunnerPoolEndToEndTest(TestCase):
 
         def another_assigner_claims_pod_first(pod_name):
             stolen_pod_names.append(pod_name)
-            self.fake_v1.labels(pod_name)["assigned-bot-id"] = "bot_someoneelse"
+            self.fake_v1.set_label(pod_name, "assigned-bot-id", "bot_someoneelse")
 
         self.fake_v1.before_patch = another_assigner_claims_pod_first
         # The first patch is rejected by the "test" op, the retry's patch is committed but reported as failed
