@@ -63,15 +63,19 @@ class FakeCoreV1Api:
             raise client.ApiException(status=404, reason="Not Found")
         return self._to_pod(pod)
 
-    def list_namespaced_pod(self, namespace, label_selector=None):
+    def list_namespaced_pod(self, namespace, label_selector=None, field_selector=None):
         required_labels = self._parse_label_selector(label_selector)
+        required_fields = self._parse_label_selector(field_selector)
         items = []
         for (pod_namespace, _), pod in self.pods.items():
             if pod_namespace != namespace:
                 continue
             labels = pod["metadata"]["labels"]
-            if all(labels.get(key) == value for key, value in required_labels.items()):
-                items.append(self._to_pod(pod))
+            if not all(labels.get(key) == value for key, value in required_labels.items()):
+                continue
+            if not all(self._get_field(pod, key) == value for key, value in required_fields.items()):
+                continue
+            items.append(self._to_pod(pod))
         return SimpleNamespace(items=items)
 
     def patch_namespaced_pod(self, name, namespace, body):
@@ -147,6 +151,15 @@ class FakeCoreV1Api:
         if not label_selector:
             return {}
         return dict(term.split("=", 1) for term in label_selector.split(","))
+
+    @staticmethod
+    def _get_field(pod, field_path):
+        value = pod
+        for part in field_path.split("."):
+            if not isinstance(value, dict):
+                return None
+            value = value.get(part)
+        return value
 
     @staticmethod
     def _to_pod(pod):
