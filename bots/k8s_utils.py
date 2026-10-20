@@ -10,20 +10,26 @@ def find_bot_pod(v1, namespace, bot):
     """Return the pod running this bot, or None if there isn't one.
 
     The bot may be running on a pod created specifically for it or on a bot runner pod
-    that was assigned to it, so we look up by the assigned-bot-id label first. Older pods
-    may not have that label, so we fall back to looking up the pod by the bot's pod name.
-    Assumes there is at most one pod per bot.
+    that was assigned to it, so we look up the pod by the bot's pod name first and fall
+    back to looking up by the assigned-bot-id label. Listing pods requires an extra RBAC
+    permission that some deployments don't grant, so if we can't list we treat the pod
+    as not found. Assumes there is at most one pod per bot.
     """
-    pods = v1.list_namespaced_pod(namespace=namespace, label_selector=f"assigned-bot-id={bot.object_id}")
-    if pods.items:
-        return pods.items[0]
-
     try:
         return v1.read_namespaced_pod(name=bot.k8s_pod_name(), namespace=namespace)
     except client.ApiException as e:
-        if e.status == 404:
+        if e.status != 404:
+            raise
+
+    try:
+        pods = v1.list_namespaced_pod(namespace=namespace, label_selector=f"assigned-bot-id={bot.object_id}")
+    except client.ApiException as e:
+        if e.status == 403:
+            logger.warning("Not permitted to list pods in namespace %s, so cannot look up pod for bot %s by label: %s", namespace, bot.object_id, e)
             return None
         raise
+
+    return pods.items[0] if pods.items else None
 
 
 def find_bot_pod_name(v1, namespace, bot):
