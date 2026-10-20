@@ -935,8 +935,8 @@ class Bot(models.Model):
         for recording in self.recordings.all():
             # Delete utterances before audio chunks so the SET_NULL cascade from Utterance.audio_chunk has nothing to update
             recording.utterances.all().delete()
-            # Delete audio chunks in batches to avoid loading all audio blobs into memory
-            recording.delete_audio_chunks()
+            # Only load the id, so the audio blobs aren't pulled into memory
+            recording.audio_chunks.only("id").delete()
 
             # Delete the actual recording file if it exists
             if recording.file and recording.file.name:
@@ -2445,13 +2445,6 @@ class Recording(models.Model):
             Params={"Bucket": self.file.storage.bucket_name, "Key": self.file.name},
             ExpiresIn=1800,
         )
-
-    def delete_audio_chunks(self, batch_size=1000):
-        while True:
-            audio_chunk_ids = list(self.audio_chunks.order_by("id").values_list("id", flat=True)[:batch_size])
-            if not audio_chunk_ids:
-                break
-            AudioChunk.objects.filter(id__in=audio_chunk_ids).only("id").delete()
 
     OBJECT_ID_PREFIX = "rec_"
     object_id = models.CharField(max_length=32, unique=True, editable=False)

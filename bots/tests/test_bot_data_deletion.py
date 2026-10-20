@@ -288,17 +288,16 @@ class TestBotDataDeletion(TransactionTestCase):
         for recording in Recording.objects.filter(bot=self.bot1):
             self.assertFalse(recording.file)
 
-    def test_delete_audio_chunks_does_not_load_audio_blobs(self):
-        """Test that deleting audio chunks never selects the audio_blob column and works across multiple batches"""
+    def test_delete_data_does_not_load_audio_blobs(self):
+        """Test that deleting a bot's data never selects the audio chunk audio_blob column"""
         for i in range(5):
             audio_chunk = AudioChunk.objects.create(recording=self.recording1, participant=self.participant1, audio_blob=b"test audio", timestamp_ms=2000 + i, duration_ms=500, sample_rate=16000)
             Utterance.objects.create(recording=self.recording1, participant=self.participant1, audio_chunk=audio_chunk, timestamp_ms=2000 + i, duration_ms=500)
 
         with CaptureQueriesContext(connection) as captured_queries:
-            self.recording1.delete_audio_chunks(batch_size=2)
+            self.bot1.delete_data()
 
         self.assertEqual(AudioChunk.objects.filter(recording=self.recording1).count(), 0)
-        self.assertEqual(Utterance.objects.filter(recording=self.recording1, audio_chunk__isnull=True).count(), 6)
         self.assertEqual(AudioChunk.objects.filter(recording=self.recording2).count(), 1)
         for query in captured_queries.captured_queries:
             self.assertNotIn('"bots_audiochunk"."audio_blob"', query["sql"])
