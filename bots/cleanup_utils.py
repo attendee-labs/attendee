@@ -89,7 +89,8 @@ def cleanup_old_audio_chunks(*, cutoff, batch_size, dry_run):
         if not ids:
             break
 
-        deleted, _ = AudioChunk.objects.filter(id__in=ids).delete()
+        # Only load the id, so the audio blobs aren't pulled into memory
+        deleted, _ = AudioChunk.objects.filter(id__in=ids).only("id").delete()
         total_deleted += deleted
         last_id = ids[-1]
         logger.info(f"[audio_chunks] Deleted {total_deleted} audio chunks so far.")
