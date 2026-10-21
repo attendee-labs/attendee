@@ -41,7 +41,7 @@ The agent will be loaded once the bot joins the meeting and starts recording.
 
 ## Screen sharing
 
-To display your voice agent's video through screenshare instead of the webcam, use `screenshare_url` in place of `url`.
+To display your voice agent's video through screenshare instead of the webcam, use `screenshare_url` in place of `url`. This url does not need to contain an actual voice agent, it can be any publicly accessible webpage that you would like to display as the bot's screenshare.
 
 ```json
 {
