@@ -305,22 +305,21 @@ class BotController:
             teams_bot_identification_credentials=self.get_teams_bot_identification_credentials(),
         )
 
-    def get_webex_service_app_credentials(self):
-        credentials_record = self.bot_in_db.project.credentials.filter(credential_type=Credentials.CredentialTypes.WEBEX_SERVICE_APP).first()
-        return credentials_record.get_credentials() if credentials_record else None
+    def get_webex_service_app(self):
+        return self.bot_in_db.project.webex_service_apps.first()
 
     def create_webex_guest_token(self):
         from bots.webex_bot_adapter.webex_guest_token import WebexAuthError, create_guest_token_from_refresh_token
 
-        # The credentials are read on the main thread so no extra sql connection is added, and the requests to Webex stay on the adapter's thread
-        credentials = self.main_thread_executor.run(self.get_webex_service_app_credentials)
-        if not credentials:
-            raise WebexAuthError("Webex Service App credentials not found")
+        # The Service App is read on the main thread so no extra sql connection is added, and the requests to Webex stay on the adapter's thread
+        webex_service_app = self.main_thread_executor.run(self.get_webex_service_app)
+        if not webex_service_app or not webex_service_app.refresh_token:
+            raise WebexAuthError("Authorized Webex Service App not found")
 
         return create_guest_token_from_refresh_token(
-            credentials["client_id"],
-            credentials["client_secret"],
-            credentials["refresh_token"],
+            webex_service_app.client_id,
+            webex_service_app.client_secret,
+            webex_service_app.refresh_token,
             subject=f"attendee-{self.bot_in_db.object_id}",
             display_name=self.bot_in_db.name,
         )

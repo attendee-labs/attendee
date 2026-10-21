@@ -4,7 +4,7 @@ from .launch_adhoc_bot_task import launch_adhoc_bot
 from .launch_scheduled_bot_task import launch_scheduled_bot
 from .process_async_transcription_task import process_async_transcription
 from .process_utterance_task import process_utterance
-from .refresh_webex_service_app_credentials_task import refresh_webex_service_app_credentials
+from .refresh_webex_service_app_task import refresh_webex_service_app
 from .refresh_zoom_oauth_connection_task import refresh_zoom_oauth_connection
 from .restart_bot_pod_task import restart_bot_pod
 from .run_bot_in_ephemeral_container_task import run_bot_in_ephemeral_container
@@ -27,7 +27,7 @@ __all__ = [
     "process_async_transcription",
     "sync_zoom_oauth_connection",
     "refresh_zoom_oauth_connection",
-    "refresh_webex_service_app_credentials",
+    "refresh_webex_service_app",
     "validate_zoom_oauth_connections",
     "send_slack_alert",
     "run_bot_in_ephemeral_container",

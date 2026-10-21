@@ -322,6 +322,58 @@ class ZoomOAuthApp(models.Model):
         return f"{self.project.name} - {self.object_id} - {self.client_id}"
 
 
+class WebexServiceApp(models.Model):
+    OBJECT_ID_PREFIX = "wsa_"
+
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="webex_service_apps")
+    object_id = models.CharField(max_length=32, unique=True, editable=False)
+
+    _encrypted_data = models.BinaryField(
+        null=True,
+        editable=False,  # Prevents editing through admin/forms
+    )
+    client_id = models.CharField(max_length=255)
+    service_app_id = models.CharField(max_length=255)
+    org_id = models.CharField(max_length=255)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    # When the tokens were last issued or refreshed. None until the Service App is authorized.
+    tokens_refreshed_at = models.DateTimeField(null=True, blank=True)
+
+    @property
+    def client_secret(self):
+        return self.get_credentials().get("client_secret")
+
+    @property
+    def refresh_token(self):
+        return self.get_credentials().get("refresh_token")
+
+    def set_credentials(self, credentials_dict):
+        """Encrypt and save credentials"""
+        f = Fernet(settings.CREDENTIALS_ENCRYPTION_KEY)
+        json_data = json.dumps(credentials_dict)
+        self._encrypted_data = f.encrypt(json_data.encode())
+        self.save()
+
+    def get_credentials(self):
+        """Decrypt and return credentials"""
+        if not self._encrypted_data:
+            return None
+        f = Fernet(settings.CREDENTIALS_ENCRYPTION_KEY)
+        decrypted_data = f.decrypt(bytes(self._encrypted_data))
+        return json.loads(decrypted_data.decode())
+
+    def save(self, *args, **kwargs):
+        if not self.object_id:
+            # Generate a random 16-character string
+            random_string = "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(16))
+            self.object_id = f"{self.OBJECT_ID_PREFIX}{random_string}"
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.project.name} - {self.object_id} - {self.client_id}"
+
+
 class ZoomOAuthConnectionStates(models.IntegerChoices):
     CONNECTED = 1
     DISCONNECTED = 2
@@ -2861,7 +2913,6 @@ class Credentials(models.Model):
         KYUTAI = 11, "Kyutai"
         TEAMS_BOT_IDENTIFICATION_CREDENTIALS = 12, "Teams Bot Identification Credentials"
         LIVEKIT = 13, "LiveKit"
-        WEBEX_SERVICE_APP = 14, "Webex Service App"
 
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="credentials")
     credential_type = models.IntegerField(choices=CredentialTypes.choices, null=False)

@@ -8,12 +8,11 @@ from bots.bot_controller.bot_controller import BotController
 from bots.bot_controller.gstreamer_pipeline import GstreamerPipeline
 from bots.bot_controller.main_thread_executor import MainThreadExecutor
 from bots.bots_api_utils import validate_meeting_url_and_credentials
-from bots.models import Bot, Credentials, Project
+from bots.models import Bot, Project, WebexServiceApp
 from bots.serializers import CreateBotSerializer
 from bots.webex_bot_adapter.webex_guest_token import WebexAuthError
 
 WEBEX_URL = "https://acme.my.webex.com/meet/jane.doe"
-WEBEX_CREDENTIALS = {"client_id": "client-id", "client_secret": "client-secret", "refresh_token": "refresh-token"}
 
 
 class WebexBotTestCase(TestCase):
@@ -21,22 +20,28 @@ class WebexBotTestCase(TestCase):
         organization = Organization.objects.create(name="Test Organization")
         self.project = Project.objects.create(name="Test Project", organization=organization)
 
-    def add_credentials(self):
-        Credentials.objects.create(project=self.project, credential_type=Credentials.CredentialTypes.WEBEX_SERVICE_APP).set_credentials(WEBEX_CREDENTIALS)
+    def add_service_app(self, refresh_token="refresh-token"):
+        webex_service_app = WebexServiceApp(project=self.project, client_id="client-id", service_app_id="service-app-id", org_id="org-id")
+        credentials = {"client_secret": "client-secret"}
+        if refresh_token:
+            credentials["refresh_token"] = refresh_token
+        webex_service_app.set_credentials(credentials)
 
 
 class WebexBotCreationTest(WebexBotTestCase):
-    def test_creating_a_webex_bot_requires_the_service_app_credentials(self):
-        error = validate_meeting_url_and_credentials(WEBEX_URL, self.project)
+    def test_creating_a_webex_bot_requires_an_authorized_service_app(self):
+        expected_error = {"error": f"An authorized Webex Service App is required to create a Webex bot. Please add and authorize it at http://localhost:8000/projects/{self.project.object_id}/credentials"}
+        self.assertEqual(validate_meeting_url_and_credentials(WEBEX_URL, self.project), expected_error)
 
-        self.assertEqual(error, {"error": f"Webex Service App credentials are required to create a Webex bot. Please add them at http://localhost:8000/projects/{self.project.object_id}/credentials"})
+        self.add_service_app(refresh_token=None)
+        self.assertEqual(validate_meeting_url_and_credentials(WEBEX_URL, self.project), expected_error)
 
-    def test_a_webex_bot_with_the_credentials_is_valid(self):
-        self.add_credentials()
+    def test_a_webex_bot_with_an_authorized_service_app_is_valid(self):
+        self.add_service_app()
 
         self.assertIsNone(validate_meeting_url_and_credentials(WEBEX_URL, self.project))
 
-    def test_other_platforms_do_not_need_the_webex_credentials(self):
+    def test_other_platforms_do_not_need_the_webex_service_app(self):
         self.assertIsNone(validate_meeting_url_and_credentials("https://meet.google.com/abc-defg-hij", self.project))
 
     def test_a_webex_bot_is_transcribed_with_the_meeting_captions_by_default(self):
@@ -82,8 +87,8 @@ class WebexBotControllerTest(WebexBotTestCase):
 
         self.assertIs(self.controller.get_bot_adapter(), self.controller.get_webex_bot_adapter.return_value)
 
-    def test_the_guest_token_is_created_from_the_project_credentials(self):
-        self.add_credentials()
+    def test_the_guest_token_is_created_from_the_project_service_app(self):
+        self.add_service_app()
 
         with patch("bots.webex_bot_adapter.webex_guest_token.create_guest_token_from_refresh_token", return_value="guest-token") as create_guest_token:
             guest_token = self.controller.create_webex_guest_token()
@@ -91,6 +96,10 @@ class WebexBotControllerTest(WebexBotTestCase):
         self.assertEqual(guest_token, "guest-token")
         create_guest_token.assert_called_once_with("client-id", "client-secret", "refresh-token", subject=f"attendee-{self.bot.object_id}", display_name="Test Bot")
 
-    def test_creating_a_guest_token_without_credentials_is_an_authorization_error(self):
+    def test_creating_a_guest_token_without_an_authorized_service_app_is_an_authorization_error(self):
+        with self.assertRaises(WebexAuthError):
+            self.controller.create_webex_guest_token()
+
+        self.add_service_app(refresh_token=None)
         with self.assertRaises(WebexAuthError):
             self.controller.create_webex_guest_token()

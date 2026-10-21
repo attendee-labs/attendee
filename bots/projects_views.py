@@ -8,6 +8,7 @@ import stripe
 from allauth.account.utils import send_email_confirmation
 from django.conf import settings
 from django.contrib.auth.mixins import LoginRequiredMixin
+from django.core import signing
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import models, transaction
 from django.db.models.fields.json import KeyTextTransform
@@ -15,6 +16,7 @@ from django.db.models.functions import Cast
 from django.http import Http404, HttpResponse, QueryDict
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
+from django.utils import timezone
 from django.views import View
 from django.views.generic import ListView
 
@@ -22,7 +24,7 @@ from accounts.models import User, UserRole
 
 from .bot_resource_usage_utils import DEFAULT_WINDOW as BOT_RESOURCE_USAGE_DEFAULT_WINDOW
 from .bot_resource_usage_utils import get_bot_resource_usage_data, user_can_view_bot_resource_usage
-from .bots_api_utils import BotCreationSource, create_bot, create_webhook_subscription
+from .bots_api_utils import BotCreationSource, build_site_url, create_bot, create_webhook_subscription
 from .instance_health_alert_manager import get_alert_configs, update_alert_settings
 from .instance_health_utils import DEFAULT_WINDOW, get_instance_health_data, user_can_view_instance_health
 from .launch_bot_utils import launch_adhoc_bot_from_view
@@ -55,6 +57,7 @@ from .models import (
     RecordingTypes,
     SessionTypes,
     Utterance,
+    WebexServiceApp,
     WebhookDeliveryAttempt,
     WebhookDeliveryAttemptStatus,
     WebhookSecret,
@@ -71,6 +74,7 @@ from .utils import (
     obfuscate_recordings_json_for_bot_detail_view,
     obfuscate_webhook_delivery_attempts_for_bot_detail_view,
 )
+from .webex_bot_adapter.webex_guest_token import WebexAuthError, exchange_integration_authorization_code, integration_authorize_url, issue_service_app_tokens
 from .zoom_oauth_apps_api_utils import create_or_update_zoom_oauth_app
 
 logger = logging.getLogger(__name__)
@@ -218,8 +222,6 @@ def get_partial_for_credential_type(credential_type, request, context):
         return render(request, "projects/partials/teams_bot_identification_credentials.html", context)
     elif credential_type == Credentials.CredentialTypes.LIVEKIT:
         return render(request, "projects/partials/livekit_credentials.html", context)
-    elif credential_type == Credentials.CredentialTypes.WEBEX_SERVICE_APP:
-        return render(request, "projects/partials/webex_service_app_credentials.html", context)
     else:
         return HttpResponse("Cannot render the partial for this credential type", status=400)
 
@@ -363,6 +365,92 @@ class CreateZoomOAuthAppView(LoginRequiredMixin, ProjectUrlContextMixin, View):
         return render(request, "projects/partials/zoom_oauth_app.html", context)
 
 
+WEBEX_OAUTH_STATE_SALT = "webex-service-app-oauth"
+WEBEX_OAUTH_STATE_MAX_AGE_SECONDS = 600
+
+
+def webex_integration_configured():
+    return bool(settings.WEBEX_INTEGRATION_CLIENT_ID and settings.WEBEX_INTEGRATION_CLIENT_SECRET)
+
+
+def webex_oauth_redirect_uri():
+    return build_site_url(reverse("projects:webex-service-app-oauth-callback"))
+
+
+def render_webex_service_app_partial(request, context, webex_service_app):
+    context["webex_service_app"] = webex_service_app
+    context["webex_integration_configured"] = webex_integration_configured()
+    return render(request, "projects/partials/webex_service_app.html", context)
+
+
+class CreateWebexServiceAppView(LoginRequiredMixin, ProjectUrlContextMixin, View):
+    def post(self, request, object_id):
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
+        fields = {name: (request.POST.get(name) or "").strip() for name in ("client_id", "client_secret", "service_app_id", "org_id")}
+        if not all(fields.values()):
+            return HttpResponse("Client ID, Client Secret, Service App ID and Organization ID are required", status=400)
+
+        # Saving replaces the Service App, so it has to be authorized again
+        WebexServiceApp.objects.filter(project=project).delete()
+        webex_service_app = WebexServiceApp(project=project, client_id=fields["client_id"], service_app_id=fields["service_app_id"], org_id=fields["org_id"])
+        webex_service_app.set_credentials({"client_secret": fields["client_secret"]})
+
+        context = self.get_project_context(object_id, project)
+        return render_webex_service_app_partial(request, context, webex_service_app)
+
+
+class DeleteWebexServiceAppView(LoginRequiredMixin, ProjectUrlContextMixin, View):
+    def post(self, request, object_id):
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
+        WebexServiceApp.objects.filter(project=project).delete()
+        context = self.get_project_context(object_id, project)
+        return render_webex_service_app_partial(request, context, None)
+
+
+class AuthorizeWebexServiceAppView(LoginRequiredMixin, View):
+    """Send the user to the Webex sign-in page, so the Integration can issue the Service App's tokens."""
+
+    def get(self, request, object_id):
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
+        if not WebexServiceApp.objects.filter(project=project).exists():
+            return HttpResponse("Webex Service App not found", status=404)
+        if not webex_integration_configured():
+            return HttpResponse("WEBEX_INTEGRATION_CLIENT_ID and WEBEX_INTEGRATION_CLIENT_SECRET are not set", status=400)
+
+        state = signing.dumps({"project_object_id": project.object_id, "user_id": request.user.id}, salt=WEBEX_OAUTH_STATE_SALT)
+        return redirect(integration_authorize_url(settings.WEBEX_INTEGRATION_CLIENT_ID, webex_oauth_redirect_uri(), state))
+
+
+class WebexServiceAppOAuthCallbackView(LoginRequiredMixin, View):
+    """Webex redirects here after the sign-in. Issue the Service App's tokens and save its refresh token."""
+
+    def get(self, request):
+        try:
+            state = signing.loads(request.GET.get("state", ""), salt=WEBEX_OAUTH_STATE_SALT, max_age=WEBEX_OAUTH_STATE_MAX_AGE_SECONDS)
+        except signing.BadSignature:
+            return HttpResponse("The Webex authorization link is invalid or expired. Please try again.", status=400)
+        if state["user_id"] != request.user.id:
+            return HttpResponse("The Webex authorization was started by another user", status=403)
+
+        project = get_project_for_user(user=request.user, project_object_id=state["project_object_id"])
+        webex_service_app = WebexServiceApp.objects.filter(project=project).first()
+        if not webex_service_app:
+            return HttpResponse("Webex Service App not found", status=404)
+
+        try:
+            if "code" not in request.GET:
+                raise WebexAuthError(f"Webex sign-in failed: {request.GET.get('error')} {request.GET.get('error_description')}")
+            integration_tokens = exchange_integration_authorization_code(settings.WEBEX_INTEGRATION_CLIENT_ID, settings.WEBEX_INTEGRATION_CLIENT_SECRET, request.GET["code"], webex_oauth_redirect_uri())
+            tokens = issue_service_app_tokens(webex_service_app.service_app_id, webex_service_app.client_id, webex_service_app.client_secret, webex_service_app.org_id, integration_tokens["access_token"])
+        except WebexAuthError as e:
+            logger.warning(f"Webex Service App {webex_service_app.object_id} could not be authorized: {e}")
+            return redirect(reverse("bots:project-credentials", kwargs={"object_id": project.object_id}) + "?webex_service_app_authorization_failed")
+
+        webex_service_app.tokens_refreshed_at = timezone.now()
+        webex_service_app.set_credentials({**webex_service_app.get_credentials(), "refresh_token": tokens["refresh_token"]})
+        return redirect("bots:project-credentials", object_id=project.object_id)
+
+
 class CreateCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
     def post(self, request, object_id):
         project = get_project_for_user(user=request.user, project_object_id=object_id)
@@ -454,15 +542,6 @@ class CreateCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 
                 if not all(credentials_data.values()):
                     return HttpResponse("Missing required credentials data", status=400)
-            elif credential_type == Credentials.CredentialTypes.WEBEX_SERVICE_APP:
-                credentials_data = {
-                    "client_id": request.POST.get("client_id"),
-                    "client_secret": request.POST.get("client_secret"),
-                    "refresh_token": request.POST.get("refresh_token"),
-                }
-
-                if not all(credentials_data.values()):
-                    return HttpResponse("Missing required credentials data", status=400)
             else:
                 return HttpResponse("Unsupported credential type", status=400)
 
@@ -542,7 +621,7 @@ class ProjectCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 
         livekit_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.LIVEKIT).first()
 
-        webex_service_app_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.WEBEX_SERVICE_APP).first()
+        webex_service_app = WebexServiceApp.objects.filter(project=project).first()
 
         context = self.get_project_context(object_id, project)
         context.update(
@@ -573,8 +652,9 @@ class ProjectCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
                 "show_teams_bot_identification_credentials": settings.SHOW_TEAMS_BOT_IDENTIFICATION_CREDENTIALS,
                 "livekit_credentials": livekit_credentials.get_credentials() if livekit_credentials else None,
                 "livekit_credential_type": Credentials.CredentialTypes.LIVEKIT,
-                "webex_service_app_credentials": webex_service_app_credentials.get_credentials() if webex_service_app_credentials else None,
-                "webex_service_app_credential_type": Credentials.CredentialTypes.WEBEX_SERVICE_APP,
+                "webex_service_app": webex_service_app,
+                "webex_service_app_authorization_failed": "webex_service_app_authorization_failed" in request.GET,
+                "webex_integration_configured": webex_integration_configured(),
             }
         )
 

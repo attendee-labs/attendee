@@ -6,25 +6,26 @@ This document covers how to use them, how Webex works, how the bot is built, and
 
 ## Setting up
 
+### Once per Attendee deployment (self-hosting)
+
+Attendee issues each Service App's tokens through its own Webex **Integration**, which the user signs in to once. To set it up:
+
+1. In the [Webex developer portal](https://developer.webex.com), create an **Integration** with only the `spark:applications_token` scope, and the redirect URI `https://<SITE_DOMAIN>/projects/webex-service-app/oauth-callback/` (`http://` for `localhost`).
+2. Set the `WEBEX_INTEGRATION_CLIENT_ID` and `WEBEX_INTEGRATION_CLIENT_SECRET` environment variables to the Integration's client ID and client secret.
+
+Without them, a Service App can be added but not authorized, and the credentials page says which variables to set.
+
+### Once per project
+
 You need a Webex organization with a paid plan: Webex only lets paid organizations create guests.
 
-1. In the [Webex developer portal](https://developer.webex.com), create a **Service App** with the `guest-issuer:read` and `guest-issuer:write` scopes, and note its client ID, client secret and Service App ID.
-2. Ask a **full admin** of your Webex organization to authorize the Service App in Control Hub (Apps, then Service Apps). Until then, requesting tokens fails with `401 ... is not authorized for the targetOrg`.
-3. Issue the Service App's tokens. This needs a bearer token with the `spark:applications_token` scope, such as your personal access token from the developer portal:
+1. In the [Webex developer portal](https://developer.webex.com), create a **Service App** with the `guest-issuer:read` and `guest-issuer:write` scopes. Note its client ID, client secret and Service App ID, and your organization ID.
+2. Ask a **full admin** of your Webex organization to authorize the Service App in Control Hub (Apps, then Service Apps, then Authorize and Save).
+3. In Attendee, open the project's credentials page, add the **Webex Service App** with those four values, then click **Authorize with Webex** and sign in as the creator of the Service App.
 
-   ```
-   curl -X POST https://webexapis.com/v1/applications/<service app id>/token \
-     -H "Authorization: Bearer <personal access token>" \
-     -H "Content-Type: application/json" \
-     -d '{"clientId": "<client id>", "clientSecret": "<client secret>", "targetOrgId": "<your org id>"}'
-   ```
+Attendee then issues the Service App's tokens with `POST /v1/applications/{id}/token` and saves its refresh token. **The refresh token lasts 90 days, and using it resets that to 90 days**, so this is done once. Attendee's scheduler refreshes every Service App that has not been refreshed in 7 days, and saves the refresh token Webex returns. Webex only resets the lifetime once the token is a few days old: a token used repeatedly on its first day kept counting down, while the same token at 5 days old went from 84.97 back to 90 days after a single call. If a refresh token does expire or is revoked anyway, click **Authorize with Webex** again. Access tokens last about 14 days. Attendee refreshes one for every bot that starts, then creates a guest token for that bot.
 
-   Keep the `refresh_token` from the response.
-4. In Attendee, open the project's credentials page and add the **Webex Service App Credentials**: client ID, client secret and refresh token.
-
-**The refresh token lasts 90 days, and using it resets that to 90 days**, so you only add it once. Attendee's scheduler refreshes every Webex credential that has not been refreshed in 7 days, and saves the refresh token Webex returns. Webex only resets the lifetime once the token is a few days old: a token used repeatedly on its first day kept counting down, while the same token at 5 days old went from 84.97 back to 90 days after a single call. If a refresh token does expire or is revoked anyway, repeat step 3 and update the credential. Access tokens last about 14 days. Attendee refreshes one for every bot that starts, then creates a guest token for that bot.
-
-Creating a bot for a Webex meeting without these credentials is rejected with an error that points to the credentials page.
+Creating a bot for a Webex meeting without an authorized Service App is rejected with an error that points to the credentials page.
 
 ## Meeting URLs
 
@@ -67,7 +68,7 @@ The host must be on `webex.com`. Everything except the room name or the `MTID` i
 | The meeting ends | Meeting ended | Verified |
 | The host has not started the meeting | Waiting for host timeout | The wait itself is **verified** (a full 10 minute timeout against a meeting nobody was in), see "Not started" below |
 | Stuck in the lobby too long | Waiting room timeout | Unit tested only |
-| The Service App credentials are missing, expired or revoked | Could not connect to meeting | Unit tested, and the underlying errors were seen live |
+| The Service App is missing or not authorized, or its refresh token expired or was revoked | Could not connect to meeting | Unit tested, and the underlying errors were seen live |
 
 ## How Webex works
 
@@ -107,7 +108,7 @@ webex_chromedriver_page.js (runs the SDK)
 webex_chromedriver_payload.js: the websocket client shared by the page
 ```
 
-The websocket messages are the same ones the other web bots use, so `WebBotAdapter` handles them unchanged. The Service App credentials are read from the database on the main thread, the requests to Webex run on the adapter's thread, and no secret is kept in memory.
+The websocket messages are the same ones the other web bots use, so `WebBotAdapter` handles them unchanged. The Service App is read from the database on the main thread, the requests to Webex run on the adapter's thread, and no secret is kept in memory.
 
 ## Limits, trade-offs and parts that may not be reliable
 
@@ -131,13 +132,13 @@ The websocket messages are the same ones the other web bots use, so `WebBotAdapt
 
 ## Developing and testing
 
-**In Docker.** The whole flow was verified with the repository's Docker setup (`dev.docker-compose.yaml`): create a project, add the Webex credentials, create a bot with `POST /api/v1/bots`, admit it, and read back its state, transcript, participant events and recording. Recordings are uploaded to S3, so for a local run point `AWS_ENDPOINT_URL` at an S3-compatible server such as [moto](https://github.com/getmoto/moto) and create the bucket.
+**In Docker.** The whole flow was verified with the repository's Docker setup (`dev.docker-compose.yaml`): create a project, add the Webex Service App, create a bot with `POST /api/v1/bots`, admit it, and read back its state, transcript, participant events and recording. Recordings are uploaded to S3, so for a local run point `AWS_ENDPOINT_URL` at an S3-compatible server such as [moto](https://github.com/getmoto/moto) and create the bucket.
 
-**Without Docker.** `bots/webex_bot_adapter/dev/standalone_harness.py` runs the page in a local Chrome without Docker, Django or Xvfb, prints every message the page sends, and saves the audio it receives. See the docstring for the options. It reads the Service App credentials from the environment or a `.env` file at the repo root.
+**Without Docker.** `bots/webex_bot_adapter/dev/standalone_harness.py` runs the page in a local Chrome without Docker, Django or Xvfb, prints every message the page sends, and saves the audio it receives. See the docstring for the options. It reads the Service App's client ID, client secret and refresh token from the environment or a `.env` file at the repo root.
 
 ```
 python bots/webex_bot_adapter/dev/standalone_harness.py                        # loads the page and the SDK, no meeting needed
 python bots/webex_bot_adapter/dev/standalone_harness.py --meeting-url <url or meeting number>
 ```
 
-The unit tests are `test_webex_bot_adapter.py`, `test_webex_bot_controller.py`, `test_webex_credentials.py`, `test_web_bot_adapter_video_output.py`, `test_web_bot_adapter_domain_allowlist.py` and the Webex cases in `test_meeting_url_utils.py`. One test checks that the page's websocket client defines every method `WebBotAdapter` calls on it, which is the kind of mistake that stops a bot from ever leaving a meeting.
+The unit tests are `test_webex_bot_adapter.py`, `test_webex_bot_controller.py`, `test_webex_service_app.py`, `test_refresh_webex_service_app_task.py`, `test_webex_domain_allowlist.py` and the Webex cases in `test_meeting_url_utils.py`. One test checks that the page's websocket client defines every method `WebBotAdapter` calls on it, which is the kind of mistake that stops a bot from ever leaving a meeting.
