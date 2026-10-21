@@ -457,6 +457,11 @@ class BotVideoOutputStream {
 
     async stopMediaStream() {
         this._stopVideoPlayback();
+
+        if (this.mediaStreamAudioSource) {
+            this.mediaStreamAudioSource.disconnect();
+            this.mediaStreamAudioSource = null;
+        }
         
         // If we had an image, display it again keep the input on if not turn it off
         if (this.lastImageBytes) {
@@ -513,11 +518,10 @@ class BotOutputManager {
             navigator.mediaDevices
         );
 
-        // --- BOT OUTPUT PEER CONNECTION SETUP ---
-        this.botOutputPeerConnection = null;
-        this.botOutputMediaStream = null;
-        this.botOutputMediaStreamOutputDestination = null;
-        this.botOutputMediaStreamIsReadyInterval = null;
+        // --- BOT OUTPUT PEER CONNECTION SETUP (keyed by output destination: "webcam" or "screenshare") ---
+        this.botOutputPeerConnections = {};
+        this.botOutputMediaStreams = {};
+        this.botOutputMediaStreamIsReadyIntervals = {};
 
         // Webcam video output stream
         this.webcamVideoOutputStream = new BotVideoOutputStream({
@@ -811,87 +815,91 @@ class BotOutputManager {
         return this.audioContext?.destination;
     }
 
-    botOutputMediaStreamIsReady() {
-        return this.botOutputMediaStream.getVideoTracks().length > 0 && this.botOutputMediaStream.getAudioTracks().length > 0;
+    _videoOutputStreamForDestination(outputDestination) {
+        return outputDestination === "screenshare" ? this.screenShareVideoOutputStream : this.webcamVideoOutputStream;
     }
 
-    setBotOutputMediaStream(mediaStream) {
-        this.botOutputMediaStream = mediaStream;
+    _clearBotOutputMediaStreamIsReadyInterval(outputDestination) {
+        if (this.botOutputMediaStreamIsReadyIntervals[outputDestination]) {
+            clearInterval(this.botOutputMediaStreamIsReadyIntervals[outputDestination]);
+            delete this.botOutputMediaStreamIsReadyIntervals[outputDestination];
+        }
     }
 
-    async playBotOutputMediaStream(outputDestination) {
-        this.botOutputMediaStreamOutputDestination = outputDestination;
+    botOutputMediaStreamIsReady(outputDestination = "webcam") {
+        const mediaStream = this.botOutputMediaStreams[outputDestination];
+        return !!mediaStream && mediaStream.getVideoTracks().length > 0 && mediaStream.getAudioTracks().length > 0;
+    }
 
-        if (!this.botOutputMediaStreamIsReady()) {
+    setBotOutputMediaStream(mediaStream, outputDestination = "webcam") {
+        this.botOutputMediaStreams[outputDestination] = mediaStream;
+    }
+
+    async playBotOutputMediaStream(outputDestination = "webcam") {
+        if (!this.botOutputMediaStreamIsReady(outputDestination)) {
             // Add interval to check if the bot output media stream is ready
-            
-            if (!this.botOutputMediaStreamIsReadyInterval)
-                this.botOutputMediaStreamIsReadyInterval = setInterval(() => {
-                    if (this.botOutputMediaStreamIsReady()) {
-                        this.playBotOutputMediaStream(this.botOutputMediaStreamOutputDestination);
+            if (!this.botOutputMediaStreamIsReadyIntervals[outputDestination])
+                this.botOutputMediaStreamIsReadyIntervals[outputDestination] = setInterval(() => {
+                    if (this.botOutputMediaStreamIsReady(outputDestination)) {
+                        this.playBotOutputMediaStream(outputDestination);
                     }
                 }, 1000);
             return;
         }
 
-        if (this.botOutputMediaStreamIsReadyInterval)
-            clearInterval(this.botOutputMediaStreamIsReadyInterval);
+        this._clearBotOutputMediaStreamIsReadyInterval(outputDestination);
 
-        if (outputDestination === "screenshare") {
-            return this.screenShareVideoOutputStream.playMediaStream(this.botOutputMediaStream);
-        } else {
-            return this.webcamVideoOutputStream.playMediaStream(this.botOutputMediaStream);
-        }
+        return this._videoOutputStreamForDestination(outputDestination).playMediaStream(this.botOutputMediaStreams[outputDestination]);
     }
 
-    async stopBotOutputMediaStream() {
-        if (this.botOutputMediaStreamOutputDestination === "screenshare") {
-            return this.screenShareVideoOutputStream.stopMediaStream();
-        } else {
-            return this.webcamVideoOutputStream.stopMediaStream();
-        }
+    async stopBotOutputMediaStream(outputDestination = "webcam") {
+        this._clearBotOutputMediaStreamIsReadyInterval(outputDestination);
+        return this._videoOutputStreamForDestination(outputDestination).stopMediaStream();
     }
 
     isReadyForWebpageStreamer() {
         return !!window.styleManager.getMeetingAudioStream();
     }
 
-    async getBotOutputPeerConnectionOffer() {
+    async getBotOutputPeerConnectionOffer(outputDestination = "webcam") {
         try
         {
             // 2) Create the RTCPeerConnection
-            this.botOutputPeerConnection = new RTCPeerConnection();
+            const peerConnection = new RTCPeerConnection();
+            this.botOutputPeerConnections[outputDestination] = peerConnection;
         
             // 3) Receive the server's *video* and *audio*
-            this.botOutputMediaStream = new MediaStream();
-            this.botOutputPeerConnection.ontrack = (ev) => {
-                this.botOutputMediaStream.addTrack(ev.track);
+            const mediaStream = new MediaStream();
+            this.botOutputMediaStreams[outputDestination] = mediaStream;
+            peerConnection.ontrack = (ev) => {
+                mediaStream.addTrack(ev.track);
             };
         
             // We still want to receive the server's video
-            this.botOutputPeerConnection.addTransceiver('video', { direction: 'recvonly' });
+            peerConnection.addTransceiver('video', { direction: 'recvonly' });
         
             // ❗ Instead of recvonly audio, we now **send** our mic upstream:
             const meetingAudioStream = window.styleManager.getMeetingAudioStream();
             for (const track of meetingAudioStream.getAudioTracks()) {
-                this.botOutputPeerConnection.addTrack(track, meetingAudioStream);
+                peerConnection.addTrack(track, meetingAudioStream);
             }
         
             // Create/POST offer → set remote answer
-            const offer = await this.botOutputPeerConnection.createOffer();
-            await this.botOutputPeerConnection.setLocalDescription(offer);
-            return { sdp: this.botOutputPeerConnection.localDescription.sdp, type: this.botOutputPeerConnection.localDescription.type };
+            const offer = await peerConnection.createOffer();
+            await peerConnection.setLocalDescription(offer);
+            return { sdp: peerConnection.localDescription.sdp, type: peerConnection.localDescription.type };
         }
         catch (e) {
             return { error: e.message };
         }
     }
 
-    async startBotOutputPeerConnection(offerResponse) {
-        await this.botOutputPeerConnection.setRemoteDescription(offerResponse);
+    async startBotOutputPeerConnection(offerResponse, outputDestination = "webcam") {
+        const peerConnection = this.botOutputPeerConnections[outputDestination];
+        await peerConnection.setRemoteDescription(offerResponse);
         
         // Start latency measurement for the bot output peer connection
-        this.startLatencyMeter(this.botOutputPeerConnection, "bot-output");
+        this.startLatencyMeter(peerConnection, `bot-output-${outputDestination}`);
     }
 
     startLatencyMeter(pc, label="rx") {

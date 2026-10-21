@@ -7,6 +7,8 @@ import requests
 
 logger = logging.getLogger(__name__)
 
+OUTPUT_DESTINATIONS = ("webcam", "screenshare")
+
 
 class WebpageStreamerManager:
     def __init__(
@@ -19,9 +21,9 @@ class WebpageStreamerManager:
         on_message_that_webpage_streamer_connection_can_start_callback,
         webpage_streamer_service_hostname,
     ):
-        self.url = None
-        self.last_non_empty_url = None
-        self.output_destination = None
+        # The webpage streamer runs a separate browser per output destination, so each destination has its own url and WebRTC connection
+        self.urls = {output_destination: None for output_destination in OUTPUT_DESTINATIONS}
+        self.webrtc_connection_started = {output_destination: False for output_destination in OUTPUT_DESTINATIONS}
         self.get_peer_connection_offer_callback = get_peer_connection_offer_callback
         self.start_peer_connection_callback = start_peer_connection_callback
         self.cleaned_up = False
@@ -30,7 +32,6 @@ class WebpageStreamerManager:
         self.play_bot_output_media_stream_callback = play_bot_output_media_stream_callback
         self.stop_bot_output_media_stream_callback = stop_bot_output_media_stream_callback
         self.on_message_that_webpage_streamer_connection_can_start_callback = on_message_that_webpage_streamer_connection_can_start_callback
-        self.webrtc_connection_started = False
         self.keepalive_task = None
         self.webpage_streamer_connection_can_start = False
 
@@ -41,44 +42,33 @@ class WebpageStreamerManager:
         self.keepalive_task = threading.Thread(target=self.send_webpage_streamer_keepalive_periodically, daemon=True)
         self.keepalive_task.start()
 
-    # Possible cases:
-    # 1. Streaming has not started yet.
-    # 2. Streaming has started. URL has changed.
-    # 3. Streaming has started. Output destination has changed.
-    # 4. Streaming has started. URL and output destination have changed.
-    def update(self, url, output_destination):
+    def update(self, urls_by_output_destination):
         if not self.webpage_streamer_connection_can_start:
             logger.info("In WebpageStreamerManager.update, Webpage streamer connection can not start yet. Not updating.")
             return
 
-        sleep_before_playing_bot_output_media_stream = False
-        if url != self.url or output_destination != self.output_destination:
-            if url:
-                if url != self.url:
-                    self.start_or_update_webrtc_connection(url)
-                    # If we are shifting to a new output destination AND the page is set to a different url, then let's pause for a second
-                    # Otherwise it will display the old page for a bit
-                    if output_destination != self.output_destination and self.last_non_empty_url and self.last_non_empty_url != url:
-                        sleep_before_playing_bot_output_media_stream = True
-                if output_destination != self.output_destination and self.output_destination:
-                    logger.info("Stopping bot output media stream")
-                    self.stop_bot_output_media_stream_callback()
-                    sleep_before_playing_bot_output_media_stream = True  # Seems like there's sometimes a DOM glitch if we don't wait a bit. Not ideal.
-                # Tell the adapter to start rendering the bot output media stream in the webcam / screenshare
-                if sleep_before_playing_bot_output_media_stream:
-                    time.sleep(1)
-                only_change_was_url = url != self.url and output_destination == self.output_destination
-                if not only_change_was_url:
-                    logger.info(f"Playing bot output media stream to {output_destination}")
-                    self.play_bot_output_media_stream_callback(output_destination)
-            if not url:
-                logger.info("Stopping bot output media stream because url is empty")
-                self.stop_bot_output_media_stream_callback()
+        for output_destination in OUTPUT_DESTINATIONS:
+            self.update_output_destination(output_destination, urls_by_output_destination.get(output_destination))
 
-        self.url = url
-        self.output_destination = output_destination
+    # Possible cases:
+    # 1. Url went from empty to non-empty: load the page and start rendering it in the output destination.
+    # 2. Url changed from one non-empty value to another: load the new page. It is already being rendered.
+    # 3. Url went from non-empty to empty: stop rendering it in the output destination.
+    def update_output_destination(self, output_destination, url):
+        previous_url = self.urls[output_destination]
+        if (url or None) == (previous_url or None):
+            return
+
         if url:
-            self.last_non_empty_url = url
+            self.start_or_update_webrtc_connection(output_destination, url)
+            if not previous_url:
+                logger.info(f"Playing bot output media stream to {output_destination}")
+                self.play_bot_output_media_stream_callback(output_destination)
+        else:
+            logger.info(f"Stopping bot output media stream to {output_destination} because url is empty")
+            self.stop_bot_output_media_stream_callback(output_destination)
+
+        self.urls[output_destination] = url
 
     def cleanup(self):
         try:
@@ -94,38 +84,41 @@ class WebpageStreamerManager:
         # Otherwise the streaming service will be running in a separate docker compose service, so we address it using the service name
         return "attendee-webpage-streamer-local"
 
-    def update_webrtc_connection(self, url):
+    def update_webrtc_connection(self, output_destination, url):
         # Start and update do the same thing, so we can use the same endpoint
-        update_streaming_response = requests.post(f"http://{self.streaming_service_hostname()}:8000/start_streaming", json={"url": url})
-        logger.info(f"Update streaming response: {update_streaming_response}")
+        update_streaming_response = requests.post(f"http://{self.streaming_service_hostname()}:8000/start_streaming", json={"url": url, "output_destination": output_destination})
+        logger.info(f"Update streaming response for {output_destination}: {update_streaming_response}")
 
         if update_streaming_response.status_code != 200:
-            logger.info(f"Failed to update streaming. Response: {update_streaming_response.status_code}")
+            logger.info(f"Failed to update streaming for {output_destination}. Response: {update_streaming_response.status_code}")
             return
 
-    def start_or_update_webrtc_connection(self, url):
-        if self.webrtc_connection_started:
-            return self.update_webrtc_connection(url)
+    def start_or_update_webrtc_connection(self, output_destination, url):
+        if self.webrtc_connection_started[output_destination]:
+            return self.update_webrtc_connection(output_destination, url)
 
-        logger.info(f"Open webpage streaming connection. Settings are url={self.url} and output_destination={self.output_destination}")
-        peerConnectionOffer = self.get_peer_connection_offer_callback()
-        logger.info(f"Peer connection offer: {peerConnectionOffer}")
+        logger.info(f"Open webpage streaming connection for {output_destination}. url={url}")
+        peerConnectionOffer = self.get_peer_connection_offer_callback(output_destination)
+        logger.info(f"Peer connection offer for {output_destination}: {peerConnectionOffer}")
         if peerConnectionOffer.get("error"):
-            logger.error(f"Error getting peer connection offer: {peerConnectionOffer.get('error')}, returning")
+            logger.error(f"Error getting peer connection offer for {output_destination}: {peerConnectionOffer.get('error')}, returning")
             return
 
-        offer_response = requests.post(f"http://{self.streaming_service_hostname()}:8000/offer", json={"sdp": peerConnectionOffer["sdp"], "type": peerConnectionOffer["type"]})
-        logger.info(f"Offer response: {offer_response.json()}")
-        self.start_peer_connection_callback(offer_response.json())
+        offer_response = requests.post(
+            f"http://{self.streaming_service_hostname()}:8000/offer",
+            json={"sdp": peerConnectionOffer["sdp"], "type": peerConnectionOffer["type"], "output_destination": output_destination},
+        )
+        logger.info(f"Offer response for {output_destination}: {offer_response.json()}")
+        self.start_peer_connection_callback(offer_response.json(), output_destination)
 
-        start_streaming_response = requests.post(f"http://{self.streaming_service_hostname()}:8000/start_streaming", json={"url": url})
-        logger.info(f"Start streaming response: {start_streaming_response}")
+        start_streaming_response = requests.post(f"http://{self.streaming_service_hostname()}:8000/start_streaming", json={"url": url, "output_destination": output_destination})
+        logger.info(f"Start streaming response for {output_destination}: {start_streaming_response}")
 
         if start_streaming_response.status_code != 200:
-            logger.info(f"Failed to start streaming, not starting webpage streamer keepalive task. Response: {start_streaming_response.status_code}")
+            logger.info(f"Failed to start streaming for {output_destination}. Response: {start_streaming_response.status_code}")
             return
 
-        self.webrtc_connection_started = True
+        self.webrtc_connection_started[output_destination] = True
 
     def send_webpage_streamer_keepalive_periodically(self):
         """Send keepalive requests to the streaming service periodically."""
