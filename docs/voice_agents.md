@@ -41,20 +41,19 @@ The agent will be loaded once the bot joins the meeting and starts recording.
 
 ## Screen sharing
 
-You can share a screen alongside your voice agent by adding `screenshare_url` to `voice_agent_settings`.
-
+To display your voice agent's video through screenshare instead of the webcam, use `screenshare_url` in place of `url`. This url does not need to contain an actual voice agent, it can be any publicly accessible webpage that you would like to display as the bot's screenshare.
 
 ```json
 {
   "meeting_url": "https://meet.google.com/abc-def-ghi",
   "bot_name": "Avatar Bot",
   "voice_agent_settings": {
-    "url": "https://your-voice-agent-app.com?agent_id=1234567890",
-    "screenshare_url": "https://your-app.com/screen"
+    "screenshare_url": "https://your-voice-agent-app.com?agent_id=1234567890"
   }
 }
 ```
-The URL should point to a publicly accessible page that renders the content you want to share (e.g. a live browser view, dashboard, or canvas). Attendee will capture and stream that page as the bot's screen share in the meeting.
+
+You cannot currently provide both `url` and `screenshare_url`.
 
 ## Setting up your webpage to be loaded by Attendee
 
