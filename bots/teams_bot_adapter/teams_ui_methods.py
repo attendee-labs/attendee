@@ -10,7 +10,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
 from bots.models import RecordingViews
-from bots.utils import cyrillicize_keywords_in_string, truncate_string_with_ellipsis
+from bots.utils import cyrillicize_keywords_in_string, remove_characters_from_string, truncate_string_with_ellipsis
 from bots.web_bot_adapter.ui_methods import UiBlockedByCaptchaException, UiCouldNotClickElementException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableException, UiRetryableExpectedException
 
 logger = logging.getLogger(__name__)
@@ -166,9 +166,10 @@ class TeamsUIMethods:
                     self.display_name,
                     keywords=["notetaker"],
                 )
-                display_name_cyrillized_and_truncated = truncate_string_with_ellipsis(display_name_cyrillized, max_length=50)
-                self.set_display_name_to_allow(display_name_cyrillized_and_truncated)
-                name_input.send_keys(display_name_cyrillized_and_truncated)
+                display_name_cyrillized_and_characters_removed = remove_characters_from_string(display_name_cyrillized, characters="()")
+                display_name_cyrillized_and_characters_removed_and_truncated = truncate_string_with_ellipsis(display_name_cyrillized_and_characters_removed, max_length=50)
+                self.set_display_name_to_allow(display_name_cyrillized_and_characters_removed_and_truncated)
+                name_input.send_keys(display_name_cyrillized_and_characters_removed_and_truncated)
                 return
             except TimeoutException as e:
                 self.look_for_microsoft_login_form_element("name_input")
