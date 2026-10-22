@@ -529,14 +529,27 @@ class GoogleMeetUIMethods:
                 logger.warning(f"Could not find name input. Unknown error {e} of type {type(e)}. Raising UiCouldNotLocateElementException")
                 raise UiCouldNotLocateElementException("Could not find name input. Unknown error.", "name_input", e)
 
+    def enable_captions_via_keyboard_shortcut(self, captions_button):
+        if captions_button.get_attribute("aria-pressed") == "true":
+            logger.info("Captions and translation button is already pressed, captions are already enabled")
+            return
+        logger.info("Found 'Captions and translation' variant of captions button. Pressing 'c' to enable captions...")
+        ActionChains(self.driver).send_keys("c").perform()
+        logger.info("Waiting for captions to be enabled...")
+        WebDriverWait(self.driver, 5).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'button[aria-label="Captions and translation"][aria-pressed="true"]')))
+        logger.info("Confirmed captions were enabled")
+
     def click_captions_button(self):
         num_attempts_to_look_for_captions_button = self.automatic_leave_configuration.waiting_room_timeout_seconds * 2
         logger.info("Waiting for captions button...")
         waiting_room_timeout_started_at = time.time()
         for attempt_to_look_for_captions_button_index in range(num_attempts_to_look_for_captions_button):
             try:
-                captions_button = WebDriverWait(self.driver, 1).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'button[aria-label="Turn on captions"]')))
+                captions_button = WebDriverWait(self.driver, 1).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'button[aria-label="Turn on captions"], button[aria-label="Captions and translation"]')))
                 logger.info("Captions button found")
+                if captions_button.get_attribute("aria-label") == "Captions and translation":
+                    self.enable_captions_via_keyboard_shortcut(captions_button)
+                    return
                 self.click_element(captions_button, "click_captions_button")
                 logger.info("Waiting for captions to be enabled...")
                 WebDriverWait(self.driver, 5).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'button[aria-label="Turn off captions"]')))
