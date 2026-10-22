@@ -51,6 +51,8 @@ The host must be on `webex.com`. Everything except the room name or the `MTID` i
 | Mixed audio | **Verified** (48 kHz mono float, the same format as the other web bots) |
 | Per participant audio | **Verified, but emulated** (see below) |
 | Video and audio recording | **Verified** in the Docker image: an 11 minute recording was 1920x1080 H.264 at 30 fps with 48 kHz AAC audio, showing the host's camera with the participant's name and containing real speech |
+| Screen share start and stop | **Verified**, as participant events from the SDK's remote share events |
+| Leaving after a long silence, or when the bot is alone | **Verified**. Silence uses the page's audio activity reports, like the Teams and Google Meet bots |
 | Bot webcam image | **Verified** |
 | Bot audio output | **Verified** with a test tone |
 | Bot video output (`send_video`) | Shared code with the other web bots, **not verified** for Webex |
@@ -118,7 +120,7 @@ The websocket messages are the same ones the other web bots use, so `WebBotAdapt
 
 **"Meeting not started" is a heuristic.** Webex shows a guest waiting for a host that has not started the meeting exactly like a normal lobby. The bot treats a lobby with nobody else in the meeting as "waiting for the host", and uses the (longer) wait-for-host timeout for it. A lobby where the only other people are also waiting guests would be misread.
 
-**Captions need Webex Assistant.** They were verified on one site. Sites or meetings that don't allow captions will give no transcript, and the bot reports that it could not enable them. The caption language is fixed to English; there is no setting for it yet.
+**Captions need Webex Assistant.** They were verified on one site. Sites or meetings that don't allow captions will give no transcript, and the bot reports that it could not enable them. The bot asks for English captions. In Webex only the host can set the meeting's spoken language (the SDK rejects it for anyone else), so unlike the Teams and Google Meet bots there is no caption language setting.
 
 **The refresh token's reset is not documented by Webex.** Attendee relies on the observed behavior that using a refresh token resets its 90 day lifetime. If Webex changes that, the token expires 90 days after it was issued, and an expired one only shows up as bots that cannot connect and an error in the scheduler's logs. A dedicated "Webex authorization failed" bot event would be clearer, but it needs a new event subtype and a migration.
 

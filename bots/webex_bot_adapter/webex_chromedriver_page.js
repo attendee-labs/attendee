@@ -22,6 +22,7 @@ const SPEECH_STOP_DELAY_MS = 1500;
 // Webex reports someone as speaking 0.1 to 0.7 seconds after their voice starts in the audio (measured), so a frame of
 // per participant audio also belongs to a speaker whose speech is reported up to this long after the frame arrived.
 const SPEAKER_REPORT_LEAD_MS = 700;
+const AUDIO_ACTIVITY_REPORT_INTERVAL_MS = 1000;
 const CAPTIONS_ANNOUNCEMENT_TIMEOUT_MS = 20000;
 const WEBEX_ERROR_CODE_MEETING_NOT_FOUND = 2403014;
 
@@ -204,6 +205,28 @@ function speakerIdAt(timestampMs) {
     return candidates.length ? candidates.reduce((latest, interval) => (interval.start > latest.start ? interval : latest)).id : null;
 }
 
+// ---------- Screen share ----------
+
+let screenSharerId = null;
+
+function sendScreenshareEvent(participantId, isScreenshareStart) {
+    send({ type: 'ScreenshareStartStopEvent', participantId, isScreenshareStart, timestamp: Date.now() });
+}
+
+// Webex has one share at a time, so a new share replaces the current one without a stop in between
+function handleRemoteShareStarted({ memberId }) {
+    if (memberId === screenSharerId) return;
+    if (screenSharerId) sendScreenshareEvent(screenSharerId, false);
+    screenSharerId = memberId;
+    sendScreenshareEvent(memberId, true);
+}
+
+function handleRemoteShareStopped() {
+    if (!screenSharerId) return;
+    sendScreenshareEvent(screenSharerId, false);
+    screenSharerId = null;
+}
+
 // ---------- Audio ----------
 
 let audioContext = null;
@@ -258,9 +281,23 @@ function sendPerParticipantAudio(samples) {
     }
 }
 
-function sendAudio(samples) {
+// The adapter leaves the meeting after a long silence. Without mixed audio it only knows about audio from these reports,
+// so they are sent like the Teams and Google Meet bots do, whatever audio the controller asked for.
+let lastAudioActivityReportAt = 0;
+
+function reportAudioActivity(samples) {
+    const now = Date.now();
+    if (now - lastAudioActivityReportAt < AUDIO_ACTIVITY_REPORT_INTERVAL_MS) return;
+    // A sample that rounds to a non-zero 16 bit value, the same test the adapter applies to mixed audio
+    if (!samples.some((sample) => Math.abs(sample) >= 1 / 32768)) return;
+    lastAudioActivityReportAt = now;
+    send({ type: 'SilenceStatus', isSilent: false });
+}
+
+function handleAudio(samples) {
     // Summing the slots can exceed full scale, and the adapter's float to int16 conversion wraps on overflow
     for (let i = 0; i < samples.length; i++) samples[i] = Math.max(-1, Math.min(1, samples[i]));
+    reportAudioActivity(samples);
     if (wantsMixedAudio) window.ws.sendMixedAudio(samples);
     if (wantsPerParticipantAudio) sendPerParticipantAudio(samples);
 }
@@ -273,12 +310,10 @@ function addAudioSlot(remoteMedia) {
     element.srcObject = remoteMedia.stream;
     document.getElementById('remoteMedia').appendChild(element);
 
-    if (!wantsMixedAudio && !wantsPerParticipantAudio) return;
-
     if (!audioContext) {
         audioContext = new AudioContext({ sampleRate: AUDIO_SAMPLE_RATE });
         mixedAudioDestination = audioContext.createMediaStreamDestination();
-        forEachAudioFrame(mixedAudioDestination.stream.getAudioTracks()[0], sendAudio);
+        forEachAudioFrame(mixedAudioDestination.stream.getAudioTracks()[0], handleAudio);
     }
     audioContext.createMediaStreamSource(remoteMedia.stream).connect(mixedAudioDestination);
 }
@@ -429,6 +464,8 @@ function listenToMeeting() {
     meeting.on('DESTROY_MEETING', handleMeetingDestroyed);
     meeting.members.on('members:update', handleMembersUpdate);
     meeting.on('media:activeSpeakerChanged', handleActiveSpeakerChanged);
+    meeting.on('meeting:startedSharingRemote', handleRemoteShareStarted);
+    meeting.on('meeting:stoppedSharingRemote', handleRemoteShareStopped);
     meeting.on('media:remoteAudio:created', handleRemoteAudioCreated);
     meeting.on('media:remoteVideo:layoutChanged', renderVideoLayout);
 }
