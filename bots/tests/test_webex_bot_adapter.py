@@ -222,14 +222,17 @@ class WebexPayloadContractTest(SimpleTestCase):
             with self.subTest(method=method):
                 self.assertRegex(payload_source, rf"(?m)^    {method}\(", msg=f"webex_chromedriver_payload.js does not define WebSocketClient.{method}, which WebBotAdapter calls")
 
-    def test_the_page_only_sends_the_audio_the_controller_asked_for(self):
-        # Sending audio that has no callback crashes the websocket handler of WebBotAdapter, and with it every later message
+    def test_the_page_only_sends_what_the_controller_asked_for(self):
+        # Sending audio or captions that have no callback crashes the websocket handler of WebBotAdapter, and with it every later message
         with open(os.path.join(os.path.dirname(inspect.getfile(WebexBotAdapter)), "webex_chromedriver_page.js")) as page:
             page_source = page.read()
 
-        for flag in ("sendMixedAudio", "sendPerParticipantAudio"):
+        for flag in ("sendMixedAudio", "sendPerParticipantAudio", "collectCaptions", "recordParticipantSpeechStartStopEvents"):
             with self.subTest(flag=flag):
-                self.assertIn(flag, re.search(r"const \{[^}]*\} = window\.initialData;", page_source).group(0))
+                flags = re.search(r"const \{[^}]*\} = window\.initialData;", page_source).group(0)
+                variable = re.search(rf"{flag}: (\w+)", flags)
+                self.assertIsNotNone(variable, msg=f"the page does not read {flag}")
+                self.assertGreater(page_source.count(variable.group(1)), 1, msg=f"the page reads {flag} but never uses it")
 
 
 class WebexVideoOutputTest(SimpleTestCase):

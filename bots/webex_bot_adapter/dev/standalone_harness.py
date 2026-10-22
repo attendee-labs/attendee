@@ -142,7 +142,7 @@ def start_chrome():
 def inject_page_scripts(driver, websocket_port, webex_initial_data):
     """Inject what the real adapter injects: the shared payload, then this platform's payload."""
     scripts = [
-        f"window.initialData = {json.dumps({'websocketPort': websocket_port, 'sendMixedAudio': True, 'sendPerParticipantAudio': True})};",
+        f"window.initialData = {json.dumps({'websocketPort': websocket_port, 'sendMixedAudio': True, 'sendPerParticipantAudio': True, 'collectCaptions': True, 'recordParticipantSpeechStartStopEvents': True})};",
         f"window.webexInitialData = {json.dumps(webex_initial_data)};",
     ]
     for path in (SHARED_PAYLOAD_PATH, PAYLOAD_PATH):

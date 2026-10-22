@@ -47,7 +47,7 @@ The host must be on `webex.com`. Everything except the room name or the `MTID` i
 | Join as a guest, wait in the lobby, be admitted | **Verified** |
 | Participant join and leave | **Verified** |
 | Speech start and stop | **Verified**, also as participant events through the API, delayed by about a second (see below) |
-| Transcription from the meeting's captions | **Verified** on one Webex site, including the utterances returned by the transcript API. The bot turns the captions on by itself. |
+| Transcription from the meeting's captions | **Verified** on one Webex site, including the utterances returned by the transcript API. The bot turns the captions on by itself, only when the bot is transcribed with them. |
 | Mixed audio | **Verified** (48 kHz mono float, the same format as the other web bots) |
 | Per participant audio | **Verified, but emulated** (see below) |
 | Video and audio recording | **Verified** in the Docker image: an 11 minute recording was 1920x1080 H.264 at 30 fps with 48 kHz AAC audio, showing the host's camera with the participant's name and containing real speech |

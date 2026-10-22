@@ -3,8 +3,14 @@
 // reading window.webexJoinState.
 
 const initialData = window.webexInitialData;
-// Which audio the controller wants over the websocket. The adapter has no callback for audio nobody asked for.
-const { sendMixedAudio: wantsMixedAudio, sendPerParticipantAudio: wantsPerParticipantAudio } = window.initialData;
+// What the controller wants over the websocket. The adapter has no callback for audio or captions nobody asked for, and
+// calling a missing one crashes its websocket handler, which loses every later message.
+const {
+    sendMixedAudio: wantsMixedAudio,
+    sendPerParticipantAudio: wantsPerParticipantAudio,
+    collectCaptions: wantsCaptions,
+    recordParticipantSpeechStartStopEvents: wantsSpeechEvents,
+} = window.initialData;
 
 const AUDIO_SAMPLE_RATE = 48000;
 const NUM_ACTIVE_SPEAKER_AUDIO_SLOTS = 3;
@@ -156,6 +162,7 @@ function openSpeechInterval(id) {
 }
 
 function sendSpeechEvent(participantId, isSpeechStart, timestamp) {
+    if (!wantsSpeechEvents) return;
     send({ type: 'ParticipantSpeechStartStopEvent', participantId, isSpeechStart, timestamp });
 }
 
@@ -468,7 +475,7 @@ async function main() {
         if (!(await joinMeeting())) return;
         joinState.phase = 'joined';
         setUpBotOutput();
-        await startCaptions();
+        if (wantsCaptions) await startCaptions();
     } catch (error) {
         failJoin(error, 'join');
     }
