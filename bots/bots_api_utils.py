@@ -344,12 +344,8 @@ def patch_bot_voice_agent_settings(bot: Bot, data: dict) -> tuple[Bot | None, di
     try:
         if "url" in validated_data:
             bot.settings["voice_agent_settings"]["url"] = validated_data.get("url")
-            if "screenshare_url" in bot.settings["voice_agent_settings"]:
-                del bot.settings["voice_agent_settings"]["screenshare_url"]
         if "screenshare_url" in validated_data:
             bot.settings["voice_agent_settings"]["screenshare_url"] = validated_data.get("screenshare_url")
-            if "url" in bot.settings["voice_agent_settings"]:
-                del bot.settings["voice_agent_settings"]["url"]
         bot.save()
     except RecordModifiedError:
         return None, {"error": "Version conflict. Please try again."}

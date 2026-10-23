@@ -1367,17 +1367,17 @@ class WebBotAdapter(BotAdapter):
     def is_ready_to_send_chat_messages(self):
         return self.ready_to_send_chat_messages
 
-    def webpage_streamer_get_peer_connection_offer(self):
-        return self.driver.execute_script("return window.botOutputManager.getBotOutputPeerConnectionOffer();")
+    def webpage_streamer_get_peer_connection_offer(self, output_destination):
+        return self.driver.execute_script("return window.botOutputManager.getBotOutputPeerConnectionOffer(arguments[0]);", output_destination)
 
-    def webpage_streamer_start_peer_connection(self, offer_response):
-        self.driver.execute_script(f"window.botOutputManager.startBotOutputPeerConnection({json.dumps(offer_response)});")
+    def webpage_streamer_start_peer_connection(self, offer_response, output_destination):
+        self.driver.execute_script("window.botOutputManager.startBotOutputPeerConnection(arguments[0], arguments[1]);", offer_response, output_destination)
 
     def webpage_streamer_play_bot_output_media_stream(self, output_destination):
-        self.driver.execute_script(f"window.botOutputManager.playBotOutputMediaStream({json.dumps(output_destination)});")
+        self.driver.execute_script("window.botOutputManager.playBotOutputMediaStream(arguments[0]);", output_destination)
 
-    def webpage_streamer_stop_bot_output_media_stream(self):
-        self.driver.execute_script("window.botOutputManager.stopBotOutputMediaStream();")
+    def webpage_streamer_stop_bot_output_media_stream(self, output_destination):
+        self.driver.execute_script("window.botOutputManager.stopBotOutputMediaStream(arguments[0]);", output_destination)
 
     def is_bot_ready_for_webpage_streamer(self):
         if not self.driver:
