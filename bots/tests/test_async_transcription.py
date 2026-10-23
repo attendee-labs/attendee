@@ -130,8 +130,8 @@ class TestAsyncTranscriptionUsesGroupedUtterances(AsyncTranscriptionTestCase):
         self.assertEqual(async_transcription.transcription_provider, TranscriptionProviders.ASSEMBLY_AI)
         self.assertTrue(async_transcription.use_grouped_utterances)
 
-    def test_gladia_transcription_does_not_use_grouped_utterances(self):
-        """Verify that other providers do NOT use grouped utterances."""
+    def test_gladia_transcription_uses_grouped_utterances(self):
+        """Verify that AsyncTranscription with Gladia uses grouped utterances."""
         # Create a recording with Gladia
         gladia_recording = Recording.objects.create(
             bot=self.bot,
@@ -148,7 +148,7 @@ class TestAsyncTranscriptionUsesGroupedUtterances(AsyncTranscriptionTestCase):
         )
 
         self.assertEqual(async_transcription.transcription_provider, TranscriptionProviders.GLADIA)
-        self.assertFalse(async_transcription.use_grouped_utterances)
+        self.assertTrue(async_transcription.use_grouped_utterances)
 
 
 class TestUtteranceGrouping(AsyncTranscriptionTestCase):
@@ -298,6 +298,63 @@ class TestSplitTranscriptionByUtterance(AsyncTranscriptionTestCase):
         # Third utterance
         self.assertEqual(result[utterances[2].id]["transcript"], "doing today")
         self.assertEqual(len(result[utterances[2].id]["words"]), 2)
+
+    def _create_utterances(self, count, duration_ms):
+        utterances = []
+        for chunk in self._create_audio_chunks(count=count, duration_ms=duration_ms):
+            utterances.append(
+                Utterance.objects.create(
+                    recording=self.recording,
+                    participant=self.participant,
+                    audio_chunk=chunk,
+                    timestamp_ms=chunk.timestamp_ms,
+                    duration_ms=chunk.duration_ms,
+                )
+            )
+        return utterances
+
+    def test_words_including_spacing_are_concatenated_as_is(self):
+        """Provider spacing is kept, so languages without word separators get no extra spaces."""
+        utterances = self._create_utterances(count=2, duration_ms=2000)
+
+        # Utterance 0: 0-2s, Utterance 1: 5-7s
+        transcription_result = {
+            "words": [
+                {"word": "hello", "start": 0.0, "end": 0.5},
+                {"word": " world", "start": 0.6, "end": 1.0},
+                {"word": ".", "start": 1.0, "end": 1.1},
+                {"word": " こんにちは", "start": 5.0, "end": 5.5},
+                {"word": "。", "start": 5.5, "end": 5.6},
+            ],
+        }
+
+        result = split_transcription_by_utterance(transcription_result, utterances, words_include_spacing=True)
+
+        self.assertEqual(result[utterances[0].id]["transcript"], "hello world.")
+        self.assertEqual(result[utterances[1].id]["transcript"], "こんにちは。")
+        # Word text itself is left untouched
+        self.assertEqual(result[utterances[0].id]["words"][1]["word"], " world")
+
+    def test_word_languages_set_per_utterance_language(self):
+        """Each utterance gets the most common language of its words, falling back to the group language."""
+        utterances = self._create_utterances(count=3, duration_ms=2000)
+
+        # Utterance 0: 0-2s, Utterance 1: 5-7s, Utterance 2: 10-12s (no words)
+        transcription_result = {
+            "language": "en",
+            "words": [
+                {"word": "hello", "start": 0.0, "end": 0.5, "language": "en"},
+                {"word": "こんにちは", "start": 5.0, "end": 5.5, "language": "ja"},
+                {"word": "OK", "start": 5.6, "end": 5.8, "language": "en"},
+                {"word": "世界", "start": 5.9, "end": 6.2, "language": "ja"},
+            ],
+        }
+
+        result = split_transcription_by_utterance(transcription_result, utterances)
+
+        self.assertEqual(result[utterances[0].id]["language"], "en")
+        self.assertEqual(result[utterances[1].id]["language"], "ja")
+        self.assertEqual(result[utterances[2].id]["language"], "en")
 
     def test_handles_empty_utterances(self):
         """Verify empty utterance list returns empty dict."""
@@ -861,6 +918,177 @@ class TestEndToEndAsyncTranscriptionAssemblyAI(AsyncTranscriptionTestCase):
         self.assertEqual(async_transcription.state, AsyncTranscriptionStates.FAILED)
         self.assertIsNotNone(async_transcription.failure_data)
         self.assertIn(TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND, async_transcription.failure_data.get("failure_reasons", []))
+
+
+@override_settings(CELERY_TASK_ALWAYS_EAGER=True, CELERY_TASK_EAGER_PROPAGATES=True)
+class TestEndToEndAsyncTranscriptionGladia(AsyncTranscriptionTestCase):
+    """End-to-end tests for async transcription with Gladia."""
+
+    def setUp(self):
+        super().setUp()
+        self.gladia_recording = Recording.objects.create(
+            bot=self.bot,
+            recording_type=RecordingTypes.AUDIO_AND_VIDEO,
+            transcription_type=TranscriptionTypes.NON_REALTIME,
+            transcription_provider=TranscriptionProviders.GLADIA,
+            is_default_recording=False,
+            state=RecordingStates.COMPLETE,
+        )
+        self.gladia_credentials = Credentials.objects.create(
+            project=self.project,
+            credential_type=Credentials.CredentialTypes.GLADIA,
+        )
+        self.gladia_credentials.set_credentials({"api_key": "test_gladia_api_key"})
+
+    @mock.patch("bots.tasks.deliver_webhook_task.deliver_webhook")
+    @mock.patch("bots.transcription_utils.requests.delete")
+    @mock.patch("bots.transcription_utils.requests.get")
+    @mock.patch("bots.transcription_utils.requests.post")
+    @mock.patch("bots.transcription_utils.get_mp3_for_utterance_group")
+    def test_utterances_are_transcribed_in_a_single_gladia_request(
+        self,
+        mock_get_mp3,
+        mock_post,
+        mock_get,
+        mock_delete,
+        mock_deliver_webhook,
+    ):
+        """All chunks are sent to Gladia as one grouped file and the result is split back per utterance."""
+        mock_deliver_webhook.return_value = None
+
+        # Three 1s chunks -> concatenated with 3s of silence between them: [0,1], [4,5], [8,9]
+        for i in range(3):
+            AudioChunk.objects.create(
+                recording=self.gladia_recording,
+                participant=self.participant,
+                audio_blob=b"\x00\x00" * 16000,
+                timestamp_ms=i * 1000,
+                duration_ms=1000,
+                sample_rate=16000,
+            )
+
+        async_transcription = AsyncTranscription.objects.create(
+            recording=self.gladia_recording,
+            settings={"transcription_settings": {"gladia": {}}},
+        )
+
+        mock_get_mp3.return_value = b"fake-mp3-data"
+
+        upload_response = mock.Mock(status_code=200)
+        upload_response.json.return_value = {"audio_url": "https://api.gladia.io/audio/123"}
+        transcribe_response = mock.Mock(status_code=201)
+        transcribe_response.json.return_value = {"result_url": "https://api.gladia.io/result/abc"}
+        mock_post.side_effect = [upload_response, transcribe_response]
+
+        poll_response = mock.Mock(status_code=200)
+        poll_response.json.return_value = {
+            "status": "done",
+            "result": {
+                "transcription": {
+                    "full_transcript": "hello world test",
+                    "languages": ["en"],
+                    "utterances": [
+                        {"words": [{"word": "hello", "start": 0.1, "end": 0.5, "confidence": 0.99}]},
+                        {"words": [{"word": " world", "start": 4.1, "end": 4.5, "confidence": 0.98}]},
+                        {"words": [{"word": " test", "start": 8.1, "end": 8.5, "confidence": 0.97}]},
+                    ],
+                }
+            },
+        }
+        mock_get.return_value = poll_response
+        mock_delete.return_value = mock.Mock(status_code=202)
+
+        process_async_transcription.delay(async_transcription.id)
+
+        async_transcription.refresh_from_db()
+        self.assertEqual(async_transcription.state, AsyncTranscriptionStates.COMPLETE)
+
+        # One upload + one transcribe request for the whole group
+        self.assertEqual(mock_post.call_count, 2)
+        mock_get_mp3.assert_called_once()
+
+        utterances = Utterance.objects.filter(async_transcription=async_transcription).order_by("timestamp_ms")
+        self.assertEqual([u.transcription["transcript"] for u in utterances], ["hello", "world", "test"])
+        self.assertEqual([u.transcription["language"] for u in utterances], ["en", "en", "en"])
+        self.assertAlmostEqual(utterances[1].transcription["words"][0]["start"], 0.1)
+
+    @mock.patch("bots.tasks.deliver_webhook_task.deliver_webhook")
+    @mock.patch("bots.transcription_utils.requests.delete")
+    @mock.patch("bots.transcription_utils.requests.get")
+    @mock.patch("bots.transcription_utils.requests.post")
+    @mock.patch("bots.transcription_utils.get_mp3_for_utterance_group")
+    def test_code_switched_group_keeps_per_utterance_language_and_spacing(
+        self,
+        mock_get_mp3,
+        mock_post,
+        mock_get,
+        mock_delete,
+        mock_deliver_webhook,
+    ):
+        """An English/Japanese group gets each chunk's own language and Gladia's spacing."""
+        mock_deliver_webhook.return_value = None
+
+        # Two 1s chunks -> [0,1], [4,5] in the concatenated audio
+        for i in range(2):
+            AudioChunk.objects.create(
+                recording=self.gladia_recording,
+                participant=self.participant,
+                audio_blob=b"\x00\x00" * 16000,
+                timestamp_ms=i * 1000,
+                duration_ms=1000,
+                sample_rate=16000,
+            )
+
+        async_transcription = AsyncTranscription.objects.create(
+            recording=self.gladia_recording,
+            settings={"transcription_settings": {"gladia": {"enable_code_switching": True, "code_switching_languages": ["en", "ja"]}}},
+        )
+
+        mock_get_mp3.return_value = b"fake-mp3-data"
+
+        upload_response = mock.Mock(status_code=200)
+        upload_response.json.return_value = {"audio_url": "https://api.gladia.io/audio/123"}
+        transcribe_response = mock.Mock(status_code=201)
+        transcribe_response.json.return_value = {"result_url": "https://api.gladia.io/result/abc"}
+        mock_post.side_effect = [upload_response, transcribe_response]
+
+        poll_response = mock.Mock(status_code=200)
+        poll_response.json.return_value = {
+            "status": "done",
+            "result": {
+                "transcription": {
+                    "full_transcript": "Hello world. こんにちは。",
+                    "languages": ["en", "ja"],
+                    "utterances": [
+                        {
+                            "language": "en",
+                            "words": [
+                                {"word": "Hello", "start": 0.1, "end": 0.4, "confidence": 0.99},
+                                {"word": " world.", "start": 0.5, "end": 0.9, "confidence": 0.99},
+                            ],
+                        },
+                        {
+                            "language": "ja",
+                            "words": [
+                                {"word": "こんにちは", "start": 4.1, "end": 4.6, "confidence": 0.97},
+                                {"word": "。", "start": 4.6, "end": 4.7, "confidence": 0.97},
+                            ],
+                        },
+                    ],
+                }
+            },
+        }
+        mock_get.return_value = poll_response
+        mock_delete.return_value = mock.Mock(status_code=202)
+
+        process_async_transcription.delay(async_transcription.id)
+
+        async_transcription.refresh_from_db()
+        self.assertEqual(async_transcription.state, AsyncTranscriptionStates.COMPLETE)
+
+        utterances = Utterance.objects.filter(async_transcription=async_transcription).order_by("timestamp_ms")
+        self.assertEqual([u.transcription["transcript"] for u in utterances], ["Hello world.", "こんにちは。"])
+        self.assertEqual([u.transcription["language"] for u in utterances], ["en", "ja"])
 
 
 class TestAsyncTranscriptionTimeout(AsyncTranscriptionTestCase):

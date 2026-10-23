@@ -5,6 +5,7 @@ import os
 import subprocess
 import threading
 import time
+from collections import Counter
 from typing import Any, Callable, Dict, List, Sequence
 
 import requests
@@ -177,6 +178,7 @@ def split_transcription_by_utterance(
     utterances: Sequence[Utterance],
     *,
     silence_seconds: float = 3.0,
+    words_include_spacing: bool = False,
 ) -> Dict[int, Dict[str, Any]]:
     """
     Split transcription result from a combined MP3 back into per-utterance results.
@@ -185,6 +187,13 @@ def split_transcription_by_utterance(
       - utterances were concatenated in THIS order
       - each utterance contributes duration_ms / 1000.0 seconds of audio
       - exactly `silence_seconds` of silence was inserted between utterances
+
+    If `words_include_spacing` is True, the word text already carries the provider's
+    spacing (e.g. Gladia's " world"), so words are concatenated as-is instead of being
+    joined with spaces. This keeps languages without word separators intact.
+
+    If words carry a "language", each utterance gets the most common language among
+    its words, falling back to the language of the whole transcription.
 
     Returns:
       { utterance_id: {"transcript": str, "words": [...], "language": str|None} }
@@ -232,7 +241,14 @@ def split_transcription_by_utterance(
             word_index += 1
 
         output[utterance_id]["words"] = utterance_words
-        output[utterance_id]["transcript"] = " ".join(w["word"] for w in utterance_words)
+        if words_include_spacing:
+            output[utterance_id]["transcript"] = "".join(w["word"] for w in utterance_words).strip()
+        else:
+            output[utterance_id]["transcript"] = " ".join(w["word"] for w in utterance_words)
+
+        word_languages = [w["language"] for w in utterance_words if w.get("language")]
+        if word_languages:
+            output[utterance_id]["language"] = Counter(word_languages).most_common(1)[0][0]
 
     return output
 
@@ -243,11 +259,15 @@ def get_transcription_for_utterance_group(utterances):
         total_duration_ms = sum(utterance.duration_ms for utterance in utterances)
 
         transcription_provider = first_utterance.transcription_provider
+        words_include_spacing = False
 
         if transcription_provider == TranscriptionProviders.ASSEMBLY_AI:
             get_transcription_from_mp3_method = get_transcription_via_assemblyai_from_mp3
         elif transcription_provider == TranscriptionProviders.DEEPGRAM:
             get_transcription_from_mp3_method = get_transcription_via_deepgram_from_mp3
+        elif transcription_provider == TranscriptionProviders.GLADIA:
+            get_transcription_from_mp3_method = get_transcription_via_gladia_from_mp3
+            words_include_spacing = True
         else:
             raise Exception(f"Unknown or unsupported transcription provider: {transcription_provider}")
 
@@ -262,7 +282,7 @@ def get_transcription_for_utterance_group(utterances):
         if error:
             return None, error
 
-        return split_transcription_by_utterance(transcription, utterances), None
+        return split_transcription_by_utterance(transcription, utterances, words_include_spacing=words_include_spacing), None
     except Exception as e:
         return None, {"reason": TranscriptionFailureReasons.INTERNAL_ERROR, "error": str(e)}
 
@@ -520,3 +540,115 @@ def get_transcription_via_deepgram_from_audio_data(
         logger.info(f"Deepgram transcription for {identifier} with model {deepgram_model} had no alternatives, returning empty transcription")
         return {"transcript": "", "words": []}, None
     return json.loads(alternatives[0].to_json()), None
+
+
+def get_transcription_via_gladia_from_mp3(
+    retrieve_mp3_data_callback: Callable[[], bytes],
+    identifier: str,
+    transcription_settings: TranscriptionSettings,
+    recording: Recording,
+    duration_ms: int | None = None,
+):
+    gladia_credentials_record = recording.bot.project.credentials.filter(credential_type=Credentials.CredentialTypes.GLADIA).first()
+    if not gladia_credentials_record:
+        return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND}
+
+    gladia_credentials = gladia_credentials_record.get_credentials()
+    if not gladia_credentials:
+        return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND}
+
+    upload_url = "https://api.gladia.io/v2/upload"
+
+    payload_mp3 = retrieve_mp3_data_callback()
+    headers = {
+        "x-gladia-key": gladia_credentials["api_key"],
+    }
+    files = {"audio": ("file.mp3", payload_mp3, "audio/mpeg")}
+    upload_response = requests.post(upload_url, headers=headers, files=files)
+
+    if upload_response.status_code == 401:
+        return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_INVALID}
+
+    if upload_response.status_code != 200 and upload_response.status_code != 201:
+        return None, {"reason": TranscriptionFailureReasons.AUDIO_UPLOAD_FAILED, "status_code": upload_response.status_code}
+
+    upload_response_json = upload_response.json()
+    audio_url = upload_response_json["audio_url"]
+
+    transcribe_url = "https://api.gladia.io/v2/pre-recorded"
+    transcribe_request_body = {"audio_url": audio_url}
+    if transcription_settings.gladia_enable_code_switching():
+        transcribe_request_body["enable_code_switching"] = True
+        transcribe_request_body["code_switching_config"] = {
+            "languages": transcription_settings.gladia_code_switching_languages(),
+        }
+    transcribe_response = requests.post(transcribe_url, headers=headers, json=transcribe_request_body)
+
+    if transcribe_response.status_code != 200 and transcribe_response.status_code != 201:
+        return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "step": "transcribe_request", "status_code": transcribe_response.status_code}
+
+    transcribe_response_json = transcribe_response.json()
+    result_url = transcribe_response_json["result_url"]
+
+    # Poll the result_url until we get a completed transcription
+    max_retries = int(os.getenv("TRANSCRIPTION_POLLING_TIMEOUT_SECONDS", 120))  # Maximum number of retries (2 minutes with 1s sleep)
+    retry_count = 0
+
+    while retry_count < max_retries:
+        result_response = requests.get(result_url, headers=headers)
+
+        if result_response.status_code != 200:
+            logger.error(f"Gladia result fetch failed with status code {result_response.status_code}")
+            time.sleep(10)
+            retry_count += 10
+            continue
+
+        result_data = result_response.json()
+        status = result_data.get("status")
+
+        if status == "done":
+            # Transcription is complete
+            transcription = result_data.get("result", {}).get("transcription", "")
+            logger.info(f"Gladia transcription completed successfully for {identifier}, now deleting audio file from Gladia")
+            # Delete the audio file from Gladia
+            delete_response = requests.delete(result_url, headers=headers)
+            if delete_response.status_code != 200 and delete_response.status_code != 202:
+                logger.error(f"Gladia delete failed with status code {delete_response.status_code}")
+            else:
+                logger.info("Gladia delete successful")
+
+            transcription["transcript"] = transcription["full_transcript"]
+            del transcription["full_transcript"]
+
+            # Extract all words from all utterances into a flat list, ordered by start time.
+            # Each word keeps its Gladia utterance's language, so code-switched groups can be split per language.
+            all_words = []
+            for gladia_utterance in transcription["utterances"]:
+                for word in gladia_utterance.get("words", []):
+                    if gladia_utterance.get("language") and "language" not in word:
+                        word = {**word, "language": gladia_utterance["language"]}
+                    all_words.append(word)
+            transcription["words"] = sorted(all_words, key=lambda w: w["start"])
+            del transcription["utterances"]
+
+            languages = transcription.get("languages") or []
+            transcription["language"] = languages[0] if languages else None
+
+            return transcription, None
+
+        elif status == "error":
+            error_code = result_data.get("error_code")
+            return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "step": "transcribe_result_poll", "error_code": error_code}
+
+        elif status in ["queued", "processing"]:
+            # Still processing, wait and retry
+            logger.info(f"Gladia transcription status for {identifier}: {status}, waiting...")
+            time.sleep(1)
+            retry_count += 1
+
+        else:
+            # Unknown status
+            return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "step": "transcribe_result_poll", "status": status}
+
+    # If we've reached here, we've timed out
+    return None, {"reason": TranscriptionFailureReasons.TIMED_OUT, "step": "transcribe_result_poll"}
