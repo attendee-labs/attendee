@@ -2709,9 +2709,8 @@ components:
                   type: array
                   items:
                     type: string
-                    minLength: 1
                     maxLength: 49
-                    pattern: ^[^<>{}\[\]\\]*$
+                    pattern: ^\s*[^<>{}\[\]\\\s]+(\s+[^<>{}\[\]\\\s]+){0,4}\s*$
                   maxItems: 1000
                   description: 'A list of keyterms to bias the transcription towards.
                     At most 1000 keyterms, each less than 50 characters and at most
@@ -2732,9 +2731,12 @@ components:
                     maximum the model supports.
                 diarization_threshold:
                   type: number
+                  minimum: 0.1
+                  maximum: 0.4
                   description: Diarization threshold to apply during speaker diarization.
                     A higher value predicts fewer speakers. Can only be set when diarize
-                    is true and num_speakers is not set.
+                    is true and num_speakers is not set. Defaults to a model-based
+                    threshold (usually 0.22).
                 use_eu_server:
                   type: boolean
                   description: Whether to use ElevenLabs' EU data residency server
@@ -2743,6 +2745,16 @@ components:
                     false.
               required:
               - model_id
+              dependentSchemas:
+                diarization_threshold:
+                  properties:
+                    diarize:
+                      const: true
+                  required:
+                  - diarize
+                  not:
+                    required:
+                    - num_speakers
               additionalProperties: false
             kyutai:
               type: object

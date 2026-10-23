@@ -2066,9 +2066,8 @@ class ElevenLabsProviderTest(TransactionTestCase):
                 "model_id": "scribe_v2",
                 "language_code": "fin",
                 "tag_audio_events": True,
-                "keyterms": ["Attendee", "In Parallel", "a" * 49],
+                "keyterms": ["Attendee", "In Parallel", "one two three four five", "a" * 49],
                 "diarize": True,
-                "num_speakers": 32,
                 "diarization_threshold": 0.3,
                 "use_eu_server": True,
             }
@@ -2076,6 +2075,9 @@ class ElevenLabsProviderTest(TransactionTestCase):
         bot_serializer = CreateBotSerializer(data={"meeting_url": "https://zoom.us/j/123456789", "bot_name": "Test Bot"})
         self.assertEqual(bot_serializer.validate_transcription_settings(settings), settings)
         self.assertEqual(CreateAsyncTranscriptionSerializer(data={}).validate_transcription_settings(settings), settings)
+
+        num_speakers_settings = {"elevenlabs": {"model_id": "scribe_v2", "diarize": True, "num_speakers": 32}}
+        self.assertEqual(CreateAsyncTranscriptionSerializer(data={}).validate_transcription_settings(num_speakers_settings), num_speakers_settings)
 
     def test_schema_rejects_invalid_elevenlabs_settings(self):
         from rest_framework import serializers
@@ -2089,6 +2091,13 @@ class ElevenLabsProviderTest(TransactionTestCase):
             "keyterm with forbidden character": {"model_id": "scribe_v2", "keyterms": ["<tag>"]},
             "keyterm with backslash": {"model_id": "scribe_v2", "keyterms": ["a\\b"]},
             "empty keyterm": {"model_id": "scribe_v2", "keyterms": [""]},
+            "blank keyterm": {"model_id": "scribe_v2", "keyterms": ["   "]},
+            "keyterm with more than 5 words": {"model_id": "scribe_v2", "keyterms": ["one two three four five six"]},
+            "diarization_threshold below range": {"model_id": "scribe_v2", "diarize": True, "diarization_threshold": 0.05},
+            "diarization_threshold above range": {"model_id": "scribe_v2", "diarize": True, "diarization_threshold": 0.5},
+            "diarization_threshold without diarize": {"model_id": "scribe_v2", "diarization_threshold": 0.3},
+            "diarization_threshold with diarize false": {"model_id": "scribe_v2", "diarize": False, "diarization_threshold": 0.3},
+            "diarization_threshold with num_speakers": {"model_id": "scribe_v2", "diarize": True, "num_speakers": 2, "diarization_threshold": 0.3},
             "too many keyterms": {"model_id": "scribe_v2", "keyterms": [f"term{i}" for i in range(1001)]},
             "too many speakers": {"model_id": "scribe_v2", "num_speakers": 33},
             "unknown property": {"model_id": "scribe_v2", "prompt": "a meeting"},
