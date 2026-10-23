@@ -5,6 +5,7 @@ import os
 import subprocess
 import threading
 import time
+from collections import Counter
 from typing import Any, Callable, Dict, List, Sequence
 
 import requests
@@ -177,6 +178,7 @@ def split_transcription_by_utterance(
     utterances: Sequence[Utterance],
     *,
     silence_seconds: float = 3.0,
+    words_include_spacing: bool = False,
 ) -> Dict[int, Dict[str, Any]]:
     """
     Split transcription result from a combined MP3 back into per-utterance results.
@@ -185,6 +187,13 @@ def split_transcription_by_utterance(
       - utterances were concatenated in THIS order
       - each utterance contributes duration_ms / 1000.0 seconds of audio
       - exactly `silence_seconds` of silence was inserted between utterances
+
+    If `words_include_spacing` is True, the word text already carries the provider's
+    spacing (e.g. Gladia's " world"), so words are concatenated as-is instead of being
+    joined with spaces. This keeps languages without word separators intact.
+
+    If words carry a "language", each utterance gets the most common language among
+    its words, falling back to the language of the whole transcription.
 
     Returns:
       { utterance_id: {"transcript": str, "words": [...], "language": str|None} }
@@ -232,8 +241,14 @@ def split_transcription_by_utterance(
             word_index += 1
 
         output[utterance_id]["words"] = utterance_words
-        # Some providers (e.g. Gladia) include leading whitespace in the word text
-        output[utterance_id]["transcript"] = " ".join(w["word"].strip() for w in utterance_words)
+        if words_include_spacing:
+            output[utterance_id]["transcript"] = "".join(w["word"] for w in utterance_words).strip()
+        else:
+            output[utterance_id]["transcript"] = " ".join(w["word"] for w in utterance_words)
+
+        word_languages = [w["language"] for w in utterance_words if w.get("language")]
+        if word_languages:
+            output[utterance_id]["language"] = Counter(word_languages).most_common(1)[0][0]
 
     return output
 
@@ -244,6 +259,7 @@ def get_transcription_for_utterance_group(utterances):
         total_duration_ms = sum(utterance.duration_ms for utterance in utterances)
 
         transcription_provider = first_utterance.transcription_provider
+        words_include_spacing = False
 
         if transcription_provider == TranscriptionProviders.ASSEMBLY_AI:
             get_transcription_from_mp3_method = get_transcription_via_assemblyai_from_mp3
@@ -251,6 +267,7 @@ def get_transcription_for_utterance_group(utterances):
             get_transcription_from_mp3_method = get_transcription_via_deepgram_from_mp3
         elif transcription_provider == TranscriptionProviders.GLADIA:
             get_transcription_from_mp3_method = get_transcription_via_gladia_from_mp3
+            words_include_spacing = True
         else:
             raise Exception(f"Unknown or unsupported transcription provider: {transcription_provider}")
 
@@ -265,7 +282,7 @@ def get_transcription_for_utterance_group(utterances):
         if error:
             return None, error
 
-        return split_transcription_by_utterance(transcription, utterances), None
+        return split_transcription_by_utterance(transcription, utterances, words_include_spacing=words_include_spacing), None
     except Exception as e:
         return None, {"reason": TranscriptionFailureReasons.INTERNAL_ERROR, "error": str(e)}
 
@@ -603,11 +620,14 @@ def get_transcription_via_gladia_from_mp3(
             transcription["transcript"] = transcription["full_transcript"]
             del transcription["full_transcript"]
 
-            # Extract all words from all utterances into a flat list, ordered by start time
+            # Extract all words from all utterances into a flat list, ordered by start time.
+            # Each word keeps its Gladia utterance's language, so code-switched groups can be split per language.
             all_words = []
             for gladia_utterance in transcription["utterances"]:
-                if "words" in gladia_utterance:
-                    all_words.extend(gladia_utterance["words"])
+                for word in gladia_utterance.get("words", []):
+                    if gladia_utterance.get("language") and "language" not in word:
+                        word = {**word, "language": gladia_utterance["language"]}
+                    all_words.append(word)
             transcription["words"] = sorted(all_words, key=lambda w: w["start"])
             del transcription["utterances"]
 
