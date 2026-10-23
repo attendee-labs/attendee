@@ -130,8 +130,8 @@ class TestAsyncTranscriptionUsesGroupedUtterances(AsyncTranscriptionTestCase):
         self.assertEqual(async_transcription.transcription_provider, TranscriptionProviders.ASSEMBLY_AI)
         self.assertTrue(async_transcription.use_grouped_utterances)
 
-    def test_gladia_transcription_does_not_use_grouped_utterances(self):
-        """Verify that other providers do NOT use grouped utterances."""
+    def test_gladia_transcription_uses_grouped_utterances(self):
+        """Verify that AsyncTranscription with Gladia uses grouped utterances."""
         # Create a recording with Gladia
         gladia_recording = Recording.objects.create(
             bot=self.bot,
@@ -148,7 +148,7 @@ class TestAsyncTranscriptionUsesGroupedUtterances(AsyncTranscriptionTestCase):
         )
 
         self.assertEqual(async_transcription.transcription_provider, TranscriptionProviders.GLADIA)
-        self.assertFalse(async_transcription.use_grouped_utterances)
+        self.assertTrue(async_transcription.use_grouped_utterances)
 
 
 class TestUtteranceGrouping(AsyncTranscriptionTestCase):
@@ -861,6 +861,99 @@ class TestEndToEndAsyncTranscriptionAssemblyAI(AsyncTranscriptionTestCase):
         self.assertEqual(async_transcription.state, AsyncTranscriptionStates.FAILED)
         self.assertIsNotNone(async_transcription.failure_data)
         self.assertIn(TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND, async_transcription.failure_data.get("failure_reasons", []))
+
+
+@override_settings(CELERY_TASK_ALWAYS_EAGER=True, CELERY_TASK_EAGER_PROPAGATES=True)
+class TestEndToEndAsyncTranscriptionGladia(AsyncTranscriptionTestCase):
+    """End-to-end tests for async transcription with Gladia."""
+
+    def setUp(self):
+        super().setUp()
+        self.gladia_recording = Recording.objects.create(
+            bot=self.bot,
+            recording_type=RecordingTypes.AUDIO_AND_VIDEO,
+            transcription_type=TranscriptionTypes.NON_REALTIME,
+            transcription_provider=TranscriptionProviders.GLADIA,
+            is_default_recording=False,
+            state=RecordingStates.COMPLETE,
+        )
+        self.gladia_credentials = Credentials.objects.create(
+            project=self.project,
+            credential_type=Credentials.CredentialTypes.GLADIA,
+        )
+        self.gladia_credentials.set_credentials({"api_key": "test_gladia_api_key"})
+
+    @mock.patch("bots.tasks.deliver_webhook_task.deliver_webhook")
+    @mock.patch("bots.transcription_utils.requests.delete")
+    @mock.patch("bots.transcription_utils.requests.get")
+    @mock.patch("bots.transcription_utils.requests.post")
+    @mock.patch("bots.transcription_utils.get_mp3_for_utterance_group")
+    def test_utterances_are_transcribed_in_a_single_gladia_request(
+        self,
+        mock_get_mp3,
+        mock_post,
+        mock_get,
+        mock_delete,
+        mock_deliver_webhook,
+    ):
+        """All chunks are sent to Gladia as one grouped file and the result is split back per utterance."""
+        mock_deliver_webhook.return_value = None
+
+        # Three 1s chunks -> concatenated with 3s of silence between them: [0,1], [4,5], [8,9]
+        for i in range(3):
+            AudioChunk.objects.create(
+                recording=self.gladia_recording,
+                participant=self.participant,
+                audio_blob=b"\x00\x00" * 16000,
+                timestamp_ms=i * 1000,
+                duration_ms=1000,
+                sample_rate=16000,
+            )
+
+        async_transcription = AsyncTranscription.objects.create(
+            recording=self.gladia_recording,
+            settings={"transcription_settings": {"gladia": {}}},
+        )
+
+        mock_get_mp3.return_value = b"fake-mp3-data"
+
+        upload_response = mock.Mock(status_code=200)
+        upload_response.json.return_value = {"audio_url": "https://api.gladia.io/audio/123"}
+        transcribe_response = mock.Mock(status_code=201)
+        transcribe_response.json.return_value = {"result_url": "https://api.gladia.io/result/abc"}
+        mock_post.side_effect = [upload_response, transcribe_response]
+
+        poll_response = mock.Mock(status_code=200)
+        poll_response.json.return_value = {
+            "status": "done",
+            "result": {
+                "transcription": {
+                    "full_transcript": "hello world test",
+                    "languages": ["en"],
+                    "utterances": [
+                        {"words": [{"word": "hello", "start": 0.1, "end": 0.5, "confidence": 0.99}]},
+                        {"words": [{"word": " world", "start": 4.1, "end": 4.5, "confidence": 0.98}]},
+                        {"words": [{"word": " test", "start": 8.1, "end": 8.5, "confidence": 0.97}]},
+                    ],
+                }
+            },
+        }
+        mock_get.return_value = poll_response
+        mock_delete.return_value = mock.Mock(status_code=202)
+
+        process_async_transcription.delay(async_transcription.id)
+
+        async_transcription.refresh_from_db()
+        self.assertEqual(async_transcription.state, AsyncTranscriptionStates.COMPLETE)
+
+        # One upload + one transcribe request for the whole group
+        self.assertEqual(mock_post.call_count, 2)
+        mock_get_mp3.assert_called_once()
+
+        utterances = Utterance.objects.filter(async_transcription=async_transcription).order_by("timestamp_ms")
+        self.assertEqual([u.transcription["transcript"] for u in utterances], ["hello", "world", "test"])
+        self.assertEqual([u.transcription["language"] for u in utterances], ["en", "en", "en"])
+        self.assertAlmostEqual(utterances[1].transcription["words"][0]["start"], 0.1)
 
 
 class TestAsyncTranscriptionTimeout(AsyncTranscriptionTestCase):
