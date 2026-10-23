@@ -413,13 +413,23 @@ TRANSCRIPTION_SETTINGS_SCHEMA = {
         "elevenlabs": {
             "type": "object",
             "properties": {
-                "model_id": {"type": "string", "description": "The ElevenLabs model to use for transcription", "enum": ["scribe_v1", "scribe_v1_experimental"]},
+                "model_id": {"type": "string", "description": "The ElevenLabs model to use for transcription", "enum": ["scribe_v1", "scribe_v1_experimental", "scribe_v2"]},
                 "language_code": {
                     "type": "string",
                     "description": "An ISO-639-1 or ISO-639-3 language_code corresponding to the language of the audio file.",
                     "enum": get_elevenlabs_language_codes(),
                 },
-                "tag_audio_events": {"type": "boolean", "description": "Whether to tag audio events like 'laughter' in the transcription."},
+                "tag_audio_events": {"type": "boolean", "description": "Whether to tag audio events like 'laughter' in the transcription. Audio events are not included in the transcript's words."},
+                "keyterms": {
+                    "type": "array",
+                    "items": {"type": "string", "minLength": 1, "maxLength": 49, "pattern": "^[^<>{}\\[\\]\\\\]*$"},
+                    "maxItems": 1000,
+                    "description": "A list of keyterms to bias the transcription towards. At most 1000 keyterms, each less than 50 characters and at most 5 words, without the characters < > { } [ ] \\. Supported by Scribe v2 models. ElevenLabs charges extra for keyterms. See here for details: https://elevenlabs.io/docs/eleven-api/guides/how-to/speech-to-text/batch/keyterm-prompting",
+                },
+                "diarize": {"type": "boolean", "description": "Whether to annotate which speaker is currently talking in the uploaded file. Only needed if multiple people are speaking into a single microphone."},
+                "num_speakers": {"type": "integer", "minimum": 1, "maximum": 32, "description": "The maximum amount of speakers talking in the uploaded file. Can help with predicting who speaks when. Defaults to the maximum the model supports."},
+                "diarization_threshold": {"type": "number", "description": "Diarization threshold to apply during speaker diarization. A higher value predicts fewer speakers. Can only be set when diarize is true and num_speakers is not set."},
+                "use_eu_server": {"type": "boolean", "description": "Whether to use ElevenLabs' EU data residency server (api.eu.residency.elevenlabs.io). This is an ElevenLabs Enterprise feature and needs an API key from the EU workspace. Defaults to false."},
             },
             "required": ["model_id"],
             "additionalProperties": False,

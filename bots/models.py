@@ -793,6 +793,26 @@ class TranscriptionSettings:
     def elevenlabs_tag_audio_events(self):
         return self._settings.get("elevenlabs", {}).get("tag_audio_events", None)
 
+    def elevenlabs_keyterms(self):
+        return self._settings.get("elevenlabs", {}).get("keyterms", None)
+
+    def elevenlabs_diarize(self):
+        return self._settings.get("elevenlabs", {}).get("diarize", None)
+
+    def elevenlabs_num_speakers(self):
+        return self._settings.get("elevenlabs", {}).get("num_speakers", None)
+
+    def elevenlabs_diarization_threshold(self):
+        return self._settings.get("elevenlabs", {}).get("diarization_threshold", None)
+
+    def elevenlabs_base_url(self):
+        if os.getenv("ELEVENLABS_BASE_URL"):
+            return os.getenv("ELEVENLABS_BASE_URL")
+        use_eu_server = self._settings.get("elevenlabs", {}).get("use_eu_server", False)
+        if use_eu_server:
+            return "https://api.eu.residency.elevenlabs.io"
+        return "https://api.elevenlabs.io"
+
     def custom_async_additional_props(self):
         return self._settings.get("custom_async", {})
 

@@ -9,7 +9,7 @@ from celery import shared_task
 logger = logging.getLogger(__name__)
 
 from bots.models import Credentials, RecordingManager, TranscriptionFailureReasons, TranscriptionProviders, Utterance, WebhookTriggerTypes
-from bots.transcription_utils import get_transcription_via_assemblyai_from_mp3, get_transcription_via_deepgram_from_audio_data, is_retryable_failure
+from bots.transcription_utils import get_elevenlabs_speech_to_text_request, get_transcription_via_assemblyai_from_mp3, get_transcription_via_deepgram_from_audio_data, get_words_from_elevenlabs_response, is_retryable_failure
 from bots.utils import pcm_to_mp3
 from bots.webhook_payloads import utterance_webhook_payload
 from bots.webhook_utils import trigger_webhook
@@ -418,27 +418,14 @@ def get_transcription_via_elevenlabs(utterance):
     # Convert PCM audio to MP3 for ElevenLabs
     payload_mp3 = pcm_to_mp3(utterance.get_audio_blob().tobytes(), sample_rate=utterance.get_sample_rate())
 
-    # Prepare the request for ElevenLabs speech-to-text API
-    url = "https://api.elevenlabs.io/v1/speech-to-text"
+    url, data = get_elevenlabs_speech_to_text_request(transcription_settings)
     headers = {
         "xi-api-key": api_key,
     }
-
-    # Prepare multipart form data
     files = {"file": ("audio.mp3", payload_mp3, "audio/mpeg")}
 
-    # Add model_id if configured
-    data = {}
-    if transcription_settings.elevenlabs_model_id():
-        data["model_id"] = transcription_settings.elevenlabs_model_id()
-
-    if transcription_settings.elevenlabs_language_code():
-        data["language_code"] = transcription_settings.elevenlabs_language_code()
-
-    data["tag_audio_events"] = transcription_settings.elevenlabs_tag_audio_events()
-
     try:
-        response = requests.post(url, headers=headers, files=files, data=data if data else None)
+        response = requests.post(url, headers=headers, files=files, data=data)
 
         if response.status_code == 401:
             return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_INVALID}
@@ -459,7 +446,7 @@ def get_transcription_via_elevenlabs(utterance):
 
         # Extract transcript and words from the response
         transcript_text = result.get("text", "")
-        words = list(map(lambda word: {"word": word.get("text"), "start": word.get("start"), "end": word.get("end")}, result.get("words", [])))
+        words = get_words_from_elevenlabs_response(result)
 
         # Format the response to match our expected schema
         transcription = {"transcript": transcript_text, "words": words, "language": result.get("language_code", None)}
