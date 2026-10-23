@@ -232,7 +232,8 @@ def split_transcription_by_utterance(
             word_index += 1
 
         output[utterance_id]["words"] = utterance_words
-        output[utterance_id]["transcript"] = " ".join(w["word"] for w in utterance_words)
+        # Some providers (e.g. Gladia) include leading whitespace in the word text
+        output[utterance_id]["transcript"] = " ".join(w["word"].strip() for w in utterance_words)
 
     return output
 
@@ -248,6 +249,8 @@ def get_transcription_for_utterance_group(utterances):
             get_transcription_from_mp3_method = get_transcription_via_assemblyai_from_mp3
         elif transcription_provider == TranscriptionProviders.DEEPGRAM:
             get_transcription_from_mp3_method = get_transcription_via_deepgram_from_mp3
+        elif transcription_provider == TranscriptionProviders.GLADIA:
+            get_transcription_from_mp3_method = get_transcription_via_gladia_from_mp3
         else:
             raise Exception(f"Unknown or unsupported transcription provider: {transcription_provider}")
 
@@ -520,3 +523,112 @@ def get_transcription_via_deepgram_from_audio_data(
         logger.info(f"Deepgram transcription for {identifier} with model {deepgram_model} had no alternatives, returning empty transcription")
         return {"transcript": "", "words": []}, None
     return json.loads(alternatives[0].to_json()), None
+
+
+def get_transcription_via_gladia_from_mp3(
+    retrieve_mp3_data_callback: Callable[[], bytes],
+    identifier: str,
+    transcription_settings: TranscriptionSettings,
+    recording: Recording,
+    duration_ms: int | None = None,
+):
+    gladia_credentials_record = recording.bot.project.credentials.filter(credential_type=Credentials.CredentialTypes.GLADIA).first()
+    if not gladia_credentials_record:
+        return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND}
+
+    gladia_credentials = gladia_credentials_record.get_credentials()
+    if not gladia_credentials:
+        return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND}
+
+    upload_url = "https://api.gladia.io/v2/upload"
+
+    payload_mp3 = retrieve_mp3_data_callback()
+    headers = {
+        "x-gladia-key": gladia_credentials["api_key"],
+    }
+    files = {"audio": ("file.mp3", payload_mp3, "audio/mpeg")}
+    upload_response = requests.post(upload_url, headers=headers, files=files)
+
+    if upload_response.status_code == 401:
+        return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_INVALID}
+
+    if upload_response.status_code != 200 and upload_response.status_code != 201:
+        return None, {"reason": TranscriptionFailureReasons.AUDIO_UPLOAD_FAILED, "status_code": upload_response.status_code}
+
+    upload_response_json = upload_response.json()
+    audio_url = upload_response_json["audio_url"]
+
+    transcribe_url = "https://api.gladia.io/v2/pre-recorded"
+    transcribe_request_body = {"audio_url": audio_url}
+    if transcription_settings.gladia_enable_code_switching():
+        transcribe_request_body["enable_code_switching"] = True
+        transcribe_request_body["code_switching_config"] = {
+            "languages": transcription_settings.gladia_code_switching_languages(),
+        }
+    transcribe_response = requests.post(transcribe_url, headers=headers, json=transcribe_request_body)
+
+    if transcribe_response.status_code != 200 and transcribe_response.status_code != 201:
+        return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "step": "transcribe_request", "status_code": transcribe_response.status_code}
+
+    transcribe_response_json = transcribe_response.json()
+    result_url = transcribe_response_json["result_url"]
+
+    # Poll the result_url until we get a completed transcription
+    max_retries = int(os.getenv("TRANSCRIPTION_POLLING_TIMEOUT_SECONDS", 120))  # Maximum number of retries (2 minutes with 1s sleep)
+    retry_count = 0
+
+    while retry_count < max_retries:
+        result_response = requests.get(result_url, headers=headers)
+
+        if result_response.status_code != 200:
+            logger.error(f"Gladia result fetch failed with status code {result_response.status_code}")
+            time.sleep(10)
+            retry_count += 10
+            continue
+
+        result_data = result_response.json()
+        status = result_data.get("status")
+
+        if status == "done":
+            # Transcription is complete
+            transcription = result_data.get("result", {}).get("transcription", "")
+            logger.info(f"Gladia transcription completed successfully for {identifier}, now deleting audio file from Gladia")
+            # Delete the audio file from Gladia
+            delete_response = requests.delete(result_url, headers=headers)
+            if delete_response.status_code != 200 and delete_response.status_code != 202:
+                logger.error(f"Gladia delete failed with status code {delete_response.status_code}")
+            else:
+                logger.info("Gladia delete successful")
+
+            transcription["transcript"] = transcription["full_transcript"]
+            del transcription["full_transcript"]
+
+            # Extract all words from all utterances into a flat list, ordered by start time
+            all_words = []
+            for gladia_utterance in transcription["utterances"]:
+                if "words" in gladia_utterance:
+                    all_words.extend(gladia_utterance["words"])
+            transcription["words"] = sorted(all_words, key=lambda w: w["start"])
+            del transcription["utterances"]
+
+            languages = transcription.get("languages") or []
+            transcription["language"] = languages[0] if languages else None
+
+            return transcription, None
+
+        elif status == "error":
+            error_code = result_data.get("error_code")
+            return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "step": "transcribe_result_poll", "error_code": error_code}
+
+        elif status in ["queued", "processing"]:
+            # Still processing, wait and retry
+            logger.info(f"Gladia transcription status for {identifier}: {status}, waiting...")
+            time.sleep(1)
+            retry_count += 1
+
+        else:
+            # Unknown status
+            return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "step": "transcribe_result_poll", "status": status}
+
+    # If we've reached here, we've timed out
+    return None, {"reason": TranscriptionFailureReasons.TIMED_OUT, "step": "transcribe_result_poll"}
