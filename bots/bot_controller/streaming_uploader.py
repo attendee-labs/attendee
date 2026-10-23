@@ -6,12 +6,15 @@ from queue import Queue
 
 import boto3
 
+from .s3_client_config import s3_client_config
+
 logger = logging.getLogger(__name__)
 
 
 class StreamingUploader:
     def __init__(self, bucket, key, chunk_size=5242880):  # 5MB chunks
-        self.s3_client = boto3.client("s3", endpoint_url=os.getenv("AWS_ENDPOINT_URL"))
+        endpoint_url = os.getenv("AWS_ENDPOINT_URL")
+        self.s3_client = boto3.client("s3", endpoint_url=endpoint_url, config=s3_client_config(endpoint_url))
         self.bucket = bucket
         self.key = key
         self.chunk_size = chunk_size
