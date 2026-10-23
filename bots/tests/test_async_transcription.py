@@ -8,6 +8,7 @@ which uses the grouped utterances approach rather than individual utterance proc
 import os
 from unittest import mock
 
+import requests
 from django.test import Client, override_settings
 from django.test.testcases import TransactionTestCase
 from django.utils import timezone
@@ -41,7 +42,7 @@ from bots.tasks.process_async_transcription_task import (
     process_async_transcription,
 )
 from bots.tasks.process_utterance_group_for_async_transcription_task import process_utterance_group_for_async_transcription
-from bots.transcription_utils import split_transcription_by_utterance
+from bots.transcription_utils import get_transcription_for_utterance_group, is_retryable_failure, split_transcription_by_utterance
 
 
 @mock.patch.dict(os.environ, {"AWS_RECORDING_STORAGE_BUCKET_NAME": "test-bucket", "CHARGE_CREDITS_FOR_BOTS": "false"})
@@ -861,6 +862,233 @@ class TestEndToEndAsyncTranscriptionAssemblyAI(AsyncTranscriptionTestCase):
         self.assertEqual(async_transcription.state, AsyncTranscriptionStates.FAILED)
         self.assertIsNotNone(async_transcription.failure_data)
         self.assertIn(TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND, async_transcription.failure_data.get("failure_reasons", []))
+
+
+class TestAsyncTranscriptionElevenLabs(AsyncTranscriptionTestCase):
+    """Tests for async transcription with ElevenLabs, which uses the grouped utterances route."""
+
+    def setUp(self):
+        super().setUp()
+        self.recording.transcription_provider = TranscriptionProviders.ELEVENLABS
+        self.recording.save()
+        self.elevenlabs_credentials = Credentials.objects.create(
+            project=self.project,
+            credential_type=Credentials.CredentialTypes.ELEVENLABS,
+        )
+        self.elevenlabs_credentials.set_credentials({"api_key": "test_elevenlabs_api_key"})
+
+    def _create_async_transcription(self, elevenlabs_settings=None):
+        return AsyncTranscription.objects.create(
+            recording=self.recording,
+            settings={"transcription_settings": {"elevenlabs": elevenlabs_settings or {"model_id": "scribe_v2"}}},
+        )
+
+    def _create_utterances(self, async_transcription, count=3, duration_ms=1000):
+        utterances = []
+        for chunk in self._create_audio_chunks(count=count, duration_ms=duration_ms):
+            utterances.append(
+                Utterance.objects.create(
+                    recording=self.recording,
+                    async_transcription=async_transcription,
+                    participant=self.participant,
+                    audio_chunk=chunk,
+                    timestamp_ms=chunk.timestamp_ms,
+                    duration_ms=chunk.duration_ms,
+                )
+            )
+        return utterances
+
+    def _mock_response(self, status_code=200, json_data=None, text=""):
+        response = mock.Mock()
+        response.status_code = status_code
+        response.json.return_value = json_data
+        response.text = text
+        return response
+
+    def _elevenlabs_result(self, language_probability=0.98):
+        # Three 1s utterances, concatenated with 3s of silence between them: windows [0, 1], [4, 5], [8, 9]
+        return {
+            "language_code": "eng",
+            "language_probability": language_probability,
+            "text": "hello (laughter) world test",
+            "words": [
+                {"text": "hello", "start": 0.1, "end": 0.5, "type": "word", "speaker_id": "speaker_0"},
+                {"text": " ", "start": 0.5, "end": 0.6, "type": "spacing", "speaker_id": "speaker_0"},
+                {"text": "(laughter)", "start": 0.6, "end": 0.9, "type": "audio_event", "speaker_id": "speaker_0"},
+                {"text": " ", "start": 0.9, "end": 4.1, "type": "spacing", "speaker_id": "speaker_0"},
+                {"text": "world", "start": 4.1, "end": 4.5, "type": "word", "speaker_id": "speaker_0"},
+                {"text": " ", "start": 4.5, "end": 8.1, "type": "spacing", "speaker_id": "speaker_0"},
+                {"text": "test", "start": 8.1, "end": 8.5, "type": "word", "speaker_id": "speaker_0"},
+            ],
+        }
+
+    def test_elevenlabs_transcription_uses_grouped_utterances(self):
+        async_transcription = self._create_async_transcription()
+
+        self.assertEqual(async_transcription.transcription_provider, TranscriptionProviders.ELEVENLABS)
+        self.assertTrue(async_transcription.use_grouped_utterances)
+
+    @override_settings(CELERY_TASK_ALWAYS_EAGER=True, CELERY_TASK_EAGER_PROPAGATES=True)
+    @mock.patch("bots.tasks.deliver_webhook_task.deliver_webhook")
+    @mock.patch("bots.transcription_utils.requests.post")
+    @mock.patch("bots.transcription_utils.get_mp3_for_utterance_group")
+    def test_complete_async_transcription_flow(self, mock_get_mp3, mock_post, mock_deliver_webhook):
+        """The whole group goes to ElevenLabs as one MP3, and only its spoken words are split back to the utterances."""
+        mock_deliver_webhook.return_value = None
+        mock_get_mp3.return_value = b"fake-mp3-data"
+        mock_post.return_value = self._mock_response(json_data=self._elevenlabs_result())
+
+        self._create_audio_chunks(count=3, duration_ms=1000)
+        async_transcription = self._create_async_transcription()
+
+        process_async_transcription.delay(async_transcription.id)
+
+        async_transcription.refresh_from_db()
+        self.assertEqual(async_transcription.state, AsyncTranscriptionStates.COMPLETE)
+        self.assertIsNone(async_transcription.failure_data)
+        self.assertEqual(mock_post.call_count, 1)
+        self.assertEqual(mock_post.call_args.kwargs["files"]["file"][1], b"fake-mp3-data")
+
+        utterances = list(Utterance.objects.filter(async_transcription=async_transcription).order_by("timestamp_ms"))
+        self.assertEqual(len(utterances), 3)
+        self.assertEqual([u.transcription["transcript"] for u in utterances], ["hello", "world", "test"])
+        for utterance in utterances:
+            self.assertIsNone(utterance.failure_data)
+            self.assertEqual(utterance.transcription["language"], "eng")
+        self.assertEqual(utterances[0].transcription["words"], [{"word": "hello", "start": 0.1, "end": 0.5, "speaker": "speaker_0"}])
+        self.assertAlmostEqual(utterances[1].transcription["words"][0]["start"], 0.1)
+        self.assertAlmostEqual(utterances[2].transcription["words"][0]["end"], 0.5)
+
+    @mock.patch("bots.transcription_utils.requests.post")
+    @mock.patch("bots.transcription_utils.get_mp3_for_utterance_group")
+    def test_settings_reach_the_grouped_request(self, mock_get_mp3, mock_post):
+        mock_get_mp3.return_value = b"fake-mp3-data"
+        mock_post.return_value = self._mock_response(json_data=self._elevenlabs_result())
+        async_transcription = self._create_async_transcription(
+            {
+                "model_id": "scribe_v2",
+                "language_code": "fin",
+                "keyterms": ["Attendee", "In Parallel"],
+                "diarize": True,
+                "num_speakers": 4,
+                "use_eu_server": True,
+            }
+        )
+        utterances = self._create_utterances(async_transcription)
+
+        _, failure_data = get_transcription_for_utterance_group(utterances)
+
+        self.assertIsNone(failure_data)
+        self.assertEqual(mock_post.call_args.args[0], "https://api.eu.residency.elevenlabs.io/v1/speech-to-text")
+        self.assertEqual(mock_post.call_args.kwargs["headers"], {"xi-api-key": "test_elevenlabs_api_key"})
+        self.assertEqual(
+            mock_post.call_args.kwargs["data"],
+            {"model_id": "scribe_v2", "language_code": "fin", "keyterms": ["Attendee", "In Parallel"], "diarize": True, "num_speakers": 4},
+        )
+        self.assertEqual(mock_post.call_args.kwargs["timeout"], 600)
+
+    @mock.patch.dict(os.environ, {"ELEVENLABS_TRANSCRIPTION_TIMEOUT_SECONDS": "1200"})
+    @mock.patch("bots.transcription_utils.requests.post")
+    @mock.patch("bots.transcription_utils.get_mp3_for_utterance_group")
+    def test_the_request_timeout_can_be_raised_with_an_env_var(self, mock_get_mp3, mock_post):
+        mock_get_mp3.return_value = b"fake-mp3-data"
+        mock_post.return_value = self._mock_response(json_data=self._elevenlabs_result())
+        utterances = self._create_utterances(self._create_async_transcription())
+
+        get_transcription_for_utterance_group(utterances)
+
+        self.assertEqual(mock_post.call_args.kwargs["timeout"], 1200)
+
+    @mock.patch("bots.transcription_utils.requests.post")
+    @mock.patch("bots.transcription_utils.get_mp3_for_utterance_group")
+    def test_low_language_probability_does_not_drop_the_group(self, mock_get_mp3, mock_post):
+        mock_get_mp3.return_value = b"fake-mp3-data"
+        mock_post.return_value = self._mock_response(json_data=self._elevenlabs_result(language_probability=0.2))
+        utterances = self._create_utterances(self._create_async_transcription())
+
+        transcriptions, failure_data = get_transcription_for_utterance_group(utterances)
+
+        self.assertIsNone(failure_data)
+        self.assertEqual([transcriptions[u.id]["transcript"] for u in utterances], ["hello", "world", "test"])
+
+    @mock.patch("bots.transcription_utils.requests.post")
+    @mock.patch("bots.transcription_utils.get_mp3_for_utterance_group")
+    def test_error_responses_are_mapped_to_failure_reasons(self, mock_get_mp3, mock_post):
+        mock_get_mp3.return_value = b"fake-mp3-data"
+        utterances = self._create_utterances(self._create_async_transcription())
+
+        cases = [
+            (401, TranscriptionFailureReasons.CREDENTIALS_INVALID, False),
+            (429, TranscriptionFailureReasons.RATE_LIMIT_EXCEEDED, True),
+            (500, TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, True),
+            (503, TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, True),
+            (422, TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, True),
+        ]
+        for status_code, expected_reason, expected_retryable in cases:
+            with self.subTest(status_code=status_code):
+                mock_post.return_value = self._mock_response(status_code=status_code, text="error")
+
+                transcriptions, failure_data = get_transcription_for_utterance_group(utterances)
+
+                self.assertIsNone(transcriptions)
+                self.assertEqual(failure_data["reason"], expected_reason)
+                self.assertEqual(is_retryable_failure(failure_data), expected_retryable)
+
+    @mock.patch("bots.transcription_utils.requests.post")
+    @mock.patch("bots.transcription_utils.get_mp3_for_utterance_group")
+    def test_request_timeout_is_a_retryable_timed_out_failure(self, mock_get_mp3, mock_post):
+        mock_get_mp3.return_value = b"fake-mp3-data"
+        mock_post.side_effect = requests.exceptions.ReadTimeout("read timed out")
+        utterances = self._create_utterances(self._create_async_transcription())
+
+        transcriptions, failure_data = get_transcription_for_utterance_group(utterances)
+
+        self.assertIsNone(transcriptions)
+        self.assertEqual(failure_data["reason"], TranscriptionFailureReasons.TIMED_OUT)
+        self.assertTrue(is_retryable_failure(failure_data))
+
+    @mock.patch("bots.transcription_utils.requests.post")
+    @mock.patch("bots.transcription_utils.get_mp3_for_utterance_group")
+    def test_connection_error_is_a_retryable_internal_error(self, mock_get_mp3, mock_post):
+        mock_get_mp3.return_value = b"fake-mp3-data"
+        mock_post.side_effect = requests.exceptions.ConnectionError("connection reset")
+        utterances = self._create_utterances(self._create_async_transcription())
+
+        transcriptions, failure_data = get_transcription_for_utterance_group(utterances)
+
+        self.assertIsNone(transcriptions)
+        self.assertEqual(failure_data["reason"], TranscriptionFailureReasons.INTERNAL_ERROR)
+        self.assertTrue(is_retryable_failure(failure_data))
+
+    @override_settings(CELERY_TASK_ALWAYS_EAGER=True, CELERY_TASK_EAGER_PROPAGATES=True)
+    @mock.patch("bots.tasks.deliver_webhook_task.deliver_webhook")
+    @mock.patch("bots.transcription_utils.requests.post")
+    @mock.patch("bots.transcription_utils.get_mp3_for_utterance_group")
+    def test_async_transcription_fails_with_invalid_credentials(self, mock_get_mp3, mock_post, mock_deliver_webhook):
+        mock_deliver_webhook.return_value = None
+        mock_get_mp3.return_value = b"fake-mp3-data"
+        mock_post.return_value = self._mock_response(status_code=401)
+
+        self._create_audio_chunks(count=2, duration_ms=500)
+        async_transcription = self._create_async_transcription()
+
+        process_async_transcription.delay(async_transcription.id)
+
+        async_transcription.refresh_from_db()
+        self.assertEqual(async_transcription.state, AsyncTranscriptionStates.FAILED)
+        self.assertIn(TranscriptionFailureReasons.CREDENTIALS_INVALID, async_transcription.failure_data.get("failure_reasons", []))
+        self.assertEqual(mock_post.call_count, 1)
+
+    @mock.patch("bots.transcription_utils.requests.post")
+    def test_fails_without_credentials(self, mock_post):
+        self.elevenlabs_credentials.delete()
+        utterances = self._create_utterances(self._create_async_transcription())
+
+        transcriptions, failure_data = get_transcription_for_utterance_group(utterances)
+
+        self.assertIsNone(transcriptions)
+        self.assertEqual(failure_data["reason"], TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND)
+        mock_post.assert_not_called()
 
 
 class TestAsyncTranscriptionTimeout(AsyncTranscriptionTestCase):
