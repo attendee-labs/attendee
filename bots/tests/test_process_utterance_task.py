@@ -1927,6 +1927,186 @@ class ElevenLabsProviderTest(TransactionTestCase):
             self.assertEqual(data["language_code"], "en")
             self.assertTrue(data["tag_audio_events"])
 
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3")
+    def test_default_request_sends_only_model_id(self, mock_pcm, mock_post):
+        """Settings that aren't given aren't sent."""
+        with self._patch_creds():
+            mock_post.return_value = mock.Mock(status_code=200, json=mock.Mock(return_value={"text": "", "language_probability": 0.9, "words": []}))
+
+            get_transcription_via_elevenlabs(self.utterance)
+
+            self.assertEqual(mock_post.call_args[0][0], "https://api.elevenlabs.io/v1/speech-to-text")
+            self.assertEqual(mock_post.call_args[1]["data"], {"model_id": "scribe_v1"})
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3")
+    def test_scribe_v2_settings_are_sent_as_given(self, mock_pcm, mock_post):
+        """model_id, keyterms and diarization settings are sent under ElevenLabs' own field names."""
+        self.bot.settings = {
+            "transcription_settings": {
+                "elevenlabs": {
+                    "model_id": "scribe_v2",
+                    "language_code": "fin",
+                    "tag_audio_events": False,
+                    "keyterms": ["Attendee", "In Parallel"],
+                    "diarize": True,
+                    "diarization_threshold": 0.3,
+                }
+            }
+        }
+        self.bot.save()
+
+        with self._patch_creds():
+            mock_post.return_value = mock.Mock(status_code=200, json=mock.Mock(return_value={"text": "", "language_probability": 0.9, "words": []}))
+
+            get_transcription_via_elevenlabs(self.utterance)
+
+            self.assertEqual(
+                mock_post.call_args[1]["data"],
+                {
+                    "model_id": "scribe_v2",
+                    "language_code": "fin",
+                    "tag_audio_events": False,
+                    "keyterms": ["Attendee", "In Parallel"],
+                    "diarize": True,
+                    "diarization_threshold": 0.3,
+                },
+            )
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3")
+    def test_num_speakers_is_sent(self, mock_pcm, mock_post):
+        self.bot.settings = {"transcription_settings": {"elevenlabs": {"model_id": "scribe_v2", "diarize": True, "num_speakers": 3}}}
+        self.bot.save()
+
+        with self._patch_creds():
+            mock_post.return_value = mock.Mock(status_code=200, json=mock.Mock(return_value={"text": "", "language_probability": 0.9, "words": []}))
+
+            get_transcription_via_elevenlabs(self.utterance)
+
+            self.assertEqual(mock_post.call_args[1]["data"]["num_speakers"], 3)
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3")
+    def test_use_eu_server_uses_eu_residency_url(self, mock_pcm, mock_post):
+        self.bot.settings = {"transcription_settings": {"elevenlabs": {"model_id": "scribe_v2", "use_eu_server": True}}}
+        self.bot.save()
+
+        with self._patch_creds():
+            mock_post.return_value = mock.Mock(status_code=200, json=mock.Mock(return_value={"text": "", "language_probability": 0.9, "words": []}))
+
+            get_transcription_via_elevenlabs(self.utterance)
+
+            self.assertEqual(mock_post.call_args[0][0], "https://api.eu.residency.elevenlabs.io/v1/speech-to-text")
+            self.assertNotIn("use_eu_server", mock_post.call_args[1]["data"])
+
+    @mock.patch.dict("os.environ", {"ELEVENLABS_BASE_URL": "https://elevenlabs.example.com"})
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3")
+    def test_base_url_env_var_overrides_server(self, mock_pcm, mock_post):
+        self.bot.settings = {"transcription_settings": {"elevenlabs": {"model_id": "scribe_v2", "use_eu_server": True}}}
+        self.bot.save()
+
+        with self._patch_creds():
+            mock_post.return_value = mock.Mock(status_code=200, json=mock.Mock(return_value={"text": "", "language_probability": 0.9, "words": []}))
+
+            get_transcription_via_elevenlabs(self.utterance)
+
+            self.assertEqual(mock_post.call_args[0][0], "https://elevenlabs.example.com/v1/speech-to-text")
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3")
+    def test_only_word_entries_are_returned(self, mock_pcm, mock_post):
+        """spacing and audio_event entries are dropped from words; speaker_id is kept as speaker."""
+        with self._patch_creds():
+            mock_response = mock.Mock(status_code=200)
+            mock_response.json.return_value = {
+                "text": "hello (laughter) world",
+                "language_code": "eng",
+                "language_probability": 0.95,
+                "words": [
+                    {"text": "hello", "type": "word", "start": 0.0, "end": 0.4, "speaker_id": "speaker_0", "logprob": -0.1},
+                    {"text": " ", "type": "spacing", "start": 0.4, "end": 0.5, "speaker_id": "speaker_0", "logprob": 0.0},
+                    {"text": "(laughter)", "type": "audio_event", "start": 0.5, "end": 1.2, "speaker_id": "speaker_0", "logprob": 0.0},
+                    {"text": " ", "type": "spacing", "start": 1.2, "end": 1.3, "speaker_id": "speaker_1", "logprob": 0.0},
+                    {"text": "world", "type": "word", "start": 1.3, "end": 1.8, "speaker_id": "speaker_1", "logprob": -0.2},
+                ],
+            }
+            mock_post.return_value = mock_response
+
+            transcript, failure = get_transcription_via_elevenlabs(self.utterance)
+
+            self.assertIsNone(failure)
+            self.assertEqual(
+                transcript["words"],
+                [
+                    {"word": "hello", "start": 0.0, "end": 0.4, "speaker": "speaker_0"},
+                    {"word": "world", "start": 1.3, "end": 1.8, "speaker": "speaker_1"},
+                ],
+            )
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3")
+    def test_rate_limit_429(self, mock_pcm, mock_post):
+        """ElevenLabs returns 429 → RATE_LIMIT_EXCEEDED."""
+        with self._patch_creds():
+            mock_post.return_value = mock.Mock(status_code=429)
+
+            transcript, failure = get_transcription_via_elevenlabs(self.utterance)
+
+            self.assertIsNone(transcript)
+            self.assertEqual(failure["reason"], TranscriptionFailureReasons.RATE_LIMIT_EXCEEDED)
+
+    def test_schema_accepts_scribe_v2_settings(self):
+        from bots.serializers import CreateAsyncTranscriptionSerializer, CreateBotSerializer
+
+        settings = {
+            "elevenlabs": {
+                "model_id": "scribe_v2",
+                "language_code": "fin",
+                "tag_audio_events": True,
+                "keyterms": ["Attendee", "In Parallel", "one two three four five", "a" * 49],
+                "diarize": True,
+                "diarization_threshold": 0.3,
+                "use_eu_server": True,
+            }
+        }
+        bot_serializer = CreateBotSerializer(data={"meeting_url": "https://zoom.us/j/123456789", "bot_name": "Test Bot"})
+        self.assertEqual(bot_serializer.validate_transcription_settings(settings), settings)
+        self.assertEqual(CreateAsyncTranscriptionSerializer(data={}).validate_transcription_settings(settings), settings)
+
+        num_speakers_settings = {"elevenlabs": {"model_id": "scribe_v2", "diarize": True, "num_speakers": 32}}
+        self.assertEqual(CreateAsyncTranscriptionSerializer(data={}).validate_transcription_settings(num_speakers_settings), num_speakers_settings)
+
+    def test_schema_rejects_invalid_elevenlabs_settings(self):
+        from rest_framework import serializers
+
+        from bots.serializers import CreateAsyncTranscriptionSerializer
+
+        serializer = CreateAsyncTranscriptionSerializer(data={})
+        invalid_settings = {
+            "unknown model": {"model_id": "scribe_v3"},
+            "keyterm too long": {"model_id": "scribe_v2", "keyterms": ["a" * 50]},
+            "keyterm with forbidden character": {"model_id": "scribe_v2", "keyterms": ["<tag>"]},
+            "keyterm with backslash": {"model_id": "scribe_v2", "keyterms": ["a\\b"]},
+            "empty keyterm": {"model_id": "scribe_v2", "keyterms": [""]},
+            "blank keyterm": {"model_id": "scribe_v2", "keyterms": ["   "]},
+            "keyterm with more than 5 words": {"model_id": "scribe_v2", "keyterms": ["one two three four five six"]},
+            "diarization_threshold below range": {"model_id": "scribe_v2", "diarize": True, "diarization_threshold": 0.05},
+            "diarization_threshold above range": {"model_id": "scribe_v2", "diarize": True, "diarization_threshold": 0.5},
+            "diarization_threshold without diarize": {"model_id": "scribe_v2", "diarization_threshold": 0.3},
+            "diarization_threshold with diarize false": {"model_id": "scribe_v2", "diarize": False, "diarization_threshold": 0.3},
+            "diarization_threshold with num_speakers": {"model_id": "scribe_v2", "diarize": True, "num_speakers": 2, "diarization_threshold": 0.3},
+            "too many keyterms": {"model_id": "scribe_v2", "keyterms": [f"term{i}" for i in range(1001)]},
+            "too many speakers": {"model_id": "scribe_v2", "num_speakers": 33},
+            "unknown property": {"model_id": "scribe_v2", "prompt": "a meeting"},
+        }
+        for name, elevenlabs_settings in invalid_settings.items():
+            with self.subTest(name):
+                with self.assertRaises(serializers.ValidationError):
+                    serializer.validate_transcription_settings({"elevenlabs": elevenlabs_settings})
+
     def test_missing_credentials_row(self):
         """No Credentials row → CREDENTIALS_NOT_FOUND."""
         # Remove the credential row created in setUp

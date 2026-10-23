@@ -924,6 +924,11 @@ def split_utterances_on_turn_taking(
         speaker = item["speaker"]
         abs_words = item["abs_words"]
 
+        # Nothing to split, e.g. an utterance that only contains audio events
+        if not abs_words:
+            results.append(u)
+            continue
+
         # Walk consecutive word pairs looking for split points
         segments: list[list[dict]] = []
         current_segment: list[dict] = [abs_words[0]]

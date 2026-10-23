@@ -424,6 +424,35 @@ def get_transcription_via_assemblyai_from_mp3(
     return None, {"reason": TranscriptionFailureReasons.TIMED_OUT, "step": "transcribe_result_poll"}
 
 
+def get_elevenlabs_speech_to_text_request(transcription_settings: TranscriptionSettings):
+    """Returns the URL and multipart form fields for ElevenLabs' speech-to-text endpoint. Settings that aren't set aren't sent."""
+    url = f"{transcription_settings.elevenlabs_base_url()}/v1/speech-to-text"
+    data = {
+        "model_id": transcription_settings.elevenlabs_model_id(),
+        "language_code": transcription_settings.elevenlabs_language_code(),
+        "tag_audio_events": transcription_settings.elevenlabs_tag_audio_events(),
+        # A list is sent as a repeated form field, like ElevenLabs' own SDK does
+        "keyterms": transcription_settings.elevenlabs_keyterms(),
+        "diarize": transcription_settings.elevenlabs_diarize(),
+        "num_speakers": transcription_settings.elevenlabs_num_speakers(),
+        "diarization_threshold": transcription_settings.elevenlabs_diarization_threshold(),
+    }
+    return url, {key: value for key, value in data.items() if value is not None}
+
+
+def get_words_from_elevenlabs_response(result: dict):
+    """Keeps only the spoken words from ElevenLabs' response; drops its spacing and audio_event entries. Times are in seconds."""
+    words = []
+    for word in result.get("words", []):
+        if word.get("type", "word") != "word":
+            continue
+        formatted_word = {"word": word.get("text"), "start": word.get("start"), "end": word.get("end")}
+        if word.get("speaker_id") is not None:
+            formatted_word["speaker"] = word["speaker_id"]
+        words.append(formatted_word)
+    return words
+
+
 def get_transcription_via_deepgram_from_mp3(
     retrieve_mp3_data_callback: Callable[[], bytes],
     duration_ms: int,
