@@ -248,6 +248,8 @@ def get_transcription_for_utterance_group(utterances):
             get_transcription_from_mp3_method = get_transcription_via_assemblyai_from_mp3
         elif transcription_provider == TranscriptionProviders.DEEPGRAM:
             get_transcription_from_mp3_method = get_transcription_via_deepgram_from_mp3
+        elif transcription_provider == TranscriptionProviders.ELEVENLABS:
+            get_transcription_from_mp3_method = get_transcription_via_elevenlabs_from_mp3
         else:
             raise Exception(f"Unknown or unsupported transcription provider: {transcription_provider}")
 
@@ -451,6 +453,59 @@ def get_words_from_elevenlabs_response(result: dict):
             formatted_word["speaker"] = word["speaker_id"]
         words.append(formatted_word)
     return words
+
+
+def get_transcription_via_elevenlabs_from_mp3(
+    retrieve_mp3_data_callback: Callable[[], bytes],
+    duration_ms: int,
+    identifier: str,
+    transcription_settings: TranscriptionSettings,
+    recording: Recording,
+):
+    elevenlabs_credentials_record = recording.bot.project.credentials.filter(credential_type=Credentials.CredentialTypes.ELEVENLABS).first()
+    if not elevenlabs_credentials_record:
+        return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND}
+
+    elevenlabs_credentials = elevenlabs_credentials_record.get_credentials()
+    if not elevenlabs_credentials:
+        return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND}
+
+    api_key = elevenlabs_credentials.get("api_key")
+    if not api_key:
+        return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND, "error": "api_key not in credentials"}
+
+    # ElevenLabs rejects audio shorter than 100ms, so just return an empty transcription
+    if duration_ms < 100:
+        logger.info(f"ElevenLabs transcription skipped for {identifier} because it's less than 100ms in duration")
+        return {"transcript": "", "words": []}, None
+
+    url, data = get_elevenlabs_speech_to_text_request(transcription_settings)
+    headers = {"xi-api-key": api_key}
+    files = {"file": ("audio.mp3", retrieve_mp3_data_callback(), "audio/mpeg")}
+
+    # The request is synchronous: ElevenLabs uploads and transcribes the whole file before it responds
+    timeout_seconds = int(os.getenv("ELEVENLABS_TRANSCRIPTION_TIMEOUT_SECONDS", 600))
+    try:
+        response = requests.post(url, headers=headers, files=files, data=data, timeout=timeout_seconds)
+    except requests.exceptions.Timeout as e:
+        return None, {"reason": TranscriptionFailureReasons.TIMED_OUT, "step": "transcribe_request", "error": str(e)}
+
+    if response.status_code == 401:
+        return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_INVALID}
+
+    if response.status_code == 429:
+        return None, {"reason": TranscriptionFailureReasons.RATE_LIMIT_EXCEEDED, "status_code": response.status_code, "text": response.text}
+
+    if response.status_code != 200:
+        return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "status_code": response.status_code, "text": response.text}
+
+    result = response.json()
+    logger.info(f"ElevenLabs transcription complete for {identifier} with model {data['model_id']}")
+
+    # Unlike the per-utterance path, a low language_probability doesn't empty the transcript here,
+    # because one low-confidence detection over a long group would drop all of its speech.
+    transcription = {"transcript": result.get("text", ""), "words": get_words_from_elevenlabs_response(result), "language": result.get("language_code", None)}
+    return transcription, None
 
 
 def get_transcription_via_deepgram_from_mp3(
