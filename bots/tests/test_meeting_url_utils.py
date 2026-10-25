@@ -123,6 +123,8 @@ class TestMeetingUrlUtils(unittest.TestCase):
         self.assertEqual(normalize_meeting_url("https://meet.google.com/abc-defg-hij")[1], "https://meet.google.com/abc-defg-hij")
 
         self.assertEqual(normalize_meeting_url("meet.google.com/abc-defg-hij")[1], "https://meet.google.com/abc-defg-hij")
+        self.assertEqual(normalize_meeting_url("https://meet.google.com/meet/abc-defg-hij")[1], "https://meet.google.com/abc-defg-hij")
+        self.assertEqual(normalize_meeting_url("https://meet.google.com/meet/abc-defg-hij?authuser=0")[1], "https://meet.google.com/abc-defg-hij")
         self.assertEqual(normalize_meeting_url("https://teams.microsoft.com/l/meetup-join/19%3ameeting_NjnnnnnnnnnnnnnnnnnnnnnnnnnnMzctODQwYTBmMDQ4MzQ2%40thread.v2/0?context=%7b%22Tid%22%3a%22b8291b4b-aaaa-bbbb-8a00-9d5fc37b9a77%22%2c%22Oid%22%3a%22216d2e11-45cc-9999-9689-d05554e5c1d1%22%7d>")[1], 'https://teams.microsoft.com/l/meetup-join/19:meeting_NjnnnnnnnnnnnnnnnnnnnnnnnnnnMzctODQwYTBmMDQ4MzQ2@thread.v2/0?context={"Tid":"b8291b4b-aaaa-bbbb-8a00-9d5fc37b9a77","Oid":"216d2e11-45cc-9999-9689-d05554e5c1d1"}')
         self.assertEqual(normalize_meeting_url("https://teams.microsoft.com/meet/999999999999?p=aaaaalRE2XBPsAr00W")[1], "https://teams.microsoft.com/meet/999999999999?p=aaaaalRE2XBPsAr00W")
 
