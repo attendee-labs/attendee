@@ -92,6 +92,16 @@ def truncate_string_with_ellipsis(string: str, max_length: int, ellipsis: str = 
     return truncated_string
 
 
+def remove_characters_from_string(string: str, characters: str = "()") -> str:
+    """
+    Remove every occurrence of each of the given characters from the string.
+    """
+    if not string or not characters:
+        return string
+
+    return string.translate(str.maketrans("", "", characters))
+
+
 def mask_url_query_param_values(url, mask="xxx"):
     """Return the URL with each query parameter's value replaced by a mask, preserving the param keys."""
     if not url:

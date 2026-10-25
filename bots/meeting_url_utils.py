@@ -164,8 +164,8 @@ def normalize_meeting_url_raw(url):
     # Check if it's a Google Meet URL
     if domain_and_subdomain == "meet.google.com":
         # Use regex to extract the meeting code from Google Meet URL
-        # Meeting code is the part after meet.google.com/
-        google_meet_match = re.search(r"meet\.google\.com/([a-zA-Z0-9-]+)", url)
+        # Meeting code is the part after meet.google.com/ (Google also links meet.google.com/meet/<code>)
+        google_meet_match = re.search(r"meet\.google\.com/(?:meet/)?([a-zA-Z0-9-]+)", url)
         if google_meet_match:
             meeting_code = google_meet_match.group(1)
             normalized_url = f"https://meet.google.com/{meeting_code}"
