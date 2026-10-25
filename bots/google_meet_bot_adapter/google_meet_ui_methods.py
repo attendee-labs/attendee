@@ -1270,7 +1270,27 @@ class GoogleMeetUIMethods:
                 e,
             )
 
+    def closed_captions_language_is_already_selected(self, language):
+        # Once captions are on, the captions bar has a "Meeting language" list, so we can check the
+        # current language without opening the settings dialog.
+        try:
+            selected_language_option = WebDriverWait(self.driver, 2).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'ul[aria-label="Meeting language"] li[aria-selected="true"]')))
+        except TimeoutException:
+            logger.info("Could not find the selected meeting language in the captions bar")
+            return False
+        selected_language = selected_language_option.get_attribute("data-value")
+        if selected_language != language:
+            logger.warning(f"Meeting language in the captions bar is {selected_language}, not {language}. Falling back to the settings dialog.")
+            return False
+        return True
+
     def select_language(self, language):
+        # First check if the language is already selected. This is what we expect because
+        # we are setting it via localstorage, and en-US is the default.
+        if self.closed_captions_language_is_already_selected(language):
+            logger.info(f"No need to select language {language} via the UI. It is already selected.")
+            return
+
         logger.info(f"Selecting language: {language}")
         logger.info("Waiting for the more options button...")
         MORE_OPTIONS_BUTTON_SELECTOR = 'button[jsname="NakZHc"][aria-label="More options"]'

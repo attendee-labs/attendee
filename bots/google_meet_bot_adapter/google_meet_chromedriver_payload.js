@@ -24,6 +24,45 @@ if (window.googleMeetInitialData.disableIncomingVideo) {
     disableIncomingVideoViaLocalStorage();
 }
 
+// Google Meet also stores the closed captions language in localstorage. Setting it before Meet reads it
+// means we don't need to open the settings dialog to select the language.
+const setClosedCaptionsLanguageViaLocalStorage = (languageId) => {
+    // The key depends on the signed in user. Meet builds it from a hash of the user's email,
+    // or of "fakeuser" for anonymous users. The email is in WIZ_global_data, which Meet sets early in the page.
+    const hashString = (str) => {
+        let hash = 0;
+        for (let i = 0; i < str.length; i++) {
+            hash = (31 * hash + str.charCodeAt(i)) >>> 0;
+        }
+        return hash;
+    };
+    const user = window.WIZ_global_data?.oPEP7c || "fakeuser";
+    const closedCaptionsLocalStorageKey = `rt_g3jartmcups-${hashString(user)}`;
+
+    // It's a protobuf. Meet writes the language id at index 2 in some sessions and at index 8 in others.
+    // Setting either one alone selects the language, so we set both.
+    const closedCaptionsPreferencesArray = Array(9).fill(null);
+    closedCaptionsPreferencesArray[2] = languageId;
+    closedCaptionsPreferencesArray[8] = languageId;
+
+    try {
+        localStorage.setItem(closedCaptionsLocalStorageKey, JSON.stringify(closedCaptionsPreferencesArray));
+        console.log("Set closed captions language via setting localstorage");
+    } catch (error) {
+        // localStorage is unavailable in opaque origins, which this script also runs in
+        console.log("Failed to set closed captions language via setting localstorage", error);
+    }
+};
+
+if (window.googleMeetInitialData.closedCaptionsLanguageId && window.location.hostname === "meet.google.com") {
+    // Wait for the page to be parsed, so that WIZ_global_data is available. Meet reads the key later than that.
+    if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", () => setClosedCaptionsLanguageViaLocalStorage(window.googleMeetInitialData.closedCaptionsLanguageId));
+    } else {
+        setClosedCaptionsLanguageViaLocalStorage(window.googleMeetInitialData.closedCaptionsLanguageId);
+    }
+}
+
 const handleVideoTrackForRealTimePerParticipantVideo = async ({ track, streams }) => {
     try {
         const firstStreamId = streams?.[0]?.id;
