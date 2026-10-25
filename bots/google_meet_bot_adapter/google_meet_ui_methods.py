@@ -529,14 +529,27 @@ class GoogleMeetUIMethods:
                 logger.warning(f"Could not find name input. Unknown error {e} of type {type(e)}. Raising UiCouldNotLocateElementException")
                 raise UiCouldNotLocateElementException("Could not find name input. Unknown error.", "name_input", e)
 
+    def enable_captions_via_keyboard_shortcut(self, captions_button):
+        if captions_button.get_attribute("aria-pressed") == "true":
+            logger.info("Captions and translation button is already pressed, captions are already enabled")
+            return
+        logger.info("Found 'Captions and translation' variant of captions button. Pressing 'c' to enable captions...")
+        ActionChains(self.driver).send_keys("c").perform()
+        logger.info("Waiting for captions to be enabled...")
+        WebDriverWait(self.driver, 5).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'button[aria-label="Captions and translation"][aria-pressed="true"]')))
+        logger.info("Confirmed captions were enabled")
+
     def click_captions_button(self):
         num_attempts_to_look_for_captions_button = self.automatic_leave_configuration.waiting_room_timeout_seconds * 2
         logger.info("Waiting for captions button...")
         waiting_room_timeout_started_at = time.time()
         for attempt_to_look_for_captions_button_index in range(num_attempts_to_look_for_captions_button):
             try:
-                captions_button = WebDriverWait(self.driver, 1).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'button[aria-label="Turn on captions"]')))
+                captions_button = WebDriverWait(self.driver, 1).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'button[aria-label="Turn on captions"], button[aria-label="Captions and translation"]')))
                 logger.info("Captions button found")
+                if captions_button.get_attribute("aria-label") == "Captions and translation":
+                    self.enable_captions_via_keyboard_shortcut(captions_button)
+                    return
                 self.click_element(captions_button, "click_captions_button")
                 logger.info("Waiting for captions to be enabled...")
                 WebDriverWait(self.driver, 5).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'button[aria-label="Turn off captions"]')))
@@ -975,7 +988,7 @@ class GoogleMeetUIMethods:
         self.google_meet_bot_login_session = {"login_type": "okta"}
 
     def _okta_session_redis_key(self):
-        domain = os.getenv("OKTA_BOT_LOGIN_DOMAIN", "")
+        domain = settings.OKTA_BOT_LOGIN_DOMAIN or ""
         username = os.getenv("OKTA_BOT_LOGIN_USERNAME", "")
         totp_secret = os.getenv("OKTA_BOT_LOGIN_TOTP_SECRET", "")
         fingerprint = hashlib.sha256(f"{domain}|{username}|{totp_secret}".encode()).hexdigest()
@@ -1001,7 +1014,7 @@ class GoogleMeetUIMethods:
         usage_key = f"{cookie_key}:uses"
         lock_key = f"{cookie_key}:lock"
 
-        okta_domain = os.getenv("OKTA_BOT_LOGIN_DOMAIN")
+        okta_domain = settings.OKTA_BOT_LOGIN_DOMAIN
         # Lock TTL must comfortably exceed the worst-case TOTP+navigation flow.
         lock_ttl_seconds = 120
         # Total time to wait for another bot to finish before giving up.
@@ -1056,7 +1069,7 @@ class GoogleMeetUIMethods:
             time.sleep(poll_interval_seconds)
 
     def save_valid_okta_session_token_in_redis(self):
-        okta_domain = os.getenv("OKTA_BOT_LOGIN_DOMAIN")
+        okta_domain = settings.OKTA_BOT_LOGIN_DOMAIN
         okta_authenticator = OktaAuthenticator(
             okta_domain=okta_domain,
             username=os.getenv("OKTA_BOT_LOGIN_USERNAME"),
@@ -1099,7 +1112,7 @@ class GoogleMeetUIMethods:
             time.sleep(1)
 
     def login_to_google_meet_account(self):
-        if os.getenv("USE_OKTA_LOGIN_FOR_SIGNED_IN_GOOGLE_MEET_BOTS", "false") == "true":
+        if settings.USE_OKTA_LOGIN_FOR_SIGNED_IN_GOOGLE_MEET_BOTS:
             try:
                 self.login_to_google_meet_account_with_okta()
                 return
