@@ -168,11 +168,9 @@ def get_transcription_via_gladia(utterance):
 
     transcribe_url = "https://api.gladia.io/v2/pre-recorded"
     transcribe_request_body = {"audio_url": audio_url}
-    if transcription_settings.gladia_enable_code_switching():
-        transcribe_request_body["enable_code_switching"] = True
-        transcribe_request_body["code_switching_config"] = {
-            "languages": transcription_settings.gladia_code_switching_languages(),
-        }
+    language_config = transcription_settings.gladia_language_config()
+    if language_config:
+        transcribe_request_body["language_config"] = language_config
     transcribe_response = requests.request("POST", transcribe_url, headers=headers, json=transcribe_request_body)
 
     if transcribe_response.status_code != 200 and transcribe_response.status_code != 201:
@@ -217,6 +215,12 @@ def get_transcription_via_gladia(utterance):
                 if "words" in utterance:
                     all_words.extend(utterance["words"])
             transcription["words"] = all_words
+
+            # Gladia sorts languages from most to least detected, so the first one is the dominant language.
+            # Fall back to the language of the first utterance that has one.
+            languages = transcription.get("languages") or []
+            first_utterance_language = next((utterance["language"] for utterance in transcription["utterances"] if utterance.get("language")), None)
+            transcription["language"] = languages[0] if languages else first_utterance_language
             del transcription["utterances"]
 
             return transcription, None
