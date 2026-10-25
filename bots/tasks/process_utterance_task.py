@@ -171,6 +171,15 @@ def get_transcription_via_gladia(utterance):
     language_config = transcription_settings.gladia_language_config()
     if language_config:
         transcribe_request_body["language_config"] = language_config
+    for key, value in [
+        ("model", transcription_settings.gladia_model()),
+        ("custom_vocabulary", transcription_settings.gladia_custom_vocabulary()),
+        ("custom_vocabulary_config", transcription_settings.gladia_custom_vocabulary_config()),
+        ("custom_spelling", transcription_settings.gladia_custom_spelling()),
+        ("custom_spelling_config", transcription_settings.gladia_custom_spelling_config()),
+    ]:
+        if value is not None:
+            transcribe_request_body[key] = value
     transcribe_response = requests.request("POST", transcribe_url, headers=headers, json=transcribe_request_body)
 
     if transcribe_response.status_code != 200 and transcribe_response.status_code != 201:

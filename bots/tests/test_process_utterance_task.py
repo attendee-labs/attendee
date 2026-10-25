@@ -961,6 +961,43 @@ class GladiaProviderTest(TransactionTestCase):
         serializer = CreateAsyncTranscriptionSerializer(data={"transcription_settings": {"gladia": {"language_config": {"language": "fi"}}}})
         self.assertFalse(serializer.is_valid())
 
+    def test_model_vocabulary_and_spelling_are_sent_as_given(self):
+        gladia_settings = {
+            "model": "solaria-3",
+            "custom_vocabulary": True,
+            "custom_vocabulary_config": {"vocabulary": ["Kubernetes", {"value": "Jyväskylä", "pronunciations": ["yuvaskula"], "intensity": 0.6, "language": "fi"}], "default_intensity": 0.4},
+            "custom_spelling": True,
+            "custom_spelling_config": {"spelling_dictionary": {"SQL": ["sequel", "s q l"]}},
+        }
+        body, _, _ = self._run_gladia(gladia_settings)
+        self.assertEqual(body, {"audio_url": "https://api.gladia.io/file/123", **gladia_settings})
+
+    def test_disabled_vocabulary_and_spelling_are_sent_as_given(self):
+        body, _, _ = self._run_gladia({"custom_vocabulary": False, "custom_spelling": False})
+        self.assertEqual(body, {"audio_url": "https://api.gladia.io/file/123", "custom_vocabulary": False, "custom_spelling": False})
+
+    def test_schema_accepts_model_vocabulary_and_spelling(self):
+        gladia_settings = {
+            "model": "solaria-1",
+            "custom_vocabulary": True,
+            "custom_vocabulary_config": {"vocabulary": ["Kubernetes", {"value": "Jyväskylä", "intensity": 0.6}], "default_intensity": 0.5},
+            "custom_spelling": True,
+            "custom_spelling_config": {"spelling_dictionary": {"SQL": ["sequel"]}},
+        }
+        serializer = CreateAsyncTranscriptionSerializer(data={"transcription_settings": {"gladia": gladia_settings}})
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+
+    def test_schema_rejects_invalid_model_vocabulary_and_spelling(self):
+        for gladia_settings in [
+            {"model": "solaria-2"},
+            {"custom_vocabulary_config": {"vocabulary": ["Kubernetes"], "default_intensity": 1.5}},
+            {"custom_vocabulary_config": {"vocabulary": [{"pronunciations": ["a"]}]}},
+            {"custom_spelling_config": {"spelling_dictionary": {"SQL": "sequel"}}},
+        ]:
+            serializer = CreateAsyncTranscriptionSerializer(data={"transcription_settings": {"gladia": gladia_settings}})
+            self.assertFalse(serializer.is_valid(), gladia_settings)
+            self.assertNotIn("Additional properties are not allowed", str(serializer.errors))
+
     # ------------------------------------------------------------------ INVALID CREDENTIALS
 
     def test_upload_401_returns_credentials_invalid(self):
