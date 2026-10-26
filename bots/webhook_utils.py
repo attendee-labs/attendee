@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 from django.db import transaction
 from opentelemetry import context, trace
 
-from attendee.telemetry import run_in_context, span_context_from, tracer
+from attendee.telemetry import run_in_context, span_context_from, tag_current_span_with_bot, tracer
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +50,8 @@ def trigger_webhook(webhook_trigger_type, bot=None, calendar=None, zoom_oauth_co
     launch_span_context = span_context_from(bot.trace_context) if bot else None
     with tracer().start_as_current_span("trigger_webhook", links=[trace.Link(launch_span_context)] if launch_span_context else []) as span:
         span.set_attribute("attendee.webhook.trigger", webhook_trigger_type)
+        if bot:
+            tag_current_span_with_bot(bot)
         return _create_delivery_attempts(subscriptions, webhook_trigger_type, bot, calendar, zoom_oauth_connection, payload)
 
 

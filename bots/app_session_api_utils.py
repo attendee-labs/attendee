@@ -4,7 +4,7 @@ import uuid
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 
-from attendee.telemetry import current_trace_context
+from attendee.telemetry import current_trace_context, tag_current_span_with_bot
 
 from .app_session_serializers import (
     CreateAppSessionSerializer,
@@ -80,6 +80,7 @@ def create_app_session(data: dict, source: BotCreationSource, project: Project) 
                 session_type=SessionTypes.APP_SESSION,
                 trace_context=current_trace_context(),
             )
+            tag_current_span_with_bot(app_session)
 
             Recording.objects.create(
                 bot=app_session,

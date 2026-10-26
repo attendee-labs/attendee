@@ -8,7 +8,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.util._once import Once
 
-from attendee.telemetry import TRACES_ENDPOINT_VARIABLES, init_tracing, tracer
+from attendee.telemetry import BOT_ID_ATTRIBUTE, TRACES_ENDPOINT_VARIABLES, init_tracing, tracer
 from bots.bots_api_utils import BotCreationSource, create_bot
 from bots.models import Bot, BotStates, Organization, Project, WebhookSecret, WebhookSubscription, WebhookTriggerTypes
 from bots.webhook_utils import trigger_webhook
@@ -55,13 +55,15 @@ class BotTraceContextTest(TestCase):
         self.assertIsNone(error)
         return bot
 
-    def test_a_bot_created_in_a_trace_keeps_it(self):
-        record_spans(self)
+    def test_a_bot_created_in_a_trace_keeps_it_and_labels_it(self):
+        spans = record_spans(self)
         with tracer().start_as_current_span("POST /api/v1/bots") as span:
             bot = self.create_bot()
 
         bot.refresh_from_db()
         self.assertIn(format(span.get_span_context().trace_id, "032x"), bot.trace_context["traceparent"])
+        (request_span,) = [finished for finished in spans.get_finished_spans() if finished.name == "POST /api/v1/bots"]
+        self.assertEqual(request_span.attributes[BOT_ID_ATTRIBUTE], bot.object_id)
 
     def test_a_bot_created_without_tracing_keeps_nothing(self):
         set_tracer_provider(None)
@@ -104,6 +106,7 @@ class WebhookTracingTest(TransactionTestCase):
 
         (trigger_span,) = [span for span in spans.get_finished_spans() if span.name == "trigger_webhook"]
         self.assertEqual(trigger_span.attributes["attendee.webhook.trigger"], WebhookTriggerTypes.BOT_STATE_CHANGE)
+        self.assertEqual(trigger_span.attributes[BOT_ID_ATTRIBUTE], self.bot.object_id)
         (link,) = trigger_span.links
         self.assertEqual(format(link.context.trace_id, "032x"), LAUNCH_TRACE_ID)
         self.assertEqual(format(link.context.span_id, "016x"), LAUNCH_SPAN_ID)
