@@ -10,9 +10,9 @@ from functools import partial
 from urllib.parse import urlsplit
 
 from django.db import transaction
-from opentelemetry import context, trace
+from opentelemetry import context
 
-from attendee.telemetry import run_in_context, span_context_from, tag_current_span_with_bot, tracer
+from attendee.telemetry import run_in_context, tag_current_span_with_bot, tracer
 
 logger = logging.getLogger(__name__)
 
@@ -45,10 +45,9 @@ def trigger_webhook(webhook_trigger_type, bot=None, calendar=None, zoom_oauth_co
             is_active=True,
         )
 
-    # A bot's webhooks are mostly triggered from the bot's own process, long after the request that
-    # created it, so each trigger is linked to that request's trace rather than made part of it.
-    launch_span_context = span_context_from(bot.trace_context) if bot else None
-    with tracer().start_as_current_span("trigger_webhook", links=[trace.Link(launch_span_context)] if launch_span_context else []) as span:
+    # A bot's webhooks are mostly triggered from the bot's own process, so each trigger usually starts
+    # its own trace; the bot id label is what ties a meeting's traces together.
+    with tracer().start_as_current_span("trigger_webhook") as span:
         span.set_attribute("attendee.webhook.trigger", webhook_trigger_type)
         if bot:
             tag_current_span_with_bot(bot)

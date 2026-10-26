@@ -923,7 +923,6 @@ class Bot(models.Model):
 
     settings = models.JSONField(null=False, default=dict)
     metadata = models.JSONField(null=True, blank=True)
-    trace_context = models.JSONField(null=True, blank=True, help_text="W3C trace context of the request that created the bot, when tracing is enabled")
 
     first_heartbeat_timestamp = models.IntegerField(null=True, blank=True)
     last_heartbeat_timestamp = models.IntegerField(null=True, blank=True)

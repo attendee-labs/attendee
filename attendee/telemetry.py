@@ -39,27 +39,12 @@ def init_tracing():
     CeleryInstrumentor().instrument()
 
 
-def current_trace_context():
-    """
-    The active trace as W3C headers (traceparent, tracestate), or None outside a trace. A bot keeps
-    it so the webhooks it triggers later, from another process, can link back to its creation.
-    """
-    carrier = {}
-    propagate.inject(carrier)
-    return carrier or None
-
-
 BOT_ID_ATTRIBUTE = "attendee.bot_id"
 
 
 def tag_current_span_with_bot(bot):
     """Label the active span with the bot's id, so one search finds every trace of a meeting."""
     trace.get_current_span().set_attribute(BOT_ID_ATTRIBUTE, bot.object_id)
-
-
-def span_context_from(carrier):
-    span_context = trace.get_current_span(propagate.extract(carrier or {})).get_span_context()
-    return span_context if span_context.is_valid else None
 
 
 def inject_trace_headers(headers):

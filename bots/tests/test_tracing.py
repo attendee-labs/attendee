@@ -13,9 +13,6 @@ from bots.bots_api_utils import BotCreationSource, create_bot
 from bots.models import Bot, BotStates, Organization, Project, WebhookSecret, WebhookSubscription, WebhookTriggerTypes
 from bots.webhook_utils import trigger_webhook
 
-LAUNCH_TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736"
-LAUNCH_SPAN_ID = "00f067aa0ba902b7"
-
 
 def set_tracer_provider(provider):
     # OpenTelemetry sets its global provider once per process; this resets it the way
@@ -45,7 +42,7 @@ class InitTracingTest(TestCase):
         self.assertNotIsInstance(trace.get_tracer_provider(), TracerProvider)
 
 
-class BotTraceContextTest(TestCase):
+class BotCreationTracingTest(TestCase):
     def setUp(self):
         organization = Organization.objects.create(name="Test Organization")
         self.project = Project.objects.create(name="Test Project", organization=organization)
@@ -55,22 +52,18 @@ class BotTraceContextTest(TestCase):
         self.assertIsNone(error)
         return bot
 
-    def test_a_bot_created_in_a_trace_keeps_it_and_labels_it(self):
+    def test_creating_a_bot_labels_the_request_span_with_its_id(self):
         spans = record_spans(self)
-        with tracer().start_as_current_span("POST /api/v1/bots") as span:
+        with tracer().start_as_current_span("POST /api/v1/bots"):
             bot = self.create_bot()
 
-        bot.refresh_from_db()
-        self.assertIn(format(span.get_span_context().trace_id, "032x"), bot.trace_context["traceparent"])
         (request_span,) = [finished for finished in spans.get_finished_spans() if finished.name == "POST /api/v1/bots"]
         self.assertEqual(request_span.attributes[BOT_ID_ATTRIBUTE], bot.object_id)
 
-    def test_a_bot_created_without_tracing_keeps_nothing(self):
+    def test_creating_a_bot_without_tracing_still_works(self):
         set_tracer_provider(None)
-        bot = self.create_bot()
 
-        bot.refresh_from_db()
-        self.assertIsNone(bot.trace_context)
+        self.assertIsNotNone(self.create_bot())
 
 
 class WebhookTracingTest(TransactionTestCase):
@@ -83,7 +76,6 @@ class WebhookTracingTest(TransactionTestCase):
             project=self.project,
             meeting_url="https://zoom.us/j/123",
             state=BotStates.READY,
-            trace_context={"traceparent": f"00-{LAUNCH_TRACE_ID}-{LAUNCH_SPAN_ID}-01"},
         )
 
         from django.conf import settings
@@ -99,7 +91,7 @@ class WebhookTracingTest(TransactionTestCase):
         return mock_post.call_args.kwargs["headers"]
 
     @patch("bots.tasks.deliver_webhook_task.requests.post")
-    def test_a_bot_webhook_links_to_the_bots_trace_and_sends_its_own(self, mock_post):
+    def test_a_bot_webhook_is_labelled_with_the_bot_and_sends_its_trace(self, mock_post):
         spans = record_spans(self)
 
         headers = self.trigger(mock_post)
@@ -107,9 +99,6 @@ class WebhookTracingTest(TransactionTestCase):
         (trigger_span,) = [span for span in spans.get_finished_spans() if span.name == "trigger_webhook"]
         self.assertEqual(trigger_span.attributes["attendee.webhook.trigger"], WebhookTriggerTypes.BOT_STATE_CHANGE)
         self.assertEqual(trigger_span.attributes[BOT_ID_ATTRIBUTE], self.bot.object_id)
-        (link,) = trigger_span.links
-        self.assertEqual(format(link.context.trace_id, "032x"), LAUNCH_TRACE_ID)
-        self.assertEqual(format(link.context.span_id, "016x"), LAUNCH_SPAN_ID)
         # The delivery continues the trigger's trace, so the receiver can continue it too
         self.assertIn(format(trigger_span.context.trace_id, "032x"), headers["traceparent"])
 

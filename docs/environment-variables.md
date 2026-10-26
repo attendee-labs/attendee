@@ -201,7 +201,7 @@ This document lists all supported environment variables for the Attendee applica
 
 ## OpenTelemetry (Tracing)
 
-Tracing is off unless an OTLP endpoint is set. When it is, Attendee exports OpenTelemetry traces over OTLP/HTTP for API requests and Celery tasks, continues a `traceparent` header sent with the request that creates a bot, and sends a `traceparent` header with each webhook. A bot's webhooks are linked to the trace of the request that created it.
+Tracing is off unless an OTLP endpoint is set. When it is, Attendee exports OpenTelemetry traces over OTLP/HTTP for API requests and Celery tasks, continues a `traceparent` header sent with the request that creates a bot, and sends a `traceparent` header with each webhook. The request that creates a bot and each webhook it triggers carry an `attendee.bot_id` span attribute, so one search (e.g., `{ span.attendee.bot_id = "bot_..." }` in Tempo) finds every trace of a meeting.
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
