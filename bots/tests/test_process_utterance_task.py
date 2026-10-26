@@ -16,6 +16,7 @@ from bots.models import (
     TranscriptionFailureReasons,
     Utterance,
 )
+from bots.serializers import CreateAsyncTranscriptionSerializer
 from bots.tasks.process_utterance_task import get_transcription_via_assemblyai, get_transcription_via_custom_async, get_transcription_via_custom_async_v2, get_transcription_via_deepgram, get_transcription_via_elevenlabs, get_transcription_via_gladia, get_transcription_via_openai, get_transcription_via_sarvam, process_utterance
 
 
@@ -853,6 +854,22 @@ class GladiaProviderTest(TransactionTestCase):
             self._patch_creds(),
             mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3"),
             mock.patch("bots.tasks.process_utterance_task.time.sleep"),
+    def _run_gladia(self, gladia_settings, transcription_result=None):
+        """Run the Gladia adapter with the given settings and return (transcribe request body, transcript, failure)."""
+        self.bot.settings = {"transcription_settings": {"gladia": gladia_settings}}
+        self.bot.save()
+        self.utterance.refresh_from_db()
+
+        if transcription_result is None:
+            transcription_result = {
+                "full_transcript": "hello world",
+                "languages": ["en"],
+                "utterances": [{"text": "hello world", "language": "en", "words": [{"word": "hello", "start": 0.0, "end": 0.4, "confidence": 0.9}, {"word": " world", "start": 0.5, "end": 0.9, "confidence": 0.8}]}],
+            }
+
+        with (
+            self._patch_creds(),
+            mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3"),
             mock.patch("bots.tasks.process_utterance_task.requests.request") as m_request,
             mock.patch("bots.tasks.process_utterance_task.requests.get") as m_get,
         ):

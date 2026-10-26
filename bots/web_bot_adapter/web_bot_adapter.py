@@ -526,6 +526,22 @@ class WebBotAdapter(BotAdapter):
 
         websocket_handler = self.handle_websocket if self.livekit_websocket_bridge is None else self.handle_websocket_with_livekit_bridge
 
+        if settings.ENABLE_BOT_WEBSOCKET_PORT_SELECTION_BY_OS:
+            # Port 0 lets the OS pick a free port, so bots sharing a network namespace
+            # (celery workers, host networking) can't collide on a fixed port.
+            self.websocket_server = serve(
+                websocket_handler,
+                "localhost",
+                0,
+                compression=None,
+                max_size=None,
+            )
+            port = self.websocket_server.socket.getsockname()[1]
+            logger.info(f"Websocket server started on ws://localhost:{port}")
+            self.websocket_port = port
+            self.websocket_server.serve_forever()
+            return
+
         port = self.get_websocket_port()
         max_retries = 10
 

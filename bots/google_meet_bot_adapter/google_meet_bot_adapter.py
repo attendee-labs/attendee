@@ -1,6 +1,5 @@
 import json
 import logging
-import os
 from typing import Callable
 
 from django.conf import settings
@@ -119,11 +118,12 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
         domain_allowlist = self.navigation_config_domain_allowlist()
         domain_allowlist.append(settings.SITE_DOMAIN)
 
-        if os.getenv("INTERNAL_SITE_DOMAIN"):
-            domain_allowlist.append(os.getenv("INTERNAL_SITE_DOMAIN"))
+        if settings.INTERNAL_SITE_DOMAIN:
+            domain_allowlist.append(settings.INTERNAL_SITE_DOMAIN)
 
-        if os.getenv("USE_OKTA_LOGIN_FOR_SIGNED_IN_GOOGLE_MEET_BOTS", "false") == "true" and os.getenv("OKTA_DOMAIN"):
-            domain_allowlist.append(os.getenv("OKTA_DOMAIN"))
+        if settings.USE_OKTA_LOGIN_FOR_SIGNED_IN_GOOGLE_MEET_BOTS and settings.OKTA_BOT_LOGIN_DOMAIN:
+            domain_allowlist.append(settings.OKTA_BOT_LOGIN_DOMAIN)
+            domain_allowlist.append("login.okta.com")
 
         return domain_allowlist
 
