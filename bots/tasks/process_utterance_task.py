@@ -137,6 +137,15 @@ def process_utterance(self, utterance_id):
         RecordingManager.set_recording_transcription_complete(utterance.recording)
 
 
+def delete_gladia_transcription(result_url, headers):
+    # Deleting the transcription also deletes the audio file it was created from
+    delete_response = requests.request("DELETE", result_url, headers=headers)
+    if delete_response.status_code != 200 and delete_response.status_code != 202:
+        logger.error(f"Gladia delete failed with status code {delete_response.status_code}")
+    else:
+        logger.info("Gladia delete successful")
+
+
 def get_transcription_via_gladia(utterance):
     recording = utterance.recording
     transcription_settings = utterance.transcription_settings
@@ -183,7 +192,7 @@ def get_transcription_via_gladia(utterance):
     transcribe_response = requests.request("POST", transcribe_url, headers=headers, json=transcribe_request_body)
 
     if transcribe_response.status_code != 200 and transcribe_response.status_code != 201:
-        return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "step": "transcribe_request", "status_code": transcribe_response.status_code}
+        return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "step": "transcribe_request", "status_code": transcribe_response.status_code, "response_text": transcribe_response.text}
 
     transcribe_response_json = transcribe_response.json()
     result_url = transcribe_response_json["result_url"]
@@ -208,12 +217,7 @@ def get_transcription_via_gladia(utterance):
             # Transcription is complete
             transcription = result_data.get("result", {}).get("transcription", "")
             logger.info("Gladia transcription completed successfully, now deleting audio file from Gladia")
-            # Delete the audio file from Gladia
-            delete_response = requests.request("DELETE", result_url, headers=headers)
-            if delete_response.status_code != 200 and delete_response.status_code != 202:
-                logger.error(f"Gladia delete failed with status code {delete_response.status_code}")
-            else:
-                logger.info("Gladia delete successful")
+            delete_gladia_transcription(result_url, headers)
 
             transcription["transcript"] = transcription["full_transcript"]
             del transcription["full_transcript"]
@@ -236,6 +240,7 @@ def get_transcription_via_gladia(utterance):
 
         elif status == "error":
             error_code = result_data.get("error_code")
+            delete_gladia_transcription(result_url, headers)
             return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "step": "transcribe_result_poll", "error_code": error_code}
 
         elif status in ["queued", "processing"]:
@@ -246,9 +251,11 @@ def get_transcription_via_gladia(utterance):
 
         else:
             # Unknown status
+            delete_gladia_transcription(result_url, headers)
             return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "step": "transcribe_result_poll", "status": status}
 
-    # If we've reached here, we've timed out
+    # If we've reached here, we've timed out. A retry uploads the audio again, so don't leave this copy on Gladia.
+    delete_gladia_transcription(result_url, headers)
     return None, {"reason": TranscriptionFailureReasons.TIMED_OUT, "step": "transcribe_result_poll"}
 
 
