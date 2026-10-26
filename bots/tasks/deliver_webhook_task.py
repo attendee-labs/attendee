@@ -8,6 +8,7 @@ from celery import shared_task
 from django.conf import settings
 from django.utils import timezone
 
+from attendee.telemetry import inject_trace_headers
 from bots.models import SessionTypes, WebhookDeliveryAttempt, WebhookDeliveryAttemptStatus, WebhookTriggerTypes
 from bots.redis_utils import incr_and_expire_nx
 from bots.webhook_utils import sign_payload, url_is_public
@@ -144,11 +145,14 @@ def deliver_webhook(self, delivery_id):
         response = requests.post(
             subscription.url,
             json=webhook_data,
-            headers={
-                "Content-Type": "application/json",
-                "User-Agent": "Attendee-Webhook/1.0",
-                "X-Webhook-Signature": signature,
-            },
+            # With tracing enabled, a traceparent header lets the receiver continue this trace
+            headers=inject_trace_headers(
+                {
+                    "Content-Type": "application/json",
+                    "User-Agent": "Attendee-Webhook/1.0",
+                    "X-Webhook-Signature": signature,
+                }
+            ),
             timeout=DELIVER_WEBHOOK_REQUEST_TIMEOUT,
             verify=os.getenv("DELIVER_WEBHOOK_VERIFY_SSL", "true").lower() != "false",
             allow_redirects=False,

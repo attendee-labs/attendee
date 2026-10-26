@@ -10,6 +10,9 @@ from functools import partial
 from urllib.parse import urlsplit
 
 from django.db import transaction
+from opentelemetry import context, trace
+
+from attendee.telemetry import run_in_context, span_context_from, tracer
 
 logger = logging.getLogger(__name__)
 
@@ -19,8 +22,6 @@ def trigger_webhook(webhook_trigger_type, bot=None, calendar=None, zoom_oauth_co
     Trigger a webhook for a given event.
     Prioritizes bot-level webhook subscriptions over project-level ones.
     """
-    from bots.models import WebhookDeliveryAttempt
-
     if bot:
         project = bot.project
     elif calendar:
@@ -44,6 +45,18 @@ def trigger_webhook(webhook_trigger_type, bot=None, calendar=None, zoom_oauth_co
             is_active=True,
         )
 
+    # A bot's webhooks are mostly triggered from the bot's own process, long after the request that
+    # created it, so each trigger is linked to that request's trace rather than made part of it.
+    launch_span_context = span_context_from(bot.trace_context) if bot else None
+    with tracer().start_as_current_span("trigger_webhook", links=[trace.Link(launch_span_context)] if launch_span_context else []) as span:
+        span.set_attribute("attendee.webhook.trigger", webhook_trigger_type)
+        return _create_delivery_attempts(subscriptions, webhook_trigger_type, bot, calendar, zoom_oauth_connection, payload)
+
+
+def _create_delivery_attempts(subscriptions, webhook_trigger_type, bot, calendar, zoom_oauth_connection, payload):
+    from bots.models import WebhookDeliveryAttempt
+    from bots.tasks.deliver_webhook_task import deliver_webhook
+
     delivery_attempts = []
     for subscription in subscriptions:
         # Create a webhook delivery attempt record
@@ -58,9 +71,8 @@ def trigger_webhook(webhook_trigger_type, bot=None, calendar=None, zoom_oauth_co
         )
         delivery_attempts.append(delivery_attempt)
 
-        from bots.tasks.deliver_webhook_task import deliver_webhook
-
-        transaction.on_commit(partial(deliver_webhook.delay, delivery_attempt.id))
+        # on_commit can run after the span has ended, so the task is enqueued under the context captured now
+        transaction.on_commit(partial(run_in_context, context.get_current(), deliver_webhook.delay, delivery_attempt.id))
 
     return len(delivery_attempts)
 
