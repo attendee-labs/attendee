@@ -723,6 +723,30 @@ class TranscriptionSettings:
     def gladia_enable_code_switching(self):
         return self._settings.get("gladia", {}).get("enable_code_switching", False)
 
+    def gladia_language_config(self):
+        gladia_settings = self._settings.get("gladia", {})
+        if "language_config" in gladia_settings:
+            return gladia_settings["language_config"]
+        # Deprecated fields, kept so existing callers get the same behavior
+        if self.gladia_enable_code_switching():
+            return {"languages": self.gladia_code_switching_languages() or [], "code_switching": True}
+        return None
+
+    def gladia_model(self):
+        return self._settings.get("gladia", {}).get("model", None)
+
+    def gladia_custom_vocabulary(self):
+        return self._settings.get("gladia", {}).get("custom_vocabulary", None)
+
+    def gladia_custom_vocabulary_config(self):
+        return self._settings.get("gladia", {}).get("custom_vocabulary_config", None)
+
+    def gladia_custom_spelling(self):
+        return self._settings.get("gladia", {}).get("custom_spelling", None)
+
+    def gladia_custom_spelling_config(self):
+        return self._settings.get("gladia", {}).get("custom_spelling_config", None)
+
     def assembly_ai_language_code(self):
         return self._settings.get("assembly_ai", {}).get("language_code", None)
 
