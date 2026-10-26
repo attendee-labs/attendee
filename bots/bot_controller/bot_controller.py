@@ -12,6 +12,7 @@ import gi
 import redis
 from django.conf import settings
 from django.core.files.base import ContentFile
+from django.db import InterfaceError, OperationalError, connection
 from django.utils import timezone
 
 from bots.automatic_leave_configuration import AutomaticLeaveConfiguration
@@ -87,6 +88,9 @@ gi.require_version("GLib", "2.0")
 from gi.repository import GLib
 
 logger = logging.getLogger(__name__)
+
+# How long the bot keeps retrying after losing its database connection before it gives up.
+DB_CONNECTION_LOST_GRACE_SECONDS = 30
 
 
 class BotController:
@@ -1057,6 +1061,7 @@ class BotController:
 
         # Add timeout just for audio processing
         self.first_timeout_call = True
+        self.db_connection_lost_at = None
         GLib.timeout_add(100, self.on_main_loop_timeout)
 
         # Add signal handlers so that when we get a SIGTERM or SIGINT, we can clean up the bot
@@ -1436,7 +1441,15 @@ class BotController:
             # Take a resource snapshot if needed
             self.bot_resource_snapshot_taker.save_snapshot_if_needed()
 
+            self.db_connection_lost_at = None
             return True
+
+        except (OperationalError, InterfaceError) as e:
+            if self.should_retry_after_db_connection_error(e):
+                return True
+            logger.warning(f"Database unreachable for over {DB_CONNECTION_LOST_GRACE_SECONDS}s in timeout callback: {e}")
+            self.handle_exception_in_timeout_callback(e)
+            return False
 
         except Exception as e:
             logger.warning(f"Error in timeout callback: {e}")
@@ -1444,6 +1457,22 @@ class BotController:
             logger.info(traceback.format_exc())
             self.handle_exception_in_timeout_callback(e)
             return False
+
+    def should_retry_after_db_connection_error(self, e):
+        # A dropped connection (a network blip between the bot node and Postgres) used to
+        # end the recording on the spot. Close it so the next tick reconnects, and only give
+        # up once the database has been unreachable for DB_CONNECTION_LOST_GRACE_SECONDS.
+        now = time.time()
+        if self.db_connection_lost_at is None:
+            self.db_connection_lost_at = now
+        try:
+            connection.close()
+        except Exception as close_error:
+            logger.info(f"Error closing broken database connection: {close_error}")
+        if now - self.db_connection_lost_at > DB_CONNECTION_LOST_GRACE_SECONDS:
+            return False
+        logger.warning(f"Database connection error in timeout callback, reconnecting on the next tick: {e}")
+        return True
 
     def handle_exception_in_timeout_callback(self, e):
         try:
