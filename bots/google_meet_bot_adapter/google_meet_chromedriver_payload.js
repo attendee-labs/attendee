@@ -1846,6 +1846,10 @@ function createMessageDecoder(messageType) {
                     message[field.name] = [];
                 }
                 message[field.name].push(value);
+            } else if (field.type === 'message' && message[field.name]) {
+                // Protobuf merges every occurrence of a non-repeated message field, so an entry
+                // in an earlier occurrence (e.g. a device's outputs) must not be dropped.
+                message[field.name] = mergeDecodedMessages(field.messageType, message[field.name], value);
             } else {
                 message[field.name] = value;
             }
@@ -1853,6 +1857,24 @@ function createMessageDecoder(messageType) {
 
         return message;
     };
+}
+
+// Merge two decoded messages of the same type as protobuf does: repeated fields are
+// concatenated, message fields merged recursively, and other fields taken from the later one.
+function mergeDecodedMessages(messageTypeName, earlier, later) {
+    const messageType = messageTypesByName[messageTypeName];
+    const merged = { ...earlier };
+    for (const [name, value] of Object.entries(later)) {
+        const field = messageType.fields.find(f => f.name === name);
+        if (field?.repeated && merged[name]) {
+            merged[name] = merged[name].concat(value);
+        } else if (field?.type === 'message' && merged[name]) {
+            merged[name] = mergeDecodedMessages(field.messageType, merged[name], value);
+        } else {
+            merged[name] = value;
+        }
+    }
+    return merged;
 }
 
 const ws = new WebSocketClient();
@@ -1880,8 +1902,10 @@ window.participantSpeechStartStopManager = participantSpeechStartStopManager;
 window.sendChatMessage = sendChatMessage;
 // Create decoders for all message types
 const messageDecoders = {};
+const messageTypesByName = {};
 messageTypes.forEach(type => {
     messageDecoders[type.name] = createMessageDecoder(type);
+    messageTypesByName[type.name] = type;
 });
 
 function base64ToUint8Array(base64) {
@@ -1909,20 +1933,28 @@ new FetchInterceptor(async (response) => {
 });
 
 const handleCollectionEvent = (event) => {
-  const decodedData = pako.inflate(new Uint8Array(event.data));
-  //console.log(' handleCollectionEventdecodedData', decodedData);
-  // Convert decoded data to base64
-  const base64Data = btoa(String.fromCharCode.apply(null, decodedData));
-  //console.log('Decoded collection event data (base64):', base64Data);
+  try {
+    handleCollectionEventData(pako.inflate(new Uint8Array(event.data)));
+  } catch (error) {
+    // A lost collection event can mean a participant's device outputs are never known,
+    // and then none of their per-participant audio is sent.
+    console.error('Error handling collection event:', error);
+    window.ws?.sendJson({
+        type: 'Error',
+        message: `Error handling collection event: ${error?.message}`
+    });
+  }
+};
 
+const handleCollectionEventData = (decodedData) => {
   const collectionEvent = messageDecoders['CollectionEvent'](decodedData);
   
-  const deviceOutputInfoList = collectionEvent.body.userInfoListWrapperAndChatWrapperWrapper?.deviceInfoWrapper?.deviceOutputInfoList;
+  const deviceOutputInfoList = collectionEvent.body?.userInfoListWrapperAndChatWrapperWrapper?.deviceInfoWrapper?.deviceOutputInfoList;
   if (deviceOutputInfoList) {
     userManager.updateDeviceOutputs(deviceOutputInfoList);
   }
 
-  const chatMessageWrapper = collectionEvent.body.userInfoListWrapperAndChatWrapperWrapper?.userInfoListWrapperAndChatWrapper?.chatMessageWrapper;
+  const chatMessageWrapper = collectionEvent.body?.userInfoListWrapperAndChatWrapperWrapper?.userInfoListWrapperAndChatWrapper?.chatMessageWrapper;
   if (chatMessageWrapper) {
     for (const chatMessage of chatMessageWrapper) {
         window.chatMessageManager?.handleChatMessage(chatMessage);
@@ -1932,7 +1964,7 @@ const handleCollectionEvent = (event) => {
   //console.log('deviceOutputInfoList', JSON.stringify(collectionEvent.body.userInfoListWrapperAndChatWrapperWrapper?.deviceInfoWrapper?.deviceOutputInfoList));
   //console.log('usermap', userMap.allUsersMap);
   //console.log('userInfoList And Event', collectionEvent.body.userInfoListWrapperAndChatWrapperWrapper.userInfoListWrapperAndChatWrapper.userInfoListWrapper);
-  const userInfoList = collectionEvent.body.userInfoListWrapperAndChatWrapperWrapper.userInfoListWrapperAndChatWrapper.userInfoListWrapper?.userInfoList || [];
+  const userInfoList = collectionEvent.body?.userInfoListWrapperAndChatWrapperWrapper?.userInfoListWrapperAndChatWrapper?.userInfoListWrapper?.userInfoList || [];
   console.log('userInfoList in collection event', userInfoList);
   // This event is triggered when a single user joins (or leaves) the meeting
   // generally this array only contains a single user
