@@ -589,8 +589,8 @@ class GoogleMeetUIMethods:
     def current_user_is_in_meeting(self, driver):
         return driver.execute_script("return window.userManager?.currentUserIsInMeeting() ?? false;")
 
-    def wait_for_admission_then_enable_captions(self):
-        num_attempts_to_check_if_admitted = (self.automatic_leave_configuration.waiting_room_timeout_seconds + self.automatic_leave_configuration.wait_for_host_to_start_meeting_timeout_seconds) * 2
+    def wait_for_admission(self):
+        num_attempts_to_check_if_admitted = (self.automatic_leave_configuration.waiting_room_timeout_seconds + self.automatic_leave_configuration.wait_for_host_to_start_meeting_timeout_seconds) * 10
         logger.info("Waiting to be admitted to the meeting...")
         timeout_started_at = time.time()
 
@@ -601,7 +601,6 @@ class GoogleMeetUIMethods:
             try:
                 WebDriverWait(self.driver, 1).until(self.current_user_is_in_meeting)
                 logger.info("Admitted to the meeting")
-                self.enable_captions()
                 return
             except TimeoutException as e:
                 self.look_for_blocked_element("click_captions_button")
@@ -1265,7 +1264,9 @@ class GoogleMeetUIMethods:
         else:
             self.click_element_with_fallback_to_forceful_click(join_button, "join_button")
 
-        self.wait_for_admission_then_enable_captions()
+        self.wait_for_admission()
+
+        self.enable_captions()
 
         if not self.disable_incoming_video:
             self.set_layout(layout_to_select)
