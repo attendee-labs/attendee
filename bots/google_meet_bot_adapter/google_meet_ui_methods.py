@@ -570,7 +570,7 @@ class GoogleMeetUIMethods:
     def current_user_is_in_meeting(self, driver):
         return driver.execute_script("return window.userManager?.currentUserIsInMeeting() ?? false;")
 
-    def click_captions_button(self):
+    def wait_for_admission_then_enable_captions(self):
         num_attempts_to_check_if_admitted = self.automatic_leave_configuration.waiting_room_timeout_seconds * 2
         logger.info("Waiting to be admitted to the meeting...")
         waiting_room_timeout_started_at = time.time()
@@ -1242,7 +1242,7 @@ class GoogleMeetUIMethods:
         else:
             self.click_element_with_fallback_to_forceful_click(join_button, "join_button")
 
-        self.click_captions_button()
+        self.wait_for_admission_then_enable_captions()
 
         self.wait_for_host_if_needed()
 

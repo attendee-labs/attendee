@@ -1779,7 +1779,7 @@ class TestGoogleMeetBot2(TransactionTestCase):
             patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.check_if_meeting_is_found", return_value=None),
             patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.join_now_button_is_present", return_value=True),
             patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.turn_off_media_inputs", return_value=None),
-            patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.click_captions_button", return_value=None),
+            patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.wait_for_admission_then_enable_captions", return_value=None),
             patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.wait_for_host_if_needed", return_value=None),
             patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.set_layout", return_value=None),
             patch.object(GoogleMeetUIMethods, "login_to_google_meet_account", autospec=True) as mock_login,
