@@ -1629,7 +1629,7 @@ const messageTypes = [
       {
         name: 'CollectionEvent',
         fields: [
-            { name: 'body', fieldNumber: 1, type: 'message', messageType: 'CollectionEventBody' }
+            { name: 'body', fieldNumber: 1, type: 'message', messageType: 'CollectionEventBody', repeated: true }
         ]
     },
     {
@@ -1909,30 +1909,50 @@ new FetchInterceptor(async (response) => {
 });
 
 const handleCollectionEvent = (event) => {
-  const decodedData = pako.inflate(new Uint8Array(event.data));
-  //console.log(' handleCollectionEventdecodedData', decodedData);
-  // Convert decoded data to base64
-  const base64Data = btoa(String.fromCharCode.apply(null, decodedData));
-  //console.log('Decoded collection event data (base64):', base64Data);
+  try {
+    const decodedData = pako.inflate(new Uint8Array(event.data));
+    //console.log(' handleCollectionEventdecodedData', decodedData);
+    // Convert decoded data to base64
+    // const base64Data = btoa(String.fromCharCode.apply(null, decodedData));
+    //console.log('Decoded collection event data (base64):', base64Data);
 
-  const collectionEvent = messageDecoders['CollectionEvent'](decodedData);
-  
-  const deviceOutputInfoList = collectionEvent.body.userInfoListWrapperAndChatWrapperWrapper?.deviceInfoWrapper?.deviceOutputInfoList;
+    const collectionEvent = messageDecoders['CollectionEvent'](decodedData);
+
+    for (const body of collectionEvent.body || []) {
+      try {
+        handleCollectionEventBody(body);
+      } catch (error) {
+        window.ws?.sendJson({
+          type: 'Error',
+          message: 'Error in handleCollectionEventBody: ' + error.message
+        });
+      }
+    }
+  } catch (error) {
+    window.ws?.sendJson({
+      type: 'Error',
+      message: 'Error in handleCollectionEvent: ' + error.message
+    });
+  }
+};
+
+const handleCollectionEventBody = (body) => {
+  const deviceOutputInfoList = body.userInfoListWrapperAndChatWrapperWrapper?.deviceInfoWrapper?.deviceOutputInfoList;
   if (deviceOutputInfoList) {
     userManager.updateDeviceOutputs(deviceOutputInfoList);
   }
 
-  const chatMessageWrapper = collectionEvent.body.userInfoListWrapperAndChatWrapperWrapper?.userInfoListWrapperAndChatWrapper?.chatMessageWrapper;
+  const chatMessageWrapper = body.userInfoListWrapperAndChatWrapperWrapper?.userInfoListWrapperAndChatWrapper?.chatMessageWrapper;
   if (chatMessageWrapper) {
     for (const chatMessage of chatMessageWrapper) {
         window.chatMessageManager?.handleChatMessage(chatMessage);
     }
   }
 
-  //console.log('deviceOutputInfoList', JSON.stringify(collectionEvent.body.userInfoListWrapperAndChatWrapperWrapper?.deviceInfoWrapper?.deviceOutputInfoList));
+  //console.log('deviceOutputInfoList', JSON.stringify(body.userInfoListWrapperAndChatWrapperWrapper?.deviceInfoWrapper?.deviceOutputInfoList));
   //console.log('usermap', userMap.allUsersMap);
-  //console.log('userInfoList And Event', collectionEvent.body.userInfoListWrapperAndChatWrapperWrapper.userInfoListWrapperAndChatWrapper.userInfoListWrapper);
-  const userInfoList = collectionEvent.body.userInfoListWrapperAndChatWrapperWrapper.userInfoListWrapperAndChatWrapper.userInfoListWrapper?.userInfoList || [];
+  //console.log('userInfoList And Event', body.userInfoListWrapperAndChatWrapperWrapper?.userInfoListWrapperAndChatWrapper?.userInfoListWrapper);
+  const userInfoList = body.userInfoListWrapperAndChatWrapperWrapper?.userInfoListWrapperAndChatWrapper?.userInfoListWrapper?.userInfoList || [];
   console.log('userInfoList in collection event', userInfoList);
   // This event is triggered when a single user joins (or leaves) the meeting
   // generally this array only contains a single user
