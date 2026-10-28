@@ -157,7 +157,6 @@ class TestGoogleMeetBot(TransactionTestCase):
     @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
     @patch("bots.bot_controller.bot_controller.S3FileUploader")
     @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.check_if_meeting_is_found", return_value=None)
-    @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.wait_for_host_if_needed", return_value=None)
     @patch("deepgram.DeepgramClient")
     @patch("time.time")
     @patch("bots.tasks.deliver_webhook_task.deliver_webhook")
@@ -166,7 +165,6 @@ class TestGoogleMeetBot(TransactionTestCase):
         mock_deliver_webhook,
         mock_time,
         MockDeepgramClient,
-        mock_wait_for_host_if_needed,
         mock_check_if_meeting_is_found,
         MockFileUploader,
         MockChromeDriver,
@@ -617,12 +615,10 @@ class TestGoogleMeetBot(TransactionTestCase):
     @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
     @patch("bots.bot_controller.bot_controller.S3FileUploader")
     @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.check_if_meeting_is_found", return_value=None)
-    @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.wait_for_host_if_needed", return_value=None)
     @patch("time.time")
     def test_bot_auto_leaves_meeting_after_silence_timeout(
         self,
         mock_time,
-        mock_wait_for_host_if_needed,
         mock_check_if_meeting_is_found,
         MockFileUploader,
         MockChromeDriver,
@@ -770,10 +766,8 @@ class TestGoogleMeetBot(TransactionTestCase):
     @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
     @patch("bots.bot_controller.bot_controller.S3FileUploader")
     @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.check_if_meeting_is_found", return_value=None)
-    @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.wait_for_host_if_needed", return_value=None)
     def test_google_meet_bot_can_join_meeting_and_record_audio_and_video(
         self,
-        mock_wait_for_host_if_needed,
         mock_check_if_meeting_is_found,
         MockFileUploader,
         MockChromeDriver,
@@ -974,14 +968,12 @@ class TestGoogleMeetBot(TransactionTestCase):
     @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
     @patch("bots.bot_controller.bot_controller.S3FileUploader")
     @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.check_if_meeting_is_found", return_value=None)
-    @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.wait_for_host_if_needed", return_value=None)
     @patch("bots.bot_controller.bot_websocket_client_manager.BotWebsocketClient")
     @patch("time.time")
     def test_bot_per_participant_audio_streaming_via_websockets(
         self,
         mock_time,
         MockBotWebsocketClient,
-        mock_wait_for_host_if_needed,
         mock_check_if_meeting_is_found,
         MockFileUploader,
         MockChromeDriver,
@@ -1112,14 +1104,12 @@ class TestGoogleMeetBot(TransactionTestCase):
     @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
     @patch("bots.bot_controller.bot_controller.S3FileUploader")
     @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.check_if_meeting_is_found", return_value=None)
-    @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.wait_for_host_if_needed", return_value=None)
     @patch("bots.bot_controller.bot_websocket_client_manager.BotWebsocketClient")
     @patch("time.time")
     def test_bot_per_participant_video_streaming_via_websockets(
         self,
         mock_time,
         MockBotWebsocketClient,
-        mock_wait_for_host_if_needed,
         mock_check_if_meeting_is_found,
         MockFileUploader,
         MockChromeDriver,
@@ -1251,14 +1241,12 @@ class TestGoogleMeetBot(TransactionTestCase):
     @patch("bots.google_meet_bot_adapter.google_meet_bot_adapter.GoogleMeetBotAdapter.send_raw_audio")
     @patch("bots.bot_controller.bot_controller.S3FileUploader")
     @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.check_if_meeting_is_found", return_value=None)
-    @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.wait_for_host_if_needed", return_value=None)
     @patch("bots.bot_controller.bot_websocket_client_manager.BotWebsocketClient")
     @patch("time.time")
     def test_bot_bidirectional_audio_streaming_via_websockets(
         self,
         mock_time,
         MockBotWebsocketClient,
-        mock_wait_for_host_if_needed,
         mock_check_if_meeting_is_found,
         MockFileUploader,
         mock_send_raw_audio,
