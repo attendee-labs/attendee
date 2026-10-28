@@ -1909,23 +1909,30 @@ new FetchInterceptor(async (response) => {
 });
 
 const handleCollectionEvent = (event) => {
-  const decodedData = pako.inflate(new Uint8Array(event.data));
-  //console.log(' handleCollectionEventdecodedData', decodedData);
-  // Convert decoded data to base64
-  const base64Data = btoa(String.fromCharCode.apply(null, decodedData));
-  //console.log('Decoded collection event data (base64):', base64Data);
+  try {
+    const decodedData = pako.inflate(new Uint8Array(event.data));
+    //console.log(' handleCollectionEventdecodedData', decodedData);
+    // Convert decoded data to base64
+    // const base64Data = btoa(String.fromCharCode.apply(null, decodedData));
+    //console.log('Decoded collection event data (base64):', base64Data);
 
-  const collectionEvent = messageDecoders['CollectionEvent'](decodedData);
+    const collectionEvent = messageDecoders['CollectionEvent'](decodedData);
 
-  for (const body of collectionEvent.body || []) {
-    try {
-      handleCollectionEventBody(body);
-    } catch (error) {
-      window.ws?.sendJson({
-        type: 'Error',
-        message: 'Error in handleCollectionEventBody: ' + error.message
-      });
+    for (const body of collectionEvent.body || []) {
+      try {
+        handleCollectionEventBody(body);
+      } catch (error) {
+        window.ws?.sendJson({
+          type: 'Error',
+          message: 'Error in handleCollectionEventBody: ' + error.message
+        });
+      }
     }
+  } catch (error) {
+    window.ws?.sendJson({
+      type: 'Error',
+      message: 'Error in handleCollectionEvent: ' + error.message
+    });
   }
 };
 
