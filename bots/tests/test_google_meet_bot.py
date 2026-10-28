@@ -12,7 +12,6 @@ from django.db import connection
 from django.db.backends.signals import connection_created
 from django.test import tag
 from django.test.testcases import TransactionTestCase
-from selenium.common.exceptions import TimeoutException
 from websockets.sync.client import connect as ws_connect
 
 from bots.bot_controller import BotController
@@ -527,6 +526,16 @@ class TestGoogleMeetBot(TransactionTestCase):
         mock_driver = create_mock_google_meet_driver()
         MockChromeDriver.return_value = mock_driver
 
+        # Simulate the bot never being admitted to the meeting
+        default_execute_script = mock_driver.execute_script.side_effect
+
+        def mock_execute_script_not_admitted(script, *args):
+            if script == "return window.userManager?.currentUserIsInMeeting() ?? false;":
+                return False
+            return default_execute_script(script, *args)
+
+        mock_driver.execute_script.side_effect = mock_execute_script_not_admitted
+
         # Mock virtual display
         mock_display = MagicMock()
         MockDisplay.return_value = mock_display
@@ -541,13 +550,6 @@ class TestGoogleMeetBot(TransactionTestCase):
             return MagicMock()  # Return a generic mock for other calls
 
         mock_locate_element.side_effect = mock_locate_element_side_effect
-
-        def mock_click_element_side_effect(element, step):
-            if step == "click_captions_button":
-                raise TimeoutException("Timed out")
-            return MagicMock()  # Return a generic mock for other calls
-
-        mock_click_element.side_effect = mock_click_element_side_effect
 
         # Create bot controller
         controller = BotController(self.bot.id)

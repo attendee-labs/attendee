@@ -149,6 +149,8 @@ def create_mock_google_meet_driver():
     def mock_execute_script(script, *args):
         if script == "return performance.timeOrigin;":
             return 12345
+        if script == "return window.userManager?.currentUserIsInMeeting() ?? false;":
+            return True
         return None
 
     mock_driver.execute_script.side_effect = mock_execute_script

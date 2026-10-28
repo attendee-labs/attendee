@@ -539,10 +539,15 @@ class GoogleMeetUIMethods:
         WebDriverWait(self.driver, 5).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'button[aria-label="Captions and translation"][aria-pressed="true"]')))
         logger.info("Confirmed captions were enabled")
 
-    def click_captions_button(self):
-        num_attempts_to_look_for_captions_button = self.automatic_leave_configuration.waiting_room_timeout_seconds * 2
+    def enable_captions(self):
+        try:
+            self.attempt_to_enable_captions()
+        except Exception as e:
+            logger.warning(f"Error enabling captions: {e}")
+
+    def attempt_to_enable_captions(self):
+        num_attempts_to_look_for_captions_button = 10
         logger.info("Waiting for captions button...")
-        waiting_room_timeout_started_at = time.time()
         for attempt_to_look_for_captions_button_index in range(num_attempts_to_look_for_captions_button):
             try:
                 captions_button = WebDriverWait(self.driver, 1).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'button[aria-label="Turn on captions"], button[aria-label="Captions and translation"]')))
@@ -555,13 +560,26 @@ class GoogleMeetUIMethods:
                 WebDriverWait(self.driver, 5).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'button[aria-label="Turn off captions"]')))
                 logger.info("Confirmed captions were enabled")
                 return
-            except UiCouldNotClickElementException as e:
+            except (UiCouldNotClickElementException, TimeoutException) as e:
                 self.click_this_meeting_is_being_recorded_join_now_button("click_captions_button")
                 self.click_others_may_see_your_meeting_differently_button("click_captions_button")
-                last_check_could_not_click_element = attempt_to_look_for_captions_button_index == num_attempts_to_look_for_captions_button - 1
-                if last_check_could_not_click_element:
-                    logger.warning("Could not click captions button. Raising UiCouldNotClickElementException")
+                last_attempt = attempt_to_look_for_captions_button_index == num_attempts_to_look_for_captions_button - 1
+                if last_attempt:
                     raise e
+
+    def current_user_is_in_meeting(self, driver):
+        return driver.execute_script("return window.userManager?.currentUserIsInMeeting() ?? false;")
+
+    def click_captions_button(self):
+        num_attempts_to_check_if_admitted = self.automatic_leave_configuration.waiting_room_timeout_seconds * 2
+        logger.info("Waiting to be admitted to the meeting...")
+        waiting_room_timeout_started_at = time.time()
+        for attempt_to_check_if_admitted_index in range(num_attempts_to_check_if_admitted):
+            try:
+                WebDriverWait(self.driver, 1).until(self.current_user_is_in_meeting)
+                logger.info("Admitted to the meeting")
+                self.enable_captions()
+                return
             except TimeoutException as e:
                 self.look_for_blocked_element("click_captions_button")
                 self.look_for_denied_your_request_element("click_captions_button")
@@ -571,21 +589,21 @@ class GoogleMeetUIMethods:
                 self.look_for_incoming_video_is_disabled_element()
                 self.check_if_waiting_room_timeout_exceeded(waiting_room_timeout_started_at, "click_captions_button")
 
-                last_check_timed_out = attempt_to_look_for_captions_button_index == num_attempts_to_look_for_captions_button - 1
+                last_check_timed_out = attempt_to_check_if_admitted_index == num_attempts_to_check_if_admitted - 1
                 if last_check_timed_out:
                     self.look_for_asking_to_be_let_in_element_after_waiting_period_expired("click_captions_button")
 
-                    logger.warning("Could not find captions button. Timed out. Raising UiCouldNotLocateElementException")
+                    logger.warning("Was not admitted to the meeting. Timed out. Raising UiCouldNotLocateElementException")
                     raise UiCouldNotLocateElementException(
-                        "Could not find captions button. Timed out.",
+                        "Was not admitted to the meeting. Timed out.",
                         "click_captions_button",
                         e,
                     )
 
             except Exception as e:
-                logger.warning(f"Could not find captions button. Unknown error {e} of type {type(e)}. Raising UiCouldNotLocateElementException")
+                logger.warning(f"Could not check if admitted to the meeting. Unknown error {e} of type {type(e)}. Raising UiCouldNotLocateElementException")
                 raise UiCouldNotLocateElementException(
-                    "Could not find captions button. Unknown error.",
+                    "Could not check if admitted to the meeting. Unknown error.",
                     "click_captions_button",
                     e,
                 )

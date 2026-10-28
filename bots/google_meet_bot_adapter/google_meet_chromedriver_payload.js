@@ -1035,6 +1035,14 @@ class UserManager {
         return currentUser.status === this.MEETING_STATUS.IN_WAITING_ROOM;
     }
 
+    // Like currentUserIsInWaitingRoom, this returns false until the roster includes the bot.
+    currentUserIsInMeeting() {
+        if (!this.currentUserId) return false;
+        const currentUser = this.allUsersMap.get(this.currentUserId);
+        if (!currentUser) return false;
+        return currentUser.status === this.MEETING_STATUS.IN_MEETING;
+    }
+
     getCurrentUsersInMeeting() {
         return Array.from(this.currentUsersMap.values()).filter(user => user.status === this.MEETING_STATUS.IN_MEETING);
     }
