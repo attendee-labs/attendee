@@ -1208,11 +1208,11 @@ VOICE_AGENT_SETTINGS_SCHEMA = {
     "properties": {
         "url": {
             "type": "string",
-            "description": "URL of a website containing a voice agent that gets the user's responses from the microphone. The bot will load this website and stream its video and audio to the meeting. The audio from the meeting will be sent to website via the microphone. See https://docs.attendee.dev/guides/voiceagents for further details. The video will be displayed through the bot's webcam. To display the video through screenshare, use the screenshare_url parameter instead.",
+            "description": "URL of a website containing a voice agent that gets the user's responses from the microphone. The bot will load this website and stream its video and audio to the meeting. The audio from the meeting will be sent to website via the microphone. See https://docs.attendee.dev/guides/voiceagents for further details. The video will be displayed through the bot's webcam. To display the video through screenshare, use the screenshare_url parameter.",
         },
         "screenshare_url": {
             "type": "string",
-            "description": "Behaves the same as url, but the video will be displayed through screenshare instead of the bot's webcam. Currently, you cannot provide both url and screenshare_url.",
+            "description": "Behaves the same as url, but the video will be displayed through screenshare instead of the bot's webcam. Can be provided together with url, in which case both websites are loaded and the bot streams one through its webcam and the other through screenshare. The audio from both websites is mixed into the bot's microphone.",
         },
         "reserve_resources": {
             "type": "boolean",
@@ -1477,9 +1477,6 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
         # Set reserve resources to true if url or screenshare_url is provided
         if value.get("url") or value.get("screenshare_url"):
             value["reserve_resources"] = True
-
-        if value.get("url") and value.get("screenshare_url"):
-            raise serializers.ValidationError({"url": "You cannot provide both url and screenshare_url."})
 
         # Validate that url is a proper URL
         url = value.get("url")
@@ -2107,8 +2104,8 @@ class ParticipantEventSerializer(serializers.Serializer):
 
 
 class PatchBotVoiceAgentSettingsSerializer(serializers.Serializer):
-    url = serializers.CharField(required=False, allow_null=False, allow_blank=True, help_text="URL of a website containing a voice agent that gets the user's responses from the microphone. The bot will load this website and stream its video and audio to the meeting. The audio from the meeting will be sent to website via the microphone. See https://docs.attendee.dev/guides/voiceagents for further details. The video will be displayed through the bot's webcam. To display the video through screenshare, use the screenshare_url parameter instead. Set to \"\" to turn off.")
-    screenshare_url = serializers.CharField(required=False, allow_null=False, allow_blank=True, help_text='Behaves the same as url, but the video will be displayed through screenshare instead of the bot\'s webcam. Currently, you cannot provide both url and screenshare_url. Set to "" to turn off.')
+    url = serializers.CharField(required=False, allow_null=False, allow_blank=True, help_text="URL of a website containing a voice agent that gets the user's responses from the microphone. The bot will load this website and stream its video and audio to the meeting. The audio from the meeting will be sent to website via the microphone. See https://docs.attendee.dev/guides/voiceagents for further details. The video will be displayed through the bot's webcam. To display the video through screenshare, use the screenshare_url parameter. Set to \"\" to turn off. Omitting this field leaves the current url unchanged.")
+    screenshare_url = serializers.CharField(required=False, allow_null=False, allow_blank=True, help_text='Behaves the same as url, but the video will be displayed through screenshare instead of the bot\'s webcam. Can be used at the same time as url. Set to "" to turn off. Omitting this field leaves the current screenshare_url unchanged.')
 
     def validate_url(self, value):
         """Validate that url starts with https://"""
@@ -2136,13 +2133,8 @@ class PatchBotVoiceAgentSettingsSerializer(serializers.Serializer):
         if unexpected_fields:
             raise serializers.ValidationError(f"Unexpected field(s): {', '.join(sorted(unexpected_fields))}. Allowed fields are: {', '.join(sorted(expected_fields))}")
 
-        """Validate that both url and screenshare_url are not provided with non-empty values"""
         url = data.get("url")
         screenshare_url = data.get("screenshare_url")
-
-        # Check if both have non-empty values
-        if url and screenshare_url:
-            raise serializers.ValidationError("Cannot provide both url and screenshare_url. Please specify only one.")
 
         if not url_is_allowed_for_voice_agent(url):
             raise serializers.ValidationError({"url": "URL is not allowed for voice agent. Please set the VOICE_AGENT_URL_PREFIX_ALLOWLIST environment variable to the comma-separated list of allowed URL prefixes."})

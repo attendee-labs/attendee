@@ -1184,18 +1184,12 @@ class Bot(models.Model):
     def room_sync_sync_to_room(self):
         return True
 
-    def voice_agent_url(self):
+    def voice_agent_urls_by_output_destination(self):
         voice_agent_settings = self.settings.get("voice_agent_settings", {}) or {}
-        return voice_agent_settings.get("url", None) or voice_agent_settings.get("screenshare_url", None)
-
-    def voice_agent_video_output_destination(self):
-        voice_agent_settings = self.settings.get("voice_agent_settings", {}) or {}
-        if voice_agent_settings.get("url", None):
-            return "webcam"
-        elif voice_agent_settings.get("screenshare_url", None):
-            return "screenshare"
-        else:
-            return None
+        return {
+            "webcam": voice_agent_settings.get("url", None) or None,
+            "screenshare": voice_agent_settings.get("screenshare_url", None) or None,
+        }
 
     def should_launch_bot_pod_with_runner_pool(self):
         if os.getenv("USE_BOT_RUNNER_POOL", "false") != "true":
