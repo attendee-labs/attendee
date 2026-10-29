@@ -11,17 +11,12 @@ from selenium.webdriver.support.ui import WebDriverWait
 
 from bots.models import RecordingViews
 from bots.utils import cyrillicize_keywords_in_string, remove_characters_from_string, truncate_string_with_ellipsis
-from bots.web_bot_adapter.ui_methods import UiBlockedByCaptchaException, UiCouldNotClickElementException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableException, UiRetryableExpectedException
+from bots.web_bot_adapter.ui_methods import UiBlockedByCaptchaException, UiCouldNotClickElementException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableExpectedException, UiWaitingRoomTransitionFailedException
 
 logger = logging.getLogger(__name__)
 
 
 class UiTeamsBlockingUsException(UiRetryableExpectedException):
-    def __init__(self, message, step=None, inner_exception=None):
-        super().__init__(message, step, inner_exception)
-
-
-class UiWaitingRoomTransitionFailedException(UiRetryableException):
     def __init__(self, message, step=None, inner_exception=None):
         super().__init__(message, step, inner_exception)
 

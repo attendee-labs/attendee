@@ -1023,7 +1023,8 @@ class UserManager {
     MEETING_STATUS = {
         IN_MEETING: 1,
         IN_WAITING_ROOM: 3,
-        NOT_IN_MEETING: 6
+        NOT_IN_MEETING: 6,
+        WAITING_FOR_HOST: 13
     }
 
     // The bot's own device id is only learned from a participant roster sync, so
@@ -1033,6 +1034,22 @@ class UserManager {
         const currentUser = this.allUsersMap.get(this.currentUserId);
         if (!currentUser) return false;
         return currentUser.status === this.MEETING_STATUS.IN_WAITING_ROOM;
+    }
+
+    // Like currentUserIsInWaitingRoom, this returns false until the roster includes the bot.
+    currentUserIsWaitingForHost() {
+        if (!this.currentUserId) return false;
+        const currentUser = this.allUsersMap.get(this.currentUserId);
+        if (!currentUser) return false;
+        return currentUser.status === this.MEETING_STATUS.WAITING_FOR_HOST;
+    }
+
+    // Like currentUserIsInWaitingRoom, this returns false until the roster includes the bot.
+    currentUserIsInMeeting() {
+        if (!this.currentUserId) return false;
+        const currentUser = this.allUsersMap.get(this.currentUserId);
+        if (!currentUser) return false;
+        return currentUser.status === this.MEETING_STATUS.IN_MEETING;
     }
 
     getCurrentUsersInMeeting() {

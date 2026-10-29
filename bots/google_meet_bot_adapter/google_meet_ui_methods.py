@@ -21,7 +21,7 @@ from bots.bot_sso_utils import get_google_meet_set_cookie_url
 from bots.google_meet_bot_adapter.okta_authenticator import OktaAuthenticator, OktaSessionError
 from bots.models import RecordingViews
 from bots.utils import mask_url_query_param_values
-from bots.web_bot_adapter.ui_methods import UiCouldNotClickElementException, UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableExpectedException
+from bots.web_bot_adapter.ui_methods import UiCouldNotClickElementException, UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableExpectedException, UiWaitingRoomTransitionFailedException
 
 from .mocap_manager import MocapManager
 
@@ -196,16 +196,35 @@ class GoogleMeetUIMethods:
         if in_waiting_room:
             self.send_bot_put_in_waiting_room_message()
 
+    def check_if_waiting_for_host(self):
+        try:
+            return self.driver.execute_script("return window.userManager?.currentUserIsWaitingForHost() ?? false;")
+        except Exception as e:
+            logger.info(f"Could not check participant roster for waiting for host status: {e}")
+            return False
+
     def check_if_waiting_room_timeout_exceeded(self, waiting_room_timeout_started_at, step):
         waiting_room_timeout_exceeded = time.time() - waiting_room_timeout_started_at > self.automatic_leave_configuration.waiting_room_timeout_seconds
         if waiting_room_timeout_exceeded:
             # If there is more than one participant in the meeting, then the bot was just let in and we should not timeout
             if len(self.participants_info) > 1:
+                waiting_room_timeout_exceeded_by_more_than_three_minutes = time.time() - waiting_room_timeout_started_at > self.automatic_leave_configuration.waiting_room_timeout_seconds + 180
+                if waiting_room_timeout_exceeded_by_more_than_three_minutes:
+                    logger.warning("Waiting room timeout exceeded, but there is more than one participant in the meeting. More than three minutes have passed since the timeout started. This is unexpected, throwing exception.")
+                    raise UiWaitingRoomTransitionFailedException("Waiting room timeout exceeded, but there is more than one participant in the meeting. More than three minutes have passed since the timeout started. This is unexpected.", step)
+
                 logger.warning("Waiting room timeout exceeded, but there is more than one participant in the meeting. Not aborting join attempt.")
                 return
             self.abort_join_attempt()
             logger.warning("Waiting room timeout exceeded. Raising UiCouldNotJoinMeetingWaitingRoomTimeoutException")
             raise UiCouldNotJoinMeetingWaitingRoomTimeoutException("Waiting room timeout exceeded", step)
+
+    def check_if_waiting_for_host_timeout_exceeded(self, waiting_for_host_timeout_started_at, step):
+        waiting_for_host_timeout_exceeded = time.time() - waiting_for_host_timeout_started_at > self.automatic_leave_configuration.wait_for_host_to_start_meeting_timeout_seconds
+        if waiting_for_host_timeout_exceeded:
+            self.abort_join_attempt()
+            logger.warning("Waiting for host timeout exceeded. Raising UiCouldNotJoinMeetingWaitingForHostException")
+            raise UiCouldNotJoinMeetingWaitingForHostException("Waiting for host timeout exceeded", step)
 
     def turn_off_media_inputs(self):
         logger.info("Waiting for the microphone button...")
@@ -539,10 +558,15 @@ class GoogleMeetUIMethods:
         WebDriverWait(self.driver, 5).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'button[aria-label="Captions and translation"][aria-pressed="true"]')))
         logger.info("Confirmed captions were enabled")
 
-    def click_captions_button(self):
-        num_attempts_to_look_for_captions_button = self.automatic_leave_configuration.waiting_room_timeout_seconds * 2
+    def enable_captions(self):
+        try:
+            self.attempt_to_enable_captions()
+        except Exception as e:
+            logger.warning(f"Error enabling captions: {e}")
+
+    def attempt_to_enable_captions(self):
+        num_attempts_to_look_for_captions_button = 10
         logger.info("Waiting for captions button...")
-        waiting_room_timeout_started_at = time.time()
         for attempt_to_look_for_captions_button_index in range(num_attempts_to_look_for_captions_button):
             try:
                 captions_button = WebDriverWait(self.driver, 1).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'button[aria-label="Turn on captions"], button[aria-label="Captions and translation"]')))
@@ -555,13 +579,29 @@ class GoogleMeetUIMethods:
                 WebDriverWait(self.driver, 5).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'button[aria-label="Turn off captions"]')))
                 logger.info("Confirmed captions were enabled")
                 return
-            except UiCouldNotClickElementException as e:
+            except (UiCouldNotClickElementException, TimeoutException) as e:
                 self.click_this_meeting_is_being_recorded_join_now_button("click_captions_button")
                 self.click_others_may_see_your_meeting_differently_button("click_captions_button")
-                last_check_could_not_click_element = attempt_to_look_for_captions_button_index == num_attempts_to_look_for_captions_button - 1
-                if last_check_could_not_click_element:
-                    logger.warning("Could not click captions button. Raising UiCouldNotClickElementException")
+                last_attempt = attempt_to_look_for_captions_button_index == num_attempts_to_look_for_captions_button - 1
+                if last_attempt:
                     raise e
+
+    def current_user_is_in_meeting(self, driver):
+        return driver.execute_script("return window.userManager?.currentUserIsInMeeting() ?? false;")
+
+    def wait_for_admission(self):
+        num_attempts_to_check_if_admitted = (self.automatic_leave_configuration.waiting_room_timeout_seconds + self.automatic_leave_configuration.wait_for_host_to_start_meeting_timeout_seconds) * 10
+        logger.info("Waiting to be admitted to the meeting...")
+        timeout_started_at = time.time()
+
+        # We can either be waiting for the host to join or we can be waiting to be admitted to the meeting
+        is_waiting_for_host = False
+
+        for attempt_to_check_if_admitted_index in range(num_attempts_to_check_if_admitted):
+            try:
+                WebDriverWait(self.driver, 1).until(self.current_user_is_in_meeting)
+                logger.info("Admitted to the meeting")
+                return
             except TimeoutException as e:
                 self.look_for_blocked_element("click_captions_button")
                 self.look_for_denied_your_request_element("click_captions_button")
@@ -569,23 +609,35 @@ class GoogleMeetUIMethods:
                 self.click_others_may_see_your_meeting_differently_button("click_captions_button")
                 self.check_if_in_waiting_room("click_captions_button")
                 self.look_for_incoming_video_is_disabled_element()
-                self.check_if_waiting_room_timeout_exceeded(waiting_room_timeout_started_at, "click_captions_button")
 
-                last_check_timed_out = attempt_to_look_for_captions_button_index == num_attempts_to_look_for_captions_button - 1
+                previous_is_waiting_for_host = is_waiting_for_host
+                is_waiting_for_host = self.check_if_waiting_for_host()
+
+                # If we switch between waiting for the host and waiting to be admitted, then we need to reset the timeout
+                if previous_is_waiting_for_host != is_waiting_for_host:
+                    logger.info(f"is_waiting_for_host changed from {previous_is_waiting_for_host} to {is_waiting_for_host}. Resetting timeout")
+                    timeout_started_at = time.time()
+
+                if is_waiting_for_host:
+                    self.check_if_waiting_for_host_timeout_exceeded(timeout_started_at, "click_captions_button")
+                else:
+                    self.check_if_waiting_room_timeout_exceeded(timeout_started_at, "click_captions_button")
+
+                last_check_timed_out = attempt_to_check_if_admitted_index == num_attempts_to_check_if_admitted - 1
                 if last_check_timed_out:
                     self.look_for_asking_to_be_let_in_element_after_waiting_period_expired("click_captions_button")
 
-                    logger.warning("Could not find captions button. Timed out. Raising UiCouldNotLocateElementException")
+                    logger.warning("Was not admitted to the meeting. Timed out. Raising UiCouldNotLocateElementException")
                     raise UiCouldNotLocateElementException(
-                        "Could not find captions button. Timed out.",
+                        "Was not admitted to the meeting. Timed out.",
                         "click_captions_button",
                         e,
                     )
 
             except Exception as e:
-                logger.warning(f"Could not find captions button. Unknown error {e} of type {type(e)}. Raising UiCouldNotLocateElementException")
+                logger.warning(f"Could not check if admitted to the meeting. Unknown error {e} of type {type(e)}. Raising UiCouldNotLocateElementException")
                 raise UiCouldNotLocateElementException(
-                    "Could not find captions button. Unknown error.",
+                    "Could not check if admitted to the meeting. Unknown error.",
                     "click_captions_button",
                     e,
                 )
@@ -603,18 +655,6 @@ class GoogleMeetUIMethods:
         if meeting_not_found_element:
             logger.warning("Meeting not found. Raising UiMeetingNotFoundException")
             raise UiMeetingNotFoundException("Meeting not found", "check_if_meeting_is_found")
-
-    def wait_for_host_if_needed(self):
-        host_element = self.find_element_by_selector(By.XPATH, '//*[contains(text(), "Waiting for the host to join")]')
-        if host_element:
-            # Wait for up to n seconds for the host to join
-            wait_time_seconds = self.automatic_leave_configuration.wait_for_host_to_start_meeting_timeout_seconds
-            logger.info(f"We must wait for the host to join before we can join the meeting. Waiting for {wait_time_seconds} seconds...")
-            try:
-                WebDriverWait(self.driver, wait_time_seconds).until(EC.invisibility_of_element_located((By.XPATH, '//*[contains(text(), "Waiting for the host to join")]')))
-            except TimeoutException:
-                logger.warning("Host did not join the meeting in time. Raising UiCouldNotJoinMeetingWaitingForHostException")
-                raise UiCouldNotJoinMeetingWaitingForHostException("Host did not join the meeting in time", "wait_for_host_if_needed")
 
     def get_layout_to_select(self):
         if self.recording_view == RecordingViews.SPEAKER_VIEW:
@@ -1224,9 +1264,9 @@ class GoogleMeetUIMethods:
         else:
             self.click_element_with_fallback_to_forceful_click(join_button, "join_button")
 
-        self.click_captions_button()
+        self.wait_for_admission()
 
-        self.wait_for_host_if_needed()
+        self.enable_captions()
 
         if not self.disable_incoming_video:
             self.set_layout(layout_to_select)
