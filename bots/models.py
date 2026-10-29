@@ -1058,6 +1058,9 @@ class Bot(models.Model):
         centicredits_active = hours_active * 100
         return math.ceil(centicredits_active)
 
+    def k8s_pod_cmd(self):
+        return ["python", "manage.py", "run_bot", "--botid", str(self.id)]
+
     def cpu_request(self):
         from bots.meeting_url_utils import meeting_type_from_url
 
@@ -1193,6 +1196,24 @@ class Bot(models.Model):
             return "screenshare"
         else:
             return None
+
+    def should_launch_bot_pod_with_runner_pool(self):
+        if os.getenv("USE_BOT_RUNNER_POOL", "false") != "true":
+            return False
+        if self.join_at is not None:
+            return False
+        # Runner pods are created with the default spec type, the default BOT_CPU_REQUEST and no
+        # persistent storage, so bots that need anything else must get a dedicated pod.
+        if self.should_launch_webpage_streamer():
+            return False
+        if self.reserve_additional_storage():
+            return False
+        if self.bot_pod_spec_type != BotPodSpecType.DEFAULT:
+            return False
+        default_cpu_request = os.getenv("BOT_CPU_REQUEST", "4") or "4"
+        if self.cpu_request() != default_cpu_request:
+            return False
+        return True
 
     def should_launch_webpage_streamer(self):
         voice_agent_settings = self.settings.get("voice_agent_settings", {}) or {}
