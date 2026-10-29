@@ -15,7 +15,8 @@ const {
 const AUDIO_SAMPLE_RATE = 48000;
 // The SDK asks for 3 by default. Each slot holds one recent speaker, so with more slots fewer speakers lose theirs when
 // someone else starts talking. Measured on a four person meeting: 6 slots cut the word error rate from 40% to 34%.
-const NUM_ACTIVE_SPEAKER_AUDIO_SLOTS = 6;
+// Webex fills at most 8 (with 16 requested and 10 people talking at once, 8 slots carried audio).
+const NUM_ACTIVE_SPEAKER_AUDIO_SLOTS = 8;
 const MAX_VIDEO_PANES = 9;
 const VIDEO_SIZE_HINT = { width: 640, height: 360 };
 // Webex reports active speakers in ~1 second steps and the list briefly empties between words, so a
