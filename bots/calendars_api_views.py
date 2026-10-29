@@ -346,6 +346,22 @@ class CalendarEventListView(GenericAPIView):
                 examples=[OpenApiExample("Start Time GTE Example", value="2025-01-13T10:30:00Z")],
             ),
             OpenApiParameter(
+                name="start_time_lt",
+                type=str,
+                location=OpenApiParameter.QUERY,
+                description="Filter events with start_time before this timestamp (ISO 8601 format)",
+                required=False,
+                examples=[OpenApiExample("Start Time LT Example", value="2025-01-14T00:00:00Z")],
+            ),
+            OpenApiParameter(
+                name="attendee_email",
+                type=str,
+                location=OpenApiParameter.QUERY,
+                description="Filter events with this email (case-insensitive) on their attendee list",
+                required=False,
+                examples=[OpenApiExample("Attendee Email Example", value="jane@example.com")],
+            ),
+            OpenApiParameter(
                 name="end_time_lte",
                 type=str,
                 location=OpenApiParameter.QUERY,
@@ -404,6 +420,27 @@ class CalendarEventListView(GenericAPIView):
                 events = events.filter(start_time__gte=start_time_gte_dt)
             except ValueError:
                 return Response({"error": "Invalid start_time_gte format. Use ISO 8601 format (e.g., 2025-01-13T10:30:00Z)"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Apply start_time_lt filter if provided
+        start_time_lt = request.query_params.get("start_time_lt")
+        if start_time_lt is not None:
+            try:
+                start_time_lt_dt = parse_datetime(start_time_lt)
+                if start_time_lt_dt is None:
+                    return Response({"error": "Invalid start_time_lt format. Use ISO 8601 format (e.g., 2025-01-14T00:00:00Z)"}, status=status.HTTP_400_BAD_REQUEST)
+                events = events.filter(start_time__lt=start_time_lt_dt)
+            except ValueError:
+                return Response({"error": "Invalid start_time_lt format. Use ISO 8601 format (e.g., 2025-01-14T00:00:00Z)"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Apply attendee_email filter if provided. Matching the quoted email in the
+        # JSON text finds it as a whole value in the attendee list, case-insensitively.
+        attendee_email = request.query_params.get("attendee_email")
+        if attendee_email is not None:
+            attendee_email = attendee_email.strip()
+            if not attendee_email:
+                return Response({"error": "attendee_email must not be empty"}, status=status.HTTP_400_BAD_REQUEST)
+            quoted_email = f'"{attendee_email}"'
+            events = events.filter(attendees__icontains=quoted_email)
 
         # Apply end_time_lte filter if provided
         end_time_lte = request.query_params.get("end_time_lte")
