@@ -14,26 +14,42 @@ class GoogleMeetUIMethodsWithDriver(GoogleMeetUIMethods):
         self.driver = driver
 
 
-def create_driver(selected_language):
-    """Driver whose captions bar "Meeting language" list has selected_language selected."""
-    selected_language_option = MagicMock()
-    selected_language_option.get_attribute.return_value = selected_language
+LANGUAGE_SENT_TO_MEET_SCRIPT = "return window.closedCaptionsLanguageSentToMeet ?? null;"
+
+
+def create_driver(*languages_sent_to_meet):
+    """Driver whose payload saw Meet send these languages over the captions_v2 data channel, one per read. The last one stays."""
+    languages_sent_to_meet = list(languages_sent_to_meet)
+
+    def execute_script(script, *args):
+        if script == LANGUAGE_SENT_TO_MEET_SCRIPT:
+            return languages_sent_to_meet.pop(0) if len(languages_sent_to_meet) > 1 else languages_sent_to_meet[0]
+        if script == "return clickLanguageOption(arguments[0]);":
+            # clickLanguageOption() found and clicked the language option
+            return True
+        raise AssertionError(f"Unexpected script: {script}")
+
     driver = MagicMock()
-    driver.find_element.return_value = selected_language_option
-    # clickLanguageOption() found and clicked the language option
-    driver.execute_script.return_value = True
+    driver.execute_script.side_effect = execute_script
     return driver
 
 
 @tag("google_meet_tests")
 class TestGoogleMeetClosedCaptionsLanguageIsAlreadySelected(SimpleTestCase):
-    def test_returns_true_when_language_is_selected(self):
+    def test_returns_true_when_language_was_sent_to_meet(self):
         self.assertTrue(GoogleMeetUIMethodsWithDriver(create_driver("es-ES")).closed_captions_language_is_already_selected("es-ES"))
 
-    def test_returns_false_when_a_different_language_is_selected(self):
-        self.assertFalse(GoogleMeetUIMethodsWithDriver(create_driver("en-US")).closed_captions_language_is_already_selected("es-ES"))
+    def test_waits_for_meet_to_send_the_language(self):
+        driver = create_driver(None, None, "es-ES")
+        self.assertTrue(GoogleMeetUIMethodsWithDriver(driver).closed_captions_language_is_already_selected("es-ES"))
+        self.assertEqual(driver.execute_script.call_count, 3)
 
-    def test_returns_false_when_meeting_language_list_is_not_found(self):
+    def test_returns_false_when_a_different_language_was_sent_to_meet(self):
+        with patch("bots.google_meet_bot_adapter.google_meet_ui_methods.WebDriverWait") as web_driver_wait:
+            web_driver_wait.return_value.until.side_effect = TimeoutException()
+            self.assertFalse(GoogleMeetUIMethodsWithDriver(create_driver("en-US")).closed_captions_language_is_already_selected("es-ES"))
+
+    def test_returns_false_when_no_language_was_sent_to_meet(self):
         with patch("bots.google_meet_bot_adapter.google_meet_ui_methods.WebDriverWait") as web_driver_wait:
             web_driver_wait.return_value.until.side_effect = TimeoutException()
             self.assertFalse(GoogleMeetUIMethodsWithDriver(create_driver(None)).closed_captions_language_is_already_selected("es-ES"))

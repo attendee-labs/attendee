@@ -1270,17 +1270,16 @@ class GoogleMeetUIMethods:
                 e,
             )
 
+    def closed_captions_language_sent_to_meet(self):
+        return self.driver.execute_script("return window.closedCaptionsLanguageSentToMeet ?? null;")
+
     def closed_captions_language_is_already_selected(self, language):
-        # Once captions are on, the captions bar has a "Meeting language" list, so we can check the
-        # current language without opening the settings dialog.
+        # When captions are turned on, Meet sends the selected language over the captions_v2 data channel.
+        # The payload keeps track of it, so we can check the language without any UI interactions.
         try:
-            selected_language_option = WebDriverWait(self.driver, 2).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'ul[aria-label="Meeting language"] li[aria-selected="true"]')))
+            WebDriverWait(self.driver, 5).until(lambda _: self.closed_captions_language_sent_to_meet() == language)
         except TimeoutException:
-            logger.info("Could not find the selected meeting language in the captions bar")
-            return False
-        selected_language = selected_language_option.get_attribute("data-value")
-        if selected_language != language:
-            logger.warning(f"Meeting language in the captions bar is {selected_language}, not {language}. Falling back to the settings dialog.")
+            logger.warning(f"Closed captions language sent to Meet is {self.closed_captions_language_sent_to_meet()}, not {language}. Falling back to the settings dialog.")
             return False
         return True
 

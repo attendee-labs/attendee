@@ -1801,6 +1801,37 @@ const messageTypes = [
             { name: 'timestamp', fieldNumber: 1, type: 'int64' }
         ]
     },
+    // Sent by Meet over the captions_v2 data channel, not received.
+    {
+        name: 'ClosedCaptionsRequestWrapper',
+        fields: [
+            { name: 'closedCaptionsRequest', fieldNumber: 1, type: 'message', messageType: 'ClosedCaptionsRequest' }
+        ]
+    },
+    {
+        name: 'ClosedCaptionsRequest',
+        fields: [
+            { name: 'closedCaptionsSettings', fieldNumber: 2, type: 'message', messageType: 'ClosedCaptionsSettings' }
+        ]
+    },
+    {
+        name: 'ClosedCaptionsSettings',
+        fields: [
+            { name: 'languageWrapper', fieldNumber: 2, type: 'message', messageType: 'ClosedCaptionsLanguageWrapper' }
+        ]
+    },
+    {
+        name: 'ClosedCaptionsLanguageWrapper',
+        fields: [
+            { name: 'language', fieldNumber: 1, type: 'message', messageType: 'ClosedCaptionsLanguage' }
+        ]
+    },
+    {
+        name: 'ClosedCaptionsLanguage',
+        fields: [
+            { name: 'languageCode', fieldNumber: 2, type: 'string' }
+        ]
+    },
     {
         name: 'CaptionWrapper',
         fields: [
@@ -2021,6 +2052,41 @@ const handleCaptionEventV2 = (event) => {
   if (captionV1) {
     captionManager.singleCaptionSynced(captionV1);
   }
+}
+
+const handleOutboundCaptionsV2Message = (data) => {
+  let decodedData;
+  if (data instanceof ArrayBuffer) {
+    decodedData = new Uint8Array(data);
+  } else if (ArrayBuffer.isView(data)) {
+    decodedData = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+  } else {
+    return;
+  }
+  const closedCaptionsRequestWrapper = messageDecoders['ClosedCaptionsRequestWrapper'](decodedData);
+  const languageCode = closedCaptionsRequestWrapper.closedCaptionsRequest?.closedCaptionsSettings?.languageWrapper?.language?.languageCode;
+  if (!languageCode) {
+    return;
+  }
+  window.closedCaptionsLanguageSentToMeet = languageCode;
+  ws.sendJson({
+    type: 'ClosedCaptionsLanguageSentToMeet',
+    languageCode: languageCode
+  });
+}
+
+// Meet sends the closed captions language it wants over the captions_v2 data channel.
+// Keep track of it, so we can confirm the language was set without any UI interactions.
+const originalDataChannelSend = RTCDataChannel.prototype.send;
+RTCDataChannel.prototype.send = function(data) {
+  if (this.label === 'captions_v2') {
+    try {
+      handleOutboundCaptionsV2Message(data);
+    } catch (error) {
+      console.error('Error handling outbound captions_v2 message:', error);
+    }
+  }
+  return originalDataChannelSend.apply(this, arguments);
 }
 
 const handleMediaDirectorEvent = (event) => {
