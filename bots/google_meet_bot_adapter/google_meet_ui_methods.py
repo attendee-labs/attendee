@@ -1270,7 +1270,26 @@ class GoogleMeetUIMethods:
                 e,
             )
 
+    def closed_captions_language_sent_to_meet(self):
+        return self.driver.execute_script("return window.closedCaptionsLanguageSentToMeet ?? null;")
+
+    def closed_captions_language_is_already_selected(self, language):
+        # When captions are turned on, Meet sends the selected language over the captions_v2 data channel.
+        # The payload keeps track of it, so we can check the language without any UI interactions.
+        try:
+            WebDriverWait(self.driver, 5).until(lambda _: self.closed_captions_language_sent_to_meet() == language)
+        except TimeoutException:
+            logger.warning(f"Closed captions language sent to Meet is {self.closed_captions_language_sent_to_meet()}, not {language}. Falling back to the settings dialog.")
+            return False
+        return True
+
     def select_language(self, language):
+        # First check if the language is already selected. This is what we expect because
+        # we are setting it via localstorage, and en-US is the default.
+        if self.closed_captions_language_is_already_selected(language):
+            logger.info(f"No need to select language {language} via the UI. It is already selected.")
+            return
+
         logger.info(f"Selecting language: {language}")
         logger.info("Waiting for the more options button...")
         MORE_OPTIONS_BUTTON_SELECTOR = 'button[jsname="NakZHc"][aria-label="More options"]'

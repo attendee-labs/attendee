@@ -4,6 +4,9 @@ from typing import Callable
 
 from django.conf import settings
 
+from bots.google_meet_bot_adapter.google_meet_closed_captions_language_ids import (
+    GOOGLE_MEET_CLOSED_CAPTIONS_LANGUAGE_IDS,
+)
 from bots.google_meet_bot_adapter.google_meet_ui_methods import (
     GoogleMeetUIMethods,
 )
@@ -98,6 +101,7 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
             window.googleMeetInitialData = {{
                 modifyDomForVideoRecording: {"true" if self.modify_dom_for_video_recording else "false"},
                 disableIncomingVideo: {"true" if self.disable_incoming_video else "false"},
+                closedCaptionsLanguageId: {json.dumps(GOOGLE_MEET_CLOSED_CAPTIONS_LANGUAGE_IDS.get(self.google_meet_closed_captions_language))},
             }}
         """
 

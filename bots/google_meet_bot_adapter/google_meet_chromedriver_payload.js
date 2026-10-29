@@ -24,6 +24,45 @@ if (window.googleMeetInitialData.disableIncomingVideo) {
     disableIncomingVideoViaLocalStorage();
 }
 
+// Google Meet also stores the closed captions language in localstorage. Setting it before Meet reads it
+// means we don't need to open the settings dialog to select the language.
+const setClosedCaptionsLanguageViaLocalStorage = (languageId) => {
+    // The key depends on the signed in user. Meet builds it from a hash of the user's email,
+    // or of "fakeuser" for anonymous users. The email is in WIZ_global_data, which Meet sets early in the page.
+    const hashString = (str) => {
+        let hash = 0;
+        for (let i = 0; i < str.length; i++) {
+            hash = (31 * hash + str.charCodeAt(i)) >>> 0;
+        }
+        return hash;
+    };
+    const user = window.WIZ_global_data?.oPEP7c || "fakeuser";
+    const closedCaptionsLocalStorageKey = `rt_g3jartmcups-${hashString(user)}`;
+
+    // It's a protobuf. Meet writes the language id at index 2 in some sessions and at index 8 in others.
+    // Setting either one alone selects the language, so we set both.
+    const closedCaptionsPreferencesArray = Array(9).fill(null);
+    closedCaptionsPreferencesArray[2] = languageId;
+    closedCaptionsPreferencesArray[8] = languageId;
+
+    try {
+        localStorage.setItem(closedCaptionsLocalStorageKey, JSON.stringify(closedCaptionsPreferencesArray));
+        console.log("Set closed captions language via setting localstorage");
+    } catch (error) {
+        // localStorage is unavailable in opaque origins, which this script also runs in
+        console.log("Failed to set closed captions language via setting localstorage", error);
+    }
+};
+
+if (window.googleMeetInitialData.closedCaptionsLanguageId && window.location.hostname === "meet.google.com") {
+    // Wait for the page to be parsed, so that WIZ_global_data is available. Meet reads the key later than that.
+    if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", () => setClosedCaptionsLanguageViaLocalStorage(window.googleMeetInitialData.closedCaptionsLanguageId));
+    } else {
+        setClosedCaptionsLanguageViaLocalStorage(window.googleMeetInitialData.closedCaptionsLanguageId);
+    }
+}
+
 const handleVideoTrackForRealTimePerParticipantVideo = async ({ track, streams }) => {
     try {
         const firstStreamId = streams?.[0]?.id;
@@ -1762,6 +1801,37 @@ const messageTypes = [
             { name: 'timestamp', fieldNumber: 1, type: 'int64' }
         ]
     },
+    // Sent by Meet over the captions_v2 data channel, not received.
+    {
+        name: 'ClosedCaptionsRequestWrapper',
+        fields: [
+            { name: 'closedCaptionsRequest', fieldNumber: 1, type: 'message', messageType: 'ClosedCaptionsRequest' }
+        ]
+    },
+    {
+        name: 'ClosedCaptionsRequest',
+        fields: [
+            { name: 'closedCaptionsSettings', fieldNumber: 2, type: 'message', messageType: 'ClosedCaptionsSettings' }
+        ]
+    },
+    {
+        name: 'ClosedCaptionsSettings',
+        fields: [
+            { name: 'languageWrapper', fieldNumber: 2, type: 'message', messageType: 'ClosedCaptionsLanguageWrapper' }
+        ]
+    },
+    {
+        name: 'ClosedCaptionsLanguageWrapper',
+        fields: [
+            { name: 'language', fieldNumber: 1, type: 'message', messageType: 'ClosedCaptionsLanguage' }
+        ]
+    },
+    {
+        name: 'ClosedCaptionsLanguage',
+        fields: [
+            { name: 'languageCode', fieldNumber: 2, type: 'string' }
+        ]
+    },
     {
         name: 'CaptionWrapper',
         fields: [
@@ -2002,6 +2072,41 @@ const handleCaptionEventV2 = (event) => {
   if (captionV1) {
     captionManager.singleCaptionSynced(captionV1);
   }
+}
+
+const handleOutboundCaptionsV2Message = (data) => {
+  let decodedData;
+  if (data instanceof ArrayBuffer) {
+    decodedData = new Uint8Array(data);
+  } else if (ArrayBuffer.isView(data)) {
+    decodedData = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+  } else {
+    return;
+  }
+  const closedCaptionsRequestWrapper = messageDecoders['ClosedCaptionsRequestWrapper'](decodedData);
+  const languageCode = closedCaptionsRequestWrapper.closedCaptionsRequest?.closedCaptionsSettings?.languageWrapper?.language?.languageCode;
+  if (!languageCode) {
+    return;
+  }
+  window.closedCaptionsLanguageSentToMeet = languageCode;
+  ws.sendJson({
+    type: 'ClosedCaptionsLanguageSentToMeet',
+    languageCode: languageCode
+  });
+}
+
+// Meet sends the closed captions language it wants over the captions_v2 data channel.
+// Keep track of it, so we can confirm the language was set without any UI interactions.
+const originalDataChannelSend = RTCDataChannel.prototype.send;
+RTCDataChannel.prototype.send = function(data) {
+  if (this.label === 'captions_v2') {
+    try {
+      handleOutboundCaptionsV2Message(data);
+    } catch (error) {
+      console.error('Error handling outbound captions_v2 message:', error);
+    }
+  }
+  return originalDataChannelSend.apply(this, arguments);
 }
 
 const handleMediaDirectorEvent = (event) => {
