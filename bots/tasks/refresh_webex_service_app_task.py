@@ -44,6 +44,8 @@ def refresh_webex_service_app(self, webex_service_app_id):
         logger.error(f"Tokens of Webex Service App {webex_service_app_id} could not be refreshed: {e}")
         return
 
-    # Save the refresh token Webex returned, in case it is a new one
-    webex_service_app.set_credentials({**credentials, "refresh_token": tokens["refresh_token"]})
+    # Webex has so far returned the same refresh token. If it ever issues a new one, the stored one may stop working.
+    if tokens["refresh_token"] != credentials["refresh_token"]:
+        logger.warning(f"Webex issued a new refresh token for Webex Service App {webex_service_app_id}, saving it")
+        webex_service_app.set_credentials({**credentials, "refresh_token": tokens["refresh_token"]})
     logger.info(f"Successfully refreshed tokens of Webex Service App {webex_service_app_id}. The refresh token expires in {tokens['refresh_token_expires_in']} seconds")

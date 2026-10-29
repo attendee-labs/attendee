@@ -27,14 +27,26 @@ class WebexServiceAppTestCase(TestCase):
 
 class TestRefreshWebexServiceApp(WebexServiceAppTestCase):
     @patch("bots.tasks.refresh_webex_service_app_task.refresh_service_app_tokens")
-    def test_refresh_saves_the_refresh_token_webex_returns(self, mock_refresh_service_app_tokens):
+    def test_refresh_saves_a_new_refresh_token_and_logs_it(self, mock_refresh_service_app_tokens):
         mock_refresh_service_app_tokens.return_value = {"access_token": "test_access_token", "refresh_token": "new_refresh_token", "refresh_token_expires_in": 7776000}
 
-        refresh_webex_service_app(self.webex_service_app.id)
+        with self.assertLogs("bots.tasks.refresh_webex_service_app_task", level="WARNING") as logs:
+            refresh_webex_service_app(self.webex_service_app.id)
 
         mock_refresh_service_app_tokens.assert_called_once_with("test_client_id", "test_client_secret", "test_refresh_token")
+        self.assertIn("issued a new refresh token", logs.output[0])
+        self.assertNotIn("new_refresh_token", logs.output[0])
         self.webex_service_app.refresh_from_db()
         self.assertEqual(self.webex_service_app.get_credentials(), {**WEBEX_CREDENTIALS, "refresh_token": "new_refresh_token"})
+
+    @patch("bots.tasks.refresh_webex_service_app_task.refresh_service_app_tokens")
+    def test_refresh_does_not_save_the_same_refresh_token(self, mock_refresh_service_app_tokens):
+        mock_refresh_service_app_tokens.return_value = {"access_token": "test_access_token", "refresh_token": "test_refresh_token", "refresh_token_expires_in": 7776000}
+
+        with patch.object(WebexServiceApp, "set_credentials") as mock_set_credentials:
+            refresh_webex_service_app(self.webex_service_app.id)
+
+        mock_set_credentials.assert_not_called()
 
     @patch("bots.tasks.refresh_webex_service_app_task.refresh_service_app_tokens")
     def test_rejected_refresh_token_keeps_the_credentials(self, mock_refresh_service_app_tokens):
