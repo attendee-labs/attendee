@@ -19,9 +19,12 @@ const VIDEO_SIZE_HINT = { width: 640, height: 360 };
 // Webex reports active speakers in ~1 second steps and the list briefly empties between words, so a
 // speaker only counts as having stopped after being absent for this long.
 const SPEECH_STOP_DELAY_MS = 1500;
-// Webex reports someone as speaking 0.1 to 0.7 seconds after their voice starts in the audio (measured), so a frame of
-// per participant audio also belongs to a speaker whose speech is reported up to this long after the frame arrived.
-const SPEAKER_REPORT_LEAD_MS = 700;
+// How much of a new speaker's speech it takes for them to take over an audio slot from its previous member
+const SLOT_MEMBER_TIME_CONSTANT_MS = 1000;
+// A slot's audio is only sent once a member has been reported speaking during at least this share of it
+const SLOT_MEMBER_MIN_SCORE = 0.2;
+// The RMS below which the adapter treats per participant audio as silence
+const AUDIBLE_RMS = 0.01;
 const AUDIO_ACTIVITY_REPORT_INTERVAL_MS = 1000;
 const CAPTIONS_ANNOUNCEMENT_TIMEOUT_MS = 20000;
 const WEBEX_ERROR_CODE_MEETING_NOT_FOUND = 2403014;
@@ -155,12 +158,8 @@ function handleMembersUpdate({ delta = {} }) {
 
 const activeSpeakerIds = new Set();
 const pendingSpeechStops = new Map();
-// When each speaker was speaking, as { id, start, end, pendingEnd }, so buffered audio can be attributed after the fact
-const speechIntervals = [];
-
-function openSpeechInterval(id) {
-    return speechIntervals.findLast((interval) => interval.id === id && interval.end === null);
-}
+// Who Webex says is speaking right now, without the stop delay, which is what the audio slots learn their member from
+let reportedSpeakerIds = new Set();
 
 function sendSpeechEvent(participantId, isSpeechStart, timestamp) {
     if (!wantsSpeechEvents) return;
@@ -170,39 +169,27 @@ function sendSpeechEvent(participantId, isSpeechStart, timestamp) {
 function handleActiveSpeakerChanged({ memberIds = [] }) {
     const reported = new Set(memberIds);
     const now = Date.now();
+    reportedSpeakerIds = reported;
 
     for (const id of reported) {
         clearTimeout(pendingSpeechStops.get(id));
         pendingSpeechStops.delete(id);
         if (!activeSpeakerIds.has(id)) {
             activeSpeakerIds.add(id);
-            speechIntervals.push({ id, start: now, end: null, pendingEnd: null });
             sendSpeechEvent(id, true, now);
         }
-        openSpeechInterval(id).pendingEnd = null;
     }
     for (const id of activeSpeakerIds) {
         if (reported.has(id) || pendingSpeechStops.has(id)) continue;
-        openSpeechInterval(id).pendingEnd = now;
         pendingSpeechStops.set(
             id,
             setTimeout(() => {
                 pendingSpeechStops.delete(id);
                 activeSpeakerIds.delete(id);
-                openSpeechInterval(id).end = now;
                 sendSpeechEvent(id, false, now);
             }, SPEECH_STOP_DELAY_MS)
         );
     }
-}
-
-// The speaker of audio that arrived at timestampMs. A speaker who might have stopped is treated as stopped from the moment
-// they were no longer reported. When several speakers qualify, the one who started speaking last wins.
-function speakerIdAt(timestampMs) {
-    const candidates = speechIntervals.filter(
-        ({ id, start, end, pendingEnd }) => id !== meeting.members.selfId && start - SPEAKER_REPORT_LEAD_MS <= timestampMs && timestampMs <= (end ?? pendingEnd ?? Infinity)
-    );
-    return candidates.length ? candidates.reduce((latest, interval) => (interval.start > latest.start ? interval : latest)).id : null;
 }
 
 // ---------- Screen share ----------
@@ -259,25 +246,55 @@ async function forEachAudioFrame(track, onSamples) {
     }
 }
 
-// Webex does not say which member is in which audio slot (the slots never report a source and the RTP packets carry
-// no contributing source), so per participant audio is emulated from the mixed audio like the Teams bot does: each
-// frame is held back for perParticipantAudioUtteranceDelayMs, until the speaker reports that cover it have arrived, and
-// then attributed to whoever was speaking when it arrived. Overlapping speakers go to whoever started speaking last.
-const perParticipantAudioQueue = [];
+// Webex sends each recent speaker in an audio slot of their own and keeps them in it while they stay among the recent
+// speakers, so people talking over each other arrive separately (measured: over 99% of a slot's speech was one
+// speaker's). It does not say which member is in which slot: the slots never report a source and the RTP packets carry
+// no contributing source. So each slot learns its member from the active speaker reports, as an average over the
+// frames where the slot is audible of whether each member was reported speaking. A new speaker in a slot takes it over
+// after about SLOT_MEMBER_TIME_CONSTANT_MS of their speech. Each frame is held back for perParticipantAudioUtteranceDelayMs,
+// so the reports that cover it have arrived, and then sent as the audio of the slot's member.
+const audioSlots = [];
 
-function sendPerParticipantAudio(samples) {
-    const now = Date.now();
-    perParticipantAudioQueue.push({ samples, arrivedAt: now });
+function isAudible(samples) {
+    let sumOfSquares = 0;
+    for (const sample of samples) sumOfSquares += sample * sample;
+    return Math.sqrt(sumOfSquares / samples.length) >= AUDIBLE_RMS;
+}
 
-    while (perParticipantAudioQueue.length && now - perParticipantAudioQueue[0].arrivedAt >= initialData.perParticipantAudioUtteranceDelayMs) {
-        const { samples: delayedSamples, arrivedAt } = perParticipantAudioQueue.shift();
-        const speakerId = speakerIdAt(arrivedAt);
-        if (speakerId) window.ws.sendPerParticipantAudio(speakerId, delayedSamples);
+function updateSlotMemberScores(slot, samples) {
+    if (!isAudible(samples)) return;
+    const step = samples.length / (AUDIO_SAMPLE_RATE / 1000) / SLOT_MEMBER_TIME_CONSTANT_MS;
+    for (const id of reportedSpeakerIds) {
+        if (id !== meeting.members.selfId && !slot.memberScores.has(id)) slot.memberScores.set(id, 0);
     }
+    for (const [id, score] of slot.memberScores) {
+        slot.memberScores.set(id, score + step * ((reportedSpeakerIds.has(id) ? 1 : 0) - score));
+    }
+}
 
-    // Speech that ended before the audio still waiting in the queue is no longer needed
-    while (speechIntervals.length && speechIntervals[0].end !== null && speechIntervals[0].end < (perParticipantAudioQueue[0]?.arrivedAt ?? now)) {
-        speechIntervals.shift();
+// Gives each slot its highest scoring member, best scores first, so a member is in at most one slot
+function slotMembers() {
+    const candidates = audioSlots.flatMap((slot) => [...slot.memberScores].map(([id, score]) => ({ slot, id, score })));
+    candidates.sort((a, b) => b.score - a.score);
+    const members = new Map();
+    const assignedIds = new Set();
+    for (const { slot, id, score } of candidates) {
+        if (score < SLOT_MEMBER_MIN_SCORE || members.has(slot) || assignedIds.has(id)) continue;
+        members.set(slot, id);
+        assignedIds.add(id);
+    }
+    return members;
+}
+
+function handleSlotAudio(slot, samples) {
+    const now = Date.now();
+    updateSlotMemberScores(slot, samples);
+    slot.queue.push({ samples, arrivedAt: now });
+
+    while (slot.queue.length && now - slot.queue[0].arrivedAt >= initialData.perParticipantAudioUtteranceDelayMs) {
+        const { samples: delayedSamples } = slot.queue.shift();
+        const memberId = slotMembers().get(slot);
+        if (memberId) window.ws.sendPerParticipantAudio(memberId, delayedSamples);
     }
 }
 
@@ -299,7 +316,6 @@ function handleAudio(samples) {
     for (let i = 0; i < samples.length; i++) samples[i] = Math.max(-1, Math.min(1, samples[i]));
     reportAudioActivity(samples);
     if (wantsMixedAudio) window.ws.sendMixedAudio(samples);
-    if (wantsPerParticipantAudio) sendPerParticipantAudio(samples);
 }
 
 function addAudioSlot(remoteMedia) {
@@ -316,6 +332,13 @@ function addAudioSlot(remoteMedia) {
         forEachAudioFrame(mixedAudioDestination.stream.getAudioTracks()[0], handleAudio);
     }
     audioContext.createMediaStreamSource(remoteMedia.stream).connect(mixedAudioDestination);
+
+    if (wantsPerParticipantAudio) {
+        const slot = { queue: [], memberScores: new Map() };
+        audioSlots.push(slot);
+        // A slot whose track has ended must not keep a member from the slots that replaced it
+        forEachAudioFrame(remoteMedia.stream.getAudioTracks()[0], (samples) => handleSlotAudio(slot, samples)).then(() => audioSlots.splice(audioSlots.indexOf(slot), 1));
+    }
 }
 
 function handleRemoteAudioCreated(audioGroup) {
