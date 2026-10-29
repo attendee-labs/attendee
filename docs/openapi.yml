@@ -1171,6 +1171,16 @@ paths:
         description: Should always be application/json
         required: true
       - in: query
+        name: attendee_email
+        schema:
+          type: string
+        description: Filter events with this email (case-insensitive) on their attendee
+          list
+        examples:
+          AttendeeEmailExample:
+            value: jane@example.com
+            summary: Attendee Email Example
+      - in: query
         name: calendar_deduplication_key
         schema:
           type: string
@@ -1241,6 +1251,16 @@ paths:
           StartTimeGTEExample:
             value: '2025-01-13T10:30:00Z'
             summary: Start Time GTE Example
+      - in: query
+        name: start_time_lt
+        schema:
+          type: string
+        description: Filter events with start_time before this timestamp (ISO 8601
+          format)
+        examples:
+          StartTimeLTExample:
+            value: '2025-01-14T00:00:00Z'
+            summary: Start Time LT Example
       - in: query
         name: updated_after
         schema:
