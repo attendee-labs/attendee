@@ -44,6 +44,7 @@ class WebexBotAdapter(WebBotAdapter, WebexUIMethods):
                 meetingUrl: {json.dumps(self.meeting_url)},
                 botName: {json.dumps(self.display_name)},
                 perParticipantAudioUtteranceDelayMs: {json.dumps(self.get_per_participant_audio_utterance_delay_ms())},
+                disableIncomingVideo: {json.dumps(self.disable_incoming_video)},
             }}
         """
 

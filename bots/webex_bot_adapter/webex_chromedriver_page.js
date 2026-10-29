@@ -448,12 +448,15 @@ const REMOTE_MEDIA_CONFIG = {
     audio: { numOfActiveSpeakerStreams: NUM_ACTIVE_SPEAKER_AUDIO_SLOTS, numOfScreenShareStreams: 1 },
     video: {
         preferLiveVideo: true,
-        initialLayoutId: 'AllEqual',
+        // When nothing records or streams video, a layout without panes keeps Webex from sending any, which saves the
+        // CPU of decoding it
+        initialLayoutId: initialData.disableIncomingVideo ? 'NoVideo' : 'AllEqual',
         layouts: {
             AllEqual: {
                 screenShareVideo: { size: 'best' },
                 activeSpeakerVideoPaneGroups: [{ id: 'main', numPanes: MAX_VIDEO_PANES, size: 'best', priority: 255 }],
             },
+            NoVideo: {},
         },
     },
 };

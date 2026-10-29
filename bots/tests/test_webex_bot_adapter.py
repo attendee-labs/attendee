@@ -80,6 +80,13 @@ class WebexInitialDataTest(SimpleTestCase):
         bot_name_literal = json.dumps('Bot "Quote"')
         self.assertIn(f"botName: {bot_name_literal}", initial_data_code)
         self.assertIn("perParticipantAudioUtteranceDelayMs: 2000", initial_data_code)
+        self.assertIn("disableIncomingVideo: false", initial_data_code)
+
+    def test_the_page_is_told_when_incoming_video_is_not_needed(self):
+        adapter = create_adapter()
+        adapter.disable_incoming_video = True
+
+        self.assertIn("disableIncomingVideo: true", adapter.subclass_specific_initial_data_code())
 
     def test_per_participant_audio_is_delayed_less_when_syncing_to_a_room(self):
         adapter = create_adapter()
