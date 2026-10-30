@@ -155,13 +155,13 @@ See CONTRIBUTING.md for detailed instructions on how to contribute to Attendee.
 - [x] Speech support
 - [x] Automatically leave meetings
 - [x] Microsoft Teams support
-- [x] Webex support
 - [x] Webhooks for state changes
 - [x] Scheduled meetings
 - [x] Audio input / output via websockets
 - [x] Attendee-Managed Calendar Integration
 - [x] [ZAK token](https://developers.zoom.us/docs/meeting-sdk/auth/#start-meetings-and-webinars-with-a-zoom-users-zak-token), [OnBehalf token](https://developers.zoom.us/blog/transition-to-obf-token-meetingsdk-apps/) and [Join token](https://developers.zoom.us/docs/api/meetings/#tag/in-meeting-features/get/meetings/{meetingId}/jointoken/local_recording) support
 - [x] Stream video and audio from arbitrary website into meeting to support voice agents
-- [ ] Webex Support
+- [x] Webex support
+- [ ] ARM64 support
 
 Have suggestions for the roadmap? Join the [Slack Community](https://join.slack.com/t/attendee-community/shared_invite/zt-3l43ns8cl-G8YnMccWVTugMlloUtSf9g) or open an issue.
