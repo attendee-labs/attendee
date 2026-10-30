@@ -214,6 +214,10 @@ class TestMeetingUrlUtils(unittest.TestCase):
         # Hosts that only look like Webex
         self.assertEqual(normalize_meeting_url("https://acme.webex.com.evil.com/meet/jane"), (None, None))
         self.assertEqual(normalize_meeting_url("https://notwebex.com/meet/jane"), (None, None))
+        # Hosts a browser would read differently than urlparse/tldextract
+        self.assertEqual(normalize_meeting_url("https://evil.com\\@acme.webex.com/meet/jane"), (None, None))
+        self.assertEqual(normalize_meeting_url("https://evil.com@acme.webex.com/meet/jane"), (None, None))
+        self.assertEqual(normalize_meeting_url("https://acme.webex.com:8443/meet/jane"), (None, None))
 
 
 if __name__ == "__main__":
