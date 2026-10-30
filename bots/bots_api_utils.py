@@ -150,6 +150,13 @@ def validate_meeting_url_and_credentials(meeting_url, project):
             settings_url = build_site_url(relative_url)
             return {"error": f"Zoom App credentials are required to create a Zoom bot. Please add Zoom credentials at {settings_url}"}
 
+    if meeting_type_from_url(meeting_url) == MeetingTypes.WEBEX:
+        webex_service_app = project.webex_service_apps.first()
+        if not webex_service_app or not webex_service_app.refresh_token:
+            relative_url = reverse("bots:project-credentials", kwargs={"object_id": project.object_id})
+            settings_url = build_site_url(relative_url)
+            return {"error": f"An authorized Webex Service App is required to create a Webex bot. Please add and authorize it at {settings_url}"}
+
     return None
 
 

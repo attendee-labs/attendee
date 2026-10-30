@@ -65,6 +65,10 @@
           ]
         },
         {
+          "path": "docs/webex.md",
+          "type": "page"
+        },
+        {
           "path": "docs/faq.md",
           "type": "page"
         }

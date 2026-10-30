@@ -188,6 +188,33 @@ class TestMeetingUrlUtils(unittest.TestCase):
         self.assertEqual(password, "AbC9xYpQ2LmN7RkT5sVuH4ZbJe1DfG.1")
         self.assertEqual(registrant_token, "ZkPqN8f2LrS4XyT6wVaE9mHuCdJg5QbA1sDoRtUvWxY.DQkAAAAATESTTOKEN1234567890AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
 
+    def test_webex_personal_room_urls(self):
+        self.assertEqual(meeting_type_from_url("https://acme-844.my.webex.com/meet/jane.doe"), MeetingTypes.WEBEX)
+        self.assertEqual(meeting_type_from_url("https://acme.webex.com/meet/jane"), MeetingTypes.WEBEX)
+        # Host is lowercased, a trailing slash and a trailing carat are dropped
+        self.assertEqual(normalize_meeting_url("https://ACME-844.my.webex.com/meet/jane.doe/>")[1], "https://acme-844.my.webex.com/meet/jane.doe")
+        # Anything other than the room name is dropped
+        self.assertEqual(normalize_meeting_url("https://acme.webex.com/meet/jane?foo=bar#baz")[1], "https://acme.webex.com/meet/jane")
+        self.assertEqual(normalize_meeting_url("acme.webex.com/meet/jane")[1], "https://acme.webex.com/meet/jane")
+
+    def test_webex_invitation_urls(self):
+        url = "https://acme-844.my.webex.com/acme-844.my/j.php?MTID=m0123456789abcdef0123456789abcdef"
+        self.assertEqual(meeting_type_from_url(url), MeetingTypes.WEBEX)
+        self.assertEqual(normalize_meeting_url(url)[1], url)
+        # Only the meeting token is kept
+        self.assertEqual(normalize_meeting_url(url + "&utm_source=email&pwd=secret")[1], url)
+
+    def test_webex_urls_the_sdk_cannot_join_are_rejected(self):
+        # The browser launcher page that opens when a meeting starts is not an invitation
+        self.assertEqual(normalize_meeting_url("https://acme-844.my.webex.com/wbxmjs/joinservice/sites/acme-844.my/meeting/download/c12ed1e804fd431888e9521395443973?siteurl=acme-844.my&theme=dark"), (None, None))
+        self.assertEqual(normalize_meeting_url("https://www.webex.com/"), (None, None))
+        self.assertEqual(normalize_meeting_url("https://acme.webex.com/meet/"), (None, None))
+        self.assertEqual(normalize_meeting_url("https://acme.webex.com/acme/j.php"), (None, None))
+        self.assertEqual(normalize_meeting_url("https://acme.webex.com/acme/j.php?MTID=bad/token"), (None, None))
+        # Hosts that only look like Webex
+        self.assertEqual(normalize_meeting_url("https://acme.webex.com.evil.com/meet/jane"), (None, None))
+        self.assertEqual(normalize_meeting_url("https://notwebex.com/meet/jane"), (None, None))
+
 
 if __name__ == "__main__":
     unittest.main()

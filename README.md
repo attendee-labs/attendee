@@ -155,6 +155,7 @@ See CONTRIBUTING.md for detailed instructions on how to contribute to Attendee.
 - [x] Speech support
 - [x] Automatically leave meetings
 - [x] Microsoft Teams support
+- [x] Webex support
 - [x] Webhooks for state changes
 - [x] Scheduled meetings
 - [x] Audio input / output via websockets
