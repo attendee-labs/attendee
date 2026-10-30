@@ -1243,7 +1243,7 @@ ROOM_SYNC_SETTINGS_SCHEMA = {
                 },
                 "source_participant": {
                     "type": "object",
-                    "description": "Identifies the LiveKit participant whose audio and video the bot should stream into the meeting. If omitted, no media will be streamed into the meeting. Exactly one of 'identity' or 'publish_on_behalf' must be provided.",
+                    "description": "Identifies the LiveKit participant whose audio and video the bot should stream into the meeting. If omitted, no media will be streamed into the meeting. At least one of 'identity' or 'publish_on_behalf' must be provided. When both are provided, tracks matched by 'publish_on_behalf' are preferred, and tracks matched by 'identity' are streamed whenever no 'publish_on_behalf' track is available.",
                     "properties": {
                         "identity": {
                             "type": "string",
@@ -1251,10 +1251,10 @@ ROOM_SYNC_SETTINGS_SCHEMA = {
                         },
                         "publish_on_behalf": {
                             "type": "string",
-                            "description": "The bot streams tracks from the first participant whose 'lk.publish_on_behalf' attribute equals this value, which is how a LiveKit agent publishes on behalf of another participant.",
+                            "description": "The bot streams tracks from participants whose 'lk.publish_on_behalf' attribute equals this value, which is how a LiveKit agent or avatar publishes on behalf of another participant.",
                         },
                     },
-                    "oneOf": [
+                    "anyOf": [
                         {"required": ["identity"]},
                         {"required": ["publish_on_behalf"]},
                     ],
