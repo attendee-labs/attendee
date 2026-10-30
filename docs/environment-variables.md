@@ -15,6 +15,7 @@ This document lists all supported environment variables for the Attendee applica
 9. [Bot Configuration](#bot-configuration)
 10. [Logging](#logging)
 11. [Sentry (Error Tracking)](#sentry-error-tracking)
+12. [OpenTelemetry (Tracing)](#opentelemetry-tracing)
 
 ---
 
@@ -195,3 +196,17 @@ This document lists all supported environment variables for the Attendee applica
 | `SENTRY_TRACES_SAMPLE_RATE` | Float | `0.1` | Sample rate for performance tracing (0.0 to 1.0, where 1.0 means 100%). |
 | `SENTRY_PROFILES_SAMPLE_RATE` | Float | `0.1` | Sample rate for profiling data (0.0 to 1.0). |
 | `SENTRY_SEND_PII` | Boolean | `false` | Include personally identifiable information (PII) in Sentry reports. Set to `true` only for development. |
+
+---
+
+## OpenTelemetry (Tracing)
+
+Tracing is off unless an OTLP endpoint is set. When it is, Attendee exports OpenTelemetry traces over OTLP/HTTP for API requests and Celery tasks, continues a `traceparent` header sent with the request that creates a bot, and sends a `traceparent` header with each webhook. The request that creates a bot and each webhook it triggers carry an `attendee.bot_id` span attribute, so one search (e.g., `{ span.attendee.bot_id = "bot_..." }` in Tempo) finds every trace of a meeting.
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | String | (None) | Full OTLP/HTTP traces URL of your collector (e.g., `http://collector:4318/v1/traces`). Setting it, or `OTEL_EXPORTER_OTLP_ENDPOINT`, turns tracing on. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | String | (None) | Base OTLP/HTTP URL of your collector (e.g., `http://collector:4318`); `/v1/traces` is appended. |
+| `OTEL_SERVICE_NAME` | String | `attendee` | Service name the spans are reported under. |
+
+The other standard `OTEL_*` variables (e.g., `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_TRACES_SAMPLER`) are read as documented by OpenTelemetry.

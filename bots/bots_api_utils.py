@@ -11,6 +11,8 @@ from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.urls import reverse
 
+from attendee.telemetry import tag_current_span_with_bot
+
 from .meeting_url_utils import meeting_type_from_url
 from .models import (
     Bot,
@@ -285,6 +287,7 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
                 state=initial_state,
                 calendar_event=calendar_event,
             )
+            tag_current_span_with_bot(bot)
 
             Recording.objects.create(
                 bot=bot,
