@@ -15,6 +15,8 @@ from .models import (
 WEBEX_PERSONAL_ROOM_PATH_RE = re.compile(r"^/meet/([A-Za-z0-9._-]+)/?$")
 WEBEX_INVITATION_PATH_RE = re.compile(r"^/([A-Za-z0-9.-]+)/j\.php$")
 WEBEX_MEETING_TOKEN_RE = re.compile(r"^[A-Za-z0-9]+$")
+# A bare webex.com host: no userinfo, port or backslash, which browsers and urlparse can read differently
+WEBEX_HOST_RE = re.compile(r"^(?:[a-z0-9-]+\.)*webex\.com$")
 
 HTTP_URL_RE = re.compile(r"https?://[^\s<>\"']+")
 
@@ -79,6 +81,8 @@ def normalize_webex_url(url):
     """Returns the canonical Webex meeting URL, or None if the URL is not one the Webex SDK can join."""
     parsed_url = urlparse(url if "//" in url else f"https://{url}")
     host = parsed_url.netloc.lower()
+    if not WEBEX_HOST_RE.match(host):
+        return None
 
     personal_room_match = WEBEX_PERSONAL_ROOM_PATH_RE.match(parsed_url.path)
     if personal_room_match:
