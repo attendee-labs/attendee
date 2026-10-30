@@ -14,6 +14,9 @@
     const { Room, RoomEvent } = livekit;
   
     const sendJson = (payload) => window.ws?.sendJson(payload);
+
+    const PUBLISH_ON_BEHALF_PRIORITY = 0;
+    const IDENTITY_PRIORITY = 1;
   
     const describeParticipant = (participant) => ({
       identity: participant.identity,
@@ -99,17 +102,18 @@
      * async loop instead of subscription callbacks.
      */
     class LiveKitConnection {
-      constructor(room, matchParticipantOnPublishOnBehalf) {
+      constructor(room, { identity, publishOnBehalf }) {
         this.room = room;
         this.stream = new MediaStream();
-        this.selectedParticipantIdentity = null;
-        this.matchParticipantOnPublishOnBehalf = matchParticipantOnPublishOnBehalf;
+        this.targetIdentity = identity;
+        this.targetPublishOnBehalf = publishOnBehalf;
   
         // The output contains at most one audio and one video track. These
         // hold the remote tracks currently feeding the output; for audio that
         // is the relay's source, not the track inside this.stream.
         this.outputTrackByKind = new Map();
         this.outputPublicationByKind = new Map();
+        this.outputPriorityByKind = new Map();
 
         this.audioRelay = new AudioTrackRelay();
         this.stream.addTrack(this.audioRelay.track);
@@ -175,31 +179,41 @@
     }
   
       /*
-       * A LiveKit agent publishing for someone else carries that person's
-       * identity in "lk.publish_on_behalf" rather than in its own identity,
-       * so which field identifies the participant depends on the room setup.
+       * A publisher acting for someone else (e.g. an avatar rendering an
+       * agent) carries that someone in "lk.publish_on_behalf"; the agent
+       * itself is matched by its own identity. Returns how strongly the
+       * participant matches (lower is preferred), or null if it does not.
        */
-      participantMatchKey(participant) {
-        if (this.matchParticipantOnPublishOnBehalf) {
-          return participant.attributes?.["lk.publish_on_behalf"] ?? null;
+      matchPriority(participant) {
+        // When no target was requested, latch onto the first publisher seen.
+        if (
+          this.targetIdentity === null &&
+          this.targetPublishOnBehalf === null &&
+          participant.identity
+        ) {
+          this.targetIdentity = participant.identity;
         }
 
-        return participant.identity ?? null;
+        if (
+          this.targetPublishOnBehalf !== null &&
+          participant.attributes?.["lk.publish_on_behalf"] ===
+            this.targetPublishOnBehalf
+        ) {
+          return PUBLISH_ON_BEHALF_PRIORITY;
+        }
+
+        if (
+          this.targetIdentity !== null &&
+          participant.identity === this.targetIdentity
+        ) {
+          return IDENTITY_PRIORITY;
+        }
+
+        return null;
       }
 
       acceptsParticipant(participant) {
-        const matchKey = this.participantMatchKey(participant);
-
-        if (matchKey === null) {
-          return false;
-        }
-
-        // When no identity was requested, latch onto the first publisher seen.
-        if (this.selectedParticipantIdentity === null) {
-          this.selectedParticipantIdentity = matchKey;
-        }
-
-        return matchKey === this.selectedParticipantIdentity;
+        return this.matchPriority(participant) !== null;
       }
   
       addRemoteTrack(remoteTrack, publication, participant) {
@@ -207,8 +221,9 @@
   
         const isUsableKind =
           mediaTrack?.kind === "audio" || mediaTrack?.kind === "video";
+        const priority = this.matchPriority(participant);
   
-        if (!this.acceptsParticipant(participant) || !isUsableKind) {
+        if (priority === null || !isUsableKind) {
           sendJson({
             type: "LiveKitTrackNotAccepted",
             participantIdentity: participant.identity,
@@ -219,11 +234,32 @@
           return;
         }
   
-        if (this.outputTrackByKind.get(mediaTrack.kind) === mediaTrack) {
+        const currentTrack = this.outputTrackByKind.get(mediaTrack.kind);
+
+        if (currentTrack === mediaTrack) {
           return;
         }
 
-        this.setOutputTrack(mediaTrack, publication);
+        // Kept in reserve; findReplacementTrack picks it up if the preferred
+        // track goes away.
+        if (
+          currentTrack?.readyState === "live" &&
+          this.outputPriorityByKind.get(mediaTrack.kind) < priority
+        ) {
+          console.info("[LiveKit receiver] Holding lower-priority track", {
+            participantIdentity: participant.identity,
+            publicationSid: publication.trackSid ?? publication.sid,
+            kind: mediaTrack.kind,
+            id: mediaTrack.id,
+          });
+          return;
+        }
+
+        this.useOutputTrack(mediaTrack, publication, participant, priority);
+      }
+
+      useOutputTrack(mediaTrack, publication, participant, priority) {
+        this.setOutputTrack(mediaTrack, publication, priority);
   
         console.info("[LiveKit receiver] Added track", {
           participantIdentity: participant.identity,
@@ -248,7 +284,7 @@
        * replacing the previous one. Audio is routed through the relay so the
        * stream's audio track stays the same object.
        */
-      setOutputTrack(mediaTrack, publication, kind = mediaTrack.kind) {
+      setOutputTrack(mediaTrack, publication, priority, kind = mediaTrack.kind) {
         const previousTrack = this.outputTrackByKind.get(kind);
 
         if (kind === "audio") {
@@ -268,9 +304,11 @@
         if (mediaTrack) {
           this.outputTrackByKind.set(kind, mediaTrack);
           this.outputPublicationByKind.set(kind, publication);
+          this.outputPriorityByKind.set(kind, priority);
         } else {
           this.outputTrackByKind.delete(kind);
           this.outputPublicationByKind.delete(kind);
+          this.outputPriorityByKind.delete(kind);
         }
 
         if (kind === "audio") {
@@ -291,15 +329,19 @@
       }
 
       /*
-       * Several publishers can act on behalf of the same participant (e.g. an
-       * agent and its avatar), so when the playing track goes away another
-       * subscribed track of the same kind may be able to take over.
+       * Several publishers can stand for the same participant (e.g. an agent
+       * and its avatar), so when the playing track goes away another
+       * subscribed track of the same kind may be able to take over. Prefers
+       * the best match priority, then unmuted over muted.
        */
       findReplacementTrack(kind, excludedTrack) {
-        let mutedCandidate = null;
+        let best = null;
+        let bestRank = Infinity;
 
         for (const participant of this.room.remoteParticipants.values()) {
-          if (!this.acceptsParticipant(participant)) {
+          const priority = this.matchPriority(participant);
+
+          if (priority === null) {
             continue;
           }
 
@@ -315,15 +357,16 @@
               continue;
             }
 
-            if (!publication.isMuted) {
-              return { mediaTrack, publication, participant };
-            }
+            const rank = priority * 2 + (publication.isMuted ? 1 : 0);
 
-            mutedCandidate ??= { mediaTrack, publication, participant };
+            if (rank < bestRank) {
+              best = { mediaTrack, publication, participant, priority };
+              bestRank = rank;
+            }
           }
         }
 
-        return mutedCandidate;
+        return best;
       }
   
       removeRemoteTrack(remoteTrack, publication, participant) {
@@ -346,16 +389,19 @@
 
         const replacement = this.findReplacementTrack(mediaTrack.kind, mediaTrack);
 
+        // Bypasses addRemoteTrack's priority check: the departing track may
+        // still read as live here and would block a lower-priority successor.
         if (replacement) {
-          this.addRemoteTrack(
-            replacement.publication.track,
+          this.useOutputTrack(
+            replacement.mediaTrack,
             replacement.publication,
-            replacement.participant
+            replacement.participant,
+            replacement.priority
           );
           return;
         }
 
-        this.setOutputTrack(null, null, mediaTrack.kind);
+        this.setOutputTrack(null, null, null, mediaTrack.kind);
         this.notifyTrackChange();
       }
   
@@ -490,12 +536,12 @@
       token,
   
       // Strongly recommended when the room can contain multiple publishers.
-      // When omitted, the first remote publisher received is selected.
-      participantIdentity = null,
-
-      // Match participantIdentity against the publisher's
-      // "lk.publish_on_behalf" attribute instead of its own identity.
-      matchParticipantOnPublishOnBehalf = true,
+      // Tracks from publishers whose "lk.publish_on_behalf" attribute equals
+      // publishOnBehalf are preferred; tracks from the participant whose
+      // identity equals identity are used when none of those are available.
+      // When both are omitted, the first remote publisher received is selected.
+      identity = null,
+      publishOnBehalf = null,
 
       waitForAudio = true,
       waitForVideo = true,
@@ -520,11 +566,7 @@
         adaptiveStream: false,
       });
   
-      const connection = new LiveKitConnection(
-        room,
-        matchParticipantOnPublishOnBehalf
-      );
-      connection.selectedParticipantIdentity = participantIdentity;
+      const connection = new LiveKitConnection(room, { identity, publishOnBehalf });
   
       activeConnection = connection;
   
@@ -549,7 +591,8 @@
   
         console.info("[LiveKit receiver] MediaStream ready", {
           roomName: room.name,
-          selectedParticipantIdentity: connection.selectedParticipantIdentity,
+          targetIdentity: connection.targetIdentity,
+          targetPublishOnBehalf: connection.targetPublishOnBehalf,
           tracks: connection.stream.getTracks().map((track) => ({
             kind: track.kind,
             id: track.id,
@@ -592,8 +635,12 @@
         return activeConnection?.stream ?? null;
       },
   
-      get selectedParticipantIdentity() {
-        return activeConnection?.selectedParticipantIdentity ?? null;
+      get targetIdentity() {
+        return activeConnection?.targetIdentity ?? null;
+      },
+
+      get targetPublishOnBehalf() {
+        return activeConnection?.targetPublishOnBehalf ?? null;
       },
     });
   })();
@@ -603,20 +650,11 @@
     const livekitConfig =
       window.initialData.roomSyncSourceParticipantConfiguration.livekit;
 
-    // The source participant is identified by exactly one of `identity` or
-    // `publish_on_behalf`. When `publish_on_behalf` is set we match against the
-    // publisher's "lk.publish_on_behalf" attribute rather than its own identity.
-    const matchParticipantOnPublishOnBehalf =
-      livekitConfig.publish_on_behalf != null;
-    const participantIdentity = matchParticipantOnPublishOnBehalf
-      ? livekitConfig.publish_on_behalf
-      : livekitConfig.identity;
-
     const mediaStream = await window.LiveKitMediaStreamReceiver.connect({
         url: `ws://localhost:${window.initialData.websocketPort}`,
         token: livekitConfig.token,
-        participantIdentity: participantIdentity,
-        matchParticipantOnPublishOnBehalf: matchParticipantOnPublishOnBehalf,
+        identity: livekitConfig.identity ?? null,
+        publishOnBehalf: livekitConfig.publish_on_behalf ?? null,
         // Audio-only participants are allowed; we handle video ourselves below.
         waitForVideo: false,
         });
