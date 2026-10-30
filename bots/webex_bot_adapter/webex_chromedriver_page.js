@@ -154,6 +154,7 @@ function handleMembersUpdate({ delta = {} }) {
     }
     const removedUsers = removed.map(toUser);
     removedUsers.forEach((user) => knownMembers.delete(user.deviceId));
+    [...updatedUsers, ...removedUsers].filter((user) => user.humanized_status !== 'in_meeting').forEach((user) => forgetSlotMember(user.deviceId));
 
     if (newUsers.length || updatedUsers.length || removedUsers.length) {
         send({ type: 'UsersUpdate', newUsers, updatedUsers, removedUsers });
@@ -302,15 +303,29 @@ function updateSlotMembers() {
     }
 }
 
+// A member who left can't be in a slot any more, and if the slot kept their score, the next person Webex puts in it would
+// take longer to be recognised. The audio already held back in their slot is still theirs (often a goodbye), so it keeps
+// their id.
+function forgetSlotMember(memberId) {
+    for (const slot of audioSlots) {
+        if (slot.memberId === memberId) {
+            slot.queue.forEach((frame) => (frame.memberId ??= memberId));
+            slot.memberId = null;
+        }
+        slot.memberScores.delete(memberId);
+    }
+}
+
 function handleSlotAudio(slot, samples) {
     const now = Date.now();
     updateSlotMemberScores(slot, samples);
     slot.queue.push({ samples, arrivedAt: now });
 
     while (slot.queue.length && now - slot.queue[0].arrivedAt >= initialData.perParticipantAudioUtteranceDelayMs) {
-        const { samples: delayedSamples } = slot.queue.shift();
+        const frame = slot.queue.shift();
         updateSlotMembers();
-        if (slot.memberId) window.ws.sendPerParticipantAudio(slot.memberId, delayedSamples);
+        const memberId = frame.memberId ?? slot.memberId;
+        if (memberId) window.ws.sendPerParticipantAudio(memberId, frame.samples);
     }
 }
 

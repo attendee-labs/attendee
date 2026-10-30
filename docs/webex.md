@@ -1,146 +1,70 @@
 # Webex Bots
 
-Webex bots join Webex meetings as a **guest**, using Cisco's official [Webex Browser SDK](https://github.com/webex/webex-js-sdk) (the `webex` npm package) running in Chrome. Unlike the Google Meet and Teams bots, they do not pretend to be an anonymous user of the web client.
+Attendee bots can join Webex meetings. A Webex bot joins as a guest of your Webex organization, using Cisco's official Webex Browser SDK, and works like the other bots: it can record, transcribe, report participants and speech, and speak or show an image in the meeting.
 
-This document covers how to use them, how Webex works, how the bot is built, and what it can't do. Everything marked **verified** was tried against a real Webex meeting. Everything marked **not verified** was written but not tried.
+## Setup
 
-## Setting up
+Every project that launches Webex bots needs a Webex **Service App**. Attendee uses it to create the guest identity each bot joins with.
 
-### Once per Attendee deployment (self-hosting)
+You need a Webex organization on a **paid plan**. Webex only lets paid organizations create guests.
 
-Attendee issues each Service App's tokens through its own Webex **Integration**, which the user signs in to once. To set it up:
+### 1. Create a Service App
 
-1. In the [Webex developer portal](https://developer.webex.com), create an **Integration** with only the `spark:applications_token` scope, and the redirect URI `https://<SITE_DOMAIN>/projects/webex-service-app/oauth-callback/` (`http://` for `localhost`).
-2. Set the `WEBEX_INTEGRATION_CLIENT_ID` and `WEBEX_INTEGRATION_CLIENT_SECRET` environment variables to the Integration's client ID and client secret.
+1. Sign in to the [Webex Developer Portal](https://developer.webex.com) and go to **My Webex Apps**, then **Create a New App**, then **Service App**.
+2. Give it a name and description, and select the `guest-issuer:read` and `guest-issuer:write` scopes.
+3. Once it is created, note its **Client ID**, **Client Secret** and **Service App ID**, and your Webex **Organization ID**.
 
-Without them, a Service App can be added but not authorized, and the credentials page says which variables to set.
+### 2. Have an admin authorize it
 
-### Once per project
+A **full admin** of your Webex organization has to authorize the Service App in [Control Hub](https://admin.webex.com): **Apps**, then **Service Apps**, then select the app, **Authorize** and **Save**.
 
-You need a Webex organization with a paid plan: Webex only lets paid organizations create guests.
+### 3. Add it to Attendee
 
-1. In the [Webex developer portal](https://developer.webex.com), create a **Service App** with the `guest-issuer:read` and `guest-issuer:write` scopes. Note its client ID, client secret and Service App ID, and your organization ID.
-2. Ask a **full admin** of your Webex organization to authorize the Service App in Control Hub (Apps, then Service Apps, then Authorize and Save).
-3. In Attendee, open the project's credentials page, add the **Webex Service App** with those four values, then click **Authorize with Webex** and sign in as the creator of the Service App.
+1. In Attendee, go to **Settings → Credentials** and find the **Webex Service App** card.
+2. Click **Add Service App** and enter the Client ID, Client Secret, Service App ID and Organization ID.
+3. Click **Authorize with Webex**, and sign in to Webex as the user who created the Service App.
 
-Attendee then issues the Service App's tokens with `POST /v1/applications/{id}/token` and saves its refresh token. **The refresh token lasts 90 days, and using it resets that to 90 days**, so this is done once. Attendee's scheduler refreshes every Service App that has not been refreshed in 7 days, and saves the refresh token Webex returns. Webex only resets the lifetime once the token is a few days old: a token used repeatedly on its first day kept counting down, while the same token at 5 days old went from 84.97 back to 90 days after a single call. If a refresh token does expire or is revoked anyway, click **Authorize with Webex** again. Access tokens last about 14 days. Attendee refreshes one for every bot that starts, then creates a guest token for that bot.
+The card then shows the Service App as **Authorized**, and you can launch Webex bots. Attendee keeps the Service App's tokens fresh by itself.
 
-Creating a bot for a Webex meeting without an authorized Service App is rejected with an error that points to the credentials page.
+If Webex bots ever fail to connect because the authorization expired or was revoked, click **Authorize with Webex** again.
 
-## Meeting URLs
+### Launching a bot
 
-Two kinds of Webex URL are accepted:
+Create the bot with the meeting's URL, as for the other platforms. Two kinds of Webex URL are supported:
 
 | URL | Example |
 |---|---|
 | Personal room | `https://acme.my.webex.com/meet/jane.doe` |
-| Invitation link | `https://acme.my.webex.com/acme.my/j.php?MTID=m0123456789abcdef0123456789abcdef` |
+| Meeting invitation link | `https://acme.my.webex.com/acme.my/j.php?MTID=m0123456789abcdef0123456789abcdef` |
 
-The host must be on `webex.com`. Everything except the room name or the `MTID` is dropped. Other Webex URLs, such as the browser launcher page (`.../wbxmjs/joinservice/...`), are rejected because the SDK can't join them (**verified**: it answers "Invalid invitee address"). URLs on other domains, such as those of Webex's government and regional clouds, are not recognized.
+Invitation links carry the meeting password, so you don't need to pass it.
 
-**Passwords.** Invitation links carry the meeting password themselves, so a bot joining through one never needs it. Personal rooms have no password setting. Webex only enforces a password when joining by meeting *number*, which the API can't express today because it takes a URL. The bot implements the wrong-password check for number-based joins (**verified** with the development harness), but nothing can trigger it through the API yet.
+## Additional setup for self-hosting
 
-## What works
+If you run your own Attendee instance, it needs a Webex **Integration** to authorize your projects' Service Apps. You set this up once per Attendee instance.
 
-| Feature | Status |
+1. In the [Webex Developer Portal](https://developer.webex.com), go to **My Webex Apps**, then **Create a New App**, then **Integration**.
+2. Set the redirect URI to `https://<your Attendee domain>/projects/webex-service-app/oauth-callback/` (use `http://` for `localhost`).
+3. Select only the `spark:applications_token` scope.
+4. Set these environment variables to the Integration's credentials:
+
+| Variable | Value |
 |---|---|
-| Join as a guest, wait in the lobby, be admitted | **Verified** |
-| Participant join and leave | **Verified** |
-| Speech start and stop | **Verified**, also as participant events through the API, delayed by about a second (see below) |
-| Transcription from the meeting's captions | **Verified** on one Webex site, including the utterances returned by the transcript API. The bot turns the captions on by itself, only when the bot is transcribed with them. |
-| Mixed audio | **Verified** (48 kHz mono float, the same format as the other web bots) |
-| Per participant audio | **Verified**, from the audio slots, with each slot's member inferred (see below) |
-| Video and audio recording | **Verified** in the Docker image: an 11 minute recording was 1920x1080 H.264 at 30 fps with 48 kHz AAC audio, showing the host's camera with the participant's name and containing real speech |
-| Screen share start and stop | **Verified**, as participant events from the SDK's remote share events |
-| Leaving after a long silence, or when the bot is alone | **Verified**. Silence uses the page's audio activity reports, like the Teams and Google Meet bots |
-| Bot webcam image | **Verified** |
-| Bot audio output | **Verified** with a test tone |
-| Bot video output (`send_video`) | Shared code with the other web bots, **not verified** for Webex |
-| Reading chat messages | **Not possible** for a guest (see below) |
-| Sending chat messages | **Not possible** for a guest |
+| `WEBEX_INTEGRATION_CLIENT_ID` | The Integration's Client ID |
+| `WEBEX_INTEGRATION_CLIENT_SECRET` | The Integration's Client Secret |
 
-### Failure cases
+Without them, a Service App can be added but not authorized, and the credentials page says which variables to set.
 
-| Situation | What the controller is told | Status |
-|---|---|---|
-| Meeting does not exist | Meeting not found | Verified |
-| Wrong password (joining by number) | Incorrect password | Verified |
-| The host denies the bot in the lobby | Request to join denied | Verified |
-| The bot is removed from the meeting | Meeting ended, with the removal recorded | Verified |
-| The meeting ends | Meeting ended | Verified |
-| The host has not started the meeting | Waiting for host timeout | The wait itself is **verified** (a full 10 minute timeout against a meeting nobody was in), see "Not started" below |
-| Stuck in the lobby too long | Waiting room timeout | Unit tested only |
-| The Service App is missing or not authorized, or its refresh token expired or was revoked | Could not connect to meeting | Unit tested, and the underlying errors were seen live |
+Attendee refreshes each Service App's tokens weekly from the scheduler (`python manage.py run_scheduler`), so the scheduler needs to be running. A Webex refresh token expires if it goes unused for 90 days.
 
-## How Webex works
+## Limitations compared to the other bots
 
-This is what was learned by reading the SDK (its published source maps), its network traffic, and by experiment.
-
-**Identity.** Webex guests are users minted by a Service App. The Service App is authorized per organization by an admin. It exchanges a refresh token for an access token, and `POST /v1/guests/token` (with a `subject` and a `displayName`) returns a guest access token, valid for about 18 hours. The SDK is initialized with that token: `Webex.init({credentials: {access_token}})`, then `meetings.register()` and `meetings.create(url)`.
-
-**Joining.** `meeting.join()` puts the guest in the lobby if the meeting has one. Media cannot be negotiated from the lobby: calling `joinWithMedia` there fails with "Confluence url for the device is null". The bot therefore joins, waits for `meeting:self:guestAdmitted`, and then calls `meeting.addMedia()`.
-
-**Media.** The SDK uses multistream: instead of one mixed stream, the server sends a few "active speaker" audio streams. The bot asks for 8 audio slots, which is as many as Webex fills: the SDK's default is 3, and with 16 requested and 10 people talking at once, audio arrived in 8 slots. Webex's active speaker reports name at most 4 people at a time. The bot also asks for up to 9 active-speaker video panes plus screen share. The slots never say whose audio they carry: the SDK reports their source as "no source", and the RTP packets carry no contributing source. So the bot works out which member is in each slot (see per participant audio below).
-
-A subtle trap: the SDK computes `receiveAudio = audioEnabled && receiveAudio`. Calling `addMedia({audioEnabled: false, additionalMediaOptions: {receiveAudio: true}})` therefore silently turns receiving off, and every audio stream stays muted. The bot keeps `audioEnabled` and `videoEnabled` true. Sending also has to stay enabled (with no local tracks, so nothing is sent), because the send transceivers cannot be added later and the bot publishes its webcam image and audio on demand.
-
-**Speakers.** `media:activeSpeakerChanged` lists the members speaking, in steps of about one second, and the list briefly empties between words. Measured against the audio, a speaker is reported 0.1 to 0.7 seconds after their voice starts and 0.2 to 1.4 seconds after it stops. The speaker named has always been the right one. Webex only reports speech: a participant playing a tone or music is never reported as speaking.
-
-**Captions.** `meeting.startTranscription()` enables Webex's built-in captions and `meeting:caption-received` delivers them, including interim versions that are replaced by a final one. `startTranscription()` swallows its own errors and fails with "can not turn on captions before llm connected" when called right after joining, so the bot calls it, waits for the transcription announcement, and calls it again.
-
-**Leaving.** Webex reports why the meeting object was destroyed (`DESTROY_MEETING`): `SELF_REMOVED` (denied in the lobby, or removed afterwards), `MEETING_INACTIVE_TERMINATING` (the meeting ended). When the bot leaves by itself the destroy event has no reason at all, and a removal event follows. Roles are hidden from lobby guests, so a guest cannot tell whether the host is present.
-
-**Chat.** In-meeting chat lives in a "meeting container" that is not part of the meetings API. For a guest token the container's endpoint answers `403 Forbidden`, and no conversation events reach the bot while it is admitted (**verified**, including with the browser's CORS check turned off in a development run).
-
-## How the bot works
-
-```
-WebexBotAdapter (Python, bots/webex_bot_adapter/)
-  loads webex_chromedriver_page.html in Chrome, from a local static server
-  passes the guest token, meeting URL and bot name in window.webexInitialData
-  polls window.webexJoinState for the phase: joining, lobby, admitted, joined
-  turns failures into the Ui*Exception the join loop already handles
-
-webex_chromedriver_page.js (runs the SDK)
-  joins, waits for admission, adds media
-  reports participants, speech, captions and failures over the websocket
-  plays the remote audio, mixes it, sends mixed and per participant audio
-  renders the remote video
-
-webex_chromedriver_payload.js: the websocket client shared by the page
-```
-
-The websocket messages are the same ones the other web bots use, so `WebBotAdapter` handles them unchanged. The Service App is read from the database on the main thread, the requests to Webex run on the adapter's thread, and no secret is kept in memory.
-
-## Limits, trade-offs and parts that may not be reliable
-
-**Per participant audio comes from the audio slots.** Webex puts each recent speaker in an audio slot of their own and keeps them there while they stay among the recent speakers, so people who talk over each other arrive in separate slots. In a test, over 99% of the speech in each slot was one speaker's. The slots don't say who that speaker is, so each slot learns its member from the active speaker reports: over the moments the slot is audible, how often each member was reported speaking, averaged over about the last second of the slot's speech. A member is given to at most one slot, and a slot only changes hands when another member's average beats its member's by 0.2. While two people talk at once, Webex reports both as speaking and their averages briefly cross. Without that margin the slots swapped members for about a second each time: 44 times in a 10 minute four person meeting, in which Webex itself kept every speaker in the same slot throughout. The page holds each slot's audio back (`perParticipantAudioUtteranceDelayMs`, 2 seconds) so the reports covering it have arrived, then sends it as that member's audio. The test was a scripted two person conversation with quick handovers, interruptions and short replies said over the other speaker, played by two bots, with the exact timing of every word known. None of the audible audio went to the wrong person (0 of 7,212 chunks), all of each speaker's solo speech reached them, and 90 to 99% of the speech in the overlaps reached each of the two speakers. The previous approach, which attributed the mixed audio to the active speaker, sent 11% of the solo speech to the wrong person and kept 46% of the overlaps. In a test with real speech, four bots each played one participant of a recorded four person meeting (10 minutes of AMI meeting TS3009c), and a bot transcribed with AssemblyAI, as in `bots/e2e_tests/diarization.py`. The word error rate against the human transcript went from 67% to 40% with 3 audio slots, and to 34% with 6, where Webex used one slot per speaker. AssemblyAI transcribing each participant's own clean recording, without Webex, gets 28%, so that is the lowest this test can go. Of the content words in a speaker's transcript, 22% were someone else's words before, 7% with 3 slots and 5% with 6 (4% with the clean recordings, from words that two people both said). Other signals were measured and are not used: the RTP packets carry no contributing sources, and the caption speaker ids and timestamps, while accurate, place speech less precisely than the slots do. Limits: with more than 8 people talking in turn, Webex moves speakers between slots, and a speaker who takes over a slot is recognised after about a second of their speech (a simulated swap of the two slots mid-conversation still gave 98% of the speech to the right person, with none to the wrong one). Screen share audio is not captured. The per participant audio arrives 2 seconds late, which utterance timestamps are corrected for. A speech stop is only reported after the speaker has been absent for 1.5 seconds.
-
-**Mixed audio is clamped.** Summing the audio slots can go above full scale, and the adapter's float to 16 bit conversion wraps around when that happens, which would be loud distortion. The page clamps the samples.
-
-**"Meeting not started" is a heuristic.** Webex shows a guest waiting for a host that has not started the meeting exactly like a normal lobby. The bot treats a lobby with nobody else in the meeting as "waiting for the host", and uses the (longer) wait-for-host timeout for it. A lobby where the only other people are also waiting guests would be misread.
-
-**Captions need Webex Assistant.** They were verified on one site. Sites or meetings that don't allow captions will give no transcript, and the bot reports that it could not enable them. The bot asks for English captions. In Webex only the host can set the meeting's spoken language (the SDK rejects it for anyone else), so unlike the Teams and Google Meet bots there is no caption language setting.
-
-**The refresh token's reset is not documented by Webex.** Attendee relies on the observed behavior that using a refresh token resets its 90 day lifetime. If Webex changes that, the token expires 90 days after it was issued, and an expired one only shows up as bots that cannot connect and an error in the scheduler's logs. A dedicated "Webex authorization failed" bot event would be clearer, but it needs a new event subtype and a migration.
-
-**Deviations from how the other bots work.**
-- It drives an SDK, not the meeting's web UI, so there are no selectors, no navigation config for the UI, and nothing to break when Webex changes its page.
-- The domain allowlist is a fixed list in the adapter (`webex.com`, `ciscospark.com`, `wbx2.com`, `unpkg.com`, `127.0.0.1`), recorded from a real join. The other platforms read theirs from signed navigation configs, and a contributor cannot sign one. Moving it to a `webex.json` is a follow-up for a maintainer.
-- The SDK is loaded from unpkg at a pinned version with a Subresource Integrity hash, because the page holds a guest token. Zoom also loads its SDK from a CDN. To upgrade, change the version and recompute the hash (the command is in the page).
-- Like the Zoom adapter it has its own small static server for the page (`webex_static_server.py`), and like the other adapters it defines its own `send_video`, `is_sent_video_still_playing` and Chrome policy. These are duplicates of the other adapters on purpose, to keep this change separate from a cleanup of them.
-
-**Not tried at all:** webinars and Webex Events, breakout rooms, a lobby that is turned off (the bot should skip the lobby phase), screen share content, reconnecting after a network drop, and meetings where the bot is the only participant for a long time.
-
-## Developing and testing
-
-**In Docker.** The whole flow was verified with the repository's Docker setup (`dev.docker-compose.yaml`): create a project, add the Webex Service App, create a bot with `POST /api/v1/bots`, admit it, and read back its state, transcript, participant events and recording. Recordings are uploaded to S3, so for a local run point `AWS_ENDPOINT_URL` at an S3-compatible server such as [moto](https://github.com/getmoto/moto) and create the bucket.
-
-**Without Docker.** `bots/webex_bot_adapter/dev/standalone_harness.py` runs the page in a local Chrome without Docker, Django or Xvfb, prints every message the page sends, and saves the audio it receives. See the docstring for the options. It reads the Service App's client ID, client secret and refresh token from the environment or a `.env` file at the repo root.
-
-```
-python bots/webex_bot_adapter/dev/standalone_harness.py                        # loads the page and the SDK, no meeting needed
-python bots/webex_bot_adapter/dev/standalone_harness.py --meeting-url <url or meeting number>
-```
-
-The unit tests are `test_webex_bot_adapter.py`, `test_webex_bot_controller.py`, `test_webex_service_app.py`, `test_refresh_webex_service_app_task.py`, `test_webex_domain_allowlist.py` and the Webex cases in `test_meeting_url_utils.py`. One test checks that the page's websocket client defines every method `WebBotAdapter` calls on it, which is the kind of mistake that stops a bot from ever leaving a meeting.
+- **No chat.** Webex doesn't give guests access to the meeting chat, so the bot can't read or send chat messages.
+- **Closed caption transcription is English only.** Only the meeting host can set the language of Webex captions, so there is no caption language setting for Webex. Captions also have to be available on your Webex site (Webex Assistant).
+- **Only personal room and invitation links.** Joining by meeting number, and meetings on Webex's government or regional clouds, are not supported.
+- **No per participant video streaming.** Recording video works, but `websocket_settings.per_participant_video` is not supported for Webex.
+- **Per participant audio for up to 8 recent speakers.** Webex sends the audio of the 8 most recent speakers separately, so per participant audio and transcription stay accurate when people talk over each other. In meetings where more than 8 people take turns, someone who starts talking after a while may have the first second or so of their speech attributed to someone else.
+- **Speech start and stop events arrive about a second late,** because that is how quickly Webex reports who is speaking.
+- **Screen share audio is not captured.** Screen share start and stop events are reported.
+- **The bot can't tell a meeting the host hasn't started from a lobby.** If the bot is waiting in the lobby and nobody else is in the meeting, it treats the meeting as not started and uses the wait for host timeout.
+- **Not tested:** webinars and Webex Events, and breakout rooms.
