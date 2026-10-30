@@ -34,6 +34,65 @@
     });
   
     /*
+     * Exposes one audio track whose identity never changes, fed from whichever
+     * remote LiveKit audio track is current. Consumers such as
+     * BotVideoOutputStream.playMediaStream bind a MediaStreamAudioSourceNode to
+     * the stream's audio track once, so swapping the track inside the
+     * MediaStream would leave them reading the old, dead track.
+     */
+    class AudioTrackRelay {
+      constructor() {
+        this.context = new AudioContext();
+        this.destination = this.context.createMediaStreamDestination();
+        this.track = this.destination.stream.getAudioTracks()[0];
+        this.sourceNode = null;
+        this.sinkElement = null;
+      }
+
+      setSource(mediaTrack) {
+        if (this.sourceNode) {
+          this.sourceNode.disconnect();
+          this.sourceNode = null;
+        }
+
+        if (this.sinkElement) {
+          this.sinkElement.srcObject = null;
+          this.sinkElement = null;
+        }
+
+        if (!mediaTrack) {
+          return;
+        }
+
+        const sourceStream = new MediaStream([mediaTrack]);
+
+        // Chrome delivers silence from a remote WebRTC track into Web Audio
+        // unless the track is also attached to a media element.
+        this.sinkElement = new Audio();
+        this.sinkElement.muted = true;
+        this.sinkElement.srcObject = sourceStream;
+        this.sinkElement.play().catch((error) =>
+          console.warn("[LiveKit receiver] Audio sink play failed", error)
+        );
+
+        this.sourceNode = this.context.createMediaStreamSource(sourceStream);
+        this.sourceNode.connect(this.destination);
+
+        if (this.context.state === "suspended") {
+          this.context.resume().catch((error) =>
+            console.warn("[LiveKit receiver] AudioContext resume failed", error)
+          );
+        }
+      }
+
+      async close() {
+        this.setSource(null);
+        this.track.stop();
+        await this.context.close();
+      }
+    }
+
+    /*
      * Wraps one LiveKit room connection and exposes the remote participant's
      * audio/video as a single MediaStream. Track arrival is observed through
      * an internal EventTarget so that waiting code can be written as a plain
@@ -46,8 +105,17 @@
         this.selectedParticipantIdentity = null;
         this.matchParticipantOnPublishOnBehalf = matchParticipantOnPublishOnBehalf;
   
-        // The output contains at most one audio and one video track.
+        // The output contains at most one audio and one video track. These
+        // hold the remote tracks currently feeding the output; for audio that
+        // is the relay's source, not the track inside this.stream.
         this.outputTrackByKind = new Map();
+        this.outputPublicationByKind = new Map();
+
+        this.audioRelay = new AudioTrackRelay();
+        this.stream.addTrack(this.audioRelay.track);
+
+        // Shown in the stream whenever no remote video track is playing.
+        this.placeholderVideoTrack = null;
   
         this.trackEvents = new EventTarget();
   
@@ -74,14 +142,32 @@
 
     /*
      * The participant's audio reaches the meeting through the bot's
-     * microphone, so their mute state has to be mirrored onto it.
+     * microphone, so the mute state of the audio track currently playing has
+     * to be mirrored onto it. Other publishers acting on behalf of the same
+     * participant are ignored until their track becomes the one playing.
      */
     handleRemoteMuteChange(publication, participant, muted) {
       if (publication.kind !== "audio" || !this.acceptsParticipant(participant)) {
         return;
       }
 
-      if (muted) {
+      if (!this.isOutputPublication(publication)) {
+        return;
+      }
+
+      this.syncMicToOutputAudio();
+    }
+
+    isOutputPublication(publication) {
+      const outputPublication = this.outputPublicationByKind.get(publication.kind);
+      const sid = (p) => p.trackSid ?? p.sid;
+      return outputPublication != null && sid(outputPublication) === sid(publication);
+    }
+
+    syncMicToOutputAudio() {
+      const publication = this.outputPublicationByKind.get("audio");
+
+      if (!publication || publication.isMuted) {
         window.botOutputManager?.disableMic();
       } else {
         window.botOutputManager?.ensureMicOn();
@@ -133,19 +219,11 @@
           return;
         }
   
-        const previousTrack = this.outputTrackByKind.get(mediaTrack.kind);
-  
-        if (previousTrack === mediaTrack) {
+        if (this.outputTrackByKind.get(mediaTrack.kind) === mediaTrack) {
           return;
         }
-  
-        // Replace the previous track of the same kind.
-        if (previousTrack) {
-          this.stream.removeTrack(previousTrack);
-        }
-  
-        this.outputTrackByKind.set(mediaTrack.kind, mediaTrack);
-        this.stream.addTrack(mediaTrack);
+
+        this.setOutputTrack(mediaTrack, publication);
   
         console.info("[LiveKit receiver] Added track", {
           participantIdentity: participant.identity,
@@ -164,6 +242,89 @@
   
         this.notifyTrackChange();
       }
+
+      /*
+       * Makes mediaTrack (or nothing, when null) the output for its kind,
+       * replacing the previous one. Audio is routed through the relay so the
+       * stream's audio track stays the same object.
+       */
+      setOutputTrack(mediaTrack, publication, kind = mediaTrack.kind) {
+        const previousTrack = this.outputTrackByKind.get(kind);
+
+        if (kind === "audio") {
+          this.audioRelay.setSource(mediaTrack);
+        } else {
+          const outgoingTrack = previousTrack ?? this.placeholderVideoTrack;
+          const incomingTrack = mediaTrack ?? this.placeholderVideoTrack;
+
+          if (outgoingTrack && outgoingTrack !== incomingTrack) {
+            this.stream.removeTrack(outgoingTrack);
+          }
+          if (incomingTrack) {
+            this.stream.addTrack(incomingTrack);
+          }
+        }
+
+        if (mediaTrack) {
+          this.outputTrackByKind.set(kind, mediaTrack);
+          this.outputPublicationByKind.set(kind, publication);
+        } else {
+          this.outputTrackByKind.delete(kind);
+          this.outputPublicationByKind.delete(kind);
+        }
+
+        if (kind === "audio") {
+          this.syncMicToOutputAudio();
+        }
+      }
+
+      setPlaceholderVideoTrack(track) {
+        if (this.placeholderVideoTrack) {
+          this.stream.removeTrack(this.placeholderVideoTrack);
+        }
+
+        this.placeholderVideoTrack = track;
+
+        if (track && !this.outputTrackByKind.has("video")) {
+          this.stream.addTrack(track);
+        }
+      }
+
+      /*
+       * Several publishers can act on behalf of the same participant (e.g. an
+       * agent and its avatar), so when the playing track goes away another
+       * subscribed track of the same kind may be able to take over.
+       */
+      findReplacementTrack(kind, excludedTrack) {
+        let mutedCandidate = null;
+
+        for (const participant of this.room.remoteParticipants.values()) {
+          if (!this.acceptsParticipant(participant)) {
+            continue;
+          }
+
+          for (const publication of participant.trackPublications.values()) {
+            const mediaTrack = publication.track?.mediaStreamTrack;
+
+            if (
+              !mediaTrack ||
+              mediaTrack === excludedTrack ||
+              mediaTrack.kind !== kind ||
+              mediaTrack.readyState !== "live"
+            ) {
+              continue;
+            }
+
+            if (!publication.isMuted) {
+              return { mediaTrack, publication, participant };
+            }
+
+            mutedCandidate ??= { mediaTrack, publication, participant };
+          }
+        }
+
+        return mutedCandidate;
+      }
   
       removeRemoteTrack(remoteTrack, publication, participant) {
         const mediaTrack = remoteTrack.mediaStreamTrack;
@@ -172,18 +333,30 @@
           return;
         }
   
-        if (this.outputTrackByKind.get(mediaTrack.kind) === mediaTrack) {
-          this.outputTrackByKind.delete(mediaTrack.kind);
-          this.stream.removeTrack(mediaTrack);
-          this.notifyTrackChange();
-        }
-  
         console.info("[LiveKit receiver] Removed track", {
           participantIdentity: participant.identity,
           publicationSid: publication.trackSid ?? publication.sid,
           kind: mediaTrack.kind,
           id: mediaTrack.id,
         });
+
+        if (this.outputTrackByKind.get(mediaTrack.kind) !== mediaTrack) {
+          return;
+        }
+
+        const replacement = this.findReplacementTrack(mediaTrack.kind, mediaTrack);
+
+        if (replacement) {
+          this.addRemoteTrack(
+            replacement.publication.track,
+            replacement.publication,
+            replacement.participant
+          );
+          return;
+        }
+
+        this.setOutputTrack(null, null, mediaTrack.kind);
+        this.notifyTrackChange();
       }
   
       notifyTrackChange() {
@@ -191,10 +364,8 @@
       }
   
       hasLiveTracks(requiredKinds) {
-        return requiredKinds.every((kind) =>
-          this.stream
-            .getTracks()
-            .some((track) => track.kind === kind && track.readyState === "live")
+        return requiredKinds.every(
+          (kind) => this.outputTrackByKind.get(kind)?.readyState === "live"
         );
       }
   
@@ -226,8 +397,7 @@
   
           if (remainingMs <= 0) {
             const presentKinds =
-              this.stream.getTracks().map((track) => track.kind).join(", ") ||
-              "none";
+              Array.from(this.outputTrackByKind.keys()).join(", ") || "none";
   
             const message =
               `Timed out waiting for LiveKit tracks: ` +
@@ -281,6 +451,16 @@
         // MediaStreamTrack.stop(). LiveKit owns the remote tracks.
         for (const track of this.stream.getTracks()) {
           this.stream.removeTrack(track);
+        }
+
+        // The placeholder is ours, unlike the remote tracks.
+        this.placeholderVideoTrack?.stop();
+        this.placeholderVideoTrack = null;
+
+        try {
+          await this.audioRelay.close();
+        } catch (error) {
+          console.warn("[LiveKit receiver] Audio relay close failed", error);
         }
   
         try {
@@ -395,6 +575,14 @@
     window.LiveKitMediaStreamReceiver = Object.freeze({
       connect,
       disconnect,
+
+      syncMicToOutputAudio() {
+        activeConnection?.syncMicToOutputAudio();
+      },
+
+      setPlaceholderVideoTrack(track) {
+        activeConnection?.setPlaceholderVideoTrack(track);
+      },
   
       get room() {
         return activeConnection?.room ?? null;
@@ -433,21 +621,21 @@
         waitForVideo: false,
         });
     
-    // Give a real video track a short grace period to arrive, then fall back
-    // to a locally generated black video track so the combined stream always
-    // has both audio and video.
-    let videoTrack = await waitForVideoTrack(mediaStream, 5_000);
+    // Give a real video track a short grace period to arrive. A locally
+    // generated black video track stands in whenever no remote video is
+    // playing, so the combined stream always has both audio and video.
+    const videoTrack = await waitForVideoTrack(mediaStream, 5_000);
+    const blackVideoTrack = createBlackVideoTrack();
+    window.LiveKitMediaStreamReceiver.setPlaceholderVideoTrack(blackVideoTrack);
    
     if (!videoTrack) {
-      videoTrack = createBlackVideoTrack();
-      mediaStream.addTrack(videoTrack);
       console.log(
         "[LiveKit receiver] No remote video track; using black video track:",
-        videoTrack.id
+        blackVideoTrack.id
       );
       window.ws?.sendJson({
         type: 'LiveKitVideoTrackNotAvailable',
-        trackId: videoTrack.id,
+        trackId: blackVideoTrack.id,
       });
     }
    
@@ -455,6 +643,10 @@
     // rendering it into an embedded video element on the page.
     window.botOutputManager.setBotOutputMediaStream(mediaStream);
     await window.botOutputManager.playBotOutputMediaStream("webcam");
+
+    // playBotOutputMediaStream turns the mic on unconditionally; re-apply the
+    // mute state of the track that is actually playing.
+    window.LiveKitMediaStreamReceiver.syncMicToOutputAudio();
    
     console.log("LiveKit media stream routed to bot webcam:", mediaStream);
    
@@ -497,9 +689,16 @@
       // producing frames (some browsers stop emitting frames from a static
       // canvas otherwise).
       draw();
-      setInterval(draw, 1000 / fps);
+      const track = canvas.captureStream(fps).getVideoTracks()[0];
+      const timer = setInterval(() => {
+        if (track.readyState === "ended") {
+          clearInterval(timer);
+        } else {
+          draw();
+        }
+      }, 1000 / fps);
    
-      return canvas.captureStream(fps).getVideoTracks()[0];
+      return track;
     }
   }
 
