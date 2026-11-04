@@ -112,6 +112,7 @@ class ZoomBotAdapter(BotAdapter):
         self.meeting_service_event = None
 
         self.audio_source = None
+        self.audio_source_subscribed = False
         self.audio_helper = None
 
         self.audio_settings = None
@@ -928,6 +929,11 @@ class ZoomBotAdapter(BotAdapter):
         if not self.recording_permission_granted:
             self.send_message_callback({"message": self.Messages.BOT_RECORDING_PERMISSION_GRANTED})
             self.recording_permission_granted = True
+            return
+
+        # The permission carries over into a breakout room session, but raw recording has to be started again there.
+        if not self.raw_recording_active and not self.recording_is_paused:
+            self.start_raw_recording()
 
     def stop_raw_recording(self):
         logger.info("Stopping raw recording")
@@ -963,8 +969,10 @@ class ZoomBotAdapter(BotAdapter):
                 onMixedAudioRawDataReceivedCallback=self.add_mixed_audio_chunk_convert_to_bytes if self.use_mixed_audio else None,
             )
 
+        if not self.audio_source_subscribed:
             audio_helper_subscribe_result = self.audio_helper.subscribe(self.audio_source, False)
             logger.info(f"audio_helper_subscribe_result = {audio_helper_subscribe_result}")
+            self.audio_source_subscribed = True
 
         GLib.timeout_add(100, self.set_up_video_input_manager)
 
@@ -1108,12 +1116,17 @@ class ZoomBotAdapter(BotAdapter):
         self.clear_stuck_in_connecting_state_timeout()
         self.meeting_status = status
 
-        if status == zoom.MEETING_STATUS_JOIN_BREAKOUT_ROOM:
+        if status == zoom.MEETING_STATUS_JOIN_BREAKOUT_ROOM or status == zoom.MEETING_STATUS_LEAVE_BREAKOUT_ROOM:
             self.is_joining_or_leaving_breakout_room = True
+            # Raw recording and the audio subscription belong to the session the bot is leaving.
+            # handle_recording_permission_granted starts them again when the new session reports the permission.
+            self.raw_recording_active = False
+            self.audio_source_subscribed = False
+
+        if status == zoom.MEETING_STATUS_JOIN_BREAKOUT_ROOM:
             self.send_message_callback({"message": self.Messages.JOINING_BREAKOUT_ROOM})
 
         if status == zoom.MEETING_STATUS_LEAVE_BREAKOUT_ROOM:
-            self.is_joining_or_leaving_breakout_room = True
             self.send_message_callback({"message": self.Messages.LEAVING_BREAKOUT_ROOM})
 
         if status == zoom.MEETING_STATUS_CONNECTING:

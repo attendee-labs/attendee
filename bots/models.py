@@ -2047,7 +2047,10 @@ class BotEventManager:
         cls.after_new_state_is_joined_recording(bot, event_type, new_state)
 
     @classmethod
-    def after_new_state_is_joined_recording_paused(cls, bot: Bot, new_state: BotStates):
+    def after_new_state_is_joined_recording_paused(cls, bot: Bot, event_type: BotEventTypes, new_state: BotStates):
+        # If bot was joining or leaving a breakout room while paused, the recording is already paused
+        if event_type == BotEventTypes.BOT_JOINED_BREAKOUT_ROOM or event_type == BotEventTypes.BOT_LEFT_BREAKOUT_ROOM:
+            return
         in_progress_recordings = bot.recordings.filter(state=RecordingStates.IN_PROGRESS)
         if in_progress_recordings.count() != 1:
             raise ValidationError(f"Expected exactly one in progress recording for bot {bot.object_id} in state {BotStates.state_to_api_code(new_state)}, but found {in_progress_recordings.count()}")
@@ -2195,7 +2198,7 @@ class BotEventManager:
                         cls.after_new_state_is_connected(bot=bot, event_type=event_type, new_state=new_state)
 
                     if new_state == BotStates.JOINED_RECORDING_PAUSED:
-                        cls.after_new_state_is_joined_recording_paused(bot=bot, new_state=new_state)
+                        cls.after_new_state_is_joined_recording_paused(bot=bot, event_type=event_type, new_state=new_state)
 
                     if new_state == BotStates.JOINED_RECORDING_PERMISSION_DENIED:
                         cls.after_new_state_is_joined_recording_permission_denied(bot=bot, new_state=new_state)
