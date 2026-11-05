@@ -381,6 +381,84 @@ class TestZoomParticipantTracking(SimpleTestCase):
 
 
 @tag("zoom_tests")
+class TestZoomBreakoutRoomMoves(SimpleTestCase):
+    def create_adapter(self):
+        adapter = ZoomBotAdapter.__new__(ZoomBotAdapter)
+        adapter.breakout_room_attendee = None
+        adapter.stay_in_main_session = False
+        return adapter
+
+    def test_bot_joins_breakout_room_it_is_assigned_to(self):
+        adapter = self.create_adapter()
+        attendee = MagicMock()
+
+        adapter.on_has_attendee_rights_notification(attendee)
+
+        attendee.JoinBo.assert_called_once_with()
+
+    def test_bot_returns_to_main_session_and_stays_there_when_host_invites_it(self):
+        adapter = self.create_adapter()
+        attendee = MagicMock()
+        handler = MagicMock()
+        handler.ReturnToMainSession.return_value = True
+        adapter.on_has_attendee_rights_notification(attendee)
+
+        adapter.on_host_invite_return_to_main_session("Host", handler)
+        handler.ReturnToMainSession.assert_called_once_with()
+
+        # Zoom sends attendee rights again in the main session because the bot is still assigned to the room
+        adapter.on_lost_attendee_rights_notification()
+        adapter.on_bo_status_changed(zoom.BO_STATUS.BO_STATUS_STARTED)
+        adapter.on_has_attendee_rights_notification(attendee)
+        self.assertEqual(attendee.JoinBo.call_count, 1)
+
+    def test_bot_joins_room_host_moves_it_to_from_main_session(self):
+        adapter = self.create_adapter()
+        attendee = MagicMock()
+        handler = MagicMock()
+        handler.ReturnToMainSession.return_value = True
+        adapter.on_has_attendee_rights_notification(attendee)
+        adapter.on_host_invite_return_to_main_session("Host", handler)
+        adapter.on_has_attendee_rights_notification(attendee)
+
+        adapter.on_bo_switch_request_received("Room 2", None)
+
+        self.assertEqual(attendee.JoinBo.call_count, 2)
+        self.assertFalse(adapter.stay_in_main_session)
+
+    def test_bot_follows_assignments_again_after_breakout_rooms_are_stopped(self):
+        adapter = self.create_adapter()
+        attendee = MagicMock()
+        handler = MagicMock()
+        handler.ReturnToMainSession.return_value = True
+        adapter.on_host_invite_return_to_main_session("Host", handler)
+
+        adapter.on_bo_status_changed(zoom.BO_STATUS.BO_STATUS_ENDED)
+        adapter.on_has_attendee_rights_notification(attendee)
+
+        attendee.JoinBo.assert_called_once_with()
+
+    def test_bot_stays_in_room_when_return_to_main_session_fails(self):
+        adapter = self.create_adapter()
+        handler = MagicMock()
+        handler.ReturnToMainSession.return_value = False
+
+        adapter.on_host_invite_return_to_main_session("Host", handler)
+
+        self.assertFalse(adapter.stay_in_main_session)
+
+    def test_bot_ignores_switch_request_without_attendee_rights(self):
+        adapter = self.create_adapter()
+        attendee = MagicMock()
+        adapter.on_has_attendee_rights_notification(attendee)
+        adapter.on_lost_attendee_rights_notification()
+
+        adapter.on_bo_switch_request_received("Room 2", None)
+
+        attendee.JoinBo.assert_called_once_with()
+
+
+@tag("zoom_tests")
 class TestZoomBot(TransactionTestCase):
     @classmethod
     def setUpClass(cls):
@@ -4349,6 +4427,18 @@ class TestZoomBot(TransactionTestCase):
         self.assertEqual(mock_recording_controller.StartRawRecording.call_count, 3)
         self.assertEqual(mock_recording_controller.StopRawRecording.call_count, 0)
         self.assertEqual(controller.adapter.audio_helper.subscribe.call_args_list, [call(controller.adapter.audio_source, False)] * 3)
+
+        # Each session registers the callbacks that let the host move the bot between rooms
+        self.assertEqual(
+            mock_zoom_sdk_adapter.MeetingBOEventCallbacks.call_args.kwargs,
+            {
+                "onHasAttendeeRightsNotificationCallback": controller.adapter.on_has_attendee_rights_notification,
+                "onLostAttendeeRightsNotificationCallback": controller.adapter.on_lost_attendee_rights_notification,
+                "onBOSwitchRequestReceivedCallback": controller.adapter.on_bo_switch_request_received,
+                "onHostInviteReturnToMainSessionCallback": controller.adapter.on_host_invite_return_to_main_session,
+                "onBOStatusChangedCallback": controller.adapter.on_bo_status_changed,
+            },
+        )
 
         controller.cleanup()
         bot_thread.join(timeout=5)
