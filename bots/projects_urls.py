@@ -12,6 +12,11 @@ urlpatterns = [
         name="create-project",
     ),
     path(
+        "webex-service-app/oauth-callback/",
+        projects_views.WebexServiceAppOAuthCallbackView.as_view(),
+        name="webex-service-app-oauth-callback",
+    ),
+    path(
         "<str:object_id>",
         projects_views.ProjectDashboardView.as_view(),
         name="project-dashboard",
@@ -92,6 +97,21 @@ urlpatterns = [
         name="delete-zoom-oauth-app",
     ),
     path(
+        "<str:object_id>/settings/webex-service-app/",
+        projects_views.CreateWebexServiceAppView.as_view(),
+        name="create-webex-service-app",
+    ),
+    path(
+        "<str:object_id>/settings/webex-service-app/delete/",
+        projects_views.DeleteWebexServiceAppView.as_view(),
+        name="delete-webex-service-app",
+    ),
+    path(
+        "<str:object_id>/settings/webex-service-app/authorize/",
+        projects_views.AuthorizeWebexServiceAppView.as_view(),
+        name="authorize-webex-service-app",
+    ),
+    path(
         "<str:object_id>/settings/credentials/",
         projects_views.CreateCredentialsView.as_view(),
         name="create-credentials",
@@ -125,6 +145,16 @@ urlpatterns = [
         "<str:object_id>/usage/",
         projects_views.ProjectUsageView.as_view(),
         name="project-usage",
+    ),
+    path(
+        "<str:object_id>/instance-health/",
+        projects_views.ProjectInstanceHealthView.as_view(),
+        name="project-instance-health",
+    ),
+    path(
+        "<str:object_id>/bot-resource-usage/",
+        projects_views.ProjectBotResourceUsageView.as_view(),
+        name="project-bot-resource-usage",
     ),
     path(
         "<str:object_id>/billing/",

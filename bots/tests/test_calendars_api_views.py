@@ -156,6 +156,45 @@ class CalendarEventListViewTest(TransactionTestCase):
         self.assertIn(self.event_a2.object_id, event_ids)
         self.assertNotIn(self.event_a1.object_id, event_ids)
 
+    def test_filter_by_start_time_lt(self):
+        """Test that start_time_lt keeps only events starting strictly before it."""
+        query_string = urlencode({"start_time_lt": self.event_a2.start_time.isoformat()})
+        response = self._make_authenticated_request("GET", f"/api/v1/calendar_events?{query_string}", self.api_key_a_plain)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        event_ids = [e["id"] for e in response.json().get("results", [])]
+        self.assertIn(self.event_a1.object_id, event_ids)
+        self.assertNotIn(self.event_a2.object_id, event_ids)
+
+    def test_invalid_start_time_lt_format_returns_error(self):
+        """Test that invalid start_time_lt format returns a 400 error."""
+        response = self._make_authenticated_request("GET", "/api/v1/calendar_events?start_time_lt=invalid-date", self.api_key_a_plain)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("start_time_lt", response.json()["error"])
+
+    def test_filter_by_attendee_email(self):
+        """Test that attendee_email matches a whole email in the attendee list, ignoring case."""
+        CalendarEvent.objects.filter(pk=self.event_a1.pk).update(attendees=[{"name": "Jane", "email": "jane@example.com"}])
+
+        cases = [
+            {"name": "attendee list", "email": "jane@example.com", "want": {self.event_a1.object_id}},
+            {"name": "case-insensitive", "email": "JANE@Example.COM", "want": {self.event_a1.object_id}},
+            {"name": "no partial match", "email": "example.com", "want": set()},
+            {"name": "no match inside other text", "email": "jane@example.co", "want": set()},
+        ]
+        for case in cases:
+            with self.subTest(case["name"]):
+                query_string = urlencode({"attendee_email": case["email"]})
+                response = self._make_authenticated_request("GET", f"/api/v1/calendar_events?{query_string}", self.api_key_a_plain)
+                self.assertEqual(response.status_code, status.HTTP_200_OK)
+                self.assertEqual({e["id"] for e in response.json().get("results", [])}, case["want"])
+
+    def test_empty_attendee_email_returns_error(self):
+        """Test that a blank attendee_email returns a 400 error instead of matching everything."""
+        response = self._make_authenticated_request("GET", "/api/v1/calendar_events?attendee_email=%20", self.api_key_a_plain)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("attendee_email", response.json()["error"])
+
     def test_invalid_updated_at_gte_format_returns_error(self):
         """Test that invalid updated_at_gte format returns a 400 error."""
         response = self._make_authenticated_request("GET", "/api/v1/calendar_events?updated_at_gte=invalid-date", self.api_key_a_plain)

@@ -9,7 +9,7 @@ from django.db import models
 from django.utils import timezone
 from kubernetes import client, config
 
-from bots.k8s_utils import retrieve_bot_pod_information
+from bots.k8s_utils import find_bot_pod_name, retrieve_bot_pod_information
 from bots.models import Bot, BotEventManager, BotEventSubTypes, BotEventTypes
 
 logger = logging.getLogger(__name__)
@@ -32,7 +32,8 @@ class Command(BaseCommand):
     def retrieve_bot_infrastructure_information(self, bot) -> dict | None:
         if os.getenv("LAUNCH_BOT_METHOD") == "kubernetes":
             try:
-                return retrieve_bot_pod_information(self.create_k8s_client(), self.namespace, bot.k8s_pod_name())
+                v1 = self.create_k8s_client()
+                return retrieve_bot_pod_information(v1, self.namespace, find_bot_pod_name(v1, self.namespace, bot))
             except Exception:
                 logger.exception(f"Failed to gather bot pod information for bot {bot.object_id}")
         return None
@@ -71,7 +72,7 @@ class Command(BaseCommand):
 
         # Try to delete the pod if it exists
         try:
-            pod_name = bot.k8s_pod_name()
+            pod_name = find_bot_pod_name(v1, self.namespace, bot)
             v1.delete_namespaced_pod(
                 name=pod_name,
                 namespace=self.namespace,
@@ -81,7 +82,7 @@ class Command(BaseCommand):
         except client.ApiException as pod_error:
             # 404 means pod doesn't exist, which is fine
             if pod_error.status != 404:
-                logger.warning(f"Error deleting pod {pod_name}: {str(pod_error)}")
+                logger.warning(f"Error deleting pod for bot {bot.object_id}: {str(pod_error)}")
 
     def _terminate_ephemeral_docker_container(self, bot):
         """Remove the ephemeral Docker container for this bot (container name: bot-{id})."""

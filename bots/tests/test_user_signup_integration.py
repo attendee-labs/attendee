@@ -33,6 +33,7 @@ class UserSignupIntegrationTest(TransactionTestCase):
         # Clear any existing emails
         mail.outbox = []
 
+    @override_settings(SITE_DOMAIN="testserver")
     def test_user_signup_happy_path(self):
         """Test the complete happy path of user signup"""
 

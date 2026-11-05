@@ -33,9 +33,15 @@ This document lists all supported environment variables for the Attendee applica
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `DATABASE_URL` | String | **Required** | PostgreSQL database connection URL (format: `postgresql://user:password@host:port/database`). |
+| `DATABASE_URL` | String | **Required*** | PostgreSQL database connection URL (format: `postgresql://user:password@host:port/database`). Takes precedence over the individual `POSTGRES_*` variables below. |
 | `POSTGRES_SSL_REQUIRE` | Boolean | `true` | Require SSL/TLS connection to PostgreSQL. Set to `false` for local development. |
-| `POSTGRES_HOST` | String | `localhost` | PostgreSQL host for development environments. Only used if not specified in `DATABASE_URL`. |
+| `POSTGRES_HOST` | String | `localhost` | PostgreSQL host. Alternative to `DATABASE_URL` together with the other `POSTGRES_*` variables; also used for development environments. |
+| `POSTGRES_PORT` | String | `5432` | PostgreSQL port. Only used when connecting via the `POSTGRES_*` variables. |
+| `POSTGRES_DB` | String | — | PostgreSQL database name. Required when connecting via the `POSTGRES_*` variables. |
+| `POSTGRES_USER` | String | — | PostgreSQL user. Required when connecting via the `POSTGRES_*` variables. |
+| `POSTGRES_PASSWORD` | String | — | PostgreSQL password. Only used when connecting via the `POSTGRES_*` variables. |
+
+\* Either `DATABASE_URL` or the set of `POSTGRES_HOST`, `POSTGRES_DB` and `POSTGRES_USER` (plus `POSTGRES_PASSWORD`/`POSTGRES_PORT` as needed) must be provided.
 
 ---
 
@@ -57,6 +63,7 @@ This document lists all supported environment variables for the Attendee applica
 | `AWS_ENDPOINT_URL` | String | (None) | Custom S3-compatible endpoint URL (e.g., for MinIO or LocalStack). |
 | `AWS_RECORDING_STORAGE_BUCKET_NAME` | String | **Required** | S3 bucket name for storing meeting recordings. |
 | `AWS_AUDIO_CHUNK_STORAGE_BUCKET_NAME` | String | (Uses recording bucket) | S3 bucket name for storing audio chunks. Falls back to `AWS_RECORDING_STORAGE_BUCKET_NAME` if not set. |
+| `AWS_BOT_DEBUG_SCREENSHOT_STORAGE_BUCKET_NAME` | String | (Uses recording bucket) | S3 bucket name for storing bot debug screenshots. Falls back to `AWS_RECORDING_STORAGE_BUCKET_NAME` if not set. |
 | `USE_IRSA_FOR_S3_STORAGE` | Boolean | `false` | Use IRSA (IAM Roles for Service Accounts) for S3 authentication in EKS. Set to `true` when running on Kubernetes with IRSA. |
 
 ### Azure Blob Storage Configuration
@@ -68,6 +75,7 @@ This document lists all supported environment variables for the Attendee applica
 | `AZURE_ACCOUNT_NAME` | String | **Required** (if using Azure) | Azure Storage Account name. |
 | `AZURE_RECORDING_STORAGE_CONTAINER_NAME` | String | **Required** (if using Azure) | Azure Blob Container name for recordings. |
 | `AZURE_AUDIO_CHUNK_STORAGE_CONTAINER_NAME` | String | (Uses recording container) | Azure Blob Container name for audio chunks. Falls back to `AZURE_RECORDING_STORAGE_CONTAINER_NAME` if not set. |
+| `AZURE_BOT_DEBUG_SCREENSHOT_STORAGE_CONTAINER_NAME` | String | (Uses recording container) | Azure Blob Container name for bot debug screenshots. Falls back to `AZURE_RECORDING_STORAGE_CONTAINER_NAME` if not set. |
 | `AZURE_STORAGE_USE_PERMANENT_LINKS` | Boolean | `false` | Generate permanent links instead of expiring ones for Azure storage. |
 | `AZURE_STORAGE_LINK_EXPIRATION_SECONDS` | Integer | `1800` | Expiration time (in seconds) for Azure storage links. Ignored if `AZURE_STORAGE_USE_PERMANENT_LINKS` is `true`. |
 
@@ -100,6 +108,8 @@ This document lists all supported environment variables for the Attendee applica
 |----------|------|---------|-------------|
 | `DISABLE_SIGNUP` | Boolean | `false` | Disable new user sign-ups. When `true`, only existing users can log in. |
 | `DJANGO_SSL_REQUIRE` | Boolean | `true` | Require HTTPS connections in production. Set to `false` for local development. |
+| `ENABLE_GRANULAR_PERMISSIONS` | Boolean | `false` | Expose granular per-project permissions (viewing recording content, managing API keys) in the team management UI. When `false`, non-admin users are granted both permissions for every project they can access. |
+| `ENABLE_VIEWING_RECORDING_CONTENT` | Boolean | `true` | Allow viewing recording content (recordings, transcripts, chat messages) in the dashboard. When `false`, no user can view recording content, including admins. |
 
 ---
 
@@ -143,6 +153,7 @@ This document lists all supported environment variables for the Attendee applica
 | `DELIVER_WEBHOOK_TASK_MAX_RETRIES` | Integer | (Uses MAX_WEBHOOK_DELIVERY_ATTEMPTS) | Maximum number of times the webhook delivery task can be retried. Can differ from `MAX_WEBHOOK_DELIVERY_ATTEMPTS` for rate limiting or other retry scenarios. |
 | `GLOBAL_WEBHOOK_DELIVERIES_PER_SECOND_RATE_LIMIT` | Integer | (None) | Global rate limit for webhook deliveries per second. If not set, no rate limiting is applied. |
 | `GLOBAL_WEBHOOK_RATE_LIMIT_RETRY_DELAY_SECONDS` | Integer | `3` | Delay (in seconds) before retrying webhook delivery when rate limit is hit. |
+| `DELIVER_WEBHOOK_REQUEST_TIMEOUT` | Float | `10` | Seconds to wait for the webhook destination to respond before the delivery attempt counts as failed. |
 | `DELIVER_WEBHOOK_VERIFY_SSL` | Boolean | `true` | Verify SSL certificates when delivering webhooks. Set to `false` for self-signed certificates (not recommended for production). |
 
 ---
@@ -154,11 +165,14 @@ This document lists all supported environment variables for the Attendee applica
 | `BOT_POD_NAMESPACE` | String | `attendee` | Kubernetes namespace for bot pods. |
 | `INTERNAL_SITE_DOMAIN` | String | (None) | Internal host (and optional port) that bot pods use for callbacks to the app, e.g. `attendee-app.<namespace>.svc.cluster.local:8000`. When set, in-cluster bot callbacks target it over HTTP, bypassing the public ingress (useful when bot pods are restricted by a NetworkPolicy). When unset, callbacks fall back to `EXTERNAL_WEBHOOK_SITE_DOMAIN` / `SITE_DOMAIN`. |
 | `USE_SECURE_COOKIE_FOR_SIGNED_IN_GOOGLE_MEET_BOTS` | Boolean | `true` | Add the Secure flag to the Google Meet SSO sign-in session cookie. Set to `false` when the Google Meet sign-in flow navigates over an HTTP url. |
+| `WEBEX_INTEGRATION_CLIENT_ID` | String | (None) | Client ID of the Webex Integration that issues the tokens of the projects' Webex Service Apps. Required for Webex bots. See [Webex Bots](webex.md#additional-setup-for-self-hosting). |
+| `WEBEX_INTEGRATION_CLIENT_SECRET` | String | (None) | Client secret of that Webex Integration. Required for Webex bots. |
 | `WEBPAGE_STREAMER_POD_NAMESPACE` | String | `attendee-webpage-streamer` | Kubernetes namespace for webpage streamer pods. |
 | `CHARGE_CREDITS_FOR_BOTS` | Boolean | `false` | Enable credit charging for bot operations. |
 | `CUSTOM_BOT_POD_SPEC_TYPES` | String | (Empty) | Comma-separated list of custom bot pod specification types. |
 | `ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME` | Boolean | `false` | Enforce domain allowlist in Chrome web bot. |
 | `MASK_TRANSCRIPT_IN_LOGS` | Boolean | `false` | Mask transcript content in application logs for privacy. |
+| `ENABLE_BOT_WEBSOCKET_PORT_SELECTION_BY_OS` | Boolean | `false` | Let the OS pick the port of the web bot websocket server instead of using a fixed port per platform (with up to 10 retries). Enable it when many bots share a network namespace, e.g. celery workers or `docker-compose-multi-host` with host networking. |
 
 ---
 
@@ -168,6 +182,9 @@ This document lists all supported environment variables for the Attendee applica
 |----------|------|---------|-------------|
 | `ATTENDEE_LOG_LEVEL` | String | `INFO` | Application log level: `DEBUG`, `INFO`, `WARNING`, `ERROR`, or `CRITICAL`. |
 | `ATTENDEE_LOG_FORMAT` | String | (None) | Log format type: use `json` for JSON structured logs or leave empty for plain text. When `None`, default formatter is used. |
+| `SAVE_BOT_LOGS_TO_DASHBOARD` | Boolean | `false` | When `true` and `IS_A_BOT_POD` is `true`, the bot pod writes its application logs to a file and attaches them to the bot's last event as a debug file, viewable in the dashboard. |
+| `BOT_POD_LOG_FILE_PATH` | String | `/tmp/bot_pod_logs.log` | Path the bot pod writes its application logs to when `SAVE_BOT_LOGS_TO_DASHBOARD` is enabled. |
+| `BOT_POD_LOG_FILE_MAX_BYTES` | Integer | `26214400` | Maximum size of the saved bot pod log file. Once reached, the oldest logs are dropped. |
 
 ---
 

@@ -5,7 +5,7 @@ billiard==4.2.1
 boto3==1.35.64
 botocore==1.35.64
 celery==5.4.0
-certifi==2024.8.30
+certifi==2026.10.23
 cffi==2.0.0
 charset-normalizer==3.4.0
 click==8.1.7
@@ -19,7 +19,7 @@ django-allauth==65.1.0
 django-concurrency==2.6.0
 django-extensions==3.2.3
 django-storages==1.14.4
-djangorestframework==3.15.2
+djangorestframework==3.18.3
 drf-spectacular==0.27.2
 gunicorn==23.0.0
 h11==0.16.0
@@ -38,7 +38,7 @@ prompt_toolkit==3.0.48
 psycopg2==2.9.10
 pycparser==2.22
 pydub==0.25.1
-PyJWT==2.13.0
+PyJWT==2.15.0
 PySocks==1.7.1
 python-dateutil==2.9.0.post0
 python-dotenv==1.0.1
@@ -106,3 +106,4 @@ django-csp==4.0
 pyotp==2.9.0
 Cython==3.2.4
 gdown==6.0.0
+livekit==1.1.8

@@ -329,14 +329,14 @@ class BotResourceSnapshotTaker:
                 self._first_cpu_usage_millicores = get_cpu_usage_millicores()
                 self._first_cpu_usage_sample_time = now
             except Exception as e:
-                logger.error(f"Error getting first cpu usage for bot {self.bot.object_id}: {e}")
+                logger.warning(f"Error getting first cpu usage for bot {self.bot.object_id}: {e}")
                 return
 
             try:
                 self._first_network_stats = get_network_interface_stats()
                 self._first_network_sample_time = now
             except Exception as e:
-                logger.error(f"Error getting first network stats for bot {self.bot.object_id}: {e}")
+                logger.warning(f"Error getting first network stats for bot {self.bot.object_id}: {e}")
 
         # Don't take a snapshot if it's been less than 1 minutes since the last snapshot.
         if (now - self._last_snapshot_time) < datetime.timedelta(minutes=1):
@@ -351,7 +351,7 @@ class BotResourceSnapshotTaker:
             ram_usage_megabytes = container_memory_mib()
         except Exception as e:
             # Could log this error, but for now we will just skip taking the snapshot.
-            logger.error(f"Error getting memory usage for bot {self.bot.object_id}: {e}")
+            logger.warning(f"Error getting memory usage for bot {self.bot.object_id}: {e}")
             return
 
         if self._first_cpu_usage_millicores is not None:
@@ -362,7 +362,7 @@ class BotResourceSnapshotTaker:
                 self._first_cpu_usage_millicores = None
                 self._first_cpu_usage_sample_time = None
             except Exception as e:
-                logger.error(f"Error getting second cpu usage for bot {self.bot.object_id}: {e}")
+                logger.warning(f"Error getting second cpu usage for bot {self.bot.object_id}: {e}")
                 return
 
         # Network deltas
@@ -375,7 +375,7 @@ class BotResourceSnapshotTaker:
                 self._first_network_stats = None
                 self._first_network_sample_time = None
             except Exception as e:
-                logger.error(f"Error getting network delta for bot {self.bot.object_id}: {e}")
+                logger.warning(f"Error getting network delta for bot {self.bot.object_id}: {e}")
 
         if ram_usage_megabytes is None or cpu_usage_millicores_delta_per_second is None:
             logger.error(f"Error getting resource usage for bot {self.bot.object_id}: {ram_usage_megabytes} or {cpu_usage_millicores_delta_per_second} was None")
@@ -385,19 +385,19 @@ class BotResourceSnapshotTaker:
         try:
             processes = get_process_memory_list()
         except Exception as e:
-            logger.error(f"Error getting process memory list for bot {self.bot.object_id}: {e}. Continuing...")
+            logger.warning(f"Error getting process memory list for bot {self.bot.object_id}: {e}. Continuing...")
 
         db_connection_count = None
         try:
             db_connection_count = get_db_connection_count()
         except Exception as e:
-            logger.error(f"Error getting db connection count for bot {self.bot.object_id}: {e}. Continuing...")
+            logger.warning(f"Error getting db connection count for bot {self.bot.object_id}: {e}. Continuing...")
 
         redis_connection_count = None
         try:
             redis_connection_count = get_redis_connection_count()
         except Exception as e:
-            logger.error(f"Error getting redis connection count for bot {self.bot.object_id}: {e}. Continuing...")
+            logger.warning(f"Error getting redis connection count for bot {self.bot.object_id}: {e}. Continuing...")
 
         snapshot_data = {
             "ram_usage_megabytes": ram_usage_megabytes,

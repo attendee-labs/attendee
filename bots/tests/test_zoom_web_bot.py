@@ -7,12 +7,13 @@ from unittest.mock import MagicMock, patch
 
 import requests
 from django.db import connection
-from django.test import TransactionTestCase, tag
+from django.test import TransactionTestCase, override_settings, tag
 from selenium.common.exceptions import NoSuchElementException
 
 from bots.bot_adapter import BotAdapter
 from bots.bot_controller.bot_controller import BotController
-from bots.models import Bot, BotEventManager, BotEventSubTypes, BotEventTypes, BotStates, Credentials, Organization, Project, Recording, RecordingTypes, TranscriptionProviders, TranscriptionTypes, WebhookDeliveryAttempt, WebhookSubscription, WebhookTriggerTypes, ZoomMeetingToZoomOAuthConnectionMapping, ZoomOAuthApp, ZoomOAuthConnection, ZoomOAuthConnectionStates
+from bots.models import Bot, BotEventManager, BotEventSubTypes, BotEventTypes, BotStates, Credentials, Organization, ParticipantEvent, ParticipantEventTypes, Project, Recording, RecordingTypes, TranscriptionProviders, TranscriptionTypes, WebhookDeliveryAttempt, WebhookSecret, WebhookSubscription, WebhookTriggerTypes, ZoomMeetingToZoomOAuthConnectionMapping, ZoomOAuthApp, ZoomOAuthConnection, ZoomOAuthConnectionStates
+from bots.web_bot_adapter.web_bot_adapter import WebBotAdapter
 
 
 # Helper functions for creating mocks
@@ -779,6 +780,127 @@ class TestZoomWebBot(TransactionTestCase):
         # Close the database connection since we're in a thread
         connection.close()
 
+    @override_settings(ENABLE_WAITING_ROOM_STATE_FOR_WEB_BOTS=True, MONITOR_DOMAIN_ALLOWLIST_IN_CHROME=False, ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME=False)
+    @patch("bots.zoom_web_bot_adapter.zoom_web_ui_methods.WebDriverWait")
+    @patch("bots.zoom_web_bot_adapter.zoom_web_ui_methods.start_zoom_web_static_server", return_value=8080)
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
+    def test_bot_put_in_waiting_room_then_admitted(
+        self,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+        mock_start_static_server,
+        MockWebDriverWait,
+    ):
+        """Test that a bot which lands in the Zoom waiting room records a BOT_PUT_IN_WAITING_ROOM event
+        and then joins normally once it is admitted.
+
+        The real wait_to_be_admitted_to_meeting loop and check_if_in_waiting_room run unmocked — only
+        the values returned by window.userHasEnteredMeeting and window.userIsInWaitingRoom are controlled.
+
+        Flow:
+        1. userHasEnteredMeeting returns False while the bot is in the waiting room
+        2. userIsInWaitingRoom returns True -> BOT_PUT_IN_WAITING_ROOM is sent exactly once
+        3. Subsequent loop iterations do not resend the waiting room message
+        4. The bot is admitted: userHasEnteredMeeting returns True and the join succeeds
+        5. The bot transitions WAITING_ROOM -> JOINED and later leaves normally
+        """
+        # Configure the mock uploader
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        # Mock the Chrome driver
+        mock_driver = create_mock_zoom_web_driver()
+        MockChromeDriver.return_value = mock_driver
+
+        # Mock virtual display
+        mock_display = MagicMock()
+        MockDisplay.return_value = mock_display
+
+        # Mock WebDriverWait to return mock elements for post-admission UI
+        mock_wait_instance = MagicMock()
+        mock_element = MagicMock()
+        mock_element.is_displayed.return_value = True
+        mock_wait_instance.until.return_value = mock_element
+        MockWebDriverWait.return_value = mock_wait_instance
+
+        # The first three userHasEnteredMeeting checks happen while the bot sits in the waiting room;
+        # the next check reports that the bot was admitted.
+        user_has_entered_meeting_call_count = [0]
+        user_is_in_waiting_room_queries = []
+
+        def execute_script_side_effect(script, *args):
+            if "userHasEnteredMeeting" in script:
+                user_has_entered_meeting_call_count[0] += 1
+                return user_has_entered_meeting_call_count[0] > 3
+            if "userIsInWaitingRoom" in script:
+                user_is_in_waiting_room_queries.append(script)
+                return True
+            if "userHasEncounteredOnBehalfTokenUserNotInMeetingError" in script:
+                return False
+            if "userHasEncounteredGenericJoinError" in script:
+                return False
+            return None
+
+        mock_driver.execute_script.side_effect = execute_script_side_effect
+
+        # Not waiting for the host, no passcode/login prompts, no captcha
+        mock_driver.find_element.side_effect = NoSuchElementException("Element not found")
+        mock_driver.find_elements.return_value = []
+
+        with patch.object(WebBotAdapter, "send_bot_put_in_waiting_room_message", autospec=True, side_effect=WebBotAdapter.send_bot_put_in_waiting_room_message) as mock_send_waiting_room_message:
+            # Create bot controller
+            controller = BotController(self.bot.id)
+
+            # Run the bot in a separate thread since it has an event loop
+            bot_thread = threading.Thread(target=controller.run)
+            bot_thread.daemon = True
+            bot_thread.start()
+
+            # Allow time for the bot to sit in the waiting room and then be admitted
+            time.sleep(10)
+
+            # The waiting room state is only queried until the waiting room message has been sent
+            self.assertEqual(len(user_is_in_waiting_room_queries), 1)
+            self.assertEqual(mock_send_waiting_room_message.call_count, 1)
+            self.assertTrue(controller.adapter.sent_bot_put_in_waiting_room_message)
+            self.assertEqual(user_has_entered_meeting_call_count[0], 4)
+
+            # The bot entered the waiting room and was then admitted
+            self.bot.refresh_from_db()
+            self.assertEqual(self.bot.state, BotStates.JOINED_NOT_RECORDING)
+            event_types = list(self.bot.bot_events.order_by("created_at").values_list("event_type", flat=True))
+            self.assertEqual(event_types, [BotEventTypes.JOIN_REQUESTED, BotEventTypes.BOT_PUT_IN_WAITING_ROOM, BotEventTypes.BOT_JOINED_MEETING])
+
+            waiting_room_event = self.bot.bot_events.get(event_type=BotEventTypes.BOT_PUT_IN_WAITING_ROOM)
+            self.assertEqual(waiting_room_event.old_state, BotStates.JOINING)
+            self.assertEqual(waiting_room_event.new_state, BotStates.WAITING_ROOM)
+
+            joined_event = self.bot.bot_events.get(event_type=BotEventTypes.BOT_JOINED_MEETING)
+            self.assertEqual(joined_event.old_state, BotStates.WAITING_ROOM)
+            self.assertEqual(joined_event.new_state, BotStates.JOINED_NOT_RECORDING)
+
+            # Simulate meeting ending to trigger cleanup
+            controller.adapter.only_one_participant_in_meeting_at = time.time() - 10000000000
+            time.sleep(4)
+
+            self.bot.refresh_from_db()
+            self.assertFalse(self.bot.bot_events.filter(event_type=BotEventTypes.FATAL_ERROR).exists())
+            self.assertFalse(self.bot.bot_events.filter(event_type=BotEventTypes.COULD_NOT_JOIN).exists())
+
+            # Cleanup
+            controller.cleanup()
+            bot_thread.join(timeout=5)
+
+            # If thread is still running after timeout, that's a problem to report
+            if bot_thread.is_alive():
+                print("WARNING: Bot thread did not terminate properly after cleanup")
+
+            # Close the database connection since we're in a thread
+            connection.close()
+
     @patch("bots.zoom_web_bot_adapter.zoom_web_ui_methods.WebDriverWait")
     @patch("bots.zoom_web_bot_adapter.zoom_web_ui_methods.start_zoom_web_static_server", return_value=8080)
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
@@ -1170,4 +1292,167 @@ class TestZoomWebBot(TransactionTestCase):
         bot_thread.join(timeout=5)
 
         # Close the database connection since we're in a thread
+        connection.close()
+
+    @patch("bots.models.Bot.create_debug_recording", return_value=False)
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
+    @patch("bots.zoom_web_bot_adapter.zoom_web_ui_methods.ZoomWebUIMethods.attempt_to_join_meeting", return_value=None)
+    @patch("time.time")
+    @patch("bots.tasks.deliver_webhook_task.deliver_webhook")
+    def test_bot_sends_screenshare_start_stop_participant_event_webhooks(
+        self,
+        mock_deliver_webhook,
+        mock_time,
+        mock_attempt_to_join,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+        mock_create_debug_recording,
+    ):
+        mock_deliver_webhook.return_value = None
+
+        WebhookSecret.objects.create(project=self.project)
+        WebhookSubscription.objects.create(
+            project=self.project,
+            url="https://example.com/webhook",
+            triggers=[
+                WebhookTriggerTypes.BOT_STATE_CHANGE,
+                WebhookTriggerTypes.PARTICIPANT_EVENTS_JOIN_LEAVE,
+                WebhookTriggerTypes.PARTICIPANT_EVENTS_SCREENSHARE_START_STOP,
+            ],
+            is_active=True,
+        )
+
+        current_time = 1000.0
+        mock_time.return_value = current_time
+
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        mock_driver = create_mock_zoom_web_driver()
+        MockChromeDriver.return_value = mock_driver
+
+        mock_display = MagicMock()
+        MockDisplay.return_value = mock_display
+
+        controller = BotController(self.bot.id)
+
+        bot_thread = threading.Thread(target=controller.run)
+        bot_thread.daemon = True
+        bot_thread.start()
+
+        def simulate_join_flow():
+            nonlocal current_time
+
+            # Simulate participants joining
+            bot_participant_data = {"deviceId": "bot1", "fullName": "Test Zoom Web Bot", "active": True, "isCurrentUser": True}
+            controller.adapter.handle_participant_update(bot_participant_data)
+
+            participant_data = {"deviceId": "user1", "fullName": "Test User", "active": True, "isCurrentUser": False}
+            controller.adapter.handle_participant_update(participant_data)
+
+            controller.adapter.last_audio_message_processed_time = current_time
+
+            time.sleep(3)
+
+            # Simulate screenshare start event for the user participant
+            controller.adapter.handle_screenshare_start_stop_event(
+                {
+                    "participantId": "user1",
+                    "isScreenshareStart": True,
+                    "timestamp": int(current_time * 1000),
+                }
+            )
+
+            time.sleep(0.5)
+
+            # Simulate screenshare stop event for the user participant
+            controller.adapter.handle_screenshare_start_stop_event(
+                {
+                    "participantId": "user1",
+                    "isScreenshareStart": False,
+                    "timestamp": int(current_time * 1000) + 30000,
+                }
+            )
+
+            # Also simulate a screenshare event for the bot (should NOT produce a webhook)
+            controller.adapter.handle_screenshare_start_stop_event(
+                {
+                    "participantId": "bot1",
+                    "isScreenshareStart": True,
+                    "timestamp": int(current_time * 1000) + 31000,
+                }
+            )
+
+            time.sleep(1)
+
+            # Simulate participant leaving
+            participant_data = {"deviceId": "user1", "fullName": "Test User", "active": False, "isCurrentUser": False}
+            controller.adapter.handle_participant_update(participant_data)
+
+            # Trigger auto-leave
+            controller.adapter.only_one_participant_in_meeting_at = time.time() - 10000000000
+            time.sleep(4)
+
+            connection.close()
+
+        threading.Timer(2, simulate_join_flow).start()
+
+        bot_thread.join(timeout=15)
+
+        self.bot.refresh_from_db()
+        self.assertEqual(self.bot.state, BotStates.ENDED)
+
+        # Verify ParticipantEvent records for screenshare start/stop were created for the user
+        user_participant_events = ParticipantEvent.objects.filter(participant__bot=self.bot, participant__uuid="user1")
+        screenshare_start_event = user_participant_events.filter(event_type=ParticipantEventTypes.SCREENSHARE_START).first()
+        self.assertIsNotNone(screenshare_start_event, "Expected a SCREENSHARE_START participant event for the user")
+        self.assertEqual(screenshare_start_event.participant.full_name, "Test User")
+        self.assertEqual(screenshare_start_event.timestamp_ms, int(current_time * 1000))
+
+        screenshare_stop_event = user_participant_events.filter(event_type=ParticipantEventTypes.SCREENSHARE_STOP).first()
+        self.assertIsNotNone(screenshare_stop_event, "Expected a SCREENSHARE_STOP participant event for the user")
+        self.assertEqual(screenshare_stop_event.participant.full_name, "Test User")
+        self.assertEqual(screenshare_stop_event.timestamp_ms, int(current_time * 1000) + 30000)
+
+        # Verify that a SCREENSHARE_START event was also created for the bot participant
+        bot_screenshare_events = ParticipantEvent.objects.filter(participant__bot=self.bot, participant__uuid="bot1", event_type=ParticipantEventTypes.SCREENSHARE_START)
+        self.assertEqual(bot_screenshare_events.count(), 1, "Expected a SCREENSHARE_START event for the bot participant")
+
+        # Verify webhook delivery attempts for screenshare start/stop
+        screenshare_webhook_attempts = WebhookDeliveryAttempt.objects.filter(
+            bot=self.bot,
+            webhook_trigger_type=WebhookTriggerTypes.PARTICIPANT_EVENTS_SCREENSHARE_START_STOP,
+        )
+        # Only user events should trigger webhooks (bot events are suppressed)
+        self.assertEqual(screenshare_webhook_attempts.count(), 2, "Expected exactly 2 screenshare webhook delivery attempts (start and stop for the user)")
+
+        screenshare_start_webhook = screenshare_webhook_attempts.filter(payload__event_type="screenshare_start").first()
+        self.assertIsNotNone(screenshare_start_webhook)
+        self.assertEqual(screenshare_start_webhook.payload["participant_name"], "Test User")
+        self.assertEqual(screenshare_start_webhook.payload["participant_uuid"], "user1")
+        self.assertEqual(screenshare_start_webhook.payload["timestamp_ms"], int(current_time * 1000))
+
+        screenshare_stop_webhook = screenshare_webhook_attempts.filter(payload__event_type="screenshare_stop").first()
+        self.assertIsNotNone(screenshare_stop_webhook)
+        self.assertEqual(screenshare_stop_webhook.payload["participant_name"], "Test User")
+        self.assertEqual(screenshare_stop_webhook.payload["participant_uuid"], "user1")
+        self.assertEqual(screenshare_stop_webhook.payload["timestamp_ms"], int(current_time * 1000) + 30000)
+
+        # Verify that no screenshare webhook was created for the bot participant
+        bot_screenshare_webhooks = screenshare_webhook_attempts.filter(payload__participant_uuid="bot1")
+        self.assertEqual(bot_screenshare_webhooks.count(), 0, "Expected no screenshare webhooks for the bot participant")
+
+        # Verify join/leave webhooks were also created (ensuring screenshare events don't interfere)
+        join_leave_webhook_attempts = WebhookDeliveryAttempt.objects.filter(
+            bot=self.bot,
+            webhook_trigger_type=WebhookTriggerTypes.PARTICIPANT_EVENTS_JOIN_LEAVE,
+        )
+        self.assertGreater(join_leave_webhook_attempts.count(), 0, "Expected join/leave webhook delivery attempts")
+
+        controller.cleanup()
+        bot_thread.join(timeout=5)
+
         connection.close()

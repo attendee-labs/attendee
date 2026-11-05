@@ -54,6 +54,7 @@
                        onclick="setActiveLink(this)">
                         <i class="bi bi-speedometer2"></i> Quick start
                     </a>
+                    {% if can_manage_api_keys %}
                     <a class="nav-link" 
                        hx-get="{% url 'projects:project-api-keys' project.object_id %}" 
                        hx-select="#content"
@@ -63,6 +64,7 @@
                        onclick="setActiveLink(this)">
                         <i class="bi bi-key"></i> API Keys
                     </a>
+                    {% endif %}
                     <a class="nav-link" 
                         href="https://docs.attendee.dev"
                         target="_blank"
@@ -206,6 +208,28 @@
                                 onclick="setActiveLink(this)">
                                     <i class="bi bi-bar-chart"></i> Usage
                                 </a>
+                                {% if can_view_instance_health %}
+                                <a class="nav-link ps-4"
+                                hx-get="{% url 'projects:project-instance-health' project.object_id %}"
+                                hx-select="#content"
+                                hx-target="#content"
+                                hx-swap="outerHTML"
+                                hx-push-url="true"
+                                onclick="setActiveLink(this)">
+                                    <i class="bi bi-heart-pulse"></i> Instance Health
+                                </a>
+                                {% endif %}
+                                {% if can_view_bot_resource_usage %}
+                                <a class="nav-link ps-4"
+                                hx-get="{% url 'projects:project-bot-resource-usage' project.object_id %}"
+                                hx-select="#content"
+                                hx-target="#content"
+                                hx-swap="outerHTML"
+                                hx-push-url="true"
+                                onclick="setActiveLink(this)">
+                                    <i class="bi bi-cpu"></i> Bot Resource Usage
+                                </a>
+                                {% endif %}
                             </div>
                         </div>
 

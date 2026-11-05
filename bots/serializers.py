@@ -63,7 +63,7 @@ def url_is_allowed_for_voice_agent(url):
 
 def get_openai_model_enum():
     """Get allowed OpenAI models including custom env var if set"""
-    default_models = ["gpt-4o-transcribe", "gpt-4o-mini-transcribe", "gpt-4o-transcribe-diarize"]
+    default_models = ["gpt-4o-transcribe", "gpt-4o-mini-transcribe", "gpt-4o-transcribe-diarize", "gpt-transcribe"]
     custom_model = os.getenv("OPENAI_MODEL_NAME")
     if custom_model and custom_model not in default_models:
         return default_models + [custom_model]
@@ -280,14 +280,85 @@ TRANSCRIPTION_SETTINGS_SCHEMA = {
         "gladia": {
             "type": "object",
             "properties": {
+                "language_config": {
+                    "type": "object",
+                    "properties": {
+                        "languages": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "ISO 639-1 codes of the languages expected in the audio. If one language is passed, it's used as the transcription language. If empty, the language is detected among all supported languages. See here for available languages: https://docs.gladia.io/chapters/language/supported-languages",
+                        },
+                        "code_switching": {
+                            "type": "boolean",
+                            "description": "Whether the language can change between utterances. If false, the language is detected once at the start of the audio. Defaults to false. See details: https://docs.gladia.io/chapters/language/code-switching",
+                        },
+                    },
+                    "additionalProperties": False,
+                    "description": "Sent to Gladia as language_config. See details: https://docs.gladia.io/api-reference/v2/pre-recorded/init",
+                },
+                "model": {
+                    "type": "string",
+                    "enum": ["solaria-1", "solaria-3", "solaria-fusion"],
+                    "description": "The Gladia model to use for transcription. Defaults to solaria-1. solaria-3 only supports English, French, German, Spanish and Italian, and does not support code switching. See details: https://docs.gladia.io/chapters/introduction/models",
+                },
+                "custom_vocabulary": {
+                    "type": "boolean",
+                    "description": "Whether to favor the words and phrases in custom_vocabulary_config in the transcript. See details: https://docs.gladia.io/chapters/audio-intelligence/custom-vocabulary",
+                },
+                "custom_vocabulary_config": {
+                    "type": "object",
+                    "properties": {
+                        "vocabulary": {
+                            "type": "array",
+                            "items": {
+                                "oneOf": [
+                                    {"type": "string"},
+                                    {
+                                        "type": "object",
+                                        "properties": {
+                                            "value": {"type": "string", "description": "The word or phrase to favor in the transcript."},
+                                            "intensity": {"type": "number", "minimum": 0, "maximum": 1, "description": "How readily the word replaces similar-sounding words. Overrides default_intensity."},
+                                            "pronunciations": {"type": "array", "items": {"type": "string"}, "description": "Other ways the word can be pronounced."},
+                                            "language": {"type": "string", "description": "ISO 639-1 code of the language the word is pronounced in."},
+                                        },
+                                        "required": ["value"],
+                                        "additionalProperties": False,
+                                    },
+                                ]
+                            },
+                            "description": "The words or phrases to favor. Each item is a string or an object with value and optional intensity, pronunciations and language.",
+                        },
+                        "default_intensity": {"type": "number", "minimum": 0, "maximum": 1, "description": "Intensity for vocabulary items that don't set their own."},
+                    },
+                    "required": ["vocabulary"],
+                    "additionalProperties": False,
+                    "description": "Sent to Gladia as custom_vocabulary_config. Only used if custom_vocabulary is true. See details: https://docs.gladia.io/api-reference/v2/pre-recorded/init",
+                },
+                "custom_spelling": {
+                    "type": "boolean",
+                    "description": "Whether to apply the spellings in custom_spelling_config to the transcript. See details: https://docs.gladia.io/chapters/audio-intelligence/custom-spelling",
+                },
+                "custom_spelling_config": {
+                    "type": "object",
+                    "properties": {
+                        "spelling_dictionary": {
+                            "type": "object",
+                            "additionalProperties": {"type": "array", "items": {"type": "string"}},
+                            "description": 'Maps each spelling to write (case-sensitive) to the variants to replace (case-insensitive), e.g. {"SQL": ["sequel"]}.',
+                        },
+                    },
+                    "required": ["spelling_dictionary"],
+                    "additionalProperties": False,
+                    "description": "Sent to Gladia as custom_spelling_config. Only used if custom_spelling is true. See details: https://docs.gladia.io/api-reference/v2/pre-recorded/init",
+                },
                 "code_switching_languages": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "The languages to transcribe the meeting in when using code switching. See here for available languages: https://docs.gladia.io/chapters/limits-and-specifications/languages",
+                    "description": "Deprecated, use language_config instead. The languages to transcribe the meeting in when using code switching. Ignored if language_config is set. See here for available languages: https://docs.gladia.io/chapters/language/supported-languages",
                 },
                 "enable_code_switching": {
                     "type": "boolean",
-                    "description": "Whether to use code switching to transcribe the meeting in multiple languages.",
+                    "description": "Deprecated, use language_config instead. Whether to use code switching to transcribe the meeting in multiple languages. Ignored if language_config is set.",
                 },
             },
             "required": [],
@@ -342,10 +413,16 @@ TRANSCRIPTION_SETTINGS_SCHEMA = {
                     "type": "string",
                     "description": "The language code to use for transcription. See here for available languages: https://www.assemblyai.com/docs/speech-to-text/pre-recorded-audio/supported-languages",
                 },
+                "language_codes": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "The languages spoken in the multi-language audio. Cannot be combined with language_code or language_detection. See details: https://www.assemblyai.com/docs/pre-recorded-audio/set-language-manually",
+                },
                 "language_detection": {
                     "type": "boolean",
                     "description": "Whether to automatically detect the spoken language.",
                 },
+                "language_confidence_threshold": {"type": "number", "minimum": 0, "maximum": 1, "description": "Fail if the confidence is below the threshold. Only used with language_detection. See details: https://www.assemblyai.com/docs/pre-recorded-audio/language-detection"},
                 "keyterms_prompt": {"type": "array", "items": {"type": "string"}, "description": "List of words or phrases to boost in the transcript. Only supported for when using the 'slam-1' speech model. See AssemblyAI docs for details."},
                 "custom_spelling": {"type": "array", "items": {"type": "object", "properties": {"from": {"type": "array", "items": {"type": "string"}}, "to": {"type": "string"}}, "required": ["from", "to"], "additionalProperties": False}, "description": "List of {from: [...], to: ...} entries that deterministically replace known misspellings with the correct spelling at the engine level, preserving word-level timestamps. See AssemblyAI docs for details."},
                 "prompt": {"type": "string", "description": "Natural language prompt of up to 1500 words providing contextual information (e.g. meeting topic, participant names, domain terms) to bias transcription. Only supported for the 'universal-3-5-pro' speech model; ignored otherwise. See AssemblyAI docs for details."},
@@ -353,7 +430,12 @@ TRANSCRIPTION_SETTINGS_SCHEMA = {
                 "speech_models": {"type": "array", "items": {"type": "string"}, "uniqueItems": True, "description": "The speech models to use for transcription in order of preference. Defaults to ['universal-3-5-pro', 'universal-2']. See AssemblyAI docs for details."},
                 "speaker_labels": {"type": "boolean", "description": "Whether to enable AssemblyAI's ML-based diarization. Only needed if multiple people are speaking into a single microphone. Defaults to false."},
                 "use_eu_server": {"type": "boolean", "description": "Whether to use the EU server for transcription. Defaults to false."},
-                "language_detection_options": {"type": "object", "properties": {"expected_languages": {"type": "array", "items": {"type": "string"}}, "fallback_language": {"type": "string"}}, "description": "Options for controlling the automatic language detection. See AssemblyAI docs for details.", "additionalProperties": False},
+                "language_detection_options": {
+                    "type": "object",
+                    "properties": {"expected_languages": {"type": "array", "items": {"type": "string"}}, "fallback_language": {"type": "string"}, "code_switching": {"type": "boolean"}, "code_switching_confidence_threshold": {"type": "number", "minimum": 0, "maximum": 1}},
+                    "description": "Options for controlling the automatic language detection. See AssemblyAI docs for details.",
+                    "additionalProperties": False,
+                },
             },
             "required": [],
             "additionalProperties": False,
@@ -370,6 +452,11 @@ TRANSCRIPTION_SETTINGS_SCHEMA = {
                     "type": "string",
                     "enum": ["ar-sa", "ar-ae", "bg-bg", "ca-es", "zh-cn", "zh-hk", "zh-tw", "hr-hr", "cs-cz", "da-dk", "nl-be", "nl-nl", "en-au", "en-ca", "en-in", "en-nz", "en-gb", "en-us", "et-ee", "fi-fi", "fr-ca", "fr-fr", "de-de", "de-ch", "el-gr", "he-il", "hi-in", "hu-hu", "id-id", "it-it", "ja-jp", "ko-kr", "lv-lv", "lt-lt", "nb-no", "pl-pl", "pt-br", "pt-pt", "ro-ro", "ru-ru", "sr-rs", "sk-sk", "sl-si", "es-mx", "es-es", "sv-se", "th-th", "tr-tr", "uk-ua", "vi-vn", "cy-gb"],
                     "description": "The language code for Teams closed captions (e.g. 'en-us'). This will change the closed captions language for everyone in the meeting, not just the bot. See here for available languages and codes: https://docs.google.com/spreadsheets/d/1F-1iLJ_4btUZJkZcD2m5sF3loqGbB0vTzgOubwQTb5o/edit?usp=sharing",
+                },
+                "teams_language_enforcement_duration_seconds": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Number of seconds after the bot sets the Teams closed captions language during which it will change the language back if another participant changes it. This is needed because in Teams the closed captions language is a single setting shared by everyone in the meeting rather than set per participant, so any participant can change the language the bot is transcribing in. Only relevant if teams_language is set. Defaults to 0, meaning the language is never changed back.",
                 },
                 "zoom_language": {
                     "type": "string",
@@ -830,6 +917,10 @@ class TeamsSettingsJSONField(serializers.JSONField):
                 "additionalProperties": False,
                 "description": "The user ID of the Zoom OAuth Connection to use for the onbehalf token.",
             },
+            "webinar_user_email": {
+                "type": "string",
+                "description": "The email address to use when joining a Zoom webinar. When this is set, the bot joins using the webinar flow (accepting a promotion to panelist if the host offers one). Leave unset for regular meetings.",
+            },
         },
         "required": [],
         "additionalProperties": False,
@@ -903,6 +994,11 @@ def get_webhook_trigger_enum():
     from .models import WebhookTriggerTypes
 
     return list(WebhookTriggerTypes._get_mapping().values())
+
+
+def build_webhook_url_regexp():
+    """Regexp for webhook URLs. Allow http:// when REQUIRE_HTTPS_WEBHOOKS is disabled."""
+    return "^https://.*" if settings.REQUIRE_HTTPS_WEBHOOKS else "^https?://.*"
 
 
 @extend_schema_field(
@@ -1137,6 +1233,51 @@ class VoiceAgentSettingsJSONField(serializers.JSONField):
     pass
 
 
+ROOM_SYNC_SETTINGS_SCHEMA = {
+    "type": "object",
+    "description": "Settings for syncing meeting media and participants with an external real-time room. Currently only LiveKit is supported.",
+    "properties": {
+        "livekit": {
+            "type": "object",
+            "description": "LiveKit connection details. The LiveKit server URL is configured as part of the project's LiveKit credentials.",
+            "properties": {
+                "room_name": {
+                    "type": "string",
+                    "description": "The name of the LiveKit room the bot should join.",
+                },
+                "source_participant": {
+                    "type": "object",
+                    "description": "Identifies the LiveKit participant whose audio and video the bot should stream into the meeting. If omitted, no media will be streamed into the meeting. At least one of 'identity' or 'publish_on_behalf' must be provided. When both are provided, tracks matched by 'publish_on_behalf' are preferred, and tracks matched by 'identity' are streamed whenever no 'publish_on_behalf' track is available.",
+                    "properties": {
+                        "identity": {
+                            "type": "string",
+                            "description": "The identity of the LiveKit participant to stream from.",
+                        },
+                        "publish_on_behalf": {
+                            "type": "string",
+                            "description": "The bot streams tracks from participants whose 'lk.publish_on_behalf' attribute equals this value, which is how a LiveKit agent or avatar publishes on behalf of another participant.",
+                        },
+                    },
+                    "anyOf": [
+                        {"required": ["identity"]},
+                        {"required": ["publish_on_behalf"]},
+                    ],
+                    "additionalProperties": False,
+                },
+            },
+            "required": ["room_name"],
+            "additionalProperties": False,
+        },
+    },
+    "additionalProperties": False,
+}
+
+
+@extend_schema_field(ROOM_SYNC_SETTINGS_SCHEMA)
+class RoomSyncSettingsJSONField(serializers.JSONField):
+    pass
+
+
 @extend_schema_field(
     {
         "type": "object",
@@ -1234,6 +1375,12 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
         default=None,
     )
 
+    room_sync_settings = RoomSyncSettingsJSONField(
+        help_text="Settings for syncing meeting media and participants with an external real-time room. Currently only LiveKit is supported.",
+        required=False,
+        default=None,
+    )
+
     WEBHOOKS_SCHEMA = {
         "type": "array",
         "items": {
@@ -1241,7 +1388,7 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
             "properties": {
                 "url": {
                     "type": "string",
-                    "pattern": "^https://.*",
+                    "pattern": build_webhook_url_regexp(),
                 },
                 "triggers": {
                     "type": "array",
@@ -1366,6 +1513,25 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
 
         return value
 
+    def validate_room_sync_settings(self, value):
+        if value is None:
+            return value
+
+        try:
+            jsonschema.validate(instance=value, schema=ROOM_SYNC_SETTINGS_SCHEMA)
+        except jsonschema.exceptions.ValidationError as e:
+            raise serializers.ValidationError(e.message)
+
+        if value:
+            meeting_url = self.initial_data.get("meeting_url")
+            meeting_type = meeting_type_from_url(meeting_url)
+            use_zoom_web_adapter = self.initial_data.get("zoom_settings", {}).get("sdk", "native") == "web"
+
+            if meeting_type == MeetingTypes.ZOOM and not use_zoom_web_adapter:
+                raise serializers.ValidationError("Room sync is not supported for Zoom when using the native SDK. Please set 'zoom_settings.sdk' to 'web' in the bot creation request.")
+
+        return value
+
     transcription_settings = TranscriptionSettingsJSONField(
         help_text="The transcription settings for the bot, e.g. {'deepgram': {'language': 'en'}}",
         required=False,
@@ -1387,6 +1553,8 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
             elif meeting_type == MeetingTypes.GOOGLE_MEET:
                 value = {"meeting_closed_captions": {}}
             elif meeting_type == MeetingTypes.TEAMS:
+                value = {"meeting_closed_captions": {}}
+            elif meeting_type == MeetingTypes.WEBEX:
                 value = {"meeting_closed_captions": {}}
             else:
                 return None
@@ -1495,9 +1663,9 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
         # Define defaults
         defaults = {"use_login": False, "login_mode": "always", "ui_interaction_mode": "humanized", "login_group_name": None}
 
-        # If use_login is set to true, then ui_interaction_mode should default to "robotic" (when not
+        # If use_login is set to true and login mode is always, then ui_interaction_mode should default to "robotic" (when not
         # explicitly provided), because in this case humanized motion is not needed.
-        if value.get("use_login"):
+        if value.get("use_login") and value.get("login_mode", "always") == "always":
             defaults["ui_interaction_mode"] = "robotic"
 
         try:
@@ -1572,6 +1740,7 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
                 "additionalProperties": False,
                 "description": "The user ID of the Zoom OAuth Connection to use for the onbehalf token.",
             },
+            "webinar_user_email": {"type": "string"},
         },
         "required": [],
         "additionalProperties": False,

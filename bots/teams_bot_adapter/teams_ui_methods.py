@@ -10,6 +10,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
 from bots.models import RecordingViews
+from bots.utils import cyrillicize_keywords_in_string, remove_characters_from_string, truncate_string_with_ellipsis
 from bots.web_bot_adapter.ui_methods import UiBlockedByCaptchaException, UiCouldNotClickElementException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableException, UiRetryableExpectedException
 
 logger = logging.getLogger(__name__)
@@ -62,6 +63,22 @@ class TeamsUIMethods:
             logger.info("Still waiting to be admitted to the meeting after waiting period expired. Raising UiRequestToJoinDeniedException")
             raise UiRequestToJoinDeniedException("Bot was not let in after waiting period expired", step)
 
+    def check_if_in_waiting_room(self):
+        if self.sent_bot_put_in_waiting_room_message:
+            return
+
+        # The caller's loop turns any exception into a failed join, so this must not raise.
+        try:
+            call_state = self.driver.execute_script("return window.callManager?.getCallState();")
+        except Exception as e:
+            logger.info(f"Unknown error occurred in check_if_in_waiting_room. Exception type = {type(e)}")
+            return
+
+        # Values of callManager.getCallState() in the chromedriver payload: InLobby, NegotiatingEncryptionLobby.
+        teams_lobby_call_states = (10, 15)
+        if call_state in teams_lobby_call_states:
+            self.send_bot_put_in_waiting_room_message()
+
     def turn_off_media_inputs(self):
         logger.info("Waiting for the microphone button...")
         microphone_button = self.locate_element(step="turn_off_microphone_button", condition=EC.presence_of_element_located((By.CSS_SELECTOR, '[data-tid="toggle-mute"]')), wait_time_seconds=60)
@@ -112,7 +129,7 @@ class TeamsUIMethods:
             self.x11_input.move_abs(screen_width // 2, screen_height // 2)
             time.sleep(random.uniform(0.1, 0.4))
 
-            num_movements = 5
+            num_movements = 10
             logger.info(f"Wiggling mouse at OS level with {num_movements} movements")
             for _ in range(num_movements):
                 target_x = random.randint(0, screen_width - 1)
@@ -124,6 +141,20 @@ class TeamsUIMethods:
             # break the join flow.
             logger.warning(f"Error wiggling mouse at OS level: {e}")
 
+    def set_display_name_to_allow(self, display_name):
+        # Tell the injected payload to allow this exact display name through Teams' validation regex.
+        self.driver.execute_script("return window.setDisplayNameToAllowForTeamsNameValidationBypass?.(arguments[0]);", display_name)
+
+    def install_join_shield_bypass(self):
+        if self.teams_bot_login_is_available and self.teams_bot_login_should_be_used:
+            logger.info("Not installing JoinShield bypass because we are signed in")
+            return
+
+        if self.driver.execute_script("return window.installJoinShieldBypass?.();"):
+            logger.info("Installed JoinShield bypass")
+        else:
+            logger.warning("Could not install JoinShield bypass")
+
     def fill_out_name_input(self):
         num_attempts = 60
         logger.info("Waiting for the name input field...")
@@ -131,7 +162,14 @@ class TeamsUIMethods:
             try:
                 name_input = WebDriverWait(self.driver, 1).until(EC.presence_of_element_located((By.CSS_SELECTOR, '[data-tid="prejoin-display-name-input"]')))
                 logger.info("Name input found")
-                name_input.send_keys(self.display_name)
+                display_name_cyrillized = cyrillicize_keywords_in_string(
+                    self.display_name,
+                    keywords=["notetaker"],
+                )
+                display_name_cyrillized_and_characters_removed = remove_characters_from_string(display_name_cyrillized, characters="()")
+                display_name_cyrillized_and_characters_removed_and_truncated = truncate_string_with_ellipsis(display_name_cyrillized_and_characters_removed, max_length=50)
+                self.set_display_name_to_allow(display_name_cyrillized_and_characters_removed_and_truncated)
+                name_input.send_keys(display_name_cyrillized_and_characters_removed_and_truncated)
                 return
             except TimeoutException as e:
                 self.look_for_microsoft_login_form_element("name_input")
@@ -290,6 +328,16 @@ class TeamsUIMethods:
             logger.info("Waiting room timeout exceeded. Raising UiCouldNotJoinMeetingWaitingRoomTimeoutException")
             raise UiCouldNotJoinMeetingWaitingRoomTimeoutException("Waiting room timeout exceeded", step)
 
+    def check_if_meeting_ended_but_we_should_retry(self, step):
+        did_meeting_end_but_we_should_retry = self.driver.execute_script("return window.connectionStateManager?.getDidMeetingEndButShouldRetryJoin()")
+        if did_meeting_end_but_we_should_retry:
+            logger.info("Meeting ended but we should retry. Resetting self.meeting_uuid and raising UiTeamsBlockingUsException")
+            self.meeting_uuid = None
+            raise UiTeamsBlockingUsException("Meeting ended but we should retry", step)
+
+    def disable_retry_join_on_meeting_end(self):
+        self.driver.execute_script("window.connectionStateManager?.disableRetryJoinOnMeetingEnd()")
+
     def click_show_more_button(self):
         waiting_room_timeout_started_at = time.time()
         num_attempts = self.automatic_leave_configuration.waiting_room_timeout_seconds * 10
@@ -299,13 +347,16 @@ class TeamsUIMethods:
                 show_more_button = WebDriverWait(self.driver, 1).until(EC.presence_of_element_located((By.ID, "callingButtons-showMoreBtn")))
                 logger.info("Clicking the show more button...")
                 self.click_element(show_more_button, "click_show_more_button")
+                self.disable_retry_join_on_meeting_end()
                 return
             except TimeoutException:
                 self.look_for_sign_in_required_element("click_show_more_button")
                 self.check_if_blocked_by_captcha("click_show_more_button")
                 self.look_for_denied_your_request_element("click_show_more_button")
                 self.look_for_we_could_not_connect_you_element("click_show_more_button")
+                self.check_if_meeting_ended_but_we_should_retry("click_show_more_button")
 
+                self.check_if_in_waiting_room()
                 self.check_if_waiting_room_timeout_exceeded(waiting_room_timeout_started_at, "click_show_more_button")
                 self.check_if_waiting_room_connection_failed(waiting_room_timeout_started_at, "click_show_more_button")
 
@@ -407,7 +458,7 @@ class TeamsUIMethods:
             return "speaker"
 
     def meeting_url_with_identification_token(self):
-        token = self.fetch_teams_bot_identification_token_callback() if self.fetch_teams_bot_identification_token_callback else None
+        token = self.get_teams_bot_identification_token()
         if not token:
             return self.meeting_url
 
@@ -497,10 +548,17 @@ class TeamsUIMethods:
 
         self.disable_video_effects()
 
+        # Start polling the call state, purely for logging purposes
+        self.start_call_state_poller()
+
         logger.info("Waiting for the Join now button...")
         join_button = self.locate_element(step="join_button", condition=EC.presence_of_element_located((By.CSS_SELECTOR, '[data-tid="prejoin-join-button"]')), wait_time_seconds=10)
         logger.info("Clicking the Join now button...")
+        self.install_join_shield_bypass()
         self.click_element(join_button, "join_button")
+
+        # Start polling participants
+        self.start_participants_poller()
 
         # Wait for meeting to load and enable captions
         self.click_show_more_button()
@@ -508,12 +566,22 @@ class TeamsUIMethods:
         # Click the captions button
         self.click_captions_button()
 
-        self.set_layout(self.get_layout_to_select())
+        if not self.disable_incoming_video:
+            self.set_layout(self.get_layout_to_select())
 
         if self.disable_incoming_video:
-            self.disable_incoming_video_in_ui()
+            self.disable_incoming_video_programatically_with_fallback_to_ui()
 
         self.ready_to_show_bot_image()
+
+    def start_participants_poller(self):
+        self.driver.execute_script("window.participantsPoller.start()")
+
+    def start_call_state_poller(self):
+        try:
+            self.driver.execute_script("window.callStatePoller.start()")
+        except Exception as e:
+            logger.warning(f"Error starting call state poller: {e}")
 
     def disable_video_effects(self):
         if not (self.teams_bot_login_is_available and self.teams_bot_login_should_be_used):
@@ -527,6 +595,40 @@ class TeamsUIMethods:
         else:
             logger.error("Failed to disable video effects programmatically")
 
+    def disable_incoming_video_programatically_with_fallback_to_ui(self):
+        """Stop incoming video via window.callManager.disableIncomingVideo in the chromedriver payload,
+        which uses the callTogglingService for signed-in bots and the callingScreenLayout context for
+        anonymous bots, instead of clicking through the View menu.
+
+        If the call fails or the state can't be verified, we fall back to driving the UI.
+        """
+        logger.info("Disabling incoming video programmatically")
+
+        try:
+            result = self.driver.execute_async_script(
+                """
+                const callback = arguments[arguments.length - 1];
+                if (!window.callManager?.disableIncomingVideo) {
+                    callback({ ok: false, error: 'window.callManager.disableIncomingVideo not available' });
+                    return;
+                }
+                window.callManager.disableIncomingVideo()
+                    .then(callback)
+                    .catch((e) => callback({ ok: false, error: (e && e.message) ? e.message : String(e) }));
+                """
+            )
+        except Exception as e:
+            logger.warning(f"Error running disableIncomingVideo: {e}. Falling back to the UI.")
+            self.disable_incoming_video_in_ui()
+            return
+
+        if not result or not result.get("ok"):
+            logger.warning(f"Failed to disable incoming video programmatically: {result.get('error') if result else 'no result'}. Steps: {result.get('steps') if result else None}. Falling back to the UI.")
+            self.disable_incoming_video_in_ui()
+            return
+
+        logger.info(f"Programmatic disable incoming video succeeded. Steps: {result.get('steps')}")
+
     def disable_incoming_video_in_ui(self):
         logger.info("Waiting for the view button...")
         view_button = self.locate_element(step="view_button", condition=EC.element_to_be_clickable((By.CSS_SELECTOR, "#view-mode-button, #custom-view-button")), wait_time_seconds=60)
@@ -539,7 +641,7 @@ class TeamsUIMethods:
         logger.info("Waiting for the turn off incoming video button...")
         for attempt_index in range(num_attempts):
             try:
-                turn_off_incoming_video_button = WebDriverWait(self.driver, 1).until(EC.element_to_be_clickable((By.CSS_SELECTOR, "[aria-label='Turn off incoming video'], [aria-label='Turn off all videos'], #incoming-video-button, #toggle-incoming-video-button")))
+                turn_off_incoming_video_button = WebDriverWait(self.driver, 1).until(EC.element_to_be_clickable((By.CSS_SELECTOR, '#incoming-video-button, #toggle-incoming-video-button, [data-track-module-name="incomingVideoButton"]')))
                 logger.info("Turn off incoming video button found")
                 turn_off_incoming_video_button.click()
                 return

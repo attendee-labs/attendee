@@ -69,7 +69,7 @@ def build_internal_site_url(path=""):
     When unset, fall back to the public site URL, preserving behavior for
     deployments that do not configure an internal route.
     """
-    internal_site_domain = os.getenv("INTERNAL_SITE_DOMAIN")
+    internal_site_domain = settings.INTERNAL_SITE_DOMAIN
     if internal_site_domain:
         return f"http://{internal_site_domain}{path}"
 
@@ -149,6 +149,13 @@ def validate_meeting_url_and_credentials(meeting_url, project):
             relative_url = reverse("bots:project-credentials", kwargs={"object_id": project.object_id})
             settings_url = build_site_url(relative_url)
             return {"error": f"Zoom App credentials are required to create a Zoom bot. Please add Zoom credentials at {settings_url}"}
+
+    if meeting_type_from_url(meeting_url) == MeetingTypes.WEBEX:
+        webex_service_app = project.webex_service_apps.first()
+        if not webex_service_app or not webex_service_app.refresh_token:
+            relative_url = reverse("bots:project-credentials", kwargs={"object_id": project.object_id})
+            settings_url = build_site_url(relative_url)
+            return {"error": f"An authorized Webex Service App is required to create a Webex bot. Please add and authorize it at {settings_url}"}
 
     return None
 
@@ -243,6 +250,7 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
     callback_settings = serializer.validated_data["callback_settings"]
     external_media_storage_settings = serializer.validated_data["external_media_storage_settings"]
     voice_agent_settings = serializer.validated_data["voice_agent_settings"]
+    room_sync_settings = serializer.validated_data["room_sync_settings"]
     kubernetes_settings = serializer.validated_data["kubernetes_settings"]
     initial_state = BotStates.SCHEDULED if join_at else BotStates.READY
 
@@ -267,6 +275,7 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
         "callback_settings": callback_settings,
         "external_media_storage_settings": external_media_storage_settings,
         "voice_agent_settings": voice_agent_settings,
+        "room_sync_settings": room_sync_settings,
         "kubernetes_settings": kubernetes_settings,
     }
 

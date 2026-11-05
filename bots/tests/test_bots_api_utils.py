@@ -47,18 +47,20 @@ class TestBuildSiteUrl(TestCase):
         self.assertEqual(result, "http://localhost:9000/callback")
 
     @patch("bots.bots_api_utils.settings")
-    @patch.dict("os.environ", {"INTERNAL_SITE_DOMAIN": "attendee-app.ai.svc.cluster.local:8000"}, clear=True)
+    @patch.dict("os.environ", {}, clear=True)
     def test_build_internal_site_url_uses_internal_domain_over_http(self, mock_settings):
         """Test that internal callbacks target INTERNAL_SITE_DOMAIN over http."""
         mock_settings.SITE_DOMAIN = "production.example.com"
+        mock_settings.INTERNAL_SITE_DOMAIN = "attendee-app.ai.svc.cluster.local:8000"
         result = build_internal_site_url("/cookie")
         self.assertEqual(result, "http://attendee-app.ai.svc.cluster.local:8000/cookie")
 
     @patch("bots.bots_api_utils.settings")
-    @patch.dict("os.environ", {"INTERNAL_SITE_DOMAIN": "attendee-app.ai.svc.cluster.local:8000", "EXTERNAL_WEBHOOK_SITE_DOMAIN": "external.example.com"}, clear=True)
+    @patch.dict("os.environ", {"EXTERNAL_WEBHOOK_SITE_DOMAIN": "external.example.com"}, clear=True)
     def test_build_site_url_external_ignores_internal_domain(self, mock_settings):
         """Test that external (default) URLs are unaffected by INTERNAL_SITE_DOMAIN."""
         mock_settings.SITE_DOMAIN = "production.example.com"
+        mock_settings.INTERNAL_SITE_DOMAIN = "attendee-app.ai.svc.cluster.local:8000"
         result = build_site_url("/webhook")
         self.assertEqual(result, "https://external.example.com/webhook")
 
@@ -67,6 +69,7 @@ class TestBuildSiteUrl(TestCase):
     def test_build_internal_site_url_falls_back_to_external_domain_when_unset(self, mock_settings):
         """Test that internal callbacks fall back to the external domain when INTERNAL_SITE_DOMAIN is unset."""
         mock_settings.SITE_DOMAIN = "production.example.com"
+        mock_settings.INTERNAL_SITE_DOMAIN = None
         result = build_internal_site_url("/cookie")
         self.assertEqual(result, "https://external.example.com/cookie")
 
@@ -704,6 +707,16 @@ class TestCreateWebhookSubscription(TestCase):
             create_webhook_subscription(f"https://example{i}.com", ["bot.state_change"], self.project)
         with self.assertRaises(ValidationError):
             create_webhook_subscription("https://example3.com", ["bot.state_change"], self.project)
+
+    @override_settings(REQUIRE_HTTPS_WEBHOOKS=False)
+    def test_create_webhook_subscription_allows_http_when_https_not_required(self):
+        create_webhook_subscription("http://example.com", ["bot.state_change"], self.project)
+        self.assertTrue(WebhookSubscription.objects.filter(url="http://example.com").exists())
+
+    @override_settings(REQUIRE_HTTPS_WEBHOOKS=True)
+    def test_create_webhook_subscription_rejects_http_when_https_required(self):
+        with self.assertRaises(ValidationError):
+            create_webhook_subscription("http://example.com", ["bot.state_change"], self.project)
 
 
 class TestPatchBot(TestCase):

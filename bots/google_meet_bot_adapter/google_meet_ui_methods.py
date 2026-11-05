@@ -5,7 +5,7 @@ import os
 import random
 import subprocess
 import time
-from urllib.parse import parse_qsl, quote, urlencode, urlparse, urlunparse
+from urllib.parse import quote, urlparse
 
 import redis
 import requests
@@ -20,18 +20,12 @@ from selenium.webdriver.support.ui import WebDriverWait
 from bots.bot_sso_utils import get_google_meet_set_cookie_url
 from bots.google_meet_bot_adapter.okta_authenticator import OktaAuthenticator, OktaSessionError
 from bots.models import RecordingViews
+from bots.utils import mask_url_query_param_values
 from bots.web_bot_adapter.ui_methods import UiCouldNotClickElementException, UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableExpectedException
 
 from .mocap_manager import MocapManager
 
 logger = logging.getLogger(__name__)
-
-
-def mask_url_query_param_values(url, mask="***"):
-    """Return the URL with each query parameter's value replaced by a mask, preserving the param keys."""
-    parsed_url = urlparse(url)
-    masked_query = urlencode([(key, mask) for key, _ in parse_qsl(parsed_url.query, keep_blank_values=True)])
-    return urlunparse(parsed_url._replace(query=masked_query, params="", fragment=""))
 
 
 class UiGoogleBlockingUsException(UiRetryableExpectedException):
@@ -113,6 +107,12 @@ class GoogleMeetUIMethods:
         if this_meeting_is_being_recorded_join_now_button:
             logger.info("Clicking this_meeting_is_being_recorded_join_now_button")
             self.click_element(this_meeting_is_being_recorded_join_now_button, step)
+            return
+
+        this_meeting_is_being_captured_join_button = self.find_element_by_selector(By.XPATH, '//div[@role="alertdialog"]//button[@data-mdc-dialog-action="ok"][.//span[text()="Join"]]')
+        if this_meeting_is_being_captured_join_button:
+            logger.info("Clicking this_meeting_is_being_captured_join_button")
+            self.click_element_forcefully(this_meeting_is_being_captured_join_button, step)
 
     # Some modal that google put up
     def click_others_may_see_your_meeting_differently_button(self, step):
@@ -148,19 +148,26 @@ class GoogleMeetUIMethods:
             raise UiLoginRequiredException("Login required", step)
 
     def look_for_denied_your_request_element(self, step):
+        # Google Meet inconsistently uses "in the call" / "on the call" and "denied" / "has denied",
+        # so we match against every combination.
+        actively_denied_texts = [f"Someone {preposition} the call {verb} your request to join" for preposition in ("in", "on") for verb in ("denied", "has denied")]
+        no_one_responded_texts = [f"No one {verb} to your request to join the call" for verb in ("responded", "has responded")]
+        left_meeting_texts = ["You left the meeting"]
+
+        all_texts = actively_denied_texts + no_one_responded_texts + left_meeting_texts
         denied_your_request_element = self.find_element_by_selector(
             By.XPATH,
-            '//*[contains(text(), "Someone in the call denied your request to join") or contains(text(), "No one responded to your request to join the call") or contains(text(), "You left the meeting")]',
+            "//*[" + " or ".join(f'contains(text(), "{text}")' for text in all_texts) + "]",
         )
         if not denied_your_request_element:
             return
 
         element_text = denied_your_request_element.text
 
-        if "Someone in the call denied your request to join" in element_text:
+        if any(text in element_text for text in actively_denied_texts):
             logger.warning("Someone in the call actively denied our request to join. Raising UiRequestToJoinDeniedException")
             raise UiRequestToJoinDeniedException("Someone in the call denied your request to join", step)
-        elif "No one responded to your request to join the call" in element_text:
+        elif any(text in element_text for text in no_one_responded_texts):
             logger.warning("No one responded to our request to join (timeout). Raising UiRequestToJoinDeniedException")
             raise UiRequestToJoinDeniedException("No one responded to your request to join the call", step)
         else:  # "You left the meeting"
@@ -175,6 +182,19 @@ class GoogleMeetUIMethods:
         if asking_to_be_let_in_element:
             logger.warning("Bot was not let in after waiting period expired. Raising UiRequestToJoinDeniedException")
             raise UiRequestToJoinDeniedException("Bot was not let in after waiting period expired", step)
+
+    def check_if_in_waiting_room(self, step):
+        if self.sent_bot_put_in_waiting_room_message:
+            return
+
+        try:
+            in_waiting_room = self.driver.execute_script("return window.userManager?.currentUserIsInWaitingRoom() ?? false;")
+        except Exception as e:
+            logger.info(f"Could not check participant roster for waiting room status: {e}")
+            return
+
+        if in_waiting_room:
+            self.send_bot_put_in_waiting_room_message()
 
     def check_if_waiting_room_timeout_exceeded(self, waiting_room_timeout_started_at, step):
         waiting_room_timeout_exceeded = time.time() - waiting_room_timeout_started_at > self.automatic_leave_configuration.waiting_room_timeout_seconds
@@ -243,7 +263,7 @@ class GoogleMeetUIMethods:
                 logger.warning("Camera button did not seem to be turned off. Retrying...")
 
     def join_now_button_selector(self):
-        return '//button[.//span[text()="Ask to join" or text()="Join now" or text()="Join the call now" or text()="Join anyway" or text()="Join here too"]]'
+        return '//button[.//span[text()="Ask to join" or text()="Ask to join anyway" or text()="Join now" or text()="Join the call now" or text()="Join anyway" or text()="Join here too"]]'
 
     def check_for_failed_logged_in_bot_attempt(self):
         if not self.google_meet_bot_login_session:
@@ -484,6 +504,7 @@ class GoogleMeetUIMethods:
             except TimeoutException as e:
                 self.look_for_blocked_element("name_input")
                 self.look_for_login_required_element("name_input")
+                self.check_if_meeting_is_found()
 
                 if self.google_meet_bot_login_session and self.join_now_button_is_present():
                     logger.info("This is a signed in bot and name input is not present but the join now button is present. Assuming name input is not present because we don't need to fill it out, so returning.")
@@ -508,14 +529,27 @@ class GoogleMeetUIMethods:
                 logger.warning(f"Could not find name input. Unknown error {e} of type {type(e)}. Raising UiCouldNotLocateElementException")
                 raise UiCouldNotLocateElementException("Could not find name input. Unknown error.", "name_input", e)
 
+    def enable_captions_via_keyboard_shortcut(self, captions_button):
+        if captions_button.get_attribute("aria-pressed") == "true":
+            logger.info("Captions and translation button is already pressed, captions are already enabled")
+            return
+        logger.info("Found 'Captions and translation' variant of captions button. Pressing 'c' to enable captions...")
+        ActionChains(self.driver).send_keys("c").perform()
+        logger.info("Waiting for captions to be enabled...")
+        WebDriverWait(self.driver, 5).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'button[aria-label="Captions and translation"][aria-pressed="true"]')))
+        logger.info("Confirmed captions were enabled")
+
     def click_captions_button(self):
         num_attempts_to_look_for_captions_button = self.automatic_leave_configuration.waiting_room_timeout_seconds * 2
         logger.info("Waiting for captions button...")
         waiting_room_timeout_started_at = time.time()
         for attempt_to_look_for_captions_button_index in range(num_attempts_to_look_for_captions_button):
             try:
-                captions_button = WebDriverWait(self.driver, 1).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'button[aria-label="Turn on captions"]')))
+                captions_button = WebDriverWait(self.driver, 1).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'button[aria-label="Turn on captions"], button[aria-label="Captions and translation"]')))
                 logger.info("Captions button found")
+                if captions_button.get_attribute("aria-label") == "Captions and translation":
+                    self.enable_captions_via_keyboard_shortcut(captions_button)
+                    return
                 self.click_element(captions_button, "click_captions_button")
                 logger.info("Waiting for captions to be enabled...")
                 WebDriverWait(self.driver, 5).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'button[aria-label="Turn off captions"]')))
@@ -533,6 +567,8 @@ class GoogleMeetUIMethods:
                 self.look_for_denied_your_request_element("click_captions_button")
                 self.click_this_meeting_is_being_recorded_join_now_button("click_captions_button")
                 self.click_others_may_see_your_meeting_differently_button("click_captions_button")
+                self.check_if_in_waiting_room("click_captions_button")
+                self.look_for_incoming_video_is_disabled_element()
                 self.check_if_waiting_room_timeout_exceeded(waiting_room_timeout_started_at, "click_captions_button")
 
                 last_check_timed_out = attempt_to_look_for_captions_button_index == num_attempts_to_look_for_captions_button - 1
@@ -560,6 +596,7 @@ class GoogleMeetUIMethods:
             "Invalid video call name",
             "Your meeting code has expired",
             "The meeting code you entered doesn’t work",
+            "The meeting code that you entered doesn’t work",
         ]
         meeting_not_found_xpath = "//*[" + " or ".join(f'contains(text(), "{text}")' for text in meeting_not_found_texts) + "]"
         meeting_not_found_element = self.find_element_by_selector(By.XPATH, meeting_not_found_xpath)
@@ -635,7 +672,22 @@ class GoogleMeetUIMethods:
         logger.info("Clicking the close button")
         self.click_element(close_button, "close_button")
 
+    def look_for_incoming_video_is_disabled_element(self):
+        if not self.disable_incoming_video or self.confirmed_incoming_video_is_disabled:
+            return
+        incoming_video_is_set_to_audio_only_element = self.find_element_by_selector(By.XPATH, '//*[contains(text(), "Incoming video is set to audio only")]')
+        if incoming_video_is_set_to_audio_only_element:
+            logger.info("Confirmed incoming video is disabled")
+            self.confirmed_incoming_video_is_disabled = True
+
     def disable_incoming_video_in_ui(self):
+        # First check if incoming video is already disabled. This is what we expect because
+        # we are disabling it via setting localstorage.
+        self.look_for_incoming_video_is_disabled_element()
+        if self.confirmed_incoming_video_is_disabled:
+            logger.info("No need to disable incoming video via the UI. It is already disabled.")
+            return
+
         logger.info("Disabling incoming video")
         logger.info("Waiting for the more options button...")
         MORE_OPTIONS_BUTTON_SELECTOR = 'button[jsname="NakZHc"][aria-label="More options"]'
@@ -936,7 +988,7 @@ class GoogleMeetUIMethods:
         self.google_meet_bot_login_session = {"login_type": "okta"}
 
     def _okta_session_redis_key(self):
-        domain = os.getenv("OKTA_BOT_LOGIN_DOMAIN", "")
+        domain = settings.OKTA_BOT_LOGIN_DOMAIN or ""
         username = os.getenv("OKTA_BOT_LOGIN_USERNAME", "")
         totp_secret = os.getenv("OKTA_BOT_LOGIN_TOTP_SECRET", "")
         fingerprint = hashlib.sha256(f"{domain}|{username}|{totp_secret}".encode()).hexdigest()
@@ -962,7 +1014,7 @@ class GoogleMeetUIMethods:
         usage_key = f"{cookie_key}:uses"
         lock_key = f"{cookie_key}:lock"
 
-        okta_domain = os.getenv("OKTA_BOT_LOGIN_DOMAIN")
+        okta_domain = settings.OKTA_BOT_LOGIN_DOMAIN
         # Lock TTL must comfortably exceed the worst-case TOTP+navigation flow.
         lock_ttl_seconds = 120
         # Total time to wait for another bot to finish before giving up.
@@ -1017,7 +1069,7 @@ class GoogleMeetUIMethods:
             time.sleep(poll_interval_seconds)
 
     def save_valid_okta_session_token_in_redis(self):
-        okta_domain = os.getenv("OKTA_BOT_LOGIN_DOMAIN")
+        okta_domain = settings.OKTA_BOT_LOGIN_DOMAIN
         okta_authenticator = OktaAuthenticator(
             okta_domain=okta_domain,
             username=os.getenv("OKTA_BOT_LOGIN_USERNAME"),
@@ -1060,7 +1112,7 @@ class GoogleMeetUIMethods:
             time.sleep(1)
 
     def login_to_google_meet_account(self):
-        if os.getenv("USE_OKTA_LOGIN_FOR_SIGNED_IN_GOOGLE_MEET_BOTS", "false") == "true":
+        if settings.USE_OKTA_LOGIN_FOR_SIGNED_IN_GOOGLE_MEET_BOTS:
             try:
                 self.login_to_google_meet_account_with_okta()
                 return
@@ -1127,6 +1179,8 @@ class GoogleMeetUIMethods:
 
     # returns nothing if succeeded, raises an exception if failed
     def attempt_to_join_meeting(self):
+        self.confirmed_incoming_video_is_disabled = False
+
         if self.google_meet_bot_login_is_available and self.google_meet_bot_login_should_be_used:
             self.login_to_google_meet_account_with_retries()
 
@@ -1273,7 +1327,7 @@ class GoogleMeetUIMethods:
             )
             logger.info("Clicking the leave button")
             try:
-                leave_button.click()
+                self.click_element_forcefully(leave_button, "click_leave_button")
                 return
             except Exception as e:
                 last_attempt = attempt_index == num_attempts - 1

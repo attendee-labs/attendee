@@ -3,8 +3,10 @@ import json
 import logging
 import math
 import os
+import random
 import secrets
 import string
+import time
 from datetime import timedelta
 
 from concurrency.exceptions import RecordModifiedError
@@ -320,6 +322,58 @@ class ZoomOAuthApp(models.Model):
         return f"{self.project.name} - {self.object_id} - {self.client_id}"
 
 
+class WebexServiceApp(models.Model):
+    OBJECT_ID_PREFIX = "wsa_"
+
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="webex_service_apps")
+    object_id = models.CharField(max_length=32, unique=True, editable=False)
+
+    _encrypted_data = models.BinaryField(
+        null=True,
+        editable=False,  # Prevents editing through admin/forms
+    )
+    client_id = models.CharField(max_length=255)
+    service_app_id = models.CharField(max_length=255)
+    org_id = models.CharField(max_length=255)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    # When the tokens were last issued or refreshed. None until the Service App is authorized.
+    tokens_refreshed_at = models.DateTimeField(null=True, blank=True)
+
+    @property
+    def client_secret(self):
+        return self.get_credentials().get("client_secret")
+
+    @property
+    def refresh_token(self):
+        return self.get_credentials().get("refresh_token")
+
+    def set_credentials(self, credentials_dict):
+        """Encrypt and save credentials"""
+        f = Fernet(settings.CREDENTIALS_ENCRYPTION_KEY)
+        json_data = json.dumps(credentials_dict)
+        self._encrypted_data = f.encrypt(json_data.encode())
+        self.save()
+
+    def get_credentials(self):
+        """Decrypt and return credentials"""
+        if not self._encrypted_data:
+            return None
+        f = Fernet(settings.CREDENTIALS_ENCRYPTION_KEY)
+        decrypted_data = f.decrypt(bytes(self._encrypted_data))
+        return json.loads(decrypted_data.decode())
+
+    def save(self, *args, **kwargs):
+        if not self.object_id:
+            # Generate a random 16-character string
+            random_string = "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(16))
+            self.object_id = f"{self.OBJECT_ID_PREFIX}{random_string}"
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.project.name} - {self.object_id} - {self.client_id}"
+
+
 class ZoomOAuthConnectionStates(models.IntegerChoices):
     CONNECTED = 1
     DISCONNECTED = 2
@@ -542,6 +596,14 @@ class CalendarEvent(models.Model):
 class ProjectAccess(models.Model):
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="project_accesses")
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="project_accesses")
+    can_view_recording_content = models.BooleanField(default=True, db_default=True)
+    can_manage_api_keys = models.BooleanField(default=True, db_default=True)
+
+    class Meta:
+        # A user should have at most one access row per project
+        constraints = [
+            models.UniqueConstraint(fields=["project", "user"], name="unique_project_access_project_user"),
+        ]
 
 
 class ApiKey(models.Model):
@@ -585,6 +647,7 @@ class MeetingTypes(models.TextChoices):
     ZOOM = "zoom"
     GOOGLE_MEET = "google_meet"
     TEAMS = "teams"
+    WEBEX = "webex"
 
 
 class BotStates(models.IntegerChoices):
@@ -654,6 +717,10 @@ class BotStates(models.IntegerChoices):
     def pre_meeting_states(cls):
         return [cls.READY, cls.SCHEDULED, cls.STAGED]
 
+    @classmethod
+    def running_but_has_not_joined_states(cls):
+        return [cls.STAGED, cls.JOINING, cls.WAITING_ROOM]
+
 
 class RecordingFormats(models.TextChoices):
     MP4 = "mp4"
@@ -709,11 +776,38 @@ class TranscriptionSettings:
     def gladia_enable_code_switching(self):
         return self._settings.get("gladia", {}).get("enable_code_switching", False)
 
+    def gladia_language_config(self):
+        gladia_settings = self._settings.get("gladia", {})
+        if "language_config" in gladia_settings:
+            return gladia_settings["language_config"]
+        # Deprecated fields, kept so existing callers get the same behavior
+        if self.gladia_enable_code_switching():
+            return {"languages": self.gladia_code_switching_languages() or [], "code_switching": True}
+        return None
+
+    def gladia_model(self):
+        return self._settings.get("gladia", {}).get("model", None)
+
+    def gladia_custom_vocabulary(self):
+        return self._settings.get("gladia", {}).get("custom_vocabulary", None)
+
+    def gladia_custom_vocabulary_config(self):
+        return self._settings.get("gladia", {}).get("custom_vocabulary_config", None)
+
+    def gladia_custom_spelling(self):
+        return self._settings.get("gladia", {}).get("custom_spelling", None)
+
+    def gladia_custom_spelling_config(self):
+        return self._settings.get("gladia", {}).get("custom_spelling_config", None)
+
     def assembly_ai_language_code(self):
         return self._settings.get("assembly_ai", {}).get("language_code", None)
 
     def assembly_ai_language_detection(self):
         return self._settings.get("assembly_ai", {}).get("language_detection", False)
+
+    def assembly_ai_language_codes(self):
+        return self._settings.get("assembly_ai", {}).get("language_codes", None)
 
     def assemblyai_keyterms_prompt(self):
         return self._settings.get("assembly_ai", {}).get("keyterms_prompt", None)
@@ -745,10 +839,18 @@ class TranscriptionSettings:
         language_detection_options = self._settings.get("assembly_ai", {}).get("language_detection_options", None)
         if not language_detection_options:
             return None
-        return {
+        options = {
             "expected_languages": language_detection_options.get("expected_languages", ["all"]),
             "fallback_language": language_detection_options.get("fallback_language", "auto"),
         }
+        if "code_switching" in language_detection_options:
+            options["code_switching"] = language_detection_options["code_switching"]
+        if "code_switching_confidence_threshold" in language_detection_options:
+            options["code_switching_confidence_threshold"] = language_detection_options["code_switching_confidence_threshold"]
+        return options
+
+    def assemblyai_language_confidence_threshold(self):
+        return self._settings.get("assembly_ai", {}).get("language_confidence_threshold", None)
 
     def sarvam_language_code(self):
         return self._settings.get("sarvam", {}).get("language_code", None)
@@ -834,6 +936,10 @@ class TranscriptionSettings:
     def teams_closed_captions_language(self):
         return self._settings.get("meeting_closed_captions", {}).get("teams_language", None)
 
+    def teams_closed_captions_language_enforcement_duration_seconds(self):
+        default_duration_seconds = int(os.getenv("ENFORCE_TEAMS_CLOSED_CAPTIONS_LANGUAGE_TIMEOUT_SECONDS", "0"))
+        return self._settings.get("meeting_closed_captions", {}).get("teams_language_enforcement_duration_seconds", default_duration_seconds)
+
     def zoom_closed_captions_language(self):
         return self._settings.get("meeting_closed_captions", {}).get("zoom_language", None)
 
@@ -843,6 +949,16 @@ class TranscriptionSettings:
 
 class Bot(models.Model):
     OBJECT_ID_PREFIX = "bot_"
+
+    # Top level keys in a bot event's metadata that hold personal data and must not survive a data deletion
+    SENSITIVE_EVENT_METADATA_KEYS = frozenset(
+        {
+            "remover_is_host",
+            "remover_name",
+            "remover_user_uuid",
+            "remover_uuid",
+        }
+    )
 
     object_id = models.CharField(max_length=32, unique=True, editable=False)
 
@@ -877,30 +993,63 @@ class Bot(models.Model):
             raise ValueError("Bot is not in a state where the data deleted event can be created")
 
         with transaction.atomic():
-            # Delete all debug screenshots from bot events
-            BotDebugScreenshot.objects.filter(bot_event__bot=self).delete()
-
-            # Delete all utterances and recording files for each recording
-            for recording in self.recordings.all():
-                # Delete all audio chunks and utterances first
-                recording.audio_chunks.all().delete()
-                recording.utterances.all().delete()
-
-                # Delete the actual recording file if it exists
-                if recording.file and recording.file.name:
-                    recording.file.delete()
-
-            # Delete all participants
-            self.participants.all().delete()
-
-            # Delete all chat messages
-            self.chat_messages.all().delete()
-
-            # Delete all webhook delivery attempts that have a trigger other than BOT_STATE_CHANGE, since these contain sensitive data
-            webhook_delivery_attempts_with_sensitive_data = self.webhook_delivery_attempts.exclude(webhook_trigger_type=WebhookTriggerTypes.BOT_STATE_CHANGE)
-            webhook_delivery_attempts_with_sensitive_data.delete()
+            self.ensure_data_deleted()
 
             BotEventManager.create_event(bot=self, event_type=BotEventTypes.DATA_DELETED)
+
+    # This method performs the actual delete queries for the delete_data operation.
+    # It does not set the bot's state to DATA_DELETED.
+    # It is also used by the finalize_bot_data_deletion management command to finalize the deletion process.
+    def ensure_data_deleted(self):
+        # Delete all debug screenshots from bot events
+        debug_screenshots = BotDebugScreenshot.objects.filter(bot_event__bot=self)
+        for debug_screenshot in debug_screenshots:
+            if debug_screenshot.file and debug_screenshot.file.name:
+                debug_screenshot.file.delete()
+        debug_screenshots.delete()
+
+        # Delete all utterances and recording files for each recording
+        for recording in self.recordings.all():
+            # Delete utterances before audio chunks so the SET_NULL cascade from Utterance.audio_chunk has nothing to update
+            recording.utterances.all().delete()
+            # Only load the id, so the audio blobs aren't pulled into memory
+            recording.audio_chunks.only("id").delete()
+
+            # Delete the actual recording file if it exists
+            if recording.file and recording.file.name:
+                recording.file.delete()
+
+        # Delete all participants
+        self.participants.all().delete()
+
+        # Delete all chat messages
+        self.chat_messages.all().delete()
+
+        # Delete all webhook delivery attempts that have a trigger other than BOT_STATE_CHANGE, since these contain sensitive data
+        webhook_delivery_attempts_with_sensitive_data = self.webhook_delivery_attempts.exclude(webhook_trigger_type=WebhookTriggerTypes.BOT_STATE_CHANGE)
+        webhook_delivery_attempts_with_sensitive_data.delete()
+
+        # Wipe any sensitive metadata attributes from both bot_events metadata and webhook delivery attempt payloads for bot.state change trigger
+        for bot_event in self.bot_events.all():
+            metadata = bot_event.metadata
+            if not isinstance(metadata, dict):
+                continue
+            scrubbed_metadata = self.metadata_without_sensitive_keys(metadata)
+            if scrubbed_metadata != metadata:
+                BotEvent.objects.filter(id=bot_event.id).update(metadata=scrubbed_metadata)
+
+        for webhook_delivery_attempt in self.webhook_delivery_attempts.filter(webhook_trigger_type=WebhookTriggerTypes.BOT_STATE_CHANGE):
+            payload = webhook_delivery_attempt.payload or {}
+            event_metadata = payload.get("event_metadata")
+            if not isinstance(event_metadata, dict):
+                continue
+            scrubbed_metadata = self.metadata_without_sensitive_keys(event_metadata)
+            if scrubbed_metadata != event_metadata:
+                WebhookDeliveryAttempt.objects.filter(id=webhook_delivery_attempt.id).update(payload={**payload, "event_metadata": scrubbed_metadata})
+
+    @classmethod
+    def metadata_without_sensitive_keys(cls, metadata):
+        return {key: value for key, value in metadata.items() if key not in cls.SENSITIVE_EVENT_METADATA_KEYS}
 
     def set_heartbeat(self):
         retry_count = 0
@@ -962,6 +1111,9 @@ class Bot(models.Model):
         centicredits_active = hours_active * 100
         return math.ceil(centicredits_active)
 
+    def k8s_pod_cmd(self):
+        return ["python", "manage.py", "run_bot", "--botid", str(self.id)]
+
     def cpu_request(self):
         from bots.meeting_url_utils import meeting_type_from_url
 
@@ -970,6 +1122,7 @@ class Bot(models.Model):
             MeetingTypes.GOOGLE_MEET: "GOOGLE_MEET",
             MeetingTypes.TEAMS: "TEAMS",
             MeetingTypes.ZOOM: "ZOOM",
+            MeetingTypes.WEBEX: "WEBEX",
         }.get(bot_meeting_type, "UNKNOWN")
 
         recording_mode_env_var_substring = {
@@ -1016,6 +1169,9 @@ class Bot(models.Model):
 
     def zoom_meeting_settings(self):
         return self.settings.get("zoom_settings", {}).get("meeting_settings", {})
+
+    def zoom_webinar_user_email(self):
+        return self.settings.get("zoom_settings", {}).get("webinar_user_email", None)
 
     def rtmp_destination_url(self):
         rtmp_settings = self.settings.get("rtmp_settings")
@@ -1066,6 +1222,22 @@ class Bot(models.Model):
         websocket_per_participant_video_settings = websocket_settings.get("per_participant_video") or {}
         return websocket_per_participant_video_settings.get("screenshare_resolution", "360p")
 
+    def should_use_room_sync(self):
+        return bool(self.room_sync_livekit_room_name())
+
+    def room_sync_livekit_room_name(self):
+        room_sync_settings = self.settings.get("room_sync_settings") or {}
+        livekit_settings = room_sync_settings.get("livekit") or {}
+        return livekit_settings.get("room_name", None)
+
+    def room_sync_livekit_source_participant(self):
+        room_sync_settings = self.settings.get("room_sync_settings") or {}
+        livekit_settings = room_sync_settings.get("livekit") or {}
+        return livekit_settings.get("source_participant", None)
+
+    def room_sync_sync_to_room(self):
+        return True
+
     def voice_agent_url(self):
         voice_agent_settings = self.settings.get("voice_agent_settings", {}) or {}
         return voice_agent_settings.get("url", None) or voice_agent_settings.get("screenshare_url", None)
@@ -1078,6 +1250,24 @@ class Bot(models.Model):
             return "screenshare"
         else:
             return None
+
+    def should_launch_bot_pod_with_runner_pool(self):
+        if os.getenv("USE_BOT_RUNNER_POOL", "false") != "true":
+            return False
+        if self.join_at is not None:
+            return False
+        # Runner pods are created with the default spec type, the default BOT_CPU_REQUEST and no
+        # persistent storage, so bots that need anything else must get a dedicated pod.
+        if self.should_launch_webpage_streamer():
+            return False
+        if self.reserve_additional_storage():
+            return False
+        if self.bot_pod_spec_type != BotPodSpecType.DEFAULT:
+            return False
+        default_cpu_request = os.getenv("BOT_CPU_REQUEST", "4") or "4"
+        if self.cpu_request() != default_cpu_request:
+            return False
+        return True
 
     def should_launch_webpage_streamer(self):
         voice_agent_settings = self.settings.get("voice_agent_settings", {}) or {}
@@ -1147,8 +1337,7 @@ class Bot(models.Model):
         return recording_settings.get("view", RecordingViews.SPEAKER_VIEW)
 
     def save_resource_snapshots(self):
-        save_resource_snapshots_env_var_value = os.getenv("SAVE_BOT_RESOURCE_SNAPSHOTS", "false")
-        return str(save_resource_snapshots_env_var_value).lower() == "true"
+        return settings.SAVE_BOT_RESOURCE_SNAPSHOTS
 
     def create_debug_recording(self):
         if os.getenv("SAVE_DEBUG_RECORDINGS", "false") == "true":
@@ -1279,6 +1468,8 @@ class CreditTransactionManager:
         """
         max_retries = 10
         retry_count = 0
+        max_total_sleep_seconds = 4.0
+        total_slept_seconds = 0.0
 
         while retry_count < max_retries:
             try:
@@ -1313,6 +1504,10 @@ class CreditTransactionManager:
                 retry_count += 1
                 if retry_count >= max_retries:
                     raise RuntimeError("Max retries exceeded while attempting to create credit transaction")
+                # Exponential backoff with full jitter so concurrent writers for the same org stop colliding on the same leaf
+                sleep_seconds = min(random.uniform(0, min(1.0, 0.05 * (2**retry_count))), max_total_sleep_seconds - total_slept_seconds)
+                time.sleep(sleep_seconds)
+                total_slept_seconds += sleep_seconds
                 continue
 
 
@@ -1445,6 +1640,8 @@ class BotEventSubTypes(models.IntegerChoices):
     BOT_RECORDING_PERMISSION_DENIED_WEBINAR_ATTENDEE_NEEDS_PANELIST_PROMOTION = 29, "Bot recording permission denied - Bot joined webinar as attendee and needs to be promoted to panelist to record"
     COULD_NOT_JOIN_MEETING_ZOOM_APP_CANNOT_JOIN_ANONYMOUSLY = 30, "Bot could not join Zoom meeting - Zoom app cannot join anonymously. To fix pass OBF or ZAK token. See https://docs.attendee.dev/guides/zoom/zoomoauth"
     FATAL_ERROR_GLOBAL_RUNTIME_TIMEOUT = 31, "Fatal error - Global runtime timeout"
+    COULD_NOT_JOIN_MEETING_LEAVE_REQUESTED_BEFORE_BOT_JOINED = 32, "Bot could not join meeting - Leave requested before bot joined"
+    COULD_NOT_JOIN_MEETING_MEETING_ENDED_BEFORE_BOT_JOINED = 33, "Bot could not join meeting - Meeting ended before bot joined"
 
     @classmethod
     def sub_type_to_api_code(cls, value):
@@ -1481,6 +1678,8 @@ class BotEventSubTypes(models.IntegerChoices):
             cls.BOT_RECORDING_PERMISSION_DENIED_WEBINAR_ATTENDEE_NEEDS_PANELIST_PROMOTION: "webinar_attendee_needs_panelist_promotion",
             cls.COULD_NOT_JOIN_MEETING_ZOOM_APP_CANNOT_JOIN_ANONYMOUSLY: "zoom_app_cannot_join_anonymously",
             cls.FATAL_ERROR_GLOBAL_RUNTIME_TIMEOUT: "global_runtime_timeout",
+            cls.COULD_NOT_JOIN_MEETING_LEAVE_REQUESTED_BEFORE_BOT_JOINED: "leave_requested_before_bot_joined",
+            cls.COULD_NOT_JOIN_MEETING_MEETING_ENDED_BEFORE_BOT_JOINED: "meeting_ended_before_bot_joined",
         }
         return mapping.get(value)
 
@@ -1541,6 +1740,8 @@ class BotEvent(models.Model):
                             | Q(event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_MEETING_NOT_FOUND)
                             | Q(event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_BLOCKED_BY_CAPTCHA)
                             | Q(event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_ZOOM_APP_CANNOT_JOIN_ANONYMOUSLY)
+                            | Q(event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_LEAVE_REQUESTED_BEFORE_BOT_JOINED)
+                            | Q(event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_MEETING_ENDED_BEFORE_BOT_JOINED)
                         )
                     )
                     |
@@ -1584,7 +1785,7 @@ class BotEventManager:
             "to": BotStates.STAGED,
         },
         BotEventTypes.COULD_NOT_JOIN: {
-            "from": [BotStates.JOINING, BotStates.WAITING_ROOM],
+            "from": [BotStates.JOINING, BotStates.WAITING_ROOM, BotStates.LEAVING],
             "to": BotStates.FATAL_ERROR,
         },
         BotEventTypes.FATAL_ERROR: {
@@ -1643,6 +1844,7 @@ class BotEventManager:
                 BotStates.JOINING,
                 BotStates.JOINING_BREAKOUT_ROOM,
                 BotStates.LEAVING_BREAKOUT_ROOM,
+                BotStates.STAGED,
             ],
             "to": BotStates.LEAVING,
         },
@@ -1869,6 +2071,16 @@ class BotEventManager:
         if bot.join_at.isoformat() != event_metadata["join_at"]:
             raise ValidationError(f"join_at in event_metadata for bot {bot.object_id} for transition to state {BotStates.state_to_api_code(new_state)} is different from the join_at in the database for bot {bot.object_id}")
 
+    @classmethod
+    def validate_could_not_join_event(cls, bot: Bot, old_state: BotStates, event_sub_type: BotEventSubTypes):
+        # COULD_NOT_JOIN from LEAVING is only for the case where a leave was requested before the bot joined.
+        # Any other could-not-join cause arriving while the bot is leaving (waiting room timeout, request denied, ...)
+        # must not turn a bot that was in the meeting into a fatal error.
+        if old_state != BotStates.LEAVING:
+            return
+        if event_sub_type != BotEventSubTypes.COULD_NOT_JOIN_MEETING_LEAVE_REQUESTED_BEFORE_BOT_JOINED:
+            raise ValidationError(f"Event {BotEventTypes.type_to_api_code(BotEventTypes.COULD_NOT_JOIN)} with sub type {BotEventSubTypes.sub_type_to_api_code(event_sub_type)} not allowed when bot is in state {BotStates.state_to_api_code(old_state)}.")
+
     # This method handles sets the state for recordings and credits for when the bot transitions to a post meeting state
     # It returns a dictionary of additional event metadata that should be added to the event
     @classmethod
@@ -1951,6 +2163,9 @@ class BotEventManager:
                     if old_state not in valid_from_states:
                         valid_states_labels = [BotStates.state_to_api_code(state) for state in valid_from_states]
                         raise ValidationError(f"Event {BotEventTypes.type_to_api_code(event_type)} not allowed when bot is in state {BotStates.state_to_api_code(old_state)}. It is only allowed in these states: {', '.join(valid_states_labels)}")
+
+                    if event_type == BotEventTypes.COULD_NOT_JOIN:
+                        cls.validate_could_not_join_event(bot=bot, old_state=old_state, event_sub_type=event_sub_type)
 
                     # Update bot state based on 'to' definition
                     if callable(transition["to"]):
@@ -2158,6 +2373,8 @@ class ParticipantEventTypes(models.IntegerChoices):
     SPEECH_START = 3, "Speech Start"
     SPEECH_STOP = 4, "Speech Stop"
     UPDATE = 5, "Update"
+    SCREENSHARE_START = 6, "Screenshare Start"
+    SCREENSHARE_STOP = 7, "Screenshare Stop"
 
     @classmethod
     def type_to_api_code(cls, value):
@@ -2168,6 +2385,8 @@ class ParticipantEventTypes(models.IntegerChoices):
             cls.SPEECH_START: "speech_start",
             cls.SPEECH_STOP: "speech_stop",
             cls.UPDATE: "update",
+            cls.SCREENSHARE_START: "screenshare_start",
+            cls.SCREENSHARE_STOP: "screenshare_stop",
         }
         return mapping.get(value)
 
@@ -2739,6 +2958,7 @@ class Credentials(models.Model):
         ELEVENLABS = 10, "ElevenLabs"
         KYUTAI = 11, "Kyutai"
         TEAMS_BOT_IDENTIFICATION_CREDENTIALS = 12, "Teams Bot Identification Credentials"
+        LIVEKIT = 13, "LiveKit"
 
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="credentials")
     credential_type = models.IntegerField(choices=CredentialTypes.choices, null=False)
@@ -3102,6 +3322,7 @@ class WebhookTriggerTypes(models.IntegerChoices):
     ZOOM_OAUTH_CONNECTION_STATE_CHANGE = 8, "Zoom OAuth Connection State Change"
     BOT_LOGS_UPDATE = 9, "Bot Logs Update"
     PARTICIPANT_EVENTS_SPEECH_START_STOP = 10, "Participant Speech Start/Stop"
+    PARTICIPANT_EVENTS_SCREENSHARE_START_STOP = 11, "Participant Screenshare Start/Stop"
     # add other event types here
 
     @classmethod
@@ -3118,6 +3339,7 @@ class WebhookTriggerTypes(models.IntegerChoices):
             cls.ZOOM_OAUTH_CONNECTION_STATE_CHANGE: "zoom_oauth_connection.state_change",
             cls.BOT_LOGS_UPDATE: "bot_logs.update",
             cls.PARTICIPANT_EVENTS_SPEECH_START_STOP: "participant_events.speech_start_stop",
+            cls.PARTICIPANT_EVENTS_SCREENSHARE_START_STOP: "participant_events.screenshare_start_stop",
         }
 
     @classmethod
@@ -3221,3 +3443,52 @@ class BotResourceSnapshot(models.Model):
 
     def __str__(self):
         return f"Resource snapshot for {self.bot.object_id} at {self.created_at}"
+
+
+class InstanceHealthSnapshot(models.Model):
+    """A point-in-time sample of instance-wide health: Celery queue depths, database
+    connection usage and (sampled less often) per-table sizes. Written by the scheduler."""
+
+    data = models.JSONField(null=False, default=dict)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    def __str__(self):
+        return f"Instance health snapshot at {self.created_at}"
+
+
+class InstanceHealthAlertsState(models.Model):
+    """Singleton holding the configuration and current firing state of instance health alerts.
+
+    There is exactly one row for the whole instance. `settings` holds each alert's
+    configuration (whether it is enabled and its threshold); `state` holds whether each
+    alert is currently active (firing) or inactive. The two are kept apart so operators
+    can edit configuration without racing the writer that flips firing state, and so a
+    schema change to one does not disturb the other.
+
+    Both columns are JSON objects keyed by alert; their shape and defaults are owned by
+    application code, not this model.
+    """
+
+    # Fixed primary key so there can only ever be one row: every save writes pk=1.
+    SINGLETON_ID = 1
+
+    settings = models.JSONField(null=False, default=dict)
+    state = models.JSONField(null=False, default=dict)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def save(self, *args, **kwargs):
+        self.pk = self.SINGLETON_ID
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        """Deleting the singleton is a no-op: the row is meant to always exist."""
+        pass
+
+    @classmethod
+    def load(cls):
+        """Return the singleton row, creating it with empty settings and state if needed."""
+        obj, _ = cls.objects.get_or_create(pk=cls.SINGLETON_ID)
+        return obj
+
+    def __str__(self):
+        return "Instance health alert state"

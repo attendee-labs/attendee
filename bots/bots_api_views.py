@@ -786,8 +786,10 @@ class TranscriptView(APIView):
                 async_transcription = recording.async_transcriptions.get(
                     object_id=request.query_params.get("async_transcription_id"),
                 )
-                if async_transcription.state != AsyncTranscriptionStates.COMPLETE:
-                    return Response({"error": f"Async transcription {async_transcription.object_id} is not complete. It is in state {AsyncTranscriptionStates.state_to_api_code(async_transcription.state)}"}, status=status.HTTP_400_BAD_REQUEST)
+                # A failed async transcription can still hold a partial transcript, so we return whatever was transcribed
+                # instead of an error. The caller learns the transcription failed from the async transcription webhook.
+                if async_transcription.state not in [AsyncTranscriptionStates.COMPLETE, AsyncTranscriptionStates.FAILED]:
+                    return Response({"error": f"Async transcription {async_transcription.object_id} is not complete or failed. It is in state {AsyncTranscriptionStates.state_to_api_code(async_transcription.state)}"}, status=status.HTTP_400_BAD_REQUEST)
 
             # Get all utterances with transcriptions, sorted by timeline
             utterances_query = Utterance.objects.select_related("participant").filter(recording=recording, transcription__isnull=False, async_transcription=async_transcription)

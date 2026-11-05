@@ -16,9 +16,10 @@ class PipelineConfiguration:
     websocket_stream_audio: bool
     websocket_stream_per_participant_audio: bool
     websocket_stream_per_participant_video: bool
+    room_sync_stream_per_participant_audio: bool
 
     def __post_init__(self):
-        base_configurations_that_support_websocket_addons = [
+        base_configurations_that_support_optional_addons = [
             # Basic meeting bot configuration
             frozenset({"record_audio", "record_video", "transcribe_audio"}),
             # Audio only recording configuration
@@ -27,21 +28,22 @@ class PipelineConfiguration:
             frozenset({"transcribe_audio"}),
         ]
 
-        base_configurations_that_do_not_support_websocket_addons = [
+        base_configurations_that_do_not_support_optional_addons = [
             # RTMP streaming configuration
             frozenset({"rtmp_stream_audio", "rtmp_stream_video", "transcribe_audio"}),
         ]
 
-        websocket_add_ons = [
+        optional_add_ons = [
             "websocket_stream_audio",
             "websocket_stream_per_participant_audio",
             "websocket_stream_per_participant_video",
+            "room_sync_stream_per_participant_audio",
         ]
 
         valid_configurations: FrozenSet[FrozenSet[str]] = frozenset(
             [
-                *base_configurations_that_do_not_support_websocket_addons,
-                *(base | frozenset(combo) for base in base_configurations_that_support_websocket_addons for r in range(len(websocket_add_ons) + 1) for combo in combinations(websocket_add_ons, r)),
+                *base_configurations_that_do_not_support_optional_addons,
+                *(base | frozenset(combo) for base in base_configurations_that_support_optional_addons for r in range(len(optional_add_ons) + 1) for combo in combinations(optional_add_ons, r)),
             ]
         )
 
@@ -53,7 +55,7 @@ class PipelineConfiguration:
             raise ValueError(f"Invalid configuration: {active_fields}\nMust be one of: {valid_configurations}")
 
     @classmethod
-    def recorder_bot(cls, websocket_stream_audio=False, websocket_stream_per_participant_audio=False, websocket_stream_per_participant_video=False) -> "PipelineConfiguration":
+    def recorder_bot(cls, websocket_stream_audio=False, websocket_stream_per_participant_audio=False, websocket_stream_per_participant_video=False, room_sync_stream_per_participant_audio=False) -> "PipelineConfiguration":
         return cls(
             record_video=True,
             record_audio=True,
@@ -63,10 +65,11 @@ class PipelineConfiguration:
             websocket_stream_audio=websocket_stream_audio,
             websocket_stream_per_participant_audio=websocket_stream_per_participant_audio,
             websocket_stream_per_participant_video=websocket_stream_per_participant_video,
+            room_sync_stream_per_participant_audio=room_sync_stream_per_participant_audio,
         )
 
     @classmethod
-    def audio_recorder_bot(cls, websocket_stream_audio=False, websocket_stream_per_participant_audio=False, websocket_stream_per_participant_video=False) -> "PipelineConfiguration":
+    def audio_recorder_bot(cls, websocket_stream_audio=False, websocket_stream_per_participant_audio=False, websocket_stream_per_participant_video=False, room_sync_stream_per_participant_audio=False) -> "PipelineConfiguration":
         return cls(
             record_video=False,
             record_audio=True,
@@ -76,10 +79,11 @@ class PipelineConfiguration:
             websocket_stream_audio=websocket_stream_audio,
             websocket_stream_per_participant_audio=websocket_stream_per_participant_audio,
             websocket_stream_per_participant_video=websocket_stream_per_participant_video,
+            room_sync_stream_per_participant_audio=room_sync_stream_per_participant_audio,
         )
 
     @classmethod
-    def pure_transcription_bot(cls, websocket_stream_audio=False, websocket_stream_per_participant_audio=False, websocket_stream_per_participant_video=False) -> "PipelineConfiguration":
+    def pure_transcription_bot(cls, websocket_stream_audio=False, websocket_stream_per_participant_audio=False, websocket_stream_per_participant_video=False, room_sync_stream_per_participant_audio=False) -> "PipelineConfiguration":
         return cls(
             record_video=False,
             record_audio=False,
@@ -89,6 +93,7 @@ class PipelineConfiguration:
             websocket_stream_audio=websocket_stream_audio,
             websocket_stream_per_participant_audio=websocket_stream_per_participant_audio,
             websocket_stream_per_participant_video=websocket_stream_per_participant_video,
+            room_sync_stream_per_participant_audio=room_sync_stream_per_participant_audio,
         )
 
     @classmethod
@@ -102,4 +107,5 @@ class PipelineConfiguration:
             websocket_stream_audio=False,
             websocket_stream_per_participant_audio=False,
             websocket_stream_per_participant_video=False,
+            room_sync_stream_per_participant_audio=False,
         )

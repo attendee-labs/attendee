@@ -787,6 +787,9 @@ class RTCInterceptor {
             
             return peerConnection;
         };
+
+        window.RTCPeerConnection.prototype.addTransceiver = originalRTCPeerConnection.prototype.addTransceiver;
+        window.RTCPeerConnection.prototype.addTrack = originalRTCPeerConnection.prototype.addTrack;
     }
 }
 
@@ -828,6 +831,7 @@ class MixedAudioStreamManager {
         this.audioContext = null;
         this.destination = null;
         this.seenTrackIds = new Set();
+        this.mixedAudioTrack = null;
     }
 
 
@@ -889,6 +893,13 @@ class MixedAudioStreamManager {
         // Create a source from the destination's stream so that it actually plays
         this.audioContext.createMediaStreamSource(this.destination.stream);
 
+        this.mixedAudioTrack = this.destination.stream.getAudioTracks()[0];
+
+        // Process and send mixed audio if enabled
+        if (window.initialData.sendMixedAudio && this.mixedAudioTrack) {
+            this.processMixedAudioTrack();
+        }
+
         window.ws?.sendJson({
             type: 'MeetingAudioStreamCreated',
             message: 'Meeting audio stream created',
@@ -898,6 +909,99 @@ class MixedAudioStreamManager {
     getMeetingAudioStream() {
         this.createStream();
         return this.meetingAudioStream;
+    }
+
+    async processMixedAudioTrack() {
+        try {
+            // Create processor to get raw audio frames from the mixed audio track
+            const processor = new MediaStreamTrackProcessor({ track: this.mixedAudioTrack });
+            const generator = new MediaStreamTrackGenerator({ kind: 'audio' });
+
+            // Get readable stream of audio frames
+            const readable = processor.readable;
+            const writable = generator.writable;
+
+            // Transform stream to intercept and send audio frames
+            const transformStream = new TransformStream({
+                async transform(frame, controller) {
+                    if (!frame) {
+                        return;
+                    }
+
+                    try {
+                        // Check if controller is still active
+                        if (controller.desiredSize === null) {
+                            frame.close();
+                            return;
+                        }
+
+                        // Copy the audio data
+                        const numChannels = frame.numberOfChannels;
+                        const numSamples = frame.numberOfFrames;
+                        const audioData = new Float32Array(numSamples);
+
+                        // Copy data from each channel
+                        // If multi-channel, average all channels together to create mono output
+                        if (numChannels > 1) {
+                            // Temporary buffer to hold each channel's data
+                            const channelData = new Float32Array(numSamples);
+
+                            // Sum all channels
+                            for (let channel = 0; channel < numChannels; channel++) {
+                                frame.copyTo(channelData, { planeIndex: channel });
+                                for (let i = 0; i < numSamples; i++) {
+                                    audioData[i] += channelData[i];
+                                }
+                            }
+
+                            // Average by dividing by number of channels
+                            for (let i = 0; i < numSamples; i++) {
+                                audioData[i] /= numChannels;
+                            }
+                        } else {
+                            // If already mono, just copy the data
+                            frame.copyTo(audioData, { planeIndex: 0 });
+                        }
+
+                        // Send mixed audio data via websocket
+                        const timestamp = performance.now();
+                        window.ws.sendMixedAudio(timestamp, audioData);
+
+                        // Pass through the original frame
+                        controller.enqueue(frame);
+                    } catch (error) {
+                        console.error('Error processing mixed audio frame:', error);
+                        frame.close();
+                    }
+                },
+                flush() {
+                    console.log('Mixed audio transform stream flush called');
+                }
+            });
+
+            // Create an abort controller for cleanup
+            const abortController = new AbortController();
+
+            try {
+                // Connect the streams
+                await readable
+                    .pipeThrough(transformStream)
+                    .pipeTo(writable, {
+                        signal: abortController.signal
+                    })
+                    .catch(error => {
+                        if (error.name !== 'AbortError') {
+                            console.error('Mixed audio pipeline error:', error);
+                        }
+                    });
+            } catch (error) {
+                console.error('Mixed audio stream pipeline error:', error);
+                abortController.abort();
+            }
+
+        } catch (error) {
+            console.error('Error setting up mixed audio processor:', error);
+        }
     }
 }
 
@@ -918,6 +1022,24 @@ class StyleManager {
 
         if (initialData.sendPerParticipantVideo) {
             window.perParticipantVideoCaptureManager.start();
+        }
+
+        // If we have a room sync source participant, then start streaming its
+        // media into the meeting.
+        if (window.initialData.roomSyncSourceParticipantConfiguration && window.streamRoomSyncSourceParticipant) {
+            window.streamRoomSyncSourceParticipant().catch((error) => {
+                console.error('Failed to stream room sync source participant:', error);
+                window.ws?.sendJson({
+                    type: 'Error',
+                    message: 'Failed to stream room sync source participant: ' + error.message
+                });
+            });
+        }
+
+        // Ensure the mixed meeting audio stream is set up so that mixed audio can
+        // be processed and sent over the websocket when enabled.
+        if (initialData.sendMixedAudio) {
+            window.mixedAudioStreamManager?.getMeetingAudioStream();
         }
     }
     
@@ -1229,6 +1351,7 @@ class UserManager {
         this.allUsersMap = new Map();
         this.currentUsersMap = new Map();
         this.deviceOutputMap = new Map();
+        this.activeScreenSharerDeviceIds = new Set();
 
         this.ws = ws;
     }
@@ -1279,6 +1402,27 @@ class UserManager {
         };
     }
 
+    detectScreenShareChange(zoomUser) {
+      const deviceId = zoomUser.userId.toString();
+      const wasSharing = this.activeScreenSharerDeviceIds.has(deviceId);
+      // Some events (e.g. onUserJoin) may not include sharingStatus, in which case we keep the previous value
+      const isSharing = zoomUser.state === 'active' && (zoomUser.sharingStatus === undefined ? wasSharing : zoomUser.sharingStatus !== 'stopped');
+      if (isSharing === wasSharing) {
+        return;
+      }
+      if (isSharing) {
+        this.activeScreenSharerDeviceIds.add(deviceId);
+      } else {
+        this.activeScreenSharerDeviceIds.delete(deviceId);
+      }
+      this.ws.sendJson({
+        type: 'ScreenshareStartStopEvent',
+        participantId: deviceId,
+        isScreenshareStart: isSharing,
+        timestamp: Date.now()
+      });
+    }
+
     singleUserSynced(user) {
       const convertedUser = this.convertUser(user);
       console.log('singleUserSynced called w', convertedUser);
@@ -1290,6 +1434,7 @@ class UserManager {
         new Map(allUsers.map(singleUser => [singleUser.deviceId, singleUser])).values()
       );
       this.newUsersListSynced(uniqueUsers);
+      this.detectScreenShareChange(user);
     }
 
     newUsersListSynced(newUsersList) {
