@@ -309,6 +309,7 @@ class LivekitRoomSyncClient:
         next_reconcile = self._loop.time() + self.RECONCILE_INTERVAL_SECONDS
         while not self._shutting_down:
             await self._broadcast("heartbeat")
+            logger.info(f"{self._log_prefix} {len(self._tasks)} pending tasks, {len(self._mirrors)} mirrors")
             now = self._loop.time()
             for bot, expires in list(self._members.items()):
                 if expires <= now:
