@@ -5,6 +5,7 @@ import logging
 import threading
 import time
 import uuid
+from collections import deque
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import dataclass, field
 
@@ -21,6 +22,9 @@ from bots.room_sync_utils import does_participant_name_have_bot_indicator
 logger = logging.getLogger(__name__)
 
 
+AUDIO_QUEUE_MAX_CHUNKS = 50
+
+
 @dataclass
 class _Mirror:
     """One task owns this connection, from connect through disconnect."""
@@ -30,6 +34,17 @@ class _Mirror:
     source: rtc.AudioSource | None = None
     release: str | None = None
     disconnected: bool = False
+    # Filled by the bot's audio thread and drained by the owning task. Only
+    # one capture_frame is ever in flight per mirror; the oldest chunks are
+    # dropped when the loop falls behind.
+    audio: deque = field(default_factory=lambda: deque(maxlen=AUDIO_QUEUE_MAX_CHUNKS))
+    audio_idle: bool = False
+    wake: asyncio.Event = field(default_factory=asyncio.Event)
+
+    def stop(self):
+        self.source = None
+        self.stopped.set()
+        self.wake.set()
 
 
 class LivekitRoomSyncClient:
@@ -164,23 +179,45 @@ class LivekitRoomSyncClient:
             logger.exception(f"{self._log_prefix} Failed to mirror chat message")
 
     def send_audio_chunk(self, participant_uuid: str, chunk_bytes: bytes):
-        """Accept little-endian signed PCM16 at the configured rate/channels."""
-        self._submit(self._start_audio, participant_uuid, chunk_bytes)
+        """Accept little-endian signed PCM16 at the configured rate/channels.
 
-    def _start_audio(self, participant_uuid, chunk_bytes):
-        mirror = self._mirrors.get(participant_uuid)
-        if mirror is not None and mirror.source is not None and chunk_bytes:
-            self._spawn(self._capture_audio(participant_uuid, mirror.source, chunk_bytes))
-
-    async def _capture_audio(self, participant_uuid, source, chunk_bytes):
-        samples_per_channel = len(chunk_bytes) // (2 * self.num_channels)
-        if not samples_per_channel:
+        Runs on the caller's thread and only wakes the loop when the mirror's
+        audio pump is idle, so chunks for unmirrored participants cost nothing.
+        """
+        if not chunk_bytes or self._cleanup_called:
             return
-        try:
-            frame = rtc.AudioFrame(data=chunk_bytes, sample_rate=self.sample_rate, num_channels=self.num_channels, samples_per_channel=samples_per_channel)
-            await source.capture_frame(frame)
-        except Exception:
-            logger.exception(f"{self._log_prefix} Failed to capture audio for {participant_uuid}")
+        mirror = self._mirrors.get(participant_uuid)
+        if mirror is None or mirror.source is None:
+            return
+        mirror.audio.append(chunk_bytes)
+        if mirror.audio_idle:
+            self._submit(mirror.wake.set)
+
+    async def _pump_audio(self, participant_uuid, mirror, source):
+        """Feed queued chunks to the source one at a time until stopped.
+
+        capture_frame subscribes to every FFI event while it waits, so it must
+        never have more than one call in flight per source.
+        """
+        while not mirror.stopped.is_set():
+            if not mirror.audio:
+                mirror.wake.clear()
+                mirror.audio_idle = True
+                # Re-check after publishing idle; a producer that appended
+                # before seeing the flag won't wake us.
+                if not mirror.audio:
+                    await mirror.wake.wait()
+                mirror.audio_idle = False
+                continue
+            chunk_bytes = mirror.audio.popleft()
+            samples_per_channel = len(chunk_bytes) // (2 * self.num_channels)
+            if not samples_per_channel:
+                continue
+            try:
+                frame = rtc.AudioFrame(data=chunk_bytes, sample_rate=self.sample_rate, num_channels=self.num_channels, samples_per_channel=samples_per_channel)
+                await source.capture_frame(frame)
+            except Exception:
+                logger.exception(f"{self._log_prefix} Failed to capture audio for {participant_uuid}")
 
     def _build_token(self, identity: str, name: str | None, video_grants: dict, attributes: dict[str, str] | None = None) -> str:
         now = int(time.time())
@@ -245,9 +282,8 @@ class LivekitRoomSyncClient:
             self._release_mirror(mirror, self.RELEASE_LEFT_MEETING)
 
     def _release_mirror(self, mirror, release):
-        mirror.source = None
         mirror.release = mirror.release or release
-        mirror.stopped.set()
+        mirror.stop()
 
     async def _watcher_loop(self):
         """Keep one watcher alive. This task is signalled, never cancelled."""
@@ -498,8 +534,7 @@ class LivekitRoomSyncClient:
 
         def disconnected(reason):
             mirror.disconnected = True
-            mirror.source = None
-            mirror.stopped.set()
+            mirror.stop()
             if self._mirrors.get(participant_uuid) is mirror:
                 self._mirrors.pop(participant_uuid, None)
             if mirror.release is None and not self._shutting_down:
@@ -523,12 +558,13 @@ class LivekitRoomSyncClient:
                 if not mirror.stopped.is_set() and not self._shutting_down:
                     mirror.source = source
                     logger.info(f"{self._log_prefix} Synced participant {participant_uuid}")
-                    await mirror.stopped.wait()
+                    await self._pump_audio(participant_uuid, mirror, source)
         except Exception:
             failed = True
             logger.exception(f"{self._log_prefix} Failed to mirror participant {participant_uuid}")
         finally:
             mirror.source = None
+            mirror.audio.clear()
             release = mirror.release or (self.RELEASE_SHUTDOWN if self._shutting_down else None)
             if release is not None and not mirror.disconnected:
                 await self._mark_released(participant_uuid, room, release)
