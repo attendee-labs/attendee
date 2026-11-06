@@ -448,15 +448,7 @@ class LivekitRoomSyncClient:
             received_chunks, received_bytes = buffer.received_chunks, buffer.received_bytes
             sent_frames, sent_bytes = buffer.sent_frames, buffer.sent_bytes
             dropped_bytes = buffer.dropped_bytes
-            logger.info(
-                f"{self._log_prefix} Audio throughput for {participant_uuid} (last {elapsed:.0f}s): "
-                f"received {received_chunks - buffer.reported_received_chunks} packets "
-                f"({self._audio_ms(received_bytes - buffer.reported_received_bytes):.0f}ms) from meeting, "
-                f"sent {sent_frames - buffer.reported_sent_frames} packets "
-                f"({self._audio_ms(sent_bytes - buffer.reported_sent_bytes):.0f}ms) to LiveKit, "
-                f"dropped {self._audio_ms(dropped_bytes - buffer.reported_stats_dropped_bytes):.0f}ms, "
-                f"buffered {self._audio_ms(buffer.buffered_bytes):.0f}ms"
-            )
+            logger.info(f"{self._log_prefix} Audio throughput for {participant_uuid} (last {elapsed:.0f}s): received {received_chunks - buffer.reported_received_chunks} packets ({self._audio_ms(received_bytes - buffer.reported_received_bytes):.0f}ms) from meeting, sent {sent_frames - buffer.reported_sent_frames} packets ({self._audio_ms(sent_bytes - buffer.reported_sent_bytes):.0f}ms) to LiveKit, dropped {self._audio_ms(dropped_bytes - buffer.reported_stats_dropped_bytes):.0f}ms, buffered {self._audio_ms(buffer.buffered_bytes):.0f}ms")
             buffer.reported_received_chunks, buffer.reported_received_bytes = received_chunks, received_bytes
             buffer.reported_sent_frames, buffer.reported_sent_bytes = sent_frames, sent_bytes
             buffer.reported_stats_dropped_bytes = dropped_bytes
