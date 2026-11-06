@@ -739,7 +739,7 @@ class StyleManager {
     }
 
     async openChatPanel() {
-        const chatButton = document.querySelector('button[aria-label="Chat with everyone"]');
+        const chatButton = document.querySelector('button[aria-label="Chat with everyone"], button[aria-label="Chat with everyone - New message"]');
         if (chatButton) {
             // Click to open the chat panel
             chatButton.click();
@@ -770,6 +770,11 @@ class StyleManager {
             window.ws.sendJson({
                 type: 'ChatStatusChange',
                 change: 'ready_to_send'
+            });
+        } else {
+            window.ws.sendJson({
+                type: 'Error',
+                message: 'Failed to find chat button in openChatPanel'
             });
         }
     }
