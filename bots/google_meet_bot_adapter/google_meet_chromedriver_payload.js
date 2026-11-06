@@ -771,6 +771,11 @@ class StyleManager {
                 type: 'ChatStatusChange',
                 change: 'ready_to_send'
             });
+        } else {
+            window.ws.sendJson({
+                type: 'Error',
+                message: 'Failed to find chat button in openChatPanel'
+            });
         }
     }
 
