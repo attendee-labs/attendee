@@ -1305,10 +1305,10 @@ class ZoomBotAdapter(BotAdapter):
         return 0
 
     # These webpage streaming functionality is not available for the zoom native adapter
-    def webpage_streamer_get_peer_connection_offer(self):
+    def webpage_streamer_get_peer_connection_offer(self, output_destination):
         pass
 
-    def webpage_streamer_start_peer_connection(self, offer_response):
+    def webpage_streamer_start_peer_connection(self, offer_response, output_destination):
         pass
 
     def webpage_streamer_play_bot_output_media_stream(self, output_destination):

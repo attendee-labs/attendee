@@ -53,7 +53,20 @@ To display your voice agent's video through screenshare instead of the webcam, u
 }
 ```
 
-You cannot currently provide both `url` and `screenshare_url`.
+You can also provide both `url` and `screenshare_url`. Each webpage is loaded in its own browser: the `url` page is streamed through the bot's webcam and the `screenshare_url` page through screenshare. Both webpages receive the meeting audio through their microphone, and the audio they play is mixed into the bot's microphone, so in most cases the `screenshare_url` page should be silent.
+
+```json
+{
+  "meeting_url": "https://meet.google.com/abc-def-ghi",
+  "bot_name": "Avatar Bot",
+  "voice_agent_settings": {
+    "url": "https://your-voice-agent-app.com?agent_id=1234567890",
+    "screenshare_url": "https://your-slides-app.com?deck_id=1234567890"
+  }
+}
+```
+
+When updating the voice agent settings mid-meeting, `url` and `screenshare_url` are updated independently. Fields you omit are left unchanged, and setting a field to `""` turns off that output.
 
 ## Setting up your webpage to be loaded by Attendee
 
