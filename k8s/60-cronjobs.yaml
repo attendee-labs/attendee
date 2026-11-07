@@ -1,0 +1,97 @@
+# Housekeeping. The first two are required in Kubernetes mode -- without them, finished bot
+# pods accumulate forever and a bot whose pod dies mid-meeting is never marked failed.
+# The data-retention job at the bottom is optional; set it to your retention policy.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: attendee-clean-up-completed-bot-pods
+  namespace: attendee
+spec:
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        spec:
+          restartPolicy: Never
+          serviceAccountName: attendee-app
+          imagePullSecrets: [{name: regcred}]
+          containers:
+            - name: cleanup
+              image: REPLACE_WITH_REGISTRY/attendee:REPLACE_WITH_IMAGE_TAG
+              command: ["/tini", "--"]
+              args: ["python", "manage.py", "clean_up_completed_bot_pods"]
+              envFrom:
+                - configMapRef: {name: env}
+                - secretRef: {name: app-secrets}
+              resources:
+                requests: {cpu: "50m", memory: "192Mi"}
+                limits: {cpu: "500m", memory: "512Mi"}
+---
+# Kills pods for bots that stopped sending heartbeats (crashed mid-meeting) or never launched,
+# and records the reason -- reading the pod's status and events, which is why the app's Role
+# needs `events: list`.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: attendee-clean-up-stalled-bots
+  namespace: attendee
+spec:
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        spec:
+          restartPolicy: Never
+          serviceAccountName: attendee-app
+          imagePullSecrets: [{name: regcred}]
+          containers:
+            - name: cleanup
+              image: REPLACE_WITH_REGISTRY/attendee:REPLACE_WITH_IMAGE_TAG
+              command: ["/tini", "--"]
+              args: ["python", "manage.py", "clean_up_bots_with_heartbeat_timeout_or_that_never_launched"]
+              envFrom:
+                - configMapRef: {name: env}
+                - secretRef: {name: app-secrets}
+              resources:
+                requests: {cpu: "50m", memory: "192Mi"}
+                limits: {cpu: "500m", memory: "512Mi"}
+---
+# OPTIONAL data retention. --days is the retention window; recordings and transcripts older
+# than it are deleted. Remove this CronJob if you retain data indefinitely.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: attendee-cleanup-old-data
+  namespace: attendee
+spec:
+  schedule: "30 3 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        spec:
+          restartPolicy: Never
+          serviceAccountName: attendee-app
+          imagePullSecrets: [{name: regcred}]
+          containers:
+            - name: cleanup
+              image: REPLACE_WITH_REGISTRY/attendee:REPLACE_WITH_IMAGE_TAG
+              command: ["/tini", "--"]
+              args: ["python", "manage.py", "cleanup_old_data", "--days", "90"]
+              envFrom:
+                - configMapRef: {name: env}
+                - secretRef: {name: app-secrets}
+              resources:
+                requests: {cpu: "100m", memory: "256Mi"}
+                limits: {cpu: "1", memory: "1Gi"}

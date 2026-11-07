@@ -1,0 +1,56 @@
+# Production Attendee WITHOUT Kubernetes -- bots run inside the Celery workers.
+#
+# Postgres, Redis and object storage are external; nothing stateful is defined here. All
+# configuration comes from .env (start from .env.production.example).
+#
+#   docker compose -f prod.docker-compose.yaml run --rm attendee-web python manage.py migrate
+#   docker compose -f prod.docker-compose.yaml up -d
+#
+# Read the sizing note in DEPLOYMENT.md before choosing --concurrency: each concurrent bot is a
+# full Chrome plus PulseAudio, roughly 4 vCPU and 4 GB while it is in a meeting.
+
+x-attendee-base: &attendee-base
+  image: ${ATTENDEE_IMAGE:?set ATTENDEE_IMAGE, e.g. registry.example.com/attendee:2026-09-10-1}
+  env_file:
+    - .env
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options: {max-size: "50m", max-file: "5"}
+
+services:
+  attendee-web:
+    <<: *attendee-base
+    # /tini stays PID 1 for signal handling; entrypoint.sh (PulseAudio) is skipped because the
+    # web process never runs a bot.
+    entrypoint: ["/tini", "--", "sh", "-c"]
+    command:
+      - >
+        python manage.py collectstatic --noinput &&
+        exec gunicorn attendee.wsgi --bind 0.0.0.0:8000 --workers 3 --timeout 120 --access-logfile -
+    ports:
+      - "8000:8000"
+    healthcheck:
+      # ALLOWED_HOSTS will not contain "localhost", so the Host header has to be set explicitly
+      # or Django answers 400 DisallowedHost. A 301 from SECURE_SSL_REDIRECT is expected and
+      # fine -- curl -f only fails on 4xx/5xx.
+      test: ["CMD-SHELL", "curl -fsS -o /dev/null -H \"Host: ${SITE_DOMAIN}\" http://127.0.0.1:8000/health/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  # Bots run HERE. Keeps the image's default entrypoint so PulseAudio is available.
+  attendee-worker:
+    <<: *attendee-base
+    command: celery -A attendee worker -l INFO --concurrency ${CELERY_CONCURRENCY:-2}
+    # Celery uses acks_late + reject_on_worker_lost, so a task interrupted by a restart is
+    # redelivered. Still: restarting this container kills every bot currently in a meeting.
+    stop_grace_period: 120s
+    shm_size: 2gb  # Chrome crashes on the 64MB default
+
+  attendee-scheduler:
+    <<: *attendee-base
+    entrypoint: ["/tini", "--"]
+    command: python manage.py run_scheduler
+    stop_grace_period: 90s
