@@ -64,6 +64,14 @@ class CreateAppSessionSerializer(CreateBotSerializer):
         except jsonschema.exceptions.ValidationError as e:
             raise serializers.ValidationError(e.message)
 
+        from bots.ssrf import assert_safe_rtms_websocket_url
+
+        server_urls = value.get("server_urls")
+        try:
+            assert_safe_rtms_websocket_url(server_urls)
+        except ValueError as e:
+            raise serializers.ValidationError({"server_urls": str(e)})
+
         return value
 
     def validate_transcription_settings(self, value):
