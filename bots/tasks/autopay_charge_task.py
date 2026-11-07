@@ -11,6 +11,16 @@ from bots.stripe_utils import credit_amount_for_purchase_amount_dollars
 
 logger = logging.getLogger(__name__)
 
+# Skip re-enqueue if a charge was already queued this recently (race guard).
+# The scheduler uses a longer (1 day) window; this covers concurrent enqueue calls.
+AUTOPAY_ENQUEUE_COOLDOWN_MINUTES = 10
+
+
+def autopay_idempotency_key(organization_id, purchase_amount_cents, when=None):
+    """Stable Stripe idempotency key for autopay (org + amount + UTC day)."""
+    day = (when or timezone.now()).strftime("%Y-%m-%d")
+    return f"autopay-{organization_id}-{purchase_amount_cents}-{day}"
+
 
 @shared_task(
     bind=True,
@@ -66,7 +76,9 @@ def autopay_charge(self, organization_id):
             organization.save()
             return
 
-        # Create payment intent with Stripe
+        # Create payment intent with Stripe.
+        # Use a stable key (not Celery task id) so retries of a new task for the
+        # same org/amount/day do not create a duplicate charge.
         payment_intent = stripe.PaymentIntent.create(
             amount=purchase_amount_cents,
             currency="usd",
@@ -77,7 +89,7 @@ def autopay_charge(self, organization_id):
             description=f"Autopay charge for {credit_amount} Attendee credits",
             metadata={"organization_id": str(organization.id), "credit_amount": str(credit_amount), "autopay": "true"},
             api_key=os.getenv("STRIPE_SECRET_KEY"),
-            idempotency_key=self.request.id,
+            idempotency_key=autopay_idempotency_key(organization.id, purchase_amount_cents),
         )
 
         # Check if payment was not successful
@@ -127,6 +139,14 @@ def autopay_charge(self, organization_id):
 def enqueue_autopay_charge_task(organization: Organization):
     """Enqueue a create autopay charge task for an organization."""
     with transaction.atomic():
+        # Lock row so concurrent enqueue calls cannot race past the cooldown check.
+        organization = Organization.objects.select_for_update().get(id=organization.id)
+        if organization.autopay_charge_task_enqueued_at is not None:
+            cooldown = timezone.timedelta(minutes=AUTOPAY_ENQUEUE_COOLDOWN_MINUTES)
+            if organization.autopay_charge_task_enqueued_at > timezone.now() - cooldown:
+                logger.info(f"Skipping autopay enqueue for organization {organization.id}: already enqueued at {organization.autopay_charge_task_enqueued_at.isoformat()}")
+                return
+
         organization.autopay_charge_task_enqueued_at = timezone.now()
         organization.save()
         autopay_charge.delay(organization.id)

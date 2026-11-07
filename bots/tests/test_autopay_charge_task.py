@@ -1,11 +1,13 @@
 import os
+from datetime import timedelta
 from unittest.mock import MagicMock, patch
 
 import stripe
 from django.test import TestCase
+from django.utils import timezone
 
 from accounts.models import Organization
-from bots.tasks.autopay_charge_task import autopay_charge, enqueue_autopay_charge_task
+from bots.tasks.autopay_charge_task import autopay_charge, autopay_idempotency_key, enqueue_autopay_charge_task
 
 
 class AutopayChargeTaskTestCase(TestCase):
@@ -61,7 +63,7 @@ class AutopayChargeTaskTestCase(TestCase):
 
         mock_payment_intent_create.assert_called_once_with(
             amount=5000,
-            idempotency_key=None,
+            idempotency_key=autopay_idempotency_key(self.org.id, 5000),
             currency="usd",
             customer="cus_test123",
             payment_method="pm_test123",
@@ -209,6 +211,19 @@ class AutopayChargeTaskTestCase(TestCase):
 
         # Check that the Celery task was queued
         mock_delay.assert_called_once_with(self.org.id)
+
+    @patch("bots.tasks.autopay_charge_task.autopay_charge.delay")
+    def test_enqueue_autopay_charge_task_skips_recent_enqueue(self, mock_delay):
+        """A second enqueue within the cooldown window must not queue another task."""
+        self.org.autopay_charge_task_enqueued_at = timezone.now() - timedelta(minutes=1)
+        self.org.save()
+        first_enqueued_at = self.org.autopay_charge_task_enqueued_at
+
+        enqueue_autopay_charge_task(self.org)
+
+        self.org.refresh_from_db()
+        mock_delay.assert_not_called()
+        self.assertEqual(self.org.autopay_charge_task_enqueued_at, first_enqueued_at)
 
     def test_organization_not_found(self):
         """Test handling of non-existent organization ID"""
