@@ -121,7 +121,32 @@ const handleVideoTrackForRealTimePerParticipantVideo = async ({ track, streams }
     }
 };
 
+// Prefers sending over the meet_messages data channel, falling back to typing into the chat UI.
 function sendChatMessage(text) {
+    const networkChatMessageSender = window.networkChatMessageSender;
+    if (!networkChatMessageSender?.isReady()) {
+        window.ws?.sendJson({
+            type: 'Error',
+            message: 'Network chat message sender not ready'
+        });
+        return sendChatMessageViaUI(text);
+    }
+
+    networkChatMessageSender.sendMessage(text).catch((error) => {
+        console.error('Error sending chat message over the network', error);
+        window.ws?.sendJson({
+            type: 'Error',
+            message: 'Error sending chat message over the network: ' + error.message
+        });
+        // On a timeout the message may still have been delivered, so falling back could post it twice.
+        //if (error.name !== 'TimeoutError') {
+            sendChatMessageViaUI(text);
+        //}
+    });
+    return true;
+}
+
+function sendChatMessageViaUI(text) {
     
     // First try to find the chat input textarea
     let chatInput = document.querySelector('textarea[aria-label="Send a message"]');
@@ -953,6 +978,267 @@ class ChatMessageManager {
         catch (error) {
             console.error('Error in handleChatMessage', error);
         }
+    }
+}
+
+// Sends chat messages as RPCs over the meet_messages data channel, so no UI interaction is needed.
+// Wire format (derived from the Meet client bundle, 2026-11-05):
+//   Request     = {1: {1: requestId, 3: {1: {2: ChatMessage}}}}
+//   Response    = {1: {1: requestId, 2: Status{1: code, 2: message}, 4: {...}}, 2: [...]}
+//   ChatMessage = {3: clientMessageId, 5: {1: text}, 6: 1 (plaintext)}
+// Frames are either raw, gzipped, or wrapped as {1: raw bytes | 2: gzipped bytes}. Which one is used is
+// learned from the channel's traffic, defaulting to wrapped, which is what Meet uses on this channel.
+class NetworkChatMessageSender {
+    static CHANNEL_LABEL = 'meet_messages';
+    // Far above the Meet client's own incrementing request ids (which start at 1), so responses to our
+    // requests can be told apart. Kept within int32 range.
+    static REQUEST_ID_BASE = 1_000_000_000;
+    static RESPONSE_TIMEOUT_MS = 20000;
+    // Encrypted (client-side encryption) meetings need a different type and frame encryption, which is unsupported
+    static PLAINTEXT_MESSAGE_TYPE = 1;
+
+    constructor() {
+        this.channel = null;
+        this.frameFormat = null; // 'raw' | 'gzip' | 'wrapper'
+        this.nextRequestId = NetworkChatMessageSender.REQUEST_ID_BASE;
+        this.nextClientMessageId = Date.now();
+        this.pendingRequests = new Map();
+    }
+
+    isReady() {
+        return this.channel?.readyState === 'open';
+    }
+
+    // Must run before the Meet client sets onmessage on the channel, so its handler gets wrapped.
+    attachToChannel(dataChannel) {
+        if (dataChannel.label !== NetworkChatMessageSender.CHANNEL_LABEL || dataChannel.__networkChatMessageSenderAttached)
+            return;
+        dataChannel.__networkChatMessageSenderAttached = true;
+        this.channel = dataChannel;
+        this.frameFormat = null;
+
+        const sender = this;
+        const onmessageDescriptor = Object.getOwnPropertyDescriptor(RTCDataChannel.prototype, 'onmessage');
+        let meetOnMessageHandler = null;
+        Object.defineProperty(dataChannel, 'onmessage', {
+            configurable: true,
+            get() {
+                return meetOnMessageHandler;
+            },
+            set(handler) {
+                meetOnMessageHandler = handler;
+                if (typeof handler !== 'function') {
+                    onmessageDescriptor.set.call(this, handler);
+                    return;
+                }
+                onmessageDescriptor.set.call(this, function (event) {
+                    if (sender.channel === dataChannel && sender.handleIncomingFrame(event.data))
+                        return;
+                    return handler.call(this, event);
+                });
+            },
+        });
+
+        const originalSend = dataChannel.send.bind(dataChannel);
+        dataChannel.send = (data) => {
+            this.logOutgoingFrame(dataChannel, data);
+            if (this.channel === dataChannel && (data instanceof ArrayBuffer || ArrayBuffer.isView(data)))
+                this.learnFrameFormatFromOutgoing(data);
+            return originalSend(data);
+        };
+
+        console.log('NetworkChatMessageSender attached to data channel', dataChannel.label);
+    }
+
+    logOutgoingFrame(dataChannel, data) {
+        try {
+            let payload;
+            let encoding;
+            if (typeof data === 'string') {
+                payload = data;
+                encoding = 'string';
+            } else if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) {
+                const bytes = data instanceof ArrayBuffer
+                    ? new Uint8Array(data)
+                    : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+                let binary = '';
+                for (let i = 0; i < bytes.length; i += 0x8000)
+                    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+                payload = btoa(binary);
+                encoding = 'base64';
+            } else {
+                payload = String(data);
+                encoding = typeof data;
+            }
+            window.ws?.sendJson({
+                type: 'MeetMessagesOutgoingFrame',
+                label: dataChannel.label,
+                encoding: encoding,
+                payload: payload,
+            });
+        } catch (error) {
+            console.error('Error logging outgoing meet_messages frame', error);
+        }
+    }
+
+    async sendMessage(text) {
+        if (!this.isReady())
+            throw new Error(`${NetworkChatMessageSender.CHANNEL_LABEL} data channel is not open`);
+
+        // Nothing has been seen on the channel yet. Meet wraps frames on this channel, so assume that.
+        this.frameFormat ??= 'wrapper';
+
+        const requestId = this.nextRequestId++;
+        const request = protobuf.Writer.create()
+            .uint32(protobufTag(1, PROTOBUF_WIRE_TYPE_LEN)).fork()
+                .uint32(protobufTag(1, PROTOBUF_WIRE_TYPE_VARINT)).uint64(requestId)
+                .uint32(protobufTag(3, PROTOBUF_WIRE_TYPE_LEN)).fork()
+                    .uint32(protobufTag(1, PROTOBUF_WIRE_TYPE_LEN)).fork()
+                        .uint32(protobufTag(2, PROTOBUF_WIRE_TYPE_LEN)).fork()
+                            .uint32(protobufTag(3, PROTOBUF_WIRE_TYPE_VARINT)).uint64(this.nextClientMessageId++)
+                            .uint32(protobufTag(5, PROTOBUF_WIRE_TYPE_LEN)).fork()
+                                .uint32(protobufTag(1, PROTOBUF_WIRE_TYPE_LEN)).string(text)
+                            .ldelim()
+                            .uint32(protobufTag(6, PROTOBUF_WIRE_TYPE_VARINT)).uint32(NetworkChatMessageSender.PLAINTEXT_MESSAGE_TYPE)
+                        .ldelim()
+                    .ldelim()
+                .ldelim()
+            .ldelim()
+            .finish();
+
+        this.channel.send(this.wrapFrame(request));
+
+        return new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => {
+                if (!this.pendingRequests.delete(requestId))
+                    return;
+                const error = new Error(`No response to chat message request ${requestId} within ${NetworkChatMessageSender.RESPONSE_TIMEOUT_MS}ms`);
+                error.name = 'TimeoutError';
+                reject(error);
+            }, NetworkChatMessageSender.RESPONSE_TIMEOUT_MS);
+            this.pendingRequests.set(requestId, { resolve, reject, timeout });
+        });
+    }
+
+    // Returns true if the frame is a response to one of our requests. Those are withheld from the
+    // Meet client, because it doesn't know about the request id.
+    handleIncomingFrame(data) {
+        if (!(data instanceof ArrayBuffer))
+            return false;
+
+        const frame = new Uint8Array(data);
+        this.learnFrameFormat(frame);
+
+        if (this.nextRequestId === NetworkChatMessageSender.REQUEST_ID_BASE)
+            return false;
+
+        let responseFields;
+        try {
+            const responseBody = decodeProtobufFields(this.unwrapFrame(frame))[1]?.[0];
+            if (!(responseBody instanceof Uint8Array))
+                return false;
+            responseFields = decodeProtobufFields(responseBody);
+        } catch (error) {
+            return false;
+        }
+
+        const requestId = responseFields[1]?.[0];
+        if (typeof requestId !== 'number' || requestId < NetworkChatMessageSender.REQUEST_ID_BASE)
+            return false;
+
+        const pendingRequest = this.pendingRequests.get(requestId);
+        if (!pendingRequest)
+            return true;
+        this.pendingRequests.delete(requestId);
+        clearTimeout(pendingRequest.timeout);
+
+        const status = responseFields[2]?.[0] ? decodeProtobufFields(responseFields[2][0]) : {};
+        const statusCode = status[1]?.[0] ?? 0;
+        if (statusCode === 0) {
+            window.ws?.sendJson({
+                type: 'NetworkChatMessageSent',
+                requestId: requestId,
+                frameFormat: this.frameFormat,
+            });
+            pendingRequest.resolve();
+        } else {
+            const statusMessage = status[2] ? new TextDecoder().decode(status[2][0]) : '';
+            pendingRequest.reject(new Error(`Chat message request ${requestId} failed with status ${statusCode}: ${statusMessage}`));
+        }
+        return true;
+    }
+
+    learnFrameFormat(data) {
+        if (this.frameFormat)
+            return;
+        const frame = data instanceof ArrayBuffer ? new Uint8Array(data) : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+        this.frameFormat = NetworkChatMessageSender.detectFrameFormat(frame);
+    }
+
+    // The Meet client's own sends are requests: a raw request's field 1 starts with the request id (0x08),
+    // a wrapped one's starts with the raw frame (0x0a). Anything else is left undecided.
+    learnFrameFormatFromOutgoing(data) {
+        if (this.frameFormat)
+            return;
+        const frame = data instanceof ArrayBuffer ? new Uint8Array(data) : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+        if (isGzip(frame)) {
+            this.frameFormat = 'gzip';
+            return;
+        }
+        try {
+            const fields = decodeProtobufFields(frame);
+            if (Object.keys(fields).length !== 1)
+                return;
+            const gzippedFrame = fields[2]?.[0];
+            if (gzippedFrame instanceof Uint8Array && isGzip(gzippedFrame)) {
+                this.frameFormat = 'wrapper';
+                return;
+            }
+            const inner = fields[1]?.[0];
+            if (inner instanceof Uint8Array) {
+                if (inner[0] === 0x08)
+                    this.frameFormat = 'raw';
+                else if (inner[0] === 0x0a)
+                    this.frameFormat = 'wrapper';
+            }
+        } catch (error) {}
+    }
+
+    // Requests and responses both start with field 1 holding a message whose own first field is the
+    // request id (0x08). A wrapper's field 1 instead holds a whole raw frame (0x0a or 0x12).
+    static detectFrameFormat(frame) {
+        if (isGzip(frame))
+            return 'gzip';
+        try {
+            const fields = decodeProtobufFields(frame);
+            if (Object.keys(fields).length === 1) {
+                const gzippedFrame = fields[2]?.[0];
+                if (gzippedFrame instanceof Uint8Array && isGzip(gzippedFrame))
+                    return 'wrapper';
+                const rawFrame = fields[1]?.[0];
+                if (rawFrame instanceof Uint8Array && (rawFrame[0] === 0x0a || rawFrame[0] === 0x12))
+                    return 'wrapper';
+            }
+        } catch (error) {}
+        return 'raw';
+    }
+
+    wrapFrame(frame) {
+        if (this.frameFormat === 'gzip')
+            return pako.gzip(frame);
+        if (this.frameFormat === 'wrapper')
+            return protobuf.Writer.create().uint32(protobufTag(1, PROTOBUF_WIRE_TYPE_LEN)).bytes(frame).finish();
+        return frame;
+    }
+
+    unwrapFrame(frame) {
+        if (this.frameFormat === 'gzip')
+            return pako.ungzip(frame);
+        if (this.frameFormat === 'wrapper') {
+            const fields = decodeProtobufFields(frame);
+            return fields[1] ? fields[1][0] : pako.ungzip(fields[2][0]);
+        }
+        return frame;
     }
 }
 
@@ -1860,6 +2146,40 @@ function createMessageDecoder(messageType) {
     };
 }
 
+const PROTOBUF_WIRE_TYPE_VARINT = 0;
+const PROTOBUF_WIRE_TYPE_LEN = 2;
+
+function protobufTag(fieldNumber, wireType) {
+    return (fieldNumber << 3) | wireType;
+}
+
+// Schema-less decode of a single message level into {fieldNumber: [values]}. Varints become numbers
+// and length-delimited values stay as Uint8Arrays, so nested messages can be decoded the same way.
+function decodeProtobufFields(bytes) {
+    const reader = protobuf.Reader.create(bytes);
+    const fields = {};
+    while (reader.pos < reader.len) {
+        const tag = reader.uint32();
+        const wireType = tag & 7;
+        let value;
+        if (wireType === PROTOBUF_WIRE_TYPE_VARINT) {
+            value = reader.uint64();
+            value = typeof value === 'number' ? value : value.toNumber();
+        } else if (wireType === PROTOBUF_WIRE_TYPE_LEN) {
+            value = reader.bytes();
+        } else {
+            reader.skipType(wireType);
+            continue;
+        }
+        (fields[tag >>> 3] ||= []).push(value);
+    }
+    return fields;
+}
+
+function isGzip(bytes) {
+    return bytes[0] === 0x1f && bytes[1] === 0x8b;
+}
+
 const ws = new WebSocketClient();
 window.ws = ws;
 const userManager = new UserManager(ws);
@@ -1868,6 +2188,7 @@ const videoTrackManager = new VideoTrackManager(ws);
 const styleManager = new StyleManager();
 const receiverManager = new ReceiverManager();
 const chatMessageManager = new ChatMessageManager(ws);
+const networkChatMessageSender = new NetworkChatMessageSender();
 const participantSpeechStartStopManager = new ParticipantSpeechStartStopManager();
 let rtpReceiverInterceptor = null;
 if (window.initialData.sendPerParticipantAudio || window.initialData.recordParticipantSpeechStartStopEvents) {
@@ -1881,6 +2202,7 @@ window.userManager = userManager;
 window.styleManager = styleManager;
 window.receiverManager = receiverManager;
 window.chatMessageManager = chatMessageManager;
+window.networkChatMessageSender = networkChatMessageSender;
 window.participantSpeechStartStopManager = participantSpeechStartStopManager;
 window.sendChatMessage = sendChatMessage;
 // Create decoders for all message types
@@ -2287,6 +2609,7 @@ new RTCInterceptor({
         console.log('New RTCPeerConnection created:', peerConnection);
         peerConnection.addEventListener('datachannel', (event) => {
             console.log('datachannel', event);
+            networkChatMessageSender.attachToChannel(event.channel);
             if (event.channel.label === "collections") {               
                 event.channel.addEventListener("message", (messageEvent) => {
                     console.log('RAWcollectionsevent', messageEvent);
@@ -2375,6 +2698,8 @@ new RTCInterceptor({
             type: 'DataChannelCreate',
             label: dataChannel.label,
         });
+
+        networkChatMessageSender.attachToChannel(dataChannel);
 
         //if (dataChannel.label === 'collections') {
           //  dataChannel.addEventListener("message", (event) => {
