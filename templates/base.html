@@ -7,29 +7,11 @@
     <!-- Bootstrap CSS -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+    <link rel="stylesheet" href="{% static 'css/theme.css' %}">
+
     <!-- HTMX -->
     <!--  <script src="https://unpkg.com/htmx.org@2.0.3"></script>  -->
     <script src="https://unpkg.com/htmx.org@2.0.3/dist/htmx.js"></script>
-
-    <style>
-        .sidebar {
-            min-height: 100vh;
-            background-color: #f8f9fa;
-            border-right: 1px solid #dee2e6;
-        }
-        .sidebar .nav-link {
-            color: #333;
-            padding: 0.5rem 1rem;
-            cursor: pointer;
-        }
-        .sidebar .nav-link:hover {
-            background-color: #e9ecef;
-        }
-        .sidebar .nav-link.active {
-            background-color: #0d6efd;
-            color: white;
-        }
-    </style>
 </head>
 <body>
     {% if messages and 'accounts' in request.path %}
