@@ -1,0 +1,52 @@
+# Optional local-only S3 emulator; usable with or without compose.arm64.yaml.
+x-local-storage: &local-storage
+  AWS_ENDPOINT_URL: http://localhost.localstack.cloud:4566
+  AWS_ACCESS_KEY_ID: test
+  AWS_SECRET_ACCESS_KEY: test
+  AWS_DEFAULT_REGION: us-east-1
+  AWS_RECORDING_STORAGE_BUCKET_NAME: attendee-local
+  AWS_BOT_DEBUG_SCREENSHOT_STORAGE_BUCKET_NAME: attendee-local
+  AWS_AUDIO_CHUNK_STORAGE_BUCKET_NAME: attendee-local
+  AWS_EC2_METADATA_DISABLED: "true"
+services:
+  attendee-app-local:
+    environment: *local-storage
+    depends_on:
+      fakecloud:
+        condition: service_healthy
+  attendee-worker-local:
+    environment: *local-storage
+    depends_on:
+      fakecloud:
+        condition: service_healthy
+  attendee-scheduler-local:
+    environment: *local-storage
+    depends_on:
+      fakecloud:
+        condition: service_healthy
+  fakecloud:
+    image: ghcr.io/faiscadev/fakecloud:0.50.0
+    restart: unless-stopped
+    environment:
+      FAKECLOUD_ADDR: 0.0.0.0:4566
+      FAKECLOUD_REGION: us-east-1
+      FAKECLOUD_STORAGE_MODE: persistent
+      FAKECLOUD_DATA_PATH: /data
+    ports:
+      - "127.0.0.1:4566:4566"
+    volumes:
+      - fakecloud:/data
+    networks:
+      attendee_network:
+        # Resolves to this container internally and loopback in the host browser.
+        # This naming convention is also recognized by FakeCloud's S3 router.
+        aliases:
+          - localhost.localstack.cloud
+    healthcheck:
+      test: ["CMD", "fakecloud", "healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 3s
+volumes:
+  fakecloud:
