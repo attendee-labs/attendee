@@ -6,12 +6,18 @@ from celery import shared_task
 from celery.signals import worker_shutting_down
 
 from bots.bot_controller import BotController
+from bots.models import Bot, BotStates
 
 logger = logging.getLogger(__name__)
 
 
 @shared_task(bind=True, soft_time_limit=3600)
 def run_bot(self, bot_id):
+    bot = Bot.objects.get(id=bot_id)
+    # Guard against broker redelivery: re-running a finished bot risks clobbering its recording (issue #587).
+    if bot.state in BotStates.post_meeting_states():
+        logger.warning(f"Bot {bot_id} is already in post-meeting state {BotStates.state_to_api_code(bot.state)}, skipping run_bot")
+        return
     logger.info(f"Running bot {bot_id}")
     bot_controller = BotController(bot_id)
     bot_controller.run()
