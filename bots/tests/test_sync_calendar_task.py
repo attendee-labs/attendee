@@ -703,6 +703,67 @@ class TestGoogleCalendarSyncHandler(TestCase):
 
         self.assertIsNone(result)
 
+    def test_get_event_by_id_recurring_series_master(self):
+        """A single event later made recurring comes back as the series master, which is not a meeting of its own."""
+        handler = GoogleCalendarSyncHandler(self.calendar.id)
+        handler._make_gcal_request = Mock(return_value={"id": "event_123", "recurrence": ["RRULE:FREQ=WEEKLY;BYDAY=TH"]})
+
+        self.assertIsNone(handler._get_event_by_id("event_123", "mock_token"))
+
+    def test_get_event_by_id_recurring_instance(self):
+        """An occurrence of a recurring event is a meeting and is returned."""
+        handler = GoogleCalendarSyncHandler(self.calendar.id)
+        instance = {"id": "event_123_20261105T170000Z", "recurringEventId": "event_123"}
+        handler._make_gcal_request = Mock(return_value=instance)
+
+        self.assertEqual(handler._get_event_by_id("event_123_20261105T170000Z", "mock_token"), instance)
+
+
+class TestGoogleCalendarSyncSingleEventMadeRecurring(TransactionTestCase):
+    """A single event made recurring must not leave its series master behind as a duplicate meeting."""
+
+    def setUp(self):
+        self.organization = Organization.objects.create(name="Test Org")
+        self.project = Project.objects.create(name="Test Project", organization=self.organization)
+        self.calendar = Calendar.objects.create(project=self.project, platform=CalendarPlatform.GOOGLE, client_id="test_client_id")
+
+    def _google_event(self, event_id, start, **extra):
+        return {
+            "id": event_id,
+            "status": "confirmed",
+            "summary": "Weekly sync",
+            "location": "https://zoom.us/j/111",
+            "start": {"dateTime": start.isoformat()},
+            "end": {"dateTime": (start + timedelta(hours=1)).isoformat()},
+            **extra,
+        }
+
+    @patch("bots.tasks.sync_calendar_task.trigger_webhook")
+    def test_series_master_marked_deleted(self, mock_trigger_webhook):
+        start = (timezone.now() + timedelta(days=1)).replace(microsecond=0)
+        single = self._google_event("event_123", start)
+        master = self._google_event("event_123", start, recurrence=["RRULE:FREQ=WEEKLY"])
+        first_instance = self._google_event(f"event_123_{start:%Y%m%dT%H%M%SZ}", start, recurringEventId="event_123")
+
+        handler = GoogleCalendarSyncHandler(self.calendar.id)
+        handler._get_access_token = Mock(return_value="mock_token")
+        handler._refresh_notification_channels = Mock()
+
+        # First sync: the event is still a single event.
+        handler._list_events = Mock(return_value=[single])
+        handler.sync_events()
+
+        # It is made recurring: the list now holds only the expanded occurrence,
+        # and fetching the old id returns the series master.
+        handler._list_events = Mock(return_value=[first_instance])
+        handler._make_gcal_request = Mock(return_value=master)
+        result = handler.sync_events()
+
+        self.assertEqual(result["deleted_count"], 1)
+        live = CalendarEvent.objects.filter(calendar=self.calendar, is_deleted=False)
+        self.assertEqual([e.platform_uuid for e in live], [first_instance["id"]])
+        self.assertTrue(CalendarEvent.objects.get(calendar=self.calendar, platform_uuid="event_123").is_deleted)
+
 
 class TestMicrosoftCalendarSyncHandler(TestCase):
     """Test the MicrosoftCalendarSyncHandler class."""

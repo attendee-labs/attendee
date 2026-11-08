@@ -44,6 +44,9 @@ class Source:
     async def capture_frame(self, frame):
         self.frames.append(frame)
 
+    async def aclose(self):
+        self.closed = True
+
 
 class Bus:
     def __init__(self):
@@ -607,6 +610,7 @@ class ThreadTests(unittest.TestCase):
         client._cleanup_called = False
         client._loop = object()
         client._log_prefix = "[test]"
+        client._watchdog_stop = subject.threading.Event()
         future = unittest.mock.Mock()
         future.result.side_effect = LegacyFutureTimeout
 
@@ -618,6 +622,7 @@ class ThreadTests(unittest.TestCase):
             client.cleanup()
             logger.warning.assert_called_once_with("[test] Cleanup continues in the background")
             logger.exception.assert_not_called()
+        self.assertTrue(client._watchdog_stop.is_set())
 
     def test_real_background_thread_cleanup_and_idempotence(self):
         import time
