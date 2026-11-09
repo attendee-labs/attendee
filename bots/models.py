@@ -2485,6 +2485,7 @@ class TranscriptionProviders(models.IntegerChoices):
     KYUTAI = 8, "Kyutai"
     CUSTOM_ASYNC = 9, "Custom Async"
     CUSTOM_ASYNC_V2 = 10, "Custom Async v2"
+    NO_TRANSCRIPTION = 11, "No Transcription"
 
 
 class RecordingStorage(Storage):
