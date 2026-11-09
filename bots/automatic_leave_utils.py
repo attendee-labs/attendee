@@ -1,5 +1,5 @@
 import re
-from typing import Iterable
+from typing import Callable, Iterable
 
 from .automatic_leave_configuration import AutomaticLeaveConfiguration
 
@@ -20,7 +20,7 @@ def participant_is_another_bot(participant_full_name, participant_is_the_bot, au
     return False
 
 
-def silence_detection_should_activate(*, automatic_leave_configuration: AutomaticLeaveConfiguration, seconds_since_joined: float, number_of_participants_ever_in_meeting_excluding_other_bots: int) -> bool:
+def silence_detection_should_activate(*, automatic_leave_configuration: AutomaticLeaveConfiguration, seconds_since_joined: float, get_number_of_participants_currently_in_meeting_excluding_other_bots: Callable[[], int]) -> bool:
     # Either trigger activates silence detection, whichever comes first
     if seconds_since_joined > automatic_leave_configuration.silence_activate_after_seconds:
         return True
@@ -29,8 +29,8 @@ def silence_detection_should_activate(*, automatic_leave_configuration: Automati
     if participant_count is None:
         return False
 
-    # The participant count includes our own bot
-    return number_of_participants_ever_in_meeting_excluding_other_bots - 1 >= participant_count
+    # Counted lazily so bots that leave this setting unset never pay for it. The count includes our own bot
+    return get_number_of_participants_currently_in_meeting_excluding_other_bots() - 1 >= participant_count
 
 
 # Split a string into a list of lower case words, splitting on spaces, hyphens, and underscores

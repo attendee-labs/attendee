@@ -946,10 +946,10 @@ class ZoomSettingsJSONField(serializers.JSONField):
             },
             "silence_activate_after_participant_count": {
                 "type": "integer",
-                "description": "Activate the silence timeout once this many participants (excluding bots) have joined the meeting. Silence detection activates when either this or silence_activate_after_seconds is met, whichever comes first. Disabled by default.",
+                "description": "Activate the silence timeout once this many participants (excluding bots) are in the meeting at the same time. Silence detection activates when either this or silence_activate_after_seconds is met, whichever comes first. Disabled by default.",
                 "default": None,
             },
-            "silence_warning_seconds": {
+            "silence_pending_log_after_seconds": {
                 "type": "integer",
                 "description": "Number of seconds of continuous silence after which the bot creates an auto_leave_silence_pending log entry (delivered by the bot_logs.update webhook), ahead of leaving at silence_timeout_seconds. Must be less than silence_timeout_seconds. Disabled by default.",
                 "default": None,
@@ -1832,8 +1832,8 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
             if param not in value:
                 value[param] = default
 
-        if value["silence_warning_seconds"] is not None and value["silence_warning_seconds"] >= value["silence_timeout_seconds"]:
-            raise serializers.ValidationError("silence_warning_seconds must be less than silence_timeout_seconds")
+        if value["silence_pending_log_after_seconds"] is not None and value["silence_pending_log_after_seconds"] >= value["silence_timeout_seconds"]:
+            raise serializers.ValidationError("silence_pending_log_after_seconds must be less than silence_timeout_seconds")
 
         return value
 
