@@ -3721,6 +3721,7 @@ class CallManager {
         this.activeCall = null;
         this.closedCaptionLanguageInterval = null;
         this.closedCaptionLanguage = null;
+        this.lobbyParticipantSpeakingTicker = 0;
     }
 
     setActiveCall() {
@@ -3981,8 +3982,22 @@ class CallManager {
         const speakingParticipantIds = new Set();
 
         this.activeCall.participants.forEach(participant => {
-            if (contributingSources.some(contributingSource => participant.hasAudioSource(contributingSource.source)) && participant.id)
+            if (contributingSources.some(contributingSource => participant.hasAudioSource(contributingSource.source)) && participant.id) {
+                // Participants in the lobby can't actually be heard, so don't consider them as speaking
+                if (participant.state === ParticipantsPoller.lobbyParticipantState) {
+                    if (this.lobbyParticipantSpeakingTicker % 300 === 0) {
+                        window.ws?.sendJson({
+                            type: 'LobbyParticipantDetectedAsSpeakingWarning',
+                            participantId: participant.id,
+                            participantState: participant.state,
+                            count: this.lobbyParticipantSpeakingTicker
+                        });
+                    }
+                    this.lobbyParticipantSpeakingTicker++;
+                    return;
+                }
                 speakingParticipantIds.add(participant.id);
+            }
         });
 
         return speakingParticipantIds;
