@@ -247,7 +247,7 @@ For webhooks triggered by `bot_logs.update`, the `data` field contains informati
 {
   "id": <The ID of the log entry>,
   "level": <The severity level of the log entry (e.g., "debug", "info", "warning", "error")>,
-  "entry_type": <The type of the log entry (e.g., "uncategorized", "could_not_enable_closed_captions")>,
+  "entry_type": <The type of the log entry (e.g., "uncategorized", "could_not_enable_closed_captions", "auto_leave_silence_pending")>,
   "message": <The log message>,
   "created_at": <The timestamp when the log entry was created>
 }
