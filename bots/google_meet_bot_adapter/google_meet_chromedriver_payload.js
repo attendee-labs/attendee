@@ -1,3 +1,21 @@
+// Keeps us on the classic audio pipeline
+const hideReceiverCreateEncodedStreamsSupport = () => {
+    const receiverPrototype = window.RTCRtpReceiver?.prototype;
+
+    if (!receiverPrototype) {
+        return;
+    }
+
+    try {
+        delete receiverPrototype.createEncodedStreams;
+        console.log("RTCRtpReceiver.prototype.createEncodedStreams now reports as unsupported");
+    } catch (error) {
+        console.log("Failed to delete RTCRtpReceiver.prototype.createEncodedStreams", error);
+    }
+};
+
+hideReceiverCreateEncodedStreamsSupport();
+
 // Google Meet uses localstorage to store its preferences. We can use this to disable incoming video.
 const disableIncomingVideoViaLocalStorage = () => {
     const MEET_PREFERENCES_LOCAL_STORAGE_KEY = "meet-preferences";
