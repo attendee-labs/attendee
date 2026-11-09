@@ -103,3 +103,21 @@ class WebexBotControllerTest(WebexBotTestCase):
         self.add_service_app(refresh_token=None)
         with self.assertRaises(WebexAuthError):
             self.controller.create_webex_guest_token()
+
+    def test_chat_reading_is_off_without_the_chat_reading_credentials(self):
+        with patch("bots.bot_controller.bot_controller.settings", WEBEX_CHAT_READING_CLIENT_ID=None, WEBEX_CHAT_READING_CLIENT_SECRET=None):
+            self.assertFalse(self.controller.webex_chat_reading_enabled())
+
+    def test_chat_reading_is_on_when_both_chat_reading_credentials_are_set(self):
+        with patch("bots.bot_controller.bot_controller.settings", WEBEX_CHAT_READING_CLIENT_ID="chat-client-id", WEBEX_CHAT_READING_CLIENT_SECRET="chat-client-secret"):
+            self.assertTrue(self.controller.webex_chat_reading_enabled())
+
+    def test_the_chat_reading_guest_token_is_used_when_chat_reading_is_configured(self):
+        self.add_service_app()
+
+        with patch("bots.bot_controller.bot_controller.settings", WEBEX_CHAT_READING_CLIENT_ID="chat-client-id", WEBEX_CHAT_READING_CLIENT_SECRET="chat-client-secret"):
+            with patch("bots.webex_bot_adapter.webex_chat_reading_token.create_chat_reading_guest_token", return_value="chat-guest-token") as create_chat_token:
+                guest_token = self.controller.create_webex_guest_token()
+
+        self.assertEqual(guest_token, "chat-guest-token")
+        create_chat_token.assert_called_once_with(self.bot.meeting_url, "chat-client-id", "chat-client-secret", display_name="Test Bot")

@@ -464,6 +464,72 @@ async function startCaptions() {
     if (meeting.transcription?.status !== 'enabled') send({ type: 'ClosedCaptionStatusChange', change: 'save_caption_not_allowed' });
 }
 
+// ---------- Chat reading ----------
+
+// Reading in-meeting chat is opt-in: it only runs when the adapter passes a chat-reading guest token (see
+// webex_chromedriver_page.html and the adapter). The Service App guest the bot normally uses is refused (403) when it
+// subscribes to the meeting's chat container, so chat reading needs a guest token minted the way the Webex web client
+// mints one. The web client receives chat by subscribing to the meeting container, after which Webex pushes each message
+// over Mercury as a KMS-encrypted conversation.inmeetingchat.activity event, which the SDK can decrypt.
+const wantsChat = !!initialData.readChat;
+const sentChatMessageIds = new Set();
+
+function meetingContainerUrl() {
+    return meeting.locusInfo?.controls?.meetingContainer?.meetingContainerUrl;
+}
+
+async function handleInMeetingChatEvent(event) {
+    const activity = event.data?.activity;
+    // Only posted comments are chat messages; the stream also carries conversation-create and other verbs.
+    if (activity?.verb !== 'post' || activity?.object?.objectType !== 'comment') return;
+    const messageId = activity.id;
+    if (!messageId || sentChatMessageIds.has(messageId)) return;
+    sentChatMessageIds.add(messageId);
+
+    try {
+        // Decrypts activity.object.displayName and actor.displayName in place using the meeting's KMS key.
+        await webex.internal.conversation.processInmeetingchatEvent(event);
+    } catch (error) {
+        console.error('Decrypting a chat message failed', error);
+        return;
+    }
+
+    // The actor carries a Webex person id under one of a few names depending on the event. memberIdForPerson maps it to
+    // the member id the rest of the page uses, and falls back to the id itself when the sender is not a current member.
+    // can_lazily_insert_participant lets the adapter insert the sender by name if that id is not a known participant.
+    const actor = activity.actor || {};
+    const personId = actor.entryUUID || actor.id || actor.emailAddress;
+    const publishedMs = Date.parse(activity.published);
+    send({
+        type: 'ChatMessage',
+        message_uuid: messageId,
+        participant_uuid: memberIdForPerson(personId),
+        participant_full_name: actor.displayName || 'Unknown',
+        can_lazily_insert_participant: true,
+        timestamp: Math.floor((Number.isNaN(publishedMs) ? Date.now() : publishedMs) / 1000),
+        text: activity.object?.displayName ?? '',
+    });
+}
+
+async function subscribeToChatContainer() {
+    const uri = meetingContainerUrl();
+    if (!uri) throw new Error('No meeting container URL yet');
+    // subscribe=true makes Webex push this meeting's chat to the bot over Mercury. It returns 409 before the bot is
+    // admitted and 200 after, so it runs once the bot has joined.
+    await webex.request({ method: 'GET', uri, qs: { subscribe: true } });
+}
+
+async function startChatReading() {
+    webex.internal.mercury.on('event:conversation.inmeetingchat.activity', (event) => {
+        handleInMeetingChatEvent(event).catch((error) => console.error('Handling a chat message failed', error));
+    });
+    try {
+        await subscribeToChatContainer();
+    } catch (error) {
+        console.error('Subscribing to the meeting chat container failed; chat will not be read', error);
+    }
+}
+
 // ---------- Bot output (webcam image, audio) ----------
 
 // BotOutputManager (shared_chromedriver_payload.js) replaces getUserMedia with the bot's canvas and audio streams, so the
@@ -570,6 +636,7 @@ async function main() {
         joinState.phase = 'joined';
         setUpBotOutput();
         if (wantsCaptions) await startCaptions();
+        if (wantsChat) await startChatReading();
     } catch (error) {
         failJoin(error, 'join');
     }

@@ -392,6 +392,12 @@ GOOGLE_MEET_MOCAP_SPEED_FACTOR = float(os.getenv("GOOGLE_MEET_MOCAP_SPEED_FACTOR
 WEBEX_INTEGRATION_CLIENT_ID = os.getenv("WEBEX_INTEGRATION_CLIENT_ID")
 WEBEX_INTEGRATION_CLIENT_SECRET = os.getenv("WEBEX_INTEGRATION_CLIENT_SECRET")
 
+# Optional: the OAuth client id and secret used to mint a guest token that can read in-meeting chat. The Service App
+# guest token cannot read chat, so without these the Webex bot joins and records but does not read chat messages. See
+# bots/webex_bot_adapter/webex_chat_reading_token.py.
+WEBEX_CHAT_READING_CLIENT_ID = os.getenv("WEBEX_CHAT_READING_CLIENT_ID")
+WEBEX_CHAT_READING_CLIENT_SECRET = os.getenv("WEBEX_CHAT_READING_CLIENT_SECRET")
+
 STORE_INFRASTRUCTURE_INFORMATION_IN_BOT_EVENT_METADATA = os.getenv("STORE_INFRASTRUCTURE_INFORMATION_IN_BOT_EVENT_METADATA", "true") == "true"
 
 CONCURRENT_BOTS_LIMIT = int(os.getenv("CONCURRENT_BOTS_LIMIT", 2500))
