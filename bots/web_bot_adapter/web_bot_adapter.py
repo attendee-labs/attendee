@@ -22,7 +22,7 @@ from websockets.sync.client import connect
 from websockets.sync.server import serve
 
 from bots.automatic_leave_configuration import AutomaticLeaveConfiguration
-from bots.automatic_leave_utils import participant_is_another_bot
+from bots.automatic_leave_utils import participant_is_another_bot, silence_detection_should_activate
 from bots.bot_adapter import BotAdapter
 from bots.models import ParticipantEventTypes, RecordingViews
 from bots.per_participant_realtime_video_configuration import PerParticipantRealtimeVideoConfiguration
@@ -127,6 +127,8 @@ class WebBotAdapter(BotAdapter):
         self.debug_screen_recorder = None
 
         self.silence_detection_activated = False
+        # The last audio timestamp we sent a silence warning for, so we warn once per stretch of silence
+        self.silence_warning_sent_for_last_audio_at = None
         self.joined_at = None
         self.recording_permission_granted_at = None
 
@@ -1347,13 +1349,20 @@ class WebBotAdapter(BotAdapter):
                 self.send_message_callback({"message": self.Messages.ADAPTER_REQUESTED_BOT_LEAVE_MEETING, "leave_reason": BotAdapter.LEAVE_REASON.AUTO_LEAVE_ONLY_PARTICIPANT_IN_MEETING})
                 return
 
-        if not self.silence_detection_activated and self.joined_at is not None and time.time() - self.joined_at > self.automatic_leave_configuration.silence_activate_after_seconds:
+        if not self.silence_detection_activated and self.joined_at is not None and silence_detection_should_activate(self.automatic_leave_configuration, time.time() - self.joined_at, self.number_of_participants_ever_in_meeting_excluding_other_bots()):
             self.silence_detection_activated = True
             self.last_audio_message_processed_time = time.time()
-            logger.info(f"Silence detection activated after {self.automatic_leave_configuration.silence_activate_after_seconds} seconds")
+            logger.info(f"Silence detection activated after {time.time() - self.joined_at:.0f} seconds")
 
         if self.last_audio_message_processed_time is not None and self.silence_detection_activated:
-            if time.time() - self.last_audio_message_processed_time > self.automatic_leave_configuration.silence_timeout_seconds:
+            seconds_of_silence = time.time() - self.last_audio_message_processed_time
+            silence_warning_seconds = self.automatic_leave_configuration.silence_warning_seconds
+            if silence_warning_seconds is not None and seconds_of_silence > silence_warning_seconds and self.silence_warning_sent_for_last_audio_at != self.last_audio_message_processed_time:
+                self.silence_warning_sent_for_last_audio_at = self.last_audio_message_processed_time
+                logger.info(f"Sending silence warning because there was no audio for {silence_warning_seconds} seconds")
+                self.send_message_callback({"message": self.Messages.SILENCE_WARNING, "seconds_of_silence": silence_warning_seconds, "seconds_until_leave": self.automatic_leave_configuration.silence_timeout_seconds - silence_warning_seconds})
+
+            if seconds_of_silence > self.automatic_leave_configuration.silence_timeout_seconds:
                 logger.info(f"Auto-leaving meeting because there was no audio for {self.automatic_leave_configuration.silence_timeout_seconds} seconds")
                 self.send_message_callback({"message": self.Messages.ADAPTER_REQUESTED_BOT_LEAVE_MEETING, "leave_reason": BotAdapter.LEAVE_REASON.AUTO_LEAVE_SILENCE})
                 return

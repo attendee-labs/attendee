@@ -1,0 +1,142 @@
+from unittest.mock import MagicMock, patch
+
+from django.test import SimpleTestCase, TestCase
+
+from accounts.models import Organization
+from bots.automatic_leave_configuration import AutomaticLeaveConfiguration
+from bots.automatic_leave_utils import silence_detection_should_activate
+from bots.bot_adapter import BotAdapter
+from bots.bot_controller.bot_controller import BotController
+from bots.models import Bot, BotLogEntry, BotLogEntryLevels, BotLogEntryTypes, Project
+from bots.serializers import CreateBotSerializer
+from bots.web_bot_adapter import WebBotAdapter
+
+
+class SilenceDetectionShouldActivateTest(SimpleTestCase):
+    def test_activates_after_silence_activate_after_seconds(self):
+        configuration = AutomaticLeaveConfiguration(silence_activate_after_seconds=1200)
+
+        self.assertFalse(silence_detection_should_activate(configuration, 1200, 1))
+        self.assertTrue(silence_detection_should_activate(configuration, 1201, 1))
+
+    def test_activates_once_enough_participants_have_joined(self):
+        configuration = AutomaticLeaveConfiguration(silence_activate_after_participant_count=2)
+
+        # The count passed in includes our own bot
+        self.assertFalse(silence_detection_should_activate(configuration, 10, 2))
+        self.assertTrue(silence_detection_should_activate(configuration, 10, 3))
+
+    def test_either_trigger_activates_whichever_comes_first(self):
+        configuration = AutomaticLeaveConfiguration(silence_activate_after_seconds=1200, silence_activate_after_participant_count=1)
+
+        self.assertTrue(silence_detection_should_activate(configuration, 10, 2))
+        self.assertTrue(silence_detection_should_activate(configuration, 1201, 1))
+        self.assertFalse(silence_detection_should_activate(configuration, 10, 1))
+
+    def test_participant_count_is_ignored_when_not_set(self):
+        self.assertFalse(silence_detection_should_activate(AutomaticLeaveConfiguration(), 10, 50))
+
+
+@patch("time.time")
+class WebBotAdapterSilenceWarningTest(SimpleTestCase):
+    def setUp(self):
+        self.adapter = object.__new__(WebBotAdapter)  # none of these tests need the adapter's constructor
+        self.adapter.automatic_leave_configuration = AutomaticLeaveConfiguration(silence_timeout_seconds=480, silence_activate_after_participant_count=1, silence_warning_seconds=240)
+        self.adapter.left_meeting = False
+        self.adapter.cleaned_up = False
+        self.adapter.check_domain_allow_list_violation = MagicMock()
+        self.adapter.only_one_participant_in_meeting_at = None
+        self.adapter.silence_detection_activated = False
+        self.adapter.silence_warning_sent_for_last_audio_at = None
+        self.adapter.joined_at = 1000
+        self.adapter.last_audio_message_processed_time = None
+        self.adapter.number_of_participants_ever_in_meeting_excluding_other_bots = MagicMock(return_value=1)
+        self.adapter.send_message_callback = MagicMock()
+
+    def check_at(self, mock_time, now):
+        mock_time.return_value = now
+        self.adapter.check_auto_leave_conditions()
+
+    def sent_messages(self):
+        return [call.args[0]["message"] for call in self.adapter.send_message_callback.call_args_list]
+
+    def test_silence_detection_waits_for_the_first_participant(self, mock_time):
+        self.check_at(mock_time, 1000 + 900)
+        self.assertFalse(self.adapter.silence_detection_activated)
+
+        self.adapter.number_of_participants_ever_in_meeting_excluding_other_bots.return_value = 2
+        self.check_at(mock_time, 1000 + 901)
+        self.assertTrue(self.adapter.silence_detection_activated)
+        self.assertEqual(self.adapter.last_audio_message_processed_time, 1000 + 901)
+
+    def test_warns_once_then_leaves(self, mock_time):
+        self.adapter.number_of_participants_ever_in_meeting_excluding_other_bots.return_value = 2
+        self.check_at(mock_time, 1000)
+
+        self.check_at(mock_time, 1000 + 241)
+        self.check_at(mock_time, 1000 + 300)
+        self.assertEqual(self.sent_messages(), [BotAdapter.Messages.SILENCE_WARNING])
+        self.assertEqual(self.adapter.send_message_callback.call_args.args[0], {"message": BotAdapter.Messages.SILENCE_WARNING, "seconds_of_silence": 240, "seconds_until_leave": 240})
+
+        self.check_at(mock_time, 1000 + 481)
+        self.assertEqual(self.sent_messages(), [BotAdapter.Messages.SILENCE_WARNING, BotAdapter.Messages.ADAPTER_REQUESTED_BOT_LEAVE_MEETING])
+
+    def test_warns_again_after_audio_resumes_and_stops(self, mock_time):
+        self.adapter.number_of_participants_ever_in_meeting_excluding_other_bots.return_value = 2
+        self.check_at(mock_time, 1000)
+        self.check_at(mock_time, 1000 + 241)
+
+        self.adapter.last_audio_message_processed_time = 1000 + 300
+        self.check_at(mock_time, 1000 + 400)
+        self.check_at(mock_time, 1000 + 541)
+
+        self.assertEqual(self.sent_messages(), [BotAdapter.Messages.SILENCE_WARNING, BotAdapter.Messages.SILENCE_WARNING])
+
+    def test_no_warning_when_silence_warning_seconds_is_not_set(self, mock_time):
+        self.adapter.automatic_leave_configuration = AutomaticLeaveConfiguration(silence_timeout_seconds=480, silence_activate_after_participant_count=1)
+        self.adapter.number_of_participants_ever_in_meeting_excluding_other_bots.return_value = 2
+        self.check_at(mock_time, 1000)
+
+        self.check_at(mock_time, 1000 + 300)
+        self.assertEqual(self.sent_messages(), [])
+
+
+class SilenceWarningLogEntryTest(TestCase):
+    def setUp(self):
+        organization = Organization.objects.create(name="Test Organization")
+        project = Project.objects.create(name="Test Project", organization=organization)
+        self.bot = Bot.objects.create(name="Test Bot", project=project, meeting_url="https://zoom.us/j/123456789")
+        self.controller = object.__new__(BotController)  # the controller's constructor connects to the outside world
+        self.controller.bot_in_db = self.bot
+
+    @patch("bots.models.trigger_webhook")
+    def test_silence_warning_creates_an_info_log_entry_and_fires_the_webhook(self, mock_trigger_webhook):
+        self.controller.take_action_based_on_message_from_adapter({"message": BotAdapter.Messages.SILENCE_WARNING, "seconds_of_silence": 240, "seconds_until_leave": 240})
+
+        log_entry = BotLogEntry.objects.get(bot=self.bot)
+        self.assertEqual(log_entry.level, BotLogEntryLevels.INFO)
+        self.assertEqual(log_entry.entry_type, BotLogEntryTypes.SILENCE_WARNING)
+        self.assertEqual(log_entry.message, "No audio detected for 240 seconds. Bot will leave the meeting in 240 seconds if no audio is detected.")
+        self.assertEqual(mock_trigger_webhook.call_args.kwargs["payload"]["entry_type"], "silence_warning")
+
+
+class SilenceWarningValidationTest(SimpleTestCase):
+    def test_silence_warning_seconds_must_be_less_than_silence_timeout_seconds(self):
+        from rest_framework.exceptions import ValidationError
+
+        serializer = CreateBotSerializer()
+
+        with self.assertRaises(ValidationError):
+            serializer.validate_automatic_leave_settings({"silence_timeout_seconds": 480, "silence_warning_seconds": 480})
+
+        validated = serializer.validate_automatic_leave_settings({"silence_timeout_seconds": 480, "silence_warning_seconds": 240, "silence_activate_after_participant_count": 1})
+        self.assertEqual(validated["silence_warning_seconds"], 240)
+        self.assertEqual(validated["silence_activate_after_participant_count"], 1)
+
+    def test_new_settings_are_off_by_default(self):
+        validated = CreateBotSerializer().validate_automatic_leave_settings({})
+
+        self.assertIsNone(validated["silence_warning_seconds"])
+        self.assertIsNone(validated["silence_activate_after_participant_count"])
+        self.assertEqual(validated["silence_timeout_seconds"], 600)
+        self.assertEqual(validated["silence_activate_after_seconds"], 1200)
