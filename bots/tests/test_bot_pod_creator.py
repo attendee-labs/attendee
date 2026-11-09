@@ -169,7 +169,7 @@ class TestBotPodCreator(TestCase):
         mock_client.ApiClient.return_value = mock_api_client
 
         creator = BotPodCreator()
-        result = creator.create_bot_pod(bot_id=123, bot_name="bot-123-abc")
+        result = creator.create_bot_pod(bot_pod_cmd=["python", "manage.py", "run_bot", "--botid", "123"], bot_pod_name="bot-123-abc")
 
         self.assertTrue(result["created"])
         self.assertEqual(result["name"], "bot-123-abc")
@@ -207,7 +207,7 @@ class TestBotPodCreator(TestCase):
         mock_client.ApiClient.return_value = mock_api_client
 
         creator = BotPodCreator()
-        result = creator.create_bot_pod(bot_id=123, bot_name="bot-123-abc", add_webpage_streamer=True)
+        result = creator.create_bot_pod(bot_pod_cmd=["python", "manage.py", "run_bot", "--botid", "123"], bot_pod_name="bot-123-abc", add_webpage_streamer=True)
 
         self.assertTrue(result["created"])
         # Should create both bot pod and streamer pod
@@ -244,7 +244,7 @@ class TestBotPodCreator(TestCase):
         mock_client.ApiClient.return_value = mock_api_client
 
         creator = BotPodCreator()
-        result = creator.create_bot_pod(bot_id=123, bot_name="bot-123-abc")
+        result = creator.create_bot_pod(bot_pod_cmd=["python", "manage.py", "run_bot", "--botid", "123"], bot_pod_name="bot-123-abc")
 
         self.assertTrue(result["created"])
         self.assertEqual(mock_v1.create_namespaced_pod.call_count, 2)
@@ -272,7 +272,7 @@ class TestBotPodCreator(TestCase):
         mock_client.ApiClient.return_value = mock_api_client
 
         creator = BotPodCreator()
-        result = creator.create_bot_pod(bot_id=123, bot_name="bot-123-abc")
+        result = creator.create_bot_pod(bot_pod_cmd=["python", "manage.py", "run_bot", "--botid", "123"], bot_pod_name="bot-123-abc")
 
         self.assertFalse(result["created"])
         self.assertEqual(result["status"], "Error")

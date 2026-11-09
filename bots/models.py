@@ -322,6 +322,58 @@ class ZoomOAuthApp(models.Model):
         return f"{self.project.name} - {self.object_id} - {self.client_id}"
 
 
+class WebexServiceApp(models.Model):
+    OBJECT_ID_PREFIX = "wsa_"
+
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="webex_service_apps")
+    object_id = models.CharField(max_length=32, unique=True, editable=False)
+
+    _encrypted_data = models.BinaryField(
+        null=True,
+        editable=False,  # Prevents editing through admin/forms
+    )
+    client_id = models.CharField(max_length=255)
+    service_app_id = models.CharField(max_length=255)
+    org_id = models.CharField(max_length=255)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    # When the tokens were last issued or refreshed. None until the Service App is authorized.
+    tokens_refreshed_at = models.DateTimeField(null=True, blank=True)
+
+    @property
+    def client_secret(self):
+        return self.get_credentials().get("client_secret")
+
+    @property
+    def refresh_token(self):
+        return self.get_credentials().get("refresh_token")
+
+    def set_credentials(self, credentials_dict):
+        """Encrypt and save credentials"""
+        f = Fernet(settings.CREDENTIALS_ENCRYPTION_KEY)
+        json_data = json.dumps(credentials_dict)
+        self._encrypted_data = f.encrypt(json_data.encode())
+        self.save()
+
+    def get_credentials(self):
+        """Decrypt and return credentials"""
+        if not self._encrypted_data:
+            return None
+        f = Fernet(settings.CREDENTIALS_ENCRYPTION_KEY)
+        decrypted_data = f.decrypt(bytes(self._encrypted_data))
+        return json.loads(decrypted_data.decode())
+
+    def save(self, *args, **kwargs):
+        if not self.object_id:
+            # Generate a random 16-character string
+            random_string = "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(16))
+            self.object_id = f"{self.OBJECT_ID_PREFIX}{random_string}"
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.project.name} - {self.object_id} - {self.client_id}"
+
+
 class ZoomOAuthConnectionStates(models.IntegerChoices):
     CONNECTED = 1
     DISCONNECTED = 2
@@ -595,6 +647,7 @@ class MeetingTypes(models.TextChoices):
     ZOOM = "zoom"
     GOOGLE_MEET = "google_meet"
     TEAMS = "teams"
+    WEBEX = "webex"
 
 
 class BotStates(models.IntegerChoices):
@@ -722,6 +775,30 @@ class TranscriptionSettings:
 
     def gladia_enable_code_switching(self):
         return self._settings.get("gladia", {}).get("enable_code_switching", False)
+
+    def gladia_language_config(self):
+        gladia_settings = self._settings.get("gladia", {})
+        if "language_config" in gladia_settings:
+            return gladia_settings["language_config"]
+        # Deprecated fields, kept so existing callers get the same behavior
+        if self.gladia_enable_code_switching():
+            return {"languages": self.gladia_code_switching_languages() or [], "code_switching": True}
+        return None
+
+    def gladia_model(self):
+        return self._settings.get("gladia", {}).get("model", None)
+
+    def gladia_custom_vocabulary(self):
+        return self._settings.get("gladia", {}).get("custom_vocabulary", None)
+
+    def gladia_custom_vocabulary_config(self):
+        return self._settings.get("gladia", {}).get("custom_vocabulary_config", None)
+
+    def gladia_custom_spelling(self):
+        return self._settings.get("gladia", {}).get("custom_spelling", None)
+
+    def gladia_custom_spelling_config(self):
+        return self._settings.get("gladia", {}).get("custom_spelling_config", None)
 
     def assembly_ai_language_code(self):
         return self._settings.get("assembly_ai", {}).get("language_code", None)
@@ -1054,6 +1131,9 @@ class Bot(models.Model):
         centicredits_active = hours_active * 100
         return math.ceil(centicredits_active)
 
+    def k8s_pod_cmd(self):
+        return ["python", "manage.py", "run_bot", "--botid", str(self.id)]
+
     def cpu_request(self):
         from bots.meeting_url_utils import meeting_type_from_url
 
@@ -1062,6 +1142,7 @@ class Bot(models.Model):
             MeetingTypes.GOOGLE_MEET: "GOOGLE_MEET",
             MeetingTypes.TEAMS: "TEAMS",
             MeetingTypes.ZOOM: "ZOOM",
+            MeetingTypes.WEBEX: "WEBEX",
         }.get(bot_meeting_type, "UNKNOWN")
 
         recording_mode_env_var_substring = {
@@ -1189,6 +1270,24 @@ class Bot(models.Model):
             return "screenshare"
         else:
             return None
+
+    def should_launch_bot_pod_with_runner_pool(self):
+        if os.getenv("USE_BOT_RUNNER_POOL", "false") != "true":
+            return False
+        if self.join_at is not None:
+            return False
+        # Runner pods are created with the default spec type, the default BOT_CPU_REQUEST and no
+        # persistent storage, so bots that need anything else must get a dedicated pod.
+        if self.should_launch_webpage_streamer():
+            return False
+        if self.reserve_additional_storage():
+            return False
+        if self.bot_pod_spec_type != BotPodSpecType.DEFAULT:
+            return False
+        default_cpu_request = os.getenv("BOT_CPU_REQUEST", "4") or "4"
+        if self.cpu_request() != default_cpu_request:
+            return False
+        return True
 
     def should_launch_webpage_streamer(self):
         voice_agent_settings = self.settings.get("voice_agent_settings", {}) or {}
@@ -2406,6 +2505,7 @@ class TranscriptionProviders(models.IntegerChoices):
     KYUTAI = 8, "Kyutai"
     CUSTOM_ASYNC = 9, "Custom Async"
     CUSTOM_ASYNC_V2 = 10, "Custom Async v2"
+    NO_TRANSCRIPTION = 11, "No Transcription"
 
 
 class RecordingStorage(Storage):

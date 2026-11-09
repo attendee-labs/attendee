@@ -12,6 +12,11 @@ urlpatterns = [
         name="create-project",
     ),
     path(
+        "webex-service-app/oauth-callback/",
+        projects_views.WebexServiceAppOAuthCallbackView.as_view(),
+        name="webex-service-app-oauth-callback",
+    ),
+    path(
         "<str:object_id>",
         projects_views.ProjectDashboardView.as_view(),
         name="project-dashboard",
@@ -90,6 +95,21 @@ urlpatterns = [
         "<str:object_id>/settings/zoom-oauth-app/delete/",
         projects_views.DeleteZoomOAuthAppView.as_view(),
         name="delete-zoom-oauth-app",
+    ),
+    path(
+        "<str:object_id>/settings/webex-service-app/",
+        projects_views.CreateWebexServiceAppView.as_view(),
+        name="create-webex-service-app",
+    ),
+    path(
+        "<str:object_id>/settings/webex-service-app/delete/",
+        projects_views.DeleteWebexServiceAppView.as_view(),
+        name="delete-webex-service-app",
+    ),
+    path(
+        "<str:object_id>/settings/webex-service-app/authorize/",
+        projects_views.AuthorizeWebexServiceAppView.as_view(),
+        name="authorize-webex-service-app",
     ),
     path(
         "<str:object_id>/settings/credentials/",

@@ -6,6 +6,38 @@ from kubernetes import client
 logger = logging.getLogger(__name__)
 
 
+def find_bot_pod(v1, namespace, bot):
+    """Return the pod running this bot, or None if there isn't one.
+
+    The bot may be running on a pod created specifically for it or on a bot runner pod
+    that was assigned to it, so we look up the pod by the bot's pod name first and fall
+    back to looking up by the assigned-bot-id label. Listing pods requires an extra RBAC
+    permission that some deployments don't grant, so if we can't list we treat the pod
+    as not found. Assumes there is at most one pod per bot.
+    """
+    try:
+        return v1.read_namespaced_pod(name=bot.k8s_pod_name(), namespace=namespace)
+    except client.ApiException as e:
+        if e.status != 404:
+            raise
+
+    try:
+        pods = v1.list_namespaced_pod(namespace=namespace, label_selector=f"assigned-bot-id={bot.object_id}")
+    except client.ApiException as e:
+        if e.status == 403:
+            logger.warning("Not permitted to list pods in namespace %s, so cannot look up pod for bot %s by label: %s", namespace, bot.object_id, e)
+            return None
+        raise
+
+    return pods.items[0] if pods.items else None
+
+
+def find_bot_pod_name(v1, namespace, bot):
+    """Return the name of the pod running this bot, falling back to the bot's default pod name if no pod is found."""
+    pod = find_bot_pod(v1, namespace, bot)
+    return pod.metadata.name if pod else bot.k8s_pod_name()
+
+
 def retrieve_bot_pod_information(v1, namespace, pod_name):
     """Best-effort snapshot of a bot pod's infrastructure state.
 

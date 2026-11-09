@@ -112,12 +112,11 @@ class BotAdmin(admin.ModelAdmin):
         return True
 
     def view_logs_link(self, obj):
-        pod_name = obj.k8s_pod_name()
         link_formatting_str = os.getenv("CLOUD_LOGS_LINK_FORMATTING_STR")
         if not link_formatting_str:
             return None
         try:
-            url = link_formatting_str.format(pod_name=pod_name)
+            url = link_formatting_str.format(pod_name=obj.k8s_pod_name(), bot_object_id=obj.object_id)
             return format_html('<a href="{}" target="_blank">View Logs</a>', url)
         except Exception:
             return None

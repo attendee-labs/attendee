@@ -109,7 +109,7 @@ class BotController:
             return self.per_participant_non_streaming_audio_input_manager
 
     def save_utterances_for_individual_audio_chunks(self):
-        return self.get_recording_transcription_provider() != TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM
+        return self.get_recording_transcription_provider() not in (TranscriptionProviders.NO_TRANSCRIPTION, TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM)
 
     def save_utterances_for_closed_captions(self):
         return self.get_recording_transcription_provider() == TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM
@@ -305,6 +305,55 @@ class BotController:
             teams_bot_identification_credentials=self.get_teams_bot_identification_credentials(),
         )
 
+    def get_webex_service_app(self):
+        return self.bot_in_db.project.webex_service_apps.first()
+
+    def create_webex_guest_token(self):
+        from bots.webex_bot_adapter.webex_guest_token import WebexAuthError, create_guest_token_from_refresh_token
+
+        # The Service App is read on the main thread so no extra sql connection is added, and the requests to Webex stay on the adapter's thread
+        webex_service_app = self.main_thread_executor.run(self.get_webex_service_app)
+        if not webex_service_app or not webex_service_app.refresh_token:
+            raise WebexAuthError("Authorized Webex Service App not found")
+
+        return create_guest_token_from_refresh_token(
+            webex_service_app.client_id,
+            webex_service_app.client_secret,
+            webex_service_app.refresh_token,
+            subject=f"attendee-{self.bot_in_db.object_id}",
+            display_name=self.bot_in_db.name,
+        )
+
+    def get_webex_bot_adapter(self):
+        from bots.webex_bot_adapter import WebexBotAdapter
+
+        return WebexBotAdapter(
+            display_name=self.bot_in_db.name,
+            send_message_callback=self.on_message_from_adapter,
+            add_audio_chunk_callback=self.get_per_participant_audio_chunk_callback(),
+            meeting_url=self.bot_in_db.meeting_url,
+            add_video_frame_callback=None,
+            wants_any_video_frames_callback=None,
+            add_mixed_audio_chunk_callback=self.add_mixed_audio_chunk_callback if self.pipeline_configuration.websocket_stream_audio else None,
+            add_per_participant_video_frame_callback=self.add_per_participant_video_frame_callback if self.pipeline_configuration.websocket_stream_per_participant_video else None,
+            upsert_caption_callback=self.closed_caption_manager.upsert_caption if self.save_utterances_for_closed_captions() else None,
+            upsert_chat_message_callback=self.on_new_chat_message,
+            add_participant_event_callback=self.on_new_participant_event,
+            automatic_leave_configuration=self.automatic_leave_configuration,
+            per_participant_realtime_video_configuration=self.per_participant_realtime_video_configuration,
+            room_sync_source_participant_configuration=self.get_room_sync_source_participant_configuration(),
+            add_encoded_mp4_chunk_callback=None,
+            recording_view=self.bot_in_db.recording_view(),
+            should_create_debug_recording=self.bot_in_db.create_debug_recording(),
+            start_recording_screen_callback=self.screen_and_audio_recorder.start_recording if self.screen_and_audio_recorder else None,
+            stop_recording_screen_callback=self.screen_and_audio_recorder.stop_recording if self.screen_and_audio_recorder else None,
+            video_frame_size=self.bot_in_db.recording_dimensions(),
+            record_chat_messages_when_paused=self.bot_in_db.record_chat_messages_when_paused(),
+            disable_incoming_video=self.disable_incoming_video_for_web_bots(),
+            record_participant_speech_start_stop_events=self.bot_in_db.record_participant_speech_start_stop_events(),
+            create_guest_token_callback=self.create_webex_guest_token,
+        )
+
     def get_zoom_oauth_credentials_via_credentials_record(self):
         zoom_oauth_credentials_record = self.bot_in_db.project.credentials.filter(credential_type=Credentials.CredentialTypes.ZOOM_OAUTH).first()
         if not zoom_oauth_credentials_record:
@@ -386,7 +435,6 @@ class BotController:
         zoom_oauth_credentials, zoom_tokens = self.get_zoom_oauth_credentials_and_tokens()
 
         return ZoomBotAdapter(
-            use_one_way_audio=self.pipeline_configuration.transcribe_audio or self.pipeline_configuration.websocket_stream_per_participant_audio,
             use_mixed_audio=self.pipeline_configuration.record_audio or self.pipeline_configuration.rtmp_stream_audio or self.pipeline_configuration.websocket_stream_audio,
             use_video=self.pipeline_configuration.record_video or self.pipeline_configuration.rtmp_stream_video,
             display_name=self.bot_in_db.name,
@@ -416,12 +464,11 @@ class BotController:
         zoom_oauth_credentials, zoom_tokens = self.get_zoom_oauth_credentials_and_tokens()
 
         return ZoomRTMSAdapter(
-            use_one_way_audio=self.pipeline_configuration.transcribe_audio or self.pipeline_configuration.websocket_stream_per_participant_audio,
             use_mixed_audio=self.pipeline_configuration.record_audio or self.pipeline_configuration.rtmp_stream_audio or self.pipeline_configuration.websocket_stream_audio,
             use_video=self.pipeline_configuration.record_video or self.pipeline_configuration.rtmp_stream_video,
             send_message_callback=self.on_message_from_adapter,
             add_audio_chunk_callback=self.get_per_participant_audio_chunk_callback(),
-            upsert_caption_callback=self.closed_caption_manager.upsert_caption,
+            upsert_caption_callback=self.closed_caption_manager.upsert_caption if self.save_utterances_for_closed_captions() else None,
             zoom_client_id=zoom_oauth_credentials["client_id"],
             zoom_client_secret=zoom_oauth_credentials["client_secret"],
             zoom_rtms=self.bot_in_db.zoom_rtms(),
@@ -478,6 +525,8 @@ class BotController:
         meeting_type = self.get_meeting_type()
         if meeting_type == MeetingTypes.TEAMS:
             return self.adapter.get_per_participant_audio_utterance_delay_ms()
+        elif meeting_type == MeetingTypes.WEBEX:
+            return self.adapter.get_per_participant_audio_utterance_delay_ms()
         return 0
 
     def get_per_participant_audio_sample_rate(self):
@@ -493,6 +542,8 @@ class BotController:
             return 48000
         elif meeting_type == MeetingTypes.TEAMS:
             return 48000
+        elif meeting_type == MeetingTypes.WEBEX:
+            return 48000
 
     def mixed_audio_sample_rate(self):
         meeting_type = self.get_meeting_type()
@@ -507,6 +558,8 @@ class BotController:
             return 48000
         elif meeting_type == MeetingTypes.TEAMS:
             return 48000
+        elif meeting_type == MeetingTypes.WEBEX:
+            return 48000
 
     def get_audio_format(self):
         meeting_type = self.get_meeting_type()
@@ -520,6 +573,8 @@ class BotController:
         elif meeting_type == MeetingTypes.GOOGLE_MEET:
             return GstreamerPipeline.AUDIO_FORMAT_FLOAT
         elif meeting_type == MeetingTypes.TEAMS:
+            return GstreamerPipeline.AUDIO_FORMAT_FLOAT
+        elif meeting_type == MeetingTypes.WEBEX:
             return GstreamerPipeline.AUDIO_FORMAT_FLOAT
 
     def get_sleep_time_between_audio_output_chunks_seconds(self):
@@ -580,6 +635,8 @@ class BotController:
             return self.get_google_meet_bot_adapter()
         elif meeting_type == MeetingTypes.TEAMS:
             return self.get_teams_bot_adapter()
+        elif meeting_type == MeetingTypes.WEBEX:
+            return self.get_webex_bot_adapter()
 
     def get_first_buffer_timestamp_ms(self):
         if self.screen_and_audio_recorder:
@@ -862,6 +919,8 @@ class BotController:
         elif meeting_type == MeetingTypes.GOOGLE_MEET:
             return False
         elif meeting_type == MeetingTypes.TEAMS:
+            return False
+        elif meeting_type == MeetingTypes.WEBEX:
             return False
 
     def should_create_websocket_client_manager(self):

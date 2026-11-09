@@ -16,6 +16,7 @@ from bots.models import (
     TranscriptionFailureReasons,
     Utterance,
 )
+from bots.serializers import CreateAsyncTranscriptionSerializer
 from bots.tasks.process_utterance_task import get_transcription_via_assemblyai, get_transcription_via_custom_async, get_transcription_via_custom_async_v2, get_transcription_via_deepgram, get_transcription_via_elevenlabs, get_transcription_via_gladia, get_transcription_via_openai, get_transcription_via_sarvam, process_utterance
 
 
@@ -844,6 +845,158 @@ class GladiaProviderTest(TransactionTestCase):
             # upload + transcribe + delete = 3 calls
             self.assertEqual(m_request.call_count, 3)
             m_get.assert_called_once_with("https://api.gladia.io/result/abc", headers=mock.ANY)
+
+    def _run_gladia(self, gladia_settings, transcription_result=None):
+        """Run the Gladia adapter with the given settings and return (transcribe request body, transcript, failure)."""
+        self.bot.settings = {"transcription_settings": {"gladia": gladia_settings}}
+        self.bot.save()
+        self.utterance.refresh_from_db()
+
+        if transcription_result is None:
+            transcription_result = {
+                "full_transcript": "hello world",
+                "languages": ["en"],
+                "utterances": [{"text": "hello world", "language": "en", "words": [{"word": "hello", "start": 0.0, "end": 0.4, "confidence": 0.9}, {"word": " world", "start": 0.5, "end": 0.9, "confidence": 0.8}]}],
+            }
+
+        with (
+            self._patch_creds(),
+            mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3"),
+            mock.patch("bots.tasks.process_utterance_task.requests.request") as m_request,
+            mock.patch("bots.tasks.process_utterance_task.requests.get") as m_get,
+        ):
+
+            def _request_side_effect(method, url, **_):
+                if url.endswith("/upload"):
+                    resp = mock.Mock(status_code=200)
+                    resp.json.return_value = {"audio_url": "https://api.gladia.io/file/123"}
+                    return resp
+                if url.endswith("/pre-recorded"):
+                    resp = mock.Mock(status_code=201)
+                    resp.json.return_value = {"id": "abc", "result_url": "https://api.gladia.io/v2/pre-recorded/abc"}
+                    return resp
+                if method == "DELETE":
+                    return mock.Mock(status_code=202)
+                raise AssertionError(f"unexpected {method} {url}")
+
+            m_request.side_effect = _request_side_effect
+            m_get.return_value = mock.Mock(status_code=200, json=mock.Mock(return_value={"status": "done", "result": {"transcription": transcription_result}}))
+
+            transcript, failure = get_transcription_via_gladia(self.utterance)
+
+        transcribe_calls = [c for c in m_request.call_args_list if c.args[1].endswith("/pre-recorded")]
+        self.assertEqual(len(transcribe_calls), 1)
+        return transcribe_calls[0].kwargs["json"], transcript, failure
+
+    def test_no_language_settings_sends_only_the_audio_url(self):
+        body, _, _ = self._run_gladia({})
+        self.assertEqual(body, {"audio_url": "https://api.gladia.io/file/123"})
+
+    def test_language_config_is_sent_as_given(self):
+        for language_config in [{"languages": ["fi", "sv", "en"], "code_switching": True}, {"languages": ["fi"]}, {"languages": ["fi"], "code_switching": True}]:
+            body, _, _ = self._run_gladia({"language_config": language_config})
+            self.assertEqual(body, {"audio_url": "https://api.gladia.io/file/123", "language_config": language_config})
+
+    def test_deprecated_code_switching_fields_are_sent_as_language_config(self):
+        body, _, _ = self._run_gladia({"enable_code_switching": True, "code_switching_languages": ["en", "fr"]})
+        self.assertEqual(body, {"audio_url": "https://api.gladia.io/file/123", "language_config": {"languages": ["en", "fr"], "code_switching": True}})
+
+    def test_deprecated_code_switching_without_languages_detects_across_all_languages(self):
+        body, _, _ = self._run_gladia({"enable_code_switching": True})
+        self.assertEqual(body, {"audio_url": "https://api.gladia.io/file/123", "language_config": {"languages": [], "code_switching": True}})
+
+    def test_deprecated_code_switching_languages_are_ignored_when_code_switching_is_off(self):
+        body, _, _ = self._run_gladia({"enable_code_switching": False, "code_switching_languages": ["en", "fr"]})
+        self.assertEqual(body, {"audio_url": "https://api.gladia.io/file/123"})
+
+    def test_language_config_takes_precedence_over_deprecated_fields(self):
+        body, _, _ = self._run_gladia({"language_config": {"languages": ["de"]}, "enable_code_switching": True, "code_switching_languages": ["en", "fr"]})
+        self.assertEqual(body, {"audio_url": "https://api.gladia.io/file/123", "language_config": {"languages": ["de"]}})
+
+    def test_stored_transcription_includes_the_dominant_language(self):
+        _, transcript, failure = self._run_gladia(
+            {"language_config": {"languages": ["fi", "en"], "code_switching": True}},
+            transcription_result={
+                "full_transcript": "moi hello hei",
+                "languages": ["fi", "en"],
+                "utterances": [
+                    {"text": "moi", "language": "fi", "words": [{"word": "moi", "start": 0.0, "end": 0.3, "confidence": 0.9}]},
+                    {"text": "hello", "language": "en", "words": [{"word": " hello", "start": 0.4, "end": 0.8, "confidence": 0.8}]},
+                    {"text": "hei", "language": "fi", "words": [{"word": " hei", "start": 0.9, "end": 1.2, "confidence": 0.7}]},
+                ],
+            },
+        )
+        self.assertIsNone(failure)
+        self.assertEqual(
+            transcript,
+            {
+                "transcript": "moi hello hei",
+                "languages": ["fi", "en"],
+                "language": "fi",
+                "words": [
+                    {"word": "moi", "start": 0.0, "end": 0.3, "confidence": 0.9},
+                    {"word": " hello", "start": 0.4, "end": 0.8, "confidence": 0.8},
+                    {"word": " hei", "start": 0.9, "end": 1.2, "confidence": 0.7},
+                ],
+            },
+        )
+
+    def test_stored_language_falls_back_to_the_utterance_language(self):
+        _, transcript, _ = self._run_gladia(
+            {},
+            transcription_result={"full_transcript": "hej", "languages": [], "utterances": [{"text": "hej", "language": "sv", "words": [{"word": "hej", "start": 0.0, "end": 0.3, "confidence": 0.9}]}]},
+        )
+        self.assertEqual(transcript, {"transcript": "hej", "languages": [], "language": "sv", "words": [{"word": "hej", "start": 0.0, "end": 0.3, "confidence": 0.9}]})
+
+    def test_stored_language_is_none_for_silent_audio(self):
+        _, transcript, _ = self._run_gladia({}, transcription_result={"full_transcript": "", "languages": [], "utterances": []})
+        self.assertEqual(transcript, {"transcript": "", "languages": [], "language": None, "words": []})
+
+    def test_schema_accepts_language_settings(self):
+        for gladia_settings in [{"language_config": {"languages": ["fi"]}}, {"language_config": {"languages": ["fi", "sv"], "code_switching": True}}, {"enable_code_switching": True, "code_switching_languages": ["en"]}]:
+            serializer = CreateAsyncTranscriptionSerializer(data={"transcription_settings": {"gladia": gladia_settings}})
+            self.assertTrue(serializer.is_valid(), serializer.errors)
+
+    def test_schema_rejects_unknown_language_config_fields(self):
+        serializer = CreateAsyncTranscriptionSerializer(data={"transcription_settings": {"gladia": {"language_config": {"language": "fi"}}}})
+        self.assertFalse(serializer.is_valid())
+
+    def test_model_vocabulary_and_spelling_are_sent_as_given(self):
+        gladia_settings = {
+            "model": "solaria-3",
+            "custom_vocabulary": True,
+            "custom_vocabulary_config": {"vocabulary": ["Kubernetes", {"value": "Jyväskylä", "pronunciations": ["yuvaskula"], "intensity": 0.6, "language": "fi"}], "default_intensity": 0.4},
+            "custom_spelling": True,
+            "custom_spelling_config": {"spelling_dictionary": {"SQL": ["sequel", "s q l"]}},
+        }
+        body, _, _ = self._run_gladia(gladia_settings)
+        self.assertEqual(body, {"audio_url": "https://api.gladia.io/file/123", **gladia_settings})
+
+    def test_disabled_vocabulary_and_spelling_are_sent_as_given(self):
+        body, _, _ = self._run_gladia({"custom_vocabulary": False, "custom_spelling": False})
+        self.assertEqual(body, {"audio_url": "https://api.gladia.io/file/123", "custom_vocabulary": False, "custom_spelling": False})
+
+    def test_schema_accepts_model_vocabulary_and_spelling(self):
+        gladia_settings = {
+            "model": "solaria-1",
+            "custom_vocabulary": True,
+            "custom_vocabulary_config": {"vocabulary": ["Kubernetes", {"value": "Jyväskylä", "intensity": 0.6}], "default_intensity": 0.5},
+            "custom_spelling": True,
+            "custom_spelling_config": {"spelling_dictionary": {"SQL": ["sequel"]}},
+        }
+        serializer = CreateAsyncTranscriptionSerializer(data={"transcription_settings": {"gladia": gladia_settings}})
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+
+    def test_schema_rejects_invalid_model_vocabulary_and_spelling(self):
+        for gladia_settings in [
+            {"model": "solaria-2"},
+            {"custom_vocabulary_config": {"vocabulary": ["Kubernetes"], "default_intensity": 1.5}},
+            {"custom_vocabulary_config": {"vocabulary": [{"pronunciations": ["a"]}]}},
+            {"custom_spelling_config": {"spelling_dictionary": {"SQL": "sequel"}}},
+        ]:
+            serializer = CreateAsyncTranscriptionSerializer(data={"transcription_settings": {"gladia": gladia_settings}})
+            self.assertFalse(serializer.is_valid(), gladia_settings)
+            self.assertNotIn("Additional properties are not allowed", str(serializer.errors))
 
     # ------------------------------------------------------------------ INVALID CREDENTIALS
 

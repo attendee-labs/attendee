@@ -258,6 +258,10 @@ BOT_IMAGE_SCHEMA = {
 TRANSCRIPTION_SETTINGS_SCHEMA = {
     "type": "object",
     "properties": {
+        "enabled": {
+            "type": "boolean",
+            "description": "Set to false to disable transcription. Defaults to true.",
+        },
         "deepgram": {
             "type": "object",
             "properties": {
@@ -276,14 +280,85 @@ TRANSCRIPTION_SETTINGS_SCHEMA = {
         "gladia": {
             "type": "object",
             "properties": {
+                "language_config": {
+                    "type": "object",
+                    "properties": {
+                        "languages": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "ISO 639-1 codes of the languages expected in the audio. If one language is passed, it's used as the transcription language. If empty, the language is detected among all supported languages. See here for available languages: https://docs.gladia.io/chapters/language/supported-languages",
+                        },
+                        "code_switching": {
+                            "type": "boolean",
+                            "description": "Whether the language can change between utterances. If false, the language is detected once at the start of the audio. Defaults to false. See details: https://docs.gladia.io/chapters/language/code-switching",
+                        },
+                    },
+                    "additionalProperties": False,
+                    "description": "Sent to Gladia as language_config. See details: https://docs.gladia.io/api-reference/v2/pre-recorded/init",
+                },
+                "model": {
+                    "type": "string",
+                    "enum": ["solaria-1", "solaria-3", "solaria-fusion"],
+                    "description": "The Gladia model to use for transcription. Defaults to solaria-1. solaria-3 only supports English, French, German, Spanish and Italian, and does not support code switching. See details: https://docs.gladia.io/chapters/introduction/models",
+                },
+                "custom_vocabulary": {
+                    "type": "boolean",
+                    "description": "Whether to favor the words and phrases in custom_vocabulary_config in the transcript. See details: https://docs.gladia.io/chapters/audio-intelligence/custom-vocabulary",
+                },
+                "custom_vocabulary_config": {
+                    "type": "object",
+                    "properties": {
+                        "vocabulary": {
+                            "type": "array",
+                            "items": {
+                                "oneOf": [
+                                    {"type": "string"},
+                                    {
+                                        "type": "object",
+                                        "properties": {
+                                            "value": {"type": "string", "description": "The word or phrase to favor in the transcript."},
+                                            "intensity": {"type": "number", "minimum": 0, "maximum": 1, "description": "How readily the word replaces similar-sounding words. Overrides default_intensity."},
+                                            "pronunciations": {"type": "array", "items": {"type": "string"}, "description": "Other ways the word can be pronounced."},
+                                            "language": {"type": "string", "description": "ISO 639-1 code of the language the word is pronounced in."},
+                                        },
+                                        "required": ["value"],
+                                        "additionalProperties": False,
+                                    },
+                                ]
+                            },
+                            "description": "The words or phrases to favor. Each item is a string or an object with value and optional intensity, pronunciations and language.",
+                        },
+                        "default_intensity": {"type": "number", "minimum": 0, "maximum": 1, "description": "Intensity for vocabulary items that don't set their own."},
+                    },
+                    "required": ["vocabulary"],
+                    "additionalProperties": False,
+                    "description": "Sent to Gladia as custom_vocabulary_config. Only used if custom_vocabulary is true. See details: https://docs.gladia.io/api-reference/v2/pre-recorded/init",
+                },
+                "custom_spelling": {
+                    "type": "boolean",
+                    "description": "Whether to apply the spellings in custom_spelling_config to the transcript. See details: https://docs.gladia.io/chapters/audio-intelligence/custom-spelling",
+                },
+                "custom_spelling_config": {
+                    "type": "object",
+                    "properties": {
+                        "spelling_dictionary": {
+                            "type": "object",
+                            "additionalProperties": {"type": "array", "items": {"type": "string"}},
+                            "description": 'Maps each spelling to write (case-sensitive) to the variants to replace (case-insensitive), e.g. {"SQL": ["sequel"]}.',
+                        },
+                    },
+                    "required": ["spelling_dictionary"],
+                    "additionalProperties": False,
+                    "description": "Sent to Gladia as custom_spelling_config. Only used if custom_spelling is true. See details: https://docs.gladia.io/api-reference/v2/pre-recorded/init",
+                },
                 "code_switching_languages": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "The languages to transcribe the meeting in when using code switching. See here for available languages: https://docs.gladia.io/chapters/limits-and-specifications/languages",
+                    "description": "Deprecated, use language_config instead. The languages to transcribe the meeting in when using code switching. Ignored if language_config is set. See here for available languages: https://docs.gladia.io/chapters/language/supported-languages",
                 },
                 "enable_code_switching": {
                     "type": "boolean",
-                    "description": "Whether to use code switching to transcribe the meeting in multiple languages.",
+                    "description": "Deprecated, use language_config instead. Whether to use code switching to transcribe the meeting in multiple languages. Ignored if language_config is set.",
                 },
             },
             "required": [],
@@ -1183,7 +1258,7 @@ ROOM_SYNC_SETTINGS_SCHEMA = {
                 },
                 "source_participant": {
                     "type": "object",
-                    "description": "Identifies the LiveKit participant whose audio and video the bot should stream into the meeting. If omitted, no media will be streamed into the meeting. Exactly one of 'identity' or 'publish_on_behalf' must be provided.",
+                    "description": "Identifies the LiveKit participant whose audio and video the bot should stream into the meeting. If omitted, no media will be streamed into the meeting. At least one of 'identity' or 'publish_on_behalf' must be provided. When both are provided, tracks matched by 'publish_on_behalf' are preferred, and tracks matched by 'identity' are streamed whenever no 'publish_on_behalf' track is available.",
                     "properties": {
                         "identity": {
                             "type": "string",
@@ -1191,10 +1266,10 @@ ROOM_SYNC_SETTINGS_SCHEMA = {
                         },
                         "publish_on_behalf": {
                             "type": "string",
-                            "description": "The bot streams tracks from the first participant whose 'lk.publish_on_behalf' attribute equals this value, which is how a LiveKit agent publishes on behalf of another participant.",
+                            "description": "The bot streams tracks from participants whose 'lk.publish_on_behalf' attribute equals this value, which is how a LiveKit agent or avatar publishes on behalf of another participant.",
                         },
                     },
-                    "oneOf": [
+                    "anyOf": [
                         {"required": ["identity"]},
                         {"required": ["publish_on_behalf"]},
                     ],
@@ -1247,6 +1322,9 @@ class CreateAsyncTranscriptionSerializer(serializers.Serializer):
             jsonschema.validate(instance=value, schema=TRANSCRIPTION_SETTINGS_SCHEMA)
         except jsonschema.exceptions.ValidationError as e:
             raise serializers.ValidationError(e.message)
+
+        if "enabled" in value:
+            raise serializers.ValidationError({"transcription_settings": "The enabled field is not applicable to an async transcription request."})
 
         if "meeting_closed_captions" in value:
             raise serializers.ValidationError({"transcription_settings": "Meeting closed captions are not available for async transcription."})
@@ -1486,6 +1564,8 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
             elif meeting_type == MeetingTypes.GOOGLE_MEET:
                 value = {"meeting_closed_captions": {}}
             elif meeting_type == MeetingTypes.TEAMS:
+                value = {"meeting_closed_captions": {}}
+            elif meeting_type == MeetingTypes.WEBEX:
                 value = {"meeting_closed_captions": {}}
             else:
                 return None

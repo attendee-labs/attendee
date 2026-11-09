@@ -34,7 +34,7 @@ class Command(BaseCommand):
             pods = self.v1.list_namespaced_pod(namespace=namespace)
 
             # Filter for completed bot pods
-            completed_pods: List[str] = [pod.metadata.name for pod in pods.items if (pod.metadata.name.startswith("bot-pod-") and pod.status.phase == "Succeeded")]
+            completed_pods: List[str] = [pod.metadata.name for pod in pods.items if (pod.metadata.name.startswith(("bot-pod-", "bot-runner-")) and pod.status.phase == "Succeeded")]
 
             # Delete each completed pod
             for pod_name in completed_pods:

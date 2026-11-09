@@ -123,6 +123,8 @@ class TestMeetingUrlUtils(unittest.TestCase):
         self.assertEqual(normalize_meeting_url("https://meet.google.com/abc-defg-hij")[1], "https://meet.google.com/abc-defg-hij")
 
         self.assertEqual(normalize_meeting_url("meet.google.com/abc-defg-hij")[1], "https://meet.google.com/abc-defg-hij")
+        self.assertEqual(normalize_meeting_url("https://meet.google.com/meet/abc-defg-hij")[1], "https://meet.google.com/abc-defg-hij")
+        self.assertEqual(normalize_meeting_url("https://meet.google.com/meet/abc-defg-hij?authuser=0")[1], "https://meet.google.com/abc-defg-hij")
         self.assertEqual(normalize_meeting_url("https://teams.microsoft.com/l/meetup-join/19%3ameeting_NjnnnnnnnnnnnnnnnnnnnnnnnnnnMzctODQwYTBmMDQ4MzQ2%40thread.v2/0?context=%7b%22Tid%22%3a%22b8291b4b-aaaa-bbbb-8a00-9d5fc37b9a77%22%2c%22Oid%22%3a%22216d2e11-45cc-9999-9689-d05554e5c1d1%22%7d>")[1], 'https://teams.microsoft.com/l/meetup-join/19:meeting_NjnnnnnnnnnnnnnnnnnnnnnnnnnnMzctODQwYTBmMDQ4MzQ2@thread.v2/0?context={"Tid":"b8291b4b-aaaa-bbbb-8a00-9d5fc37b9a77","Oid":"216d2e11-45cc-9999-9689-d05554e5c1d1"}')
         self.assertEqual(normalize_meeting_url("https://teams.microsoft.com/meet/999999999999?p=aaaaalRE2XBPsAr00W")[1], "https://teams.microsoft.com/meet/999999999999?p=aaaaalRE2XBPsAr00W")
 
@@ -185,6 +187,37 @@ class TestMeetingUrlUtils(unittest.TestCase):
         self.assertEqual(meeting_id, "111222333")
         self.assertEqual(password, "AbC9xYpQ2LmN7RkT5sVuH4ZbJe1DfG.1")
         self.assertEqual(registrant_token, "ZkPqN8f2LrS4XyT6wVaE9mHuCdJg5QbA1sDoRtUvWxY.DQkAAAAATESTTOKEN1234567890AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+
+    def test_webex_personal_room_urls(self):
+        self.assertEqual(meeting_type_from_url("https://acme-844.my.webex.com/meet/jane.doe"), MeetingTypes.WEBEX)
+        self.assertEqual(meeting_type_from_url("https://acme.webex.com/meet/jane"), MeetingTypes.WEBEX)
+        # Host is lowercased, a trailing slash and a trailing carat are dropped
+        self.assertEqual(normalize_meeting_url("https://ACME-844.my.webex.com/meet/jane.doe/>")[1], "https://acme-844.my.webex.com/meet/jane.doe")
+        # Anything other than the room name is dropped
+        self.assertEqual(normalize_meeting_url("https://acme.webex.com/meet/jane?foo=bar#baz")[1], "https://acme.webex.com/meet/jane")
+        self.assertEqual(normalize_meeting_url("acme.webex.com/meet/jane")[1], "https://acme.webex.com/meet/jane")
+
+    def test_webex_invitation_urls(self):
+        url = "https://acme-844.my.webex.com/acme-844.my/j.php?MTID=m0123456789abcdef0123456789abcdef"
+        self.assertEqual(meeting_type_from_url(url), MeetingTypes.WEBEX)
+        self.assertEqual(normalize_meeting_url(url)[1], url)
+        # Only the meeting token is kept
+        self.assertEqual(normalize_meeting_url(url + "&utm_source=email&pwd=secret")[1], url)
+
+    def test_webex_urls_the_sdk_cannot_join_are_rejected(self):
+        # The browser launcher page that opens when a meeting starts is not an invitation
+        self.assertEqual(normalize_meeting_url("https://acme-844.my.webex.com/wbxmjs/joinservice/sites/acme-844.my/meeting/download/c12ed1e804fd431888e9521395443973?siteurl=acme-844.my&theme=dark"), (None, None))
+        self.assertEqual(normalize_meeting_url("https://www.webex.com/"), (None, None))
+        self.assertEqual(normalize_meeting_url("https://acme.webex.com/meet/"), (None, None))
+        self.assertEqual(normalize_meeting_url("https://acme.webex.com/acme/j.php"), (None, None))
+        self.assertEqual(normalize_meeting_url("https://acme.webex.com/acme/j.php?MTID=bad/token"), (None, None))
+        # Hosts that only look like Webex
+        self.assertEqual(normalize_meeting_url("https://acme.webex.com.evil.com/meet/jane"), (None, None))
+        self.assertEqual(normalize_meeting_url("https://notwebex.com/meet/jane"), (None, None))
+        # Hosts a browser would read differently than urlparse/tldextract
+        self.assertEqual(normalize_meeting_url("https://evil.com\\@acme.webex.com/meet/jane"), (None, None))
+        self.assertEqual(normalize_meeting_url("https://evil.com@acme.webex.com/meet/jane"), (None, None))
+        self.assertEqual(normalize_meeting_url("https://acme.webex.com:8443/meet/jane"), (None, None))
 
 
 if __name__ == "__main__":

@@ -16,9 +16,10 @@ from django.utils import timezone
 from accounts.models import Organization
 from bots.instance_health_alert_manager import InstanceHealthAlertManager
 from bots.instance_health_snapshot_taker import InstanceHealthSnapshotTaker
-from bots.models import Bot, BotStates, Calendar, CalendarStates, ZoomOAuthConnection, ZoomOAuthConnectionStates
+from bots.models import Bot, BotStates, Calendar, CalendarStates, WebexServiceApp, ZoomOAuthConnection, ZoomOAuthConnectionStates
 from bots.tasks.autopay_charge_task import enqueue_autopay_charge_task
 from bots.tasks.launch_scheduled_bot_task import launch_scheduled_bot
+from bots.tasks.refresh_webex_service_app_task import enqueue_refresh_webex_service_app_task
 from bots.tasks.refresh_zoom_oauth_connection_task import enqueue_refresh_zoom_oauth_connection_task
 from bots.tasks.sync_calendar_task import enqueue_sync_calendar_task
 from bots.tasks.sync_zoom_oauth_connection_task import enqueue_sync_zoom_oauth_connection_task
@@ -90,6 +91,7 @@ class Command(BaseCommand):
                 self._run_periodic_calendar_syncs()
                 self._run_periodic_zoom_oauth_connection_syncs()
                 self._run_periodic_zoom_oauth_connection_token_refreshs()
+                self._run_periodic_webex_service_app_token_refreshs()
                 self._run_autopay_tasks()
             except Exception:
                 log.exception("Scheduler cycle failed")
@@ -156,6 +158,22 @@ class Command(BaseCommand):
             enqueue_refresh_zoom_oauth_connection_task(zoom_oauth_connection)
 
         log.info("Launched %d zoom oauth connection token refresh tasks", len(zoom_oauth_connections))
+
+    def _run_periodic_webex_service_app_token_refreshs(self):
+        """
+        Run periodic webex service app token refreshs.
+        Launch token refresh tasks for authorized webex service apps whose tokens haven't been refreshed in the last 7 days, so their
+        refresh tokens never reach the end of their 90 day lifetime.
+        """
+        cutoff_time = timezone.now() - timezone.timedelta(days=7)
+
+        webex_service_apps = WebexServiceApp.objects.filter(tokens_refreshed_at__lte=cutoff_time)
+
+        for webex_service_app in webex_service_apps:
+            log.info("Launching webex service app token refresh for webex service app %s (last refreshed: %s)", webex_service_app.object_id, webex_service_app.tokens_refreshed_at.isoformat())
+            enqueue_refresh_webex_service_app_task(webex_service_app)
+
+        log.info("Launched %d webex service app token refresh tasks", len(webex_service_apps))
 
     def _run_periodic_zoom_oauth_connection_syncs(self):
         """
