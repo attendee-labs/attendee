@@ -49,18 +49,19 @@ RUN apt-get update  \
 # Install Chrome dependencies
 RUN apt-get install -y xvfb xauth x11-xkb-utils xfonts-100dpi xfonts-75dpi xfonts-scalable xfonts-cyrillic x11-apps libvulkan1 fonts-liberation xdg-utils wget
 # Install a specific version of Chrome.
-RUN wget --progress=dot:giga --timeout=30 --tries=3 https://build-assets.attendee.dev/google-chrome/pool/main/g/google-chrome-stable/google-chrome-stable_134.0.6998.88-1_amd64.deb
-# Verify that the package is correct, since this is a mirror.
-RUN echo "df557edb3d24d8dcaff9557d80733b42afb6626685200d3f34a3b6f528065cad  google-chrome-stable_134.0.6998.88-1_amd64.deb" | sha256sum -c -
-RUN apt-get install -y ./google-chrome-stable_134.0.6998.88-1_amd64.deb
+RUN wget --progress=dot:giga --timeout=30 --tries=3 https://dl.google.com/linux/chrome/deb/pool/main/g/google-chrome-stable/google-chrome-stable_157.0.8103.38-1_amd64.deb
+RUN echo "a62b277dc03da2cff50cc04589deb66f6875be339c066d46adb49b49eedb629d  google-chrome-stable_157.0.8103.38-1_amd64.deb" | sha256sum -c -
+RUN apt-get install -y ./google-chrome-stable_157.0.8103.38-1_amd64.deb
 
 # Install a specific version of ChromeDriver.
-RUN wget -q https://storage.googleapis.com/chrome-for-testing-public/134.0.6998.88/linux64/chromedriver-linux64.zip \
-    && echo "58df717d51484b9f3ac188af5231cdc77255daa72d0b2b86481bee54e398ce2f  chromedriver-linux64.zip" | sha256sum -c - \
+RUN wget -q https://storage.googleapis.com/chrome-for-testing-public/157.0.8103.38/linux64/chromedriver-linux64.zip \
+    && echo "329525fa0bf02be19794de1e9475772ef64695e0456f142888bd70df3147dc1e  chromedriver-linux64.zip" | sha256sum -c - \
     && unzip chromedriver-linux64.zip \
     && mv chromedriver-linux64/chromedriver /usr/local/bin/chromedriver \
     && chmod +x /usr/local/bin/chromedriver \
     && rm -rf chromedriver-linux64 chromedriver-linux64.zip
+
+RUN python3 -c 'import pathlib, re, sys; p = pathlib.Path("/usr/local/bin/chromedriver"); b = p.read_bytes(); m = re.search(rb"\{window\.cdc_[A-Za-z0-9_]+ = window\.Array;[^}]*\}", b); m or sys.exit("chromedriver automation marker block not found"); p.write_bytes(b[:m.start()] + b"{}".ljust(len(m.group(0))) + b[m.end():])'
 
 # Install ALSA
 RUN apt-get update && apt-get install -y libasound2 libasound2-plugins alsa alsa-utils alsa-oss
