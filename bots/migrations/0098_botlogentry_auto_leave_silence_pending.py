@@ -13,6 +13,6 @@ class Migration(migrations.Migration):
         migrations.AlterField(
             model_name='botlogentry',
             name='entry_type',
-            field=models.IntegerField(choices=[(0, 'Uncategorized'), (1, 'Could not enable closed captions'), (2, 'Webinar panelist promotion'), (3, 'Silence warning')], default=0),
+            field=models.IntegerField(choices=[(0, 'Uncategorized'), (1, 'Could not enable closed captions'), (2, 'Webinar panelist promotion'), (3, 'Auto leave silence pending')], default=0),
         ),
     ]

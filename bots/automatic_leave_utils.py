@@ -20,7 +20,7 @@ def participant_is_another_bot(participant_full_name, participant_is_the_bot, au
     return False
 
 
-def silence_detection_should_activate(automatic_leave_configuration: AutomaticLeaveConfiguration, seconds_since_joined: float, number_of_participants_ever_in_meeting_excluding_other_bots: int) -> bool:
+def silence_detection_should_activate(*, automatic_leave_configuration: AutomaticLeaveConfiguration, seconds_since_joined: float, number_of_participants_ever_in_meeting_excluding_other_bots: int) -> bool:
     # Either trigger activates silence detection, whichever comes first
     if seconds_since_joined > automatic_leave_configuration.silence_activate_after_seconds:
         return True

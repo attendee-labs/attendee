@@ -951,7 +951,7 @@ class ZoomSettingsJSONField(serializers.JSONField):
             },
             "silence_warning_seconds": {
                 "type": "integer",
-                "description": "Number of seconds of continuous silence after which the bot creates a silence_warning log entry (delivered by the bot_logs.update webhook), ahead of leaving at silence_timeout_seconds. Must be less than silence_timeout_seconds. Disabled by default.",
+                "description": "Number of seconds of continuous silence after which the bot creates an auto_leave_silence_pending log entry (delivered by the bot_logs.update webhook), ahead of leaving at silence_timeout_seconds. Must be less than silence_timeout_seconds. Disabled by default.",
                 "default": None,
             },
             "only_participant_in_meeting_timeout_seconds": {

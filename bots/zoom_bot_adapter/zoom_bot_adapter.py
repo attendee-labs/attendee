@@ -1238,7 +1238,7 @@ class ZoomBotAdapter(BotAdapter):
                 self.send_message_callback({"message": self.Messages.ADAPTER_REQUESTED_BOT_LEAVE_MEETING, "leave_reason": BotAdapter.LEAVE_REASON.AUTO_LEAVE_ONLY_PARTICIPANT_IN_MEETING})
                 return
 
-        if not self.silence_detection_activated and self.joined_at is not None and silence_detection_should_activate(self.automatic_leave_configuration, time.time() - self.joined_at, self.number_of_participants_ever_in_meeting_excluding_other_bots()):
+        if not self.silence_detection_activated and self.joined_at is not None and silence_detection_should_activate(automatic_leave_configuration=self.automatic_leave_configuration, seconds_since_joined=time.time() - self.joined_at, number_of_participants_ever_in_meeting_excluding_other_bots=self.number_of_participants_ever_in_meeting_excluding_other_bots()):
             self.silence_detection_activated = True
             self.last_audio_received_at = time.time()
             logger.info(f"Silence detection activated after {time.time() - self.joined_at:.0f} seconds")
@@ -1249,7 +1249,7 @@ class ZoomBotAdapter(BotAdapter):
             if silence_warning_seconds is not None and seconds_of_silence > silence_warning_seconds and self.silence_warning_sent_for_last_audio_at != self.last_audio_received_at:
                 self.silence_warning_sent_for_last_audio_at = self.last_audio_received_at
                 logger.info(f"Sending silence warning because there was no audio for {silence_warning_seconds} seconds")
-                self.send_message_callback({"message": self.Messages.SILENCE_WARNING, "seconds_of_silence": silence_warning_seconds, "seconds_until_leave": self.automatic_leave_configuration.silence_timeout_seconds - silence_warning_seconds})
+                self.send_message_callback({"message": self.Messages.AUTO_LEAVE_SILENCE_PENDING, "seconds_of_silence": silence_warning_seconds, "seconds_until_leave": self.automatic_leave_configuration.silence_timeout_seconds - silence_warning_seconds})
 
             if seconds_of_silence > self.automatic_leave_configuration.silence_timeout_seconds:
                 logger.info(f"Auto-leaving meeting because there was no audio message for {self.automatic_leave_configuration.silence_timeout_seconds} seconds")

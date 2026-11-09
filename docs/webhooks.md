@@ -247,25 +247,13 @@ For webhooks triggered by `bot_logs.update`, the `data` field contains informati
 {
   "id": <The ID of the log entry>,
   "level": <The severity level of the log entry (e.g., "debug", "info", "warning", "error")>,
-  "entry_type": <The type of the log entry (e.g., "uncategorized", "could_not_enable_closed_captions", "silence_warning")>,
+  "entry_type": <The type of the log entry (e.g., "uncategorized", "could_not_enable_closed_captions")>,
   "message": <The log message>,
   "created_at": <The timestamp when the log entry was created>
 }
 ```
 
 This webhook fires every time a new log entry is recorded for a bot. Use these events to keep track of errors, warnings, or other relevant activities occurring on your bots — especially issues that matter but don't rise to the level of a state change. Monitoring these log webhooks helps you catch and investigate noteworthy bot events in real time.
-
-If you set `automatic_leave_settings.silence_warning_seconds`, the bot creates a `silence_warning` log entry when there has been no audio for that long. You can use it to warn the meeting, for example by sending a chat message asking participants to check that they are unmuted. For example, with `silence_warning_seconds: 240` and `silence_timeout_seconds: 480`:
-
-```
-{
-  "id": "log_aBcDeFgHiJkLmNoP",
-  "level": "info",
-  "entry_type": "silence_warning",
-  "message": "No audio detected for 240 seconds. Bot will leave the meeting in 240 seconds if no audio is detected.",
-  "created_at": "2026-11-09T18:04:00.000000+00:00"
-}
-```
 
 
 ## Debugging Webhook Deliveries

@@ -16,25 +16,25 @@ class SilenceDetectionShouldActivateTest(SimpleTestCase):
     def test_activates_after_silence_activate_after_seconds(self):
         configuration = AutomaticLeaveConfiguration(silence_activate_after_seconds=1200)
 
-        self.assertFalse(silence_detection_should_activate(configuration, 1200, 1))
-        self.assertTrue(silence_detection_should_activate(configuration, 1201, 1))
+        self.assertFalse(silence_detection_should_activate(automatic_leave_configuration=configuration, seconds_since_joined=1200, number_of_participants_ever_in_meeting_excluding_other_bots=1))
+        self.assertTrue(silence_detection_should_activate(automatic_leave_configuration=configuration, seconds_since_joined=1201, number_of_participants_ever_in_meeting_excluding_other_bots=1))
 
     def test_activates_once_enough_participants_have_joined(self):
         configuration = AutomaticLeaveConfiguration(silence_activate_after_participant_count=2)
 
         # The count passed in includes our own bot
-        self.assertFalse(silence_detection_should_activate(configuration, 10, 2))
-        self.assertTrue(silence_detection_should_activate(configuration, 10, 3))
+        self.assertFalse(silence_detection_should_activate(automatic_leave_configuration=configuration, seconds_since_joined=10, number_of_participants_ever_in_meeting_excluding_other_bots=2))
+        self.assertTrue(silence_detection_should_activate(automatic_leave_configuration=configuration, seconds_since_joined=10, number_of_participants_ever_in_meeting_excluding_other_bots=3))
 
     def test_either_trigger_activates_whichever_comes_first(self):
         configuration = AutomaticLeaveConfiguration(silence_activate_after_seconds=1200, silence_activate_after_participant_count=1)
 
-        self.assertTrue(silence_detection_should_activate(configuration, 10, 2))
-        self.assertTrue(silence_detection_should_activate(configuration, 1201, 1))
-        self.assertFalse(silence_detection_should_activate(configuration, 10, 1))
+        self.assertTrue(silence_detection_should_activate(automatic_leave_configuration=configuration, seconds_since_joined=10, number_of_participants_ever_in_meeting_excluding_other_bots=2))
+        self.assertTrue(silence_detection_should_activate(automatic_leave_configuration=configuration, seconds_since_joined=1201, number_of_participants_ever_in_meeting_excluding_other_bots=1))
+        self.assertFalse(silence_detection_should_activate(automatic_leave_configuration=configuration, seconds_since_joined=10, number_of_participants_ever_in_meeting_excluding_other_bots=1))
 
     def test_participant_count_is_ignored_when_not_set(self):
-        self.assertFalse(silence_detection_should_activate(AutomaticLeaveConfiguration(), 10, 50))
+        self.assertFalse(silence_detection_should_activate(automatic_leave_configuration=AutomaticLeaveConfiguration(), seconds_since_joined=10, number_of_participants_ever_in_meeting_excluding_other_bots=50))
 
 
 @patch("time.time")
@@ -75,11 +75,11 @@ class WebBotAdapterSilenceWarningTest(SimpleTestCase):
 
         self.check_at(mock_time, 1000 + 241)
         self.check_at(mock_time, 1000 + 300)
-        self.assertEqual(self.sent_messages(), [BotAdapter.Messages.SILENCE_WARNING])
-        self.assertEqual(self.adapter.send_message_callback.call_args.args[0], {"message": BotAdapter.Messages.SILENCE_WARNING, "seconds_of_silence": 240, "seconds_until_leave": 240})
+        self.assertEqual(self.sent_messages(), [BotAdapter.Messages.AUTO_LEAVE_SILENCE_PENDING])
+        self.assertEqual(self.adapter.send_message_callback.call_args.args[0], {"message": BotAdapter.Messages.AUTO_LEAVE_SILENCE_PENDING, "seconds_of_silence": 240, "seconds_until_leave": 240})
 
         self.check_at(mock_time, 1000 + 481)
-        self.assertEqual(self.sent_messages(), [BotAdapter.Messages.SILENCE_WARNING, BotAdapter.Messages.ADAPTER_REQUESTED_BOT_LEAVE_MEETING])
+        self.assertEqual(self.sent_messages(), [BotAdapter.Messages.AUTO_LEAVE_SILENCE_PENDING, BotAdapter.Messages.ADAPTER_REQUESTED_BOT_LEAVE_MEETING])
 
     def test_warns_again_after_audio_resumes_and_stops(self, mock_time):
         self.adapter.number_of_participants_ever_in_meeting_excluding_other_bots.return_value = 2
@@ -90,7 +90,7 @@ class WebBotAdapterSilenceWarningTest(SimpleTestCase):
         self.check_at(mock_time, 1000 + 400)
         self.check_at(mock_time, 1000 + 541)
 
-        self.assertEqual(self.sent_messages(), [BotAdapter.Messages.SILENCE_WARNING, BotAdapter.Messages.SILENCE_WARNING])
+        self.assertEqual(self.sent_messages(), [BotAdapter.Messages.AUTO_LEAVE_SILENCE_PENDING, BotAdapter.Messages.AUTO_LEAVE_SILENCE_PENDING])
 
     def test_no_warning_when_silence_warning_seconds_is_not_set(self, mock_time):
         self.adapter.automatic_leave_configuration = AutomaticLeaveConfiguration(silence_timeout_seconds=480, silence_activate_after_participant_count=1)
@@ -111,13 +111,13 @@ class SilenceWarningLogEntryTest(TestCase):
 
     @patch("bots.models.trigger_webhook")
     def test_silence_warning_creates_an_info_log_entry_and_fires_the_webhook(self, mock_trigger_webhook):
-        self.controller.take_action_based_on_message_from_adapter({"message": BotAdapter.Messages.SILENCE_WARNING, "seconds_of_silence": 240, "seconds_until_leave": 240})
+        self.controller.take_action_based_on_message_from_adapter({"message": BotAdapter.Messages.AUTO_LEAVE_SILENCE_PENDING, "seconds_of_silence": 240, "seconds_until_leave": 240})
 
         log_entry = BotLogEntry.objects.get(bot=self.bot)
         self.assertEqual(log_entry.level, BotLogEntryLevels.INFO)
-        self.assertEqual(log_entry.entry_type, BotLogEntryTypes.SILENCE_WARNING)
+        self.assertEqual(log_entry.entry_type, BotLogEntryTypes.AUTO_LEAVE_SILENCE_PENDING)
         self.assertEqual(log_entry.message, "No audio detected for 240 seconds. Bot will leave the meeting in 240 seconds if no audio is detected.")
-        self.assertEqual(mock_trigger_webhook.call_args.kwargs["payload"]["entry_type"], "silence_warning")
+        self.assertEqual(mock_trigger_webhook.call_args.kwargs["payload"]["entry_type"], "auto_leave_silence_pending")
 
 
 class SilenceWarningValidationTest(SimpleTestCase):

@@ -29,7 +29,7 @@ class BotAdapter:
         BOT_RECORDING_PERMISSION_DENIED = "Bot recording permission denied"
         AUTHORIZED_USER_NOT_IN_MEETING_TIMEOUT_EXCEEDED = "Authorized user not in meeting timeout exceeded"
         COULD_NOT_ENABLE_CLOSED_CAPTIONS = "Could not enable closed captions"
-        SILENCE_WARNING = "Silence warning"
+        AUTO_LEAVE_SILENCE_PENDING = "Auto leave silence pending"
         SAVE_SCREENSHOT_AND_MHTML_FILE = "Save screenshot and mhtml file"
 
         # App session messages
