@@ -3985,7 +3985,7 @@ class CallManager {
             if (contributingSources.some(contributingSource => participant.hasAudioSource(contributingSource.source)) && participant.id) {
                 // Participants in the lobby can't actually be heard, so don't consider them as speaking
                 if (participant.state === ParticipantsPoller.lobbyParticipantState) {
-                    if (this.lobbyParticipantSpeakingTicker % 100 === 0) {
+                    if (this.lobbyParticipantSpeakingTicker % 300 === 0) {
                         window.ws?.sendJson({
                             type: 'LobbyParticipantDetectedAsSpeakingWarning',
                             participantId: participant.id,
