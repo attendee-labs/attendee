@@ -61,7 +61,8 @@ RUN wget -q https://storage.googleapis.com/chrome-for-testing-public/157.0.8103.
     && chmod +x /usr/local/bin/chromedriver \
     && rm -rf chromedriver-linux64 chromedriver-linux64.zip
 
-RUN python3 -c 'import pathlib, re, sys; p = pathlib.Path("/usr/local/bin/chromedriver"); b = p.read_bytes(); m = re.search(rb"\{window\.cdc_[A-Za-z0-9_]+ = window\.Array;[^}]*\}", b); m or sys.exit("chromedriver automation marker block not found"); p.write_bytes(b[:m.start()] + b"{}".ljust(len(m.group(0))) + b[m.end():])'
+RUN python3 -c 'import pathlib, re, sys; p = pathlib.Path("/usr/local/bin/chromedriver"); b = p.read_bytes(); m = re.search(rb"\{window\.cdc_[A-Za-z0-9_]+ = window\.Array;[^}]*\}", b); m or sys.exit("chromedriver automation marker block not found"); p.write_bytes(b[:m.start()] + b"{}".ljust(len(m.group(0))) + b[m.end():])' \
+    && echo "bc66c6cf88e7625bdff06e0d7574fabe5792f682e0e484c653fa0da26c550bfe  /usr/local/bin/chromedriver" | sha256sum -c -
 
 # Install ALSA
 RUN apt-get update && apt-get install -y libasound2 libasound2-plugins alsa alsa-utils alsa-oss
