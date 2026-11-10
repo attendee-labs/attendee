@@ -1938,6 +1938,7 @@ function base64ToUint8Array(base64) {
 
 const syncMeetingSpaceCollectionsUrl = "https://meet.google.com/$rpc/google.rtc.meetings.v1.MeetingSpaceService/SyncMeetingSpaceCollections";
 const createMeetingDeviceUrl = "https://meet.google.com/$rpc/google.rtc.meetings.v1.MeetingDeviceService/CreateMeetingDevice";
+const updateMeetingDeviceUrl = "https://meet.google.com/$rpc/google.rtc.meetings.v1.MeetingDeviceService/UpdateMeetingDevice";
 const userMap = new Map();
 new FetchInterceptor(async (response) => {
     if (response.url === syncMeetingSpaceCollectionsUrl) {
@@ -1950,17 +1951,17 @@ new FetchInterceptor(async (response) => {
             userManager.newUsersListSynced(userInfoList);
         }
     }
-    if (response.url === createMeetingDeviceUrl) {
+    // Both create and update meeting device requests return the same response type
+    if (response.url === createMeetingDeviceUrl || response.url === updateMeetingDeviceUrl) {
         if (!response.ok)
             return;
         const responseText = await response.text();
         const decodedData = base64ToUint8Array(responseText);
         const createDeviceResponse = messageDecoders['CreateMeetingDeviceResponse'](decodedData);
-        const detectedAsBot = Boolean(createDeviceResponse.detectedAsBot);
-        console.log('detectedAsBot', detectedAsBot);
+        const detected = Boolean(createDeviceResponse.detectedAsBot);
         window.ws?.sendJson({
-            type: 'CreateMeetingDeviceResponse',
-            detectedAsBot: detectedAsBot,
+            type: 'DetectedAsBot',
+            detected,
         });
     }
 });
