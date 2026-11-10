@@ -308,8 +308,23 @@ class BotController:
     def get_webex_service_app(self):
         return self.bot_in_db.project.webex_service_apps.first()
 
+    def webex_chat_reading_enabled(self):
+        return bool(getattr(settings, "WEBEX_CHAT_READING_CLIENT_ID", None) and getattr(settings, "WEBEX_CHAT_READING_CLIENT_SECRET", None))
+
     def create_webex_guest_token(self):
         from bots.webex_bot_adapter.webex_guest_token import WebexAuthError, create_guest_token_from_refresh_token
+
+        # When chat reading is configured, mint the web-client-style guest token that can read in-meeting chat instead of
+        # the Service App guest token, which Webex refuses chat access.
+        if self.webex_chat_reading_enabled():
+            from bots.webex_bot_adapter.webex_chat_reading_token import create_chat_reading_guest_token
+
+            return create_chat_reading_guest_token(
+                self.bot_in_db.meeting_url,
+                settings.WEBEX_CHAT_READING_CLIENT_ID,
+                settings.WEBEX_CHAT_READING_CLIENT_SECRET,
+                display_name=self.bot_in_db.name,
+            )
 
         # The Service App is read on the main thread so no extra sql connection is added, and the requests to Webex stay on the adapter's thread
         webex_service_app = self.main_thread_executor.run(self.get_webex_service_app)
@@ -352,6 +367,7 @@ class BotController:
             disable_incoming_video=self.disable_incoming_video_for_web_bots(),
             record_participant_speech_start_stop_events=self.bot_in_db.record_participant_speech_start_stop_events(),
             create_guest_token_callback=self.create_webex_guest_token,
+            read_chat=self.webex_chat_reading_enabled(),
         )
 
     def get_zoom_oauth_credentials_via_credentials_record(self):

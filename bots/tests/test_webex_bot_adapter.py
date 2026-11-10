@@ -88,6 +88,15 @@ class WebexInitialDataTest(SimpleTestCase):
 
         self.assertIn("disableIncomingVideo: true", adapter.subclass_specific_initial_data_code())
 
+    def test_the_page_is_not_told_to_read_chat_by_default(self):
+        self.assertIn("readChat: false", create_adapter().subclass_specific_initial_data_code())
+
+    def test_the_page_is_told_to_read_chat_when_chat_reading_is_on(self):
+        adapter = create_adapter()
+        adapter.read_chat = True
+
+        self.assertIn("readChat: true", adapter.subclass_specific_initial_data_code())
+
     def test_per_participant_audio_is_delayed_less_when_syncing_to_a_room(self):
         adapter = create_adapter()
         self.assertEqual(adapter.get_per_participant_audio_utterance_delay_ms(), 2000)

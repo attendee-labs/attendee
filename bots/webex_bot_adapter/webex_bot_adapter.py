@@ -21,10 +21,11 @@ class UiWebexAuthorizationFailedException(UiInfinitelyRetryableException):
 
 
 class WebexBotAdapter(WebBotAdapter, WebexUIMethods):
-    def __init__(self, *args, create_guest_token_callback: Callable[[], str], **kwargs):
+    def __init__(self, *args, create_guest_token_callback: Callable[[], str], read_chat: bool = False, **kwargs):
         super().__init__(*args, **kwargs)
         # Doing it via callback so we don't keep the Service App credentials in memory
         self.create_guest_token_callback = create_guest_token_callback
+        self.read_chat = read_chat
         self.failed_to_join_reason = None
         self.sent_authorization_failed_message = False
 
@@ -45,6 +46,7 @@ class WebexBotAdapter(WebBotAdapter, WebexUIMethods):
                 botName: {json.dumps(self.display_name)},
                 perParticipantAudioUtteranceDelayMs: {json.dumps(self.get_per_participant_audio_utterance_delay_ms())},
                 disableIncomingVideo: {json.dumps(self.disable_incoming_video)},
+                readChat: {json.dumps(self.read_chat)},
             }}
         """
 
