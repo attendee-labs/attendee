@@ -1239,11 +1239,15 @@ class WebSocketClient {
       PER_PARTICIPANT_VIDEO: 6,
   };
 
+  static MAX_PENDING_JSON_MESSAGES = 1000;
+
   constructor() {
       this.wsUrl = `ws://localhost:${window.initialData.websocketPort}`;
       console.log('WebSocketClient url', this.wsUrl);
       this.ws = null;
       this.mediaSendingEnabled = false;
+      // JSON messages sent while the socket is still connecting; flushed on open
+      this.pendingJsonMessages = [];
   }
 
   ensureConnected() {
@@ -1256,6 +1260,7 @@ class WebSocketClient {
       
       this.ws.onopen = () => {
           console.log('WebSocket Connected');
+          this.flushPendingJsonMessages();
       };
       
       this.ws.onmessage = (event) => {
@@ -1371,11 +1376,30 @@ class WebSocketClient {
   
   sendJson(data) {
       this.ensureConnected();
+      if (this.ws.readyState === WebSocket.CONNECTING) {
+          if (this.pendingJsonMessages.length >= WebSocketClient.MAX_PENDING_JSON_MESSAGES) {
+              console.error('Pending JSON message buffer full, dropping oldest message:', this.pendingJsonMessages.shift());
+          }
+          this.pendingJsonMessages.push(data);
+          return;
+      }
       if (this.ws.readyState !== WebSocket.OPEN) {
           console.error('WebSocket is not connected');
           return;
       }
 
+      this.sendJsonNow(data);
+  }
+
+  flushPendingJsonMessages() {
+      const pending = this.pendingJsonMessages;
+      this.pendingJsonMessages = [];
+      for (const data of pending) {
+          this.sendJsonNow(data);
+      }
+  }
+
+  sendJsonNow(data) {
       try {
           // Convert JSON to string then to Uint8Array
           const jsonString = JSON.stringify(data);
