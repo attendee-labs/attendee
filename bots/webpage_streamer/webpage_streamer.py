@@ -6,7 +6,9 @@ from selenium.webdriver.chrome.service import Service
 logger = logging.getLogger(__name__)
 
 import asyncio
+import json
 import os
+import subprocess
 import time
 from fractions import Fraction
 
@@ -25,6 +27,9 @@ from gi.repository import Gst, GstApp
 Gst.init(None)
 
 os.environ["PULSE_LATENCY_MSEC"] = "20"
+
+OUTPUT_DESTINATIONS = ("webcam", "screenshare")
+DEFAULT_OUTPUT_DESTINATION = "webcam"
 
 
 class GstVideoStreamTrack(MediaStreamTrack):
@@ -143,93 +148,48 @@ class GstAudioStreamTrack(MediaStreamTrack):
         return frame
 
 
-class WebpageStreamer:
-    def __init__(
-        self,
-        video_frame_size,
-    ):
-        self.driver = None
+def ensure_pulse_null_sink(sink_name):
+    sinks = subprocess.run(["pactl", "list", "short", "sinks"], capture_output=True, text=True, check=True).stdout
+    existing_sink_names = [line.split("\t")[1] for line in sinks.splitlines() if "\t" in line]
+    if sink_name in existing_sink_names:
+        return
+    subprocess.run(["pactl", "load-module", "module-null-sink", f"sink_name={sink_name}"], check=True, capture_output=True)
+    logger.info(f"Created PulseAudio null sink {sink_name}")
+
+
+class StreamedBrowser:
+    """A Chrome instance with its own virtual display and PulseAudio sink, captured into WebRTC tracks.
+
+    Each instance gets a dedicated null sink so that its capture only contains its own page's audio.
+    """
+
+    def __init__(self, output_destination, video_frame_size, remote_debugging_port, use_existing_display):
+        self.output_destination = output_destination
         self.video_frame_size = video_frame_size
-        self.display_var_for_recording = None
+        self.remote_debugging_port = remote_debugging_port
+        self.use_existing_display = use_existing_display
+        self.pulse_sink_name = f"attendee_{output_destination}"
+
+        self.driver = None
         self.display = None
-        self.last_keepalive_time = None
-        self.web_app = None
+        self.display_var = None
 
         # GStreamer-related
         self._gst_pipeline = None
         self._gst_video_sink = None
         self._gst_audio_sink = None
-        self._video_track = None
-        self._audio_track = None
+        self.video_track = None
+        self.audio_track = None
 
-    def _start_gstreamer_capture(self):
-        if self._gst_pipeline:
-            return
-
-        width, height = self.video_frame_size
-        display_var = self.display_var_for_recording
-
-        pipeline_desc = f"""
-            ximagesrc display-name={display_var} use-damage=0 show-pointer=false
-                ! video/x-raw,framerate=15/1,width={width},height={height}
-                ! videoconvert
-                ! video/x-raw,format=I420,width={width},height={height}
-                ! queue max-size-buffers=5 max-size-time=0 leaky=downstream
-                ! appsink name=video_sink emit-signals=false max-buffers=1 drop=true
-
-            alsasrc device=default
-                ! audio/x-raw,format=S16LE,channels=1,rate=16000
-                ! audioconvert
-                ! audioresample
-                ! queue max-size-buffers=8000 leaky=downstream
-                ! appsink name=audio_sink emit-signals=false max-buffers=8000 drop=true
-        """
-
-        logger.info("Starting GStreamer capture pipeline")
-        self._gst_pipeline = Gst.parse_launch(pipeline_desc)
-
-        self._gst_video_sink = self._gst_pipeline.get_by_name("video_sink")
-        self._gst_audio_sink = self._gst_pipeline.get_by_name("audio_sink")
-
-        if not self._gst_video_sink or not self._gst_audio_sink:
-            raise RuntimeError("Failed to get GStreamer appsinks for audio/video")
-
-        ret = self._gst_pipeline.set_state(Gst.State.PLAYING)
-        if ret == Gst.StateChangeReturn.FAILURE:
-            self._gst_pipeline.set_state(Gst.State.NULL)
-            raise RuntimeError("Failed to start GStreamer pipeline")
-
-        logger.info("GStreamer capture pipeline is PLAYING")
-
-        self._video_track = GstVideoStreamTrack(
-            sink=self._gst_video_sink,
-            width=width,
-            height=height,
-            framerate=15,
-        )
-        self._audio_track = GstAudioStreamTrack(
-            sink=self._gst_audio_sink,
-            sample_rate=16000,
-            channels=1,
-        )
-
-    def _stop_gstreamer_capture(self):
-        if self._gst_pipeline:
-            logger.info("Stopping GStreamer capture pipeline")
-            self._gst_pipeline.set_state(Gst.State.NULL)
-            self._gst_pipeline = None
-            self._gst_video_sink = None
-            self._gst_audio_sink = None
-            self._video_track = None
-            self._audio_track = None
-
-    def run(self):
-        self.display_var_for_recording = os.environ.get("DISPLAY")
-        if os.environ.get("DISPLAY") is None:
-            # Create virtual display only if no real display is available
-            self.display = Display(visible=0, size=self.video_frame_size)
+    def start(self):
+        if self.use_existing_display and os.environ.get("DISPLAY"):
+            self.display_var = os.environ.get("DISPLAY")
+        else:
+            self.display = Display(visible=0, size=self.video_frame_size, manage_global_env=False)
             self.display.start()
-            self.display_var_for_recording = self.display.new_display_var
+            self.display_var = self.display.new_display_var
+
+        ensure_pulse_null_sink(self.pulse_sink_name)
 
         options = webdriver.ChromeOptions()
 
@@ -245,7 +205,7 @@ class WebpageStreamer:
         options.add_argument("--disable-application-cache")
         options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--enable-blink-features=WebCodecs,WebRTC-InsertableStreams,-AutomationControlled")
-        options.add_argument("--remote-debugging-port=9222")
+        options.add_argument(f"--remote-debugging-port={self.remote_debugging_port}")
 
         if os.getenv("ENABLE_CHROME_SANDBOX_FOR_WEBPAGE_STREAMER", "true").lower() != "true":
             options.add_argument("--no-sandbox")
@@ -265,18 +225,104 @@ class WebpageStreamer:
             },
         )
 
-        self.driver = webdriver.Chrome(options=options, service=Service(executable_path="/usr/local/bin/chromedriver"))
-        logger.info(f"web driver server initialized at port {self.driver.service.port}")
+        # Chrome inherits chromedriver's environment, which is how it picks up its display and audio sink
+        chrome_env = {**os.environ, "DISPLAY": self.display_var, "PULSE_SINK": self.pulse_sink_name}
+        self.driver = webdriver.Chrome(options=options, service=Service(executable_path="/usr/local/bin/chromedriver", env=chrome_env))
+        logger.info(f"web driver server for {self.output_destination} initialized at port {self.driver.service.port} on display {self.display_var}")
 
         with open("bots/webpage_streamer/webpage_streamer_payload.js", "r") as file:
             payload_code = file.read()
 
-        combined_code = f"""
-            {payload_code}
-        """
+        combined_code = payload_code.replace("__ATTENDEE_OUTPUT_DESTINATION__", json.dumps(self.output_destination))
 
         # Add the combined script to execute on new document
         self.driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": combined_code})
+
+    def start_gstreamer_capture(self):
+        if self._gst_pipeline:
+            return
+
+        width, height = self.video_frame_size
+
+        pipeline_desc = f"""
+            ximagesrc display-name={self.display_var} use-damage=0 show-pointer=false
+                ! video/x-raw,framerate=15/1,width={width},height={height}
+                ! videoconvert
+                ! video/x-raw,format=I420,width={width},height={height}
+                ! queue max-size-buffers=5 max-size-time=0 leaky=downstream
+                ! appsink name=video_sink emit-signals=false max-buffers=1 drop=true
+
+            pulsesrc device={self.pulse_sink_name}.monitor
+                ! audio/x-raw,format=S16LE,channels=1,rate=16000
+                ! audioconvert
+                ! audioresample
+                ! queue max-size-buffers=8000 leaky=downstream
+                ! appsink name=audio_sink emit-signals=false max-buffers=8000 drop=true
+        """
+
+        logger.info(f"Starting GStreamer capture pipeline for {self.output_destination}")
+        self._gst_pipeline = Gst.parse_launch(pipeline_desc)
+
+        self._gst_video_sink = self._gst_pipeline.get_by_name("video_sink")
+        self._gst_audio_sink = self._gst_pipeline.get_by_name("audio_sink")
+
+        if not self._gst_video_sink or not self._gst_audio_sink:
+            raise RuntimeError("Failed to get GStreamer appsinks for audio/video")
+
+        ret = self._gst_pipeline.set_state(Gst.State.PLAYING)
+        if ret == Gst.StateChangeReturn.FAILURE:
+            self._gst_pipeline.set_state(Gst.State.NULL)
+            raise RuntimeError("Failed to start GStreamer pipeline")
+
+        logger.info(f"GStreamer capture pipeline for {self.output_destination} is PLAYING")
+
+        self.video_track = GstVideoStreamTrack(
+            sink=self._gst_video_sink,
+            width=width,
+            height=height,
+            framerate=15,
+        )
+        self.audio_track = GstAudioStreamTrack(
+            sink=self._gst_audio_sink,
+            sample_rate=16000,
+            channels=1,
+        )
+
+    def stop_gstreamer_capture(self):
+        if self._gst_pipeline:
+            logger.info(f"Stopping GStreamer capture pipeline for {self.output_destination}")
+            self._gst_pipeline.set_state(Gst.State.NULL)
+            self._gst_pipeline = None
+            self._gst_video_sink = None
+            self._gst_audio_sink = None
+            self.video_track = None
+            self.audio_track = None
+
+    def stop(self):
+        self.stop_gstreamer_capture()
+        if self.driver:
+            self.driver.quit()
+        if self.display:
+            self.display.stop()
+
+
+class WebpageStreamer:
+    def __init__(
+        self,
+        video_frame_size,
+    ):
+        self.video_frame_size = video_frame_size
+        self.last_keepalive_time = None
+        self.web_app = None
+        # One browser per output destination. A browser that is never given a url sits on a blank page and is never captured.
+        self.browsers = {
+            "webcam": StreamedBrowser("webcam", video_frame_size, remote_debugging_port=9222, use_existing_display=True),
+            "screenshare": StreamedBrowser("screenshare", video_frame_size, remote_debugging_port=9223, use_existing_display=False),
+        }
+
+    def run(self):
+        for browser in self.browsers.values():
+            browser.start()
 
         self.load_webapp()
 
@@ -299,11 +345,11 @@ class WebpageStreamer:
     async def shutdown_process(self):
         """Gracefully shutdown the process."""
         try:
-            self._stop_gstreamer_capture()
-            if self.driver:
-                self.driver.quit()
-            if self.display:
-                self.display.stop()
+            for browser in self.browsers.values():
+                try:
+                    browser.stop()
+                except Exception as e:
+                    logger.error(f"Error stopping {browser.output_destination} browser: {e}")
             if self.web_app:
                 await self.web_app.shutdown()
             logger.info("Process shutting down")
@@ -315,11 +361,16 @@ class WebpageStreamer:
     def load_webapp(self):
         pcs = set()
 
-        # will hold the *original* upstream AudioStreamTrack
-        # from the first client that posts to /offer
+        # The *original* upstream meeting AudioStreamTracks, keyed by output destination, sent by the bot over each destination's peer connection.
         # The MediaRelay is necessary because it creates a small buffer. Without it audio quality is degraded.
-        UPSTREAM_AUDIO_RELAY = MediaRelay()
-        UPSTREAM_AUDIO_TRACK_KEY = "upstream_audio_track"
+        upstream_audio_relay = MediaRelay()
+        upstream_audio_tracks = {}
+
+        def get_output_destination(value):
+            output_destination = value or DEFAULT_OUTPUT_DESTINATION
+            if output_destination not in OUTPUT_DESTINATIONS:
+                raise web.HTTPBadRequest(text=f"Invalid output_destination: {output_destination}")
+            return output_destination
 
         async def offer_meeting_audio(req):
             """
@@ -329,9 +380,10 @@ class WebpageStreamer:
             """
             params = await req.json()
             offer = RTCSessionDescription(sdp=params["sdp"], type=params["type"])
+            output_destination = get_output_destination(req.query.get("output_destination"))
 
-            # Do we have an upstream audio yet?
-            upstream = req.app.get(UPSTREAM_AUDIO_TRACK_KEY)
+            # Every destination's upstream carries the same meeting audio, so fall back to any of them
+            upstream = upstream_audio_tracks.get(output_destination) or next(iter(upstream_audio_tracks.values()), None)
             if upstream is None:
                 return web.Response(status=409, text="No upstream audio has been published yet.")
 
@@ -339,7 +391,7 @@ class WebpageStreamer:
             pcs.add(pc)
 
             # Re-broadcast using the relay so multiple listeners are OK
-            rebroadcast_track = UPSTREAM_AUDIO_RELAY.subscribe(upstream)
+            rebroadcast_track = upstream_audio_relay.subscribe(upstream)
             pc.addTrack(rebroadcast_track)
 
             @pc.on("connectionstatechange")
@@ -356,17 +408,18 @@ class WebpageStreamer:
         async def offer(req):
             params = await req.json()
             offer = RTCSessionDescription(sdp=params["sdp"], type=params["type"])
+            output_destination = get_output_destination(params.get("output_destination"))
+            browser = self.browsers[output_destination]
 
             # Lazy-start capture so we don't accumulate latency before WebRTC is up
-            if self._gst_pipeline is None:
-                self._start_gstreamer_capture()
+            browser.start_gstreamer_capture()
 
             pc = RTCPeerConnection()
             pcs.add(pc)
 
             # --- server-to-client: send GStreamer-captured video/audio ---
-            v_track = self._video_track
-            a_track = self._audio_track
+            v_track = browser.video_track
+            a_track = browser.audio_track
 
             if v_track is not None:
                 pc.addTrack(v_track)
@@ -378,8 +431,8 @@ class WebpageStreamer:
             def on_track(track):
                 if track.kind == "audio":
                     # store the ORIGINAL upstream track for rebroadcast
-                    req.app[UPSTREAM_AUDIO_TRACK_KEY] = track
-                    logger.info("Upstream audio track set for rebroadcast.")
+                    upstream_audio_tracks[output_destination] = track
+                    logger.info(f"Upstream audio track for {output_destination} set for rebroadcast.")
 
             @pc.on("connectionstatechange")
             async def _on_state():
@@ -397,9 +450,12 @@ class WebpageStreamer:
             webpage_url = data.get("url")
             if not webpage_url:
                 return web.json_response({"error": "URL is required"}, status=400)
+            output_destination = get_output_destination(data.get("output_destination"))
+            browser = self.browsers[output_destination]
 
-            print(f"Starting streaming to {webpage_url}")
-            self.driver.get(webpage_url)
+            logger.info(f"Starting streaming to {webpage_url} for {output_destination}")
+            # Page loads block, so run them off the event loop to avoid stalling the other destination's stream
+            await asyncio.get_running_loop().run_in_executor(None, browser.driver.get, webpage_url)
 
             return web.json_response({"status": "success"})
 
