@@ -55,6 +55,8 @@ Recording Settings
 Automatic leave settings
    - How long should the bot wait to be let into the meeting before giving up?
    - How long it should be silent before the bot leaves?
+   - When should silence detection start? After a fixed time, or once a number of participants are in the meeting at the same time, whichever comes first.
+   - How long should it be silent before the bot warns that it will leave?
    - How long should the bot be the only one in the meeting before it leaves?
    - How long the meeting can last before the bot leaves?
 

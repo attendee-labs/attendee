@@ -2388,4 +2388,10 @@ class BotController:
             BotLogManager.create_bot_log_entry(bot=self.bot_in_db, level=BotLogEntryLevels.INFO, entry_type=BotLogEntryTypes.WEBINAR_PANELIST_PROMOTION, message="Bot was promoted to panelist in webinar")
             return
 
+        if message.get("message") == BotAdapter.Messages.AUTO_LEAVE_SILENCE_PENDING:
+            logger.info("Received message that bot will leave soon due to silence")
+            # Info level, not warning: leaving due to silence is expected behavior, not a problem
+            BotLogManager.create_bot_log_entry(bot=self.bot_in_db, level=BotLogEntryLevels.INFO, entry_type=BotLogEntryTypes.AUTO_LEAVE_SILENCE_PENDING, message=f"No audio detected for {message['seconds_of_silence']} seconds. Bot will leave the meeting in {message['seconds_until_leave']} seconds if no audio is detected.")
+            return
+
         raise Exception(f"Received unexpected message from bot adapter: {message}")
