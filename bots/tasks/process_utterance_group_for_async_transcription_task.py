@@ -43,7 +43,8 @@ def process_utterance_group_for_async_transcription(self, utterance_ids):
 
         if failure_data:
             if first_utterance.transcription_attempt_count < 5 and is_retryable_failure(failure_data):
-                first_utterance.save()
+                # Only save the attempt count, so provider_transcription_id saved during the attempt is kept for the retry
+                first_utterance.save(update_fields=["transcription_attempt_count", "updated_at"])
                 raise Exception(f"Retryable failure when transcribing utterances {utterance_ids}: {failure_data}")
             else:
                 first_utterance.save()
