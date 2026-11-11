@@ -1,0 +1,11 @@
+# Installed alongside requirements.txt by Dockerfile.debian only.
+
+# The PyAV wheel bundles its own FFmpeg. Dockerfile rebuilds av 12 from source
+# against Ubuntu's FFmpeg 4.4; it doesn't build against trixie's FFmpeg 7, and
+# the app only uses its frame classes through aiortc.
+av==12.0.0
+
+# Dockerfile gets the gi module from Ubuntu's python3-gi, which only works with
+# the system Python.
+PyGObject==3.58.1
+pycairo==1.29.2

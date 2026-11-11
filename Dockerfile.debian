@@ -1,0 +1,204 @@
+# Opt-in Debian (trixie) based alternative to the Ubuntu 22.04 image in
+# Dockerfile. The Ubuntu image stays the default; build this one with
+#
+#   docker build -f Dockerfile.debian -t attendee:debian .
+#
+# CI runs the same test suites against both images.
+#
+# Why Debian: the Ubuntu image gets most of its CVEs from packages that Ubuntu
+# ships in universe (FFmpeg, GStreamer plugins, ImageMagick, ...), which jammy
+# only patches through Ubuntu Pro ESM. Debian ships them in main, and the Debian
+# security team patches them for free. Trixie is the current stable release.
+#
+# Differences from the Ubuntu image, all aimed at fewer packages:
+# - Python 3.12 from the official python image instead of Ubuntu's 3.10;
+#   zoom-meeting-sdk has no wheels for trixie's system Python 3.13.
+# - Python packages are compiled in a throwaway stage, so the final image has no
+#   compilers, -dev headers, cmake, gdb, git or vim.
+# - apt never installs recommended packages.
+# - PyAV is the PyPI wheel, not built from source against the system FFmpeg:
+#   av 12 doesn't build against trixie's FFmpeg 7, and the app only uses its
+#   frame classes (through aiortc).
+# - The system OpenCV, ImageMagick and pip-era leftovers aren't installed at all;
+#   cv2 comes from the opencv-python wheel.
+# - PyGObject comes from pip, since Debian's python3-gi targets the system Python.
+#
+# Runtime layout matches the Ubuntu image's: the app in /attendee owned by uid 1000
+# (app), tini + entrypoint.sh, Chrome and ChromeDriver at the pinned version,
+# and the writable Chrome policies symlink.
+
+ARG PYTHON_IMAGE=python:3.12-slim-trixie
+
+# ---------------------------------------------------------------------------
+# Downloads, kept out of the final image together with curl and unzip.
+FROM --platform=linux/amd64 ${PYTHON_IMAGE} AS downloads
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+# Same pins and checksums as Dockerfile; keep them in sync.
+ARG CHROME_VERSION=134.0.6998.88
+ARG CHROME_SHA256=df557edb3d24d8dcaff9557d80733b42afb6626685200d3f34a3b6f528065cad
+ARG CHROMEDRIVER_SHA256=58df717d51484b9f3ac188af5231cdc77255daa72d0b2b86481bee54e398ce2f
+ARG TINI_VERSION=v0.19.0
+ARG TINI_SHA256=93dcc18adc78c65a028a84799ecf8ad40c936fdfc5f2a57b1acda5a8117fa82c
+
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates curl unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /downloads
+
+RUN curl -fsSL --retry 3 -o google-chrome-stable.deb \
+        "https://build-assets.attendee.dev/google-chrome/pool/main/g/google-chrome-stable/google-chrome-stable_${CHROME_VERSION}-1_amd64.deb" \
+    && echo "${CHROME_SHA256}  google-chrome-stable.deb" | sha256sum -c - \
+    && curl -fsSL --retry 3 -o chromedriver.zip \
+        "https://storage.googleapis.com/chrome-for-testing-public/${CHROME_VERSION}/linux64/chromedriver-linux64.zip" \
+    && echo "${CHROMEDRIVER_SHA256}  chromedriver.zip" | sha256sum -c - \
+    && unzip -q chromedriver.zip \
+    && mv chromedriver-linux64/chromedriver chromedriver \
+    && curl -fsSL --retry 3 -o tini "https://github.com/krallin/tini/releases/download/${TINI_VERSION}/tini" \
+    && echo "${TINI_SHA256}  tini" | sha256sum -c - \
+    && chmod 0755 chromedriver tini
+
+# ---------------------------------------------------------------------------
+# Builds a wheel for every Python dependency, so the final image needs no compilers.
+FROM --platform=linux/amd64 ${PYTHON_IMAGE} AS wheels
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        build-essential \
+        libcairo2-dev \
+        libgirepository-2.0-dev \
+        libpq-dev \
+        pkgconf \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+COPY requirements.txt requirements.debian.txt ./
+RUN pip wheel --no-cache-dir --wheel-dir /wheels -r requirements.txt -r requirements.debian.txt
+
+# ---------------------------------------------------------------------------
+FROM --platform=linux/amd64 ${PYTHON_IMAGE} AS runtime
+
+SHELL ["/bin/bash", "-c"]
+
+ENV project=attendee
+ENV cwd=/$project
+
+# Runtime libraries only. Grouped by what needs them; versions come from trixie
+# and trixie-security at build time, so rebuild this stage without the cache
+# (e.g. buildx --no-cache-filter runtime) to pick up new security updates.
+RUN --mount=type=bind,from=downloads,source=/downloads/google-chrome-stable.deb,target=/tmp/google-chrome-stable.deb \
+    apt-get update --error-on=any \
+    && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y --no-install-recommends \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        `# Zoom Meeting SDK, OpenCV wheel and Chrome: X11/xcb, GL, D-Bus, GLib` \
+        libdbus-1-3 \
+        libgbm1 \
+        libgl1 \
+        libgl1-mesa-dri \
+        libglib2.0-0t64 \
+        libx11-6 \
+        libx11-xcb1 \
+        libxcb-image0 \
+        libxcb-keysyms1 \
+        libxcb-randr0 \
+        libxcb-shape0 \
+        libxcb-shm0 \
+        libxcb-xfixes0 \
+        libxcb-xtest0 \
+        libxfixes3 \
+        libvulkan1 \
+        `# psycopg2 and PyGObject (built in the wheels stage)` \
+        libpq5 \
+        libcairo2 \
+        libgirepository-2.0-0 \
+        `# Virtual display, fonts and X tools the bots run (Xvfb, xterm, xclip)` \
+        xvfb \
+        xauth \
+        x11-xkb-utils \
+        x11-apps \
+        xfonts-base \
+        xfonts-100dpi \
+        xfonts-75dpi \
+        xfonts-scalable \
+        xfonts-cyrillic \
+        fonts-liberation \
+        xdg-utils \
+        xterm \
+        xclip \
+        `# Audio: ALSA routed to PulseAudio, see entrypoint.sh` \
+        alsa-utils \
+        libasound2t64 \
+        libasound2-plugins \
+        pulseaudio \
+        pulseaudio-utils \
+        `# FFmpeg CLI (recording, RTMP, transcription) and GStreamer with its introspection data` \
+        ffmpeg \
+        gir1.2-glib-2.0 \
+        gir1.2-gstreamer-1.0 \
+        gir1.2-gst-plugins-base-1.0 \
+        gstreamer1.0-alsa \
+        gstreamer1.0-libav \
+        gstreamer1.0-plugins-bad \
+        gstreamer1.0-plugins-base \
+        gstreamer1.0-plugins-good \
+        gstreamer1.0-plugins-ugly \
+        gstreamer1.0-pulseaudio \
+        gstreamer1.0-tools \
+        ca-certificates \
+        /tmp/google-chrome-stable.deb \
+    && apt-mark hold google-chrome-stable \
+    && rm -rf /var/lib/apt/lists/*
+
+# gstreamer1.0-plugins-bad is one package, but the app only uses two of its
+# elements (h264parse, voaacenc). Three plugins it never loads are the only users
+# of OpenEXR, Raptor and PipeWire, which carry ~26 of the image's open CVEs,
+# including both critical ones. Delete those plugins and force-purge the
+# libraries; dpkg then records broken dependencies, which is fine because apt
+# never runs again in this image. Fails the build if the purge leaves anything
+# that links to a missing library and didn't already before.
+RUN unresolved() { \
+        find /usr/lib/x86_64-linux-gnu /usr/bin /usr/local/bin /opt/google/chrome -type f \( -name '*.so*' -o -perm -u+x \) \
+            -exec sh -c 'for f; do ldd "$f" 2>/dev/null | grep -q "not found" && echo "$f"; done' _ {} + | sort; \
+    } \
+    && unresolved > /tmp/unresolved-before \
+    && plugins=/usr/lib/x86_64-linux-gnu/gstreamer-1.0 \
+    && rm "$plugins/libgstopenexr.so" "$plugins/libgstladspa.so" "$plugins/libgstfluidsynthmidi.so" \
+    && dpkg --purge --force-depends \
+        libopenexr-3-1-30 libimath-3-1-29t64 \
+        liblrdf0 libraptor2-0 \
+        libfluidsynth3 libinstpatch-1.0-2 libpipewire-0.3-0t64 libspa-0.2-modules \
+    && unresolved > /tmp/unresolved-after \
+    && broken=$(comm -13 /tmp/unresolved-before /tmp/unresolved-after) \
+    && rm /tmp/unresolved-before /tmp/unresolved-after \
+    && if [ -n "$broken" ]; then echo "The purge left unresolved libraries in:" $broken >&2; exit 1; fi
+
+COPY --from=downloads /downloads/chromedriver /usr/local/bin/chromedriver
+COPY --from=downloads /downloads/tini /tini
+
+RUN --mount=type=bind,from=wheels,source=/wheels,target=/wheels \
+    --mount=type=bind,source=requirements.txt,target=/tmp/requirements.txt \
+    --mount=type=bind,source=requirements.debian.txt,target=/tmp/requirements.debian.txt \
+    pip install --no-cache-dir --no-index --find-links /wheels \
+        -r /tmp/requirements.txt -r /tmp/requirements.debian.txt
+
+# Same as the final stage of Dockerfile from here on.
+RUN useradd -m -u 1000 -s /bin/bash app
+
+WORKDIR $cwd
+
+COPY --chown=app:app --chmod=0755 entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY --chown=app:app . .
+
+RUN mkdir -p "$cwd/staticfiles" && chown -R app:app "$cwd/staticfiles"
+
+RUN mkdir -p /etc/opt/chrome/policies/managed \
+  && ln -s /tmp/attendee-chrome-policies.json /etc/opt/chrome/policies/managed/attendee-chrome-policies.json
+
+USER app
+
+ENTRYPOINT ["/tini","--","/usr/local/bin/entrypoint.sh"]
+CMD ["bash"]

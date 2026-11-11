@@ -135,6 +135,14 @@ LAUNCH_BOT_METHOD="kubernetes"
 
 Our paid self-hosting plan includes official directions and support for running Attendee with Kubernetes. Interested in using Attendee at your company? Schedule a call [here](https://calendly.com/d/cw6r-2n4-gcw/attendee-intro-meeting).
 
+### Debian-based image (optional)
+
+The default image (`Dockerfile`) is based on Ubuntu 22.04. Some of its packages, such as FFmpeg and the GStreamer plugins, come from Ubuntu's universe repository, where security fixes are only available through Ubuntu Pro. If that matters to you, you can build the image from `Dockerfile.debian` instead. It's based on Debian trixie, where those packages get regular security updates, and it leaves out build tools and packages the app doesn't use at runtime. It runs the app the same way and passes the same tests in CI:
+
+```
+docker build -f Dockerfile.debian -t attendee:debian .
+```
+
 
 ## Contribute 
 

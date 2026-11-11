@@ -11,13 +11,21 @@ permissions:
 
 jobs:
   test:
-    name: "Tests: ${{ matrix.test_suite }}"
+    # The Ubuntu jobs keep their original names, so required status checks still match.
+    name: "Tests: ${{ matrix.test_suite }}${{ matrix.image != 'ubuntu' && format(' ({0})', matrix.image) || '' }}"
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
+        # ubuntu is the default image (Dockerfile); debian is the opt-in Dockerfile.debian.
+        image: [ubuntu, debian]
+        test_suite: [smoke, zoom, google_meet, teams_and_zoom_web, others]
         include:
+          - image: ubuntu
+            dockerfile: Dockerfile
+          - image: debian
+            dockerfile: Dockerfile.debian
           - test_suite: zoom
             test_args: "--tag zoom_tests"
           - test_suite: google_meet
@@ -63,13 +71,24 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: .
+          file: ${{ matrix.dockerfile }}
           push: false
           load: true
           tags: attendee-test:latest
-          cache-from: type=gha,scope=attendee-test
-          cache-to: type=gha,scope=attendee-test,mode=min
+          cache-from: type=gha,scope=attendee-test${{ matrix.image != 'ubuntu' && format('-{0}', matrix.image) || '' }}
+          cache-to: type=gha,scope=attendee-test${{ matrix.image != 'ubuntu' && format('-{0}', matrix.image) || '' }},mode=min
+
+      # Native libraries, GStreamer elements, FFmpeg, Chrome and CLI tools the bots rely on.
+      - name: Run smoke test
+        if: matrix.test_suite == 'smoke'
+        run: |
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE/.github/scripts/image-smoke-test.sh:/smoke-test.sh:ro" \
+            --entrypoint bash \
+            attendee-test:latest /smoke-test.sh
 
       - name: "Run ${{ matrix.test_suite }} tests"
+        if: matrix.test_suite != 'smoke'
         env:
           POSTGRES_HOST: localhost
           REDIS_URL: redis://localhost:6379/5
