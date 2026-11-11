@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import os
+import random
 import signal
 import subprocess
 import threading
@@ -101,6 +102,7 @@ class WebBotAdapter(BotAdapter):
         self.cleaned_up = False
 
         self.websocket_port = None
+        self.websocket_host = None
         self.websocket_server = None
         self.websocket_thread = None
         self.last_websocket_message_processed_time = None
@@ -531,24 +533,35 @@ class WebBotAdapter(BotAdapter):
 
         websocket_handler = self.handle_websocket if self.livekit_websocket_bridge is None else self.handle_websocket_with_livekit_bridge
 
-        if settings.ENABLE_BOT_WEBSOCKET_PORT_SELECTION_BY_OS:
-            # Port 0 lets the OS pick a free port, so bots sharing a network namespace
-            # (celery workers, host networking) can't collide on a fixed port.
-            self.websocket_server = serve(
-                websocket_handler,
-                "localhost",
-                0,
-                compression=None,
-                max_size=None,
-            )
-            port = self.websocket_server.socket.getsockname()[1]
-            logger.info(f"Websocket server started on ws://localhost:{port}")
-            self.websocket_port = port
-            self.websocket_server.serve_forever()
-            return
-
         port = self.get_websocket_port()
         max_retries = 10
+
+        if settings.ENABLE_BOT_WEBSOCKET_PORT_SELECTION_BY_OS:
+            # Bots sharing a network namespace (celery workers, host networking) each bind the platform's
+            # fixed port on their own random loopback IP (all of 127.0.0.0/8 is loopback on Linux).
+            # init_driver maps localhost to that IP in Chrome, so the page still connects to ws://localhost:<port>,
+            # which keeps CSPs that only allow a specific port (e.g. Teams' connect-src ws://localhost:8097) happy.
+            for attempt in range(max_retries):
+                host = f"127.{random.randint(1, 254)}.{random.randint(0, 255)}.{random.randint(1, 254)}"
+                try:
+                    self.websocket_server = serve(
+                        websocket_handler,
+                        host,
+                        port,
+                        compression=None,
+                        max_size=None,
+                    )
+                except OSError as e:
+                    if e.errno == 98:  # Address already in use
+                        logger.info(f"{host}:{port} is already in use, trying another loopback IP...")
+                        continue
+                    raise
+                logger.info(f"Websocket server started on ws://{host}:{port}")
+                self.websocket_host = host
+                self.websocket_port = port
+                self.websocket_server.serve_forever()
+                return
+            raise Exception(f"Could not find available loopback IP after {max_retries} attempts")
 
         for attempt in range(max_retries):
             try:
@@ -835,6 +848,9 @@ class WebBotAdapter(BotAdapter):
 
         if settings.MONITOR_DOMAIN_ALLOWLIST_IN_CHROME:
             options.set_capability("webSocketUrl", True)
+
+        if self.websocket_host:
+            options.add_argument(f"--host-resolver-rules=MAP localhost {self.websocket_host}")
 
         self.add_subclass_specific_chrome_options(options)
 
