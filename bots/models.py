@@ -2931,6 +2931,9 @@ class Utterance(models.Model):
     # To keep track of how many retries we've done for this utterance
     transcription_attempt_count = models.IntegerField(default=0)
     failure_data = models.JSONField(null=True, default=None)
+    # The provider's ID for a transcription that was submitted but not yet retrieved, so a retry can resume it
+    # instead of submitting the audio again. Only set on the first utterance of an async transcription group.
+    provider_transcription_id = models.CharField(max_length=255, null=True, blank=True, default=None)
     source_uuid = models.CharField(max_length=255, null=True, unique=True)
 
     created_at = models.DateTimeField(auto_now_add=True)

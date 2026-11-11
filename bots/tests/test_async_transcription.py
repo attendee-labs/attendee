@@ -45,6 +45,19 @@ from bots.tasks.process_utterance_group_for_async_transcription_task import proc
 from bots.transcription_utils import get_transcription_for_utterance_group, is_retryable_failure, split_transcription_by_utterance
 
 
+class FakeClock:
+    """Stands in for the time module in bots.transcription_utils: sleeping advances the monotonic clock."""
+
+    def __init__(self):
+        self.now = 0.0
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+
 @mock.patch.dict(os.environ, {"AWS_RECORDING_STORAGE_BUCKET_NAME": "test-bucket", "CHARGE_CREDITS_FOR_BOTS": "false"})
 class AsyncTranscriptionTestCase(TransactionTestCase):
     """Base test case with common setup for Assembly AI async transcription tests."""
@@ -951,7 +964,8 @@ class TestAsyncTranscriptionElevenLabs(AsyncTranscriptionTestCase):
 
         utterances = list(Utterance.objects.filter(async_transcription=async_transcription).order_by("timestamp_ms"))
         self.assertEqual(len(utterances), 3)
-        self.assertEqual([u.transcription["transcript"] for u in utterances], ["hello", "world", "test"])
+        # The transcript keeps ElevenLabs' own spacing and audio events, the words don't
+        self.assertEqual([u.transcription["transcript"] for u in utterances], ["hello (laughter)", "world", "test"])
         for utterance in utterances:
             self.assertIsNone(utterance.failure_data)
             self.assertEqual(utterance.transcription["language"], "eng")
@@ -1009,7 +1023,7 @@ class TestAsyncTranscriptionElevenLabs(AsyncTranscriptionTestCase):
         transcriptions, failure_data = get_transcription_for_utterance_group(utterances)
 
         self.assertIsNone(failure_data)
-        self.assertEqual([transcriptions[u.id]["transcript"] for u in utterances], ["hello", "world", "test"])
+        self.assertEqual([transcriptions[u.id]["transcript"] for u in utterances], ["hello (laughter)", "world", "test"])
 
     @mock.patch("bots.transcription_utils.requests.post")
     @mock.patch("bots.transcription_utils.get_mp3_for_utterance_group")
@@ -1088,7 +1102,7 @@ class TestAsyncTranscriptionElevenLabs(AsyncTranscriptionTestCase):
     def _not_ready_response(self):
         return self._mock_response(status_code=404, json_data={"detail": {"code": "transcript_not_found"}})
 
-    @mock.patch("bots.transcription_utils.time.sleep")
+    @mock.patch("bots.transcription_utils.time", new_callable=FakeClock)
     @mock.patch("bots.transcription_utils.requests.delete")
     @mock.patch("bots.transcription_utils.requests.get")
     @mock.patch("bots.transcription_utils.requests.post")
@@ -1104,7 +1118,7 @@ class TestAsyncTranscriptionElevenLabs(AsyncTranscriptionTestCase):
         transcriptions, failure_data = get_transcription_for_utterance_group(utterances)
 
         self.assertIsNone(failure_data)
-        self.assertEqual([transcriptions[u.id]["transcript"] for u in utterances], ["hello", "world", "test"])
+        self.assertEqual([transcriptions[u.id]["transcript"] for u in utterances], ["hello (laughter)", "world", "test"])
         self.assertEqual(mock_post.call_args.kwargs["data"], {"model_id": "scribe_v2", "webhook": True, "webhook_id": "wh_123"})
         polling_endpoint = "https://api.eu.residency.elevenlabs.io/v1/speech-to-text/transcripts/tr-1"
         self.assertEqual(mock_get.call_count, 3)
@@ -1113,7 +1127,7 @@ class TestAsyncTranscriptionElevenLabs(AsyncTranscriptionTestCase):
         mock_delete.assert_called_once()
         self.assertEqual(mock_delete.call_args.args[0], polling_endpoint)
 
-    @mock.patch("bots.transcription_utils.time.sleep")
+    @mock.patch("bots.transcription_utils.time", new_callable=FakeClock)
     @mock.patch("bots.transcription_utils.requests.delete")
     @mock.patch("bots.transcription_utils.requests.get")
     @mock.patch("bots.transcription_utils.requests.post")
@@ -1129,11 +1143,11 @@ class TestAsyncTranscriptionElevenLabs(AsyncTranscriptionTestCase):
         transcriptions, failure_data = get_transcription_for_utterance_group(utterances)
 
         self.assertIsNone(failure_data)
-        self.assertEqual([transcriptions[u.id]["transcript"] for u in utterances], ["hello", "world", "test"])
+        self.assertEqual([transcriptions[u.id]["transcript"] for u in utterances], ["hello (laughter)", "world", "test"])
         self.assertEqual(mock_post.call_args.kwargs["data"], {"model_id": "scribe_v2", "webhook": True})
 
     @mock.patch.dict(os.environ, {"TRANSCRIPTION_POLLING_TIMEOUT_SECONDS": "20"})
-    @mock.patch("bots.transcription_utils.time.sleep")
+    @mock.patch("bots.transcription_utils.time", new_callable=FakeClock)
     @mock.patch("bots.transcription_utils.requests.get")
     @mock.patch("bots.transcription_utils.requests.post")
     @mock.patch("bots.transcription_utils.get_mp3_for_utterance_group")
@@ -1152,7 +1166,7 @@ class TestAsyncTranscriptionElevenLabs(AsyncTranscriptionTestCase):
         # 20 seconds of polling every 5 seconds
         self.assertEqual(mock_get.call_count, 4)
 
-    @mock.patch("bots.transcription_utils.time.sleep")
+    @mock.patch("bots.transcription_utils.time", new_callable=FakeClock)
     @mock.patch("bots.transcription_utils.requests.get")
     @mock.patch("bots.transcription_utils.requests.post")
     @mock.patch("bots.transcription_utils.get_mp3_for_utterance_group")
@@ -1192,6 +1206,104 @@ class TestAsyncTranscriptionElevenLabs(AsyncTranscriptionTestCase):
         _, failure_data = get_transcription_for_utterance_group(utterances)
 
         self.assertEqual(failure_data["reason"], TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED)
+
+    @mock.patch("bots.transcription_utils.requests.post")
+    @mock.patch("bots.transcription_utils.get_mp3_for_utterance_group")
+    def test_transcript_keeps_elevenlabs_spacing(self, mock_get_mp3, mock_post):
+        """Text without spaces between words (e.g. Chinese) isn't rejoined with spaces."""
+        mock_get_mp3.return_value = b"fake-mp3-data"
+        mock_post.return_value = self._mock_response(
+            json_data={
+                "language_code": "zho",
+                "language_probability": 0.9,
+                "text": "你好！",
+                "words": [
+                    {"text": "你", "start": 0.1, "end": 0.3, "type": "word"},
+                    {"text": "好！", "start": 0.3, "end": 0.6, "type": "word"},
+                ],
+            }
+        )
+        utterances = self._create_utterances(self._create_async_transcription(), count=1)
+
+        transcriptions, failure_data = get_transcription_for_utterance_group(utterances)
+
+        self.assertIsNone(failure_data)
+        self.assertEqual(transcriptions[utterances[0].id]["transcript"], "你好！")
+        self.assertEqual([w["word"] for w in transcriptions[utterances[0].id]["words"]], ["你", "好！"])
+
+    @mock.patch.dict(os.environ, {"TRANSCRIPTION_POLLING_TIMEOUT_SECONDS": "120"})
+    @mock.patch("bots.transcription_utils.time", new_callable=FakeClock)
+    @mock.patch("bots.transcription_utils.requests.get")
+    @mock.patch("bots.transcription_utils.requests.post")
+    @mock.patch("bots.transcription_utils.get_mp3_for_utterance_group")
+    def test_webhook_mode_deadline_includes_slow_requests(self, mock_get_mp3, mock_post, mock_get, clock):
+        """The polling deadline counts the time spent in requests, and each request's timeout is capped to the time left."""
+        mock_get_mp3.return_value = b"fake-mp3-data"
+        mock_post.return_value = self._webhook_accepted_response()
+
+        def slow_not_ready(*args, **kwargs):
+            clock.now += 59
+            return self._not_ready_response()
+
+        mock_get.side_effect = slow_not_ready
+        utterances = self._create_utterances(self._create_async_transcription({"model_id": "scribe_v2", "webhook": True}))
+
+        _, failure_data = get_transcription_for_utterance_group(utterances)
+
+        self.assertEqual(failure_data["reason"], TranscriptionFailureReasons.TIMED_OUT)
+        # GET at 0 s (until 59 s), sleep 5 s, GET at 64 s with 56 s left (until 123 s), then the deadline has passed
+        self.assertEqual([call.kwargs["timeout"] for call in mock_get.call_args_list], [60, 56])
+        self.assertLess(clock.now, 130)
+
+    @mock.patch("bots.transcription_utils.time", new_callable=FakeClock)
+    @mock.patch("bots.transcription_utils.requests.delete")
+    @mock.patch("bots.transcription_utils.requests.get")
+    @mock.patch("bots.transcription_utils.requests.post")
+    @mock.patch("bots.transcription_utils.get_mp3_for_utterance_group")
+    def test_webhook_mode_resumes_a_pending_transcription(self, mock_get_mp3, mock_post, mock_get, mock_delete, clock):
+        """A pending transcription_id saved by an earlier attempt is polled again instead of submitting the audio again."""
+        mock_get.return_value = self._mock_response(json_data=self._elevenlabs_result())
+        mock_delete.return_value = self._mock_response()
+        utterances = self._create_utterances(self._create_async_transcription({"model_id": "scribe_v2", "webhook": True}))
+        Utterance.objects.filter(id=utterances[0].id).update(provider_transcription_id="tr-earlier")
+        utterances[0].refresh_from_db()
+
+        transcriptions, failure_data = get_transcription_for_utterance_group(utterances)
+
+        self.assertIsNone(failure_data)
+        self.assertEqual([transcriptions[u.id]["transcript"] for u in utterances], ["hello (laughter)", "world", "test"])
+        mock_post.assert_not_called()
+        mock_get_mp3.assert_not_called()
+        self.assertEqual(mock_get.call_args.args[0], "https://api.elevenlabs.io/v1/speech-to-text/transcripts/tr-earlier")
+        # Cleared once the transcript is retrieved
+        utterances[0].refresh_from_db()
+        self.assertIsNone(utterances[0].provider_transcription_id)
+
+    @mock.patch.dict(os.environ, {"TRANSCRIPTION_POLLING_TIMEOUT_SECONDS": "10"})
+    @mock.patch("bots.transcription_utils.time", new_callable=FakeClock)
+    @mock.patch("bots.transcription_utils.requests.delete")
+    @mock.patch("bots.transcription_utils.requests.get")
+    @mock.patch("bots.transcription_utils.requests.post")
+    @mock.patch("bots.transcription_utils.get_mp3_for_utterance_group")
+    def test_retry_after_polling_timeout_does_not_submit_again(self, mock_get_mp3, mock_post, mock_get, mock_delete, clock):
+        """When polling times out, the group task's retry resumes polling the same transcription."""
+        mock_get_mp3.return_value = b"fake-mp3-data"
+        mock_post.return_value = self._webhook_accepted_response()
+        # The first attempt polls twice (at 0 s and 5 s) and times out, the retry gets the transcript
+        mock_get.side_effect = [self._not_ready_response(), self._not_ready_response(), self._mock_response(json_data=self._elevenlabs_result())]
+        mock_delete.return_value = self._mock_response()
+        utterances = self._create_utterances(self._create_async_transcription({"model_id": "scribe_v2", "webhook": True}))
+
+        # Applied eagerly, Celery runs the retry inline
+        process_utterance_group_for_async_transcription.apply(args=[[u.id for u in utterances]], throw=False)
+
+        mock_post.assert_called_once()
+        self.assertEqual(mock_get.call_count, 3)
+        for utterance in utterances:
+            utterance.refresh_from_db()
+            self.assertIsNone(utterance.failure_data)
+        self.assertEqual([u.transcription["transcript"] for u in utterances], ["hello (laughter)", "world", "test"])
+        self.assertIsNone(utterances[0].provider_transcription_id)
 
     @mock.patch("bots.transcription_utils.requests.post")
     def test_fails_without_credentials(self, mock_post):
