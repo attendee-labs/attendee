@@ -2103,8 +2103,7 @@ class BotController:
                 return
 
             logger.info("Received message that we were blocked by platform repeatedly, so recreating pod")
-            # Run task to restart the bot pod with 1 minute delay
-            restart_bot_pod.apply_async(args=[self.bot_in_db.id], countdown=60)
+            restart_bot_pod.apply_async(args=[self.bot_in_db.id], countdown=settings.BLOCKED_BY_PLATFORM_POD_RESTART_DELAY_SECONDS)
             # Don't do the normal cleanup tasks because we'll be restarting the pod
             if self.main_loop and self.main_loop.is_running():
                 logger.info("Quitting main loop")

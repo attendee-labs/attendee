@@ -447,7 +447,7 @@ class TestTeamsBot(TransactionTestCase):
             connection.close()
 
             # A pod restart should have been scheduled with a countdown
-            mock_restart_apply_async.assert_called_once_with(args=[staged_bot.id], countdown=60)
+            mock_restart_apply_async.assert_called_once_with(args=[staged_bot.id], countdown=settings.BLOCKED_BY_PLATFORM_POD_RESTART_DELAY_SECONDS)
 
             # The normal shutdown cleanup should NOT run, since the pod is being restarted
             mock_cleanup.assert_not_called()
