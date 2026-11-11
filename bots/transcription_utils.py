@@ -480,10 +480,17 @@ def get_transcription_via_elevenlabs_from_mp3(
         return {"transcript": "", "words": []}, None
 
     url, data = get_elevenlabs_speech_to_text_request(transcription_settings)
+    # In webhook mode ElevenLabs returns right away and transcribes in the background. We poll for the
+    # transcript instead of receiving the webhook, so the webhook only needs to exist in the ElevenLabs workspace.
+    use_webhook = transcription_settings.elevenlabs_webhook()
+    if use_webhook:
+        data["webhook"] = True
+        if transcription_settings.elevenlabs_webhook_id():
+            data["webhook_id"] = transcription_settings.elevenlabs_webhook_id()
     headers = {"xi-api-key": api_key}
     files = {"file": ("audio.mp3", retrieve_mp3_data_callback(), "audio/mpeg")}
 
-    # The request is synchronous: ElevenLabs uploads and transcribes the whole file before it responds
+    # Without webhook mode, ElevenLabs uploads and transcribes the whole file before it responds
     timeout_seconds = int(os.getenv("ELEVENLABS_TRANSCRIPTION_TIMEOUT_SECONDS", 600))
     try:
         response = requests.post(url, headers=headers, files=files, data=data, timeout=timeout_seconds)
@@ -496,16 +503,66 @@ def get_transcription_via_elevenlabs_from_mp3(
     if response.status_code == 429:
         return None, {"reason": TranscriptionFailureReasons.RATE_LIMIT_EXCEEDED, "status_code": response.status_code, "text": response.text}
 
-    if response.status_code != 200:
+    # ElevenLabs documents 202 for webhook mode, but has been seen to answer 200
+    if response.status_code != 200 and not (use_webhook and response.status_code == 202):
         return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "status_code": response.status_code, "text": response.text}
 
-    result = response.json()
+    if use_webhook:
+        transcription_id = response.json().get("transcription_id")
+        if not transcription_id:
+            return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "error": "transcription_id not in response", "text": response.text}
+        logger.info(f"ElevenLabs transcription {transcription_id} accepted for {identifier}, polling for the result")
+        result, error = poll_elevenlabs_transcript(transcription_settings=transcription_settings, transcription_id=transcription_id, headers=headers, identifier=identifier)
+        if error:
+            return None, error
+    else:
+        result = response.json()
+
     logger.info(f"ElevenLabs transcription complete for {identifier} with model {data['model_id']}")
 
     # Unlike the per-utterance path, a low language_probability doesn't empty the transcript here,
     # because one low-confidence detection over a long group would drop all of its speech.
     transcription = {"transcript": result.get("text", ""), "words": get_words_from_elevenlabs_response(result), "language": result.get("language_code", None)}
     return transcription, None
+
+
+def poll_elevenlabs_transcript(transcription_settings: TranscriptionSettings, transcription_id: str, headers: dict, identifier: str):
+    """Polls for a transcript submitted in webhook mode, then deletes it from ElevenLabs. ElevenLabs answers 404 until the transcript is ready."""
+    polling_endpoint = f"{transcription_settings.elevenlabs_base_url()}/v1/speech-to-text/transcripts/{transcription_id}"
+    max_wait_seconds = int(os.getenv("TRANSCRIPTION_POLLING_TIMEOUT_SECONDS", 120))
+    poll_interval_seconds = 5
+    waited_seconds = 0
+
+    while waited_seconds < max_wait_seconds:
+        try:
+            polling_response = requests.get(polling_endpoint, headers=headers, timeout=60)
+        except requests.exceptions.RequestException as e:
+            # Keep polling: failing here would resubmit (and pay for) the whole transcription
+            logger.error(f"ElevenLabs result fetch for {identifier} failed: {e}")
+            polling_response = None
+
+        if polling_response is not None:
+            if polling_response.status_code == 200:
+                result = polling_response.json()
+                try:
+                    delete_response = requests.delete(polling_endpoint, headers=headers, timeout=60)
+                    if delete_response.status_code != 200:
+                        logger.error(f"ElevenLabs delete failed with status code {delete_response.status_code}: {delete_response.text}")
+                except requests.exceptions.RequestException as e:
+                    logger.error(f"ElevenLabs delete for {identifier} failed: {e}")
+                return result, None
+
+            if polling_response.status_code == 401:
+                return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_INVALID}
+
+            # 404 means the transcript isn't ready yet. ElevenLabs reports no other status while processing.
+            if polling_response.status_code != 404:
+                logger.error(f"ElevenLabs result fetch for {identifier} failed with status code {polling_response.status_code}: {polling_response.text}")
+
+        time.sleep(poll_interval_seconds)
+        waited_seconds += poll_interval_seconds
+
+    return None, {"reason": TranscriptionFailureReasons.TIMED_OUT, "step": "transcribe_result_poll", "transcription_id": transcription_id}
 
 
 def get_transcription_via_deepgram_from_mp3(

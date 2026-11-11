@@ -882,6 +882,12 @@ class TranscriptionSettings:
     def elevenlabs_diarization_threshold(self):
         return self._settings.get("elevenlabs", {}).get("diarization_threshold", None)
 
+    def elevenlabs_webhook(self):
+        return self._settings.get("elevenlabs", {}).get("webhook", False)
+
+    def elevenlabs_webhook_id(self):
+        return self._settings.get("elevenlabs", {}).get("webhook_id", None)
+
     def elevenlabs_base_url(self):
         if os.getenv("ELEVENLABS_BASE_URL"):
             return os.getenv("ELEVENLABS_BASE_URL")

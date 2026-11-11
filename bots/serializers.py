@@ -505,6 +505,11 @@ TRANSCRIPTION_SETTINGS_SCHEMA = {
                 "num_speakers": {"type": "integer", "minimum": 1, "maximum": 32, "description": "The maximum amount of speakers talking in the uploaded file. Can help with predicting who speaks when. Defaults to the maximum the model supports."},
                 "diarization_threshold": {"type": "number", "minimum": 0.1, "maximum": 0.4, "description": "Diarization threshold to apply during speaker diarization. A higher value predicts fewer speakers. Can only be set when diarize is true and num_speakers is not set. Defaults to a model-based threshold (usually 0.22)."},
                 "use_eu_server": {"type": "boolean", "description": "Whether to use ElevenLabs' EU data residency server (api.eu.residency.elevenlabs.io). This is an ElevenLabs Enterprise feature and needs an API key from the EU workspace. Defaults to false."},
+                "webhook": {
+                    "type": "boolean",
+                    "description": "Whether to send async transcription requests in ElevenLabs' webhook mode, for long audio. ElevenLabs returns right away and transcribes in the background, and Attendee polls ElevenLabs for the transcript until it's ready. ElevenLabs also delivers the result to the speech-to-text webhooks configured in your ElevenLabs workspace (or the one given in webhook_id), which you need to set up yourself. Attendee doesn't use that delivery. Only used for async transcription. Defaults to false.",
+                },
+                "webhook_id": {"type": "string", "description": "The ID of the ElevenLabs webhook to deliver the result to, instead of all webhooks configured in your ElevenLabs workspace. Only used when webhook is true."},
             },
             "required": ["model_id"],
             "dependentSchemas": {"diarization_threshold": {"properties": {"diarize": {"const": True}}, "required": ["diarize"], "not": {"required": ["num_speakers"]}}},
