@@ -540,7 +540,11 @@ class GoogleMeetUIMethods:
         logger.info("Found 'Captions and translation' variant of captions button. Pressing 'c' to enable captions...")
         ActionChains(self.driver).send_keys("c").perform()
         logger.info("Waiting for captions to be enabled...")
-        WebDriverWait(self.driver, 5).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'button[aria-label="Captions and translation"][aria-pressed="true"]')))
+        try:
+            WebDriverWait(self.driver, 30).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'button[aria-label="Captions and translation"][aria-pressed="true"]')))
+        except TimeoutException as e:
+            logger.warning("Captions were not enabled within 30 seconds after pressing 'c'. Raising UiCouldNotLocateElementException")
+            raise UiCouldNotLocateElementException("Captions were not enabled within 30 seconds after pressing 'c'.", "enable_captions_via_keyboard_shortcut", e)
         logger.info("Confirmed captions were enabled")
 
     def click_captions_button(self):
