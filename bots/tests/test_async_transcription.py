@@ -1079,6 +1079,120 @@ class TestAsyncTranscriptionElevenLabs(AsyncTranscriptionTestCase):
         self.assertIn(TranscriptionFailureReasons.CREDENTIALS_INVALID, async_transcription.failure_data.get("failure_reasons", []))
         self.assertEqual(mock_post.call_count, 1)
 
+    def _webhook_accepted_response(self, status_code=200):
+        return self._mock_response(
+            status_code=status_code,
+            json_data={"message": "Request accepted. Transcription result will be sent to the webhook endpoint.", "request_id": "req-1", "transcription_id": "tr-1"},
+        )
+
+    def _not_ready_response(self):
+        return self._mock_response(status_code=404, json_data={"detail": {"code": "transcript_not_found"}})
+
+    @mock.patch("bots.transcription_utils.time.sleep")
+    @mock.patch("bots.transcription_utils.requests.delete")
+    @mock.patch("bots.transcription_utils.requests.get")
+    @mock.patch("bots.transcription_utils.requests.post")
+    @mock.patch("bots.transcription_utils.get_mp3_for_utterance_group")
+    def test_webhook_mode_polls_for_the_transcript(self, mock_get_mp3, mock_post, mock_get, mock_delete, mock_sleep):
+        """With webhook mode, the request returns a transcription_id, which is polled until ElevenLabs stops answering 404."""
+        mock_get_mp3.return_value = b"fake-mp3-data"
+        mock_post.return_value = self._webhook_accepted_response()
+        mock_get.side_effect = [self._not_ready_response(), self._not_ready_response(), self._mock_response(json_data=self._elevenlabs_result())]
+        mock_delete.return_value = self._mock_response()
+        utterances = self._create_utterances(self._create_async_transcription({"model_id": "scribe_v2", "webhook": True, "webhook_id": "wh_123", "use_eu_server": True}))
+
+        transcriptions, failure_data = get_transcription_for_utterance_group(utterances)
+
+        self.assertIsNone(failure_data)
+        self.assertEqual([transcriptions[u.id]["transcript"] for u in utterances], ["hello", "world", "test"])
+        self.assertEqual(mock_post.call_args.kwargs["data"], {"model_id": "scribe_v2", "webhook": True, "webhook_id": "wh_123"})
+        polling_endpoint = "https://api.eu.residency.elevenlabs.io/v1/speech-to-text/transcripts/tr-1"
+        self.assertEqual(mock_get.call_count, 3)
+        self.assertEqual(mock_get.call_args.args[0], polling_endpoint)
+        self.assertEqual(mock_get.call_args.kwargs["headers"], {"xi-api-key": "test_elevenlabs_api_key"})
+        mock_delete.assert_called_once()
+        self.assertEqual(mock_delete.call_args.args[0], polling_endpoint)
+
+    @mock.patch("bots.transcription_utils.time.sleep")
+    @mock.patch("bots.transcription_utils.requests.delete")
+    @mock.patch("bots.transcription_utils.requests.get")
+    @mock.patch("bots.transcription_utils.requests.post")
+    @mock.patch("bots.transcription_utils.get_mp3_for_utterance_group")
+    def test_webhook_mode_accepts_202_and_survives_poll_errors(self, mock_get_mp3, mock_post, mock_get, mock_delete, mock_sleep):
+        """A 202 is accepted, and a failed poll or a failed delete doesn't lose the transcript."""
+        mock_get_mp3.return_value = b"fake-mp3-data"
+        mock_post.return_value = self._webhook_accepted_response(status_code=202)
+        mock_get.side_effect = [requests.exceptions.ConnectionError("connection reset"), self._mock_response(status_code=500, text="error"), self._mock_response(json_data=self._elevenlabs_result())]
+        mock_delete.side_effect = requests.exceptions.ConnectionError("connection reset")
+        utterances = self._create_utterances(self._create_async_transcription({"model_id": "scribe_v2", "webhook": True}))
+
+        transcriptions, failure_data = get_transcription_for_utterance_group(utterances)
+
+        self.assertIsNone(failure_data)
+        self.assertEqual([transcriptions[u.id]["transcript"] for u in utterances], ["hello", "world", "test"])
+        self.assertEqual(mock_post.call_args.kwargs["data"], {"model_id": "scribe_v2", "webhook": True})
+
+    @mock.patch.dict(os.environ, {"TRANSCRIPTION_POLLING_TIMEOUT_SECONDS": "20"})
+    @mock.patch("bots.transcription_utils.time.sleep")
+    @mock.patch("bots.transcription_utils.requests.get")
+    @mock.patch("bots.transcription_utils.requests.post")
+    @mock.patch("bots.transcription_utils.get_mp3_for_utterance_group")
+    def test_webhook_mode_times_out_when_the_transcript_never_appears(self, mock_get_mp3, mock_post, mock_get, mock_sleep):
+        mock_get_mp3.return_value = b"fake-mp3-data"
+        mock_post.return_value = self._webhook_accepted_response()
+        mock_get.return_value = self._not_ready_response()
+        utterances = self._create_utterances(self._create_async_transcription({"model_id": "scribe_v2", "webhook": True}))
+
+        transcriptions, failure_data = get_transcription_for_utterance_group(utterances)
+
+        self.assertIsNone(transcriptions)
+        self.assertEqual(failure_data["reason"], TranscriptionFailureReasons.TIMED_OUT)
+        self.assertEqual(failure_data["step"], "transcribe_result_poll")
+        self.assertTrue(is_retryable_failure(failure_data))
+        # 20 seconds of polling every 5 seconds
+        self.assertEqual(mock_get.call_count, 4)
+
+    @mock.patch("bots.transcription_utils.time.sleep")
+    @mock.patch("bots.transcription_utils.requests.get")
+    @mock.patch("bots.transcription_utils.requests.post")
+    @mock.patch("bots.transcription_utils.get_mp3_for_utterance_group")
+    def test_webhook_mode_maps_401_while_polling(self, mock_get_mp3, mock_post, mock_get, mock_sleep):
+        mock_get_mp3.return_value = b"fake-mp3-data"
+        mock_post.return_value = self._webhook_accepted_response()
+        mock_get.return_value = self._mock_response(status_code=401)
+        utterances = self._create_utterances(self._create_async_transcription({"model_id": "scribe_v2", "webhook": True}))
+
+        transcriptions, failure_data = get_transcription_for_utterance_group(utterances)
+
+        self.assertIsNone(transcriptions)
+        self.assertEqual(failure_data["reason"], TranscriptionFailureReasons.CREDENTIALS_INVALID)
+        self.assertFalse(is_retryable_failure(failure_data))
+
+    @mock.patch("bots.transcription_utils.requests.get")
+    @mock.patch("bots.transcription_utils.requests.post")
+    @mock.patch("bots.transcription_utils.get_mp3_for_utterance_group")
+    def test_webhook_mode_fails_without_a_transcription_id(self, mock_get_mp3, mock_post, mock_get):
+        mock_get_mp3.return_value = b"fake-mp3-data"
+        mock_post.return_value = self._mock_response(json_data={"message": "Request accepted.", "request_id": "req-1", "transcription_id": None}, text="accepted")
+        utterances = self._create_utterances(self._create_async_transcription({"model_id": "scribe_v2", "webhook": True}))
+
+        transcriptions, failure_data = get_transcription_for_utterance_group(utterances)
+
+        self.assertIsNone(transcriptions)
+        self.assertEqual(failure_data["reason"], TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED)
+        mock_get.assert_not_called()
+
+    @mock.patch("bots.transcription_utils.requests.post")
+    @mock.patch("bots.transcription_utils.get_mp3_for_utterance_group")
+    def test_202_without_webhook_mode_is_a_failure(self, mock_get_mp3, mock_post):
+        mock_get_mp3.return_value = b"fake-mp3-data"
+        mock_post.return_value = self._webhook_accepted_response(status_code=202)
+        utterances = self._create_utterances(self._create_async_transcription())
+
+        _, failure_data = get_transcription_for_utterance_group(utterances)
+
+        self.assertEqual(failure_data["reason"], TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED)
+
     @mock.patch("bots.transcription_utils.requests.post")
     def test_fails_without_credentials(self, mock_post):
         self.elevenlabs_credentials.delete()
