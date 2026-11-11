@@ -374,7 +374,7 @@ class GoogleMeetUIMethods:
         if not hasattr(self, "mocap_manager"):
             self.mocap_manager = MocapManager(video_frame_size=self.video_frame_size)
 
-    def humanized_navigate_to_and_click_element(self, element, fallback_to_forceful_click_for_zero_size_element=False):
+    def humanized_navigate_to_and_click_element(self, element):
         self.ensure_x11_input()
         self.ensure_mocap_manager()
 
@@ -407,10 +407,6 @@ class GoogleMeetUIMethods:
         dpr = float(metrics["dpr"])
 
         if width <= 0 or height <= 0:
-            if fallback_to_forceful_click_for_zero_size_element:
-                logger.warning(f"Element has invalid size: {width}x{height}. Falling back to forceful click.")
-                self.click_element_forcefully(element, "humanized_navigate_to_and_click_element:zero_size_fallback")
-                return
             raise RuntimeError(f"Element has invalid size: {width}x{height}")
 
         # Clickable rect: half the width and half the height, centered
@@ -1224,7 +1220,7 @@ class GoogleMeetUIMethods:
         )
         logger.info("Clicking the join button...")
         if self.ui_interaction_mode == "humanized":
-            self.humanized_navigate_to_and_click_element(join_button, fallback_to_forceful_click_for_zero_size_element=True)
+            self.humanized_navigate_to_and_click_element(join_button)
         else:
             self.click_element_with_fallback_to_forceful_click(join_button, "join_button")
 
