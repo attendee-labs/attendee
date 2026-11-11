@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import os
+import random
 import signal
 import subprocess
 import threading
@@ -22,7 +23,7 @@ from websockets.sync.client import connect
 from websockets.sync.server import serve
 
 from bots.automatic_leave_configuration import AutomaticLeaveConfiguration
-from bots.automatic_leave_utils import participant_is_another_bot
+from bots.automatic_leave_utils import participant_is_another_bot, silence_detection_should_activate
 from bots.bot_adapter import BotAdapter
 from bots.models import ParticipantEventTypes, RecordingViews
 from bots.per_participant_realtime_video_configuration import PerParticipantRealtimeVideoConfiguration
@@ -101,6 +102,7 @@ class WebBotAdapter(BotAdapter):
         self.cleaned_up = False
 
         self.websocket_port = None
+        self.websocket_host = None
         self.websocket_server = None
         self.websocket_thread = None
         self.last_websocket_message_processed_time = None
@@ -127,6 +129,8 @@ class WebBotAdapter(BotAdapter):
         self.debug_screen_recorder = None
 
         self.silence_detection_activated = False
+        # The last audio timestamp we logged a pending silence auto-leave for, so we log once per stretch of silence
+        self.silence_pending_logged_for_last_audio_at = None
         self.joined_at = None
         self.recording_permission_granted_at = None
 
@@ -324,6 +328,9 @@ class WebBotAdapter(BotAdapter):
 
     def number_of_participants_ever_in_meeting_excluding_other_bots(self):
         return len([participant_uuid for participant_uuid, participant in self.participants_info.items() if participant_uuid in self.participant_uuids_that_were_ever_in_meeting and not participant_is_another_bot(participant["fullName"], participant["isCurrentUser"], self.automatic_leave_configuration)])
+
+    def number_of_participants_currently_in_meeting_excluding_other_bots(self):
+        return len([participant for participant in self.participants_info.values() if participant["active"] and not participant_is_another_bot(participant["fullName"], participant["isCurrentUser"], self.automatic_leave_configuration)])
 
     def update_only_one_participant_in_meeting_at(self):
         if not self.joined_at:
@@ -526,24 +533,35 @@ class WebBotAdapter(BotAdapter):
 
         websocket_handler = self.handle_websocket if self.livekit_websocket_bridge is None else self.handle_websocket_with_livekit_bridge
 
-        if settings.ENABLE_BOT_WEBSOCKET_PORT_SELECTION_BY_OS:
-            # Port 0 lets the OS pick a free port, so bots sharing a network namespace
-            # (celery workers, host networking) can't collide on a fixed port.
-            self.websocket_server = serve(
-                websocket_handler,
-                "localhost",
-                0,
-                compression=None,
-                max_size=None,
-            )
-            port = self.websocket_server.socket.getsockname()[1]
-            logger.info(f"Websocket server started on ws://localhost:{port}")
-            self.websocket_port = port
-            self.websocket_server.serve_forever()
-            return
-
         port = self.get_websocket_port()
         max_retries = 10
+
+        if settings.ENABLE_BOT_WEBSOCKET_PORT_SELECTION_BY_OS:
+            # Bots sharing a network namespace (celery workers, host networking) each bind the platform's
+            # fixed port on their own random loopback IP (all of 127.0.0.0/8 is loopback on Linux).
+            # init_driver maps localhost to that IP in Chrome, so the page still connects to ws://localhost:<port>,
+            # which keeps CSPs that only allow a specific port (e.g. Teams' connect-src ws://localhost:8097) happy.
+            for attempt in range(max_retries):
+                host = f"127.{random.randint(1, 254)}.{random.randint(0, 255)}.{random.randint(1, 254)}"
+                try:
+                    self.websocket_server = serve(
+                        websocket_handler,
+                        host,
+                        port,
+                        compression=None,
+                        max_size=None,
+                    )
+                except OSError as e:
+                    if e.errno == 98:  # Address already in use
+                        logger.info(f"{host}:{port} is already in use, trying another loopback IP...")
+                        continue
+                    raise
+                logger.info(f"Websocket server started on ws://{host}:{port}")
+                self.websocket_host = host
+                self.websocket_port = port
+                self.websocket_server.serve_forever()
+                return
+            raise Exception(f"Could not find available loopback IP after {max_retries} attempts")
 
         for attempt in range(max_retries):
             try:
@@ -830,6 +848,9 @@ class WebBotAdapter(BotAdapter):
 
         if settings.MONITOR_DOMAIN_ALLOWLIST_IN_CHROME:
             options.set_capability("webSocketUrl", True)
+
+        if self.websocket_host:
+            options.add_argument(f"--host-resolver-rules=MAP localhost {self.websocket_host}")
 
         self.add_subclass_specific_chrome_options(options)
 
@@ -1347,13 +1368,20 @@ class WebBotAdapter(BotAdapter):
                 self.send_message_callback({"message": self.Messages.ADAPTER_REQUESTED_BOT_LEAVE_MEETING, "leave_reason": BotAdapter.LEAVE_REASON.AUTO_LEAVE_ONLY_PARTICIPANT_IN_MEETING})
                 return
 
-        if not self.silence_detection_activated and self.joined_at is not None and time.time() - self.joined_at > self.automatic_leave_configuration.silence_activate_after_seconds:
+        if not self.silence_detection_activated and self.joined_at is not None and silence_detection_should_activate(automatic_leave_configuration=self.automatic_leave_configuration, seconds_since_joined=time.time() - self.joined_at, get_number_of_participants_currently_in_meeting_excluding_other_bots=self.number_of_participants_currently_in_meeting_excluding_other_bots):
             self.silence_detection_activated = True
             self.last_audio_message_processed_time = time.time()
-            logger.info(f"Silence detection activated after {self.automatic_leave_configuration.silence_activate_after_seconds} seconds")
+            logger.info(f"Silence detection activated after {time.time() - self.joined_at:.0f} seconds")
 
         if self.last_audio_message_processed_time is not None and self.silence_detection_activated:
-            if time.time() - self.last_audio_message_processed_time > self.automatic_leave_configuration.silence_timeout_seconds:
+            seconds_of_silence = time.time() - self.last_audio_message_processed_time
+            silence_pending_log_after_seconds = self.automatic_leave_configuration.silence_pending_log_after_seconds
+            if silence_pending_log_after_seconds is not None and seconds_of_silence > silence_pending_log_after_seconds and self.silence_pending_logged_for_last_audio_at != self.last_audio_message_processed_time:
+                self.silence_pending_logged_for_last_audio_at = self.last_audio_message_processed_time
+                logger.info(f"Logging pending silence auto-leave because there was no audio for {silence_pending_log_after_seconds} seconds")
+                self.send_message_callback({"message": self.Messages.AUTO_LEAVE_SILENCE_PENDING, "seconds_of_silence": silence_pending_log_after_seconds, "seconds_until_leave": self.automatic_leave_configuration.silence_timeout_seconds - silence_pending_log_after_seconds})
+
+            if seconds_of_silence > self.automatic_leave_configuration.silence_timeout_seconds:
                 logger.info(f"Auto-leaving meeting because there was no audio for {self.automatic_leave_configuration.silence_timeout_seconds} seconds")
                 self.send_message_callback({"message": self.Messages.ADAPTER_REQUESTED_BOT_LEAVE_MEETING, "leave_reason": BotAdapter.LEAVE_REASON.AUTO_LEAVE_SILENCE})
                 return

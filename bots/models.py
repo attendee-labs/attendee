@@ -2303,6 +2303,7 @@ class BotLogEntryTypes(models.IntegerChoices):
     UNCATEGORIZED = 0, "Uncategorized"
     COULD_NOT_ENABLE_CLOSED_CAPTIONS = 1, "Could not enable closed captions"
     WEBINAR_PANELIST_PROMOTION = 2, "Webinar panelist promotion"
+    AUTO_LEAVE_SILENCE_PENDING = 3, "Auto leave silence pending"
 
     @classmethod
     def type_to_api_code(cls, value):
@@ -2311,6 +2312,7 @@ class BotLogEntryTypes(models.IntegerChoices):
             cls.UNCATEGORIZED: "uncategorized",
             cls.COULD_NOT_ENABLE_CLOSED_CAPTIONS: "could_not_enable_closed_captions",
             cls.WEBINAR_PANELIST_PROMOTION: "webinar_panelist_promotion",
+            cls.AUTO_LEAVE_SILENCE_PENDING: "auto_leave_silence_pending",
         }
         return mapping.get(value)
 
