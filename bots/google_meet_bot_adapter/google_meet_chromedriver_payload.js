@@ -1,3 +1,21 @@
+// Keeps us on the classic audio pipeline
+const hideReceiverCreateEncodedStreamsSupport = () => {
+    const receiverPrototype = window.RTCRtpReceiver?.prototype;
+
+    if (!receiverPrototype) {
+        return;
+    }
+
+    try {
+        delete receiverPrototype.createEncodedStreams;
+        console.log("RTCRtpReceiver.prototype.createEncodedStreams now reports as unsupported");
+    } catch (error) {
+        console.log("Failed to delete RTCRtpReceiver.prototype.createEncodedStreams", error);
+    }
+};
+
+hideReceiverCreateEncodedStreamsSupport();
+
 // Google Meet uses localstorage to store its preferences. We can use this to disable incoming video.
 const disableIncomingVideoViaLocalStorage = () => {
     const MEET_PREFERENCES_LOCAL_STORAGE_KEY = "meet-preferences";
@@ -1221,14 +1239,28 @@ class WebSocketClient {
       PER_PARTICIPANT_VIDEO: 6,
   };
 
+  static MAX_PENDING_JSON_MESSAGES = 1000;
+
   constructor() {
-      const url = `ws://localhost:${window.initialData.websocketPort}`;
-      console.log('WebSocketClient url', url);
-      this.ws = new WebSocket(url);
+      this.wsUrl = `ws://localhost:${window.initialData.websocketPort}`;
+      console.log('WebSocketClient url', this.wsUrl);
+      this.ws = null;
+      this.mediaSendingEnabled = false;
+      // JSON messages sent while the socket is still connecting; flushed on open
+      this.pendingJsonMessages = [];
+  }
+
+  ensureConnected() {
+      if (this.ws !== null) {
+          return;
+      }
+
+      this.ws = new WebSocket(this.wsUrl);
       this.ws.binaryType = 'arraybuffer';
       
       this.ws.onopen = () => {
           console.log('WebSocket Connected');
+          this.flushPendingJsonMessages();
       };
       
       this.ws.onmessage = (event) => {
@@ -1243,7 +1275,6 @@ class WebSocketClient {
           console.log('WebSocket Disconnected');
       };
 
-      this.mediaSendingEnabled = false;
       
       /*
       We no longer need this because we're not using MediaStreamTrackProcessor's
@@ -1344,11 +1375,31 @@ class WebSocketClient {
   }
   
   sendJson(data) {
+      this.ensureConnected();
+      if (this.ws.readyState === WebSocket.CONNECTING) {
+          if (this.pendingJsonMessages.length >= WebSocketClient.MAX_PENDING_JSON_MESSAGES) {
+              console.error('Pending JSON message buffer full, dropping oldest message:', this.pendingJsonMessages.shift());
+          }
+          this.pendingJsonMessages.push(data);
+          return;
+      }
       if (this.ws.readyState !== WebSocket.OPEN) {
           console.error('WebSocket is not connected');
           return;
       }
 
+      this.sendJsonNow(data);
+  }
+
+  flushPendingJsonMessages() {
+      const pending = this.pendingJsonMessages;
+      this.pendingJsonMessages = [];
+      for (const data of pending) {
+          this.sendJsonNow(data);
+      }
+  }
+
+  sendJsonNow(data) {
       try {
           // Convert JSON to string then to Uint8Array
           const jsonString = JSON.stringify(data);
@@ -1382,6 +1433,7 @@ class WebSocketClient {
   }
 
   sendEncodedMP4Chunk(encodedMP4Data) {
+    this.ensureConnected();
     if (this.ws.readyState !== WebSocket.OPEN) {
       console.error('WebSocket is not connected for video chunk send', this.ws.readyState);
       return;
@@ -1408,6 +1460,7 @@ class WebSocketClient {
   }
 
   sendPerParticipantAudio(participantId, audioData) {
+    this.ensureConnected();
     if (this.ws.readyState !== WebSocket.OPEN) {
       console.error('WebSocket is not connected for per participant audio send', this.ws.readyState);
       return;
@@ -1446,6 +1499,7 @@ class WebSocketClient {
   }
 
   sendPerParticipantVideo(participantId, isScreenShare, videoData) {
+    this.ensureConnected();
     if (this.ws.readyState !== WebSocket.OPEN) {
       console.error('WebSocket is not connected for per participant video send', this.ws.readyState);
       return;
@@ -1490,6 +1544,7 @@ class WebSocketClient {
   }
 
   sendMixedAudio(timestamp, audioData) {
+      this.ensureConnected();
       if (this.ws.readyState !== WebSocket.OPEN) {
           console.error('WebSocket is not connected for audio send', this.ws.readyState);
           return;
@@ -1518,6 +1573,7 @@ class WebSocketClient {
   }
 
   sendVideo(timestamp, streamId, width, height, videoData) {
+      this.ensureConnected();
       if (this.ws.readyState !== WebSocket.OPEN) {
           console.error('WebSocket is not connected for video send', this.ws.readyState);
           return;
@@ -1676,6 +1732,12 @@ const messageTypes = [
         name: 'DeviceOutputStatus',
         fields: [
             { name: 'disabled', fieldNumber: 1, type: 'varint' }
+        ]
+    },
+    {
+        name: 'CreateMeetingDeviceResponse',
+        fields: [
+            { name: 'detectedAsBot', fieldNumber: 36, type: 'varint' }
         ]
     },
     // Existing message types
@@ -1899,6 +1961,8 @@ function base64ToUint8Array(base64) {
 }
 
 const syncMeetingSpaceCollectionsUrl = "https://meet.google.com/$rpc/google.rtc.meetings.v1.MeetingSpaceService/SyncMeetingSpaceCollections";
+const createMeetingDeviceUrl = "https://meet.google.com/$rpc/google.rtc.meetings.v1.MeetingDeviceService/CreateMeetingDevice";
+const updateMeetingDeviceUrl = "https://meet.google.com/$rpc/google.rtc.meetings.v1.MeetingDeviceService/UpdateMeetingDevice";
 const userMap = new Map();
 new FetchInterceptor(async (response) => {
     if (response.url === syncMeetingSpaceCollectionsUrl) {
@@ -1910,6 +1974,19 @@ new FetchInterceptor(async (response) => {
         if (userInfoList.length > 0) {
             userManager.newUsersListSynced(userInfoList);
         }
+    }
+    // Both create and update meeting device requests return the same response type
+    if (response.url === createMeetingDeviceUrl || response.url === updateMeetingDeviceUrl) {
+        if (!response.ok)
+            return;
+        const responseText = await response.text();
+        const decodedData = base64ToUint8Array(responseText);
+        const createDeviceResponse = messageDecoders['CreateMeetingDeviceResponse'](decodedData);
+        const detected = Boolean(createDeviceResponse.detectedAsBot);
+        window.ws?.sendJson({
+            type: 'DetectedAsBot',
+            detected,
+        });
     }
 });
 
