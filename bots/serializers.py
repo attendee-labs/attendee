@@ -1689,6 +1689,9 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
                 if key not in value:
                     value[key] = default_value
 
+        if value and os.getenv("FORCE_GOOGLE_MEET_HUMANIZED_UI_INTERACTION_MODE", "false") == "true":
+            value["ui_interaction_mode"] = "humanized"
+
         return value
 
     teams_settings = TeamsSettingsJSONField(
