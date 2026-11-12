@@ -168,6 +168,8 @@ def create_mock_zoom_sdk():
     base_mock.MEETING_STATUS_ENDED = zoom.MeetingStatus.MEETING_STATUS_ENDED
     base_mock.MEETING_STATUS_WEBINAR_PROMOTE = zoom.MeetingStatus.MEETING_STATUS_WEBINAR_PROMOTE
     base_mock.MEETING_STATUS_WEBINAR_DEPROMOTE = zoom.MeetingStatus.MEETING_STATUS_WEBINAR_DEPROMOTE
+    base_mock.MEETING_STATUS_JOIN_BREAKOUT_ROOM = zoom.MeetingStatus.MEETING_STATUS_JOIN_BREAKOUT_ROOM
+    base_mock.MEETING_STATUS_LEAVE_BREAKOUT_ROOM = zoom.MeetingStatus.MEETING_STATUS_LEAVE_BREAKOUT_ROOM
     base_mock.LEAVE_MEETING = zoom.LeaveMeetingCmd.LEAVE_MEETING
     base_mock.AUTHRET_JWTTOKENWRONG = zoom.AuthResult.AUTHRET_JWTTOKENWRONG
     base_mock.SDKERR_INVALID_PARAMETER = zoom.SDKError.SDKERR_INVALID_PARAMETER
@@ -376,6 +378,84 @@ class TestZoomParticipantTracking(SimpleTestCase):
 
         self.assertIsNone(adapter.only_one_participant_in_meeting_at)
         self.assertIn("only_one_participant_in_meeting_at set to None because participant 456 is not available", logs.output[0])
+
+
+@tag("zoom_tests")
+class TestZoomBreakoutRoomMoves(SimpleTestCase):
+    def create_adapter(self):
+        adapter = ZoomBotAdapter.__new__(ZoomBotAdapter)
+        adapter.breakout_room_attendee = None
+        adapter.stay_in_main_session = False
+        return adapter
+
+    def test_bot_joins_breakout_room_it_is_assigned_to(self):
+        adapter = self.create_adapter()
+        attendee = MagicMock()
+
+        adapter.on_has_attendee_rights_notification(attendee)
+
+        attendee.JoinBo.assert_called_once_with()
+
+    def test_bot_returns_to_main_session_and_stays_there_when_host_invites_it(self):
+        adapter = self.create_adapter()
+        attendee = MagicMock()
+        handler = MagicMock()
+        handler.ReturnToMainSession.return_value = True
+        adapter.on_has_attendee_rights_notification(attendee)
+
+        adapter.on_host_invite_return_to_main_session("Host", handler)
+        handler.ReturnToMainSession.assert_called_once_with()
+
+        # Zoom sends attendee rights again in the main session because the bot is still assigned to the room
+        adapter.on_lost_attendee_rights_notification()
+        adapter.on_bo_status_changed(zoom.BO_STATUS.BO_STATUS_STARTED)
+        adapter.on_has_attendee_rights_notification(attendee)
+        self.assertEqual(attendee.JoinBo.call_count, 1)
+
+    def test_bot_joins_room_host_moves_it_to_from_main_session(self):
+        adapter = self.create_adapter()
+        attendee = MagicMock()
+        handler = MagicMock()
+        handler.ReturnToMainSession.return_value = True
+        adapter.on_has_attendee_rights_notification(attendee)
+        adapter.on_host_invite_return_to_main_session("Host", handler)
+        adapter.on_has_attendee_rights_notification(attendee)
+
+        adapter.on_bo_switch_request_received("Room 2", None)
+
+        self.assertEqual(attendee.JoinBo.call_count, 2)
+        self.assertFalse(adapter.stay_in_main_session)
+
+    def test_bot_follows_assignments_again_after_breakout_rooms_are_stopped(self):
+        adapter = self.create_adapter()
+        attendee = MagicMock()
+        handler = MagicMock()
+        handler.ReturnToMainSession.return_value = True
+        adapter.on_host_invite_return_to_main_session("Host", handler)
+
+        adapter.on_bo_status_changed(zoom.BO_STATUS.BO_STATUS_ENDED)
+        adapter.on_has_attendee_rights_notification(attendee)
+
+        attendee.JoinBo.assert_called_once_with()
+
+    def test_bot_stays_in_room_when_return_to_main_session_fails(self):
+        adapter = self.create_adapter()
+        handler = MagicMock()
+        handler.ReturnToMainSession.return_value = False
+
+        adapter.on_host_invite_return_to_main_session("Host", handler)
+
+        self.assertFalse(adapter.stay_in_main_session)
+
+    def test_bot_ignores_switch_request_without_attendee_rights(self):
+        adapter = self.create_adapter()
+        attendee = MagicMock()
+        adapter.on_has_attendee_rights_notification(attendee)
+        adapter.on_lost_attendee_rights_notification()
+
+        adapter.on_bo_switch_request_received("Room 2", None)
+
+        attendee.JoinBo.assert_called_once_with()
 
 
 @tag("zoom_tests")
@@ -4264,6 +4344,199 @@ class TestZoomBot(TransactionTestCase):
         bot_thread.join(timeout=5)
 
         # Close the database connection since we're in a thread
+        connection.close()
+
+    @patch(
+        "bots.zoom_bot_adapter.video_input_manager.zoom",
+        new_callable=create_mock_zoom_sdk,
+    )
+    @patch("bots.zoom_bot_adapter.zoom_bot_adapter.zoom", new_callable=create_mock_zoom_sdk)
+    @patch("bots.zoom_bot_adapter.zoom_bot_adapter.jwt")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
+    @patch("deepgram.DeepgramClient")
+    def test_recording_restarts_after_joining_and_leaving_breakout_room(
+        self,
+        MockDeepgramClient,
+        MockFileUploader,
+        mock_jwt,
+        mock_zoom_sdk_adapter,
+        mock_zoom_sdk_video,
+    ):
+        MockDeepgramClient.return_value = create_mock_deepgram()
+        MockFileUploader.return_value = create_mock_file_uploader()
+        mock_jwt.encode.return_value = "fake_jwt_token"
+
+        controller = BotController(self.bot.id)
+
+        bot_thread = threading.Thread(target=controller.run)
+        bot_thread.daemon = True
+        bot_thread.start()
+
+        def simulate_flow():
+            adapter = controller.adapter
+
+            def change_meeting_status(status):
+                adapter.meeting_service_event.onMeetingStatusChangedCallback(status, mock_zoom_sdk_adapter.SDKERR_SUCCESS)
+
+            adapter.auth_event.onAuthenticationReturnCallback(mock_zoom_sdk_adapter.AUTHRET_SUCCESS)
+            change_meeting_status(mock_zoom_sdk_adapter.MEETING_STATUS_CONNECTING)
+            # The default mock grants recording permission as soon as the bot joins
+            change_meeting_status(mock_zoom_sdk_adapter.MEETING_STATUS_INMEETING)
+            time.sleep(1)
+
+            # Zoom starts a new meeting session for the breakout room
+            change_meeting_status(mock_zoom_sdk_adapter.MEETING_STATUS_JOIN_BREAKOUT_ROOM)
+            change_meeting_status(mock_zoom_sdk_adapter.MEETING_STATUS_INMEETING)
+            time.sleep(0.5)
+
+            # And another one when the bot returns to the main room
+            change_meeting_status(mock_zoom_sdk_adapter.MEETING_STATUS_LEAVE_BREAKOUT_ROOM)
+            change_meeting_status(mock_zoom_sdk_adapter.MEETING_STATUS_INMEETING)
+            time.sleep(0.5)
+
+            change_meeting_status(mock_zoom_sdk_adapter.MEETING_STATUS_ENDED)
+
+            connection.close()
+
+        threading.Timer(2, simulate_flow).start()
+
+        bot_thread.join(timeout=12)
+
+        time.sleep(2)
+
+        self.bot.refresh_from_db()
+
+        events = list(self.bot.bot_events.order_by("created_at", "id"))
+        self.assertEqual(
+            [(event.event_type, event.old_state, event.new_state) for event in events],
+            [
+                (BotEventTypes.JOIN_REQUESTED, BotStates.READY, BotStates.JOINING),
+                (BotEventTypes.BOT_JOINED_MEETING, BotStates.JOINING, BotStates.JOINED_NOT_RECORDING),
+                (BotEventTypes.BOT_RECORDING_PERMISSION_GRANTED, BotStates.JOINED_NOT_RECORDING, BotStates.JOINED_RECORDING),
+                (BotEventTypes.BOT_BEGAN_JOINING_BREAKOUT_ROOM, BotStates.JOINED_RECORDING, BotStates.JOINING_BREAKOUT_ROOM),
+                (BotEventTypes.BOT_JOINED_BREAKOUT_ROOM, BotStates.JOINING_BREAKOUT_ROOM, BotStates.JOINED_RECORDING),
+                (BotEventTypes.BOT_BEGAN_LEAVING_BREAKOUT_ROOM, BotStates.JOINED_RECORDING, BotStates.LEAVING_BREAKOUT_ROOM),
+                (BotEventTypes.BOT_LEFT_BREAKOUT_ROOM, BotStates.LEAVING_BREAKOUT_ROOM, BotStates.JOINED_RECORDING),
+                (BotEventTypes.MEETING_ENDED, BotStates.JOINED_RECORDING, BotStates.POST_PROCESSING),
+                (BotEventTypes.POST_PROCESSING_COMPLETED, BotStates.POST_PROCESSING, BotStates.ENDED),
+            ],
+        )
+
+        # Raw recording starts and the audio delegate is subscribed once per meeting session: main room, breakout room, main room
+        mock_recording_controller = controller.adapter.meeting_service.GetMeetingRecordingController.return_value
+        self.assertEqual(mock_recording_controller.StartRawRecording.call_count, 3)
+        self.assertEqual(mock_recording_controller.StopRawRecording.call_count, 0)
+        self.assertEqual(controller.adapter.audio_helper.subscribe.call_args_list, [call(controller.adapter.audio_source, False)] * 3)
+
+        # Each session registers the callbacks that let the host move the bot between rooms
+        self.assertEqual(
+            mock_zoom_sdk_adapter.MeetingBOEventCallbacks.call_args.kwargs,
+            {
+                "onHasAttendeeRightsNotificationCallback": controller.adapter.on_has_attendee_rights_notification,
+                "onLostAttendeeRightsNotificationCallback": controller.adapter.on_lost_attendee_rights_notification,
+                "onBOSwitchRequestReceivedCallback": controller.adapter.on_bo_switch_request_received,
+                "onHostInviteReturnToMainSessionCallback": controller.adapter.on_host_invite_return_to_main_session,
+                "onBOStatusChangedCallback": controller.adapter.on_bo_status_changed,
+            },
+        )
+
+        controller.cleanup()
+        bot_thread.join(timeout=5)
+
+        connection.close()
+
+    @patch(
+        "bots.zoom_bot_adapter.video_input_manager.zoom",
+        new_callable=create_mock_zoom_sdk,
+    )
+    @patch("bots.zoom_bot_adapter.zoom_bot_adapter.zoom", new_callable=create_mock_zoom_sdk)
+    @patch("bots.zoom_bot_adapter.zoom_bot_adapter.jwt")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
+    @patch("deepgram.DeepgramClient")
+    def test_paused_recording_stays_paused_in_breakout_room_and_can_resume_there(
+        self,
+        MockDeepgramClient,
+        MockFileUploader,
+        mock_jwt,
+        mock_zoom_sdk_adapter,
+        mock_zoom_sdk_video,
+    ):
+        MockDeepgramClient.return_value = create_mock_deepgram()
+        MockFileUploader.return_value = create_mock_file_uploader()
+        mock_jwt.encode.return_value = "fake_jwt_token"
+
+        controller = BotController(self.bot.id)
+
+        bot_thread = threading.Thread(target=controller.run)
+        bot_thread.daemon = True
+        bot_thread.start()
+
+        mock_recording_controller = None
+        start_raw_recording_calls_while_paused_in_breakout_room = None
+
+        def simulate_flow():
+            nonlocal mock_recording_controller, start_raw_recording_calls_while_paused_in_breakout_room
+            adapter = controller.adapter
+
+            def change_meeting_status(status):
+                adapter.meeting_service_event.onMeetingStatusChangedCallback(status, mock_zoom_sdk_adapter.SDKERR_SUCCESS)
+
+            adapter.auth_event.onAuthenticationReturnCallback(mock_zoom_sdk_adapter.AUTHRET_SUCCESS)
+            change_meeting_status(mock_zoom_sdk_adapter.MEETING_STATUS_CONNECTING)
+            change_meeting_status(mock_zoom_sdk_adapter.MEETING_STATUS_INMEETING)
+            time.sleep(1)
+
+            send_sync_command(self.bot, "pause_recording")
+            time.sleep(0.5)
+
+            change_meeting_status(mock_zoom_sdk_adapter.MEETING_STATUS_JOIN_BREAKOUT_ROOM)
+            change_meeting_status(mock_zoom_sdk_adapter.MEETING_STATUS_INMEETING)
+            time.sleep(0.5)
+
+            mock_recording_controller = adapter.meeting_service.GetMeetingRecordingController.return_value
+            start_raw_recording_calls_while_paused_in_breakout_room = mock_recording_controller.StartRawRecording.call_count
+
+            send_sync_command(self.bot, "resume_recording")
+            time.sleep(0.5)
+
+            change_meeting_status(mock_zoom_sdk_adapter.MEETING_STATUS_ENDED)
+
+            connection.close()
+
+        threading.Timer(2, simulate_flow).start()
+
+        bot_thread.join(timeout=12)
+
+        time.sleep(2)
+
+        self.bot.refresh_from_db()
+
+        events = list(self.bot.bot_events.order_by("created_at", "id"))
+        self.assertEqual(
+            [(event.event_type, event.old_state, event.new_state) for event in events],
+            [
+                (BotEventTypes.JOIN_REQUESTED, BotStates.READY, BotStates.JOINING),
+                (BotEventTypes.BOT_JOINED_MEETING, BotStates.JOINING, BotStates.JOINED_NOT_RECORDING),
+                (BotEventTypes.BOT_RECORDING_PERMISSION_GRANTED, BotStates.JOINED_NOT_RECORDING, BotStates.JOINED_RECORDING),
+                (BotEventTypes.RECORDING_PAUSED, BotStates.JOINED_RECORDING, BotStates.JOINED_RECORDING_PAUSED),
+                (BotEventTypes.BOT_BEGAN_JOINING_BREAKOUT_ROOM, BotStates.JOINED_RECORDING_PAUSED, BotStates.JOINING_BREAKOUT_ROOM),
+                (BotEventTypes.BOT_JOINED_BREAKOUT_ROOM, BotStates.JOINING_BREAKOUT_ROOM, BotStates.JOINED_RECORDING_PAUSED),
+                (BotEventTypes.RECORDING_RESUMED, BotStates.JOINED_RECORDING_PAUSED, BotStates.JOINED_RECORDING),
+                (BotEventTypes.MEETING_ENDED, BotStates.JOINED_RECORDING, BotStates.POST_PROCESSING),
+                (BotEventTypes.POST_PROCESSING_COMPLETED, BotStates.POST_PROCESSING, BotStates.ENDED),
+            ],
+        )
+
+        # Joining the breakout room while paused does not start raw recording
+        self.assertEqual(start_raw_recording_calls_while_paused_in_breakout_room, 1)
+        # Resuming in the breakout room starts raw recording and subscribes the audio delegate in that session
+        self.assertEqual(mock_recording_controller.StartRawRecording.call_count, 2)
+        self.assertEqual(mock_recording_controller.StopRawRecording.call_count, 1)
+        self.assertEqual(controller.adapter.audio_helper.subscribe.call_args_list, [call(controller.adapter.audio_source, False)] * 2)
+
+        controller.cleanup()
+        bot_thread.join(timeout=5)
+
         connection.close()
 
     @patch("bots.zoom_bot_adapter.zoom_bot_adapter.VideoInputManager")

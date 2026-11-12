@@ -110,6 +110,7 @@ class ZoomBotAdapter(BotAdapter):
         self.meeting_service_event = None
 
         self.audio_source = None
+        self.audio_source_subscribed = False
         self.audio_helper = None
 
         self.audio_settings = None
@@ -200,6 +201,9 @@ class ZoomBotAdapter(BotAdapter):
         # Breakout room controller
         self.breakout_room_ctrl = None
         self.breakout_room_ctrl_event = None
+        self.breakout_room_attendee = None
+        # Set when the host sends the bot back to the main session, so it does not rejoin the room it is still assigned to
+        self.stay_in_main_session = False
         self.is_joining_or_leaving_breakout_room = False
 
         # Waiting room controller
@@ -576,8 +580,40 @@ class ZoomBotAdapter(BotAdapter):
 
     def on_has_attendee_rights_notification(self, attendee):
         logger.info(f"on_has_attendee_rights_notification called. attendee = {attendee}")
+        self.breakout_room_attendee = attendee
+        # Zoom sends this again when the bot returns to the main session while it is still assigned to a room
+        if self.stay_in_main_session:
+            logger.info("Not joining the breakout room because the host sent the bot back to the main session")
+            return
         join_bo_result = attendee.JoinBo()
         logger.info(f"join_bo_result = {join_bo_result}")
+
+    def on_lost_attendee_rights_notification(self):
+        logger.info("on_lost_attendee_rights_notification called")
+        self.breakout_room_attendee = None
+
+    def on_bo_switch_request_received(self, new_bo_name, new_bo_id):
+        # Zoom sends this when the host moves the bot to another breakout room while it is assigned to one but has not joined it
+        logger.info(f"on_bo_switch_request_received called. new_bo_name = {new_bo_name}")
+        if self.breakout_room_attendee is None:
+            logger.info("Cannot join the new breakout room because the bot has no breakout room attendee rights")
+            return
+        self.stay_in_main_session = False
+        join_bo_result = self.breakout_room_attendee.JoinBo()
+        logger.info(f"join_bo_result = {join_bo_result}")
+
+    def on_host_invite_return_to_main_session(self, host_name, handler):
+        logger.info(f"on_host_invite_return_to_main_session called. host_name = {host_name}")
+        return_to_main_session_result = handler.ReturnToMainSession()
+        logger.info(f"return_to_main_session_result = {return_to_main_session_result}")
+        if return_to_main_session_result:
+            self.stay_in_main_session = True
+
+    def on_bo_status_changed(self, status):
+        logger.info(f"on_bo_status_changed called. status = {status}")
+        # Breakout rooms that are stopped and started again come with new assignments, which the bot follows
+        if status != zoom.BO_STATUS.BO_STATUS_STARTED:
+            self.stay_in_main_session = False
 
     def admit_from_waiting_room(self):
         logger.info("admit_from_waiting_room called")
@@ -658,7 +694,13 @@ class ZoomBotAdapter(BotAdapter):
 
         # Breakout room controller
         self.breakout_room_ctrl = self.meeting_service.GetMeetingBOController()
-        self.breakout_room_ctrl_event = zoom.MeetingBOEventCallbacks(onHasAttendeeRightsNotificationCallback=self.on_has_attendee_rights_notification)
+        self.breakout_room_ctrl_event = zoom.MeetingBOEventCallbacks(
+            onHasAttendeeRightsNotificationCallback=self.on_has_attendee_rights_notification,
+            onLostAttendeeRightsNotificationCallback=self.on_lost_attendee_rights_notification,
+            onBOSwitchRequestReceivedCallback=self.on_bo_switch_request_received,
+            onHostInviteReturnToMainSessionCallback=self.on_host_invite_return_to_main_session,
+            onBOStatusChangedCallback=self.on_bo_status_changed,
+        )
         self.breakout_room_ctrl.SetEvent(self.breakout_room_ctrl_event)
 
         # Waiting room controller
@@ -936,6 +978,11 @@ class ZoomBotAdapter(BotAdapter):
         if not self.recording_permission_granted:
             self.send_message_callback({"message": self.Messages.BOT_RECORDING_PERMISSION_GRANTED})
             self.recording_permission_granted = True
+            return
+
+        # The permission carries over into a breakout room session, but raw recording has to be started again there.
+        if not self.raw_recording_active and not self.recording_is_paused:
+            self.start_raw_recording()
 
     def stop_raw_recording(self):
         logger.info("Stopping raw recording")
@@ -971,8 +1018,10 @@ class ZoomBotAdapter(BotAdapter):
                 onMixedAudioRawDataReceivedCallback=self.add_mixed_audio_chunk_convert_to_bytes if self.use_mixed_audio else None,
             )
 
+        if not self.audio_source_subscribed:
             audio_helper_subscribe_result = self.audio_helper.subscribe(self.audio_source, False)
             logger.info(f"audio_helper_subscribe_result = {audio_helper_subscribe_result}")
+            self.audio_source_subscribed = True
 
         GLib.timeout_add(100, self.set_up_video_input_manager)
 
@@ -1116,12 +1165,17 @@ class ZoomBotAdapter(BotAdapter):
         self.clear_stuck_in_connecting_state_timeout()
         self.meeting_status = status
 
-        if status == zoom.MEETING_STATUS_JOIN_BREAKOUT_ROOM:
+        if status == zoom.MEETING_STATUS_JOIN_BREAKOUT_ROOM or status == zoom.MEETING_STATUS_LEAVE_BREAKOUT_ROOM:
             self.is_joining_or_leaving_breakout_room = True
+            # Raw recording and the audio subscription belong to the session the bot is leaving.
+            # handle_recording_permission_granted starts them again when the new session reports the permission.
+            self.raw_recording_active = False
+            self.audio_source_subscribed = False
+
+        if status == zoom.MEETING_STATUS_JOIN_BREAKOUT_ROOM:
             self.send_message_callback({"message": self.Messages.JOINING_BREAKOUT_ROOM})
 
         if status == zoom.MEETING_STATUS_LEAVE_BREAKOUT_ROOM:
-            self.is_joining_or_leaving_breakout_room = True
             self.send_message_callback({"message": self.Messages.LEAVING_BREAKOUT_ROOM})
 
         if status == zoom.MEETING_STATUS_CONNECTING:
