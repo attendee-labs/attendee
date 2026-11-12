@@ -33,7 +33,19 @@ else:
 # For this case set CELERY_BROKER_TRANSPORT_OPTIONS='{"global_keyprefix":"{celeryattendee}:","fanout_prefix":true,"fanout_patterns":true}'
 
 if os.getenv("CELERY_BROKER_TRANSPORT_OPTIONS"):
-    app.conf.update(broker_transport_options=json.loads(os.getenv("CELERY_BROKER_TRANSPORT_OPTIONS")))
+    broker_transport_options = json.loads(os.getenv("CELERY_BROKER_TRANSPORT_OPTIONS"))
+else:
+    # Without socket timeouts a worker can block forever on a half-open Redis connection (e.g. after the server
+    # drops it) and never reconnect, while the pod still looks healthy.
+    # These defaults are used only when CELERY_BROKER_TRANSPORT_OPTIONS is not set.
+    broker_transport_options = {
+        "socket_timeout": float(os.getenv("CELERY_BROKER_SOCKET_TIMEOUT", 60)),
+        "socket_connect_timeout": float(os.getenv("CELERY_BROKER_SOCKET_CONNECT_TIMEOUT", 10)),
+        "socket_keepalive": os.getenv("CELERY_BROKER_SOCKET_KEEPALIVE", "true") == "true",
+        "retry_on_timeout": os.getenv("CELERY_BROKER_RETRY_ON_TIMEOUT", "true") == "true",
+        "health_check_interval": int(os.getenv("CELERY_BROKER_HEALTH_CHECK_INTERVAL", 25)),
+    }
+app.conf.update(broker_transport_options=broker_transport_options)
 
 # Load configuration from Django settings
 app.config_from_object("django.conf:settings", namespace="CELERY")
