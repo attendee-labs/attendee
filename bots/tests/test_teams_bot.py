@@ -460,6 +460,86 @@ class TestTeamsBot(TransactionTestCase):
                 "No FATAL_ERROR event should be created when the pod is restarted",
             )
 
+    @override_settings(PREJOIN_LEAVE_OR_MEETING_END_IS_FATAL_ERROR=True)
+    @patch("bots.tasks.restart_bot_pod_task.BotPodCreator")
+    @patch("bots.tasks.restart_bot_pod_task.find_bot_pod_name", return_value="bot-pod")
+    @patch("bots.tasks.restart_bot_pod_task.client.CoreV1Api")
+    @patch("bots.tasks.restart_bot_pod_task.config.load_incluster_config")
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
+    def test_restart_bot_pod_when_leave_requested_while_pod_was_down(
+        self,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+        mock_load_incluster_config,
+        MockCoreV1Api,
+        mock_find_bot_pod_name,
+        MockBotPodCreator,
+    ):
+        """Test that a leave requested while a joining bot's pod was down still ends the bot.
+
+        Flow:
+        1. The bot is JOINING and its pod has gone away, so restart_bot_pod has been scheduled.
+        2. Before the task runs, the user asks the bot to leave, moving it to LEAVING. No pod receives the sync command.
+        3. restart_bot_pod still recreates the pod.
+        4. The restarted bot controller starts in LEAVING, leaves without having joined, and ends the bot
+           with a COULD_NOT_JOIN / leave requested before bot joined event.
+        """
+        from kubernetes import client as k8s_client
+
+        from bots.tasks.restart_bot_pod_task import restart_bot_pod
+
+        MockCoreV1Api.return_value.read_namespaced_pod.side_effect = k8s_client.ApiException(status=404)
+        MockBotPodCreator.return_value.create_bot_pod.return_value = {"created": True}
+
+        BotEventManager.create_event(self.bot, BotEventTypes.LEAVE_REQUESTED, event_sub_type=BotEventSubTypes.LEAVE_REQUESTED_USER_REQUESTED)
+        self.bot.refresh_from_db()
+        self.assertEqual(self.bot.state, BotStates.LEAVING)
+
+        restart_bot_pod(self.bot.id)
+
+        MockBotPodCreator.return_value.create_bot_pod.assert_called_once()
+
+        MockFileUploader.return_value = create_mock_file_uploader()
+        MockChromeDriver.return_value = create_mock_teams_driver()
+        MockDisplay.return_value = MagicMock()
+
+        controller = BotController(self.bot.id)
+        bot_thread = threading.Thread(target=controller.run)
+        bot_thread.daemon = True
+        bot_thread.start()
+        bot_thread.join(timeout=15)
+        self.assertFalse(bot_thread.is_alive(), "Restarted bot controller should finish after leaving")
+
+        connection.close()
+
+        self.bot.refresh_from_db()
+        self.assertEqual(self.bot.state, BotStates.FATAL_ERROR)
+        could_not_join_event = self.bot.bot_events.order_by("created_at").last()
+        self.assertEqual(could_not_join_event.event_type, BotEventTypes.COULD_NOT_JOIN)
+        self.assertEqual(could_not_join_event.event_sub_type, BotEventSubTypes.COULD_NOT_JOIN_MEETING_LEAVE_REQUESTED_BEFORE_BOT_JOINED)
+        self.assertEqual(could_not_join_event.metadata["state_when_leave_requested"], BotStates.state_to_api_code(BotStates.JOINING))
+
+        leave_requested_event = self.bot.bot_events.get(event_type=BotEventTypes.LEAVE_REQUESTED)
+        self.assertEqual(len(leave_requested_event.metadata["pod_recreations"]), 1)
+
+    @patch("bots.tasks.restart_bot_pod_task.BotPodCreator")
+    @patch("bots.tasks.restart_bot_pod_task.client.CoreV1Api")
+    def test_restart_bot_pod_skipped_when_leave_requested_after_bot_joined(self, MockCoreV1Api, MockBotPodCreator):
+        """Test that restart_bot_pod does not recreate the pod of a bot that joined the meeting and was then asked to leave,
+        since that bot's own pod is handling the leave."""
+        from bots.tasks.restart_bot_pod_task import restart_bot_pod
+
+        BotEventManager.create_event(self.bot, BotEventTypes.BOT_JOINED_MEETING)
+        BotEventManager.create_event(self.bot, BotEventTypes.LEAVE_REQUESTED, event_sub_type=BotEventSubTypes.LEAVE_REQUESTED_USER_REQUESTED)
+
+        restart_bot_pod(self.bot.id)
+
+        MockCoreV1Api.assert_not_called()
+        MockBotPodCreator.return_value.create_bot_pod.assert_not_called()
+
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
     @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
     @patch("bots.bot_controller.bot_controller.S3FileUploader")
