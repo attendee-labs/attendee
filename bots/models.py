@@ -882,6 +882,12 @@ class TranscriptionSettings:
     def elevenlabs_diarization_threshold(self):
         return self._settings.get("elevenlabs", {}).get("diarization_threshold", None)
 
+    def elevenlabs_webhook(self):
+        return self._settings.get("elevenlabs", {}).get("webhook", False)
+
+    def elevenlabs_webhook_id(self):
+        return self._settings.get("elevenlabs", {}).get("webhook_id", None)
+
     def elevenlabs_base_url(self):
         if os.getenv("ELEVENLABS_BASE_URL"):
             return os.getenv("ELEVENLABS_BASE_URL")
@@ -2790,7 +2796,7 @@ class AsyncTranscription(models.Model):
 
     @property
     def use_grouped_utterances(self):
-        return self.transcription_provider in [TranscriptionProviders.ASSEMBLY_AI, TranscriptionProviders.DEEPGRAM]
+        return self.transcription_provider in [TranscriptionProviders.ASSEMBLY_AI, TranscriptionProviders.DEEPGRAM, TranscriptionProviders.ELEVENLABS]
 
 
 class AsyncTranscriptionManager:
@@ -2925,6 +2931,9 @@ class Utterance(models.Model):
     # To keep track of how many retries we've done for this utterance
     transcription_attempt_count = models.IntegerField(default=0)
     failure_data = models.JSONField(null=True, default=None)
+    # The provider's ID for a transcription that was submitted but not yet retrieved, so a retry can resume it
+    # instead of submitting the audio again. Only set on the first utterance of an async transcription group.
+    provider_transcription_id = models.CharField(max_length=255, null=True, blank=True, default=None)
     source_uuid = models.CharField(max_length=255, null=True, unique=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
