@@ -441,17 +441,32 @@ class GoogleMeetUIMethods:
 
         return rect_left, rect_top, rect_right, rect_bottom, screen_x, screen_y, dpr
 
+    def _is_element_at_monitor_point(self, element, monitor_x, monitor_y, screen_x, screen_y, dpr):
+        return self.driver.execute_script(
+            """
+            var el = document.elementFromPoint(arguments[0], arguments[1]);
+            var expected = arguments[2];
+            return !!el && (el === expected || expected.contains(el));
+            """,
+            monitor_x / dpr - screen_x,
+            monitor_y / dpr - screen_y,
+            element,
+        )
+
+    def _get_pointer_position(self):
+        ptr = self.x11_input.root.query_pointer()._data
+        return int(ptr["root_x"]), int(ptr["root_y"])
+
     def humanized_navigate_to_and_click_element(self, element):
         self.ensure_x11_input()
         self.ensure_mocap_manager()
 
-        ptr = self.x11_input.root.query_pointer()._data
-        current_x = int(ptr["root_x"])
-        current_y = int(ptr["root_y"])
-
         seq = None
         num_seq_attempts = 10
         for attempt in range(num_seq_attempts):
+            # The mouse may have moved in a previous attempt, so re-read its position each time
+            current_x, current_y = self._get_pointer_position()
+
             # The element can move between attempts (e.g. while the page is still transitioning), so re-measure it each time
             rect_left, rect_top, rect_right, rect_bottom, screen_x, screen_y, dpr = self._measure_clickable_rect(element)
             logger.info(f"humanized interaction: mouse at ({current_x},{current_y}), clickable rect [({rect_left},{rect_top})-({rect_right},{rect_bottom})]")
@@ -470,41 +485,36 @@ class GoogleMeetUIMethods:
 
             endpoint_monitor_x = current_x + seq.total_dx
             endpoint_monitor_y = current_y + seq.total_dy
-            endpoint_page_x = endpoint_monitor_x / dpr - screen_x
-            endpoint_page_y = endpoint_monitor_y / dpr - screen_y
 
-            is_element_at_endpoint = self.driver.execute_script(
-                """
-                var el = document.elementFromPoint(arguments[0], arguments[1]);
-                var expected = arguments[2];
-                return !!el && (el === expected || expected.contains(el));
-                """,
-                endpoint_page_x,
-                endpoint_page_y,
-                element,
-            )
+            if not self._is_element_at_monitor_point(element, endpoint_monitor_x, endpoint_monitor_y, screen_x, screen_y, dpr):
+                logger.info(f"humanized interaction: predicted endpoint ({endpoint_monitor_x},{endpoint_monitor_y}) not on target element, retrying (attempt {attempt + 1}/{num_seq_attempts})")
+                continue
 
-            if is_element_at_endpoint:
+            logger.info(f"humanized interaction: selected sequence with {len(seq.movements)} movements, total_dx={seq.total_dx}, total_dy={seq.total_dy}")
+
+            for move in seq.movements:
+                dt = move.get("dt", 0)
+                if dt > 0:
+                    time.sleep(dt)
+                dx = move.get("dx", 0)
+                dy = move.get("dy", 0)
+                if dx or dy:
+                    self.x11_input.move_rel(dx, dy)
+
+            if seq.click_down_dt > 0:
+                time.sleep(seq.click_down_dt)
+
+            # The page can change while the mouse is moving (layout shift, overlay appearing), and the mouse may not
+            # end up exactly where predicted. So right before clicking, confirm the element is under the actual mouse position.
+            actual_x, actual_y = self._get_pointer_position()
+            if self._is_element_at_monitor_point(element, actual_x, actual_y, screen_x, screen_y, dpr):
                 break
 
-            logger.info(f"humanized interaction: endpoint page coords ({endpoint_page_x:.1f}, {endpoint_page_y:.1f}) not on target element, retrying (attempt {attempt + 1}/{num_seq_attempts})")
+            logger.info(f"humanized interaction: after moving, mouse at ({actual_x},{actual_y}) is not on target element, retrying (attempt {attempt + 1}/{num_seq_attempts})")
         else:
             self.send_screenshot_and_mhtml_file_message()
-            raise RuntimeError(f"Could not find mocap sequence landing on target element after {num_seq_attempts} attempts")
+            raise RuntimeError(f"Could not land mouse on target element after {num_seq_attempts} attempts")
 
-        logger.info(f"humanized interaction: selected sequence with {len(seq.movements)} movements, total_dx={seq.total_dx}, total_dy={seq.total_dy}")
-
-        for move in seq.movements:
-            dt = move.get("dt", 0)
-            if dt > 0:
-                time.sleep(dt)
-            dx = move.get("dx", 0)
-            dy = move.get("dy", 0)
-            if dx or dy:
-                self.x11_input.move_rel(dx, dy)
-
-        if seq.click_down_dt > 0:
-            time.sleep(seq.click_down_dt)
         self.x11_input.button_press("left")
 
         if seq.click_up_dt > 0:
