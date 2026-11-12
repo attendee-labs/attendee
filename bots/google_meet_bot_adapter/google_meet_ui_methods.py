@@ -301,7 +301,7 @@ class GoogleMeetUIMethods:
         return False
 
     def retrieve_name_input_element(self):
-        return WebDriverWait(self.driver, 1).until(EC.element_to_be_clickable((By.CSS_SELECTOR, 'input[type="text"][aria-label="Your name"]')))
+        return WebDriverWait(self.driver, 1).until(EC.element_to_be_clickable((By.CSS_SELECTOR, 'input[type="text"][aria-label="Your name"], input[type="text"][aria-label="Enter your name"]')))
 
     UNSHIFTED_PUNCTUATION = {
         "-": "minus",
@@ -397,10 +397,7 @@ class GoogleMeetUIMethods:
         if not hasattr(self, "mocap_manager"):
             self.mocap_manager = MocapManager(video_frame_size=self.video_frame_size)
 
-    def humanized_navigate_to_and_click_element(self, element, fallback_to_forceful_click_for_zero_size_element=False):
-        self.ensure_x11_input()
-        self.ensure_mocap_manager()
-
+    def _measure_clickable_rect(self, element):
         metrics = self.driver.execute_script(
             """
             const el = arguments[0];
@@ -449,15 +446,23 @@ class GoogleMeetUIMethods:
         rect_right = int(round((screen_x + clickable_css_right) * dpr))
         rect_bottom = int(round((screen_y + clickable_css_bottom) * dpr))
 
+        return rect_left, rect_top, rect_right, rect_bottom, screen_x, screen_y, dpr
+
+    def humanized_navigate_to_and_click_element(self, element, fallback_to_forceful_click_for_zero_size_element=False):
+        self.ensure_x11_input()
+        self.ensure_mocap_manager()
+
         ptr = self.x11_input.root.query_pointer()._data
         current_x = int(ptr["root_x"])
         current_y = int(ptr["root_y"])
 
-        logger.info(f"humanized interaction: mouse at ({current_x},{current_y}), clickable rect [({rect_left},{rect_top})-({rect_right},{rect_bottom})]")
-
         seq = None
         num_seq_attempts = 10
         for attempt in range(num_seq_attempts):
+            # The element can move between attempts (e.g. while the page is still transitioning), so re-measure it each time
+            rect_left, rect_top, rect_right, rect_bottom, screen_x, screen_y, dpr = self._measure_clickable_rect(element)
+            logger.info(f"humanized interaction: mouse at ({current_x},{current_y}), clickable rect [({rect_left},{rect_top})-({rect_right},{rect_bottom})]")
+
             seq = self.mocap_manager.find_random_sequence_landing_in_rect(current_x, current_y, rect_left, rect_top, rect_right, rect_bottom)
 
             # If we have hit dead ends 2 times in the past, we will stretch the mocap path to fit the desired endpoint
@@ -491,6 +496,7 @@ class GoogleMeetUIMethods:
 
             logger.info(f"humanized interaction: endpoint page coords ({endpoint_page_x:.1f}, {endpoint_page_y:.1f}) not on target element, retrying (attempt {attempt + 1}/{num_seq_attempts})")
         else:
+            self.send_screenshot_and_mhtml_file_message()
             raise RuntimeError(f"Could not find mocap sequence landing on target element after {num_seq_attempts} attempts")
 
         logger.info(f"humanized interaction: selected sequence with {len(seq.movements)} movements, total_dx={seq.total_dx}, total_dy={seq.total_dy}")
