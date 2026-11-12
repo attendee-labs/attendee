@@ -660,24 +660,7 @@ class WebBotAdapter(BotAdapter):
         )
 
     def send_debug_screenshot_message(self, step, exception, inner_exception):
-        current_time = datetime.datetime.now()
-        timestamp = current_time.strftime("%Y%m%d_%H%M%S")
-        screenshot_path = f"/tmp/ui_element_not_found_{timestamp}.png"
-        try:
-            self.driver.save_screenshot(screenshot_path)
-        except Exception as e:
-            logger.warning(f"Error saving screenshot: {e}")
-            screenshot_path = None
-
-        mhtml_file_path = f"/tmp/page_snapshot_{timestamp}.mhtml"
-        try:
-            result = self.driver.execute_cdp_cmd("Page.captureSnapshot", {})
-            mhtml_bytes = result["data"]  # Extract the data from the response dictionary
-            with open(mhtml_file_path, "w", encoding="utf-8") as f:
-                f.write(mhtml_bytes)
-        except Exception as e:
-            logger.warning(f"Error saving mhtml: {e}")
-            mhtml_file_path = None
+        screenshot_path, mhtml_file_path, current_time = self.capture_screenshot_and_mhtml_file()
 
         self.send_message_callback(
             {
