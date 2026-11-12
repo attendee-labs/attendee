@@ -34,7 +34,7 @@ from bots.utils import half_ceil, mask_url_query_param_values, scale_i420
 from .debug_screen_recorder import DebugScreenRecorder
 from .livekit_websocket_bridge import LiveKitWebsocketBridge
 from .navigation_config import get_platform_domain_allowlist, get_platform_selector
-from .ui_methods import UiAuthorizedUserNotInMeetingTimeoutExceededException, UiBlockedByCaptchaException, UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiIncorrectPasswordException, UiInfinitelyRetryableException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableException, UiRetryableExpectedException
+from .ui_methods import UiAuthorizedUserNotInMeetingTimeoutExceededException, UiBlockedByCaptchaException, UiCouldNotCompleteJoinAfterAdmissionException, UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiIncorrectPasswordException, UiInfinitelyRetryableException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableException, UiRetryableExpectedException
 
 logger = logging.getLogger(__name__)
 
@@ -1060,6 +1060,10 @@ class WebBotAdapter(BotAdapter):
 
             except UiCouldNotJoinMeetingWaitingForHostException:
                 self.send_message_callback({"message": self.Messages.LEAVE_MEETING_WAITING_FOR_HOST})
+                return
+
+            except UiCouldNotCompleteJoinAfterAdmissionException as e:
+                self.send_debug_screenshot_message(step=e.step, exception=e, inner_exception=e.inner_exception)
                 return
 
             except UiMeetingNotFoundException:

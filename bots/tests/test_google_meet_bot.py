@@ -3,6 +3,7 @@ import json
 import os
 import threading
 import time
+import unittest
 from base64 import b64decode, b64encode
 from contextlib import contextmanager
 from unittest.mock import MagicMock, call, patch
@@ -15,6 +16,7 @@ from django.test.testcases import TransactionTestCase
 from selenium.common.exceptions import TimeoutException
 from websockets.sync.client import connect as ws_connect
 
+from bots.automatic_leave_configuration import AutomaticLeaveConfiguration
 from bots.bot_controller import BotController
 from bots.google_meet_bot_adapter.google_meet_ui_methods import GoogleMeetUIMethods
 from bots.models import (
@@ -44,7 +46,7 @@ from bots.models import (
 )
 from bots.tasks.process_async_transcription_task import process_async_transcription
 from bots.tests.mock_data import create_mock_file_uploader, create_mock_google_meet_driver
-from bots.web_bot_adapter.ui_methods import UiCouldNotJoinMeetingWaitingRoomTimeoutException
+from bots.web_bot_adapter.ui_methods import UiCouldNotCompleteJoinAfterAdmissionException, UiCouldNotJoinMeetingWaitingRoomTimeoutException
 
 
 @contextmanager
@@ -75,6 +77,50 @@ def assert_only_threads_created_connections(testcase, events, allowed_thread_ide
         [],
         f"DB connections created from disallowed threads: {offenders}",
     )
+
+
+@tag("google_meet_tests")
+class TestGoogleMeetCheckIfWaitingRoomTimeoutExceeded(unittest.TestCase):
+    def build_ui_methods(self, participants_info):
+        ui_methods = GoogleMeetUIMethods()
+        ui_methods.automatic_leave_configuration = AutomaticLeaveConfiguration(waiting_room_timeout_seconds=900)
+        ui_methods.participants_info = participants_info
+        ui_methods.abort_join_attempt = MagicMock()
+        return ui_methods
+
+    def other_participants_info(self):
+        return {
+            "bot": {"deviceId": "bot", "fullName": "Test Bot", "active": True, "isCurrentUser": True},
+            "user1": {"deviceId": "user1", "fullName": "Test User", "active": True, "isCurrentUser": False},
+        }
+
+    @patch("time.time", return_value=1901.0)
+    def test_does_not_abort_when_timeout_exceeded_with_other_participants(self, mock_time):
+        ui_methods = self.build_ui_methods(self.other_participants_info())
+
+        ui_methods.check_if_waiting_room_timeout_exceeded(1000.0, "click_captions_button")
+
+        ui_methods.abort_join_attempt.assert_not_called()
+
+    @patch("time.time", return_value=2081.0)
+    def test_raises_when_timeout_exceeded_by_more_than_three_minutes_with_other_participants(self, mock_time):
+        ui_methods = self.build_ui_methods(self.other_participants_info())
+
+        with self.assertRaises(UiCouldNotCompleteJoinAfterAdmissionException) as context:
+            ui_methods.check_if_waiting_room_timeout_exceeded(1000.0, "click_captions_button")
+
+        self.assertEqual(context.exception.step, "click_captions_button")
+        ui_methods.abort_join_attempt.assert_not_called()
+
+    @patch("time.time", return_value=1901.0)
+    def test_raises_waiting_room_timeout_when_timeout_exceeded_without_other_participants(self, mock_time):
+        ui_methods = self.build_ui_methods({"bot": {"deviceId": "bot", "fullName": "Test Bot", "active": True, "isCurrentUser": True}})
+
+        with self.assertRaises(UiCouldNotJoinMeetingWaitingRoomTimeoutException) as context:
+            ui_methods.check_if_waiting_room_timeout_exceeded(1000.0, "click_captions_button")
+
+        self.assertEqual(context.exception.step, "click_captions_button")
+        ui_methods.abort_join_attempt.assert_called_once()
 
 
 @tag("google_meet_tests")
@@ -609,6 +655,101 @@ class TestGoogleMeetBot(TransactionTestCase):
 
             # Close the database connection since we're in a thread
             connection.close()
+
+    @patch("bots.models.Bot.create_debug_recording", return_value=False)
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
+    @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.look_for_blocked_element", return_value=None)
+    @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.look_for_denied_your_request_element", return_value=None)
+    @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.click_this_meeting_is_being_recorded_join_now_button", return_value=None)
+    @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.click_others_may_see_your_meeting_differently_button", return_value=None)
+    @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.check_if_meeting_is_found", return_value=None)
+    @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.fill_out_name_input", return_value=None)
+    @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.turn_off_media_inputs", return_value=None)
+    @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.locate_element")
+    @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.click_element")
+    @patch("time.time")
+    def test_bot_stops_without_retrying_when_captions_button_not_found_after_admission(
+        self,
+        mock_time,
+        mock_click_element,
+        mock_locate_element,
+        mock_turn_off_media_inputs,
+        mock_fill_out_name_input,
+        mock_check_if_meeting_is_found,
+        mock_click_others_may_see_your_meeting_differently_button,
+        mock_click_this_meeting_is_being_recorded_join_now_button,
+        mock_look_for_denied_your_request_element,
+        mock_look_for_blocked_element,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+        mock_create_debug_recording,
+    ):
+        # Set initial time
+        current_time = 1000.0
+        mock_time.return_value = current_time
+
+        # Configure the mock uploader
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        # Mock the Chrome driver
+        mock_driver = create_mock_google_meet_driver()
+        MockChromeDriver.return_value = mock_driver
+
+        # Mock virtual display
+        mock_display = MagicMock()
+        MockDisplay.return_value = mock_display
+
+        mock_locate_element.return_value = MagicMock()
+
+        # The bot was let in, but the captions button never shows up
+        def mock_click_element_side_effect(element, step):
+            if step == "click_captions_button":
+                nonlocal current_time
+                controller.adapter.participants_info["bot"] = {"deviceId": "bot", "fullName": "Test Bot", "active": True, "isCurrentUser": True}
+                controller.adapter.participants_info["user1"] = {"deviceId": "user1", "fullName": "Test User", "active": True, "isCurrentUser": False}
+                # Just over the 900 second default timeout plus three minutes
+                current_time += 1081
+                mock_time.return_value = current_time
+                raise TimeoutException("Timed out")
+            return MagicMock()
+
+        mock_click_element.side_effect = mock_click_element_side_effect
+
+        # Create bot controller
+        controller = BotController(self.bot.id)
+
+        # Run the bot in a separate thread since it has an event loop
+        bot_thread = threading.Thread(target=controller.run)
+        bot_thread.daemon = True
+        bot_thread.start()
+
+        # Give the bot some time to process
+        bot_thread.join(timeout=10)
+
+        # Refresh the bot from the database
+        self.bot.refresh_from_db()
+
+        self.assertEqual(self.bot.state, BotStates.FATAL_ERROR)
+
+        fatal_error_events = [e for e in self.bot.bot_events.all() if e.event_type == BotEventTypes.FATAL_ERROR]
+        self.assertEqual(len(fatal_error_events), 1)
+        self.assertEqual(fatal_error_events[0].event_sub_type, BotEventSubTypes.FATAL_ERROR_UI_ELEMENT_NOT_FOUND)
+        self.assertEqual(fatal_error_events[0].metadata["step"], "click_captions_button")
+        self.assertEqual(fatal_error_events[0].metadata["exception_type"], "UiCouldNotCompleteJoinAfterAdmissionException")
+
+        # The join was not retried
+        MockChromeDriver.assert_called_once()
+
+        # Cleanup
+        controller.cleanup()
+        bot_thread.join(timeout=5)
+
+        # Close the database connection since we're in a thread
+        connection.close()
 
     @patch("bots.models.Bot.create_debug_recording", return_value=False)
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")

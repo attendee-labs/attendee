@@ -23,6 +23,12 @@ class UiCouldNotJoinMeetingWaitingRoomTimeoutException(UiException):
         super().__init__(message, step, inner_exception)
 
 
+# When this exception is raised, the bot will stop running without retrying and log that a UI element could not be found, because it was let into the meeting but could not finish joining
+class UiCouldNotCompleteJoinAfterAdmissionException(UiException):
+    def __init__(self, message, step=None, inner_exception=None):
+        super().__init__(message, step, inner_exception)
+
+
 # When this exception is raised, the bot will stop running and log that the meeting was not found
 class UiMeetingNotFoundException(UiException):
     def __init__(self, message, step=None, inner_exception=None):
