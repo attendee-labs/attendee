@@ -123,7 +123,7 @@ class GoogleMeetUIMethods:
 
     def find_blocked_element(self):
         return self.find_element_by_selector(By.XPATH, '//*[contains(text(), "You can\'t join this video call") or contains(text(), "There is a problem connecting to this video call")]')
-    
+
     # Some meetings show a "Continue as guest" / "Sign in with Google" screen before the name input
     def look_for_continue_as_guest_button(self, step):
         continue_as_guest_button = self.find_element_by_selector(By.XPATH, '//button[contains(., "Continue as guest")] | //div[@role="button"][contains(., "Continue as guest")]')
@@ -568,14 +568,23 @@ class GoogleMeetUIMethods:
             logger.info("Captions and translation button is already pressed, captions are already enabled")
             return
         logger.info("Found 'Captions and translation' variant of captions button. Pressing 'c' to enable captions...")
-        ActionChains(self.driver).send_keys("c").perform()
-        logger.info("Waiting for captions to be enabled...")
-        try:
-            WebDriverWait(self.driver, 30).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'button[aria-label="Captions and translation"][aria-pressed="true"]')))
-        except TimeoutException as e:
-            logger.warning("Captions were not enabled within 30 seconds after pressing 'c'. Raising UiCouldNotLocateElementException")
-            raise UiCouldNotLocateElementException("Captions were not enabled within 30 seconds after pressing 'c'.", "enable_captions_via_keyboard_shortcut", e)
-        logger.info("Confirmed captions were enabled")
+        self.ensure_x11_input()
+        num_attempts = 2
+        wait_seconds_per_attempt = 15
+        for attempt_index in range(num_attempts):
+            logger.info(f"Pressing 'c' to enable captions (attempt {attempt_index + 1} of {num_attempts})...")
+            self.x11_input.key_press("c")
+            self.x11_input.key_release("c")
+            logger.info("Waiting for captions to be enabled...")
+            try:
+                WebDriverWait(self.driver, wait_seconds_per_attempt).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'button[aria-label="Captions and translation"][aria-pressed="true"]')))
+                logger.info("Confirmed captions were enabled")
+                return
+            except TimeoutException as e:
+                if attempt_index == num_attempts - 1:
+                    logger.warning(f"Captions were not enabled within {wait_seconds_per_attempt} seconds after pressing 'c' {num_attempts} times. Raising UiCouldNotLocateElementException")
+                    raise UiCouldNotLocateElementException(f"Captions were not enabled after pressing 'c' {num_attempts} times.", "enable_captions_via_keyboard_shortcut", e)
+                logger.warning(f"Captions were not enabled within {wait_seconds_per_attempt} seconds after pressing 'c'. Trying again...")
 
     def click_captions_button(self):
         num_attempts_to_look_for_captions_button = self.automatic_leave_configuration.waiting_room_timeout_seconds * 2
