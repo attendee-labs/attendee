@@ -800,11 +800,12 @@ class GladiaProviderTest(TransactionTestCase):
         with (
             self._patch_creds(),
             mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3"),
-            mock.patch("bots.tasks.process_utterance_task.requests.request") as m_request,
-            mock.patch("bots.tasks.process_utterance_task.requests.get") as m_get,
+            mock.patch("bots.transcription_utils.requests.post") as m_post,
+            mock.patch("bots.transcription_utils.requests.get") as m_get,
+            mock.patch("bots.transcription_utils.requests.delete") as m_delete,
         ):
-            # ---- requests.request calls: upload, transcribe, delete -----------------------
-            def _request_side_effect(method, url, **_):
+            # ---- requests.post calls: upload, transcribe ----------------------------------
+            def _post_side_effect(url, **_):
                 if url.endswith("/upload"):
                     resp = mock.Mock(status_code=201)
                     resp.json.return_value = {"audio_url": "https://api.gladia.io/audio/123"}
@@ -815,12 +816,10 @@ class GladiaProviderTest(TransactionTestCase):
                     resp.json.return_value = {"result_url": "https://api.gladia.io/result/abc"}
                     return resp
 
-                if url.startswith("https://api.gladia.io/result/abc") and method == "DELETE":
-                    return mock.Mock(status_code=202)
+                raise AssertionError(f"unexpected POST {url}")
 
-                raise AssertionError(f"unexpected {method} {url}")
-
-            m_request.side_effect = _request_side_effect
+            m_post.side_effect = _post_side_effect
+            m_delete.return_value = mock.Mock(status_code=202)
 
             # ---- requests.get (polling) returns "done" once --------------------------------
             done_resp = mock.Mock(status_code=200)
@@ -829,7 +828,8 @@ class GladiaProviderTest(TransactionTestCase):
                 "result": {
                     "transcription": {
                         "full_transcript": "hello world",
-                        "utterances": [{"speaker": 0, "words": [{"word": "hello"}, {"word": "world"}]}],
+                        "languages": ["en"],
+                        "utterances": [{"speaker": 0, "words": [{"word": "hello", "start": 0.0, "end": 0.2}, {"word": " world", "start": 0.3, "end": 0.5}]}],
                     }
                 },
             }
@@ -840,11 +840,13 @@ class GladiaProviderTest(TransactionTestCase):
             # Assertions --------------------------------------------------------------------
             self.assertIsNone(failure)
             self.assertEqual(transcript["transcript"], "hello world")
-            self.assertEqual([w["word"] for w in transcript["words"]], ["hello", "world"])
+            self.assertEqual([w["word"] for w in transcript["words"]], ["hello", " world"])
+            self.assertEqual(transcript["language"], "en")
 
-            # upload + transcribe + delete = 3 calls
-            self.assertEqual(m_request.call_count, 3)
+            # upload + transcribe = 2 POSTs, then one DELETE
+            self.assertEqual(m_post.call_count, 2)
             m_get.assert_called_once_with("https://api.gladia.io/result/abc", headers=mock.ANY)
+            m_delete.assert_called_once_with("https://api.gladia.io/result/abc", headers=mock.ANY)
 
     def _run_gladia(self, gladia_settings, transcription_result=None):
         """Run the Gladia adapter with the given settings and return (transcribe request body, transcript, failure)."""
@@ -862,11 +864,12 @@ class GladiaProviderTest(TransactionTestCase):
         with (
             self._patch_creds(),
             mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3"),
-            mock.patch("bots.tasks.process_utterance_task.requests.request") as m_request,
-            mock.patch("bots.tasks.process_utterance_task.requests.get") as m_get,
+            mock.patch("bots.transcription_utils.requests.post") as m_post,
+            mock.patch("bots.transcription_utils.requests.get") as m_get,
+            mock.patch("bots.transcription_utils.requests.delete", return_value=mock.Mock(status_code=202)),
         ):
 
-            def _request_side_effect(method, url, **_):
+            def _post_side_effect(url, **_):
                 if url.endswith("/upload"):
                     resp = mock.Mock(status_code=200)
                     resp.json.return_value = {"audio_url": "https://api.gladia.io/file/123"}
@@ -875,16 +878,14 @@ class GladiaProviderTest(TransactionTestCase):
                     resp = mock.Mock(status_code=201)
                     resp.json.return_value = {"id": "abc", "result_url": "https://api.gladia.io/v2/pre-recorded/abc"}
                     return resp
-                if method == "DELETE":
-                    return mock.Mock(status_code=202)
-                raise AssertionError(f"unexpected {method} {url}")
+                raise AssertionError(f"unexpected POST {url}")
 
-            m_request.side_effect = _request_side_effect
+            m_post.side_effect = _post_side_effect
             m_get.return_value = mock.Mock(status_code=200, json=mock.Mock(return_value={"status": "done", "result": {"transcription": transcription_result}}))
 
             transcript, failure = get_transcription_via_gladia(self.utterance)
 
-        transcribe_calls = [c for c in m_request.call_args_list if c.args[1].endswith("/pre-recorded")]
+        transcribe_calls = [c for c in m_post.call_args_list if c.args[0].endswith("/pre-recorded")]
         self.assertEqual(len(transcribe_calls), 1)
         return transcribe_calls[0].kwargs["json"], transcript, failure
 
@@ -934,9 +935,9 @@ class GladiaProviderTest(TransactionTestCase):
                 "languages": ["fi", "en"],
                 "language": "fi",
                 "words": [
-                    {"word": "moi", "start": 0.0, "end": 0.3, "confidence": 0.9},
-                    {"word": " hello", "start": 0.4, "end": 0.8, "confidence": 0.8},
-                    {"word": " hei", "start": 0.9, "end": 1.2, "confidence": 0.7},
+                    {"word": "moi", "start": 0.0, "end": 0.3, "confidence": 0.9, "language": "fi"},
+                    {"word": " hello", "start": 0.4, "end": 0.8, "confidence": 0.8, "language": "en"},
+                    {"word": " hei", "start": 0.9, "end": 1.2, "confidence": 0.7, "language": "fi"},
                 ],
             },
         )
@@ -946,7 +947,7 @@ class GladiaProviderTest(TransactionTestCase):
             {},
             transcription_result={"full_transcript": "hej", "languages": [], "utterances": [{"text": "hej", "language": "sv", "words": [{"word": "hej", "start": 0.0, "end": 0.3, "confidence": 0.9}]}]},
         )
-        self.assertEqual(transcript, {"transcript": "hej", "languages": [], "language": "sv", "words": [{"word": "hej", "start": 0.0, "end": 0.3, "confidence": 0.9}]})
+        self.assertEqual(transcript, {"transcript": "hej", "languages": [], "language": "sv", "words": [{"word": "hej", "start": 0.0, "end": 0.3, "confidence": 0.9, "language": "sv"}]})
 
     def test_stored_language_is_none_for_silent_audio(self):
         _, transcript, _ = self._run_gladia({}, transcription_result={"full_transcript": "", "languages": [], "utterances": []})
@@ -1005,10 +1006,10 @@ class GladiaProviderTest(TransactionTestCase):
         with (
             self._patch_creds(),
             mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3"),
-            mock.patch("bots.tasks.process_utterance_task.requests.request") as m_request,
+            mock.patch("bots.transcription_utils.requests.post") as m_post,
         ):
             resp401 = mock.Mock(status_code=401)
-            m_request.return_value = resp401
+            m_post.return_value = resp401
 
             transcript, failure = get_transcription_via_gladia(self.utterance)
 
@@ -1516,7 +1517,7 @@ class AssemblyAIProviderTest(TransactionTestCase):
             mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3"),
             mock.patch("bots.tasks.process_utterance_task.requests.post") as m_post,
             mock.patch("bots.tasks.process_utterance_task.requests.get") as m_get,
-            mock.patch("bots.tasks.process_utterance_task.time.sleep"),  # speed up test
+            mock.patch("bots.transcription_utils.time.sleep"),  # speed up test
         ):
             upload_response = mock.Mock(status_code=200)
             upload_response.json.return_value = {"upload_url": "https://cdn.assemblyai.com/upload/123"}

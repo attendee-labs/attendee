@@ -1,7 +1,6 @@
 import json
 import logging
 import os
-import time
 
 import requests
 from celery import shared_task
@@ -9,7 +8,7 @@ from celery import shared_task
 logger = logging.getLogger(__name__)
 
 from bots.models import Credentials, RecordingManager, TranscriptionFailureReasons, TranscriptionProviders, Utterance, WebhookTriggerTypes
-from bots.transcription_utils import get_elevenlabs_speech_to_text_request, get_transcription_via_assemblyai_from_mp3, get_transcription_via_deepgram_from_audio_data, get_words_from_elevenlabs_response, is_retryable_failure
+from bots.transcription_utils import get_elevenlabs_speech_to_text_request, get_transcription_via_assemblyai_from_mp3, get_transcription_via_deepgram_from_audio_data, get_transcription_via_gladia_from_mp3, get_words_from_elevenlabs_response, is_retryable_failure
 from bots.utils import pcm_to_mp3
 from bots.webhook_payloads import utterance_webhook_payload
 from bots.webhook_utils import trigger_webhook
@@ -138,118 +137,12 @@ def process_utterance(self, utterance_id):
 
 
 def get_transcription_via_gladia(utterance):
-    recording = utterance.recording
-    transcription_settings = utterance.transcription_settings
-    gladia_credentials_record = recording.bot.project.credentials.filter(credential_type=Credentials.CredentialTypes.GLADIA).first()
-    if not gladia_credentials_record:
-        return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND}
-
-    gladia_credentials = gladia_credentials_record.get_credentials()
-    if not gladia_credentials:
-        return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND}
-
-    upload_url = "https://api.gladia.io/v2/upload"
-
-    payload_mp3 = pcm_to_mp3(utterance.get_audio_blob().tobytes(), sample_rate=utterance.get_sample_rate())
-    headers = {
-        "x-gladia-key": gladia_credentials["api_key"],
-    }
-    files = {"audio": ("file.mp3", payload_mp3, "audio/mpeg")}
-    upload_response = requests.request("POST", upload_url, headers=headers, files=files)
-
-    if upload_response.status_code == 401:
-        return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_INVALID}
-
-    if upload_response.status_code != 200 and upload_response.status_code != 201:
-        return None, {"reason": TranscriptionFailureReasons.AUDIO_UPLOAD_FAILED, "status_code": upload_response.status_code}
-
-    upload_response_json = upload_response.json()
-    audio_url = upload_response_json["audio_url"]
-
-    transcribe_url = "https://api.gladia.io/v2/pre-recorded"
-    transcribe_request_body = {"audio_url": audio_url}
-    language_config = transcription_settings.gladia_language_config()
-    if language_config:
-        transcribe_request_body["language_config"] = language_config
-    for key, value in [
-        ("model", transcription_settings.gladia_model()),
-        ("custom_vocabulary", transcription_settings.gladia_custom_vocabulary()),
-        ("custom_vocabulary_config", transcription_settings.gladia_custom_vocabulary_config()),
-        ("custom_spelling", transcription_settings.gladia_custom_spelling()),
-        ("custom_spelling_config", transcription_settings.gladia_custom_spelling_config()),
-    ]:
-        if value is not None:
-            transcribe_request_body[key] = value
-    transcribe_response = requests.request("POST", transcribe_url, headers=headers, json=transcribe_request_body)
-
-    if transcribe_response.status_code != 200 and transcribe_response.status_code != 201:
-        return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "step": "transcribe_request", "status_code": transcribe_response.status_code}
-
-    transcribe_response_json = transcribe_response.json()
-    result_url = transcribe_response_json["result_url"]
-
-    # Poll the result_url until we get a completed transcription
-    max_retries = 120  # Maximum number of retries (2 minutes with 1s sleep)
-    retry_count = 0
-
-    while retry_count < max_retries:
-        result_response = requests.get(result_url, headers=headers)
-
-        if result_response.status_code != 200:
-            logger.error(f"Gladia result fetch failed with status code {result_response.status_code}")
-            time.sleep(10)
-            retry_count += 1
-            continue
-
-        result_data = result_response.json()
-        status = result_data.get("status")
-
-        if status == "done":
-            # Transcription is complete
-            transcription = result_data.get("result", {}).get("transcription", "")
-            logger.info("Gladia transcription completed successfully, now deleting audio file from Gladia")
-            # Delete the audio file from Gladia
-            delete_response = requests.request("DELETE", result_url, headers=headers)
-            if delete_response.status_code != 200 and delete_response.status_code != 202:
-                logger.error(f"Gladia delete failed with status code {delete_response.status_code}")
-            else:
-                logger.info("Gladia delete successful")
-
-            transcription["transcript"] = transcription["full_transcript"]
-            del transcription["full_transcript"]
-
-            # Extract all words from all utterances into a flat list
-            all_words = []
-            for utterance in transcription["utterances"]:
-                if "words" in utterance:
-                    all_words.extend(utterance["words"])
-            transcription["words"] = all_words
-
-            # Gladia sorts languages from most to least detected, so the first one is the dominant language.
-            # Fall back to the language of the first utterance that has one.
-            languages = transcription.get("languages") or []
-            first_utterance_language = next((utterance["language"] for utterance in transcription["utterances"] if utterance.get("language")), None)
-            transcription["language"] = languages[0] if languages else first_utterance_language
-            del transcription["utterances"]
-
-            return transcription, None
-
-        elif status == "error":
-            error_code = result_data.get("error_code")
-            return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "step": "transcribe_result_poll", "error_code": error_code}
-
-        elif status in ["queued", "processing"]:
-            # Still processing, wait and retry
-            logger.info(f"Gladia transcription status: {status}, waiting...")
-            time.sleep(1)
-            retry_count += 1
-
-        else:
-            # Unknown status
-            return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "step": "transcribe_result_poll", "status": status}
-
-    # If we've reached here, we've timed out
-    return None, {"reason": TranscriptionFailureReasons.TIMED_OUT, "step": "transcribe_result_poll"}
+    return get_transcription_via_gladia_from_mp3(
+        retrieve_mp3_data_callback=lambda: pcm_to_mp3(utterance.get_audio_blob().tobytes(), sample_rate=utterance.get_sample_rate()),
+        identifier=f"utterance {utterance.id}",
+        transcription_settings=utterance.transcription_settings,
+        recording=utterance.recording,
+    )
 
 
 def get_transcription_via_deepgram(utterance):
