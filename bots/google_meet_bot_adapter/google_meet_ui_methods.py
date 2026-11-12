@@ -121,8 +121,11 @@ class GoogleMeetUIMethods:
             logger.info("Clicking others_may_see_your_meeting_differently_button")
             self.click_element_forcefully(others_may_see_your_meeting_differently_button, step)
 
+    def find_blocked_element(self):
+        return self.find_element_by_selector(By.XPATH, '//*[contains(text(), "You can\'t join this video call") or contains(text(), "There is a problem connecting to this video call")]')
+
     def look_for_blocked_element(self, step):
-        cannot_join_element = self.find_element_by_selector(By.XPATH, '//*[contains(text(), "You can\'t join this video call") or contains(text(), "There is a problem connecting to this video call")]')
+        cannot_join_element = self.find_blocked_element()
         if cannot_join_element:
             # This means google is blocking us for whatever reason, but we can retry
             element_text = cannot_join_element.text
@@ -506,6 +509,13 @@ class GoogleMeetUIMethods:
                     name_input.send_keys(self.display_name)
                 return
             except TimeoutException as e:
+                last_check_timed_out = attempt_to_look_for_name_input_index == num_attempts_to_look_for_name_input - 1
+
+                if not self.google_meet_bot_login_session and not last_check_timed_out and self.find_blocked_element():
+                    logger.warning("Google is blocking us at the name input step and the bot is not signed in. Reloading the meeting URL.")
+                    self.driver.get(self.meeting_url)
+                    continue
+
                 self.look_for_blocked_element("name_input")
                 self.look_for_login_required_element("name_input")
                 self.check_if_meeting_is_found()
@@ -514,7 +524,6 @@ class GoogleMeetUIMethods:
                     logger.info("This is a signed in bot and name input is not present but the join now button is present. Assuming name input is not present because we don't need to fill it out, so returning.")
                     return
 
-                last_check_timed_out = attempt_to_look_for_name_input_index == num_attempts_to_look_for_name_input - 1
                 if last_check_timed_out:
                     logger.warning("Could not find name input. Timed out. Raising UiCouldNotLocateElementException")
                     raise UiCouldNotLocateElementException("Could not find name input. Timed out.", "name_input", e)
