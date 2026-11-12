@@ -145,3 +145,13 @@ Example: `OPENAI_BASE_URL=https://your-proxy.com/v1` and `OPENAI_MODEL_NAME=whis
 ### Custom Async (Bring Your Own Platform)
 
 For Attendee self-hosters only. Lets you use your own self-hosted transcription service. See the [Custom Async Transcription](https://github.com/attendee-labs/attendee/blob/main/docs/custom_async_transcription.md) page for more details.
+
+### Disabling transcription
+
+To disable transcription, set the `transcription_settings` to:
+
+```json
+{
+    "enabled": false
+}
+```

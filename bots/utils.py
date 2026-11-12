@@ -579,8 +579,13 @@ def generate_utterance_json_for_bot_detail_view(recording, async_transcription=N
 
 def transcription_provider_from_bot_creation_data(data):
     url = data.get("meeting_url")
-    settings = data.get("transcription_settings", {})
-    use_zoom_web_adapter = data.get("zoom_settings", {}).get("sdk") == "web"
+    settings = data.get("transcription_settings") or {}
+    use_zoom_web_adapter = (data.get("zoom_settings") or {}).get("sdk") == "web"
+
+    # The enabled flag defaults to True. If it is set to False, it takes precedence over any other
+    # provider being specified.
+    if settings.get("enabled", True) is False:
+        return TranscriptionProviders.NO_TRANSCRIPTION
 
     if "deepgram" in settings:
         return TranscriptionProviders.DEEPGRAM
@@ -923,6 +928,11 @@ def split_utterances_on_turn_taking(
         u = item["utterance"]
         speaker = item["speaker"]
         abs_words = item["abs_words"]
+
+        # Nothing to split, e.g. an utterance that only contains audio events
+        if not abs_words:
+            results.append(u)
+            continue
 
         # Walk consecutive word pairs looking for split points
         segments: list[list[dict]] = []

@@ -384,3 +384,31 @@ class TranscriptSplitOnTurnsViewTest(TransactionTestCase):
         self.assertEqual(results[2]["transcription"]["transcript"], "World")
         self.assertEqual(len(results[2]["transcription"]["words"]), 1)
         self.assertEqual(results[2]["transcription"]["words"][0]["word"], "World")
+
+    def test_transcript_with_split_on_turns_keeps_utterance_without_words(self):
+        """An utterance with a transcript but no words (e.g. only audio events) is returned unsplit."""
+        Utterance.objects.create(
+            recording=self.recording,
+            participant=self.participant_a,
+            timestamp_ms=0,
+            duration_ms=1200,
+            transcription={"transcript": "(laughter)", "words": []},
+        )
+        Utterance.objects.create(
+            recording=self.recording,
+            participant=self.participant_b,
+            timestamp_ms=1500,
+            duration_ms=300,
+            transcription={"transcript": "Hi", "words": [{"word": "Hi", "start": 0.0, "end": 0.3}]},
+        )
+
+        response = self._make_authenticated_request(
+            "GET",
+            f"/api/v1/bots/{self.bot.object_id}/transcript?split_on_turns=true",
+            self.api_key_plain,
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        results = response.json()
+        self.assertEqual([r["transcription"]["transcript"] for r in results], ["(laughter)", "Hi"])
+        self.assertEqual(results[0]["transcription"]["words"], [])

@@ -492,13 +492,21 @@ class GoogleCalendarSyncHandler(CalendarSyncHandler):
 
         try:
             logger.info(f"Calendar {self.calendar.object_id}: Fetching individual event {event_id} from Google Calendar")
-            return self._make_gcal_request(url, access_token)
+            event = self._make_gcal_request(url, access_token)
         except Exception as e:
             if _exception_is_404(e):
                 logger.info(f"Calendar {self.calendar.object_id}: Event {event_id} not found in Google Calendar")
                 # Event was deleted
                 return None
             raise
+
+        # A single event later made recurring keeps its id as the series master.
+        # _list_events expands recurring events, so the master is not a meeting
+        # of its own: keeping it would duplicate its first occurrence.
+        if event.get("recurrence"):
+            logger.info(f"Calendar {self.calendar.object_id}: Event {event_id} is now a recurring series master, treating as deleted")
+            return None
+        return event
 
     def _parse_event_datetime(self, event_datetime: dict, default_tz: str = "UTC", normalize_to_utc: bool = False) -> datetime:
         """Parse Google Calendar event datetime dict (start/end)."""

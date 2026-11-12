@@ -365,7 +365,8 @@ PREJOIN_LEAVE_OR_MEETING_END_IS_FATAL_ERROR = os.getenv("PREJOIN_LEAVE_OR_MEETIN
 ENABLE_WAITING_ROOM_STATE_FOR_WEB_BOTS = os.getenv("ENABLE_WAITING_ROOM_STATE_FOR_WEB_BOTS", "false") == "true"
 
 # Web bots bind their websocket server to a fixed port per platform and try the next 10 ports if it is taken.
-# When enabled, the OS picks a free port instead, so any number of bots can share a network namespace.
+# When enabled, each bot binds the fixed port on its own random loopback IP and Chrome maps localhost to it,
+# so any number of bots can share a network namespace. Linux only. The name is historical (it used to bind to port 0).
 ENABLE_BOT_WEBSOCKET_PORT_SELECTION_BY_OS = os.getenv("ENABLE_BOT_WEBSOCKET_PORT_SELECTION_BY_OS", "false") == "true"
 
 BOT_POD_NAMESPACE = os.getenv("BOT_POD_NAMESPACE", "attendee")
@@ -401,6 +402,9 @@ CONCURRENT_BOTS_LIMIT = int(os.getenv("CONCURRENT_BOTS_LIMIT", 2500))
 # AFTER: how late a missed bot can still be launched.
 SCHEDULED_BOT_LAUNCH_WINDOW_BEFORE_JOIN_AT_SECONDS = int(os.getenv("SCHEDULED_BOT_LAUNCH_WINDOW_BEFORE_JOIN_AT_SECONDS", 300))
 SCHEDULED_BOT_LAUNCH_WINDOW_AFTER_JOIN_AT_SECONDS = int(os.getenv("SCHEDULED_BOT_LAUNCH_WINDOW_AFTER_JOIN_AT_SECONDS", 300))
+
+# How long to wait before restarting the bot pod after the bot was blocked by the platform repeatedly.
+BLOCKED_BY_PLATFORM_POD_RESTART_DELAY_SECONDS = int(os.getenv("BLOCKED_BY_PLATFORM_POD_RESTART_DELAY_SECONDS", 15))
 
 CLEANTALK_API_KEY = os.getenv("CLEANTALK_API_KEY")
 USERCHECK_API_KEY = os.getenv("USERCHECK_API_KEY")

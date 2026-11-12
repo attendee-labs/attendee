@@ -870,6 +870,26 @@ class TranscriptionSettings:
     def elevenlabs_tag_audio_events(self):
         return self._settings.get("elevenlabs", {}).get("tag_audio_events", None)
 
+    def elevenlabs_keyterms(self):
+        return self._settings.get("elevenlabs", {}).get("keyterms", None)
+
+    def elevenlabs_diarize(self):
+        return self._settings.get("elevenlabs", {}).get("diarize", None)
+
+    def elevenlabs_num_speakers(self):
+        return self._settings.get("elevenlabs", {}).get("num_speakers", None)
+
+    def elevenlabs_diarization_threshold(self):
+        return self._settings.get("elevenlabs", {}).get("diarization_threshold", None)
+
+    def elevenlabs_base_url(self):
+        if os.getenv("ELEVENLABS_BASE_URL"):
+            return os.getenv("ELEVENLABS_BASE_URL")
+        use_eu_server = self._settings.get("elevenlabs", {}).get("use_eu_server", False)
+        if use_eu_server:
+            return "https://api.eu.residency.elevenlabs.io"
+        return "https://api.elevenlabs.io"
+
     def custom_async_additional_props(self):
         return self._settings.get("custom_async", {})
 
@@ -2286,6 +2306,7 @@ class BotLogEntryTypes(models.IntegerChoices):
     UNCATEGORIZED = 0, "Uncategorized"
     COULD_NOT_ENABLE_CLOSED_CAPTIONS = 1, "Could not enable closed captions"
     WEBINAR_PANELIST_PROMOTION = 2, "Webinar panelist promotion"
+    AUTO_LEAVE_SILENCE_PENDING = 3, "Auto leave silence pending"
 
     @classmethod
     def type_to_api_code(cls, value):
@@ -2294,6 +2315,7 @@ class BotLogEntryTypes(models.IntegerChoices):
             cls.UNCATEGORIZED: "uncategorized",
             cls.COULD_NOT_ENABLE_CLOSED_CAPTIONS: "could_not_enable_closed_captions",
             cls.WEBINAR_PANELIST_PROMOTION: "webinar_panelist_promotion",
+            cls.AUTO_LEAVE_SILENCE_PENDING: "auto_leave_silence_pending",
         }
         return mapping.get(value)
 
@@ -2488,6 +2510,7 @@ class TranscriptionProviders(models.IntegerChoices):
     KYUTAI = 8, "Kyutai"
     CUSTOM_ASYNC = 9, "Custom Async"
     CUSTOM_ASYNC_V2 = 10, "Custom Async v2"
+    NO_TRANSCRIPTION = 11, "No Transcription"
 
 
 class RecordingStorage(Storage):

@@ -5,12 +5,16 @@ from celery import shared_task
 from kubernetes import client, config
 
 from bots.k8s_utils import find_bot_pod_name
-from bots.models import Bot, BotEventTypes
+from bots.models import Bot, BotEventTypes, BotStates
 
 logger = logging.getLogger(__name__)
 from django.conf import settings
 
 from bots.bot_pod_creator import BotPodCreator
+
+
+def bot_was_asked_to_leave_before_joining(last_bot_event):
+    return last_bot_event.event_type == BotEventTypes.LEAVE_REQUESTED and last_bot_event.old_state in (BotStates.STAGED, BotStates.JOINING)
 
 
 @shared_task(bind=True, soft_time_limit=3600)
@@ -25,8 +29,9 @@ def restart_bot_pod(self, bot_id):
 
     last_bot_event = bot.last_bot_event()
 
-    if last_bot_event.event_type not in (BotEventTypes.JOIN_REQUESTED, BotEventTypes.STAGED):
-        logger.info(f"Bot {bot_id} is not in JOINING or STAGED state, so not restarting pod")
+    # If the bot was asked to leave while its pod was down, the restarted pod will start in the LEAVING state and leave
+    if last_bot_event.event_type not in (BotEventTypes.JOIN_REQUESTED, BotEventTypes.STAGED) and not bot_was_asked_to_leave_before_joining(last_bot_event):
+        logger.info(f"Bot {bot_id} is not in JOINING or STAGED state and was not asked to leave before joining, so not restarting pod")
         return
 
     # Initialize kubernetes client
