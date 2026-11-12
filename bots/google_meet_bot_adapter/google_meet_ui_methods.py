@@ -123,6 +123,26 @@ class GoogleMeetUIMethods:
 
     def find_blocked_element(self):
         return self.find_element_by_selector(By.XPATH, '//*[contains(text(), "You can\'t join this video call") or contains(text(), "There is a problem connecting to this video call")]')
+    
+    # Some meetings show a "Continue as guest" / "Sign in with Google" screen before the name input
+    def look_for_continue_as_guest_button(self, step):
+        continue_as_guest_button = self.find_element_by_selector(By.XPATH, '//button[contains(., "Continue as guest")] | //div[@role="button"][contains(., "Continue as guest")]')
+        if not continue_as_guest_button:
+            return
+
+        if not hasattr(self, "continue_as_guest_button_last_clicked_at"):
+            self.continue_as_guest_button_last_clicked_at = None
+
+        # The page takes a moment to transition after clicking, so don't click again while that's happening
+        if self.continue_as_guest_button_last_clicked_at and time.time() - self.continue_as_guest_button_last_clicked_at < 10:
+            return
+
+        logger.info("Clicking continue_as_guest_button")
+        if self.ui_interaction_mode == "humanized":
+            self.humanized_navigate_to_and_click_element(continue_as_guest_button)
+        else:
+            self.click_element_with_fallback_to_forceful_click(continue_as_guest_button, step)
+        self.continue_as_guest_button_last_clicked_at = time.time()
 
     def look_for_blocked_element(self, step):
         cannot_join_element = self.find_blocked_element()
@@ -518,6 +538,7 @@ class GoogleMeetUIMethods:
 
                 self.look_for_blocked_element("name_input")
                 self.look_for_login_required_element("name_input")
+                self.look_for_continue_as_guest_button("name_input")
                 self.check_if_meeting_is_found()
 
                 if self.google_meet_bot_login_session and self.join_now_button_is_present():
