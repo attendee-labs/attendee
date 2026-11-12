@@ -424,7 +424,8 @@ class GoogleMeetUIMethods:
         dpr = float(metrics["dpr"])
 
         if width <= 0 or height <= 0:
-            raise RuntimeError(f"Element has invalid size: {width}x{height}")
+            logger.warning(f"Element has invalid size: {width}x{height}")
+            return None
 
         # Clickable rect: half the width and half the height, centered
         inset_x = 0
@@ -441,7 +442,7 @@ class GoogleMeetUIMethods:
 
         return rect_left, rect_top, rect_right, rect_bottom, screen_x, screen_y, dpr
 
-    def humanized_navigate_to_and_click_element(self, element):
+    def humanized_navigate_to_and_click_element(self, element, fallback_to_forceful_click_for_zero_size_element=False):
         self.ensure_x11_input()
         self.ensure_mocap_manager()
 
@@ -453,7 +454,14 @@ class GoogleMeetUIMethods:
         num_seq_attempts = 10
         for attempt in range(num_seq_attempts):
             # The element can move between attempts (e.g. while the page is still transitioning), so re-measure it each time
-            rect_left, rect_top, rect_right, rect_bottom, screen_x, screen_y, dpr = self._measure_clickable_rect(element)
+            clickable_rect = self._measure_clickable_rect(element)
+            if clickable_rect is None:
+                if fallback_to_forceful_click_for_zero_size_element:
+                    logger.warning("Element has zero size. Falling back to forceful click.")
+                    self.click_element_forcefully(element, "humanized_navigate_to_and_click_element:zero_size_fallback")
+                    return
+                raise RuntimeError("Element has invalid size")
+            rect_left, rect_top, rect_right, rect_bottom, screen_x, screen_y, dpr = clickable_rect
             logger.info(f"humanized interaction: mouse at ({current_x},{current_y}), clickable rect [({rect_left},{rect_top})-({rect_right},{rect_bottom})]")
 
             seq = self.mocap_manager.find_random_sequence_landing_in_rect(current_x, current_y, rect_left, rect_top, rect_right, rect_bottom)
