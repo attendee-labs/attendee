@@ -232,10 +232,11 @@ class Command(BaseCommand):
         desired_count = max(self.min_size, min(self.max_size, target))
 
         logger.info(
-            "Bot runner pool sizing: new launches this cycle %s, peak launches per cycle in lookback %s, desired pool size %s",
+            "Bot runner pool sizing: new launches this cycle %s, peak launches per cycle in lookback %s, desired pool size %s, launches per cycle in lookback (oldest first): %s",
             new_launches,
             peak_launches_per_cycle,
             desired_count,
+            ",".join(map(str, self._launches_per_cycle)),
         )
         return desired_count
 
@@ -293,10 +294,9 @@ class Command(BaseCommand):
         current_count = len(unassigned_pods)
 
         logger.info(
-            "Bot runner pool status: %s unassigned pods (current version), desired: %s, launches per cycle in lookback (oldest first): %s",
+            "Bot runner pool status: %s unassigned pods (current version), desired: %s",
             current_count,
             desired_count,
-            ",".join(map(str, self._launches_per_cycle)),
         )
 
         if current_count > desired_count:
