@@ -116,8 +116,6 @@ class WebBotAdapter(BotAdapter):
 
         self.participants_info = {}
         self.participant_uuids_that_were_ever_in_meeting = set()
-        self.latest_device_outputs = []
-        self.media_state_error_ticker = 0
         self.only_one_participant_in_meeting_at = None
         self.video_frame_ticker = 0
 
@@ -407,19 +405,6 @@ class WebBotAdapter(BotAdapter):
             return
         self.update_participant_media_state(participant_id, is_unmuted=is_unmuted, is_webcam_on=is_webcam_on)
 
-    # Google Meet reports whether each device's audio (outputType 1) and video (outputType 2) output is disabled
-    def update_participant_media_states_from_device_outputs(self):
-        try:
-            for device_output in self.latest_device_outputs:
-                if device_output.get("outputType") == 1:
-                    self.handle_participant_media_state_update(device_output.get("deviceId"), is_unmuted=not device_output.get("disabled"))
-                elif device_output.get("outputType") == 2:
-                    self.handle_participant_media_state_update(device_output.get("deviceId"), is_webcam_on=not device_output.get("disabled"))
-        except Exception as e:
-            if self.media_state_error_ticker % 100 == 0:
-                logger.warning(f"Error updating participant media states from device outputs: {e}")
-            self.media_state_error_ticker += 1
-
     def handle_chat_message(self, json_data):
         if self.recording_paused and not self.record_chat_messages_when_paused:
             return
@@ -490,10 +475,6 @@ class WebBotAdapter(BotAdapter):
                         elif json_data.get("type") == "ParticipantMediaStateUpdate":
                             self.handle_participant_media_state_update(json_data.get("participantId"), is_unmuted=json_data.get("isUnmuted"), is_webcam_on=json_data.get("isWebcamOn"))
 
-                        elif json_data.get("type") == "DeviceOutputsUpdate":
-                            self.latest_device_outputs = json_data.get("deviceOutputs") or []
-                            self.update_participant_media_states_from_device_outputs()
-
                         elif json_data.get("type") == "UsersUpdate":
                             for user in json_data["newUsers"]:
                                 user["active"] = user["humanized_status"] == "in_meeting"
@@ -509,8 +490,6 @@ class WebBotAdapter(BotAdapter):
                                     self.handle_removed_from_meeting()
 
                             self.update_only_one_participant_in_meeting_at()
-                            # Device outputs may arrive before the participant they belong to
-                            self.update_participant_media_states_from_device_outputs()
 
                         elif json_data.get("type") == "SilenceStatus":
                             if not json_data.get("isSilent"):
