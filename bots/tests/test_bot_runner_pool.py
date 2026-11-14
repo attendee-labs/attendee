@@ -795,11 +795,20 @@ class BotRunnerPoolEndToEndTest(TestCase):
         command._hold_max_size_until = 0
         self.assertEqual(command._desired_pool_size(), 1)
 
-    def test_pool_size_keeps_peak_when_launch_counts_cannot_be_read(self):
-        command = self._pool_sizer()
+    def test_pool_size_is_max_when_launch_counts_cannot_be_read(self):
+        command = self._pool_sizer(max_size=10)
         command._desired_pool_size()
         self._launch_bots(2)
         self.assertEqual(command._desired_pool_size(), 4)
 
         with patch("bots.management.commands.create_bot_runner_pods.get_bot_runner_pool_launch_counts", side_effect=redis.ConnectionError("redis is down")):
-            self.assertEqual(command._desired_pool_size(), 4)
+            self.assertEqual(command._desired_pool_size(), 10)
+
+        # Once the counts can be read again, the pool goes back to being sized from the launches in the lookback
+        self.assertEqual(command._desired_pool_size(), 4)
+
+    def test_pool_size_is_max_when_launch_counts_have_never_been_read(self):
+        command = self._pool_sizer(max_size=10)
+
+        with patch("bots.management.commands.create_bot_runner_pods.get_bot_runner_pool_launch_counts", side_effect=redis.ConnectionError("redis is down")):
+            self.assertEqual(command._desired_pool_size(), 10)

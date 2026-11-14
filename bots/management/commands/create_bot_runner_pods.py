@@ -219,13 +219,18 @@ class Command(BaseCommand):
         peak_launch_multiplier pods for each launch in that cycle to cover the launches that arrive in the meantime.
         Using the peak grows the pool on the cycle after a burst, and only shrinks it once the burst
         is older than the lookback.
+
+        The pool is held at max_size on any cycle where the launch counts could not be read.
         """
         new_launches = self._count_new_launches()
         if new_launches is not None:
             self._launches_per_cycle.append(sum(new_launches.values()))
 
         peak_launches_per_cycle = max(self._launches_per_cycle, default=0)
-        if time.monotonic() < self._hold_max_size_until:
+        if new_launches is None:
+            # Launches can't be seen right now, so the lookback may be missing a burst
+            target = self.max_size
+        elif time.monotonic() < self._hold_max_size_until:
             target = self.max_size
         else:
             target = math.ceil(peak_launches_per_cycle * self.peak_launch_multiplier)
