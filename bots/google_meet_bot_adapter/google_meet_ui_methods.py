@@ -121,6 +121,9 @@ class GoogleMeetUIMethods:
             logger.info("Clicking others_may_see_your_meeting_differently_button")
             self.click_element_forcefully(others_may_see_your_meeting_differently_button, step)
 
+    def find_blocked_element(self):
+        return self.find_element_by_selector(By.XPATH, '//*[contains(text(), "You can\'t join this video call") or contains(text(), "There is a problem connecting to this video call")]')
+
     # Some meetings show a "Continue as guest" / "Sign in with Google" screen before the name input
     def look_for_continue_as_guest_button(self, step):
         continue_as_guest_button = self.find_element_by_selector(By.XPATH, '//button[contains(., "Continue as guest")] | //div[@role="button"][contains(., "Continue as guest")]')
@@ -142,7 +145,7 @@ class GoogleMeetUIMethods:
         self.continue_as_guest_button_last_clicked_at = time.time()
 
     def look_for_blocked_element(self, step):
-        cannot_join_element = self.find_element_by_selector(By.XPATH, '//*[contains(text(), "You can\'t join this video call") or contains(text(), "There is a problem connecting to this video call")]')
+        cannot_join_element = self.find_blocked_element()
         if cannot_join_element:
             # This means google is blocking us for whatever reason, but we can retry
             element_text = cannot_join_element.text
@@ -549,6 +552,13 @@ class GoogleMeetUIMethods:
                     name_input.send_keys(self.display_name)
                 return
             except TimeoutException as e:
+                last_check_timed_out = attempt_to_look_for_name_input_index == num_attempts_to_look_for_name_input - 1
+
+                if not self.google_meet_bot_login_session and not last_check_timed_out and self.find_blocked_element():
+                    logger.warning("Google is blocking us at the name input step and the bot is not signed in. Reloading the meeting URL.")
+                    self.driver.get(self.meeting_url)
+                    continue
+
                 self.look_for_blocked_element("name_input")
                 self.look_for_login_required_element("name_input")
                 self.look_for_continue_as_guest_button("name_input")
@@ -558,7 +568,6 @@ class GoogleMeetUIMethods:
                     logger.info("This is a signed in bot and name input is not present but the join now button is present. Assuming name input is not present because we don't need to fill it out, so returning.")
                     return
 
-                last_check_timed_out = attempt_to_look_for_name_input_index == num_attempts_to_look_for_name_input - 1
                 if last_check_timed_out:
                     logger.warning("Could not find name input. Timed out. Raising UiCouldNotLocateElementException")
                     raise UiCouldNotLocateElementException("Could not find name input. Timed out.", "name_input", e)
@@ -582,10 +591,23 @@ class GoogleMeetUIMethods:
             logger.info("Captions and translation button is already pressed, captions are already enabled")
             return
         logger.info("Found 'Captions and translation' variant of captions button. Pressing 'c' to enable captions...")
-        ActionChains(self.driver).send_keys("c").perform()
-        logger.info("Waiting for captions to be enabled...")
-        WebDriverWait(self.driver, 5).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'button[aria-label="Captions and translation"][aria-pressed="true"]')))
-        logger.info("Confirmed captions were enabled")
+        self.ensure_x11_input()
+        num_attempts = 2
+        wait_seconds_per_attempt = 15
+        for attempt_index in range(num_attempts):
+            logger.info(f"Pressing 'c' to enable captions (attempt {attempt_index + 1} of {num_attempts})...")
+            self.x11_input.key_press("c")
+            self.x11_input.key_release("c")
+            logger.info("Waiting for captions to be enabled...")
+            try:
+                WebDriverWait(self.driver, wait_seconds_per_attempt).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'button[aria-label="Captions and translation"][aria-pressed="true"]')))
+                logger.info("Confirmed captions were enabled")
+                return
+            except TimeoutException as e:
+                if attempt_index == num_attempts - 1:
+                    logger.warning(f"Captions were not enabled within {wait_seconds_per_attempt} seconds after pressing 'c' {num_attempts} times. Raising UiCouldNotLocateElementException")
+                    raise UiCouldNotLocateElementException(f"Captions were not enabled after pressing 'c' {num_attempts} times.", "enable_captions_via_keyboard_shortcut", e)
+                logger.warning(f"Captions were not enabled within {wait_seconds_per_attempt} seconds after pressing 'c'. Trying again...")
 
     def click_captions_button(self):
         num_attempts_to_look_for_captions_button = self.automatic_leave_configuration.waiting_room_timeout_seconds * 2
@@ -1268,7 +1290,7 @@ class GoogleMeetUIMethods:
         )
         logger.info("Clicking the join button...")
         if self.ui_interaction_mode == "humanized":
-            self.humanized_navigate_to_and_click_element(join_button)
+            self.humanized_navigate_to_and_click_element(join_button, fallback_to_forceful_click_for_zero_size_element=True)
         else:
             self.click_element_with_fallback_to_forceful_click(join_button, "join_button")
 
