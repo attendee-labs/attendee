@@ -2397,6 +2397,10 @@ class ParticipantEventTypes(models.IntegerChoices):
     UPDATE = 5, "Update"
     SCREENSHARE_START = 6, "Screenshare Start"
     SCREENSHARE_STOP = 7, "Screenshare Stop"
+    UNMUTE = 8, "Unmute"
+    MUTE = 9, "Mute"
+    WEBCAM_ON = 10, "Webcam On"
+    WEBCAM_OFF = 11, "Webcam Off"
 
     @classmethod
     def type_to_api_code(cls, value):
@@ -2409,6 +2413,10 @@ class ParticipantEventTypes(models.IntegerChoices):
             cls.UPDATE: "update",
             cls.SCREENSHARE_START: "screenshare_start",
             cls.SCREENSHARE_STOP: "screenshare_stop",
+            cls.UNMUTE: "unmute",
+            cls.MUTE: "mute",
+            cls.WEBCAM_ON: "webcam_on",
+            cls.WEBCAM_OFF: "webcam_off",
         }
         return mapping.get(value)
 
@@ -3345,6 +3353,8 @@ class WebhookTriggerTypes(models.IntegerChoices):
     BOT_LOGS_UPDATE = 9, "Bot Logs Update"
     PARTICIPANT_EVENTS_SPEECH_START_STOP = 10, "Participant Speech Start/Stop"
     PARTICIPANT_EVENTS_SCREENSHARE_START_STOP = 11, "Participant Screenshare Start/Stop"
+    PARTICIPANT_EVENTS_MUTE_UNMUTE = 12, "Participant Mute/Unmute"
+    PARTICIPANT_EVENTS_WEBCAM_ON_OFF = 13, "Participant Webcam On/Off"
     # add other event types here
 
     @classmethod
@@ -3362,6 +3372,8 @@ class WebhookTriggerTypes(models.IntegerChoices):
             cls.BOT_LOGS_UPDATE: "bot_logs.update",
             cls.PARTICIPANT_EVENTS_SPEECH_START_STOP: "participant_events.speech_start_stop",
             cls.PARTICIPANT_EVENTS_SCREENSHARE_START_STOP: "participant_events.screenshare_start_stop",
+            cls.PARTICIPANT_EVENTS_MUTE_UNMUTE: "participant_events.mute_unmute",
+            cls.PARTICIPANT_EVENTS_WEBCAM_ON_OFF: "participant_events.webcam_on_off",
         }
 
     @classmethod

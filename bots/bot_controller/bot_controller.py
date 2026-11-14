@@ -1753,6 +1753,10 @@ class BotController:
             webhook_trigger_type = WebhookTriggerTypes.PARTICIPANT_EVENTS_SPEECH_START_STOP
         elif participant_event.event_type == ParticipantEventTypes.SCREENSHARE_START or participant_event.event_type == ParticipantEventTypes.SCREENSHARE_STOP:
             webhook_trigger_type = WebhookTriggerTypes.PARTICIPANT_EVENTS_SCREENSHARE_START_STOP
+        elif participant_event.event_type == ParticipantEventTypes.UNMUTE or participant_event.event_type == ParticipantEventTypes.MUTE:
+            webhook_trigger_type = WebhookTriggerTypes.PARTICIPANT_EVENTS_MUTE_UNMUTE
+        elif participant_event.event_type == ParticipantEventTypes.WEBCAM_ON or participant_event.event_type == ParticipantEventTypes.WEBCAM_OFF:
+            webhook_trigger_type = WebhookTriggerTypes.PARTICIPANT_EVENTS_WEBCAM_ON_OFF
         else:
             logger.warning(f"Warning: Unknown participant event type: {participant_event.event_type}")
             return

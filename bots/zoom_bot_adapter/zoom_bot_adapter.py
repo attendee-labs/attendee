@@ -177,6 +177,8 @@ class ZoomBotAdapter(BotAdapter):
         self.active_sharer_id = None
         self.active_sharer_source_id = None
         self.screensharing_user_ids_for_participant_events = set()
+        self.participant_media_states_poll_started = False
+        self.participant_media_states_poll_error_ticker = 0
 
         self._participant_cache = {}
 
@@ -294,6 +296,7 @@ class ZoomBotAdapter(BotAdapter):
 
         for left_user_id in left_user_ids:
             self.set_user_screensharing_for_participant_events(left_user_id, False)
+            self.update_participant_media_state(left_user_id, is_unmuted=False, is_webcam_on=False)
             self.send_participant_event(left_user_id, event_type=ParticipantEventTypes.LEAVE)
 
     def on_host_request_start_audio_callback(self, handler):
@@ -505,6 +508,23 @@ class ZoomBotAdapter(BotAdapter):
         elif not is_sharing and user_id in self.screensharing_user_ids_for_participant_events:
             self.screensharing_user_ids_for_participant_events.discard(user_id)
             self.send_participant_event(user_id, event_type=ParticipantEventTypes.SCREENSHARE_STOP)
+
+    def poll_participant_media_states(self):
+        try:
+            if self.meeting_service.GetMeetingStatus() == zoom.MEETING_STATUS_INMEETING:
+                for participant_id in self.participants_ctrl.GetParticipantsList():
+                    if participant_id == self.my_participant_id:
+                        continue
+                    user = self.participants_ctrl.GetUserByUserID(participant_id)
+                    if user:
+                        # A participant who hasn't connected audio yet can't be heard, even if they aren't muted
+                        is_unmuted = not user.IsAudioMuted() and user.GetAudioJoinType() in (zoom.AudioType.AUDIOTYPE_VOIP, zoom.AudioType.AUDIOTYPE_PHONE)
+                        self.update_participant_media_state(participant_id, is_unmuted=is_unmuted, is_webcam_on=user.IsVideoOn())
+        except Exception as e:
+            if self.participant_media_states_poll_error_ticker % 100 == 0:
+                logger.warning(f"Error polling participant media states: {e}")
+            self.participant_media_states_poll_error_ticker += 1
+        return True
 
     def on_sharing_status_callback(self, sharing_info):
         user_id = sharing_info.userid
@@ -729,6 +749,11 @@ class ZoomBotAdapter(BotAdapter):
 
         # Apply meeting settings
         self.apply_meeting_settings()
+
+        # Poll for participant mute / webcam changes
+        if not self.participant_media_states_poll_started:
+            self.participant_media_states_poll_started = True
+            GLib.timeout_add_seconds(1, self.poll_participant_media_states)
 
         # Set up media streams
         GLib.timeout_add_seconds(1, self.set_up_bot_audio_input)
