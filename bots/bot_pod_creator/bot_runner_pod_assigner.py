@@ -4,10 +4,40 @@ import random
 import time
 from typing import Dict
 
+import redis
 from django.conf import settings
 from kubernetes import client, config
 
 logger = logging.getLogger(__name__)
+
+# Redis hash of how many bot launches asked for a runner, by outcome ("assigned", "not_assigned" or
+# "outcome_unknown"). The pool manager sizes the pool from how fast these grow. They are running totals
+# that are never reset, so only the difference between two readings means anything.
+BOT_RUNNER_POOL_LAUNCH_COUNTS_REDIS_KEY = "bot_runner_pool:launch_counts"
+
+_redis_client = None
+
+
+def _get_redis_client():
+    # Shared across the process. The short timeouts keep a slow Redis from holding up bot launches.
+    global _redis_client
+    if _redis_client is None:
+        _redis_client = redis.from_url(settings.REDIS_URL_WITH_PARAMS, socket_timeout=2, socket_connect_timeout=2)
+    return _redis_client
+
+
+def _record_bot_runner_pool_launch(outcome: str):
+    # This is only used for sizing the pool, so a Redis problem must never fail the launch
+    try:
+        _get_redis_client().hincrby(BOT_RUNNER_POOL_LAUNCH_COUNTS_REDIS_KEY, outcome, 1)
+    except Exception as e:
+        logger.warning("Failed to record bot runner pool launch with outcome %s: %s", outcome, e)
+
+
+def get_bot_runner_pool_launch_counts() -> Dict[str, int]:
+    """Returns the running total of bot launches that asked for a runner, by outcome. Raises redis.RedisError if Redis can't be reached."""
+    launch_counts = _get_redis_client().hgetall(BOT_RUNNER_POOL_LAUNCH_COUNTS_REDIS_KEY)
+    return {outcome.decode(): int(count) for outcome, count in launch_counts.items()}
 
 
 class ClaimOutcomeUnknownError(Exception):
@@ -131,13 +161,21 @@ class BotRunnerPodAssigner:
               launched anywhere else, or it could end up running twice.
         """
         result = self._attempt_to_assign_bot(bot_object_id)
-        if result["assigned"] or result.get("outcome_unknown"):
-            return result
+        if not result["assigned"] and not result.get("outcome_unknown"):
+            logger.info("First assignment attempt failed for bot %s, retrying in 1 second...", bot_object_id)
+            time.sleep(1)
+            result = self._attempt_to_assign_bot(bot_object_id)
 
-        logger.info("First assignment attempt failed for bot %s, retrying in 1 second...", bot_object_id)
-        time.sleep(1)
+        # Every launch is recorded, not just the ones that got a runner: a launch that found the pool
+        # empty is the clearest sign that the pool is too small.
+        if result["assigned"]:
+            _record_bot_runner_pool_launch("assigned")
+        elif result.get("outcome_unknown"):
+            _record_bot_runner_pool_launch("outcome_unknown")
+        else:
+            _record_bot_runner_pool_launch("not_assigned")
 
-        return self._attempt_to_assign_bot(bot_object_id)
+        return result
 
     def _attempt_to_assign_bot(self, bot_object_id: str) -> Dict:
         """
