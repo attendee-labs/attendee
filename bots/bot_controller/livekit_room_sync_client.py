@@ -17,7 +17,6 @@ from bots.room_sync_source_participant_configuration import (
     LivekitRoomSyncSourceParticipantConfiguration,
     RoomSyncSourceParticipantConfiguration,
 )
-from bots.room_sync_utils import does_participant_name_have_bot_indicator
 
 logger = logging.getLogger(__name__)
 
@@ -165,6 +164,13 @@ class LivekitRoomSyncClient:
     Release attributes distinguish meeting departures from bot shutdowns.
     Claims require a connected watcher whose membership view has settled.
 
+    Bots never mirror each other. The controller passes this bot's own JOIN
+    (participant_is_the_bot); every control message then carries this bot's
+    meeting participant ids under "bot_participants". Other bots drop those
+    participants from their roster for good and stop any mirror of them that
+    was already connecting. Joins wait briefly for these announcements when
+    other bots are live, so a bot joining the meeting is rarely mirrored at all.
+
     Audio is pushed from the caller's thread into a bounded per-participant
     buffer, and a single pump task per mirror feeds it to the AudioSource one
     frame at a time. A watchdog thread outside the event loop logs only when
@@ -179,6 +185,7 @@ class LivekitRoomSyncClient:
     SOURCE_ATTRIBUTE = "attendee.room_sync.source"
     RELEASE_LEFT_MEETING = "left_meeting"
     RELEASE_SHUTDOWN = "shutdown"
+    RELEASE_BOT_PARTICIPANT = "bot_participant"
     RELEASE_ATTRIBUTE_TIMEOUT_SECONDS = 2
     TAKEOVER_STEP_SECONDS = 2.0
     UNRELEASED_SETTLE_SECONDS = 0.5
@@ -194,6 +201,10 @@ class LivekitRoomSyncClient:
     WATCHER_RETRY_SECONDS = 5
     RECONCILE_INTERVAL_SECONDS = 30
     TAKEOVER_FLAP_WARNING_THRESHOLD = 3
+    # When other bots are live, a new meeting participant might be one of
+    # them. Wait this long for its bot_participants announcement before claiming.
+    BOT_ANNOUNCEMENT_SETTLE_SECONDS = 1.0
+    MAX_ANNOUNCED_BOT_PARTICIPANTS = 16
 
     # Audio: at most this much audio waits in our buffer per participant (the
     # SDK's AudioSource keeps its own ~1s queue on top of this). Each capture
@@ -240,6 +251,12 @@ class LivekitRoomSyncClient:
         self._left_meeting_releases: dict[str, float] = {}
         self._takeover_counts: dict[str, int] = {}
         self._members: dict[str, float] = {}
+        # This bot's own meeting participant ids, announced to other bots.
+        self._own_bot_participants: set[str] = set()
+        # Meeting participant ids that are room sync bots (ours included),
+        # mapped to the bot that announced them. Never mirrored; kept for the
+        # client's lifetime so a late or missed heartbeat can't re-admit them.
+        self._known_bot_participants: dict[str, str] = {}
         self._tasks: set[asyncio.Task] = set()
 
         self._watcher_room: rtc.Room | None = None
@@ -304,14 +321,21 @@ class LivekitRoomSyncClient:
             self._spawn(self._maintenance_loop())
 
     def handle_participant_event(self, event, participant=None):
-        """Accept the bot controller's JOIN/LEAVE event and optional metadata."""
+        """Accept the bot controller's JOIN/LEAVE event and optional metadata.
+
+        Pass this bot's own events too: a JOIN with participant_is_the_bot set
+        is never mirrored, and is announced so other room sync bots skip it.
+        """
         if not self.sync_to_room or self._cleanup_called:
             return
         participant_uuid = event["participant_uuid"]
+        if participant is not None and participant.get("participant_is_the_bot"):
+            if event["event_type"] == ParticipantEventTypes.JOIN:
+                self._submit(self._handle_own_join, participant_uuid)
+            return
         if event["event_type"] == ParticipantEventTypes.JOIN:
             name = participant.get("participant_full_name") if participant is not None else None
-            if not does_participant_name_have_bot_indicator(name):
-                self._submit(self._handle_join, participant_uuid, name)
+            self._submit(self._handle_join, participant_uuid, name)
         elif event["event_type"] == ParticipantEventTypes.LEAVE:
             self._submit(self._handle_leave, participant_uuid)
 
@@ -568,13 +592,47 @@ class LivekitRoomSyncClient:
         )
 
     def _handle_join(self, participant_uuid, name):
+        if participant_uuid in self._known_bot_participants:
+            logger.debug(f"{self._log_prefix} Ignoring join of {participant_uuid}: room sync bot {self._known_bot_participants[participant_uuid]}")
+            return
         self._meeting_participants[participant_uuid] = name
         self._left_meeting_releases.pop(participant_uuid, None)
-        self._schedule_claim_check(participant_uuid, "join")
+        self._schedule_claim_check(participant_uuid, "join", settle=self._bot_announcement_settle())
         # If the watcher isn't ready, its initial/reconnect reconcile picks up
         # this join. No separate waiter task is needed for each participant.
 
-    def _handle_leave(self, participant_uuid):
+    def _bot_announcement_settle(self):
+        # With other bots live, an unclaimed participant may be one of them;
+        # give its announcement a moment to arrive. A lone bot claims right away.
+        return self.BOT_ANNOUNCEMENT_SETTLE_SECONDS if len(self._live_bot_ids()) > 1 else 0.0
+
+    def _handle_own_join(self, participant_uuid):
+        if participant_uuid in self._own_bot_participants:
+            return
+        self._own_bot_participants.add(participant_uuid)
+        logger.info(f"{self._log_prefix} This bot is meeting participant {participant_uuid}; announcing it so other room sync bots don't mirror it")
+        self._mark_bot_participant(participant_uuid, self._instance_id)
+        if not self._shutting_down:
+            # Announce now rather than at the next heartbeat. If the watcher
+            # isn't connected yet, its hello and heartbeats will carry it.
+            self._spawn(self._broadcast("heartbeat"))
+
+    def _record_announced_bot_participants(self, bot_id, participant_uuids):
+        if not isinstance(participant_uuids, list):
+            return
+        for participant_uuid in participant_uuids[: self.MAX_ANNOUNCED_BOT_PARTICIPANTS]:
+            if isinstance(participant_uuid, str) and participant_uuid and participant_uuid not in self._known_bot_participants:
+                logger.info(f"{self._log_prefix} Bot {bot_id} announced meeting participant {participant_uuid} as itself; it will not be mirrored")
+                self._mark_bot_participant(participant_uuid, bot_id)
+
+    def _mark_bot_participant(self, participant_uuid, bot_id):
+        """Never mirror this participant, and stop if we already started."""
+        self._known_bot_participants[participant_uuid] = bot_id
+        if self._mirrors.get(participant_uuid) is not None:
+            logger.warning(f"{self._log_prefix} Stopping mirror of {participant_uuid}: it is room sync bot {bot_id}")
+        self._handle_leave(participant_uuid, self.RELEASE_BOT_PARTICIPANT)
+
+    def _handle_leave(self, participant_uuid, release=RELEASE_LEFT_MEETING):
         self._meeting_participants.pop(participant_uuid, None)
         self._left_meeting_releases.pop(participant_uuid, None)
         self._claim_leases.pop(participant_uuid, None)
@@ -582,7 +640,7 @@ class LivekitRoomSyncClient:
         self._cancel_pending_claim(participant_uuid)
         mirror = self._mirrors.get(participant_uuid)
         if mirror is not None:
-            self._release_mirror(mirror, self.RELEASE_LEFT_MEETING)
+            self._release_mirror(mirror, release)
 
     def _release_mirror(self, mirror, release):
         self._detach_audio(mirror)
@@ -695,6 +753,7 @@ class LivekitRoomSyncClient:
             return
         if not isinstance(bot_id, str) or bot_id == self._instance_id:
             return
+        self._record_announced_bot_participants(bot_id, message.get("bot_participants"))
         if kind == "goodbye":
             if self._members.pop(bot_id, None) is not None:
                 logger.info(f"{self._log_prefix} Bot {bot_id} left the live set (goodbye)")
@@ -724,6 +783,9 @@ class LivekitRoomSyncClient:
         message = {"type": kind, "bot": self._instance_id}
         if participant_uuid is not None:
             message["participant"] = participant_uuid
+        if self._own_bot_participants:
+            # Every message repeats this, so a missed one is soon made up.
+            message["bot_participants"] = sorted(self._own_bot_participants)
         try:
             await asyncio.wait_for(
                 watcher.local_participant.publish_data(json.dumps(message).encode(), reliable=True, topic=self.CONTROL_TOPIC),
@@ -827,9 +889,10 @@ class LivekitRoomSyncClient:
         present_elsewhere = (roster & watcher.remote_participants.keys()) - owned
         missing = roster - owned - present_elsewhere
         logger.info(f"{self._log_prefix} Ownership ({trigger}): {len(roster)} in meeting, {len(owned)} owned or connecting here, {len(present_elsewhere)} present elsewhere, {len(missing)} missing, {len(self._live_bot_ids())} live bots")
+        settle = self._bot_announcement_settle()
         for participant_uuid in self._meeting_participants:
             if participant_uuid not in self._mirrors and self._claimable(participant_uuid):
-                self._schedule_claim_check(participant_uuid, trigger)
+                self._schedule_claim_check(participant_uuid, trigger, settle=settle)
 
     async def _mirror_participant(self, participant_uuid, name, mirror):
         """Own a participant's entire lifetime, including slow connects/leaves."""

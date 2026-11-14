@@ -1712,8 +1712,7 @@ class BotController:
             return
 
         # Mirror participant joins/leaves into the LiveKit room if room sync is enabled
-        # Don't sync the bot itself into the room
-        if self.room_sync_client is not None and not participant["participant_is_the_bot"]:
+        if self.room_sync_client is not None:
             self.room_sync_client.handle_participant_event(event, participant=participant)
 
         # Create participant record if it doesn't exist
