@@ -1423,6 +1423,22 @@ class UserManager {
       });
     }
 
+    // Some events (e.g. onUserJoin) may not include the audio / video state, in which case that value is left out
+    sendMediaStateUpdate(zoomUser) {
+      // audio is null when unknown and '' when the participant has not connected audio, so they can't be heard
+      const isUnmuted = (zoomUser.muted === undefined || zoomUser.audio === undefined || zoomUser.audio === null) ? undefined : (!zoomUser.muted && zoomUser.audio !== '');
+      const isWebcamOn = zoomUser.video;
+      if (zoomUser.state !== 'active' || (isUnmuted === undefined && isWebcamOn === undefined)) {
+        return;
+      }
+      this.ws.sendJson({
+        type: 'ParticipantMediaStateUpdate',
+        participantId: zoomUser.userId.toString(),
+        isUnmuted: isUnmuted,
+        isWebcamOn: isWebcamOn
+      });
+    }
+
     singleUserSynced(user) {
       const convertedUser = this.convertUser(user);
       console.log('singleUserSynced called w', convertedUser);
@@ -1435,6 +1451,7 @@ class UserManager {
       );
       this.newUsersListSynced(uniqueUsers);
       this.detectScreenShareChange(user);
+      this.sendMediaStateUpdate(user);
     }
 
     newUsersListSynced(newUsersList) {

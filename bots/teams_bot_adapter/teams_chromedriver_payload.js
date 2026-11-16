@@ -4108,6 +4108,8 @@ class ParticipantsPoller {
         this.lastLogAllParticipantsRawTime = 0;
         this.lastPollParticipantsTime = 0;
         this.fastPollUntilTime = 0;
+        this.previousParticipantMediaStates = new Map();
+        this.errorPollingParticipantMediaStatesTicker = 0;
     }
 
     start() {
@@ -4123,6 +4125,7 @@ class ParticipantsPoller {
                 }
                 this.lastPollParticipantsTime = now;
                 this.pollParticipants();
+                this.pollParticipantMediaStates();
             } catch (error) {
                 if (this.errorPollingParticipantsTicker % 500 === 0)
                 {
@@ -4140,6 +4143,42 @@ class ParticipantsPoller {
     // rate for a short window to pick up the changes sooner.
     enableFastPolling() {
         this.fastPollUntilTime = Date.now() + ParticipantsPoller.fastPollWindowMs;
+    }
+
+    // Sends each participant's mute / webcam state when it changes
+    pollParticipantMediaStates() {
+        try {
+            const mediaStates = new Map();
+            for (const participant of window.callManager.getRemoteParticipants()) {
+                if (!participant.id || !participant.displayName || participant.state === ParticipantsPoller.lobbyParticipantState) {
+                    continue;
+                }
+                const mediaStreams = (participant.endpoints?.endpointDetails || []).flatMap(endpoint => endpoint.mediaStreams || []);
+                const mediaState = {
+                    isUnmuted: participant.isServerMuted === false,
+                    isWebcamOn: mediaStreams.some(mediaStream => mediaStream.type === 'video' && (mediaStream.direction === 'sendrecv' || mediaStream.direction === 'sendonly'))
+                };
+                mediaStates.set(participant.id, mediaState);
+
+                const previousMediaState = this.previousParticipantMediaStates.get(participant.id);
+                if (!previousMediaState || previousMediaState.isUnmuted !== mediaState.isUnmuted || previousMediaState.isWebcamOn !== mediaState.isWebcamOn) {
+                    window.ws?.sendJson({
+                        type: 'ParticipantMediaStateUpdate',
+                        participantId: participant.id,
+                        ...mediaState
+                    });
+                }
+            }
+            this.previousParticipantMediaStates = mediaStates;
+        } catch (error) {
+            if (this.errorPollingParticipantMediaStatesTicker % 500 === 0) {
+                window.ws?.sendJson({
+                    type: 'ErrorPollingParticipantMediaStates',
+                    error: error.message
+                });
+            }
+            this.errorPollingParticipantMediaStatesTicker++;
+        }
     }
 
     pollParticipants() {

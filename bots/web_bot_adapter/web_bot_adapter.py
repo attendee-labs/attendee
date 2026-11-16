@@ -217,6 +217,7 @@ class WebBotAdapter(BotAdapter):
         self.participants_info[user["deviceId"]] = user
 
         if user_before.get("active") and not user["active"]:
+            self.update_participant_media_state(user["deviceId"], is_unmuted=False, is_webcam_on=False)
             self.add_participant_event_callback({"participant_uuid": user["deviceId"], "event_type": ParticipantEventTypes.LEAVE, "event_data": {}, "timestamp_ms": int(time.time() * 1000)})
             return
 
@@ -398,6 +399,12 @@ class WebBotAdapter(BotAdapter):
     def handle_screenshare_start_stop_event(self, json_data):
         self.add_participant_event_callback({"participant_uuid": json_data["participantId"], "event_type": ParticipantEventTypes.SCREENSHARE_START if json_data["isScreenshareStart"] else ParticipantEventTypes.SCREENSHARE_STOP, "event_data": {}, "timestamp_ms": int(json_data["timestamp"])})
 
+    def handle_participant_media_state_update(self, participant_id, is_unmuted=None, is_webcam_on=None):
+        participant = self.participants_info.get(participant_id)
+        if not participant or not participant.get("active") or participant.get("isCurrentUser"):
+            return
+        self.update_participant_media_state(participant_id, is_unmuted=is_unmuted, is_webcam_on=is_webcam_on)
+
     def handle_chat_message(self, json_data):
         if self.recording_paused and not self.record_chat_messages_when_paused:
             return
@@ -464,6 +471,9 @@ class WebBotAdapter(BotAdapter):
 
                         elif json_data.get("type") == "ScreenshareStartStopEvent":
                             self.handle_screenshare_start_stop_event(json_data)
+
+                        elif json_data.get("type") == "ParticipantMediaStateUpdate":
+                            self.handle_participant_media_state_update(json_data.get("participantId"), is_unmuted=json_data.get("isUnmuted"), is_webcam_on=json_data.get("isWebcamOn"))
 
                         elif json_data.get("type") == "UsersUpdate":
                             for user in json_data["newUsers"]:

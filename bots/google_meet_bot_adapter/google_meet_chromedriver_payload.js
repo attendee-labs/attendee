@@ -965,6 +965,9 @@ class UserManager {
         this.currentUserId = null;
         // Track the set of parentDeviceIds (real participant deviceIds) currently screen sharing
         this.activeScreenSharerParentDeviceIds = new Set();
+        // Last mute / webcam state sent for each participant deviceId
+        this.sentMediaStates = new Map();
+        this.sendMediaStateUpdatesErrorTicker = 0;
 
         this.ws = ws;
     }
@@ -1003,6 +1006,46 @@ class UserManager {
             type: 'DeviceOutputsUpdate',
             deviceOutputs: Array.from(this.deviceOutputMap.values())
         });
+
+        this.sendMediaStateUpdates();
+    }
+
+    // Sends each participant's mute / webcam state when it changes. A device output is disabled when muted / webcam off.
+    // Called after both device output and user list updates, since device outputs may arrive before the user does.
+    sendMediaStateUpdates() {
+        try {
+            const mediaStates = new Map();
+            for (const user of this.getCurrentUsersInMeeting()) {
+                if (user.parentDeviceId || user.isCurrentUser) {
+                    continue;
+                }
+                const audioOutput = this.getDeviceOutput(user.deviceId, 1);
+                const videoOutput = this.getDeviceOutput(user.deviceId, 2);
+                const mediaState = {
+                    isUnmuted: audioOutput ? !audioOutput.disabled : undefined,
+                    isWebcamOn: videoOutput ? !videoOutput.disabled : undefined
+                };
+                mediaStates.set(user.deviceId, mediaState);
+
+                const sentMediaState = this.sentMediaStates.get(user.deviceId) || {};
+                if (sentMediaState.isUnmuted !== mediaState.isUnmuted || sentMediaState.isWebcamOn !== mediaState.isWebcamOn) {
+                    this.ws.sendJson({
+                        type: 'ParticipantMediaStateUpdate',
+                        participantId: user.deviceId,
+                        ...mediaState
+                    });
+                }
+            }
+            this.sentMediaStates = mediaStates;
+        } catch (error) {
+            if (this.sendMediaStateUpdatesErrorTicker % 500 === 0) {
+                this.ws.sendJson({
+                    type: 'SendMediaStateUpdatesError',
+                    error: error.message
+                });
+            }
+            this.sendMediaStateUpdatesErrorTicker++;
+        }
     }
 
     getUserByStreamId(streamId) {
@@ -1144,6 +1187,7 @@ class UserManager {
         }
 
         this.detectScreenShareChanges();
+        this.sendMediaStateUpdates();
     }
 
     detectScreenShareChanges() {

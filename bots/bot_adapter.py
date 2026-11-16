@@ -1,3 +1,6 @@
+import time
+
+
 class BotAdapter:
     class Messages:
         LEAVE_MEETING_WAITING_FOR_HOST = "Leave meeting because received waiting for host status"
@@ -50,3 +53,24 @@ class BotAdapter:
         AUTO_LEAVE_COULD_NOT_ENABLE_CLOSED_CAPTIONS = "AUTO_LEAVE_COULD_NOT_ENABLE_CLOSED_CAPTIONS"
 
     DEBUG_RECORDING_FILE_PATH = "/tmp/debug_screen_recording.mp4"
+
+    def update_participant_media_state(self, participant_uuid, is_unmuted=None, is_webcam_on=None):
+        """
+        Emits unmute/mute and webcam_on/webcam_off participant events when a participant's media state changes.
+        Participants are assumed to start muted with their webcam off, so nothing is emitted for a participant
+        who stays muted / webcam off the whole time. Pass None for a value that is unknown.
+        """
+        from bots.models import ParticipantEventTypes
+
+        if not hasattr(self, "participant_media_states"):
+            self.participant_media_states = {}
+        state = self.participant_media_states.setdefault(participant_uuid, {"is_unmuted": False, "is_webcam_on": False})
+
+        for key, value, on_event_type, off_event_type in (
+            ("is_unmuted", is_unmuted, ParticipantEventTypes.UNMUTE, ParticipantEventTypes.MUTE),
+            ("is_webcam_on", is_webcam_on, ParticipantEventTypes.WEBCAM_ON, ParticipantEventTypes.WEBCAM_OFF),
+        ):
+            if value is None or bool(value) == state[key]:
+                continue
+            state[key] = bool(value)
+            self.add_participant_event_callback({"participant_uuid": participant_uuid, "event_type": on_event_type if value else off_event_type, "event_data": {}, "timestamp_ms": int(time.time() * 1000)})
