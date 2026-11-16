@@ -21,6 +21,7 @@ from bots.models import (
 )
 from bots.tasks.sync_calendar_task import (
     CalendarAPIAuthenticationError,
+    CalendarAPIError,
     CalendarSyncHandler,
     GoogleCalendarSyncHandler,
     MicrosoftCalendarSyncHandler,
@@ -263,7 +264,7 @@ class TestEnqueueSyncCalendarTask(TransactionTestCase):
         self.assertIsNotNone(self.calendar.sync_task_enqueued_at)
         self.assertNotEqual(self.calendar.sync_task_enqueued_at, initial_sync_task_enqueued_at)
         self.assertEqual(self.calendar.sync_task_requested_at, None)
-        mock_delay.assert_called_once_with(self.calendar.id)
+        mock_delay.assert_called_once_with(self.calendar.id, enqueued_at=self.calendar.sync_task_enqueued_at.isoformat())
 
 
 class TestSyncCalendar(TestCase):
@@ -1178,3 +1179,162 @@ class TestMicrosoftNotificationChannelLifecycle(TransactionTestCase):
             CalendarNotificationChannel.objects.filter(platform_uuid="orphaned_subscription_uuid").exists(),
             "The notification channel with orphaned_subscription_uuid should not exist",
         )
+
+
+def _http_error_response(status_code: int, content: bytes, url: str = "https://graph.microsoft.com/v1.0/me/calendarView") -> requests.Response:
+    response = requests.Response()
+    response.status_code = status_code
+    response._content = content
+    response.url = url
+    return response
+
+
+class TestSyncCalendarRetryDeduplication(TestCase):
+    """A retry of a sync task is dropped when a newer sync task has been enqueued for the same calendar."""
+
+    def setUp(self):
+        self.organization = Organization.objects.create(name="Test Org")
+        self.project = Project.objects.create(name="Test Project", organization=self.organization)
+        self.enqueued_at = timezone.now() - timedelta(minutes=5)
+        self.calendar = Calendar.objects.create(project=self.project, platform=CalendarPlatform.MICROSOFT, client_id="test_client_id", sync_task_enqueued_at=self.enqueued_at)
+
+    @patch("bots.tasks.sync_calendar_task.MicrosoftCalendarSyncHandler")
+    def test_retry_is_skipped_when_superseded(self, mock_handler_class):
+        Calendar.objects.filter(id=self.calendar.id).update(sync_task_enqueued_at=timezone.now())
+
+        result = sync_calendar.apply(args=[self.calendar.id], kwargs={"enqueued_at": self.enqueued_at.isoformat()}, retries=1).get()
+
+        mock_handler_class.assert_not_called()
+        self.assertEqual(result, {"success": False, "skipped": "superseded_by_newer_sync_task"})
+
+    @patch("bots.tasks.sync_calendar_task.MicrosoftCalendarSyncHandler")
+    def test_retry_runs_when_not_superseded(self, mock_handler_class):
+        mock_handler_class.return_value.sync_events.return_value = {"success": True}
+
+        result = sync_calendar.apply(args=[self.calendar.id], kwargs={"enqueued_at": self.enqueued_at.isoformat()}, retries=1).get()
+
+        mock_handler_class.assert_called_once_with(self.calendar.id)
+        self.assertEqual(result, {"success": True})
+
+    @patch("bots.tasks.sync_calendar_task.MicrosoftCalendarSyncHandler")
+    def test_first_attempt_always_runs(self, mock_handler_class):
+        mock_handler_class.return_value.sync_events.return_value = {"success": True}
+        Calendar.objects.filter(id=self.calendar.id).update(sync_task_enqueued_at=timezone.now())
+
+        result = sync_calendar.apply(args=[self.calendar.id], kwargs={"enqueued_at": self.enqueued_at.isoformat()}).get()
+
+        mock_handler_class.assert_called_once_with(self.calendar.id)
+        self.assertEqual(result, {"success": True})
+
+
+class TestCalendarProviderErrorsWithoutResponse(TestCase):
+    """Timeouts, connection errors and non-JSON error bodies must surface as themselves, not as AttributeError / JSONDecodeError."""
+
+    def setUp(self):
+        self.organization = Organization.objects.create(name="Test Org")
+        self.project = Project.objects.create(name="Test Project", organization=self.organization)
+        self.microsoft_calendar = Calendar.objects.create(project=self.project, platform=CalendarPlatform.MICROSOFT, client_id="test_client_id")
+        self.microsoft_calendar.set_credentials({"client_secret": "test_secret", "refresh_token": "test_refresh_token"})
+        self.google_calendar = Calendar.objects.create(project=self.project, platform=CalendarPlatform.GOOGLE, client_id="test_client_id_google")
+        self.google_calendar.set_credentials({"client_secret": "test_secret", "refresh_token": "test_refresh_token"})
+
+    def test_microsoft_auth_error_check_ignores_errors_without_response(self):
+        handler = MicrosoftCalendarSyncHandler(self.microsoft_calendar.id)
+        self.assertIsNone(handler._raise_if_error_is_authentication_error(requests.exceptions.ReadTimeout("Read timed out")))
+
+    def test_google_auth_error_check_ignores_errors_without_response(self):
+        handler = GoogleCalendarSyncHandler(self.google_calendar.id)
+        self.assertIsNone(handler._raise_if_error_is_authentication_error(requests.exceptions.ConnectionError("Connection refused")))
+
+    @patch("bots.tasks.sync_calendar_task.requests.Session.send")
+    def test_microsoft_graph_request_timeout_raises_timeout(self, mock_send):
+        mock_send.side_effect = requests.exceptions.ReadTimeout("Read timed out")
+        handler = MicrosoftCalendarSyncHandler(self.microsoft_calendar.id)
+
+        with self.assertRaises(requests.exceptions.ReadTimeout):
+            handler._make_graph_request("https://graph.microsoft.com/v1.0/me/calendarView", "token")
+
+    @patch("bots.tasks.sync_calendar_task.requests.Session.send")
+    def test_microsoft_graph_request_non_json_503_raises_http_error(self, mock_send):
+        mock_send.return_value = _http_error_response(503, b"<html>Service Unavailable</html>")
+        handler = MicrosoftCalendarSyncHandler(self.microsoft_calendar.id)
+
+        with self.assertRaises(requests.exceptions.HTTPError) as cm:
+            handler._make_graph_request("https://graph.microsoft.com/v1.0/me/calendarView", "token")
+        self.assertEqual(cm.exception.response.status_code, 503)
+
+    @patch("bots.tasks.sync_calendar_task.requests.Session.send")
+    def test_google_calendar_request_timeout_raises_timeout(self, mock_send):
+        mock_send.side_effect = requests.exceptions.ReadTimeout("Read timed out")
+        handler = GoogleCalendarSyncHandler(self.google_calendar.id)
+
+        with self.assertRaises(requests.exceptions.ReadTimeout):
+            handler._make_gcal_request("https://www.googleapis.com/calendar/v3/calendars/primary/events", "token")
+
+    @patch("bots.tasks.sync_calendar_task.requests.post")
+    def test_microsoft_token_refresh_connection_error_raises_calendar_api_error(self, mock_post):
+        mock_post.side_effect = requests.exceptions.ConnectionError("Connection refused")
+        handler = MicrosoftCalendarSyncHandler(self.microsoft_calendar.id)
+
+        with self.assertRaises(CalendarAPIError):
+            handler._get_access_token()
+
+    @patch("bots.tasks.sync_calendar_task.requests.post")
+    def test_google_token_refresh_connection_error_raises_calendar_api_error(self, mock_post):
+        mock_post.side_effect = requests.exceptions.ConnectionError("Connection refused")
+        handler = GoogleCalendarSyncHandler(self.google_calendar.id)
+
+        with self.assertRaises(CalendarAPIError):
+            handler._get_access_token()
+
+
+class TestSyncEventsNotificationChannelRefreshFailure(TransactionTestCase):
+    """A failure to refresh notification channels must not prevent the events from being synced."""
+
+    def setUp(self):
+        self.organization = Organization.objects.create(name="Test Org")
+        self.project = Project.objects.create(name="Test Project", organization=self.organization)
+        self.calendar = Calendar.objects.create(project=self.project, platform=CalendarPlatform.MICROSOFT, client_id="test_client_id")
+
+    def _handler_with_no_remote_events(self):
+        handler = CalendarSyncHandler(self.calendar.id)
+        handler._get_access_token = Mock(return_value="mock_token")
+        handler._list_events = Mock(return_value=[])
+        handler._get_event_by_id = Mock(return_value=None)
+        return handler
+
+    @patch("bots.tasks.sync_calendar_task.trigger_webhook")
+    def test_sync_continues_when_refresh_returns_503(self, mock_trigger_webhook):
+        handler = self._handler_with_no_remote_events()
+        response = _http_error_response(503, b'{"error": {"code": "ExtensionError"}}', url="https://graph.microsoft.com/v1.0/subscriptions/abc")
+        handler._refresh_notification_channels = Mock(side_effect=requests.exceptions.HTTPError("503 Server Error", response=response))
+
+        result = handler.sync_events()
+
+        self.assertTrue(result["success"])
+        handler._list_events.assert_called_once()
+        self.calendar.refresh_from_db()
+        self.assertIsNotNone(self.calendar.last_successful_sync_at)
+
+    @patch("bots.tasks.sync_calendar_task.trigger_webhook")
+    def test_sync_continues_when_refresh_times_out(self, mock_trigger_webhook):
+        handler = self._handler_with_no_remote_events()
+        handler._refresh_notification_channels = Mock(side_effect=requests.exceptions.ReadTimeout("Read timed out"))
+
+        result = handler.sync_events()
+
+        self.assertTrue(result["success"])
+        handler._list_events.assert_called_once()
+
+    @patch("bots.tasks.sync_calendar_task.trigger_webhook")
+    @patch("bots.tasks.sync_calendar_task.remove_bots_from_calendar")
+    def test_authentication_error_during_refresh_still_disconnects_calendar(self, mock_remove_bots, mock_trigger_webhook):
+        handler = self._handler_with_no_remote_events()
+        handler._refresh_notification_channels = Mock(side_effect=CalendarAPIAuthenticationError("Auth failed"))
+
+        result = handler.sync_events()
+
+        self.assertIsNone(result)
+        handler._list_events.assert_not_called()
+        self.calendar.refresh_from_db()
+        self.assertEqual(self.calendar.state, CalendarStates.DISCONNECTED)
