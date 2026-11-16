@@ -40,6 +40,7 @@ This document lists all supported environment variables for the Attendee applica
 | `POSTGRES_DB` | String | — | PostgreSQL database name. Required when connecting via the `POSTGRES_*` variables. |
 | `POSTGRES_USER` | String | — | PostgreSQL user. Required when connecting via the `POSTGRES_*` variables. |
 | `POSTGRES_PASSWORD` | String | — | PostgreSQL password. Only used when connecting via the `POSTGRES_*` variables. |
+| `DATABASE_CONN_MAX_AGE` | Integer | `600` | Lifetime (in seconds) of persistent database connections (Django `CONN_MAX_AGE`). Lower it, or set it to `0` to close connections at the end of each request or task, when many processes share a PostgreSQL server with a limited `max_connections`. |
 
 \* Either `DATABASE_URL` or the set of `POSTGRES_HOST`, `POSTGRES_DB` and `POSTGRES_USER` (plus `POSTGRES_PASSWORD`/`POSTGRES_PORT` as needed) must be provided.
 
