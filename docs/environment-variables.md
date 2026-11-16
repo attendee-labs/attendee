@@ -123,6 +123,9 @@ This document lists all supported environment variables for the Attendee applica
 | `PROCESS_UTTERANCE_CELERY_QUEUE` | String | `celery` | Celery queue name for processing utterances. |
 | `PROCESS_ASYNC_TRANSCRIPTION_CELERY_QUEUE` | String | `celery` | Celery queue name for async transcription processing. |
 | `SYNC_CALENDAR_CELERY_QUEUE` | String | `celery` | Celery queue name for calendar synchronization. |
+| `SYNC_CALENDAR_SOFT_TIME_LIMIT_SECONDS` | Integer | `300` | Soft time limit (in seconds) of a single calendar sync task attempt. When reached, the attempt is aborted and retried with backoff. |
+| `SYNC_CALENDAR_TIME_LIMIT_SECONDS` | Integer | `SYNC_CALENDAR_SOFT_TIME_LIMIT_SECONDS + 60` | Hard time limit (in seconds) of a single calendar sync task attempt. The worker process running the task is killed when reached. |
+| `CALENDAR_REQUESTED_SYNC_MIN_INTERVAL_SECONDS` | Integer | `60` | Minimum delay (in seconds) between two sync tasks enqueued for the same calendar in response to change notifications from the calendar provider. Notifications received in the meantime are coalesced into the next sync. |
 | `LAUNCH_SCHEDULED_BOT_CELERY_QUEUE` | String | `celery` | Celery queue name for launching scheduled bots. |
 | `DELIVER_WEBHOOK_CELERY_QUEUE` | String | `celery` | Celery queue name for webhook delivery. |
 | `LAUNCH_BOT_METHOD` | String | `kubernetes` | Method to launch bots: `kubernetes` or `docker-compose-multi-host`. |

@@ -27,6 +27,9 @@ from bots.tasks.sync_zoom_oauth_connection_task import enqueue_sync_zoom_oauth_c
 log = logging.getLogger(__name__)
 
 CALENDAR_SYNC_THRESHOLD_HOURS = 24  # The longest a calendar can go without having been synced
+# Minimum delay between two sync tasks enqueued for the same calendar in response to sync requests (webhook notifications).
+# Requests received in the meantime are not lost: sync_task_requested_at stays set and is picked up on a later cycle.
+CALENDAR_REQUESTED_SYNC_MIN_INTERVAL_SECONDS = int(os.getenv("CALENDAR_REQUESTED_SYNC_MIN_INTERVAL_SECONDS", 60))
 
 # Heartbeat file the scheduler rewrites each cycle so a liveness probe can
 # restart the pod if the loop stalls (a process-liveness check wouldn't catch it).
@@ -127,11 +130,13 @@ class Command(BaseCommand):
         """
         now = timezone.now()
         cutoff_time = now - timezone.timedelta(hours=CALENDAR_SYNC_THRESHOLD_HOURS)
+        requested_sync_cutoff_time = now - timezone.timedelta(seconds=CALENDAR_REQUESTED_SYNC_MIN_INTERVAL_SECONDS)
 
-        # Find connected calendars that haven't had a sync task enqueued in the last 24 hours
+        # Find connected calendars that haven't had a sync task enqueued in the last 24 hours,
+        # or that have a pending sync request and haven't had a sync task enqueued very recently
         calendars = Calendar.objects.filter(
             state=CalendarStates.CONNECTED,
-        ).filter(Q(sync_task_enqueued_at__isnull=True) | Q(sync_task_enqueued_at__lte=cutoff_time) | Q(sync_task_requested_at__isnull=False))
+        ).filter(Q(sync_task_enqueued_at__isnull=True) | Q(sync_task_enqueued_at__lte=cutoff_time) | Q(sync_task_requested_at__isnull=False, sync_task_enqueued_at__lte=requested_sync_cutoff_time))
 
         for calendar in calendars:
             last_enqueued = calendar.sync_task_enqueued_at.isoformat() if calendar.sync_task_enqueued_at else "never"

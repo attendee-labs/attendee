@@ -9,7 +9,7 @@ from django.test import TestCase, override_settings
 from django.utils import timezone as django_timezone
 
 from accounts.models import Organization
-from bots.management.commands.run_scheduler import CALENDAR_SYNC_THRESHOLD_HOURS, Command
+from bots.management.commands.run_scheduler import CALENDAR_REQUESTED_SYNC_MIN_INTERVAL_SECONDS, CALENDAR_SYNC_THRESHOLD_HOURS, Command
 from bots.models import Bot, BotStates, Calendar, CalendarPlatform, CalendarStates, Project, ZoomOAuthApp, ZoomOAuthConnection, ZoomOAuthConnectionStates
 
 
@@ -201,7 +201,7 @@ class RunSchedulerCommandTestCase(TestCase):
                 command._run_periodic_calendar_syncs()
 
             # Verify only the boundary calendar had a sync task enqueued
-            mock_delay.assert_called_once_with(calendar_boundary.id)
+            mock_delay.assert_called_once_with(calendar_boundary.id, enqueued_at=self.now.isoformat())
 
         # Verify the sync_task_enqueued_at field was updated for the boundary calendar
         calendar_boundary.refresh_from_db()
@@ -224,12 +224,39 @@ class RunSchedulerCommandTestCase(TestCase):
                 command._run_periodic_calendar_syncs()
 
             # Verify only the boundary calendar had a sync task enqueued
-            mock_delay.assert_called_once_with(calendar_with_requested_sync.id)
+            mock_delay.assert_called_once_with(calendar_with_requested_sync.id, enqueued_at=self.now.isoformat())
 
         # Verify the sync_task_enqueued_at field was updated for the boundary calendar
         calendar_with_requested_sync.refresh_from_db()
         self.assertEqual(calendar_with_requested_sync.sync_task_enqueued_at, self.now)
         self.assertEqual(calendar_with_requested_sync.sync_task_requested_at, None)
+
+    def test_run_periodic_calendar_syncs_debounces_requested_syncs(self):
+        """A requested sync is not enqueued again while the previous sync task was enqueued less than CALENDAR_REQUESTED_SYNC_MIN_INTERVAL_SECONDS ago"""
+        just_enqueued = self.now - django_timezone.timedelta(seconds=CALENDAR_REQUESTED_SYNC_MIN_INTERVAL_SECONDS - 1)
+        requested_at = self.now - django_timezone.timedelta(seconds=1)
+        calendar = Calendar.objects.create(project=self.project, platform=CalendarPlatform.MICROSOFT, state=CalendarStates.CONNECTED, sync_task_enqueued_at=just_enqueued, sync_task_requested_at=requested_at, client_id="test_client_id_debounced")
+
+        command = Command()
+
+        with patch("bots.tasks.sync_calendar_task.sync_calendar.delay") as mock_delay:
+            with patch("django.utils.timezone.now", return_value=self.now):
+                command._run_periodic_calendar_syncs()
+            mock_delay.assert_not_called()
+
+        # The request is kept, so it is picked up once the interval has elapsed
+        calendar.refresh_from_db()
+        self.assertEqual(calendar.sync_task_enqueued_at, just_enqueued)
+        self.assertEqual(calendar.sync_task_requested_at, requested_at)
+
+        later = self.now + django_timezone.timedelta(seconds=1)
+        with patch("bots.tasks.sync_calendar_task.sync_calendar.delay") as mock_delay:
+            with patch("django.utils.timezone.now", return_value=later):
+                command._run_periodic_calendar_syncs()
+            mock_delay.assert_called_once_with(calendar.id, enqueued_at=later.isoformat())
+
+        calendar.refresh_from_db()
+        self.assertEqual(calendar.sync_task_requested_at, None)
 
     def test_run_autopay_tasks_enqueues_eligible_organizations(self):
         """Test that _run_autopay_tasks finds and enqueues autopay tasks for eligible organizations"""
