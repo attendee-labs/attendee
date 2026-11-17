@@ -5,7 +5,7 @@ from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
-from bots.credentials_encryption import get_credentials_fernet, new_credentials_encryption_key
+from bots.credentials_encryption_utils import get_credentials_fernet, new_credentials_encryption_key
 from bots.models import BotLogin, Calendar, Credentials, GoogleMeetBotLogin, WebexServiceApp, WebhookSecret, ZoomOAuthApp, ZoomOAuthConnection
 
 logger = logging.getLogger(__name__)
@@ -24,7 +24,7 @@ ENCRYPTED_COLUMNS = [
 
 
 class Command(BaseCommand):
-    help = "Re-encrypts every encrypted column with NEW_CREDENTIALS_ENCRYPTION_KEY. Run it only after every pod is running with NEW_CREDENTIALS_ENCRYPTION_KEY set. See bots/credentials_encryption.py for the full rotation procedure."
+    help = "Re-encrypts every encrypted column with NEW_CREDENTIALS_ENCRYPTION_KEY. Run it only after every pod is running with NEW_CREDENTIALS_ENCRYPTION_KEY set. See bots/credentials_encryption_utils.py for the full rotation procedure."
 
     def add_arguments(self, parser):
         parser.add_argument(

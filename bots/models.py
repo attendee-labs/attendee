@@ -23,7 +23,7 @@ from django.utils.crypto import get_random_string
 
 from accounts.models import Organization, User, UserRole
 from bots.bot_pod_creator.bot_pod_spec import BotPodSpecType
-from bots.credentials_encryption import decrypt_credentials, encrypt_credentials
+from bots.credentials_encryption_utils import decrypt_credentials, encrypt_credentials
 from bots.storage import StorageAlias, download_blob_from_remote_storage, remote_storage_url
 from bots.webhook_utils import trigger_webhook
 

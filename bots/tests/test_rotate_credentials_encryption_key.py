@@ -5,7 +5,7 @@ from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import TestCase, override_settings
 
-from bots.credentials_encryption import decrypt_credentials, encrypt_credentials
+from bots.credentials_encryption_utils import decrypt_credentials, encrypt_credentials
 from bots.models import Credentials, Organization, Project, WebhookSecret
 
 OLD_KEY = Fernet.generate_key().decode()
