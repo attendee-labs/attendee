@@ -5,7 +5,7 @@ from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
-from bots.credentials_encryption_utils import configured_new_credentials_encryption_key, get_credentials_fernet, is_valid_fernet_key
+from bots.credentials_encryption_utils import configured_fallback_credentials_encryption_keys, get_credentials_fernet, is_valid_fernet_key
 from bots.models import BotLogin, Calendar, Credentials, GoogleMeetBotLogin, WebexServiceApp, WebhookSecret, ZoomOAuthApp, ZoomOAuthConnection
 
 logger = logging.getLogger(__name__)
@@ -24,25 +24,24 @@ ENCRYPTED_COLUMNS = [
 
 
 class Command(BaseCommand):
-    help = "Re-encrypts every encrypted column with NEW_CREDENTIALS_ENCRYPTION_KEY. Run it only after every pod is running with NEW_CREDENTIALS_ENCRYPTION_KEY set. See bots/credentials_encryption_utils.py for the full rotation procedure."
+    help = "Re-encrypts every encrypted column that is still on a key from CREDENTIALS_ENCRYPTION_KEY_FALLBACKS with CREDENTIALS_ENCRYPTION_KEY. See bots/credentials_encryption_utils.py for the full rotation procedure."
 
     def add_arguments(self, parser):
         parser.add_argument(
             "--check",
             action="store_true",
-            help="Change nothing; report how many rows are not yet encrypted with the new key.",
+            help="Change nothing; report how many rows are not encrypted with CREDENTIALS_ENCRYPTION_KEY.",
         )
 
     def handle(self, *args, **options):
         if not settings.CREDENTIALS_ENCRYPTION_KEY:
             raise CommandError("CREDENTIALS_ENCRYPTION_KEY must be set.")
-        new_key = configured_new_credentials_encryption_key()
-        if new_key is None:
-            raise CommandError("NEW_CREDENTIALS_ENCRYPTION_KEY must be set to a key different from CREDENTIALS_ENCRYPTION_KEY.")
-        if not is_valid_fernet_key(new_key):
-            raise CommandError("NEW_CREDENTIALS_ENCRYPTION_KEY is not a valid Fernet key. Pods are ignoring it, so no rotation is in progress. Fix the value, wait for every pod to pick it up, then re-run this command.")
+        if not all(is_valid_fernet_key(key) for key in configured_fallback_credentials_encryption_keys()):
+            raise CommandError("CREDENTIALS_ENCRYPTION_KEY_FALLBACKS contains a key that is not a valid Fernet key. Pods are ignoring it, so rows encrypted with it cannot be read. Fix the value and deploy it, then re-run this command.")
 
-        new_fernet = Fernet(new_key)
+        # With no fallback keys there is nothing to re-encrypt, but the command still verifies that
+        # every row can be decrypted with CREDENTIALS_ENCRYPTION_KEY.
+        new_fernet = Fernet(settings.CREDENTIALS_ENCRYPTION_KEY)
         rotation_fernet = get_credentials_fernet()
         check_only = options["check"]
 
@@ -54,19 +53,19 @@ class Command(BaseCommand):
             total_remaining += remaining
             total_undecryptable += undecryptable
             if check_only:
-                self.stdout.write(f"{label}: {remaining} rows not on the new key, {undecryptable} rows undecryptable")
+                self.stdout.write(f"{label}: {remaining} rows on a fallback key, {undecryptable} rows undecryptable")
             else:
                 self.stdout.write(f"{label}: re-encrypted {rotated} rows, {undecryptable} rows undecryptable")
 
         if not check_only:
-            # Rows written by a stale in-memory instance can be saved back with the old key while
-            # the command runs, so finish with a check pass.
+            # Rows written by a stale in-memory instance can be saved back with a fallback key
+            # while the command runs, so finish with a check pass.
             total_remaining = sum(self._process_column(model, field_name, new_fernet, rotation_fernet, check_only=True)[1] for model, field_name in ENCRYPTED_COLUMNS)
 
-        self.stdout.write(f"Rows not on the new key: {total_remaining}. Undecryptable rows: {total_undecryptable}.")
+        self.stdout.write(f"Rows on a fallback key: {total_remaining}. Undecryptable rows: {total_undecryptable}.")
         if total_remaining or total_undecryptable:
-            raise CommandError("Not every row is encrypted with the new key. Do not swap CREDENTIALS_ENCRYPTION_KEY yet; re-run this command and investigate any undecryptable rows.")
-        self.stdout.write(self.style.SUCCESS("Every row is encrypted with the new key. You can now set CREDENTIALS_ENCRYPTION_KEY to the new key and clear NEW_CREDENTIALS_ENCRYPTION_KEY."))
+            raise CommandError("Not every row is encrypted with CREDENTIALS_ENCRYPTION_KEY. Do not remove CREDENTIALS_ENCRYPTION_KEY_FALLBACKS yet; re-run this command and investigate any undecryptable rows.")
+        self.stdout.write(self.style.SUCCESS("Every row is encrypted with CREDENTIALS_ENCRYPTION_KEY. Before removing CREDENTIALS_ENCRYPTION_KEY_FALLBACKS, wait until no pod from before the key change is running and confirm this again with --check."))
 
     def _process_column(self, model, field_name, new_fernet, rotation_fernet, check_only):
         rotated = 0
@@ -93,7 +92,7 @@ class Command(BaseCommand):
                 remaining += 1
             elif status == "undecryptable":
                 undecryptable += 1
-                logger.error(f"rotate_credentials_encryption_key: {model.__name__} pk={pk} {field_name} cannot be decrypted with either key")
+                logger.error(f"rotate_credentials_encryption_key: {model.__name__} pk={pk} {field_name} cannot be decrypted with any configured key")
         return rotated, remaining, undecryptable
 
     def _key_status(self, token, new_fernet, rotation_fernet):

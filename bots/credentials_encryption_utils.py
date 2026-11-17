@@ -7,19 +7,26 @@ logger = logging.getLogger(__name__)
 
 # Key rotation for CREDENTIALS_ENCRYPTION_KEY
 #
-# 1. Set NEW_CREDENTIALS_ENCRYPTION_KEY to a freshly generated Fernet key and wait until every
-#    pod (web, workers, scheduler and bot pods) is running with it. While it is set, new writes are
-#    encrypted with the new key and reads accept either key.
-# 2. Run `python manage.py rotate_credentials_encryption_key` to re-encrypt every encrypted column
-#    with the new key. Run it again with --check right before step 3; it must report 0 rows left.
-# 3. In a single rollout, set CREDENTIALS_ENCRYPTION_KEY to the new key and set
-#    NEW_CREDENTIALS_ENCRYPTION_KEY to ''.
+# This works like Django's SECRET_KEY / SECRET_KEY_FALLBACKS: CREDENTIALS_ENCRYPTION_KEY encrypts,
+# and CREDENTIALS_ENCRYPTION_KEY_FALLBACKS holds previous keys that can still decrypt.
 #
-# A malformed NEW_CREDENTIALS_ENCRYPTION_KEY is ignored (with an error log) instead of breaking
-# every encrypt and decrypt, and the rotation command refuses to run with it.
+# 1. Deploy with CREDENTIALS_ENCRYPTION_KEY set to a freshly generated Fernet key and the previous
+#    key moved to CREDENTIALS_ENCRYPTION_KEY_FALLBACKS.
+# 2. Run `python manage.py rotate_credentials_encryption_key` to re-encrypt every encrypted column
+#    with the new key. Unlike sessions and password reset tokens, stored credentials never expire,
+#    so the previous key cannot be removed until this has been done.
+# 3. Once no pod from before step 1 is still running, run the command again with --check. When it
+#    reports 0 rows on a fallback key, deploy with CREDENTIALS_ENCRYPTION_KEY_FALLBACKS removed.
+#
+# Pods that are still running from before step 1 (bots that are in a meeting) only have the previous
+# key, so they cannot read rows written with the new key. To avoid that, first deploy with the new
+# key in CREDENTIALS_ENCRYPTION_KEY_FALLBACKS, wait for those pods to finish, then do step 1.
+#
+# A malformed fallback key is ignored (with an error log) instead of breaking every encrypt and
+# decrypt, and the rotation command refuses to run with it.
 
-MALFORMED_NEW_KEY_LOG_INTERVAL = 1000
-_malformed_new_key_count = 0
+MALFORMED_FALLBACK_KEY_LOG_INTERVAL = 1000
+_malformed_fallback_key_count = 0
 
 
 def is_valid_fernet_key(key):
@@ -30,38 +37,37 @@ def is_valid_fernet_key(key):
         return False
 
 
-def configured_new_credentials_encryption_key():
-    """NEW_CREDENTIALS_ENCRYPTION_KEY as configured, or None when it is unset or equal to the current key."""
-    new_key = getattr(settings, "NEW_CREDENTIALS_ENCRYPTION_KEY", None)
-    if not new_key or new_key == settings.CREDENTIALS_ENCRYPTION_KEY:
-        return None
-    return new_key
+def configured_fallback_credentials_encryption_keys():
+    """CREDENTIALS_ENCRYPTION_KEY_FALLBACKS as configured, without the current key."""
+    fallback_keys = getattr(settings, "CREDENTIALS_ENCRYPTION_KEY_FALLBACKS", None) or []
+    return [key for key in fallback_keys if key and key != settings.CREDENTIALS_ENCRYPTION_KEY]
 
 
-def new_credentials_encryption_key():
-    """The key being rotated to, or None when no rotation is in progress or the configured key is malformed."""
-    global _malformed_new_key_count
+def fallback_credentials_encryption_keys():
+    """The fallback keys that are usable. Malformed ones are logged and left out."""
+    global _malformed_fallback_key_count
 
-    new_key = configured_new_credentials_encryption_key()
-    if new_key is None:
-        return None
-    if not is_valid_fernet_key(new_key):
-        if _malformed_new_key_count % MALFORMED_NEW_KEY_LOG_INTERVAL == 0:
-            logger.error(f"NEW_CREDENTIALS_ENCRYPTION_KEY is not a valid Fernet key; ignoring it and using only CREDENTIALS_ENCRYPTION_KEY (occurrence {_malformed_new_key_count + 1})")
-        _malformed_new_key_count += 1
-        return None
-    return new_key
+    valid_keys = []
+    for key in configured_fallback_credentials_encryption_keys():
+        if is_valid_fernet_key(key):
+            valid_keys.append(key)
+            continue
+        if _malformed_fallback_key_count % MALFORMED_FALLBACK_KEY_LOG_INTERVAL == 0:
+            logger.error(f"CREDENTIALS_ENCRYPTION_KEY_FALLBACKS contains a key that is not a valid Fernet key; ignoring it (occurrence {_malformed_fallback_key_count + 1})")
+        _malformed_fallback_key_count += 1
+    return valid_keys
 
 
 def get_credentials_fernet():
     """Fernet used for runtime encryption and decryption of stored credentials.
 
-    During a rotation it encrypts with the new key and decrypts with either key.
+    It always encrypts with CREDENTIALS_ENCRYPTION_KEY and decrypts with it or any fallback key.
     """
-    new_key = new_credentials_encryption_key()
-    if new_key is None:
-        return Fernet(settings.CREDENTIALS_ENCRYPTION_KEY)
-    return MultiFernet([Fernet(new_key), Fernet(settings.CREDENTIALS_ENCRYPTION_KEY)])
+    current_fernet = Fernet(settings.CREDENTIALS_ENCRYPTION_KEY)
+    fallback_keys = fallback_credentials_encryption_keys()
+    if not fallback_keys:
+        return current_fernet
+    return MultiFernet([current_fernet, *[Fernet(key) for key in fallback_keys]])
 
 
 def encrypt_credentials(data: bytes) -> bytes:
