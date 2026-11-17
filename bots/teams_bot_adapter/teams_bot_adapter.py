@@ -155,8 +155,11 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
         else:
             logger.error("In update_closed_captions_language, failed to set closed captions language programatically")
 
+    def bot_is_signed_in(self):
+        return self.teams_bot_login_should_be_used and self.teams_bot_login_is_available
+
     def get_staged_bot_join_delay_seconds(self):
-        if self.teams_bot_login_should_be_used and self.teams_bot_login_is_available:
+        if self.bot_is_signed_in():
             return 35
         return 15
 
@@ -168,6 +171,7 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
             window.teamsInitialData = {{
                 shouldLogNetworkRequests: {"true" if self.should_log_network_requests else "false"},
                 modifyDomForVideoRecording: {"true" if self.modify_dom_for_video_recording else "false"},
+                botIsSignedIn: {"true" if self.bot_is_signed_in() else "false"},
                 teamsClosedCaptionsLanguageEnforcementDurationSeconds: {json.dumps(self.teams_closed_captions_language_enforcement_duration_seconds)},
                 perParticipantAudioUtteranceDelayMs: {json.dumps(self.get_per_participant_audio_utterance_delay_ms())}
             }}

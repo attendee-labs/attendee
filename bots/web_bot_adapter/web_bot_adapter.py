@@ -182,6 +182,20 @@ class WebBotAdapter(BotAdapter):
 
         return False
 
+    def handle_meeting_id_change(self, json_data):
+        previous_meeting_id = json_data.get("previousMeetingId")
+        new_meeting_id = json_data.get("newMeetingId")
+        if not new_meeting_id:
+            return
+
+        # Only accept the change if it is a change from the meeting id we currently have
+        if self.meeting_uuid and previous_meeting_id != self.meeting_uuid:
+            logger.info(f"Ignoring meeting id change because previous meeting id does not match. meeting_uuid: {self.meeting_uuid} previous_meeting_id: {previous_meeting_id} new_meeting_id: {new_meeting_id}")
+            return
+
+        logger.info(f"meeting_uuid changed from {self.meeting_uuid} to {new_meeting_id}")
+        self.meeting_uuid = new_meeting_id
+
     # In Teams someone can send a chat message into the meeting even if
     # they are not in the meeting. We lazily insert them as inactive participants
     def lazily_insert_participant_for_chat_message(self, json_data):
@@ -499,6 +513,9 @@ class WebBotAdapter(BotAdapter):
                                 self.handle_meeting_ended(json_data.get("meetingId"))
                             if json_data.get("change") == "failed_to_join":
                                 self.handle_failed_to_join(json_data.get("reason"))
+
+                        elif json_data.get("type") == "MeetingIdChange":
+                            self.handle_meeting_id_change(json_data)
 
                         elif json_data.get("type") == "RecordingPermissionChange":
                             if json_data.get("change") == "granted":
