@@ -172,6 +172,7 @@ This document lists all supported environment variables for the Attendee applica
 | `CHARGE_CREDITS_FOR_BOTS` | Boolean | `false` | Enable credit charging for bot operations. |
 | `CUSTOM_BOT_POD_SPEC_TYPES` | String | (Empty) | Comma-separated list of custom bot pod specification types. |
 | `ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME` | Boolean | `false` | Enforce domain allowlist in Chrome web bot. |
+| `CHROME_TIMEZONE` | String | (None) | IANA timezone (e.g. `America/New_York`) for Chrome web bots. Set it to match the region of your egress IP. When unset, Chrome inherits the container's timezone. |
 | `MASK_TRANSCRIPT_IN_LOGS` | Boolean | `false` | Mask transcript content in application logs for privacy. |
 | `ENABLE_BOT_WEBSOCKET_PORT_SELECTION_BY_OS` | Boolean | `false` | Bind the web bot websocket server to a random loopback IP (`127.x.y.z`) on the platform's fixed port, and map `localhost` to that IP in Chrome, instead of binding to `localhost` and trying the next 10 ports. Enable it when many bots share a network namespace, e.g. celery workers or `docker-compose-multi-host` with host networking. Linux only. |
 
