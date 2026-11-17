@@ -1,16 +1,40 @@
 from io import StringIO
 
 from cryptography.fernet import Fernet, InvalidToken
+from django.apps import apps
 from django.core.management import call_command
 from django.core.management.base import CommandError
+from django.db import models
 from django.test import TestCase, override_settings
 
 from bots.credentials_encryption_utils import decrypt_credentials, encrypt_credentials
+from bots.management.commands.rotate_credentials_encryption_key import ENCRYPTED_COLUMNS
 from bots.models import Credentials, Organization, Project, WebhookSecret
 
 OLD_KEY = Fernet.generate_key().decode()
 NEW_KEY = Fernet.generate_key().decode()
 MALFORMED_KEY = NEW_KEY[:-5]
+
+# Binary columns that hold plain (unencrypted) data, so the rotation command skips them.
+UNENCRYPTED_BINARY_COLUMNS = {
+    ("bots.AudioChunk", "audio_blob"),
+    ("bots.Utterance", "audio_blob"),
+    ("bots.MediaBlob", "blob"),
+}
+
+
+class EncryptedColumnsListTest(TestCase):
+    def test_every_binary_column_is_classified(self):
+        """A BinaryField missing from ENCRYPTED_COLUMNS would not be re-encrypted and would become unreadable after the key swap."""
+        encrypted = {(model._meta.label, field_name) for model, field_name in ENCRYPTED_COLUMNS}
+        self.assertFalse(encrypted & UNENCRYPTED_BINARY_COLUMNS)
+
+        binary_columns = {(model._meta.label, field.name) for model in apps.get_models() for field in model._meta.get_fields() if isinstance(field, models.BinaryField)}
+        unclassified = binary_columns - encrypted - UNENCRYPTED_BINARY_COLUMNS
+        self.assertFalse(unclassified, f"Add these BinaryFields to ENCRYPTED_COLUMNS in rotate_credentials_encryption_key.py if they are encrypted, otherwise to UNENCRYPTED_BINARY_COLUMNS in this test: {sorted(unclassified)}")
+
+        stale = (encrypted | UNENCRYPTED_BINARY_COLUMNS) - binary_columns
+        self.assertFalse(stale, f"These listed columns are no longer BinaryFields: {sorted(stale)}")
 
 
 @override_settings(CREDENTIALS_ENCRYPTION_KEY=OLD_KEY, NEW_CREDENTIALS_ENCRYPTION_KEY="")
