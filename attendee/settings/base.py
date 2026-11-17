@@ -50,6 +50,8 @@ INSTALLED_APPS = [
 ]
 
 CREDENTIALS_ENCRYPTION_KEY = os.getenv("CREDENTIALS_ENCRYPTION_KEY")
+# Only set while rotating CREDENTIALS_ENCRYPTION_KEY. See bots/credentials_encryption.py.
+NEW_CREDENTIALS_ENCRYPTION_KEY = os.getenv("NEW_CREDENTIALS_ENCRYPTION_KEY", "")
 
 AUTH_USER_MODEL = "accounts.User"
 
