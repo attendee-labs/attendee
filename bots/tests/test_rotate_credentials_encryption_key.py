@@ -10,6 +10,7 @@ from bots.models import Credentials, Organization, Project, WebhookSecret
 
 OLD_KEY = Fernet.generate_key().decode()
 NEW_KEY = Fernet.generate_key().decode()
+MALFORMED_KEY = NEW_KEY[:-5]
 
 
 @override_settings(CREDENTIALS_ENCRYPTION_KEY=OLD_KEY, NEW_CREDENTIALS_ENCRYPTION_KEY="")
@@ -33,6 +34,13 @@ class CredentialsEncryptionHelperTest(TestCase):
         with self.assertRaises(InvalidToken):
             Fernet(OLD_KEY).decrypt(new_token)
 
+    def test_malformed_new_key_is_ignored_and_logged(self):
+        old_token = Fernet(OLD_KEY).encrypt(b"old")
+        with override_settings(NEW_CREDENTIALS_ENCRYPTION_KEY=MALFORMED_KEY), self.assertLogs("bots.credentials_encryption_utils", level="ERROR"):
+            token = encrypt_credentials(b"secret")
+            self.assertEqual(decrypt_credentials(old_token), b"old")
+        self.assertEqual(Fernet(OLD_KEY).decrypt(token), b"secret")
+
 
 @override_settings(CREDENTIALS_ENCRYPTION_KEY=OLD_KEY, NEW_CREDENTIALS_ENCRYPTION_KEY="")
 class RotateCredentialsEncryptionKeyCommandTest(TestCase):
@@ -53,6 +61,13 @@ class RotateCredentialsEncryptionKeyCommandTest(TestCase):
     def test_fails_without_new_key(self):
         with self.assertRaises(CommandError):
             self.run_command()
+
+    @override_settings(NEW_CREDENTIALS_ENCRYPTION_KEY=MALFORMED_KEY)
+    def test_fails_with_malformed_new_key(self):
+        original_token = bytes(Credentials.objects.get(pk=self.credentials.pk)._encrypted_data)
+        with self.assertRaisesMessage(CommandError, "not a valid Fernet key"):
+            self.run_command()
+        self.assertEqual(bytes(Credentials.objects.get(pk=self.credentials.pk)._encrypted_data), original_token)
 
     @override_settings(NEW_CREDENTIALS_ENCRYPTION_KEY=NEW_KEY)
     def test_check_reports_rows_on_old_key_without_changing_them(self):

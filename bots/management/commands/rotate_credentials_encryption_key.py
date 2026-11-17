@@ -5,7 +5,7 @@ from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
-from bots.credentials_encryption_utils import get_credentials_fernet, new_credentials_encryption_key
+from bots.credentials_encryption_utils import configured_new_credentials_encryption_key, get_credentials_fernet, is_valid_fernet_key
 from bots.models import BotLogin, Calendar, Credentials, GoogleMeetBotLogin, WebexServiceApp, WebhookSecret, ZoomOAuthApp, ZoomOAuthConnection
 
 logger = logging.getLogger(__name__)
@@ -34,11 +34,13 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
-        new_key = new_credentials_encryption_key()
-        if new_key is None:
-            raise CommandError("NEW_CREDENTIALS_ENCRYPTION_KEY must be set to a key different from CREDENTIALS_ENCRYPTION_KEY.")
         if not settings.CREDENTIALS_ENCRYPTION_KEY:
             raise CommandError("CREDENTIALS_ENCRYPTION_KEY must be set.")
+        new_key = configured_new_credentials_encryption_key()
+        if new_key is None:
+            raise CommandError("NEW_CREDENTIALS_ENCRYPTION_KEY must be set to a key different from CREDENTIALS_ENCRYPTION_KEY.")
+        if not is_valid_fernet_key(new_key):
+            raise CommandError("NEW_CREDENTIALS_ENCRYPTION_KEY is not a valid Fernet key. Pods are ignoring it, so no rotation is in progress. Fix the value, wait for every pod to pick it up, then re-run this command.")
 
         new_fernet = Fernet(new_key)
         rotation_fernet = get_credentials_fernet()
