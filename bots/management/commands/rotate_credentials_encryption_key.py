@@ -45,22 +45,21 @@ class Command(BaseCommand):
         rotation_fernet = get_credentials_fernet()
         check_only = options["check"]
 
+        if not check_only:
+            for model, field_name in ENCRYPTED_COLUMNS:
+                rotated, _, undecryptable = self._process_column(model, field_name, new_fernet, rotation_fernet, check_only=False)
+                self.stdout.write(f"{model.__name__}.{field_name}: re-encrypted {rotated} rows, {undecryptable} rows undecryptable")
+
+        # A concurrent save can change a row after rotation. Use the verification pass
+        # for both counts so the summary and exit status reflect what it found.
         total_remaining = 0
         total_undecryptable = 0
         for model, field_name in ENCRYPTED_COLUMNS:
-            label = f"{model.__name__}.{field_name}"
-            rotated, remaining, undecryptable = self._process_column(model, field_name, new_fernet, rotation_fernet, check_only)
+            _, remaining, undecryptable = self._process_column(model, field_name, new_fernet, rotation_fernet, check_only=True)
             total_remaining += remaining
             total_undecryptable += undecryptable
             if check_only:
-                self.stdout.write(f"{label}: {remaining} rows on a fallback key, {undecryptable} rows undecryptable")
-            else:
-                self.stdout.write(f"{label}: re-encrypted {rotated} rows, {undecryptable} rows undecryptable")
-
-        if not check_only:
-            # Rows written by a stale in-memory instance can be saved back with a fallback key
-            # while the command runs, so finish with a check pass.
-            total_remaining = sum(self._process_column(model, field_name, new_fernet, rotation_fernet, check_only=True)[1] for model, field_name in ENCRYPTED_COLUMNS)
+                self.stdout.write(f"{model.__name__}.{field_name}: {remaining} rows on a fallback key, {undecryptable} rows undecryptable")
 
         self.stdout.write(f"Rows on a fallback key: {total_remaining}. Undecryptable rows: {total_undecryptable}.")
         if total_remaining or total_undecryptable:

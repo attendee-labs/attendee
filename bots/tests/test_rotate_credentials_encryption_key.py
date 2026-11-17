@@ -1,4 +1,5 @@
 from io import StringIO
+from unittest.mock import patch
 
 from cryptography.fernet import Fernet, InvalidToken
 from django.apps import apps
@@ -9,7 +10,7 @@ from django.test import TestCase, override_settings
 from django.utils import timezone
 
 from bots.credentials_encryption_utils import decrypt_credentials, encrypt_credentials
-from bots.management.commands.rotate_credentials_encryption_key import ENCRYPTED_COLUMNS
+from bots.management.commands.rotate_credentials_encryption_key import ENCRYPTED_COLUMNS, Command
 from bots.models import Calendar, CalendarPlatform, Credentials, Organization, Project, WebhookSecret
 
 OLD_KEY = Fernet.generate_key().decode()
@@ -166,6 +167,23 @@ class RotateCredentialsEncryptionKeyCommandTest(TestCase):
                 self.run_command("--check")
             self.run_command()
             self.run_command("--check")
+
+    @override_settings(**ROTATING)
+    def test_row_becoming_undecryptable_after_rotation_fails_verification(self):
+        command = Command()
+        process_column = command._process_column
+        unknown_key_token = Fernet(Fernet.generate_key()).encrypt(b"{}")
+
+        def process_with_concurrent_write(model, field_name, new_fernet, rotation_fernet, check_only):
+            counts = process_column(model, field_name, new_fernet, rotation_fernet, check_only)
+            if model is Credentials and not check_only:
+                Credentials.objects.filter(pk=self.credentials.pk).update(_encrypted_data=unknown_key_token)
+            return counts
+
+        out = StringIO()
+        with patch.object(command, "_process_column", side_effect=process_with_concurrent_write), self.assertRaises(CommandError):
+            call_command(command, stdout=out)
+        self.assertIn("Rows on a fallback key: 0. Undecryptable rows: 1.", out.getvalue())
 
     @override_settings(**ROTATING)
     def test_undecryptable_row_fails_the_command(self):
