@@ -858,7 +858,14 @@ class WebBotAdapter(BotAdapter):
             self.teardown_driver(graceful_shutdown_fn=self.default_graceful_driver_shutdown)
             self.driver = None
 
-        self.driver = webdriver.Chrome(options=options, service=Service(executable_path="/usr/local/bin/chromedriver"))
+        chrome_timezone = os.getenv("CHROME_TIMEZONE")
+        if chrome_timezone:
+            logger.info(f"Setting Chrome timezone to {chrome_timezone}")
+        service = Service(
+            executable_path="/usr/local/bin/chromedriver",
+            env={**os.environ, "TZ": chrome_timezone} if chrome_timezone else None,
+        )
+        self.driver = webdriver.Chrome(options=options, service=service)
         self.start_domain_allow_list_listener()
         logger.info(f"web driver server initialized at port {self.driver.service.port}")
 
