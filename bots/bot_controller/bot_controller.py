@@ -706,6 +706,7 @@ class BotController:
                 region_name=external_media_storage_credentials.get("region_name"),
                 access_key_id=external_media_storage_credentials.get("access_key_id"),
                 access_key_secret=external_media_storage_credentials.get("access_key_secret"),
+                ignore_configured_endpoint_urls=True,
             )
             file_uploader.upload_file(self.get_recording_file_location())
             file_uploader.wait_for_upload()
