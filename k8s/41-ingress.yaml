@@ -1,0 +1,31 @@
+# TLS termination. Adapt the ingressClassName and annotations to whatever the cluster runs --
+# this example assumes ingress-nginx plus cert-manager.
+#
+# Two requirements, whatever the controller:
+#   1. It must forward X-Forwarded-Proto. Django's SECURE_PROXY_SSL_HEADER relies on it; without
+#      it every request looks insecure and SECURE_SSL_REDIRECT sends clients into a redirect loop.
+#   2. proxy-body-size must be generous. Bots upload recordings through the app.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: attendee
+  namespace: attendee
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-body-size: "512m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [attendee.example.com]
+      secretName: attendee-tls
+  rules:
+    - host: attendee.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: attendee-web
+                port: {name: http}

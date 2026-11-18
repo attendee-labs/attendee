@@ -1,0 +1,82 @@
+# Singleton pollers. Both loop forever inside one process, so they are Deployments rather than
+# CronJobs -- and both MUST stay at replicas: 1. Two schedulers would double-launch scheduled
+# bots. `strategy: Recreate` guarantees the old pod is gone before the new one starts, which
+# RollingUpdate would not.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: attendee-scheduler
+  namespace: attendee
+  labels: {app.kubernetes.io/name: attendee, app.kubernetes.io/component: scheduler}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app.kubernetes.io/name: attendee, app.kubernetes.io/component: scheduler}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: attendee, app.kubernetes.io/component: scheduler}
+    spec:
+      serviceAccountName: attendee-app
+      imagePullSecrets: [{name: regcred}]
+      terminationGracePeriodSeconds: 90
+      containers:
+        - name: scheduler
+          image: REPLACE_WITH_REGISTRY/attendee:REPLACE_WITH_IMAGE_TAG
+          command: ["/tini", "--"]
+          args: ["python", "manage.py", "run_scheduler"]
+          envFrom:
+            - configMapRef: {name: env}
+            - secretRef: {name: app-secrets}
+          # run_scheduler rewrites SCHEDULER_HEARTBEAT_FILE with a unix timestamp every cycle
+          # (60s by default). A stalled loop leaves the process alive but the file stale, which
+          # an httpGet or process check would never notice -- hence reading the timestamp.
+          livenessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - |
+                  import os, sys, time
+                  path = os.environ["SCHEDULER_HEARTBEAT_FILE"]
+                  with open(path) as f:
+                      written_at = float(f.read())
+                  sys.exit(0 if time.time() - written_at < 300 else 1)
+            initialDelaySeconds: 60
+            periodSeconds: 60
+            failureThreshold: 3
+          resources:
+            requests: {cpu: "100m", memory: "256Mi"}
+            limits: {cpu: "500m", memory: "512Mi"}
+---
+# Detects bots whose pod never came up (ImagePullBackOff, unschedulable, evicted) and records
+# the failure against the bot so it does not hang in "launching" forever. Kubernetes-mode only.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: attendee-correct-failed-bot-launches
+  namespace: attendee
+  labels: {app.kubernetes.io/name: attendee, app.kubernetes.io/component: correct-failed-bot-launches}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app.kubernetes.io/name: attendee, app.kubernetes.io/component: correct-failed-bot-launches}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: attendee, app.kubernetes.io/component: correct-failed-bot-launches}
+    spec:
+      serviceAccountName: attendee-app
+      imagePullSecrets: [{name: regcred}]
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: correct-failed-bot-launches
+          image: REPLACE_WITH_REGISTRY/attendee:REPLACE_WITH_IMAGE_TAG
+          command: ["/tini", "--"]
+          args: ["python", "manage.py", "run_correct_failed_bot_launches", "--interval", "60"]
+          envFrom:
+            - configMapRef: {name: env}
+            - secretRef: {name: app-secrets}
+          resources:
+            requests: {cpu: "100m", memory: "256Mi"}
+            limits: {cpu: "500m", memory: "512Mi"}
