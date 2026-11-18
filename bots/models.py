@@ -11,7 +11,7 @@ from datetime import timedelta
 
 from concurrency.exceptions import RecordModifiedError
 from concurrency.fields import IntegerVersionField
-from cryptography.fernet import Fernet, InvalidToken
+from cryptography.fernet import InvalidToken
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.files.storage import Storage, storages
@@ -23,6 +23,7 @@ from django.utils.crypto import get_random_string
 
 from accounts.models import Organization, User, UserRole
 from bots.bot_pod_creator.bot_pod_spec import BotPodSpecType
+from bots.credentials_encryption_utils import decrypt_credentials, encrypt_credentials
 from bots.storage import StorageAlias, download_blob_from_remote_storage, remote_storage_url
 from bots.webhook_utils import trigger_webhook
 
@@ -121,17 +122,15 @@ class GoogleMeetBotLogin(models.Model):
 
     def set_credentials(self, credentials_dict):
         """Encrypt and save credentials"""
-        f = Fernet(settings.CREDENTIALS_ENCRYPTION_KEY)
         json_data = json.dumps(credentials_dict)
-        self._encrypted_data = f.encrypt(json_data.encode())
+        self._encrypted_data = encrypt_credentials(json_data.encode())
         self.save()
 
     def get_credentials(self):
         """Decrypt and return credentials"""
         if not self._encrypted_data:
             return None
-        f = Fernet(settings.CREDENTIALS_ENCRYPTION_KEY)
-        decrypted_data = f.decrypt(bytes(self._encrypted_data))
+        decrypted_data = decrypt_credentials(self._encrypted_data)
         return json.loads(decrypted_data.decode())
 
     def save(self, *args, **kwargs):
@@ -243,17 +242,15 @@ class BotLogin(models.Model):
 
     def set_credentials(self, credentials_dict):
         """Encrypt and save credentials"""
-        f = Fernet(settings.CREDENTIALS_ENCRYPTION_KEY)
         json_data = json.dumps(credentials_dict)
-        self._encrypted_data = f.encrypt(json_data.encode())
+        self._encrypted_data = encrypt_credentials(json_data.encode())
         self.save()
 
     def get_credentials(self):
         """Decrypt and return credentials"""
         if not self._encrypted_data:
             return None
-        f = Fernet(settings.CREDENTIALS_ENCRYPTION_KEY)
-        decrypted_data = f.decrypt(bytes(self._encrypted_data))
+        decrypted_data = decrypt_credentials(self._encrypted_data)
         return json.loads(decrypted_data.decode())
 
     def save(self, *args, **kwargs):
@@ -298,17 +295,15 @@ class ZoomOAuthApp(models.Model):
 
     def set_credentials(self, credentials_dict):
         """Encrypt and save credentials"""
-        f = Fernet(settings.CREDENTIALS_ENCRYPTION_KEY)
         json_data = json.dumps(credentials_dict)
-        self._encrypted_data = f.encrypt(json_data.encode())
+        self._encrypted_data = encrypt_credentials(json_data.encode())
         self.save()
 
     def get_credentials(self):
         """Decrypt and return credentials"""
         if not self._encrypted_data:
             return None
-        f = Fernet(settings.CREDENTIALS_ENCRYPTION_KEY)
-        decrypted_data = f.decrypt(bytes(self._encrypted_data))
+        decrypted_data = decrypt_credentials(self._encrypted_data)
         return json.loads(decrypted_data.decode())
 
     def save(self, *args, **kwargs):
@@ -350,17 +345,15 @@ class WebexServiceApp(models.Model):
 
     def set_credentials(self, credentials_dict):
         """Encrypt and save credentials"""
-        f = Fernet(settings.CREDENTIALS_ENCRYPTION_KEY)
         json_data = json.dumps(credentials_dict)
-        self._encrypted_data = f.encrypt(json_data.encode())
+        self._encrypted_data = encrypt_credentials(json_data.encode())
         self.save()
 
     def get_credentials(self):
         """Decrypt and return credentials"""
         if not self._encrypted_data:
             return None
-        f = Fernet(settings.CREDENTIALS_ENCRYPTION_KEY)
-        decrypted_data = f.decrypt(bytes(self._encrypted_data))
+        decrypted_data = decrypt_credentials(self._encrypted_data)
         return json.loads(decrypted_data.decode())
 
     def save(self, *args, **kwargs):
@@ -416,17 +409,15 @@ class ZoomOAuthConnection(models.Model):
 
     def set_credentials(self, credentials_dict):
         """Encrypt and save credentials"""
-        f = Fernet(settings.CREDENTIALS_ENCRYPTION_KEY)
         json_data = json.dumps(credentials_dict)
-        self._encrypted_data = f.encrypt(json_data.encode())
+        self._encrypted_data = encrypt_credentials(json_data.encode())
         self.save()
 
     def get_credentials(self):
         """Decrypt and return credentials"""
         if not self._encrypted_data:
             return None
-        f = Fernet(settings.CREDENTIALS_ENCRYPTION_KEY)
-        decrypted_data = f.decrypt(bytes(self._encrypted_data))
+        decrypted_data = decrypt_credentials(self._encrypted_data)
         return json.loads(decrypted_data.decode())
 
     def save(self, *args, **kwargs):
@@ -518,17 +509,15 @@ class Calendar(models.Model):
 
     def set_credentials(self, credentials_dict):
         """Encrypt and save credentials"""
-        f = Fernet(settings.CREDENTIALS_ENCRYPTION_KEY)
         json_data = json.dumps(credentials_dict)
-        self._encrypted_data = f.encrypt(json_data.encode())
+        self._encrypted_data = encrypt_credentials(json_data.encode())
         self.save()
 
     def get_credentials(self):
         """Decrypt and return credentials"""
         if not self._encrypted_data:
             return None
-        f = Fernet(settings.CREDENTIALS_ENCRYPTION_KEY)
-        decrypted_data = f.decrypt(bytes(self._encrypted_data))
+        decrypted_data = decrypt_credentials(self._encrypted_data)
         return json.loads(decrypted_data.decode())
 
     def save(self, *args, **kwargs):
@@ -2998,17 +2987,15 @@ class Credentials(models.Model):
 
     def set_credentials(self, credentials_dict):
         """Encrypt and save credentials"""
-        f = Fernet(settings.CREDENTIALS_ENCRYPTION_KEY)
         json_data = json.dumps(credentials_dict)
-        self._encrypted_data = f.encrypt(json_data.encode())
+        self._encrypted_data = encrypt_credentials(json_data.encode())
         self.save()
 
     def get_credentials(self):
         """Decrypt and return credentials"""
         if not self._encrypted_data:
             return None
-        f = Fernet(settings.CREDENTIALS_ENCRYPTION_KEY)
-        decrypted_data = f.decrypt(bytes(self._encrypted_data))
+        decrypted_data = decrypt_credentials(self._encrypted_data)
         return json.loads(decrypted_data.decode())
 
     def __str__(self):
@@ -3318,9 +3305,7 @@ class WebhookSecret(models.Model):
         if not self._secret:
             return None
         try:
-            f = Fernet(settings.CREDENTIALS_ENCRYPTION_KEY)
-            decrypted_data = f.decrypt(bytes(self._secret))
-            return decrypted_data
+            return decrypt_credentials(self._secret)
         except (InvalidToken, ValueError):
             return None
 
@@ -3328,8 +3313,7 @@ class WebhookSecret(models.Model):
         # Only generate a secret if this is a new object (not yet saved to DB)
         if not self.pk and not self._secret:
             secret = secrets.token_bytes(32)
-            f = Fernet(settings.CREDENTIALS_ENCRYPTION_KEY)
-            self._secret = f.encrypt(secret)
+            self._secret = encrypt_credentials(secret)
         super().save(*args, **kwargs)
 
 

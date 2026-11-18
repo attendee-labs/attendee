@@ -50,6 +50,9 @@ INSTALLED_APPS = [
 ]
 
 CREDENTIALS_ENCRYPTION_KEY = os.getenv("CREDENTIALS_ENCRYPTION_KEY")
+# Comma-separated extra keys that can decrypt but never encrypt. Only set while rotating
+# CREDENTIALS_ENCRYPTION_KEY. See bots/credentials_encryption_utils.py.
+CREDENTIALS_ENCRYPTION_KEY_FALLBACKS = [key.strip() for key in os.getenv("CREDENTIALS_ENCRYPTION_KEY_FALLBACKS", "").split(",") if key.strip()]
 
 AUTH_USER_MODEL = "accounts.User"
 
