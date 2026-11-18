@@ -9,24 +9,15 @@ logger = logging.getLogger(__name__)
 #
 # This works like Django's SECRET_KEY / SECRET_KEY_FALLBACKS: CREDENTIALS_ENCRYPTION_KEY encrypts,
 # and CREDENTIALS_ENCRYPTION_KEY_FALLBACKS holds extra keys that can decrypt but never encrypt.
-# Unlike Django's documented procedure, the new key is given to every process as a fallback before
-# it is promoted. Pods are replaced gradually, so a process that only has the old key could
-# otherwise read a credential that a new process has already encrypted with the new key. This
-# applies to web, Celery and scheduler processes as well as bots that are in a meeting.
-#
-# Before you start, apply every pending migration with the current key. Migrations 0067 and 0083
-# decrypt with CREDENTIALS_ENCRYPTION_KEY alone: 0067 fails, and 0083 skips legacy Teams bot logins
-# that it cannot decrypt. Do not combine a rotation with an upgrade that includes them.
 #
 # 1. Deploy with the new key added to CREDENTIALS_ENCRYPTION_KEY_FALLBACKS and
 #    CREDENTIALS_ENCRYPTION_KEY unchanged. Nothing is encrypted with the new key yet. Wait until no
 #    process from before this deploy is still running.
 # 2. Deploy with CREDENTIALS_ENCRYPTION_KEY set to the new key and CREDENTIALS_ENCRYPTION_KEY_FALLBACKS
-#    set to the old key. Every process running during this rollout can decrypt both keys.
+#    set to the old key.
 # 3. Once no process from before step 2 is still running, run
 #    `python manage.py rotate_credentials_encryption_key` to re-encrypt every encrypted column with
-#    the new key. Stored credentials never expire, unlike sessions and password reset tokens, so the
-#    old key cannot be removed until this has been done.
+#    the new key.
 # 4. Run the command again with --check. When it reports 0 rows on a fallback key, deploy with
 #    CREDENTIALS_ENCRYPTION_KEY_FALLBACKS removed. Keep the old key somewhere safe until any
 #    database backups taken before step 3 have expired.
