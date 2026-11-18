@@ -3,20 +3,31 @@ import threading
 from pathlib import Path
 
 import boto3
+from botocore.config import Config
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 
 class S3FileUploader:
-    def __init__(self, bucket, filename, endpoint_url=None, region_name=None, access_key_id=None, access_key_secret=None):
+    def __init__(self, bucket, filename, endpoint_url=None, region_name=None, access_key_id=None, access_key_secret=None, ignore_configured_endpoint_urls=False):
         """Initialize the S3FileUploader with an S3 bucket name.
 
         Args:
             bucket (str): The name of the S3 bucket to upload to
             filename (str): The name of the to be stored file
+            ignore_configured_endpoint_urls (bool): If True, don't fall back to endpoints configured via
+                AWS_ENDPOINT_URL or the AWS config file. Needed when uploading to a third-party bucket
+                so it doesn't get routed to the endpoint this instance uses for its own storage.
         """
-        self.s3_client = boto3.client("s3", endpoint_url=endpoint_url, region_name=region_name, aws_access_key_id=access_key_id, aws_secret_access_key=access_key_secret)
+        self.s3_client = boto3.client(
+            "s3",
+            endpoint_url=endpoint_url,
+            region_name=region_name,
+            aws_access_key_id=access_key_id,
+            aws_secret_access_key=access_key_secret,
+            config=Config(ignore_configured_endpoint_urls=True) if ignore_configured_endpoint_urls else None,
+        )
         self.bucket = bucket
         self.filename = filename
         self._upload_thread = None
