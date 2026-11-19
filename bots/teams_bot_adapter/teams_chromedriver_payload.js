@@ -4032,6 +4032,10 @@ class CallManager {
 
     // startClosedCaption() returns nothing and does its work asynchronously; failures only show up in the call's captions status.
     watchClosedCaptionsStatus() {
+        if (!window.initialData.collectCaptions) {
+            return;
+        }
+
         const call = this.activeCall;
         if (this.watchClosedCaptionsStatusInterval) {
             return;
@@ -4052,14 +4056,21 @@ class CallManager {
         const pollIntervalMs = 1000;
         // startClosedCaption() can leave the status in pending indefinitely, so treat an attempt as failed if it hasn't started by then
         const attemptTimeoutMs = 60000;
+        // startClosedCaption() doesn't always reset a leftover failed status, so a failed status is only trusted once it has
+        // left failed since the attempt began, or after this long (enough for a background re-add to finish).
+        const staleFailedGracePeriodMs = 15000;
 
         let attempt = 1;
         let attemptStartedAt = Date.now();
+        let sawNonFailedSinceAttemptStart = false;
 
         this.watchClosedCaptionsStatusInterval = setInterval(() => {
             try {
                 const status = call.getClosedCaptionStatus();
                 const subStatus = call.getClosedCaptionSubStatus?.();
+                if (status !== statusFailed) {
+                    sawNonFailedSinceAttemptStart = true;
+                }
 
                 if (status === statusStarted) {
                     window.ws?.sendJson({
@@ -4071,8 +4082,9 @@ class CallManager {
                     return;
                 }
 
-                const failed = status === statusFailed;
-                const timedOut = Date.now() - attemptStartedAt > attemptTimeoutMs;
+                const attemptElapsedMs = Date.now() - attemptStartedAt;
+                const failed = status === statusFailed && (sawNonFailedSinceAttemptStart || attemptElapsedMs > staleFailedGracePeriodMs);
+                const timedOut = attemptElapsedMs > attemptTimeoutMs;
                 if (!failed && !timedOut) {
                     return;
                 }
@@ -4099,6 +4111,7 @@ class CallManager {
 
                 attempt++;
                 attemptStartedAt = Date.now();
+                sawNonFailedSinceAttemptStart = false;
                 call.startClosedCaption();
             } catch (error) {
                 window.ws?.sendJson({
