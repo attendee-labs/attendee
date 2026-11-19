@@ -2920,9 +2920,6 @@ class Utterance(models.Model):
     # To keep track of how many retries we've done for this utterance
     transcription_attempt_count = models.IntegerField(default=0)
     failure_data = models.JSONField(null=True, default=None)
-    # The provider's ID for a transcription that was submitted but not yet retrieved, so a retry can resume it
-    # instead of submitting the audio again. Only set on the first utterance of an async transcription group.
-    provider_transcription_id = models.CharField(max_length=255, null=True, blank=True, default=None)
     source_uuid = models.CharField(max_length=255, null=True, unique=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
@@ -2962,6 +2959,41 @@ class Utterance(models.Model):
         if self.async_transcription:
             return self.async_transcription.transcription_provider
         return self.recording.transcription_provider
+
+
+class ThirdPartyTranscriptionJobStates(models.IntegerChoices):
+    PENDING = 1, "Pending"
+    COMPLETE = 2, "Complete"
+    FAILED = 3, "Failed"
+
+
+class ThirdPartyTranscriptionJob(models.Model):
+    """
+    A transcription submitted to a provider that runs it in the background and is polled for the result.
+    Kept so a retry can resume polling instead of submitting (and paying for) the audio again.
+    Covers one utterance, or every utterance of a group transcribed together.
+    """
+
+    recording = models.ForeignKey(Recording, on_delete=models.CASCADE, related_name="third_party_transcription_jobs")
+    utterances = models.ManyToManyField(Utterance, related_name="third_party_transcription_jobs")
+    provider = models.IntegerField(choices=TranscriptionProviders.choices)
+    provider_job_id = models.CharField(max_length=255)
+    state = models.IntegerField(choices=ThirdPartyTranscriptionJobStates.choices, default=ThirdPartyTranscriptionJobStates.PENDING)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["provider", "provider_job_id"], name="unique_third_party_transcription_job_provider_job_id"),
+        ]
+
+    def __str__(self):
+        return f"Third party transcription job {self.provider_job_id} - {self.get_state_display()}"
+
+    def seconds_until_deadline(self):
+        """The job counts as failed if the provider hasn't returned the result within TRANSCRIPTION_POLLING_TIMEOUT_SECONDS of its submission"""
+        deadline = self.created_at + timedelta(seconds=int(os.getenv("TRANSCRIPTION_POLLING_TIMEOUT_SECONDS", 120)))
+        return (deadline - timezone.now()).total_seconds()
 
 
 class Credentials(models.Model):

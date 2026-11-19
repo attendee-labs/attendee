@@ -4,7 +4,7 @@ from celery import shared_task
 
 logger = logging.getLogger(__name__)
 
-from bots.models import Utterance
+from bots.models import ThirdPartyTranscriptionJob, ThirdPartyTranscriptionJobStates, Utterance
 from bots.transcription_utils import get_transcription_for_utterance_group, is_retryable_failure
 
 
@@ -43,8 +43,7 @@ def process_utterance_group_for_async_transcription(self, utterance_ids):
 
         if failure_data:
             if first_utterance.transcription_attempt_count < 5 and is_retryable_failure(failure_data):
-                # Only save the attempt count, so provider_transcription_id saved during the attempt is kept for the retry
-                first_utterance.save(update_fields=["transcription_attempt_count", "updated_at"])
+                first_utterance.save()
                 raise Exception(f"Retryable failure when transcribing utterances {utterance_ids}: {failure_data}")
             else:
                 first_utterance.save()
@@ -52,6 +51,8 @@ def process_utterance_group_for_async_transcription(self, utterance_ids):
                 for utterance in utterances:
                     utterance.failure_data = failure_data
                     utterance.save()
+                # No retry will resume a job that was still waiting for the provider's result
+                ThirdPartyTranscriptionJob.objects.filter(utterances=first_utterance, state=ThirdPartyTranscriptionJobStates.PENDING).update(state=ThirdPartyTranscriptionJobStates.FAILED)
                 logger.info(f"Transcription failed for utterances {utterance_ids}, failure data: {failure_data}")
                 return
 

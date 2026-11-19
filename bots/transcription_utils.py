@@ -9,8 +9,9 @@ import time
 from typing import Any, Callable, Dict, List, Sequence
 
 import requests
+from django.db import transaction
 
-from bots.models import Credentials, Recording, TranscriptionFailureReasons, TranscriptionProviders, TranscriptionSettings, Utterance
+from bots.models import Credentials, Recording, ThirdPartyTranscriptionJob, ThirdPartyTranscriptionJobStates, TranscriptionFailureReasons, TranscriptionProviders, TranscriptionSettings, Utterance
 
 logger = logging.getLogger(__name__)
 
@@ -252,6 +253,28 @@ def split_transcription_by_utterance(
     return output
 
 
+def get_resumable_third_party_transcription_job(utterances: Sequence[Utterance], provider: TranscriptionProviders):
+    """Returns the pending job submitted for these utterances, if any. A pending job past its deadline is marked failed instead, so the audio is submitted again."""
+    job = ThirdPartyTranscriptionJob.objects.filter(utterances=utterances[0], provider=provider, state=ThirdPartyTranscriptionJobStates.PENDING).order_by("-created_at").first()
+    if job and job.seconds_until_deadline() <= 0:
+        logger.info(f"Third party transcription job {job.provider_job_id} passed its deadline, marking it failed")
+        set_third_party_transcription_job_state(job, ThirdPartyTranscriptionJobStates.FAILED)
+        return None
+    return job
+
+
+def create_third_party_transcription_job(utterances: Sequence[Utterance], provider: TranscriptionProviders, provider_job_id: str):
+    with transaction.atomic():
+        job = ThirdPartyTranscriptionJob.objects.create(recording=utterances[0].recording, provider=provider, provider_job_id=provider_job_id)
+        job.utterances.set(utterances)
+    return job
+
+
+def set_third_party_transcription_job_state(job: ThirdPartyTranscriptionJob, state: ThirdPartyTranscriptionJobStates):
+    job.state = state
+    job.save(update_fields=["state", "updated_at"])
+
+
 def get_transcription_for_utterance_group(utterances):
     try:
         first_utterance = utterances[0]
@@ -264,18 +287,8 @@ def get_transcription_for_utterance_group(utterances):
         elif transcription_provider == TranscriptionProviders.DEEPGRAM:
             get_transcription_from_mp3_method = get_transcription_via_deepgram_from_mp3
         elif transcription_provider == TranscriptionProviders.ELEVENLABS:
-
-            def save_pending_transcription_id(transcription_id):
-                # Saved right away so it survives a failed attempt, and set on the object the caller saves afterwards
-                first_utterance.provider_transcription_id = transcription_id
-                Utterance.objects.filter(id=first_utterance.id).update(provider_transcription_id=transcription_id)
-
-            # Lets a retry resume polling a transcription ElevenLabs already accepted, instead of paying for a new one
-            get_transcription_from_mp3_method = functools.partial(
-                get_transcription_via_elevenlabs_from_mp3,
-                pending_transcription_id=first_utterance.provider_transcription_id,
-                save_pending_transcription_id=save_pending_transcription_id,
-            )
+            # The utterances are passed so a submitted transcription can be tracked and resumed on retry
+            get_transcription_from_mp3_method = functools.partial(get_transcription_via_elevenlabs_from_mp3, utterances=utterances)
         else:
             raise Exception(f"Unknown or unsupported transcription provider: {transcription_provider}")
 
@@ -493,13 +506,12 @@ def get_transcription_via_elevenlabs_from_mp3(
     identifier: str,
     transcription_settings: TranscriptionSettings,
     recording: Recording,
-    pending_transcription_id: str | None = None,
-    save_pending_transcription_id: Callable[[str | None], Any] | None = None,
+    utterances: Sequence[Utterance] | None = None,
 ):
     """
     Transcribe an MP3 with ElevenLabs. Synchronous by default. With the webhook setting, the transcription is
-    submitted in webhook mode and polled for. Its transcription_id is saved with save_pending_transcription_id,
-    and a retry that passes it back as pending_transcription_id resumes polling instead of submitting again.
+    submitted in webhook mode and polled for. If utterances are given, the submission is saved as a
+    ThirdPartyTranscriptionJob, and a retry resumes polling it until its deadline instead of submitting again.
     """
     elevenlabs_credentials_record = recording.bot.project.credentials.filter(credential_type=Credentials.CredentialTypes.ELEVENLABS).first()
     if not elevenlabs_credentials_record:
@@ -524,9 +536,11 @@ def get_transcription_via_elevenlabs_from_mp3(
     use_webhook = transcription_settings.elevenlabs_webhook()
     headers = {"xi-api-key": api_key}
 
-    if use_webhook and pending_transcription_id:
-        logger.info(f"Resuming polling for ElevenLabs transcription {pending_transcription_id} for {identifier}")
-        transcription_id = pending_transcription_id
+    job = get_resumable_third_party_transcription_job(utterances, TranscriptionProviders.ELEVENLABS) if use_webhook and utterances else None
+
+    if job:
+        logger.info(f"Resuming polling for ElevenLabs transcription {job.provider_job_id} for {identifier}")
+        transcription_id = job.provider_job_id
     else:
         if use_webhook:
             data["webhook"] = True
@@ -558,15 +572,21 @@ def get_transcription_via_elevenlabs_from_mp3(
             if not transcription_id:
                 return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "error": "transcription_id not in response", "text": response.text}
             logger.info(f"ElevenLabs transcription {transcription_id} accepted for {identifier}, polling for the result")
-            if save_pending_transcription_id:
-                save_pending_transcription_id(transcription_id)
+            if utterances:
+                job = create_third_party_transcription_job(utterances, TranscriptionProviders.ELEVENLABS, transcription_id)
 
     if use_webhook:
-        result, error = poll_elevenlabs_transcript(transcription_settings=transcription_settings, transcription_id=transcription_id, headers=headers, identifier=identifier)
+        # A job's deadline counts from its submission, so a retry only polls for the time that's left
+        timeout_seconds = job.seconds_until_deadline() if job else int(os.getenv("TRANSCRIPTION_POLLING_TIMEOUT_SECONDS", 120))
+        result, error = poll_elevenlabs_transcript(transcription_settings=transcription_settings, transcription_id=transcription_id, headers=headers, identifier=identifier, timeout_seconds=timeout_seconds)
         if error:
+            # ElevenLabs reports a failed transcription only through the webhook; polling keeps answering 404.
+            # So a job without a result by its deadline is treated as failed, and a retry submits the audio again.
+            if job and error.get("reason") == TranscriptionFailureReasons.TIMED_OUT:
+                set_third_party_transcription_job_state(job, ThirdPartyTranscriptionJobStates.FAILED)
             return None, error
-        if save_pending_transcription_id:
-            save_pending_transcription_id(None)
+        if job:
+            set_third_party_transcription_job_state(job, ThirdPartyTranscriptionJobStates.COMPLETE)
 
     logger.info(f"ElevenLabs transcription complete for {identifier} with model {data['model_id']}")
 
@@ -577,13 +597,12 @@ def get_transcription_via_elevenlabs_from_mp3(
     return transcription, None
 
 
-def poll_elevenlabs_transcript(transcription_settings: TranscriptionSettings, transcription_id: str, headers: dict, identifier: str):
+def poll_elevenlabs_transcript(transcription_settings: TranscriptionSettings, transcription_id: str, headers: dict, identifier: str, timeout_seconds: float):
     """Polls for a transcript submitted in webhook mode, then deletes it from ElevenLabs. ElevenLabs answers 404 until the transcript is ready."""
     polling_endpoint = f"{transcription_settings.elevenlabs_base_url()}/v1/speech-to-text/transcripts/{transcription_id}"
-    max_wait_seconds = int(os.getenv("TRANSCRIPTION_POLLING_TIMEOUT_SECONDS", 120))
     poll_interval_seconds = 5
     # The deadline includes the time spent in requests, not just in sleeps
-    deadline = time.monotonic() + max_wait_seconds
+    deadline = time.monotonic() + timeout_seconds
 
     while (remaining_seconds := deadline - time.monotonic()) > 0:
         try:
