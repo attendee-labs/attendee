@@ -351,13 +351,21 @@ class SpeechView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Check for Google TTS credentials. This is currently the only supported text-to-speech provider.
-        google_tts_credentials = bot.project.credentials.filter(credential_type=Credentials.CredentialTypes.GOOGLE_TTS).first()
+        text_to_speech_settings = serializer.validated_data["text_to_speech_settings"]
+        if "google" in text_to_speech_settings:
+            credential_type = Credentials.CredentialTypes.GOOGLE_TTS
+            provider_name = "Google Text-to-Speech"
+        elif "elevenlabs" in text_to_speech_settings:
+            credential_type = Credentials.CredentialTypes.ELEVENLABS
+            provider_name = "ElevenLabs"
+        else:
+            return Response({"error": "Unsupported text-to-speech provider"}, status=status.HTTP_400_BAD_REQUEST)
 
-        if not google_tts_credentials:
+        credentials = bot.project.credentials.filter(credential_type=credential_type).first()
+        if not credentials:
             settings_url = request.build_absolute_uri(reverse("bots:project-credentials", kwargs={"object_id": bot.project.object_id}))
             return Response(
-                {"error": f"Google Text-to-Speech credentials are required. Please add credentials at {settings_url}"},
+                {"error": f"{provider_name} credentials are required. Please add credentials at {settings_url}"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -365,7 +373,7 @@ class SpeechView(APIView):
         BotMediaRequest.objects.create(
             bot=bot,
             text_to_speak=serializer.validated_data["text"],
-            text_to_speech_settings=serializer.validated_data["text_to_speech_settings"],
+            text_to_speech_settings=text_to_speech_settings,
             media_type=BotMediaRequestMediaTypes.AUDIO,
         )
 
