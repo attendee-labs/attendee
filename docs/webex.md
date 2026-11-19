@@ -26,6 +26,23 @@ The card then shows the Service App as authorized, and you can launch Webex bots
 
 If Webex bots ever fail to connect because the authorization expired or was revoked, click **Authorize with Webex** again.
 
+### Or add it through the API
+
+Step 3's form and button have an API equivalent, for when the sign-in happens somewhere other than Attendee's UI, such as your own app's OAuth flow. Both calls use the project's API key.
+
+1. Save the Service App: `PUT /api/v1/webex_service_app` with `client_id`, `client_secret`, `service_app_id` and `org_id`. Saving replaces the project's Service App and its authorization.
+2. Authorize it: `POST /api/v1/webex_service_app/authorize` with one of:
+   - `authorization_code` and `redirect_uri`: the code Webex sent to your own redirect URI after the Service App's creator signed in to the Integration described under [Additional setup for self-hosting](#additional-setup-for-self-hosting). Register that redirect URI on the Integration. Attendee exchanges the code with the Integration's credentials.
+   - `access_token`: a Webex access token of the Service App's creator with the `spark:applications_token` scope, such as their personal access token from the Developer Portal. Attendee uses it once and doesn't store it.
+
+`GET /api/v1/webex_service_app` shows whether the Service App is authorized (`is_authorized`), and `DELETE` removes it. Neither returns the client secret or the tokens.
+
+```bash
+curl -X POST https://<your Attendee domain>/api/v1/webex_service_app/authorize \
+  -H "Authorization: Token <your API key>" -H "Content-Type: application/json" \
+  -d '{"authorization_code": "<code>", "redirect_uri": "https://example.com/webex/callback"}'
+```
+
 ### Launching a bot
 
 Create the bot with the meeting's URL. Currently, two kinds of Webex URL are supported:

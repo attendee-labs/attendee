@@ -43,6 +43,7 @@ from .models import (
     RecordingTranscriptionStates,
     RecordingViews,
     TranscriptionProviders,
+    WebexServiceApp,
     ZoomOAuthConnection,
     ZoomOAuthConnectionStates,
 )
@@ -2545,4 +2546,57 @@ class ZoomOAuthConnectionSerializer(serializers.ModelSerializer):
             "last_successful_sync_at",
             "last_attempted_sync_at",
         ]
+        read_only_fields = fields
+
+
+def _reject_unexpected_fields(serializer):
+    expected_fields = set(serializer.fields.keys())
+    unexpected_fields = set(serializer.initial_data.keys()) - expected_fields
+    if unexpected_fields:
+        raise serializers.ValidationError(f"Unexpected field(s): {', '.join(sorted(unexpected_fields))}. Allowed fields are: {', '.join(sorted(expected_fields))}")
+
+
+class SetWebexServiceAppSerializer(serializers.Serializer):
+    client_id = serializers.CharField(help_text="The Webex Service App's Client ID")
+    client_secret = serializers.CharField(help_text="The Webex Service App's Client Secret. Stored encrypted and never returned.")
+    service_app_id = serializers.CharField(help_text="The Webex Service App's ID")
+    org_id = serializers.CharField(help_text="The ID of the Webex organization whose guests the bots join as. A full admin of it must have authorized the Service App in Control Hub.")
+
+    def validate(self, data):
+        _reject_unexpected_fields(self)
+        return data
+
+
+class AuthorizeWebexServiceAppSerializer(serializers.Serializer):
+    authorization_code = serializers.CharField(
+        help_text="The authorization code Webex sent to your redirect URI after the Service App's creator signed in to the Webex Integration that has the spark:applications_token scope. Attendee exchanges it with that Integration (WEBEX_INTEGRATION_CLIENT_ID and WEBEX_INTEGRATION_CLIENT_SECRET). Requires redirect_uri.",
+        required=False,
+    )
+    redirect_uri = serializers.CharField(help_text="The redirect URI used to obtain the authorization code", required=False)
+    access_token = serializers.CharField(
+        help_text="Instead of an authorization code: a Webex access token of the Service App's creator with the spark:applications_token scope, such as their personal access token. Used once and not stored.",
+        required=False,
+    )
+
+    def validate(self, data):
+        _reject_unexpected_fields(self)
+        if bool(data.get("authorization_code")) == bool(data.get("access_token")):
+            raise serializers.ValidationError("Provide either authorization_code (with redirect_uri) or access_token")
+        if data.get("authorization_code") and not data.get("redirect_uri"):
+            raise serializers.ValidationError("redirect_uri is required with authorization_code")
+        if data.get("access_token") and data.get("redirect_uri"):
+            raise serializers.ValidationError("redirect_uri is only used with authorization_code")
+        return data
+
+
+class WebexServiceAppSerializer(serializers.ModelSerializer):
+    id = serializers.CharField(source="object_id")
+    is_authorized = serializers.SerializerMethodField(help_text="Whether the Service App has tokens, so the project can launch Webex bots")
+
+    def get_is_authorized(self, obj) -> bool:
+        return bool(obj.refresh_token)
+
+    class Meta:
+        model = WebexServiceApp
+        fields = ["id", "client_id", "service_app_id", "org_id", "is_authorized", "tokens_refreshed_at", "created_at", "updated_at"]
         read_only_fields = fields
