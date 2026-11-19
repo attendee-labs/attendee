@@ -2154,6 +2154,23 @@ class ElevenLabsProviderTest(TransactionTestCase):
             self.assertEqual(mock_post.call_args[0][0], "https://api.eu.residency.elevenlabs.io/v1/speech-to-text")
             self.assertNotIn("use_eu_server", mock_post.call_args[1]["data"])
 
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3")
+    def test_webhook_mode_is_not_used_per_utterance(self, mock_pcm, mock_post):
+        """webhook only applies to async transcription, so per-utterance requests stay synchronous."""
+        self.bot.settings = {"transcription_settings": {"elevenlabs": {"model_id": "scribe_v2", "webhook": True, "webhook_id": "wh_123"}}}
+        self.bot.save()
+
+        with self._patch_creds():
+            mock_post.return_value = mock.Mock(status_code=200, json=mock.Mock(return_value={"text": "hello", "language_probability": 0.9, "words": [{"text": "hello", "start": 0.0, "end": 0.5, "type": "word"}]}))
+
+            transcript, failure = get_transcription_via_elevenlabs(self.utterance)
+
+            self.assertIsNone(failure)
+            self.assertEqual(transcript["transcript"], "hello")
+            self.assertNotIn("webhook", mock_post.call_args[1]["data"])
+            self.assertNotIn("webhook_id", mock_post.call_args[1]["data"])
+
     @mock.patch.dict("os.environ", {"ELEVENLABS_BASE_URL": "https://elevenlabs.example.com"})
     @mock.patch("bots.tasks.process_utterance_task.requests.post")
     @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3")
@@ -2223,6 +2240,8 @@ class ElevenLabsProviderTest(TransactionTestCase):
                 "diarize": True,
                 "diarization_threshold": 0.3,
                 "use_eu_server": True,
+                "webhook": True,
+                "webhook_id": "wh_123",
             }
         }
         bot_serializer = CreateBotSerializer(data={"meeting_url": "https://zoom.us/j/123456789", "bot_name": "Test Bot"})

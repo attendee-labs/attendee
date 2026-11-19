@@ -1,3 +1,4 @@
+import functools
 import io
 import json
 import logging
@@ -8,8 +9,9 @@ import time
 from typing import Any, Callable, Dict, List, Sequence
 
 import requests
+from django.db import transaction
 
-from bots.models import Credentials, Recording, TranscriptionFailureReasons, TranscriptionProviders, TranscriptionSettings, Utterance
+from bots.models import Credentials, Recording, ThirdPartyTranscriptionJob, ThirdPartyTranscriptionJobStates, TranscriptionFailureReasons, TranscriptionProviders, TranscriptionSettings, Utterance
 
 logger = logging.getLogger(__name__)
 
@@ -205,12 +207,17 @@ def split_transcription_by_utterance(
         windows.append((u.id, start, end))
         t = end + silence_seconds
 
+    # Entries with a "type" (ElevenLabs' word, spacing and audio_event) are joined as given to rebuild the transcript text,
+    # keeping the provider's own spacing and audio events. Only "word" entries end up in the words.
+    has_typed_entries = any("type" in w for w in words)
+
     output = {utterance.id: {"transcript": "", "words": [], "language": language} for utterance in utterances}
 
     # Assign each word to the first window it overlaps with.
     word_index = 0
     for window_index, (utterance_id, start, end) in enumerate(windows):
         utterance_words = []
+        utterance_text_parts = []
         next_start = windows[window_index + 1][1] if window_index + 1 < len(windows) else None
 
         while word_index < len(words):
@@ -218,23 +225,54 @@ def split_transcription_by_utterance(
             # If word starts at or after window end, stop (no overlap with this window)
             if w["start"] >= end:
                 break
+            if w.get("type", "word") != "word":
+                # Spacing and audio events only go into the transcript text, in the window they start in
+                if w["start"] >= start:
+                    utterance_text_parts.append(w["word"])
             # If word ends after window start, it overlaps
-            if w["end"] > start:
+            elif w["end"] > start:
                 # Check that word doesn't also overlap with next window (unexpected)
                 if next_start is not None and w["end"] > next_start:
                     logger.warning(f"Word overlaps with subsequent window, skipping: {w}")
                 else:
                     # Create a new word object with the start and end times adjusted to the current window
                     word_adjusted = dict(w)
+                    word_adjusted.pop("type", None)
                     word_adjusted["start"] = word_adjusted["start"] - start
                     word_adjusted["end"] = word_adjusted["end"] - start
                     utterance_words.append(word_adjusted)
+                    utterance_text_parts.append(w["word"])
             word_index += 1
 
         output[utterance_id]["words"] = utterance_words
-        output[utterance_id]["transcript"] = " ".join(w["word"] for w in utterance_words)
+        if has_typed_entries:
+            output[utterance_id]["transcript"] = "".join(utterance_text_parts).strip()
+        else:
+            output[utterance_id]["transcript"] = " ".join(w["word"] for w in utterance_words)
 
     return output
+
+
+def get_resumable_third_party_transcription_job(utterances: Sequence[Utterance], provider: TranscriptionProviders):
+    """Returns the pending job submitted for these utterances, if any. A pending job past its deadline is marked failed instead, so the audio is submitted again."""
+    job = ThirdPartyTranscriptionJob.objects.filter(utterances=utterances[0], provider=provider, state=ThirdPartyTranscriptionJobStates.PENDING).order_by("-created_at").first()
+    if job and job.seconds_until_deadline() <= 0:
+        logger.info(f"Third party transcription job {job.provider_job_id} passed its deadline, marking it failed")
+        set_third_party_transcription_job_state(job, ThirdPartyTranscriptionJobStates.FAILED)
+        return None
+    return job
+
+
+def create_third_party_transcription_job(utterances: Sequence[Utterance], provider: TranscriptionProviders, provider_job_id: str):
+    with transaction.atomic():
+        job = ThirdPartyTranscriptionJob.objects.create(recording=utterances[0].recording, provider=provider, provider_job_id=provider_job_id)
+        job.utterances.set(utterances)
+    return job
+
+
+def set_third_party_transcription_job_state(job: ThirdPartyTranscriptionJob, state: ThirdPartyTranscriptionJobStates):
+    job.state = state
+    job.save(update_fields=["state", "updated_at"])
 
 
 def get_transcription_for_utterance_group(utterances):
@@ -248,6 +286,9 @@ def get_transcription_for_utterance_group(utterances):
             get_transcription_from_mp3_method = get_transcription_via_assemblyai_from_mp3
         elif transcription_provider == TranscriptionProviders.DEEPGRAM:
             get_transcription_from_mp3_method = get_transcription_via_deepgram_from_mp3
+        elif transcription_provider == TranscriptionProviders.ELEVENLABS:
+            # The utterances are passed so a submitted transcription can be tracked and resumed on retry
+            get_transcription_from_mp3_method = functools.partial(get_transcription_via_elevenlabs_from_mp3, utterances=utterances)
         else:
             raise Exception(f"Unknown or unsupported transcription provider: {transcription_provider}")
 
@@ -440,17 +481,158 @@ def get_elevenlabs_speech_to_text_request(transcription_settings: TranscriptionS
     return url, {key: value for key, value in data.items() if value is not None}
 
 
-def get_words_from_elevenlabs_response(result: dict):
-    """Keeps only the spoken words from ElevenLabs' response; drops its spacing and audio_event entries. Times are in seconds."""
+def get_words_from_elevenlabs_response(result: dict, include_spacing_and_audio_events: bool = False):
+    """
+    Keeps only the spoken words from ElevenLabs' response; drops its spacing and audio_event entries. Times are in seconds.
+    With include_spacing_and_audio_events, every entry is kept along with its "type", for split_transcription_by_utterance.
+    """
     words = []
     for word in result.get("words", []):
-        if word.get("type", "word") != "word":
+        entry_type = word.get("type", "word")
+        if entry_type != "word" and not include_spacing_and_audio_events:
             continue
         formatted_word = {"word": word.get("text"), "start": word.get("start"), "end": word.get("end")}
+        if include_spacing_and_audio_events:
+            formatted_word["type"] = entry_type
         if word.get("speaker_id") is not None:
             formatted_word["speaker"] = word["speaker_id"]
         words.append(formatted_word)
     return words
+
+
+def get_transcription_via_elevenlabs_from_mp3(
+    retrieve_mp3_data_callback: Callable[[], bytes],
+    duration_ms: int,
+    identifier: str,
+    transcription_settings: TranscriptionSettings,
+    recording: Recording,
+    utterances: Sequence[Utterance] | None = None,
+):
+    """
+    Transcribe an MP3 with ElevenLabs. Synchronous by default. With the webhook setting, the transcription is
+    submitted in webhook mode and polled for. If utterances are given, the submission is saved as a
+    ThirdPartyTranscriptionJob, and a retry resumes polling it until its deadline instead of submitting again.
+    """
+    elevenlabs_credentials_record = recording.bot.project.credentials.filter(credential_type=Credentials.CredentialTypes.ELEVENLABS).first()
+    if not elevenlabs_credentials_record:
+        return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND}
+
+    elevenlabs_credentials = elevenlabs_credentials_record.get_credentials()
+    if not elevenlabs_credentials:
+        return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND}
+
+    api_key = elevenlabs_credentials.get("api_key")
+    if not api_key:
+        return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND, "error": "api_key not in credentials"}
+
+    # ElevenLabs rejects audio shorter than 100ms, so just return an empty transcription
+    if duration_ms < 100:
+        logger.info(f"ElevenLabs transcription skipped for {identifier} because it's less than 100ms in duration")
+        return {"transcript": "", "words": []}, None
+
+    url, data = get_elevenlabs_speech_to_text_request(transcription_settings)
+    # In webhook mode ElevenLabs returns right away and transcribes in the background. We poll for the
+    # transcript instead of receiving the webhook, so the webhook only needs to exist in the ElevenLabs workspace.
+    use_webhook = transcription_settings.elevenlabs_webhook()
+    headers = {"xi-api-key": api_key}
+
+    job = get_resumable_third_party_transcription_job(utterances, TranscriptionProviders.ELEVENLABS) if use_webhook and utterances else None
+
+    if job:
+        logger.info(f"Resuming polling for ElevenLabs transcription {job.provider_job_id} for {identifier}")
+        transcription_id = job.provider_job_id
+    else:
+        if use_webhook:
+            data["webhook"] = True
+            if transcription_settings.elevenlabs_webhook_id():
+                data["webhook_id"] = transcription_settings.elevenlabs_webhook_id()
+        files = {"file": ("audio.mp3", retrieve_mp3_data_callback(), "audio/mpeg")}
+
+        # Without webhook mode, ElevenLabs uploads and transcribes the whole file before it responds
+        timeout_seconds = int(os.getenv("ELEVENLABS_TRANSCRIPTION_TIMEOUT_SECONDS", 600))
+        try:
+            response = requests.post(url, headers=headers, files=files, data=data, timeout=timeout_seconds)
+        except requests.exceptions.Timeout as e:
+            return None, {"reason": TranscriptionFailureReasons.TIMED_OUT, "step": "transcribe_request", "error": str(e)}
+
+        if response.status_code == 401:
+            return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_INVALID}
+
+        if response.status_code == 429:
+            return None, {"reason": TranscriptionFailureReasons.RATE_LIMIT_EXCEEDED, "status_code": response.status_code, "text": response.text}
+
+        # ElevenLabs documents 202 for webhook mode, but has been seen to answer 200
+        if response.status_code != 200 and not (use_webhook and response.status_code == 202):
+            return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "status_code": response.status_code, "text": response.text}
+
+        if not use_webhook:
+            result = response.json()
+        else:
+            transcription_id = response.json().get("transcription_id")
+            if not transcription_id:
+                return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "error": "transcription_id not in response", "text": response.text}
+            logger.info(f"ElevenLabs transcription {transcription_id} accepted for {identifier}, polling for the result")
+            if utterances:
+                job = create_third_party_transcription_job(utterances, TranscriptionProviders.ELEVENLABS, transcription_id)
+
+    if use_webhook:
+        # A job's deadline counts from its submission, so a retry only polls for the time that's left
+        timeout_seconds = job.seconds_until_deadline() if job else int(os.getenv("TRANSCRIPTION_POLLING_TIMEOUT_SECONDS", 120))
+        result, error = poll_elevenlabs_transcript(transcription_settings=transcription_settings, transcription_id=transcription_id, headers=headers, identifier=identifier, timeout_seconds=timeout_seconds)
+        if error:
+            # ElevenLabs reports a failed transcription only through the webhook; polling keeps answering 404.
+            # So a job without a result by its deadline is treated as failed, and a retry submits the audio again.
+            if job and error.get("reason") == TranscriptionFailureReasons.TIMED_OUT:
+                set_third_party_transcription_job_state(job, ThirdPartyTranscriptionJobStates.FAILED)
+            return None, error
+        if job:
+            set_third_party_transcription_job_state(job, ThirdPartyTranscriptionJobStates.COMPLETE)
+
+    logger.info(f"ElevenLabs transcription complete for {identifier} with model {data['model_id']}")
+
+    # Unlike the per-utterance path, a low language_probability doesn't empty the transcript here,
+    # because one low-confidence detection over a long group would drop all of its speech.
+    # Spacing and audio events are kept for split_transcription_by_utterance, which uses them for the transcript text only
+    transcription = {"transcript": result.get("text", ""), "words": get_words_from_elevenlabs_response(result, include_spacing_and_audio_events=True), "language": result.get("language_code", None)}
+    return transcription, None
+
+
+def poll_elevenlabs_transcript(transcription_settings: TranscriptionSettings, transcription_id: str, headers: dict, identifier: str, timeout_seconds: float):
+    """Polls for a transcript submitted in webhook mode, then deletes it from ElevenLabs. ElevenLabs answers 404 until the transcript is ready."""
+    polling_endpoint = f"{transcription_settings.elevenlabs_base_url()}/v1/speech-to-text/transcripts/{transcription_id}"
+    poll_interval_seconds = 5
+    # The deadline includes the time spent in requests, not just in sleeps
+    deadline = time.monotonic() + timeout_seconds
+
+    while (remaining_seconds := deadline - time.monotonic()) > 0:
+        try:
+            polling_response = requests.get(polling_endpoint, headers=headers, timeout=min(60, remaining_seconds))
+        except requests.exceptions.RequestException as e:
+            # Keep polling: failing here would resubmit (and pay for) the whole transcription
+            logger.error(f"ElevenLabs result fetch for {identifier} failed: {e}")
+            polling_response = None
+
+        if polling_response is not None:
+            if polling_response.status_code == 200:
+                result = polling_response.json()
+                try:
+                    delete_response = requests.delete(polling_endpoint, headers=headers, timeout=60)
+                    if delete_response.status_code != 200:
+                        logger.error(f"ElevenLabs delete failed with status code {delete_response.status_code}: {delete_response.text}")
+                except requests.exceptions.RequestException as e:
+                    logger.error(f"ElevenLabs delete for {identifier} failed: {e}")
+                return result, None
+
+            if polling_response.status_code == 401:
+                return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_INVALID}
+
+            # 404 means the transcript isn't ready yet. ElevenLabs reports no other status while processing.
+            if polling_response.status_code != 404:
+                logger.error(f"ElevenLabs result fetch for {identifier} failed with status code {polling_response.status_code}: {polling_response.text}")
+
+        time.sleep(max(0, min(poll_interval_seconds, deadline - time.monotonic())))
+
+    return None, {"reason": TranscriptionFailureReasons.TIMED_OUT, "step": "transcribe_result_poll", "transcription_id": transcription_id}
 
 
 def get_transcription_via_deepgram_from_mp3(
