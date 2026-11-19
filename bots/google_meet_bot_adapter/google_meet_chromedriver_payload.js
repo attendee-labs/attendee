@@ -965,8 +965,14 @@ class UserManager {
         this.currentUserId = null;
         // Track the set of parentDeviceIds (real participant deviceIds) currently screen sharing
         this.activeScreenSharerParentDeviceIds = new Set();
+        // Set once we've reported that another participant muted the bot; cleared when the bot unmutes
+        this.sentBotMediaDeviceStateChangedByOtherParticipant = false;
 
         this.ws = ws;
+    }
+
+    resetSentBotMediaDeviceStateChangedByOtherParticipant() {
+        this.sentBotMediaDeviceStateChangedByOtherParticipant = false;
     }
 
     deviceForStreamIsActive(streamId) {
@@ -1148,8 +1154,12 @@ class UserManager {
     }
 
     detectAudioMuteRequests(users) {
+        if (this.sentBotMediaDeviceStateChangedByOtherParticipant)
+            return;
+
         for (const user of users) {
             if (user.isCurrentUser && user.audioMuteRequest?.byDeviceId) {
+                this.sentBotMediaDeviceStateChangedByOtherParticipant = true;
                 this.ws.sendJson({
                     type: 'BotMediaDeviceStateChangedByOtherParticipant',
                     other_participant_id: user.audioMuteRequest.byDeviceId,
@@ -2527,6 +2537,7 @@ function turnOnMic() {
     if (microphoneButton) {
         console.log("Clicking the microphone button to turn it on");
         microphoneButton.click();
+        window.userManager?.resetSentBotMediaDeviceStateChangedByOtherParticipant();
     } else {
         console.log("Microphone button not found");
     }
@@ -2549,6 +2560,7 @@ function turnOnMicAndCamera() {
     if (microphoneButton) {
         console.log("Clicking the microphone button to turn it on");
         microphoneButton.click();
+        window.userManager?.resetSentBotMediaDeviceStateChangedByOtherParticipant();
     } else {
         console.log("Microphone button not found");
     }
@@ -2604,6 +2616,7 @@ function turnOnMicAndScreenshare() {
     if (microphoneButton) {
         console.log("Clicking the microphone button to turn it on");
         microphoneButton.click();
+        window.userManager?.resetSentBotMediaDeviceStateChangedByOtherParticipant();
     } else {
         console.log("Microphone button not found");
     }
