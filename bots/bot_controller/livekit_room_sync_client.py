@@ -348,6 +348,9 @@ class LivekitRoomSyncClient:
         if text:
             self._submit(self._start_chat, participant_uuid, text)
 
+    def handle_bot_media_device_state_changed_by_other_participant(self, event):
+        logger.info(f"{self._log_prefix} Received bot media device state change by other participant: {event}")
+
     def _start_chat(self, participant_uuid, text):
         mirror = self._mirrors.get(participant_uuid)
         if mirror is not None and mirror.source is not None:
