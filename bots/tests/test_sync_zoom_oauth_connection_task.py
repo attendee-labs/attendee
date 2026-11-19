@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 from datetime import timedelta
 from unittest.mock import Mock, patch
 
@@ -19,6 +20,11 @@ from bots.tasks.sync_zoom_oauth_connection_task import (
 from bots.zoom_oauth_connections_utils import ZoomAPIAuthenticationError
 
 
+@contextmanager
+def _noop_lock(*args, **kwargs):
+    yield
+
+
 class TestSyncZoomOAuthConnection(TestCase):
     """Test the sync_zoom_oauth_connection Celery task."""
 
@@ -33,6 +39,28 @@ class TestSyncZoomOAuthConnection(TestCase):
             account_id="test_account_id",
         )
         self.zoom_oauth_connection.set_credentials({"refresh_token": "test_refresh_token"})
+        self.lock_patcher = patch(
+            "bots.tasks.sync_zoom_oauth_connection_task.zoom_oauth_connection_token_lock",
+            side_effect=_noop_lock,
+        )
+        self.lock_patcher.start()
+
+    def tearDown(self):
+        self.lock_patcher.stop()
+
+    @patch("bots.tasks.sync_zoom_oauth_connection_task._get_access_token")
+    @patch("bots.tasks.sync_zoom_oauth_connection_task.zoom_oauth_connection_token_lock")
+    def test_sync_acquires_connection_scoped_lock(self, mock_lock, mock_get_access_token):
+        """Sync must share the same connection token lock as refresh."""
+        mock_lock.side_effect = _noop_lock
+        mock_get_access_token.return_value = "mock_access_token"
+
+        with patch("bots.tasks.sync_zoom_oauth_connection_task._get_zoom_meetings", return_value=[]):
+            with patch("bots.tasks.sync_zoom_oauth_connection_task._get_zoom_personal_meeting_id", return_value="pmi"):
+                with patch("bots.tasks.sync_zoom_oauth_connection_task._upsert_zoom_meeting_to_zoom_oauth_connection_mapping"):
+                    sync_zoom_oauth_connection(self.zoom_oauth_connection.id)
+
+        mock_lock.assert_called_with(self.zoom_oauth_connection.id)
 
     @patch("bots.tasks.sync_zoom_oauth_connection_task._upsert_zoom_meeting_to_zoom_oauth_connection_mapping")
     @patch("bots.tasks.sync_zoom_oauth_connection_task._get_zoom_personal_meeting_id")
@@ -200,6 +228,14 @@ class TestGetAccessToken(TestCase):
             account_id="test_account_id",
         )
         self.zoom_oauth_connection.set_credentials({"refresh_token": "test_refresh_token"})
+        self.lock_patcher = patch(
+            "bots.redis_utils.zoom_oauth_connection_token_lock",
+            side_effect=_noop_lock,
+        )
+        self.lock_patcher.start()
+
+    def tearDown(self):
+        self.lock_patcher.stop()
 
     @patch("requests.post")
     def test_get_access_token_success(self, mock_post):
@@ -215,6 +251,28 @@ class TestGetAccessToken(TestCase):
 
         self.assertEqual(result, "new_access_token")
         mock_post.assert_called_once()
+
+    @patch("requests.post")
+    @patch("bots.redis_utils.zoom_oauth_connection_token_lock")
+    def test_get_access_token_takes_lock_and_reloads_credentials(self, mock_lock, mock_post):
+        """Token refresh must lock the connection and reload credentials under the lock."""
+        from bots.zoom_oauth_connections_utils import _get_access_token
+
+        mock_lock.side_effect = _noop_lock
+        mock_response = Mock()
+        mock_response.json.return_value = {
+            "access_token": "new_access_token",
+            "refresh_token": "rotated_refresh_token",
+        }
+        mock_response.raise_for_status.return_value = None
+        mock_post.return_value = mock_response
+
+        result = _get_access_token(self.zoom_oauth_connection)
+
+        mock_lock.assert_called_with(self.zoom_oauth_connection.id)
+        self.assertEqual(result, "new_access_token")
+        self.zoom_oauth_connection.refresh_from_db()
+        self.assertEqual(self.zoom_oauth_connection.get_credentials()["refresh_token"], "rotated_refresh_token")
 
     @patch("requests.post")
     def test_get_access_token_with_refresh_token_rotation(self, mock_post):

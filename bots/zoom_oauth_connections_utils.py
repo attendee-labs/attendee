@@ -91,45 +91,54 @@ def _get_access_token(zoom_oauth_connection) -> str:
     Exchange the stored refresh token for a new access token.
     Zoom returns a new refresh_token on each successful refresh.
     Persist it so we don't lose the chain.
+
+    Concurrent refreshes are serialized with a Redis lock keyed by connection id
+    so a second worker waits and then uses the rotated token instead of racing
+    into invalid_grant.
     """
-    credentials = zoom_oauth_connection.get_credentials()
-    if not credentials:
-        raise ZoomAPIAuthenticationError("No credentials found for zoom oauth connection")
+    from bots.redis_utils import zoom_oauth_connection_token_lock
 
-    refresh_token = credentials.get("refresh_token")
-    client_id = zoom_oauth_connection.zoom_oauth_app.client_id
-    client_secret = zoom_oauth_connection.zoom_oauth_app.client_secret
-    if not refresh_token or not client_id or not client_secret:
-        raise ZoomAPIAuthenticationError("Missing refresh_token or client_secret")
+    with zoom_oauth_connection_token_lock(zoom_oauth_connection.id):
+        # Reload credentials after acquiring the lock — a prior refresher may have rotated them.
+        zoom_oauth_connection.refresh_from_db()
+        credentials = zoom_oauth_connection.get_credentials()
+        if not credentials:
+            raise ZoomAPIAuthenticationError("No credentials found for zoom oauth connection")
 
-    data = {
-        "grant_type": "refresh_token",
-        "refresh_token": refresh_token,
-        "client_id": client_id,
-        "client_secret": client_secret,
-    }
+        refresh_token = credentials.get("refresh_token")
+        client_id = zoom_oauth_connection.zoom_oauth_app.client_id
+        client_secret = zoom_oauth_connection.zoom_oauth_app.client_secret
+        if not refresh_token or not client_id or not client_secret:
+            raise ZoomAPIAuthenticationError("Missing refresh_token or client_secret")
 
-    try:
-        response = requests.post("https://zoom.us/oauth/token", data=data, timeout=30)
-        response.raise_for_status()
-        token_data = response.json()
+        data = {
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+            "client_id": client_id,
+            "client_secret": client_secret,
+        }
 
-        access_token = token_data.get("access_token")
-        if not access_token:
-            raise ZoomAPIError(f"No access_token in refresh response. Response body: {response.json()}")
+        try:
+            response = requests.post("https://zoom.us/oauth/token", data=data, timeout=30)
+            response.raise_for_status()
+            token_data = response.json()
 
-        # IMPORTANT: Zoom rotates refresh tokens. Save the new one if provided.
-        new_refresh = token_data.get("refresh_token")
-        if new_refresh and new_refresh != refresh_token:
-            credentials["refresh_token"] = new_refresh
-            zoom_oauth_connection.set_credentials(credentials)
-            logger.info("Stored rotated Zoom refresh_token for zoom oauth connection %s", zoom_oauth_connection.object_id)
+            access_token = token_data.get("access_token")
+            if not access_token:
+                raise ZoomAPIError(f"No access_token in refresh response. Response body: {response.json()}")
 
-        return access_token
+            # IMPORTANT: Zoom rotates refresh tokens. Save the new one if provided.
+            new_refresh = token_data.get("refresh_token")
+            if new_refresh and new_refresh != refresh_token:
+                credentials["refresh_token"] = new_refresh
+                zoom_oauth_connection.set_credentials(credentials)
+                logger.info("Stored rotated Zoom refresh_token for zoom oauth connection %s", zoom_oauth_connection.object_id)
 
-    except requests.RequestException as e:
-        _raise_if_error_is_authentication_error(e)
-        raise ZoomAPIError(f"Failed to refresh Zoom access token. Response body: {e.response.json()}")
+            return access_token
+
+        except requests.RequestException as e:
+            _raise_if_error_is_authentication_error(e)
+            raise ZoomAPIError(f"Failed to refresh Zoom access token. Response body: {e.response.json()}")
 
 
 def _make_zoom_api_request(url: str, access_token: str, params: dict) -> dict:
