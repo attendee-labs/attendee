@@ -29,9 +29,7 @@ class TestWebpageStreamerManagerInit(TestCase):
             webpage_streamer_service_hostname="test-hostname",
         )
 
-        self.assertIsNone(manager.url)
-        self.assertIsNone(manager.last_non_empty_url)
-        self.assertIsNone(manager.output_destination)
+        self.assertEqual(manager.urls, {"webcam": None, "screenshare": None})
         self.assertEqual(manager.get_peer_connection_offer_callback, get_offer_callback)
         self.assertEqual(manager.start_peer_connection_callback, start_pc_callback)
         self.assertFalse(manager.cleaned_up)
@@ -40,7 +38,7 @@ class TestWebpageStreamerManagerInit(TestCase):
         self.assertEqual(manager.play_bot_output_media_stream_callback, play_media_callback)
         self.assertEqual(manager.stop_bot_output_media_stream_callback, stop_media_callback)
         self.assertEqual(manager.on_message_that_webpage_streamer_connection_can_start_callback, on_can_start_callback)
-        self.assertFalse(manager.webrtc_connection_started)
+        self.assertEqual(manager.webrtc_connection_started, {"webcam": False, "screenshare": False})
         self.assertIsNone(manager.keepalive_task)
         self.assertFalse(manager.webpage_streamer_connection_can_start)
 
@@ -103,11 +101,10 @@ class TestWebpageStreamerManagerUpdate(TestCase):
         manager = self._create_manager()
         manager.webpage_streamer_connection_can_start = False
 
-        manager.update("http://example.com", "webcam")
+        manager.update({"webcam": "http://example.com", "screenshare": None})
 
         # Should not update any values
-        self.assertIsNone(manager.url)
-        self.assertIsNone(manager.output_destination)
+        self.assertEqual(manager.urls, {"webcam": None, "screenshare": None})
         manager.play_bot_output_media_stream_callback.assert_not_called()
 
     @patch("bots.bot_controller.webpage_streamer_manager.requests.post")
@@ -122,67 +119,110 @@ class TestWebpageStreamerManagerUpdate(TestCase):
         mock_response.json.return_value = {"sdp": "answer-sdp", "type": "answer"}
         mock_post.return_value = mock_response
 
-        manager.update("http://example.com", "webcam")
+        manager.update({"webcam": "http://example.com", "screenshare": None})
 
-        self.assertEqual(manager.url, "http://example.com")
-        self.assertEqual(manager.output_destination, "webcam")
-        self.assertEqual(manager.last_non_empty_url, "http://example.com")
+        self.assertEqual(manager.urls, {"webcam": "http://example.com", "screenshare": None})
+        self.assertEqual(manager.webrtc_connection_started, {"webcam": True, "screenshare": False})
+        manager.get_peer_connection_offer_callback.assert_called_once_with("webcam")
+        manager.start_peer_connection_callback.assert_called_once_with({"sdp": "answer-sdp", "type": "answer"}, "webcam")
         manager.play_bot_output_media_stream_callback.assert_called_once_with("webcam")
+        manager.stop_bot_output_media_stream_callback.assert_not_called()
 
     @patch("bots.bot_controller.webpage_streamer_manager.requests.post")
-    def test_update_stops_stream_when_url_becomes_empty(self, mock_post):
-        """Test that update stops the media stream when url becomes empty."""
+    def test_update_starts_both_output_destinations(self, mock_post):
+        """Test that update starts a separate WebRTC connection for webcam and screenshare."""
         manager = self._create_manager()
         manager.webpage_streamer_connection_can_start = True
-        manager.url = "http://example.com"
-        manager.output_destination = "webcam"
-
-        manager.update("", "webcam")
-
-        manager.stop_bot_output_media_stream_callback.assert_called_once()
-        self.assertEqual(manager.url, "")
-
-    @patch("bots.bot_controller.webpage_streamer_manager.requests.post")
-    @patch("bots.bot_controller.webpage_streamer_manager.time.sleep")
-    def test_update_stops_and_replays_when_output_destination_changes(self, mock_sleep, mock_post):
-        """Test that update stops and replays stream when output destination changes."""
-        manager = self._create_manager()
-        manager.webpage_streamer_connection_can_start = True
-        manager.webrtc_connection_started = True
-        manager.url = "http://example.com"
-        manager.last_non_empty_url = "http://example.com"
-        manager.output_destination = "webcam"
+        manager.get_peer_connection_offer_callback.return_value = {"sdp": "test-sdp", "type": "offer"}
 
         mock_response = MagicMock()
         mock_response.status_code = 200
+        mock_response.json.return_value = {"sdp": "answer-sdp", "type": "answer"}
         mock_post.return_value = mock_response
 
-        manager.update("http://example.com", "screenshare")
+        manager.update({"webcam": "https://agent.example.com", "screenshare": "https://slides.example.com"})
 
-        manager.stop_bot_output_media_stream_callback.assert_called_once()
-        manager.play_bot_output_media_stream_callback.assert_called_once_with("screenshare")
-        mock_sleep.assert_called_once_with(1)
+        self.assertEqual(manager.urls, {"webcam": "https://agent.example.com", "screenshare": "https://slides.example.com"})
+        self.assertEqual(manager.webrtc_connection_started, {"webcam": True, "screenshare": True})
+        self.assertEqual([c.args for c in manager.get_peer_connection_offer_callback.call_args_list], [("webcam",), ("screenshare",)])
+        self.assertEqual([c.args for c in manager.play_bot_output_media_stream_callback.call_args_list], [("webcam",), ("screenshare",)])
+
+        start_streaming_bodies = [c.kwargs["json"] for c in mock_post.call_args_list if c.args[0].endswith("/start_streaming")]
+        self.assertEqual(
+            start_streaming_bodies,
+            [
+                {"url": "https://agent.example.com", "output_destination": "webcam"},
+                {"url": "https://slides.example.com", "output_destination": "screenshare"},
+            ],
+        )
+        offer_bodies = [c.kwargs["json"] for c in mock_post.call_args_list if c.args[0].endswith("/offer")]
+        self.assertEqual([body["output_destination"] for body in offer_bodies], ["webcam", "screenshare"])
+
+    @patch("bots.bot_controller.webpage_streamer_manager.requests.post")
+    def test_update_stops_stream_when_url_becomes_empty(self, mock_post):
+        """Test that update stops only that destination's media stream when its url becomes empty."""
+        manager = self._create_manager()
+        manager.webpage_streamer_connection_can_start = True
+        manager.urls = {"webcam": "http://example.com", "screenshare": "http://slides.example.com"}
+
+        manager.update({"webcam": "", "screenshare": "http://slides.example.com"})
+
+        manager.stop_bot_output_media_stream_callback.assert_called_once_with("webcam")
+        manager.play_bot_output_media_stream_callback.assert_not_called()
+        mock_post.assert_not_called()
+        self.assertEqual(manager.urls, {"webcam": "", "screenshare": "http://slides.example.com"})
+
+    @patch("bots.bot_controller.webpage_streamer_manager.requests.post")
+    def test_update_does_not_stop_stream_that_was_never_started(self, mock_post):
+        """Test that an empty url for a destination that was never started is a no-op."""
+        manager = self._create_manager()
+        manager.webpage_streamer_connection_can_start = True
+
+        manager.update({"webcam": "", "screenshare": None})
+
+        manager.stop_bot_output_media_stream_callback.assert_not_called()
+        manager.play_bot_output_media_stream_callback.assert_not_called()
+        mock_post.assert_not_called()
 
     @patch("bots.bot_controller.webpage_streamer_manager.requests.post")
     def test_update_only_changes_url_without_replaying(self, mock_post):
         """Test that changing only the URL doesn't stop/replay the stream."""
         manager = self._create_manager()
         manager.webpage_streamer_connection_can_start = True
-        manager.webrtc_connection_started = True
-        manager.url = "http://example.com"
-        manager.last_non_empty_url = "http://example.com"
-        manager.output_destination = "webcam"
+        manager.webrtc_connection_started = {"webcam": True, "screenshare": False}
+        manager.urls = {"webcam": "http://example.com", "screenshare": None}
 
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_post.return_value = mock_response
 
-        manager.update("http://example2.com", "webcam")
+        manager.update({"webcam": "http://example2.com", "screenshare": None})
 
-        # Should not call play_bot_output_media_stream_callback since output_destination unchanged
+        # Should not call play_bot_output_media_stream_callback since the stream is already playing
         manager.play_bot_output_media_stream_callback.assert_not_called()
         manager.stop_bot_output_media_stream_callback.assert_not_called()
-        self.assertEqual(manager.url, "http://example2.com")
+        mock_post.assert_called_once()
+        self.assertEqual(mock_post.call_args.kwargs["json"], {"url": "http://example2.com", "output_destination": "webcam"})
+        self.assertEqual(manager.urls["webcam"], "http://example2.com")
+
+    @patch("bots.bot_controller.webpage_streamer_manager.requests.post")
+    def test_update_restarts_playback_after_url_turned_off_and_on(self, mock_post):
+        """Test that re-enabling a destination reuses its WebRTC connection and plays the stream again."""
+        manager = self._create_manager()
+        manager.webpage_streamer_connection_can_start = True
+        manager.webrtc_connection_started = {"webcam": False, "screenshare": True}
+        manager.urls = {"webcam": None, "screenshare": ""}
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_post.return_value = mock_response
+
+        manager.update({"webcam": None, "screenshare": "http://slides2.example.com"})
+
+        manager.get_peer_connection_offer_callback.assert_not_called()
+        manager.play_bot_output_media_stream_callback.assert_called_once_with("screenshare")
+        mock_post.assert_called_once()
+        self.assertIn("start_streaming", mock_post.call_args.args[0])
 
 
 class TestWebpageStreamerManagerStartOrUpdateWebrtcConnection(TestCase):
@@ -214,10 +254,10 @@ class TestWebpageStreamerManagerStartOrUpdateWebrtcConnection(TestCase):
 
         mock_post.side_effect = [mock_offer_response, mock_start_response]
 
-        manager.start_or_update_webrtc_connection("http://example.com")
+        manager.start_or_update_webrtc_connection("screenshare", "http://example.com")
 
-        self.assertTrue(manager.webrtc_connection_started)
-        manager.start_peer_connection_callback.assert_called_once_with({"sdp": "answer-sdp", "type": "answer"})
+        self.assertEqual(manager.webrtc_connection_started, {"webcam": False, "screenshare": True})
+        manager.start_peer_connection_callback.assert_called_once_with({"sdp": "answer-sdp", "type": "answer"}, "screenshare")
         self.assertEqual(mock_post.call_count, 2)
 
     @patch("bots.bot_controller.webpage_streamer_manager.requests.post")
@@ -226,9 +266,9 @@ class TestWebpageStreamerManagerStartOrUpdateWebrtcConnection(TestCase):
         manager = self._create_manager()
         manager.get_peer_connection_offer_callback.return_value = {"error": "Failed to create offer"}
 
-        manager.start_or_update_webrtc_connection("http://example.com")
+        manager.start_or_update_webrtc_connection("webcam", "http://example.com")
 
-        self.assertFalse(manager.webrtc_connection_started)
+        self.assertFalse(manager.webrtc_connection_started["webcam"])
         mock_post.assert_not_called()
 
     @patch("bots.bot_controller.webpage_streamer_manager.requests.post")
@@ -245,21 +285,21 @@ class TestWebpageStreamerManagerStartOrUpdateWebrtcConnection(TestCase):
 
         mock_post.side_effect = [mock_offer_response, mock_start_response]
 
-        manager.start_or_update_webrtc_connection("http://example.com")
+        manager.start_or_update_webrtc_connection("webcam", "http://example.com")
 
-        self.assertFalse(manager.webrtc_connection_started)
+        self.assertFalse(manager.webrtc_connection_started["webcam"])
 
     @patch("bots.bot_controller.webpage_streamer_manager.requests.post")
     def test_update_webrtc_connection_when_already_started(self, mock_post):
         """Test that update is called when connection is already started."""
         manager = self._create_manager()
-        manager.webrtc_connection_started = True
+        manager.webrtc_connection_started["webcam"] = True
 
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_post.return_value = mock_response
 
-        manager.start_or_update_webrtc_connection("http://newurl.com")
+        manager.start_or_update_webrtc_connection("webcam", "http://newurl.com")
 
         # Should only call start_streaming, not offer
         mock_post.assert_called_once()
