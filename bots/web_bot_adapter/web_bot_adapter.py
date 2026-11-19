@@ -60,12 +60,12 @@ class WebBotAdapter(BotAdapter):
         should_create_debug_recording: bool,
         start_recording_screen_callback,
         stop_recording_screen_callback,
+        bot_media_device_state_changed_by_other_participant_callback,
         video_frame_size: tuple[int, int],
         record_chat_messages_when_paused: bool,
         disable_incoming_video: bool,
         record_participant_speech_start_stop_events: bool,
         room_sync_source_participant_configuration: RoomSyncSourceParticipantConfiguration | None,
-        bot_media_device_state_changed_by_other_participant_callback=None,
     ):
         self.display_name = display_name
         self.send_message_callback = send_message_callback
@@ -535,7 +535,7 @@ class WebBotAdapter(BotAdapter):
                                 self.after_bot_recording_permission_denied()
 
                         elif json_data.get("type") == "ClosedCaptionStatusChange":
-                            if json_data.get("change") == "save_caption_not_allowed":
+                            if json_data.get("change") in ("save_caption_not_allowed", "could_not_enable_closed_captions"):
                                 self.could_not_enable_closed_captions()
 
                 elif message_type == 2:  # VIDEO
