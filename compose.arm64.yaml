@@ -1,0 +1,26 @@
+# Experimental native ARM64 web-adapter image. See docs/local-arm64.md.
+services:
+  attendee-app-local:
+    image: attendee-local:arm64
+    platform: linux/arm64
+    build:
+      context: .
+      dockerfile: Dockerfile.arm64
+  attendee-worker-local:
+    image: attendee-local:arm64
+    platform: linux/arm64
+    build:
+      context: .
+      dockerfile: Dockerfile.arm64
+  attendee-scheduler-local:
+    image: attendee-local:arm64
+    platform: linux/arm64
+    build:
+      context: .
+      dockerfile: Dockerfile.arm64
+  attendee-webpage-streamer-local:
+    image: attendee-local:arm64
+    platform: linux/arm64
+    build:
+      context: .
+      dockerfile: Dockerfile.arm64
