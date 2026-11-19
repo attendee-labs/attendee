@@ -267,6 +267,10 @@ To ensure the webhook requests are coming from Attendee, we sign each request wi
 - Each project has a single webhook secret used for both project and bot-level webhooks. You can get the secret in the Settings → Webhooks page.
 - The signature is included in the `X-Webhook-Signature` header of each webhook request
 
+## Tracing
+
+If OpenTelemetry tracing is enabled (see [OpenTelemetry (Tracing)](environment-variables.md#opentelemetry-tracing)), each webhook request carries a W3C `traceparent` header, so a receiver instrumented with OpenTelemetry continues the same trace. Without tracing the header is not sent.
+
 ## Webhook Retry Policy
 
 If your endpoint returns a non-2xx status code or fails to respond within 10 seconds, Attendee will retry the webhook delivery up to 3 times with exponential backoff.
