@@ -32,7 +32,7 @@ JOINED = {"phase": "joined", "othersInMeeting": True}
 
 
 def create_adapter(create_guest_token_callback=lambda: "guest-token", **automatic_leave_settings):
-    callbacks = {name: MagicMock() for name in ("send_message_callback", "add_video_frame_callback", "wants_any_video_frames_callback", "add_audio_chunk_callback", "add_mixed_audio_chunk_callback", "add_per_participant_video_frame_callback", "add_encoded_mp4_chunk_callback", "upsert_caption_callback", "upsert_chat_message_callback", "add_participant_event_callback", "start_recording_screen_callback", "stop_recording_screen_callback")}
+    callbacks = {name: MagicMock() for name in ("send_message_callback", "add_video_frame_callback", "wants_any_video_frames_callback", "add_audio_chunk_callback", "add_mixed_audio_chunk_callback", "add_per_participant_video_frame_callback", "add_encoded_mp4_chunk_callback", "upsert_caption_callback", "upsert_chat_message_callback", "add_participant_event_callback", "start_recording_screen_callback", "stop_recording_screen_callback", "bot_media_device_state_changed_by_other_participant_callback")}
     adapter = WebexBotAdapter(
         display_name='Bot "Quote"',
         meeting_url=MEETING_URL,
