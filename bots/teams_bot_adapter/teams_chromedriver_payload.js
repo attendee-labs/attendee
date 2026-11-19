@@ -4039,7 +4039,7 @@ class CallManager {
 
         if (typeof call?.getClosedCaptionStatus !== 'function') {
             window.ws?.sendJson({
-                type: 'watchClosedCaptionsStatus',
+                type: 'WatchClosedCaptionsStatus',
                 error: 'getClosedCaptionStatus not available'
             });
             return;
@@ -4063,7 +4063,7 @@ class CallManager {
 
                 if (status === statusStarted) {
                     window.ws?.sendJson({
-                        type: 'closedCaptionsEnabled',
+                        type: 'ClosedCaptionsEnabled',
                         attempt: attempt,
                         elapsedMs: Date.now() - attemptStartedAt
                     });
@@ -4079,7 +4079,7 @@ class CallManager {
 
                 const willRetry = attempt < maxAttempts;
                 window.ws?.sendJson({
-                    type: 'closedCaptionsEnableAttemptFailed',
+                    type: 'ClosedCaptionsEnableAttemptFailed',
                     attempt: attempt,
                     status: status,
                     subStatus: subStatus,
@@ -4102,7 +4102,7 @@ class CallManager {
                 call.startClosedCaption();
             } catch (error) {
                 window.ws?.sendJson({
-                    type: 'closedCaptionsWatcherError',
+                    type: 'WatchClosedCaptionsStatusError',
                     error: error?.message || String(error)
                 });
                 this.stopWatchClosedCaptionsStatus();
