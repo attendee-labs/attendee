@@ -107,6 +107,11 @@ def run_bot_in_ephemeral_container(self, bot_id: int):
         host_code_path = os.getenv("BOT_HOST_CODE_PATH", "/opt/attendee")
         volumes = {host_code_path: {"bind": "/attendee", "mode": "rw"}}
 
+        # Network mode for the ephemeral container. Defaults to "host" (original behavior).
+        # Set BOT_CONTAINER_NETWORK to a Docker network name (e.g. the compose network) so that
+        # ephemeral bot containers join the same bridge network as the app/worker/postgres/redis
+        # and can resolve them by service name. This is required when running via docker-compose.
+        network_mode = os.getenv("BOT_CONTAINER_NETWORK", "host")
         # Launch ephemeral container
         container = client.containers.run(
             image=image,
@@ -120,7 +125,7 @@ def run_bot_in_ephemeral_container(self, bot_id: int):
             mem_limit=mem_limit,
             cpu_quota=cpu_quota,
             cpu_period=cpu_period,
-            network_mode="host",  # Same network mode as workers
+            network_mode=network_mode,
             security_opt=["seccomp=unconfined"],  # Same config as workers
             # Container will automatically stop after max_execution_seconds thanks to timeout in command
         )
