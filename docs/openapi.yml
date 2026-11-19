@@ -1785,8 +1785,203 @@ paths:
           description: Zoom OAuth Connection deleted successfully
         '404':
           description: Zoom OAuth Connection not found
+  /api/v1/webex_service_app:
+    get:
+      operationId: Get Webex Service App
+      description: Returns the project's Webex Service App and whether it is authorized.
+        Its client secret and tokens are never returned.
+      summary: Get the project's Webex Service App
+      parameters:
+      - in: header
+        name: Authorization
+        schema:
+          type: string
+          default: Token YOUR_API_KEY_HERE
+        description: API key for authentication
+        required: true
+      - in: header
+        name: Content-Type
+        schema:
+          type: string
+          default: application/json
+        description: Should always be application/json
+        required: true
+      tags:
+      - Webex Service App
+      security:
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebexServiceApp'
+              examples:
+                WebexServiceApp:
+                  value:
+                    id: wsa_abcdef1234567890
+                    client_id: C0123456789abcdef
+                    service_app_id: Y2lzY29zcGFyazovL3VzL0FQUExJQ0FUSU9OL2FiY2RlZg
+                    org_id: Y2lzY29zcGFyazovL3VzL09SR0FOSVpBVElPTi9hYmNkZWY
+                    is_authorized: true
+                    tokens_refreshed_at: '2026-11-18T10:30:00.123456Z'
+                    created_at: '2026-11-18T10:29:00.123456Z'
+                    updated_at: '2026-11-18T10:30:00.123456Z'
+                  summary: Webex Service App
+                  description: A Webex Service App that has been authorized
+          description: The Webex Service App
+        '404':
+          description: The project has no Webex Service App
+    put:
+      operationId: Set Webex Service App
+      description: Saves the project's Webex Service App, replacing any existing one.
+        A replaced Service App loses its authorization, so authorize the new one before
+        launching Webex bots.
+      summary: Set the project's Webex Service App
+      parameters:
+      - in: header
+        name: Authorization
+        schema:
+          type: string
+          default: Token YOUR_API_KEY_HERE
+        description: API key for authentication
+        required: true
+      - in: header
+        name: Content-Type
+        schema:
+          type: string
+          default: application/json
+        description: Should always be application/json
+        required: true
+      tags:
+      - Webex Service App
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetWebexServiceAppRequest'
+        required: true
+      security:
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebexServiceApp'
+          description: The saved Webex Service App, not authorized yet
+        '400':
+          description: Invalid input
+    delete:
+      operationId: Delete Webex Service App
+      description: Deletes the project's Webex Service App and its tokens. The project
+        can't launch Webex bots until a new one is set and authorized.
+      summary: Delete the project's Webex Service App
+      parameters:
+      - in: header
+        name: Authorization
+        schema:
+          type: string
+          default: Token YOUR_API_KEY_HERE
+        description: API key for authentication
+        required: true
+      - in: header
+        name: Content-Type
+        schema:
+          type: string
+          default: application/json
+        description: Should always be application/json
+        required: true
+      tags:
+      - Webex Service App
+      security:
+      - {}
+      responses:
+        '200':
+          description: Webex Service App deleted
+        '404':
+          description: The project has no Webex Service App
+  /api/v1/webex_service_app/authorize:
+    post:
+      operationId: Authorize Webex Service App
+      description: Issues the Service App's tokens with a Webex token of the user
+        who created it, so the project can launch Webex bots. Pass either the authorization_code
+        (and redirect_uri) that Webex sent to your own redirect URI after that user
+        signed in to the Webex Integration with the spark:applications_token scope,
+        or an access_token of that user with that scope. Attendee keeps the Service
+        App's tokens fresh from then on.
+      summary: Authorize the project's Webex Service App
+      parameters:
+      - in: header
+        name: Authorization
+        schema:
+          type: string
+          default: Token YOUR_API_KEY_HERE
+        description: API key for authentication
+        required: true
+      - in: header
+        name: Content-Type
+        schema:
+          type: string
+          default: application/json
+        description: Should always be application/json
+        required: true
+      tags:
+      - Webex Service App
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuthorizeWebexServiceAppRequest'
+      security:
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebexServiceApp'
+              examples:
+                WebexServiceApp:
+                  value:
+                    id: wsa_abcdef1234567890
+                    client_id: C0123456789abcdef
+                    service_app_id: Y2lzY29zcGFyazovL3VzL0FQUExJQ0FUSU9OL2FiY2RlZg
+                    org_id: Y2lzY29zcGFyazovL3VzL09SR0FOSVpBVElPTi9hYmNkZWY
+                    is_authorized: true
+                    tokens_refreshed_at: '2026-11-18T10:30:00.123456Z'
+                    created_at: '2026-11-18T10:29:00.123456Z'
+                    updated_at: '2026-11-18T10:30:00.123456Z'
+                  summary: Webex Service App
+                  description: A Webex Service App that has been authorized
+          description: The authorized Webex Service App
+        '400':
+          description: Invalid input, or Webex did not issue the tokens
+        '404':
+          description: The project has no Webex Service App
 components:
   schemas:
+    AuthorizeWebexServiceAppRequest:
+      type: object
+      properties:
+        authorization_code:
+          type: string
+          minLength: 1
+          description: The authorization code Webex sent to your redirect URI after
+            the Service App's creator signed in to the Webex Integration that has
+            the spark:applications_token scope. Attendee exchanges it with that Integration
+            (WEBEX_INTEGRATION_CLIENT_ID and WEBEX_INTEGRATION_CLIENT_SECRET). Requires
+            redirect_uri.
+        redirect_uri:
+          type: string
+          minLength: 1
+          description: The redirect URI used to obtain the authorization code
+        access_token:
+          type: string
+          minLength: 1
+          description: 'Instead of an authorization code: a Webex access token of
+            the Service App''s creator with the spark:applications_token scope, such
+            as their personal access token. Used once and not stored.'
     Bot:
       type: object
       properties:
@@ -3645,6 +3840,33 @@ components:
       - complete
       - failed
       - paused
+    SetWebexServiceAppRequest:
+      type: object
+      properties:
+        client_id:
+          type: string
+          minLength: 1
+          description: The Webex Service App's Client ID
+        client_secret:
+          type: string
+          minLength: 1
+          description: The Webex Service App's Client Secret. Stored encrypted and
+            never returned.
+        service_app_id:
+          type: string
+          minLength: 1
+          description: The Webex Service App's ID
+        org_id:
+          type: string
+          minLength: 1
+          description: The ID of the Webex organization whose guests the bots join
+            as. A full admin of it must have authorized the Service App in Control
+            Hub.
+      required:
+      - client_id
+      - client_secret
+      - org_id
+      - service_app_id
     SpeechRequest:
       type: object
       properties:
@@ -3719,6 +3941,47 @@ components:
       description: '* `image/png` - PNG Image
 
         * `image/jpeg` - JPEG Image'
+    WebexServiceApp:
+      type: object
+      properties:
+        id:
+          type: string
+        client_id:
+          type: string
+          readOnly: true
+        service_app_id:
+          type: string
+          readOnly: true
+        org_id:
+          type: string
+          readOnly: true
+        is_authorized:
+          type: boolean
+          readOnly: true
+          description: Whether the Service App has tokens, so the project can launch
+            Webex bots
+        tokens_refreshed_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - client_id
+      - created_at
+      - id
+      - is_authorized
+      - org_id
+      - service_app_id
+      - tokens_refreshed_at
+      - updated_at
     ZoomOAuthConnection:
       type: object
       properties:
