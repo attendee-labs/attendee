@@ -2468,6 +2468,7 @@ class RecordingTypes(models.IntegerChoices):
 class RecordingResolutions(models.TextChoices):
     HD_1080P = "1080p"
     HD_720P = "720p"
+    SD_480P = "480p"
 
     @classmethod
     def get_dimensions(cls, value):
@@ -2475,6 +2476,7 @@ class RecordingResolutions(models.TextChoices):
         dimensions = {
             cls.HD_1080P: (1920, 1080),
             cls.HD_720P: (1280, 720),
+            cls.SD_480P: (854, 480),
         }
         return dimensions.get(value)
 
