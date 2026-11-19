@@ -65,6 +65,7 @@ class WebBotAdapter(BotAdapter):
         disable_incoming_video: bool,
         record_participant_speech_start_stop_events: bool,
         room_sync_source_participant_configuration: RoomSyncSourceParticipantConfiguration | None,
+        bot_media_device_state_changed_by_other_participant_callback=None,
     ):
         self.display_name = display_name
         self.send_message_callback = send_message_callback
@@ -76,6 +77,7 @@ class WebBotAdapter(BotAdapter):
         self.add_encoded_mp4_chunk_callback = add_encoded_mp4_chunk_callback
         self.upsert_caption_callback = upsert_caption_callback
         self.upsert_chat_message_callback = upsert_chat_message_callback
+        self.bot_media_device_state_changed_by_other_participant_callback = bot_media_device_state_changed_by_other_participant_callback
         self.add_participant_event_callback = add_participant_event_callback
         self.start_recording_screen_callback = start_recording_screen_callback
         self.stop_recording_screen_callback = stop_recording_screen_callback
@@ -420,6 +422,12 @@ class WebBotAdapter(BotAdapter):
 
         self.upsert_chat_message_callback(json_data)
 
+    def handle_bot_media_device_state_changed_by_other_participant(self, json_data):
+        if not self.bot_media_device_state_changed_by_other_participant_callback:
+            return
+
+        self.bot_media_device_state_changed_by_other_participant_callback(json_data)
+
     def mask_transcript_if_required(self, json_data):
         if not settings.MASK_TRANSCRIPT_IN_LOGS:
             return json_data
@@ -472,6 +480,9 @@ class WebBotAdapter(BotAdapter):
 
                         elif json_data.get("type") == "ChatMessage":
                             self.handle_chat_message(json_data)
+
+                        elif json_data.get("type") == "BotMediaDeviceStateChangedByOtherParticipant":
+                            self.handle_bot_media_device_state_changed_by_other_participant(json_data)
 
                         elif json_data.get("type") == "ParticipantSpeechStartStopEvent":
                             self.handle_participant_speech_start_stop_event(json_data)
