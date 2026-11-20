@@ -276,13 +276,27 @@ def should_create_third_party_transcription_job_for_utterance_group(utterances):
     return False
 
 
-# Submits the utterance group to a provider that transcribes it in the background. The result is
-# retrieved later by get_transcription_for_utterance_group_from_terminated_third_party_job
+# Submits the utterance group to a provider that transcribes it in the background and returns the provider's job id.
+# The result is retrieved later by get_transcription_for_utterance_group_from_terminated_third_party_job
 def create_third_party_transcription_job_for_utterance_group(utterances):
     try:
-        transcription_provider = utterances[0].transcription_provider
+        first_utterance = utterances[0]
+        total_duration_ms = sum(utterance.duration_ms for utterance in utterances)
 
-        raise Exception(f"Unknown or unsupported transcription provider for third party transcription jobs: {transcription_provider}")
+        transcription_provider = first_utterance.transcription_provider
+
+        if transcription_provider == TranscriptionProviders.ELEVENLABS:
+            create_third_party_transcription_job_from_mp3_method = create_third_party_transcription_job_via_elevenlabs_from_mp3
+        else:
+            raise Exception(f"Unknown or unsupported transcription provider for third party transcription jobs: {transcription_provider}")
+
+        return create_third_party_transcription_job_from_mp3_method(
+            retrieve_mp3_data_callback=lambda: get_mp3_for_utterance_group(utterances, sample_rate=first_utterance.get_sample_rate()),
+            duration_ms=total_duration_ms,
+            identifier=f"utterances {[utterance.id for utterance in utterances]}",
+            transcription_settings=first_utterance.transcription_settings,
+            recording=first_utterance.recording,
+        )
     except Exception as e:
         return None, {"reason": TranscriptionFailureReasons.INTERNAL_ERROR, "error": str(e)}
 
@@ -483,13 +497,7 @@ def get_words_from_elevenlabs_response(result: dict):
     return words
 
 
-def get_transcription_via_elevenlabs_from_mp3(
-    retrieve_mp3_data_callback: Callable[[], bytes],
-    duration_ms: int,
-    identifier: str,
-    transcription_settings: TranscriptionSettings,
-    recording: Recording,
-):
+def get_elevenlabs_api_key(recording: Recording):
     elevenlabs_credentials_record = recording.bot.project.credentials.filter(credential_type=Credentials.CredentialTypes.ELEVENLABS).first()
     if not elevenlabs_credentials_record:
         return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND}
@@ -501,6 +509,72 @@ def get_transcription_via_elevenlabs_from_mp3(
     api_key = elevenlabs_credentials.get("api_key")
     if not api_key:
         return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND, "error": "api_key not in credentials"}
+
+    return api_key, None
+
+
+def create_third_party_transcription_job_via_elevenlabs_from_mp3(
+    retrieve_mp3_data_callback: Callable[[], bytes],
+    duration_ms: int,
+    identifier: str,
+    transcription_settings: TranscriptionSettings,
+    recording: Recording,
+):
+    api_key, error = get_elevenlabs_api_key(recording)
+    if error:
+        return None, error
+
+    url, data = get_elevenlabs_speech_to_text_request(transcription_settings)
+    # The request returns early and the transcription is delivered to the speech-to-text webhooks configured in ElevenLabs
+    data["webhook"] = True
+    headers = {
+        "xi-api-key": api_key,
+    }
+    files = {"file": ("audio.mp3", retrieve_mp3_data_callback(), "audio/mpeg")}
+
+    try:
+        response = requests.post(url, headers=headers, files=files, data=data)
+
+        if response.status_code == 401:
+            return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_INVALID}
+
+        if response.status_code == 429:
+            return None, {"reason": TranscriptionFailureReasons.RATE_LIMIT_EXCEEDED, "status_code": response.status_code}
+
+        if response.status_code != 200:
+            logger.error(f"ElevenLabs third party transcription job creation failed for {identifier} with status code {response.status_code}: {response.text}")
+            return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "status_code": response.status_code, "response_text": response.text}
+
+        # The webhook payload identifies the transcription by this request_id
+        request_id = response.json().get("request_id")
+        if not request_id:
+            logger.error(f"ElevenLabs third party transcription job creation response for {identifier} had no request_id: {response.text}")
+            return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "status_code": response.status_code, "response_text": response.text}
+
+        logger.info(f"ElevenLabs third party transcription job {request_id} created for {identifier}")
+        return request_id, None
+
+    except requests.exceptions.RequestException as e:
+        logger.error(f"ElevenLabs third party transcription job creation request failed for {identifier}: {str(e)}")
+        return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "error": str(e)}
+    except json.JSONDecodeError as e:
+        logger.error(f"ElevenLabs third party transcription job creation response parsing failed for {identifier}: {str(e)}")
+        return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "error": f"Invalid JSON response: {str(e)}"}
+    except Exception as e:
+        logger.error(f"ElevenLabs third party transcription job creation unexpected error for {identifier}: {str(e)}")
+        return None, {"reason": TranscriptionFailureReasons.INTERNAL_ERROR, "error": str(e)}
+
+
+def get_transcription_via_elevenlabs_from_mp3(
+    retrieve_mp3_data_callback: Callable[[], bytes],
+    duration_ms: int,
+    identifier: str,
+    transcription_settings: TranscriptionSettings,
+    recording: Recording,
+):
+    api_key, error = get_elevenlabs_api_key(recording)
+    if error:
+        return None, error
 
     url, data = get_elevenlabs_speech_to_text_request(transcription_settings)
     headers = {
