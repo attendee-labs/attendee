@@ -176,6 +176,7 @@ This document lists all supported environment variables for the Attendee applica
 | `CHROME_TIMEZONE` | String | (None) | IANA timezone (e.g. `America/New_York`) for Chrome web bots. Set it to match the region of your egress IP. When unset, Chrome inherits the container's timezone. |
 | `MASK_TRANSCRIPT_IN_LOGS` | Boolean | `false` | Mask transcript content in application logs for privacy. |
 | `ENABLE_BOT_WEBSOCKET_PORT_SELECTION_BY_OS` | Boolean | `false` | Bind the web bot websocket server to a random loopback IP (`127.x.y.z`) on the platform's fixed port, and map `localhost` to that IP in Chrome, instead of binding to `localhost` and trying the next 10 ports. Enable it when many bots share a network namespace, e.g. celery workers or `docker-compose-multi-host` with host networking. Linux only. |
+| `PER_BOT_AUDIO_SINK` | Boolean | `true` | Give each bot launched by a celery worker its own PulseAudio null sink, so Chrome plays into it and ffmpeg records its monitor. Without it, every bot in the worker records the shared default sink and concurrent recordings contain each other's audio. Bots that run in their own pod or container are not affected. Set to `false` to record from the shared default sink. |
 
 ---
 
