@@ -189,6 +189,9 @@ CELERY_TASK_ROUTES = {
     "bots.tasks.process_utterance_group_for_async_transcription_task.process_utterance_group_for_async_transcription": {
         "queue": os.getenv("PROCESS_UTTERANCE_CELERY_QUEUE", "celery"),
     },
+    "bots.tasks.process_utterance_group_for_async_transcription_upon_third_party_job_termination_task.process_utterance_group_for_async_transcription_upon_third_party_job_termination": {
+        "queue": os.getenv("PROCESS_UTTERANCE_CELERY_QUEUE", "celery"),
+    },
     "bots.tasks.process_async_transcription_task.process_async_transcription": {
         "queue": os.getenv("PROCESS_ASYNC_TRANSCRIPTION_CELERY_QUEUE", "celery"),
     },

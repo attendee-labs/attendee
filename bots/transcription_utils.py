@@ -9,7 +9,7 @@ from typing import Any, Callable, Dict, List, Sequence
 
 import requests
 
-from bots.models import Credentials, Recording, TranscriptionFailureReasons, TranscriptionProviders, TranscriptionSettings, Utterance
+from bots.models import Credentials, Recording, ThirdPartyTranscriptionJob, ThirdPartyTranscriptionJobStates, TranscriptionFailureReasons, TranscriptionProviders, TranscriptionSettings, Utterance
 
 logger = logging.getLogger(__name__)
 
@@ -248,6 +248,8 @@ def get_transcription_for_utterance_group(utterances):
             get_transcription_from_mp3_method = get_transcription_via_assemblyai_from_mp3
         elif transcription_provider == TranscriptionProviders.DEEPGRAM:
             get_transcription_from_mp3_method = get_transcription_via_deepgram_from_mp3
+        elif transcription_provider == TranscriptionProviders.ELEVENLABS:
+            get_transcription_from_mp3_method = get_transcription_via_elevenlabs_from_mp3
         else:
             raise Exception(f"Unknown or unsupported transcription provider: {transcription_provider}")
 
@@ -255,6 +257,66 @@ def get_transcription_for_utterance_group(utterances):
             retrieve_mp3_data_callback=lambda: get_mp3_for_utterance_group(utterances, sample_rate=first_utterance.get_sample_rate()),
             duration_ms=total_duration_ms,
             identifier=f"utterances {[utterance.id for utterance in utterances]}",
+            transcription_settings=first_utterance.transcription_settings,
+            recording=first_utterance.recording,
+        )
+
+        if error:
+            return None, error
+
+        return split_transcription_by_utterance(transcription, utterances), None
+    except Exception as e:
+        return None, {"reason": TranscriptionFailureReasons.INTERNAL_ERROR, "error": str(e)}
+
+
+def should_create_third_party_transcription_job_for_utterance_group(utterances):
+    transcription_provider = utterances[0].transcription_provider
+    if transcription_provider == TranscriptionProviders.ELEVENLABS:
+        return os.getenv("USE_THIRD_PARTY_TRANSCRIPTION_JOBS_FOR_ELEVENLABS_ASYNC_TRANSCRIPTION", "false") == "true"
+    return False
+
+
+# Submits the utterance group to a provider that transcribes it in the background and returns
+# {"provider_job_id": ..., "provider_job_data": {...}} describing the provider's job.
+# The result is retrieved later by get_transcription_for_utterance_group_from_terminated_third_party_job
+def create_third_party_transcription_job_for_utterance_group(utterances):
+    try:
+        first_utterance = utterances[0]
+        total_duration_ms = sum(utterance.duration_ms for utterance in utterances)
+
+        transcription_provider = first_utterance.transcription_provider
+
+        if transcription_provider == TranscriptionProviders.ELEVENLABS:
+            create_third_party_transcription_job_from_mp3_method = create_third_party_transcription_job_via_elevenlabs_from_mp3
+        else:
+            raise Exception(f"Unknown or unsupported transcription provider for third party transcription jobs: {transcription_provider}")
+
+        return create_third_party_transcription_job_from_mp3_method(
+            retrieve_mp3_data_callback=lambda: get_mp3_for_utterance_group(utterances, sample_rate=first_utterance.get_sample_rate()),
+            duration_ms=total_duration_ms,
+            identifier=f"utterances {[utterance.id for utterance in utterances]}",
+            transcription_settings=first_utterance.transcription_settings,
+            recording=first_utterance.recording,
+        )
+    except Exception as e:
+        return None, {"reason": TranscriptionFailureReasons.INTERNAL_ERROR, "error": str(e)}
+
+
+# This will get a transcription result from a thrid party job that has either completed or failed
+def get_transcription_for_utterance_group_from_terminated_third_party_job(third_party_transcription_job, utterances):
+    try:
+        first_utterance = utterances[0]
+
+        transcription_provider = third_party_transcription_job.provider
+
+        if transcription_provider == TranscriptionProviders.ELEVENLABS:
+            get_transcription_from_terminated_third_party_job_method = get_transcription_via_elevenlabs_from_terminated_third_party_job
+        else:
+            raise Exception(f"Unknown or unsupported transcription provider for third party transcription jobs: {transcription_provider}")
+
+        transcription, error = get_transcription_from_terminated_third_party_job_method(
+            third_party_transcription_job=third_party_transcription_job,
+            identifier=f"utterances {[utterance.id for utterance in utterances]} (third party transcription job {third_party_transcription_job.id})",
             transcription_settings=first_utterance.transcription_settings,
             recording=first_utterance.recording,
         )
@@ -451,6 +513,182 @@ def get_words_from_elevenlabs_response(result: dict):
             formatted_word["speaker"] = word["speaker_id"]
         words.append(formatted_word)
     return words
+
+
+def get_elevenlabs_api_key(recording: Recording):
+    elevenlabs_credentials_record = recording.bot.project.credentials.filter(credential_type=Credentials.CredentialTypes.ELEVENLABS).first()
+    if not elevenlabs_credentials_record:
+        return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND}
+
+    elevenlabs_credentials = elevenlabs_credentials_record.get_credentials()
+    if not elevenlabs_credentials:
+        return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND}
+
+    api_key = elevenlabs_credentials.get("api_key")
+    if not api_key:
+        return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND, "error": "api_key not in credentials"}
+
+    return api_key, None
+
+
+def create_third_party_transcription_job_via_elevenlabs_from_mp3(
+    retrieve_mp3_data_callback: Callable[[], bytes],
+    duration_ms: int,
+    identifier: str,
+    transcription_settings: TranscriptionSettings,
+    recording: Recording,
+):
+    api_key, error = get_elevenlabs_api_key(recording)
+    if error:
+        return None, error
+
+    url, data = get_elevenlabs_speech_to_text_request(transcription_settings)
+    # The request returns early and the transcription is delivered to the speech-to-text webhooks configured in ElevenLabs
+    data["webhook"] = True
+    headers = {
+        "xi-api-key": api_key,
+    }
+    files = {"file": ("audio.mp3", retrieve_mp3_data_callback(), "audio/mpeg")}
+
+    try:
+        response = requests.post(url, headers=headers, files=files, data=data)
+
+        if response.status_code == 401:
+            return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_INVALID}
+
+        if response.status_code == 429:
+            return None, {"reason": TranscriptionFailureReasons.RATE_LIMIT_EXCEEDED, "status_code": response.status_code}
+
+        if response.status_code not in (200, 202):
+            logger.error(f"ElevenLabs third party transcription job creation failed for {identifier} with status code {response.status_code}: {response.text}")
+            return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "status_code": response.status_code, "response_text": response.text}
+
+        # The webhook payload identifies the job by request_id, but the transcript can only be fetched by transcription_id
+        result = response.json()
+        request_id = result.get("request_id")
+        transcription_id = result.get("transcription_id")
+        if not request_id or not transcription_id:
+            logger.error(f"ElevenLabs third party transcription job creation response for {identifier} was missing request_id or transcription_id: {response.text}")
+            return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "status_code": response.status_code, "response_text": response.text}
+
+        logger.info(f"ElevenLabs third party transcription job {request_id} created for {identifier}")
+        return {"provider_job_id": request_id, "provider_job_data": {"transcription_id": transcription_id}}, None
+
+    except requests.exceptions.RequestException as e:
+        logger.error(f"ElevenLabs third party transcription job creation request failed for {identifier}: {str(e)}")
+        return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "error": str(e)}
+    except json.JSONDecodeError as e:
+        logger.error(f"ElevenLabs third party transcription job creation response parsing failed for {identifier}: {str(e)}")
+        return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "error": f"Invalid JSON response: {str(e)}"}
+    except Exception as e:
+        logger.error(f"ElevenLabs third party transcription job creation unexpected error for {identifier}: {str(e)}")
+        return None, {"reason": TranscriptionFailureReasons.INTERNAL_ERROR, "error": str(e)}
+
+
+def get_transcription_from_elevenlabs_response(result: dict, identifier: str):
+    if result.get("language_probability", 0.0) < 0.5:
+        logger.info(f"ElevenLabs transcription skipped for {identifier} because the language probability was less than 0.5")
+        return {"transcript": "", "words": []}
+
+    return {"transcript": result.get("text", ""), "words": get_words_from_elevenlabs_response(result), "language": result.get("language_code", None)}
+
+
+def get_transcription_via_elevenlabs_from_terminated_third_party_job(
+    third_party_transcription_job: ThirdPartyTranscriptionJob,
+    identifier: str,
+    transcription_settings: TranscriptionSettings,
+    recording: Recording,
+):
+    if third_party_transcription_job.state == ThirdPartyTranscriptionJobStates.FAILED:
+        logger.error(f"ElevenLabs third party transcription job failed for {identifier}: {third_party_transcription_job.failure_data}")
+        return None, {"reason": TranscriptionFailureReasons.THIRD_PARTY_TRANSCRIPTION_JOB_FAILED, "provider_failure_data": third_party_transcription_job.failure_data}
+
+    api_key, error = get_elevenlabs_api_key(recording)
+    if error:
+        return None, error
+
+    transcription_id = third_party_transcription_job.provider_job_data.get("transcription_id")
+    if not transcription_id:
+        return None, {"reason": TranscriptionFailureReasons.INTERNAL_ERROR, "error": "transcription_id not in provider_job_data"}
+
+    url = f"{transcription_settings.elevenlabs_base_url()}/v1/speech-to-text/transcripts/{transcription_id}"
+    headers = {
+        "xi-api-key": api_key,
+    }
+
+    try:
+        response = requests.get(url, headers=headers)
+
+        if response.status_code == 401:
+            return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_INVALID}
+
+        if response.status_code == 429:
+            return None, {"reason": TranscriptionFailureReasons.RATE_LIMIT_EXCEEDED, "status_code": response.status_code}
+
+        if response.status_code != 200:
+            logger.error(f"ElevenLabs transcript retrieval failed for {identifier} with status code {response.status_code}: {response.text}")
+            return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "status_code": response.status_code, "response_text": response.text}
+
+        result = response.json()
+        logger.info(f"ElevenLabs transcript retrieved successfully for {identifier}")
+
+        return get_transcription_from_elevenlabs_response(result, identifier), None
+
+    except requests.exceptions.RequestException as e:
+        logger.error(f"ElevenLabs transcript retrieval request failed for {identifier}: {str(e)}")
+        return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "error": str(e)}
+    except json.JSONDecodeError as e:
+        logger.error(f"ElevenLabs transcript retrieval response parsing failed for {identifier}: {str(e)}")
+        return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "error": f"Invalid JSON response: {str(e)}"}
+    except Exception as e:
+        logger.error(f"ElevenLabs transcript retrieval unexpected error for {identifier}: {str(e)}")
+        return None, {"reason": TranscriptionFailureReasons.INTERNAL_ERROR, "error": str(e)}
+
+
+def get_transcription_via_elevenlabs_from_mp3(
+    retrieve_mp3_data_callback: Callable[[], bytes],
+    duration_ms: int,
+    identifier: str,
+    transcription_settings: TranscriptionSettings,
+    recording: Recording,
+):
+    api_key, error = get_elevenlabs_api_key(recording)
+    if error:
+        return None, error
+
+    url, data = get_elevenlabs_speech_to_text_request(transcription_settings)
+    headers = {
+        "xi-api-key": api_key,
+    }
+    files = {"file": ("audio.mp3", retrieve_mp3_data_callback(), "audio/mpeg")}
+
+    try:
+        response = requests.post(url, headers=headers, files=files, data=data)
+
+        if response.status_code == 401:
+            return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_INVALID}
+
+        if response.status_code == 429:
+            return None, {"reason": TranscriptionFailureReasons.RATE_LIMIT_EXCEEDED, "status_code": response.status_code}
+
+        if response.status_code != 200:
+            logger.error(f"ElevenLabs transcription failed for {identifier} with status code {response.status_code}: {response.text}")
+            return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "status_code": response.status_code, "response_text": response.text}
+
+        result = response.json()
+        logger.info(f"ElevenLabs transcription completed successfully for {identifier}")
+
+        return get_transcription_from_elevenlabs_response(result, identifier), None
+
+    except requests.exceptions.RequestException as e:
+        logger.error(f"ElevenLabs transcription request failed for {identifier}: {str(e)}")
+        return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "error": str(e)}
+    except json.JSONDecodeError as e:
+        logger.error(f"ElevenLabs transcription response parsing failed for {identifier}: {str(e)}")
+        return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "error": f"Invalid JSON response: {str(e)}"}
+    except Exception as e:
+        logger.error(f"ElevenLabs transcription unexpected error for {identifier}: {str(e)}")
+        return None, {"reason": TranscriptionFailureReasons.INTERNAL_ERROR, "error": str(e)}
 
 
 def get_transcription_via_deepgram_from_mp3(

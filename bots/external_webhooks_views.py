@@ -10,8 +10,9 @@ from django.utils.decorators import method_decorator
 from django.views import View
 from django.views.decorators.csrf import csrf_exempt
 
-from .models import CalendarNotificationChannel, ZoomOAuthApp, ZoomOAuthConnection
+from .models import CalendarNotificationChannel, ThirdPartyTranscriptionJob, ThirdPartyTranscriptionJobStates, TranscriptionProviders, ZoomOAuthApp, ZoomOAuthConnection
 from .stripe_utils import process_checkout_session_completed, process_customer_updated, process_payment_intent_succeeded
+from .tasks.process_utterance_group_for_async_transcription_upon_third_party_job_termination_task import process_utterance_group_for_async_transcription_upon_third_party_job_termination
 from .zoom_oauth_connections_utils import _upsert_zoom_meeting_to_zoom_oauth_connection_mapping, _verify_zoom_webhook_signature, compute_zoom_webhook_validation_response
 
 logger = logging.getLogger(__name__)
@@ -199,6 +200,53 @@ class ExternalWebhookZoomOAuthAppView(View):
         except Exception as e:
             logger.exception(f"Error processing Zoom OAuth app webhook: {e}")
             return HttpResponse(status=400)
+        return HttpResponse(status=200)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class ExternalWebhookElevenLabsView(View):
+    """
+    View to handle ElevenLabs speech-to-text webhook events.
+    This endpoint is called by ElevenLabs when a third party transcription job completes or fails.
+    The signature is not verified because the payload is only used to identify the job and whether it succeeded;
+    the transcript itself is fetched from the ElevenLabs API.
+    """
+
+    def post(self, request, *args, **kwargs):
+        try:
+            event = json.loads(request.body)
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse ElevenLabs webhook payload: {e}")
+            return HttpResponse(status=400)
+
+        event_type = event.get("type")
+        if event_type == "speech_to_text_transcription":
+            request_id = (event.get("data") or {}).get("request_id")
+            new_state = ThirdPartyTranscriptionJobStates.COMPLETE
+            failure_data = None
+        elif event_type == "webhook_error":
+            request_id = event.get("request_id")
+            new_state = ThirdPartyTranscriptionJobStates.FAILED
+            failure_data = {"error_message": event.get("error_message")}
+        else:
+            logger.info(f"Received ElevenLabs webhook event that we don't handle: {event_type}")
+            return HttpResponse(status=200)
+
+        logger.info(f"Received ElevenLabs webhook event {event_type} for request {request_id}")
+
+        third_party_transcription_job = ThirdPartyTranscriptionJob.objects.filter(provider=TranscriptionProviders.ELEVENLABS, provider_job_id=request_id).first()
+        if not third_party_transcription_job:
+            logger.warning(f"No third party transcription job found for ElevenLabs request {request_id}")
+            return HttpResponse(status=200)
+
+        # Conditional update so a duplicate webhook doesn't launch the termination task twice
+        updated_count = ThirdPartyTranscriptionJob.objects.filter(id=third_party_transcription_job.id, state=ThirdPartyTranscriptionJobStates.PENDING).update(state=new_state, failure_data=failure_data, updated_at=timezone.now())
+        if updated_count == 0:
+            logger.info(f"Third party transcription job {third_party_transcription_job.id} was already terminated, ignoring ElevenLabs webhook event {event_type}")
+            return HttpResponse(status=200)
+
+        process_utterance_group_for_async_transcription_upon_third_party_job_termination.delay(third_party_transcription_job.id)
+
         return HttpResponse(status=200)
 
 

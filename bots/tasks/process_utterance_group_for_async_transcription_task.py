@@ -1,11 +1,50 @@
 import logging
 
 from celery import shared_task
+from django.db import transaction
 
 logger = logging.getLogger(__name__)
 
-from bots.models import Utterance
-from bots.transcription_utils import get_transcription_for_utterance_group, is_retryable_failure
+from bots.models import ThirdPartyTranscriptionJob, Utterance
+from bots.transcription_utils import (
+    create_third_party_transcription_job_for_utterance_group,
+    get_transcription_for_utterance_group,
+    is_retryable_failure,
+    should_create_third_party_transcription_job_for_utterance_group,
+)
+
+
+def handle_transcription_failure(first_utterance, utterances, failure_data):
+    utterance_ids = [utterance.id for utterance in utterances]
+    if first_utterance.transcription_attempt_count < 5 and is_retryable_failure(failure_data):
+        first_utterance.save()
+        raise Exception(f"Retryable failure when transcribing utterances {utterance_ids}: {failure_data}")
+
+    first_utterance.save()
+    # Set the failure data for all the utterances
+    for utterance in utterances:
+        utterance.failure_data = failure_data
+        utterance.save()
+    logger.info(f"Transcription failed for utterances {utterance_ids}, failure data: {failure_data}")
+
+
+# The transcriptions will be written when the third party job terminates
+def create_third_party_transcription_job_and_save_to_db(first_utterance, utterances):
+    provider_job, failure_data = create_third_party_transcription_job_for_utterance_group(utterances)
+    if failure_data:
+        handle_transcription_failure(first_utterance, utterances, failure_data)
+        return
+
+    with transaction.atomic():
+        third_party_transcription_job = ThirdPartyTranscriptionJob.objects.create(
+            recording=first_utterance.recording,
+            provider=first_utterance.transcription_provider,
+            provider_job_id=provider_job["provider_job_id"],
+            provider_job_data=provider_job["provider_job_data"],
+        )
+        third_party_transcription_job.utterances.set(utterances)
+
+    logger.info(f"Created third party transcription job {third_party_transcription_job.id} for utterances {[utterance.id for utterance in utterances]}")
 
 
 @shared_task(
@@ -39,20 +78,14 @@ def process_utterance_group_for_async_transcription(self, utterance_ids):
     if first_utterance.transcription is None:
         first_utterance.transcription_attempt_count += 1
 
-        transcriptions, failure_data = get_transcription_for_utterance_group(utterances)
+        if should_create_third_party_transcription_job_for_utterance_group(utterances):
+            create_third_party_transcription_job_and_save_to_db(first_utterance, utterances)
+            return
 
+        transcriptions, failure_data = get_transcription_for_utterance_group(utterances)
         if failure_data:
-            if first_utterance.transcription_attempt_count < 5 and is_retryable_failure(failure_data):
-                first_utterance.save()
-                raise Exception(f"Retryable failure when transcribing utterances {utterance_ids}: {failure_data}")
-            else:
-                first_utterance.save()
-                # Set the failure data for all the utterances
-                for utterance in utterances:
-                    utterance.failure_data = failure_data
-                    utterance.save()
-                logger.info(f"Transcription failed for utterances {utterance_ids}, failure data: {failure_data}")
-                return
+            handle_transcription_failure(first_utterance, utterances, failure_data)
+            return
 
         # Loop through the utterances and write the transcription to the utterance
         for utterance in utterances:

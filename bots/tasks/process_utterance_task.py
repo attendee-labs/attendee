@@ -9,7 +9,7 @@ from celery import shared_task
 logger = logging.getLogger(__name__)
 
 from bots.models import Credentials, RecordingManager, TranscriptionFailureReasons, TranscriptionProviders, Utterance, WebhookTriggerTypes
-from bots.transcription_utils import get_elevenlabs_speech_to_text_request, get_transcription_via_assemblyai_from_mp3, get_transcription_via_deepgram_from_audio_data, get_words_from_elevenlabs_response, is_retryable_failure
+from bots.transcription_utils import get_transcription_via_assemblyai_from_mp3, get_transcription_via_deepgram_from_audio_data, get_transcription_via_elevenlabs_from_mp3, is_retryable_failure
 from bots.utils import pcm_to_mp3
 from bots.webhook_payloads import utterance_webhook_payload
 from bots.webhook_utils import trigger_webhook
@@ -414,67 +414,13 @@ def get_transcription_via_sarvam(utterance):
 
 
 def get_transcription_via_elevenlabs(utterance):
-    recording = utterance.recording
-    transcription_settings = utterance.transcription_settings
-    elevenlabs_credentials_record = recording.bot.project.credentials.filter(credential_type=Credentials.CredentialTypes.ELEVENLABS).first()
-    if not elevenlabs_credentials_record:
-        return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND}
-
-    elevenlabs_credentials = elevenlabs_credentials_record.get_credentials()
-    if not elevenlabs_credentials:
-        return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND}
-
-    api_key = elevenlabs_credentials.get("api_key")
-    if not api_key:
-        return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND, "error": "api_key not in credentials"}
-
-    # Convert PCM audio to MP3 for ElevenLabs
-    payload_mp3 = pcm_to_mp3(utterance.get_audio_blob().tobytes(), sample_rate=utterance.get_sample_rate())
-
-    url, data = get_elevenlabs_speech_to_text_request(transcription_settings)
-    headers = {
-        "xi-api-key": api_key,
-    }
-    files = {"file": ("audio.mp3", payload_mp3, "audio/mpeg")}
-
-    try:
-        response = requests.post(url, headers=headers, files=files, data=data)
-
-        if response.status_code == 401:
-            return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_INVALID}
-
-        if response.status_code == 429:
-            return None, {"reason": TranscriptionFailureReasons.RATE_LIMIT_EXCEEDED, "status_code": response.status_code}
-
-        if response.status_code != 200:
-            logger.error(f"ElevenLabs transcription failed with status code {response.status_code}: {response.text}")
-            return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "status_code": response.status_code, "response_text": response.text}
-
-        result = response.json()
-        logger.info("ElevenLabs transcription completed successfully")
-
-        if result.get("language_probability", 0.0) < 0.5:
-            logger.info(f"ElevenLabs transcription skipped for utterance {utterance.id} because the language probability was less than 0.5")
-            return {"transcript": "", "words": []}, None
-
-        # Extract transcript and words from the response
-        transcript_text = result.get("text", "")
-        words = get_words_from_elevenlabs_response(result)
-
-        # Format the response to match our expected schema
-        transcription = {"transcript": transcript_text, "words": words, "language": result.get("language_code", None)}
-
-        return transcription, None
-
-    except requests.exceptions.RequestException as e:
-        logger.error(f"ElevenLabs transcription request failed: {str(e)}")
-        return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "error": str(e)}
-    except json.JSONDecodeError as e:
-        logger.error(f"ElevenLabs transcription response parsing failed: {str(e)}")
-        return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "error": f"Invalid JSON response: {str(e)}"}
-    except Exception as e:
-        logger.error(f"ElevenLabs transcription unexpected error: {str(e)}")
-        return None, {"reason": TranscriptionFailureReasons.INTERNAL_ERROR, "error": str(e)}
+    return get_transcription_via_elevenlabs_from_mp3(
+        retrieve_mp3_data_callback=lambda: pcm_to_mp3(utterance.get_audio_blob().tobytes(), sample_rate=utterance.get_sample_rate()),
+        duration_ms=utterance.duration_ms,
+        identifier=f"utterance {utterance.id}",
+        transcription_settings=utterance.transcription_settings,
+        recording=utterance.recording,
+    )
 
 
 def _request_custom_async_transcription(utterance, headers, data):
