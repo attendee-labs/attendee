@@ -2718,6 +2718,7 @@ class TranscriptionFailureReasons(models.TextChoices):
     TRANSCRIPTION_REQUEST_FAILED = "transcription_request_failed"
     TIMED_OUT = "timed_out"
     INTERNAL_ERROR = "internal_error"
+    THIRD_PARTY_TRANSCRIPTION_JOB_FAILED = "third_party_transcription_job_failed"
     # This reason applies to the transcription operation as a whole, not a specific utterance
     UTTERANCES_STILL_IN_PROGRESS_WHEN_RECORDING_TERMINATED = "utterances_still_in_progress_when_recording_terminated"
     UTTERANCES_STILL_IN_PROGRESS_WHEN_TRANSCRIPTION_TERMINATED = "utterances_still_in_progress_when_transcription_terminated"
@@ -2972,6 +2973,8 @@ class ThirdPartyTranscriptionJob(models.Model):
     utterances = models.ManyToManyField(Utterance, related_name="third_party_transcription_jobs")
     provider = models.IntegerField(choices=TranscriptionProviders.choices)
     provider_job_id = models.CharField(max_length=255)
+    # Provider-specific data needed to retrieve the result, e.g. ElevenLabs' transcription_id
+    provider_job_data = models.JSONField(default=dict)
     state = models.IntegerField(choices=ThirdPartyTranscriptionJobStates.choices, default=ThirdPartyTranscriptionJobStates.PENDING)
     failure_data = models.JSONField(null=True, default=None)
     created_at = models.DateTimeField(auto_now_add=True)

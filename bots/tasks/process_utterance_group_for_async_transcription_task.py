@@ -30,7 +30,7 @@ def handle_transcription_failure(first_utterance, utterances, failure_data):
 
 # The transcriptions will be written when the third party job terminates
 def create_third_party_transcription_job_and_save_to_db(first_utterance, utterances):
-    provider_job_id, failure_data = create_third_party_transcription_job_for_utterance_group(utterances)
+    provider_job, failure_data = create_third_party_transcription_job_for_utterance_group(utterances)
     if failure_data:
         handle_transcription_failure(first_utterance, utterances, failure_data)
         return
@@ -39,7 +39,8 @@ def create_third_party_transcription_job_and_save_to_db(first_utterance, utteran
         third_party_transcription_job = ThirdPartyTranscriptionJob.objects.create(
             recording=first_utterance.recording,
             provider=first_utterance.transcription_provider,
-            provider_job_id=provider_job_id,
+            provider_job_id=provider_job["provider_job_id"],
+            provider_job_data=provider_job["provider_job_data"],
         )
         third_party_transcription_job.utterances.set(utterances)
 
