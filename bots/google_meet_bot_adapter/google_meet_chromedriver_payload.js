@@ -2030,11 +2030,58 @@ function convertCaptionV2ToV1(captionWrapperV2) {
     };
 }
 
+const captionV2WordKey = (word) => word.toLowerCase().normalize('NFD').replace(/\p{M}/gu, '').replace(/[^\p{L}\p{N}]/gu, '');
+
+function captionV2WordsMatch(keptWord, incomingWord, isFirstIncomingWord, isLastKeptWord) {
+    if (!keptWord || !incomingWord) return false;
+    if (keptWord === incomingWord) return true;
+    if (isLastKeptWord && incomingWord.startsWith(keptWord)) return true;
+    if (isFirstIncomingWord && incomingWord.length >= 3 && keptWord.endsWith(incomingWord)) return true;
+    return false;
+}
+
+function mergeCaptionV2Window(previousText, windowText) {
+    if (!previousText) return windowText;
+    const keptWords = previousText.split(/\s+/).filter(Boolean);
+    const incomingWords = windowText.split(/\s+/).filter(Boolean);
+    if (incomingWords.length === 0) return previousText;
+    const keptKeys = keptWords.map(captionV2WordKey);
+    const incomingKeys = incomingWords.map(captionV2WordKey);
+    let bestStart = -1;
+    let bestScore = 0;
+    for (let start = Math.max(0, keptWords.length - 40); start < keptWords.length; start++) {
+        const tailLength = keptWords.length - start;
+        const anchored = incomingWords.length >= 3 && tailLength >= 3 && [0, 1, 2].every((offset) => keptKeys[start + offset] === incomingKeys[offset]);
+        if (!anchored && tailLength > incomingWords.length + 2) continue;
+        const overlapLength = Math.min(tailLength, incomingWords.length);
+        let score = 0;
+        for (let offset = 0; offset < overlapLength; offset++) {
+            if (captionV2WordsMatch(keptKeys[start + offset], incomingKeys[offset], offset === 0, start + offset === keptWords.length - 1)) score++;
+        }
+        const requiredScore = anchored ? 3 : Math.max(Math.ceil(overlapLength / 2), Math.min(2, tailLength));
+        if (score >= requiredScore && score >= bestScore) {
+            bestScore = score;
+            bestStart = start;
+        }
+    }
+    if (bestStart < 0) return keptWords.concat(incomingWords).join(' ');
+    return keptWords.slice(0, bestStart).concat(incomingWords).join(' ');
+}
+
+const captionV2MergedTextByKey = new Map();
+
 const handleCaptionEventV2 = (event) => {
   const decodedData = new Uint8Array(event.data);
   const captionWrapperV2 = messageDecoders['CaptionWrapperV2'](decodedData);
   const captionV1 = convertCaptionV2ToV1(captionWrapperV2);
   if (captionV1) {
+    const captionKey = `${captionV1.deviceId}:${captionV1.captionId}`;
+    captionV1.text = mergeCaptionV2Window(captionV2MergedTextByKey.get(captionKey), captionV1.text);
+    if (captionV1.isFinal) {
+      captionV2MergedTextByKey.delete(captionKey);
+    } else {
+      captionV2MergedTextByKey.set(captionKey, captionV1.text);
+    }
     captionManager.singleCaptionSynced(captionV1);
   }
 }
