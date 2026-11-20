@@ -3721,6 +3721,7 @@ class CallManager {
         this.activeCall = null;
         this.closedCaptionLanguageInterval = null;
         this.closedCaptionLanguage = null;
+        this.watchClosedCaptionsStatusInterval = null;
         this.lobbyParticipantSpeakingTicker = 0;
     }
 
@@ -4023,9 +4024,108 @@ class CallManager {
         this.setActiveCall();
         if (this.activeCall) {
             this.activeCall.startClosedCaption();
+            this.watchClosedCaptionsStatus();
             return true;
         }
         return false;
+    }
+
+    // startClosedCaption() returns nothing and does its work asynchronously; failures only show up in the call's captions status.
+    watchClosedCaptionsStatus() {
+        if (!window.initialData.collectCaptions) {
+            return;
+        }
+
+        const call = this.activeCall;
+        if (this.watchClosedCaptionsStatusInterval) {
+            return;
+        }
+
+        if (typeof call?.getClosedCaptionStatus !== 'function') {
+            window.ws?.sendJson({
+                type: 'WatchClosedCaptionsStatus',
+                error: 'getClosedCaptionStatus not available'
+            });
+            return;
+        }
+
+        // Values of call.getClosedCaptionStatus()
+        const statusStarted = 2;
+        const statusFailed = 5;
+        const maxAttempts = 4;
+        const pollIntervalMs = 1000;
+        // startClosedCaption() can leave the status in pending indefinitely, so treat an attempt as failed if it hasn't started by then
+        const attemptTimeoutMs = 60000;
+        // startClosedCaption() doesn't always reset a leftover failed status, so a failed status is only trusted once it has
+        // left failed since the attempt began, or after this long (enough for a background re-add to finish).
+        const staleFailedGracePeriodMs = 15000;
+
+        let attempt = 1;
+        let attemptStartedAt = Date.now();
+        let sawNonFailedSinceAttemptStart = false;
+
+        this.watchClosedCaptionsStatusInterval = setInterval(() => {
+            try {
+                const status = call.getClosedCaptionStatus();
+                const subStatus = call.getClosedCaptionSubStatus?.();
+                if (status !== statusFailed) {
+                    sawNonFailedSinceAttemptStart = true;
+                }
+
+                if (status === statusStarted) {
+                    window.ws?.sendJson({
+                        type: 'ClosedCaptionsEnabled',
+                        attempt: attempt,
+                        elapsedMs: Date.now() - attemptStartedAt
+                    });
+                    this.stopWatchClosedCaptionsStatus();
+                    return;
+                }
+
+                const attemptElapsedMs = Date.now() - attemptStartedAt;
+                const failed = status === statusFailed && (sawNonFailedSinceAttemptStart || attemptElapsedMs > staleFailedGracePeriodMs);
+                const timedOut = attemptElapsedMs > attemptTimeoutMs;
+                if (!failed && !timedOut) {
+                    return;
+                }
+
+                const willRetry = attempt < maxAttempts;
+                window.ws?.sendJson({
+                    type: 'ClosedCaptionsEnableAttemptFailed',
+                    attempt: attempt,
+                    status: status,
+                    subStatus: subStatus,
+                    timedOut: timedOut && !failed,
+                    runtimeErrors: call.getClosedCaptionsRuntimeError?.() || [],
+                    willRetry: willRetry
+                });
+
+                if (!willRetry) {
+                    this.stopWatchClosedCaptionsStatus();
+                    window.ws?.sendJson({
+                        type: 'ClosedCaptionStatusChange',
+                        change: 'could_not_enable_closed_captions'
+                    });
+                    return;
+                }
+
+                attempt++;
+                attemptStartedAt = Date.now();
+                sawNonFailedSinceAttemptStart = false;
+                call.startClosedCaption();
+            } catch (error) {
+                window.ws?.sendJson({
+                    type: 'WatchClosedCaptionsStatusError',
+                    error: error?.message || String(error)
+                });
+                this.stopWatchClosedCaptionsStatus();
+            }
+        }, pollIntervalMs);
+    }
+
+    stopWatchClosedCaptionsStatus() {
+        clearInterval(this.watchClosedCaptionsStatusInterval);
+        this.watchClosedCaptionsStatusInterval = null;
     }
 
     setClosedCaptionsLanguage(language) {
