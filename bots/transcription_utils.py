@@ -559,7 +559,7 @@ def create_third_party_transcription_job_via_elevenlabs_from_mp3(
         if response.status_code == 429:
             return None, {"reason": TranscriptionFailureReasons.RATE_LIMIT_EXCEEDED, "status_code": response.status_code}
 
-        if response.status_code != 200:
+        if response.status_code not in (200, 202):
             logger.error(f"ElevenLabs third party transcription job creation failed for {identifier} with status code {response.status_code}: {response.text}")
             return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "status_code": response.status_code, "response_text": response.text}
 
