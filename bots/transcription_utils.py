@@ -269,6 +269,16 @@ def get_transcription_for_utterance_group(utterances):
         return None, {"reason": TranscriptionFailureReasons.INTERNAL_ERROR, "error": str(e)}
 
 
+# This will get a transcription result from a thrid party job that has either completed or failed
+def get_transcription_for_utterance_group_from_terminated_third_party_job(third_party_transcription_job, utterances):
+    try:
+        transcription_provider = third_party_transcription_job.provider
+
+        raise Exception(f"Unknown or unsupported transcription provider for third party transcription jobs: {transcription_provider}")
+    except Exception as e:
+        return None, {"reason": TranscriptionFailureReasons.INTERNAL_ERROR, "error": str(e)}
+
+
 def get_transcription_via_assemblyai_from_mp3(
     retrieve_mp3_data_callback: Callable[[], bytes],
     duration_ms: int,
