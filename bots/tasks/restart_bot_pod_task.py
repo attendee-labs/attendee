@@ -1,10 +1,12 @@
 import logging
+import os
 import time
 
 from celery import shared_task
 from kubernetes import client, config
 
 from bots.k8s_utils import find_bot_pod_name
+from bots.launch_bot_utils import launch_bot
 from bots.models import Bot, BotEventTypes, BotStates
 
 logger = logging.getLogger(__name__)
@@ -32,6 +34,12 @@ def restart_bot_pod(self, bot_id):
     # If the bot was asked to leave while its pod was down, the restarted pod will start in the LEAVING state and leave
     if last_bot_event.event_type not in (BotEventTypes.JOIN_REQUESTED, BotEventTypes.STAGED) and not bot_was_asked_to_leave_before_joining(last_bot_event):
         logger.info(f"Bot {bot_id} is not in JOINING or STAGED state and was not asked to leave before joining, so not restarting pod")
+        return
+
+    if os.getenv("LAUNCH_BOT_METHOD") != "kubernetes":
+        reset_bot_for_restart(bot, last_bot_event)
+        logger.info(f"Relaunching bot {bot_id} with launch_bot because LAUNCH_BOT_METHOD is not kubernetes")
+        launch_bot(bot)
         return
 
     # Initialize kubernetes client
@@ -78,15 +86,7 @@ def restart_bot_pod(self, bot_id):
             # Some other API error occurred
             logger.error(f"Error checking for existing pod: {str(e)}")
 
-    last_bot_event.requested_bot_action_taken_at = None
-    if "pod_recreations" not in last_bot_event.metadata:
-        last_bot_event.metadata["pod_recreations"] = []
-    last_bot_event.metadata["pod_recreations"].append(int(time.time()))
-    last_bot_event.save()
-
-    bot.first_heartbeat_timestamp = None
-    bot.last_heartbeat_timestamp = None
-    bot.save()
+    reset_bot_for_restart(bot, last_bot_event)
 
     bot_pod_creator = BotPodCreator()
     bot_pod_create_result = bot_pod_creator.create_bot_pod(
@@ -100,3 +100,15 @@ def restart_bot_pod(self, bot_id):
     )
 
     logger.info(f"Bot pod create result: {bot_pod_create_result}")
+
+
+def reset_bot_for_restart(bot, last_bot_event):
+    last_bot_event.requested_bot_action_taken_at = None
+    if "pod_recreations" not in last_bot_event.metadata:
+        last_bot_event.metadata["pod_recreations"] = []
+    last_bot_event.metadata["pod_recreations"].append(int(time.time()))
+    last_bot_event.save()
+
+    bot.first_heartbeat_timestamp = None
+    bot.last_heartbeat_timestamp = None
+    bot.save()

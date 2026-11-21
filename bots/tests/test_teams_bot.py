@@ -498,7 +498,8 @@ class TestTeamsBot(TransactionTestCase):
         self.bot.refresh_from_db()
         self.assertEqual(self.bot.state, BotStates.LEAVING)
 
-        restart_bot_pod(self.bot.id)
+        with patch.dict(os.environ, {"LAUNCH_BOT_METHOD": "kubernetes"}):
+            restart_bot_pod(self.bot.id)
 
         MockBotPodCreator.return_value.create_bot_pod.assert_called_once()
 

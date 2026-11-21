@@ -734,6 +734,37 @@ class BotController:
             endpoint_url=settings.RECORDING_STORAGE_BACKEND.get("OPTIONS").get("endpoint_url"),
         )
 
+    def release_resources_before_relaunch(self):
+        if self.gstreamer_pipeline:
+            self.gstreamer_pipeline.cleanup()
+
+        if self.rtmp_client:
+            self.rtmp_client.stop()
+
+        self.cleanup_room_sync_client()
+
+        if self.adapter:
+            self.adapter.cleanup()
+            virtual_display = getattr(self.adapter, "display", None)
+            if virtual_display:
+                try:
+                    virtual_display.stop()
+                except Exception as e:
+                    logger.warning(f"Error stopping virtual display before relaunch: {e}")
+
+        if self.realtime_audio_output_manager:
+            self.realtime_audio_output_manager.cleanup()
+
+        if self.webpage_streamer_manager:
+            self.webpage_streamer_manager.cleanup()
+
+        if self.websocket_client_manager:
+            self.websocket_client_manager.cleanup()
+
+        recording_file_location = self.get_recording_file_location()
+        if recording_file_location and os.path.exists(recording_file_location):
+            os.remove(recording_file_location)
+
     def cleanup(self):
         if self.cleanup_called:
             logger.info("Cleanup already called, exiting")
@@ -2117,6 +2148,11 @@ class BotController:
 
             logger.info("Received message that we were blocked by platform repeatedly, so recreating pod")
             restart_bot_pod.apply_async(args=[self.bot_in_db.id], countdown=settings.BLOCKED_BY_PLATFORM_POD_RESTART_DELAY_SECONDS)
+            if os.getenv("LAUNCH_BOT_METHOD") != "kubernetes":
+                try:
+                    self.release_resources_before_relaunch()
+                except Exception as e:
+                    logger.warning(f"Error releasing resources before relaunch: {e}")
             # Don't do the normal cleanup tasks because we'll be restarting the pod
             if self.main_loop and self.main_loop.is_running():
                 logger.info("Quitting main loop")
