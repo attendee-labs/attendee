@@ -3,6 +3,8 @@ import os
 import subprocess
 import time
 
+from .per_bot_audio_sink import audio_input_ffmpeg_args, audio_sink_to_mute
+
 logger = logging.getLogger(__name__)
 
 
@@ -30,10 +32,7 @@ class ScreenAndAudioRecorder:
                 "-y",  # Overwrite output file without asking
                 "-thread_queue_size",
                 "4096",
-                "-f",
-                "alsa",  # Audio input format for Linux
-                "-i",
-                "default",  # Default audio input device
+                *audio_input_ffmpeg_args(),
                 "-c:a",
                 "libmp3lame",  # MP3 codec
                 "-b:a",
@@ -45,7 +44,7 @@ class ScreenAndAudioRecorder:
                 self.file_location,
             ]
         else:
-            ffmpeg_cmd = ["ffmpeg", "-y", "-thread_queue_size", "256", "-framerate", "30", "-video_size", f"{self.screen_dimensions[0]}x{self.screen_dimensions[1]}", "-f", "x11grab", "-draw_mouse", "0", "-probesize", "32", "-i", display_var, "-thread_queue_size", "4096", "-f", "alsa", "-i", "default", "-vf", f"crop={self.recording_dimensions[0]}:{self.recording_dimensions[1]}:10:10", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-g", "30", "-c:a", "aac", "-strict", "experimental", "-b:a", "128k", self.file_location]
+            ffmpeg_cmd = ["ffmpeg", "-y", "-thread_queue_size", "256", "-framerate", "30", "-video_size", f"{self.screen_dimensions[0]}x{self.screen_dimensions[1]}", "-f", "x11grab", "-draw_mouse", "0", "-probesize", "32", "-i", display_var, "-thread_queue_size", "4096", *audio_input_ffmpeg_args(), "-vf", f"crop={self.recording_dimensions[0]}:{self.recording_dimensions[1]}:10:10", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-g", "30", "-c:a", "aac", "-strict", "experimental", "-b:a", "128k", self.file_location]
 
         logger.info(f"Starting FFmpeg command: {' '.join(ffmpeg_cmd)}")
         self.ffmpeg_proc = subprocess.Popen(ffmpeg_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
@@ -62,7 +61,7 @@ class ScreenAndAudioRecorder:
 
             self.xterm_proc = subprocess.Popen(["xterm", "-bg", "black", "-fg", "black", "-geometry", f"{sw}x{sh}+{x}+{y}", "-xrm", "*borderWidth:0", "-xrm", "*scrollBar:false"])
 
-            subprocess.run(["pactl", "set-sink-mute", "@DEFAULT_SINK@", "1"], check=True)
+            subprocess.run(["pactl", "set-sink-mute", audio_sink_to_mute(), "1"], check=True)
             self.paused = True
             return True
         except Exception as e:
@@ -78,7 +77,7 @@ class ScreenAndAudioRecorder:
             self.xterm_proc.terminate()
             self.xterm_proc.wait()
             self.xterm_proc = None
-            subprocess.run(["pactl", "set-sink-mute", "@DEFAULT_SINK@", "0"], check=True)
+            subprocess.run(["pactl", "set-sink-mute", audio_sink_to_mute(), "0"], check=True)
             self.paused = False
             return True
         except Exception as e:
