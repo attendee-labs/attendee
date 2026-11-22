@@ -1,0 +1,195 @@
+import json
+from unittest.mock import MagicMock, patch
+
+import numpy as np
+from django.test import SimpleTestCase, TestCase
+
+from accounts.models import Organization
+from bots.bot_controller.bot_controller import BotController
+from bots.bot_controller.media_capture_health_monitor import CaptionsWithoutPerParticipantAudioCheck, MediaCaptureHealthMonitor, MediaCaptureIssue
+from bots.media_capture_signals import MediaCaptureSignal, MediaCaptureSignalDebouncer
+from bots.models import Bot, BotLogEntry, BotLogEntryLevels, BotLogEntryTypes, MeetingTypes, Project
+from bots.web_bot_adapter import WebBotAdapter
+from bots.web_bot_adapter.web_bot_adapter import MEDIA_CAPTURE_SIGNAL_DEBOUNCE_SECONDS
+
+CAPTION = MediaCaptureSignal.CAPTION_ACTIVITY
+AUDIO = MediaCaptureSignal.PER_PARTICIPANT_AUDIO
+
+
+class MediaCaptureSignalDebouncerTest(SimpleTestCase):
+    def test_lets_a_signal_through_at_most_once_per_interval(self):
+        debouncer = MediaCaptureSignalDebouncer(180)
+
+        self.assertTrue(debouncer.should_emit(CAPTION, 1000))
+        self.assertFalse(debouncer.should_emit(CAPTION, 1179))
+        self.assertTrue(debouncer.should_emit(CAPTION, 1180))
+
+    def test_debounces_each_signal_separately(self):
+        debouncer = MediaCaptureSignalDebouncer(180)
+
+        self.assertTrue(debouncer.should_emit(CAPTION, 1000))
+        self.assertTrue(debouncer.should_emit(AUDIO, 1001))
+
+
+class CaptionsWithoutPerParticipantAudioCheckTest(SimpleTestCase):
+    def record(self, check, *signals_and_timestamps):
+        for signal, timestamp in signals_and_timestamps:
+            check.record_signal(signal, timestamp)
+
+    def test_finds_an_issue_after_three_caption_signals_without_audio(self):
+        check = CaptionsWithoutPerParticipantAudioCheck()
+
+        self.record(check, (CAPTION, 0), (CAPTION, 180))
+        self.assertIsNone(check.evaluate(200))
+
+        self.record(check, (CAPTION, 360))
+        issue = check.evaluate(370)
+
+        self.assertEqual(issue.log_entry_type, BotLogEntryTypes.PER_PARTICIPANT_AUDIO_CAPTURE_FAILURE)
+        self.assertEqual(issue.message, "Closed captions were generated over 6 minutes, but no per-participant audio was captured in that time. No per-participant audio has been captured in this meeting.")
+
+    def test_per_participant_audio_resets_the_caption_signals(self):
+        check = CaptionsWithoutPerParticipantAudioCheck()
+
+        self.record(check, (CAPTION, 0), (CAPTION, 180), (AUDIO, 200), (CAPTION, 360), (CAPTION, 540))
+        self.assertIsNone(check.evaluate(550))
+
+    def test_says_when_per_participant_audio_stopped_partway_through(self):
+        check = CaptionsWithoutPerParticipantAudioCheck()
+
+        self.record(check, (AUDIO, 0), (CAPTION, 180), (CAPTION, 360), (CAPTION, 540))
+        issue = check.evaluate(550)
+
+        self.assertEqual(issue.message, "Closed captions were generated over 6 minutes, but no per-participant audio was captured in that time. Per-participant audio was captured earlier in the meeting, but then stopped.")
+
+    def test_finds_no_issue_when_audio_and_captions_arrive_together(self):
+        check = CaptionsWithoutPerParticipantAudioCheck()
+
+        for minute in range(0, 60, 3):
+            self.record(check, (AUDIO, minute * 60), (CAPTION, minute * 60 + 1))
+            self.assertIsNone(check.evaluate(minute * 60 + 2))
+
+
+class MediaCaptureHealthMonitorTest(SimpleTestCase):
+    def test_reports_each_issue_once(self):
+        on_issue_detected = MagicMock()
+        monitor = MediaCaptureHealthMonitor(checks=[CaptionsWithoutPerParticipantAudioCheck()], on_issue_detected=on_issue_detected)
+
+        for timestamp in (0, 180, 360, 540, 720, 900):
+            monitor.record_signal(CAPTION, timestamp)
+            monitor.evaluate(timestamp)
+
+        on_issue_detected.assert_called_once()
+        self.assertEqual(on_issue_detected.call_args.args[0].log_entry_type, BotLogEntryTypes.PER_PARTICIPANT_AUDIO_CAPTURE_FAILURE)
+
+    def test_only_passes_a_check_the_signals_it_cares_about(self):
+        check = MagicMock(relevant_signals=frozenset({CAPTION}))
+        check.evaluate.return_value = None
+        monitor = MediaCaptureHealthMonitor(checks=[check], on_issue_detected=MagicMock())
+
+        monitor.record_signal(AUDIO, 0)
+        monitor.record_signal(CAPTION, 1)
+
+        check.record_signal.assert_called_once_with(CAPTION, 1)
+
+
+def json_message(payload):
+    return (1).to_bytes(4, byteorder="little") + json.dumps(payload).encode("utf-8")
+
+
+def per_participant_audio_message(participant_id="participant-1"):
+    participant_id_bytes = participant_id.encode("utf-8")
+    audio = np.zeros(480, dtype=np.float32).tobytes()
+    return (5).to_bytes(4, byteorder="little") + len(participant_id_bytes).to_bytes(1, byteorder="little") + participant_id_bytes + audio
+
+
+@patch("bots.web_bot_adapter.web_bot_adapter.time.time")
+class WebBotAdapterMediaCaptureSignalTest(SimpleTestCase):
+    def setUp(self):
+        self.adapter = object.__new__(WebBotAdapter)  # none of these tests need the adapter's constructor
+        self.adapter.recording_paused = False
+        self.adapter.add_audio_chunk_callback = MagicMock()
+        self.adapter.media_capture_signal_callback = MagicMock()
+        self.adapter.media_capture_signal_debouncer = MediaCaptureSignalDebouncer(MEDIA_CAPTURE_SIGNAL_DEBOUNCE_SECONDS)
+
+    def receive_at(self, mock_time, now, message):
+        mock_time.return_value = now
+        self.adapter.handle_websocket([message])
+
+    def test_caption_activity_is_sent_at_most_once_every_three_minutes(self, mock_time):
+        self.receive_at(mock_time, 1000, json_message({"type": "CaptionActivity"}))
+        self.receive_at(mock_time, 1060, json_message({"type": "CaptionActivity"}))
+        self.receive_at(mock_time, 1180, json_message({"type": "CaptionActivity"}))
+
+        self.assertEqual(self.adapter.media_capture_signal_callback.call_args_list, [((CAPTION, 1000),), ((CAPTION, 1180),)])
+
+    def test_per_participant_audio_is_sent_at_most_once_every_three_minutes(self, mock_time):
+        self.receive_at(mock_time, 1000, per_participant_audio_message())
+        self.receive_at(mock_time, 1001, per_participant_audio_message())
+
+        self.assertEqual(self.adapter.add_audio_chunk_callback.call_count, 2)
+        self.assertEqual(self.adapter.media_capture_signal_callback.call_args_list, [((AUDIO, 1000),)])
+
+    def test_nothing_is_sent_while_recording_is_paused(self, mock_time):
+        self.adapter.recording_paused = True
+
+        self.receive_at(mock_time, 1000, json_message({"type": "CaptionActivity"}))
+        self.receive_at(mock_time, 1000, per_participant_audio_message())
+
+        self.adapter.media_capture_signal_callback.assert_not_called()
+
+    def test_caption_activity_is_ignored_when_nothing_is_being_checked(self, mock_time):
+        self.adapter.media_capture_signal_callback = None
+
+        self.receive_at(mock_time, 1000, json_message({"type": "CaptionActivity"}))
+        self.receive_at(mock_time, 1000, per_participant_audio_message())
+
+        self.adapter.add_audio_chunk_callback.assert_called_once()
+
+
+class BotControllerMediaCaptureHealthMonitorTest(TestCase):
+    def setUp(self):
+        organization = Organization.objects.create(name="Test Organization")
+        project = Project.objects.create(name="Test Project", organization=organization)
+        self.bot = Bot.objects.create(name="Test Bot", project=project, meeting_url="https://meet.google.com/abc-defg-hij")
+        self.controller = object.__new__(BotController)  # the controller's constructor connects to the outside world
+        self.controller.bot_in_db = self.bot
+        self.controller.should_capture_audio_chunks = MagicMock(return_value=True)
+        self.controller.get_meeting_type = MagicMock(return_value=MeetingTypes.GOOGLE_MEET)
+
+    def test_monitor_is_created_when_per_participant_audio_chunks_are_captured(self):
+        self.assertIsNotNone(self.controller.create_media_capture_health_monitor())
+
+    def test_monitor_is_not_created_when_per_participant_audio_chunks_are_not_captured(self):
+        self.controller.should_capture_audio_chunks.return_value = False
+
+        self.assertIsNone(self.controller.create_media_capture_health_monitor())
+
+    def test_monitor_is_not_created_for_webex(self):
+        self.controller.get_meeting_type.return_value = MeetingTypes.WEBEX
+
+        self.assertIsNone(self.controller.create_media_capture_health_monitor())
+
+    def test_monitor_is_not_created_for_the_native_zoom_adapter(self):
+        self.controller.get_meeting_type.return_value = MeetingTypes.ZOOM
+        self.controller.is_using_rtms = MagicMock(return_value=False)
+        self.bot.use_zoom_web_adapter = MagicMock(return_value=False)
+
+        self.assertIsNone(self.controller.create_media_capture_health_monitor())
+
+    def test_monitor_is_created_for_the_zoom_web_adapter(self):
+        self.controller.get_meeting_type.return_value = MeetingTypes.ZOOM
+        self.controller.is_using_rtms = MagicMock(return_value=False)
+        self.bot.use_zoom_web_adapter = MagicMock(return_value=True)
+
+        self.assertIsNotNone(self.controller.create_media_capture_health_monitor())
+
+    @patch("bots.models.trigger_webhook")
+    def test_issue_creates_an_error_log_entry_and_fires_the_webhook(self, mock_trigger_webhook):
+        self.controller.on_media_capture_issue_detected(MediaCaptureIssue(log_entry_type=BotLogEntryTypes.PER_PARTICIPANT_AUDIO_CAPTURE_FAILURE, message="Something went wrong"))
+
+        log_entry = BotLogEntry.objects.get(bot=self.bot)
+        self.assertEqual(log_entry.level, BotLogEntryLevels.ERROR)
+        self.assertEqual(log_entry.entry_type, BotLogEntryTypes.PER_PARTICIPANT_AUDIO_CAPTURE_FAILURE)
+        self.assertEqual(log_entry.message, "Something went wrong")
+        self.assertEqual(mock_trigger_webhook.call_args.kwargs["payload"]["entry_type"], "per_participant_audio_capture_failure")

@@ -928,3 +928,34 @@ class BotOutputManager {
         }, 60000);
     }
 }
+// Tells the adapter that captions are being generated, so it can check that per-participant audio is being captured while people speak.
+// Only sends whether a caption was seen, not the caption itself, and at most once a minute.
+class CaptionActivityReporter {
+    static THROTTLE_MS = 60000;
+
+    constructor() {
+        this.lastSentAt = null;
+    }
+
+    captionReceived(deviceId) {
+        if (!window.initialData?.sendCaptionActivity) {
+            return;
+        }
+
+        // The bot's own speech isn't in the per-participant audio, so its captions say nothing about whether that audio is being captured
+        const user = window.userManager?.getUserByDeviceId?.(deviceId);
+        if (user?.isCurrentUser) {
+            return;
+        }
+
+        const now = Date.now();
+        if (this.lastSentAt !== null && now - this.lastSentAt < CaptionActivityReporter.THROTTLE_MS) {
+            return;
+        }
+        this.lastSentAt = now;
+
+        window.ws?.sendJson({ type: 'CaptionActivity' });
+    }
+}
+
+window.captionActivityReporter = new CaptionActivityReporter();
