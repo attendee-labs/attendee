@@ -215,6 +215,42 @@ class TestBotPodCreator(TestCase):
         # Should create service for streamer
         mock_v1.create_namespaced_service.assert_called_once()
 
+    @patch("bots.bot_pod_creator.bot_pod_creator.config")
+    @patch("bots.bot_pod_creator.bot_pod_creator.client")
+    @patch("bots.bot_pod_creator.bot_pod_creator.os.getenv")
+    @patch("bots.bot_pod_creator.bot_pod_creator.settings")
+    def test_webpage_streamer_pod_spec_is_applied_to_streamer_pod_only(self, mock_settings, mock_getenv, mock_client, mock_config):
+        """WEBPAGE_STREAMER_POD_SPEC patches the streamer pod, and BOT_POD_SPEC_* still patches only the bot pod"""
+        env_vars = self.env_vars.copy()
+        env_vars["WEBPAGE_STREAMER_POD_SPEC"] = '[{"op": "add", "path": "/spec/nodeSelector", "value": {"workload": "bots"}}]'
+        env_vars["BOT_POD_SPEC_DEFAULT"] = '[{"op": "add", "path": "/metadata/labels/bot-spec", "value": "applied"}]'
+        mock_getenv.side_effect = lambda key, default=None: env_vars.get(key, default)
+        mock_settings.BOT_POD_NAMESPACE = "bot-namespace"
+        mock_settings.WEBPAGE_STREAMER_POD_NAMESPACE = "streamer-namespace"
+
+        mock_v1 = MagicMock()
+        mock_streamer_response = MagicMock()
+        mock_streamer_response.metadata.name = "bot-123-abc-webpage-streamer"
+        mock_streamer_response.metadata.uid = "streamer-uid-123"
+        mock_v1.create_namespaced_pod.side_effect = [MagicMock(), mock_streamer_response]
+        mock_client.CoreV1Api.return_value = mock_v1
+
+        # Each pod serializes to its own dict, so each patch can be checked on its own pod
+        mock_api_client = MagicMock()
+        mock_api_client.sanitize_for_serialization.side_effect = lambda pod: {"metadata": {"labels": {}}, "spec": {}}
+        mock_client.ApiClient.return_value = mock_api_client
+
+        creator = BotPodCreator()
+        result = creator.create_bot_pod(bot_pod_cmd=["python", "manage.py", "run_bot", "--botid", "123"], bot_pod_name="bot-123-abc", add_webpage_streamer=True)
+
+        self.assertTrue(result["created"])
+        bot_pod_body = mock_v1.create_namespaced_pod.call_args_list[0].kwargs["body"]
+        streamer_pod_body = mock_v1.create_namespaced_pod.call_args_list[1].kwargs["body"]
+        self.assertEqual(streamer_pod_body["spec"]["nodeSelector"], {"workload": "bots"})
+        self.assertNotIn("bot-spec", streamer_pod_body["metadata"]["labels"])
+        self.assertEqual(bot_pod_body["metadata"]["labels"]["bot-spec"], "applied")
+        self.assertNotIn("nodeSelector", bot_pod_body["spec"])
+
     @patch("bots.bot_pod_creator.bot_pod_creator.time.sleep")
     @patch("bots.bot_pod_creator.bot_pod_creator.config")
     @patch("bots.bot_pod_creator.bot_pod_creator.client")
