@@ -1,5 +1,6 @@
 import os
 import time
+import uuid
 from datetime import datetime, timedelta
 
 import cv2
@@ -162,7 +163,7 @@ class ZoomBotAdapter(BotAdapter):
 
         if self.add_per_participant_video_frame_callback:
             self.realtime_per_participant_video_frame_generator = RealtimePerParticipantVideoFrameGenerator(
-                frame_callback=self.add_per_participant_video_frame_callback,
+                frame_callback=self.on_per_participant_video_frame,
                 get_participants_ctrl_callback=self.get_participants_ctrl,
                 get_meeting_sharing_controller_callback=self.get_meeting_sharing_controller,
                 get_recording_is_paused_callback=self.get_recording_is_paused,
@@ -180,6 +181,12 @@ class ZoomBotAdapter(BotAdapter):
         self.screensharing_user_ids_for_participant_events = set()
 
         self._participant_cache = {}
+
+        # Zoom gives participants new user ids in every breakout room session and reuses user ids across sessions.
+        # After the bot first joins or leaves a breakout room, participant ids get a suffix unique to the session,
+        # so a user id from one session is never taken for someone else's in another. Without breakout rooms, participant ids are the user ids.
+        self.participant_id_session_suffix = None
+        self.user_ids_joined_in_current_session = set()
 
         self.meeting_status = None
 
@@ -254,7 +261,7 @@ class ZoomBotAdapter(BotAdapter):
         logger.info(f"on_user_join_callback called. joined_user_ids = {joined_user_ids}")
         self.update_only_one_participant_in_meeting_at()
         for joined_user_id in joined_user_ids:
-            self.get_participant(joined_user_id)
+            self.get_participant_by_user_id(joined_user_id)
             self.send_participant_event(joined_user_id, event_type=ParticipantEventTypes.JOIN)
             self.request_permission_to_record_if_joined_user_is_host(joined_user_id)
 
@@ -275,7 +282,7 @@ class ZoomBotAdapter(BotAdapter):
         all_participant_ids_excluding_other_bots = []
         other_bots_in_meeting_names = []
         for participant_id in all_participant_ids:
-            participant = self.get_participant(participant_id)
+            participant = self.get_participant_by_user_id(participant_id)
             if participant is None:
                 self.only_one_participant_in_meeting_at = None
                 logger.warning(f"only_one_participant_in_meeting_at set to None because participant {participant_id} is not available")
@@ -479,9 +486,39 @@ class ZoomBotAdapter(BotAdapter):
 
         self.create_services()
 
+    def participant_uuid_for_user_id(self, user_id):
+        if self.participant_id_session_suffix is None:
+            return user_id
+        return f"{user_id}-{self.participant_id_session_suffix}"
+
+    def user_id_for_participant_uuid(self, participant_uuid):
+        # Returns None if the participant id is from an earlier session
+        if self.participant_id_session_suffix is None:
+            return participant_uuid
+        suffix = f"-{self.participant_id_session_suffix}"
+        if isinstance(participant_uuid, str) and participant_uuid.endswith(suffix):
+            return int(participant_uuid[: -len(suffix)])
+        return None
+
+    def start_new_participant_id_session(self):
+        # Zoom does not report the participants of the session the bot is leaving as having left, so we do it here
+        self.create_participant_events_for_active_speaker_change(new_speaker_id=None, old_speaker_id=self.active_speaker_id)
+        self.active_speaker_id = None
+        for user_id in list(self.screensharing_user_ids_for_participant_events):
+            self.set_user_screensharing_for_participant_events(user_id, False)
+        for user_id in list(self.user_ids_joined_in_current_session):
+            self.send_participant_event(user_id, event_type=ParticipantEventTypes.LEAVE)
+        self.participant_id_session_suffix = uuid.uuid4().hex[:8]
+
+    def get_participant_by_user_id(self, user_id):
+        return self.get_participant(self.participant_uuid_for_user_id(user_id))
+
     def get_participant(self, participant_id):
+        user_id = self.user_id_for_participant_uuid(participant_id)
+        if user_id is None:
+            return self._participant_cache.get(participant_id)
         try:
-            speaker_object = self.participants_ctrl.GetUserByUserID(participant_id)
+            speaker_object = self.participants_ctrl.GetUserByUserID(user_id)
             participant_info = {
                 "participant_uuid": participant_id,
                 "participant_user_uuid": speaker_object.GetPersistentId(),
@@ -499,7 +536,7 @@ class ZoomBotAdapter(BotAdapter):
         return len([participant for participant in self._participant_cache.values() if not participant_is_another_bot(participant["participant_full_name"], participant["participant_is_the_bot"], self.automatic_leave_configuration)])
 
     def number_of_participants_currently_in_meeting_excluding_other_bots(self):
-        participants = [self.get_participant(participant_id) for participant_id in self.participants_ctrl.GetParticipantsList()]
+        participants = [self.get_participant_by_user_id(participant_id) for participant_id in self.participants_ctrl.GetParticipantsList()]
         return len([participant for participant in participants if participant is not None and not participant_is_another_bot(participant["participant_full_name"], participant["participant_is_the_bot"], self.automatic_leave_configuration)])
 
     def set_user_screensharing_for_participant_events(self, user_id, is_sharing):
@@ -538,7 +575,13 @@ class ZoomBotAdapter(BotAdapter):
         builder = self.chat_ctrl.GetChatMessageBuilder()
         builder.SetContent(text)
         if to_user_uuid:
-            builder.SetReceiver(to_user_uuid)
+            receiver_user_id = self.user_id_for_participant_uuid(to_user_uuid)
+            if receiver_user_id is None:
+                logger.warning(f"Not sending chat message to {to_user_uuid} because they are not in the bot's current breakout room session")
+                builder.Clear()
+                return
+            # SetReceiver only accepts an int, but the API passes a string
+            builder.SetReceiver(int(receiver_user_id))
             builder.SetMessageType(zoom.SDKChatMessageType.To_Individual)
         else:
             builder.SetReceiver(0)
@@ -557,7 +600,7 @@ class ZoomBotAdapter(BotAdapter):
             self.upsert_chat_message_callback(
                 {
                     "text": chat_msg_info.GetContent(),
-                    "participant_uuid": chat_msg_info.GetSenderUserId(),
+                    "participant_uuid": self.participant_uuid_for_user_id(chat_msg_info.GetSenderUserId()),
                     "timestamp": chat_msg_info.GetTimeStamp(),
                     "message_uuid": chat_msg_info.GetMessageID(),
                     # Simplified logic to determine if the message is for the bot. Not completely accurate.
@@ -576,7 +619,14 @@ class ZoomBotAdapter(BotAdapter):
             logger.error(f"Error processing chat message: {e}")
 
     def send_participant_event(self, participant_id, event_type, event_data={}):
-        self.add_participant_event_callback({"participant_uuid": participant_id, "event_type": event_type, "event_data": event_data, "timestamp_ms": int(time.time() * 1000)})
+        if event_type == ParticipantEventTypes.JOIN:
+            self.user_ids_joined_in_current_session.add(participant_id)
+        elif event_type == ParticipantEventTypes.LEAVE:
+            self.user_ids_joined_in_current_session.discard(participant_id)
+        self.add_participant_event_callback({"participant_uuid": self.participant_uuid_for_user_id(participant_id), "event_type": event_type, "event_data": event_data, "timestamp_ms": int(time.time() * 1000)})
+
+    def on_per_participant_video_frame(self, frame, participant_id, source):
+        self.add_per_participant_video_frame_callback(frame, self.participant_uuid_for_user_id(participant_id), source)
 
     def on_has_attendee_rights_notification(self, attendee):
         logger.info(f"on_has_attendee_rights_notification called. attendee = {attendee}")
@@ -682,7 +732,7 @@ class ZoomBotAdapter(BotAdapter):
         self.my_participant_id = self.participants_ctrl.GetMySelfUser().GetUserID()
         participant_ids_list = self.participants_ctrl.GetParticipantsList()
         for participant_id in participant_ids_list:
-            self.get_participant(participant_id)
+            self.get_participant_by_user_id(participant_id)
             self.send_participant_event(participant_id, event_type=ParticipantEventTypes.JOIN)
 
         # Chats controller
@@ -967,7 +1017,7 @@ class ZoomBotAdapter(BotAdapter):
             return
 
         current_time = datetime.utcnow()
-        self.add_audio_chunk_callback(node_id, current_time, data.GetBuffer())
+        self.add_audio_chunk_callback(self.participant_uuid_for_user_id(node_id), current_time, data.GetBuffer())
 
     def add_mixed_audio_chunk_convert_to_bytes(self, data):
         if self.recording_is_paused:
@@ -1171,6 +1221,7 @@ class ZoomBotAdapter(BotAdapter):
             # handle_recording_permission_granted starts them again when the new session reports the permission.
             self.raw_recording_active = False
             self.audio_source_subscribed = False
+            self.start_new_participant_id_session()
 
         if status == zoom.MEETING_STATUS_JOIN_BREAKOUT_ROOM:
             self.send_message_callback({"message": self.Messages.JOINING_BREAKOUT_ROOM})

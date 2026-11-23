@@ -371,6 +371,7 @@ class TestZoomParticipantTracking(SimpleTestCase):
         adapter.number_of_participants_ever_in_meeting_excluding_other_bots = MagicMock(return_value=2)
         adapter.participants_ctrl = MagicMock()
         adapter.participants_ctrl.GetParticipantsList.return_value = [456]
+        adapter.participant_id_session_suffix = None
         adapter.get_participant = MagicMock(return_value=None)
 
         with self.assertLogs("bots.zoom_bot_adapter.zoom_bot_adapter", level="WARNING") as logs:
@@ -456,6 +457,114 @@ class TestZoomBreakoutRoomMoves(SimpleTestCase):
         adapter.on_bo_switch_request_received("Room 2", None)
 
         attendee.JoinBo.assert_called_once_with()
+
+
+@tag("zoom_tests")
+class TestZoomParticipantIdsInBreakoutRooms(SimpleTestCase):
+    # Zoom gives participants new user ids in every breakout room session and reuses user ids across sessions.
+    # In a live meeting, the host and the bot swapped user ids when they moved into a breakout room.
+
+    class MockUser:
+        def __init__(self, user_id, name):
+            self.user_id = user_id
+            self.name = name
+
+        def GetUserID(self):
+            return self.user_id
+
+        def GetUserName(self):
+            return self.name
+
+        def GetPersistentId(self):
+            return f"{self.name}-persistent-id"
+
+        def IsHost(self):
+            return self.name == "Host"
+
+    def create_adapter(self):
+        adapter = ZoomBotAdapter.__new__(ZoomBotAdapter)
+        adapter._participant_cache = {}
+        adapter.participant_id_session_suffix = None
+        adapter.user_ids_joined_in_current_session = set()
+        adapter.active_speaker_id = None
+        adapter.screensharing_user_ids_for_participant_events = set()
+        adapter.record_participant_speech_start_stop_events = True
+        adapter.add_participant_event_callback = MagicMock()
+        adapter.add_audio_chunk_callback = MagicMock()
+        adapter.recording_is_paused = False
+        adapter.participants_ctrl = MagicMock()
+        return adapter
+
+    def enter_session(self, adapter, users, my_user_id):
+        users_by_id = {user.user_id: user for user in users}
+        adapter.participants_ctrl.GetUserByUserID.side_effect = lambda user_id: users_by_id[user_id]
+        adapter.my_participant_id = my_user_id
+        for user in users:
+            adapter.get_participant_by_user_id(user.user_id)
+            adapter.send_participant_event(user.user_id, event_type=ParticipantEventTypes.JOIN)
+
+    def send_audio(self, adapter, user_id):
+        adapter.on_one_way_audio_raw_data_received_callback(MagicMock(), user_id)
+        return adapter.add_audio_chunk_callback.call_args[0][0]
+
+    def participant_events(self, adapter):
+        return [(c[0][0]["participant_uuid"], c[0][0]["event_type"]) for c in adapter.add_participant_event_callback.call_args_list]
+
+    def test_participant_ids_are_user_ids_without_breakout_rooms(self):
+        adapter = self.create_adapter()
+        self.enter_session(adapter, [self.MockUser(100, "Host"), self.MockUser(200, "Bot")], my_user_id=200)
+
+        self.assertEqual(self.send_audio(adapter, 100), 100)
+        self.assertEqual(adapter.get_participant(100)["participant_full_name"], "Host")
+        self.assertEqual(self.participant_events(adapter), [(100, ParticipantEventTypes.JOIN), (200, ParticipantEventTypes.JOIN)])
+
+    def test_participants_leave_and_join_with_new_ids_when_user_ids_are_swapped_in_a_breakout_room(self):
+        adapter = self.create_adapter()
+        self.enter_session(adapter, [self.MockUser(100, "Host"), self.MockUser(200, "Bot")], my_user_id=200)
+        adapter.add_participant_event_callback.reset_mock()
+
+        adapter.start_new_participant_id_session()
+        suffix = adapter.participant_id_session_suffix
+        self.enter_session(adapter, [self.MockUser(200, "Host"), self.MockUser(100, "Bot")], my_user_id=100)
+
+        events = self.participant_events(adapter)
+        self.assertCountEqual(events[:2], [(100, ParticipantEventTypes.LEAVE), (200, ParticipantEventTypes.LEAVE)])
+        self.assertEqual(events[2:], [(f"200-{suffix}", ParticipantEventTypes.JOIN), (f"100-{suffix}", ParticipantEventTypes.JOIN)])
+        # The host speaks with user id 200, which was the bot's user id in the main session
+        host = adapter.get_participant(self.send_audio(adapter, 200))
+        self.assertEqual(host["participant_full_name"], "Host")
+        self.assertFalse(host["participant_is_the_bot"])
+        # Participant ids from the main session still resolve to the participants who had them there
+        self.assertEqual(adapter.get_participant(100)["participant_full_name"], "Host")
+        self.assertEqual(adapter.get_participant(200)["participant_full_name"], "Bot")
+
+    def test_speech_of_previous_session_stops_before_participant_ids_change(self):
+        adapter = self.create_adapter()
+        adapter.realtime_per_participant_video_frame_generator = None
+        adapter.set_video_input_manager_based_on_state = MagicMock()
+        self.enter_session(adapter, [self.MockUser(100, "Host"), self.MockUser(200, "Bot")], my_user_id=200)
+        adapter.on_user_active_audio_change_callback([100])
+        adapter.add_participant_event_callback.reset_mock()
+
+        adapter.start_new_participant_id_session()
+
+        self.assertEqual(self.participant_events(adapter)[0], (100, ParticipantEventTypes.SPEECH_STOP))
+        self.assertIsNone(adapter.active_speaker_id)
+
+    def test_chat_message_is_sent_to_participant_in_current_session_only(self):
+        adapter = self.create_adapter()
+        adapter.chat_ctrl = MagicMock()
+        builder = adapter.chat_ctrl.GetChatMessageBuilder.return_value
+        self.enter_session(adapter, [self.MockUser(100, "Host"), self.MockUser(200, "Bot")], my_user_id=200)
+        adapter.start_new_participant_id_session()
+        suffix = adapter.participant_id_session_suffix
+        self.enter_session(adapter, [self.MockUser(200, "Host"), self.MockUser(100, "Bot")], my_user_id=100)
+
+        adapter.send_chat_message(text="hi", to_user_uuid="100")
+        builder.SetReceiver.assert_not_called()
+
+        adapter.send_chat_message(text="hi", to_user_uuid=f"200-{suffix}")
+        builder.SetReceiver.assert_called_once_with(200)
 
 
 @tag("zoom_tests")
