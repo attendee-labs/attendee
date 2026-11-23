@@ -49,7 +49,7 @@ RUN apt-get update  \
 # Install Chrome dependencies
 RUN apt-get install -y xvfb xauth x11-xkb-utils xfonts-100dpi xfonts-75dpi xfonts-scalable xfonts-cyrillic x11-apps libvulkan1 fonts-liberation xdg-utils wget
 # Install a specific version of Chrome.
-RUN wget --progress=dot:giga --timeout=30 --tries=3 https://dl.google.com/linux/chrome/deb/pool/main/g/google-chrome-stable/google-chrome-stable_157.0.8103.38-1_amd64.deb
+RUN wget --progress=dot:giga --timeout=30 --tries=3 https://build-assets.attendee.dev/google-chrome/pool/main/g/google-chrome-stable/google-chrome-stable_157.0.8103.38-1_amd64.deb
 RUN echo "a62b277dc03da2cff50cc04589deb66f6875be339c066d46adb49b49eedb629d  google-chrome-stable_157.0.8103.38-1_amd64.deb" | sha256sum -c -
 RUN apt-get install -y ./google-chrome-stable_157.0.8103.38-1_amd64.deb
 
