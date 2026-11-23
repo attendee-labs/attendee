@@ -25,6 +25,7 @@ from websockets.sync.server import serve
 from bots.automatic_leave_configuration import AutomaticLeaveConfiguration
 from bots.automatic_leave_utils import participant_is_another_bot, silence_detection_should_activate
 from bots.bot_adapter import BotAdapter
+from bots.media_capture_health_signals import MediaCaptureHealthSignal, MediaCaptureHealthSignalDebouncer
 from bots.models import ParticipantEventTypes, RecordingViews
 from bots.per_participant_realtime_video_configuration import PerParticipantRealtimeVideoConfiguration
 from bots.room_sync_source_participant_configuration import RoomSyncSourceParticipantConfiguration
@@ -66,6 +67,7 @@ class WebBotAdapter(BotAdapter):
         disable_incoming_video: bool,
         record_participant_speech_start_stop_events: bool,
         room_sync_source_participant_configuration: RoomSyncSourceParticipantConfiguration | None,
+        media_capture_health_signal_callback,
     ):
         self.display_name = display_name
         self.send_message_callback = send_message_callback
@@ -79,6 +81,8 @@ class WebBotAdapter(BotAdapter):
         self.upsert_chat_message_callback = upsert_chat_message_callback
         self.bot_media_device_state_changed_by_other_participant_callback = bot_media_device_state_changed_by_other_participant_callback
         self.add_participant_event_callback = add_participant_event_callback
+        self.media_capture_health_signal_callback = media_capture_health_signal_callback
+        self.media_capture_health_signal_debouncer = MediaCaptureHealthSignalDebouncer(interval_seconds=180)
         self.start_recording_screen_callback = start_recording_screen_callback
         self.stop_recording_screen_callback = stop_recording_screen_callback
         self.recording_view = recording_view
@@ -321,6 +325,7 @@ class WebBotAdapter(BotAdapter):
             audio_data = (audio_data * 32768.0).astype(np.int16)
 
             self.add_audio_chunk_callback(participant_id, datetime.datetime.utcnow(), audio_data.tobytes())
+            self.send_media_capture_health_signal(MediaCaptureHealthSignal.PER_PARTICIPANT_AUDIO)
 
     def process_per_participant_video_frame(self, message):
         if self.recording_paused:
@@ -408,6 +413,21 @@ class WebBotAdapter(BotAdapter):
         self.last_audio_message_processed_time = time.time()
         self.upsert_caption_callback(json_data["caption"])
 
+    def send_media_capture_health_signal(self, signal: MediaCaptureHealthSignal):
+        if not self.media_capture_health_signal_callback:
+            return
+
+        if not self.media_capture_health_signal_debouncer.should_emit(signal, time.time()):
+            return
+
+        self.media_capture_health_signal_callback(signal)
+
+    def handle_caption_activity(self):
+        if self.recording_paused:
+            return
+
+        self.send_media_capture_health_signal(MediaCaptureHealthSignal.CAPTION_ACTIVITY)
+
     def handle_participant_speech_start_stop_event(self, json_data):
         self.add_participant_event_callback({"participant_uuid": json_data["participantId"], "event_type": ParticipantEventTypes.SPEECH_START if json_data["isSpeechStart"] else ParticipantEventTypes.SPEECH_STOP, "event_data": {}, "timestamp_ms": int(json_data["timestamp"])})
 
@@ -477,6 +497,9 @@ class WebBotAdapter(BotAdapter):
 
                         elif json_data.get("type") == "CaptionUpdate":
                             self.handle_caption_update(json_data)
+
+                        elif json_data.get("type") == "CaptionActivity":
+                            self.handle_caption_activity()
 
                         elif json_data.get("type") == "ChatMessage":
                             self.handle_chat_message(json_data)
@@ -880,7 +903,7 @@ class WebBotAdapter(BotAdapter):
         self.start_domain_allow_list_listener()
         logger.info(f"web driver server initialized at port {self.driver.service.port}")
 
-        initial_data_code = f"window.initialData = {{websocketPort: {self.websocket_port}, videoFrameWidth: {self.video_frame_size[0]}, videoFrameHeight: {self.video_frame_size[1]}, botName: {json.dumps(self.display_name)}, addClickRipple: {'true' if self.should_create_debug_recording else 'false'}, recordingView: '{self.recording_view}', sendMixedAudio: {'true' if self.add_mixed_audio_chunk_callback else 'false'}, sendPerParticipantAudio: {'true' if self.add_audio_chunk_callback else 'false'}, perParticipantRealtimeVideoConfiguration: {json.dumps(self.per_participant_realtime_video_configuration.to_dict())}, roomSyncSourceParticipantConfiguration: {json.dumps(self.room_sync_source_participant_configuration.to_dict()) if self.room_sync_source_participant_configuration else 'null'}, sendPerParticipantVideo: {'true' if self.add_per_participant_video_frame_callback else 'false'}, collectCaptions: {'true' if self.upsert_caption_callback else 'false'}, recordParticipantSpeechStartStopEvents: {'true' if self.record_participant_speech_start_stop_events else 'false'}}}"
+        initial_data_code = f"window.initialData = {{websocketPort: {self.websocket_port}, videoFrameWidth: {self.video_frame_size[0]}, videoFrameHeight: {self.video_frame_size[1]}, botName: {json.dumps(self.display_name)}, addClickRipple: {'true' if self.should_create_debug_recording else 'false'}, recordingView: '{self.recording_view}', sendMixedAudio: {'true' if self.add_mixed_audio_chunk_callback else 'false'}, sendPerParticipantAudio: {'true' if self.add_audio_chunk_callback else 'false'}, perParticipantRealtimeVideoConfiguration: {json.dumps(self.per_participant_realtime_video_configuration.to_dict())}, roomSyncSourceParticipantConfiguration: {json.dumps(self.room_sync_source_participant_configuration.to_dict()) if self.room_sync_source_participant_configuration else 'null'}, sendPerParticipantVideo: {'true' if self.add_per_participant_video_frame_callback else 'false'}, collectCaptions: {'true' if self.upsert_caption_callback else 'false'}, sendCaptionActivity: {'true' if self.media_capture_health_signal_callback else 'false'}, recordParticipantSpeechStartStopEvents: {'true' if self.record_participant_speech_start_stop_events else 'false'}}}"
 
         # Get directory of current file
         current_dir = os.path.dirname(os.path.abspath(__file__))

@@ -73,6 +73,7 @@ from .bot_resource_snapshot_taker import BotResourceSnapshotTaker
 from .closed_caption_manager import ClosedCaptionManager
 from .grouped_closed_caption_manager import GroupedClosedCaptionManager
 from .gstreamer_pipeline import GstreamerPipeline
+from .media_capture_health_monitor import CaptionsWithoutPerParticipantAudioCheck, MediaCaptureHealthMonitor, MediaCaptureIssue, MediaCaptureIssueType
 from .per_participant_non_streaming_audio_input_manager import PerParticipantNonStreamingAudioInputManager
 from .per_participant_streaming_audio_input_manager import PerParticipantStreamingAudioInputManager
 from .pipeline_configuration import PipelineConfiguration
@@ -128,7 +129,7 @@ class BotController:
     #   - the per-participant audio input manager, which transcribes it and stores the audio chunks for post-meeting transcription
     #   - the websocket client, when per-participant audio is being streamed via websocket
     #   - the room sync client, when per-participant audio is being mirrored into a LiveKit room
-    def get_per_participant_audio_chunk_callback(self):
+    def get_per_participant_audio_chunk_sinks(self):
         sinks = []
 
         if self.should_capture_audio_chunks():
@@ -137,6 +138,11 @@ class BotController:
             sinks.append(("websocket client", self.send_per_participant_audio_chunk_to_websocket_client))
         if self.pipeline_configuration.room_sync_stream_per_participant_audio:
             sinks.append(("room sync client", self.send_per_participant_audio_chunk_to_room_sync_client))
+
+        return sinks
+
+    def get_per_participant_audio_chunk_callback(self):
+        sinks = self.get_per_participant_audio_chunk_sinks()
 
         if not sinks:
             return None
@@ -230,6 +236,7 @@ class BotController:
                 self.create_google_meet_bot_login_session,
             ),
             ui_interaction_mode=self.bot_in_db.google_meet_ui_interaction_mode(),
+            media_capture_health_signal_callback=self.on_media_capture_health_signal,
         )
 
     def retrieve_teams_bot_login_credentials(self):
@@ -305,6 +312,7 @@ class BotController:
             disable_incoming_video=self.disable_incoming_video_for_web_bots(),
             modify_dom_for_video_recording=self.should_modify_dom_for_video_recording_for_web_bots(),
             teams_bot_identification_credentials=self.get_teams_bot_identification_credentials(),
+            media_capture_health_signal_callback=self.on_media_capture_health_signal,
         )
 
     def get_webex_service_app(self):
@@ -355,6 +363,7 @@ class BotController:
             disable_incoming_video=self.disable_incoming_video_for_web_bots(),
             record_participant_speech_start_stop_events=self.bot_in_db.record_participant_speech_start_stop_events(),
             create_guest_token_callback=self.create_webex_guest_token,
+            media_capture_health_signal_callback=self.on_media_capture_health_signal,
         )
 
     def get_zoom_oauth_credentials_via_credentials_record(self):
@@ -431,6 +440,7 @@ class BotController:
             modify_dom_for_video_recording=self.should_modify_dom_for_video_recording_for_web_bots(),
             record_participant_speech_start_stop_events=self.bot_in_db.record_participant_speech_start_stop_events(),
             zoom_tokens=zoom_tokens,
+            media_capture_health_signal_callback=self.on_media_capture_health_signal,
         )
 
     def get_zoom_bot_adapter(self):
@@ -625,6 +635,25 @@ class BotController:
 
         logger.info("Telling room sync client to shutdown...")
         self.room_sync_client.cleanup()
+
+    def create_media_capture_health_monitor(self):
+        checks = []
+        # Per-participant audio is only collected when it's used for transcription, websocket streaming or room sync. Otherwise there is never any audio, so this check would always fire.
+        if self.get_per_participant_audio_chunk_sinks():
+            checks.append(CaptionsWithoutPerParticipantAudioCheck())
+
+        logger.info(f"Creating media capture health monitor with checks: {[type(check).__name__ for check in checks]}")
+        return MediaCaptureHealthMonitor(checks=checks, on_issue_detected=self.on_media_capture_issue_detected)
+
+    def on_media_capture_health_signal(self, signal):
+        GLib.idle_add(lambda: self.media_capture_health_monitor.record_signal(signal))
+
+    def on_media_capture_issue_detected(self, issue: MediaCaptureIssue):
+        logger.error(f"Media capture issue detected: {issue.message}")
+        log_entry_type = {
+            MediaCaptureIssueType.CAPTIONS_WITHOUT_PER_PARTICIPANT_AUDIO: BotLogEntryTypes.PER_PARTICIPANT_AUDIO_CAPTURE_FAILURE,
+        }[issue.issue_type]
+        BotLogManager.create_bot_log_entry(bot=self.bot_in_db, level=BotLogEntryLevels.ERROR, entry_type=log_entry_type, message=issue.message)
 
     def get_bot_adapter(self):
         meeting_type = self.get_meeting_type()
@@ -856,6 +885,8 @@ class BotController:
 
         self.main_thread_executor = MainThreadExecutor()
 
+        self.media_capture_health_monitor = None
+
     def get_pipeline_configuration(self):
         if self.bot_in_db.rtmp_destination_url():
             return PipelineConfiguration.rtmp_streaming_bot()
@@ -1038,6 +1069,8 @@ class BotController:
             )
 
         self.room_sync_client = self.get_room_sync_client()
+
+        self.media_capture_health_monitor = self.create_media_capture_health_monitor()
 
         self.adapter = self.get_bot_adapter()
 
@@ -1484,6 +1517,9 @@ class BotController:
 
             # Process captions
             self.closed_caption_manager.process_captions()
+
+            # Check that media is being captured
+            self.media_capture_health_monitor.evaluate()
 
             # Check if auto-leave conditions are met
             self.adapter.check_auto_leave_conditions()

@@ -225,7 +225,8 @@ class LiveTranscriptListWatcher {
     processLiveTranscriptChange(newLTMessage) {
       if (!newLTMessage || typeof newLTMessage !== 'object') return;
 
-      if (!window.initialData?.collectCaptions) return;
+      const collectCaptions = !!window.initialData?.collectCaptions;
+      if (!collectCaptions && !window.initialData?.sendCaptionActivity) return;
 
       const next = new Map(Object.entries(newLTMessage));
       const prev = this.currentMessageMap;
@@ -236,6 +237,10 @@ class LiveTranscriptListWatcher {
         // Only forward to finalization manager if new or changed
         if (!old || old.text !== message.text || old.done !== message.done) {
           if (message.user?.userId != null) {
+            window.captionActivityReporter?.captionReceived(message.user.userId.toString());
+          }
+
+          if (collectCaptions && message.user?.userId != null) {
             // It's defined in zoom_web_chromedriver_page.js. Ugly.
             transcriptMessageFinalizationManager.addMessage({
               userId: message.user.userId,

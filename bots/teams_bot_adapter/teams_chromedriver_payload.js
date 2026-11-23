@@ -2524,6 +2524,8 @@ const processClosedCaptionData = (item) => {
         dominantSpeakerManager.upsertSpeechInterval(captionId, startMs, startMs + durationMs, item.userId);
     }
 
+    window.captionActivityReporter?.captionReceived(item.userId);
+
     // If we don't need the captions, we can leave.
     if (!window.initialData.collectCaptions)
     {

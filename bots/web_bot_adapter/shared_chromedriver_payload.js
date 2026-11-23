@@ -928,3 +928,59 @@ class BotOutputManager {
         }, 60000);
     }
 }
+// Tells the adapter that captions are being generated, so it can check that per-participant audio is being captured while people speak.
+// Only sends whether a caption was seen, not the caption itself, and at most once a minute.
+class CaptionActivityReporter {
+    static THROTTLE_MS = 60000;
+
+    constructor() {
+        this.lastSentAt = null;
+        this.lastErrorReportedAt = null;
+    }
+
+    // A failure here must never get in the way of caption processing, so it is caught and reported, at most once a minute
+    captionReceived(deviceId) {
+        try {
+            if (!window.initialData?.sendCaptionActivity) {
+                return;
+            }
+
+            // Per-participant audio isn't sent until media sending is enabled (e.g. a Zoom web bot waiting for recording permission),
+            // so captions seen before then don't mean audio capture has failed
+            if (!window.ws?.mediaSendingEnabled) {
+                return;
+            }
+
+            // The bot's own speech isn't in the per-participant audio, so its captions say nothing about whether that audio is being captured
+            const user = window.userManager?.getUserByDeviceId?.(deviceId);
+            if (user?.isCurrentUser) {
+                return;
+            }
+
+            const now = Date.now();
+            if (this.lastSentAt !== null && now - this.lastSentAt < CaptionActivityReporter.THROTTLE_MS) {
+                return;
+            }
+            this.lastSentAt = now;
+
+            window.ws?.sendJson({ type: 'CaptionActivity' });
+        } catch (error) {
+            this.reportError(error);
+        }
+    }
+
+    reportError(error) {
+        try {
+            const now = Date.now();
+            if (this.lastErrorReportedAt !== null && now - this.lastErrorReportedAt < CaptionActivityReporter.THROTTLE_MS) {
+                return;
+            }
+            this.lastErrorReportedAt = now;
+            window.ws?.sendJson({ type: 'CaptionActivityReporterError', error: error?.message || String(error) });
+        } catch (_) {
+            // Nothing else to do if the error can't be reported
+        }
+    }
+}
+
+window.captionActivityReporter = new CaptionActivityReporter();
