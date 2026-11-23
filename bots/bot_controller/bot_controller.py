@@ -231,7 +231,7 @@ class BotController:
                 self.create_google_meet_bot_login_session,
             ),
             ui_interaction_mode=self.bot_in_db.google_meet_ui_interaction_mode(),
-            media_capture_signal_callback=self.get_media_capture_signal_callback(),
+            media_capture_health_signal_callback=self.get_media_capture_health_signal_callback(),
         )
 
     def retrieve_teams_bot_login_credentials(self):
@@ -307,7 +307,7 @@ class BotController:
             disable_incoming_video=self.disable_incoming_video_for_web_bots(),
             modify_dom_for_video_recording=self.should_modify_dom_for_video_recording_for_web_bots(),
             teams_bot_identification_credentials=self.get_teams_bot_identification_credentials(),
-            media_capture_signal_callback=self.get_media_capture_signal_callback(),
+            media_capture_health_signal_callback=self.get_media_capture_health_signal_callback(),
         )
 
     def get_webex_service_app(self):
@@ -358,8 +358,7 @@ class BotController:
             disable_incoming_video=self.disable_incoming_video_for_web_bots(),
             record_participant_speech_start_stop_events=self.bot_in_db.record_participant_speech_start_stop_events(),
             create_guest_token_callback=self.create_webex_guest_token,
-            # Webex only turns on captions when they are being collected, so there's no caption activity to check against
-            media_capture_signal_callback=None,
+            media_capture_health_signal_callback=self.get_media_capture_health_signal_callback(),
         )
 
     def get_zoom_oauth_credentials_via_credentials_record(self):
@@ -436,7 +435,7 @@ class BotController:
             modify_dom_for_video_recording=self.should_modify_dom_for_video_recording_for_web_bots(),
             record_participant_speech_start_stop_events=self.bot_in_db.record_participant_speech_start_stop_events(),
             zoom_tokens=zoom_tokens,
-            media_capture_signal_callback=self.get_media_capture_signal_callback(),
+            media_capture_health_signal_callback=self.get_media_capture_health_signal_callback(),
         )
 
     def get_zoom_bot_adapter(self):
@@ -632,18 +631,16 @@ class BotController:
         logger.info("Telling room sync client to shutdown...")
         self.room_sync_client.cleanup()
 
-    # Only the Google Meet, Teams and Zoom web adapters send caption activity signals, since they turn on captions in every meeting
-    def adapter_sends_caption_activity_signals(self):
-        meeting_type = self.get_meeting_type()
-        if meeting_type == MeetingTypes.ZOOM:
-            return not self.is_using_rtms() and self.bot_in_db.use_zoom_web_adapter()
-        return meeting_type in (MeetingTypes.GOOGLE_MEET, MeetingTypes.TEAMS)
+    # Media capture health signals come from the web bot adapters, so the RTMS and native Zoom adapters don't send them
+    def adapter_sends_media_capture_health_signals(self):
+        using_native_zoom_adapter = self.get_meeting_type() == MeetingTypes.ZOOM and not self.bot_in_db.use_zoom_web_adapter()
+        return not self.is_using_rtms() and not using_native_zoom_adapter
 
     # Checks that per-participant audio is being captured. Only needed when the bot captures per-participant audio chunks.
     def create_media_capture_health_monitor(self):
         if not self.should_capture_audio_chunks():
             return None
-        if not self.adapter_sends_caption_activity_signals():
+        if not self.adapter_sends_media_capture_health_signals():
             return None
 
         logger.info("Creating media capture health monitor to check that per-participant audio is being captured")
@@ -652,13 +649,13 @@ class BotController:
             on_issue_detected=self.on_media_capture_issue_detected,
         )
 
-    def get_media_capture_signal_callback(self):
+    def get_media_capture_health_signal_callback(self):
         if not self.media_capture_health_monitor:
             return None
-        return self.on_media_capture_signal
+        return self.on_media_capture_health_signal
 
     # Called from the adapter's websocket thread, so hand the signal to the main thread
-    def on_media_capture_signal(self, signal, timestamp):
+    def on_media_capture_health_signal(self, signal, timestamp):
         GLib.idle_add(lambda: self.media_capture_health_monitor.record_signal(signal, timestamp))
 
     def on_media_capture_issue_detected(self, issue: MediaCaptureIssue):

@@ -2,7 +2,7 @@ import logging
 from dataclasses import dataclass
 from typing import Callable
 
-from bots.media_capture_signals import MediaCaptureSignal
+from bots.media_capture_health_signals import MediaCaptureHealthSignal
 from bots.models import BotLogEntryTypes
 
 logger = logging.getLogger(__name__)
@@ -19,7 +19,7 @@ class MediaCaptureCheck:
 
     relevant_signals: frozenset = frozenset()
 
-    def record_signal(self, signal: MediaCaptureSignal, timestamp: float):
+    def record_signal(self, signal: MediaCaptureHealthSignal, timestamp: float):
         raise NotImplementedError
 
     # Returns an issue if the check has found a failure
@@ -30,7 +30,7 @@ class MediaCaptureCheck:
 class CaptionsWithoutPerParticipantAudioCheck(MediaCaptureCheck):
     """Captions mean someone is speaking, so if captions keep arriving while no per-participant audio is captured, the per-participant audio capture has failed."""
 
-    relevant_signals = frozenset({MediaCaptureSignal.CAPTION_ACTIVITY, MediaCaptureSignal.PER_PARTICIPANT_AUDIO})
+    relevant_signals = frozenset({MediaCaptureHealthSignal.CAPTION_ACTIVITY, MediaCaptureHealthSignal.PER_PARTICIPANT_AUDIO})
 
     # The adapter sends each signal at most once every 3 minutes, so 3 caption activity signals mean captions were seen across at least 6 minutes
     MIN_CAPTION_ACTIVITY_SIGNALS = 3
@@ -39,10 +39,10 @@ class CaptionsWithoutPerParticipantAudioCheck(MediaCaptureCheck):
         self.caption_activity_timestamps_since_last_per_participant_audio = []
         self.per_participant_audio_was_ever_captured = False
 
-    def record_signal(self, signal: MediaCaptureSignal, timestamp: float):
-        if signal == MediaCaptureSignal.CAPTION_ACTIVITY:
+    def record_signal(self, signal: MediaCaptureHealthSignal, timestamp: float):
+        if signal == MediaCaptureHealthSignal.CAPTION_ACTIVITY:
             self.caption_activity_timestamps_since_last_per_participant_audio.append(timestamp)
-        elif signal == MediaCaptureSignal.PER_PARTICIPANT_AUDIO:
+        elif signal == MediaCaptureHealthSignal.PER_PARTICIPANT_AUDIO:
             self.caption_activity_timestamps_since_last_per_participant_audio = []
             self.per_participant_audio_was_ever_captured = True
 
@@ -63,13 +63,13 @@ class CaptionsWithoutPerParticipantAudioCheck(MediaCaptureCheck):
 
 
 class MediaCaptureHealthMonitor:
-    """Passes the media capture signals from the bot adapter to the checks, and reports each issue they find. Each check reports at most one issue per bot."""
+    """Passes the media capture health signals from the bot adapter to the checks, and reports each issue they find. Each check reports at most one issue per bot."""
 
     def __init__(self, *, checks: list[MediaCaptureCheck], on_issue_detected: Callable[[MediaCaptureIssue], None]):
         self.checks = checks
         self.on_issue_detected = on_issue_detected
 
-    def record_signal(self, signal: MediaCaptureSignal, timestamp: float):
+    def record_signal(self, signal: MediaCaptureHealthSignal, timestamp: float):
         for check in self.checks:
             if signal in check.relevant_signals:
                 check.record_signal(signal, timestamp)
