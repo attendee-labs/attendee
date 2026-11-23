@@ -90,9 +90,16 @@ class MediaCaptureHealthMonitor:
         self.last_evaluated_at = now
 
         for check in list(self.checks):
-            issue = check.evaluate()
-            if issue is None:
-                continue
-            logger.info(f"{type(check).__name__} detected a media capture issue: {issue.message}")
-            self.checks.remove(check)
-            self.on_issue_detected(issue)
+            # This runs in the bot's main loop, where an exception would kill the bot, so a failing check is dropped rather than raised.
+            # Dropping it also means the error is only logged once.
+            try:
+                issue = check.evaluate()
+                if issue is None:
+                    continue
+                logger.info(f"{type(check).__name__} detected a media capture issue: {issue.message}")
+                self.checks.remove(check)
+                self.on_issue_detected(issue)
+            except Exception:
+                logger.exception(f"Error running {type(check).__name__}. It will not run again for this bot.")
+                if check in self.checks:
+                    self.checks.remove(check)

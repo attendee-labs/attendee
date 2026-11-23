@@ -96,6 +96,35 @@ class MediaCaptureHealthMonitorTest(SimpleTestCase):
 
         check.record_signal.assert_called_once_with(CAPTION, 1)
 
+    def test_an_error_reporting_an_issue_does_not_escape_and_is_not_retried(self, mock_time):
+        mock_time.return_value = 0
+        check = MagicMock(relevant_signals=frozenset())
+        check.evaluate.return_value = MediaCaptureIssue(issue_type=MediaCaptureIssueType.CAPTIONS_WITHOUT_PER_PARTICIPANT_AUDIO, message="Something went wrong")
+        on_issue_detected = MagicMock(side_effect=Exception("database is down"))
+        monitor = MediaCaptureHealthMonitor(checks=[check], on_issue_detected=on_issue_detected)
+
+        with self.assertLogs("bots.bot_controller.media_capture_health_monitor", level="ERROR"):
+            monitor.evaluate()
+        mock_time.return_value = 10
+        monitor.evaluate()
+
+        on_issue_detected.assert_called_once()
+        self.assertEqual(monitor.checks, [])
+
+    def test_a_check_that_raises_does_not_escape_and_is_dropped(self, mock_time):
+        mock_time.return_value = 0
+        failing_check = MagicMock(relevant_signals=frozenset())
+        failing_check.evaluate.side_effect = Exception("bug in check")
+        healthy_check = MagicMock(relevant_signals=frozenset())
+        healthy_check.evaluate.return_value = None
+        monitor = MediaCaptureHealthMonitor(checks=[failing_check, healthy_check], on_issue_detected=MagicMock())
+
+        with self.assertLogs("bots.bot_controller.media_capture_health_monitor", level="ERROR"):
+            monitor.evaluate()
+
+        healthy_check.evaluate.assert_called_once()
+        self.assertEqual(monitor.checks, [healthy_check])
+
     def test_runs_the_checks_at_most_every_five_seconds(self, mock_time):
         check = MagicMock(relevant_signals=frozenset())
         check.evaluate.return_value = None
