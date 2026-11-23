@@ -636,17 +636,15 @@ class BotController:
         logger.info("Telling room sync client to shutdown...")
         self.room_sync_client.cleanup()
 
-    # Always created. It does nothing for adapters that never send media capture health signals, like RTMS and native Zoom
     def create_media_capture_health_monitor(self):
         checks = []
-        # The page only sends per-participant audio when something consumes it. Without it, captions would never be matched by audio and this check would always fire.
+        # Per-participant audio is only collected when it's used for transcription, websocket streaming or room sync. Otherwise there is never any audio, so this check would always fire.
         if self.get_per_participant_audio_chunk_sinks():
             checks.append(CaptionsWithoutPerParticipantAudioCheck())
 
         logger.info(f"Creating media capture health monitor with checks: {[type(check).__name__ for check in checks]}")
         return MediaCaptureHealthMonitor(checks=checks, on_issue_detected=self.on_media_capture_issue_detected)
 
-    # Called from the adapter's websocket thread, so hand the signal to the main thread
     def on_media_capture_health_signal(self, signal):
         GLib.idle_add(lambda: self.media_capture_health_monitor.record_signal(signal))
 

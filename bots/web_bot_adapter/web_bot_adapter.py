@@ -81,9 +81,8 @@ class WebBotAdapter(BotAdapter):
         self.upsert_chat_message_callback = upsert_chat_message_callback
         self.bot_media_device_state_changed_by_other_participant_callback = bot_media_device_state_changed_by_other_participant_callback
         self.add_participant_event_callback = add_participant_event_callback
-        # Called with a MediaCaptureHealthSignal so the bot controller can check that media is being captured. None if nothing is checked.
         self.media_capture_health_signal_callback = media_capture_health_signal_callback
-        self.media_capture_health_signal_debouncer = MediaCaptureHealthSignalDebouncer(interval_seconds=180)  # each signal is sent at most once every 3 minutes
+        self.media_capture_health_signal_debouncer = MediaCaptureHealthSignalDebouncer(interval_seconds=180)
         self.start_recording_screen_callback = start_recording_screen_callback
         self.stop_recording_screen_callback = stop_recording_screen_callback
         self.recording_view = recording_view
