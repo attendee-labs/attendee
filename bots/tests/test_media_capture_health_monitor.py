@@ -96,6 +96,17 @@ class MediaCaptureHealthMonitorTest(SimpleTestCase):
 
         check.record_signal.assert_called_once_with(CAPTION, 1)
 
+    def test_runs_the_checks_at_most_every_five_seconds(self, mock_time):
+        check = MagicMock(relevant_signals=frozenset())
+        check.evaluate.return_value = None
+        monitor = MediaCaptureHealthMonitor(checks=[check], on_issue_detected=MagicMock())
+
+        for timestamp in (1000, 1000.1, 1004.9, 1005, 1009.9, 1010):
+            mock_time.return_value = timestamp
+            monitor.evaluate()
+
+        self.assertEqual(check.evaluate.call_count, 3)
+
 
 def json_message(payload):
     return (1).to_bytes(4, byteorder="little") + json.dumps(payload).encode("utf-8")

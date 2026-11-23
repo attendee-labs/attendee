@@ -73,6 +73,7 @@ class MediaCaptureHealthMonitor:
     def __init__(self, *, checks: list[MediaCaptureCheck], on_issue_detected: Callable[[MediaCaptureIssue], None]):
         self.checks = checks
         self.on_issue_detected = on_issue_detected
+        self.last_evaluated_at = None
 
     # Signals are recorded as they arrive, which is close enough to when they happened for checks that work in minutes
     def record_signal(self, signal: MediaCaptureHealthSignal):
@@ -81,7 +82,13 @@ class MediaCaptureHealthMonitor:
             if signal in check.relevant_signals:
                 check.record_signal(signal, timestamp)
 
+    # Called on every main loop timeout, but the signals are minutes apart, so the checks only run every 5 seconds
     def evaluate(self):
+        now = time.time()
+        if self.last_evaluated_at is not None and now - self.last_evaluated_at < 5:
+            return
+        self.last_evaluated_at = now
+
         for check in list(self.checks):
             issue = check.evaluate()
             if issue is None:
