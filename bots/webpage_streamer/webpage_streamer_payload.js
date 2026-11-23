@@ -2,7 +2,8 @@
   const ORIGINAL_GET_USER_MEDIA =
     navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
 
-  const UPSTREAM_URL = "http://localhost:8000/offer_meeting_audio";
+  // __ATTENDEE_OUTPUT_DESTINATION__ is substituted by the webpage streamer before injection
+  const UPSTREAM_URL = "http://localhost:8000/offer_meeting_audio?output_destination=" + encodeURIComponent(__ATTENDEE_OUTPUT_DESTINATION__);
 
   let pc = null;
   let virtualAudioTrack = null;
