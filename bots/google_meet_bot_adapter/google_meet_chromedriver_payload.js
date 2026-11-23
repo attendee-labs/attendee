@@ -2010,17 +2010,24 @@ new FetchInterceptor(async (response) => {
     if (response.url === createMeetingDeviceUrl || response.url === updateMeetingDeviceUrl) {
         if (!response.ok)
             return;
-        const responseText = await response.text();
-        const decodedData = base64ToUint8Array(responseText);
-        const createDeviceResponse = messageDecoders['CreateMeetingDeviceResponse'](decodedData);
-        const placedInLobby = createDeviceResponse.joinState === 3 || createDeviceResponse.joinState === 5;
-        if (!placedInLobby)
-            return;
-        const detected = Boolean(createDeviceResponse.detectedAsBot);
-        window.ws?.sendJson({
-            type: 'DetectedAsBot',
-            detected,
-        });
+        try {
+            const responseText = await response.text();
+            const decodedData = base64ToUint8Array(responseText);
+            const createDeviceResponse = messageDecoders['CreateMeetingDeviceResponse'](decodedData);
+            const placedInLobby = createDeviceResponse.joinState === 3 || createDeviceResponse.joinState === 5;
+            if (!placedInLobby)
+                return;
+            const detected = Boolean(createDeviceResponse.detectedAsBot);
+            window.ws?.sendJson({
+                type: 'DetectedAsBot',
+                detected,
+            });
+        } catch (error) {
+            window.ws?.sendJson({
+                type: 'Error',
+                message: 'Error decoding meeting device response: ' + error.message
+            });
+        }
     }
 });
 
