@@ -1760,6 +1760,7 @@ const messageTypes = [
     {
         name: 'CreateMeetingDeviceResponse',
         fields: [
+            { name: 'joinState', fieldNumber: 4, type: 'varint' }, // 3 or 5 means in lobby
             { name: 'detectedAsBot', fieldNumber: 36, type: 'varint' }
         ]
     },
@@ -2012,6 +2013,9 @@ new FetchInterceptor(async (response) => {
         const responseText = await response.text();
         const decodedData = base64ToUint8Array(responseText);
         const createDeviceResponse = messageDecoders['CreateMeetingDeviceResponse'](decodedData);
+        const placedInLobby = createDeviceResponse.joinState === 3 || createDeviceResponse.joinState === 5;
+        if (!placedInLobby)
+            return;
         const detected = Boolean(createDeviceResponse.detectedAsBot);
         window.ws?.sendJson({
             type: 'DetectedAsBot',
