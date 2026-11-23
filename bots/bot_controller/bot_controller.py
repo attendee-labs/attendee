@@ -129,7 +129,7 @@ class BotController:
     #   - the per-participant audio input manager, which transcribes it and stores the audio chunks for post-meeting transcription
     #   - the websocket client, when per-participant audio is being streamed via websocket
     #   - the room sync client, when per-participant audio is being mirrored into a LiveKit room
-    def get_per_participant_audio_chunk_callback(self):
+    def get_per_participant_audio_chunk_sinks(self):
         sinks = []
 
         if self.should_capture_audio_chunks():
@@ -138,6 +138,11 @@ class BotController:
             sinks.append(("websocket client", self.send_per_participant_audio_chunk_to_websocket_client))
         if self.pipeline_configuration.room_sync_stream_per_participant_audio:
             sinks.append(("room sync client", self.send_per_participant_audio_chunk_to_room_sync_client))
+
+        return sinks
+
+    def get_per_participant_audio_chunk_callback(self):
+        sinks = self.get_per_participant_audio_chunk_sinks()
 
         if not sinks:
             return None
@@ -634,8 +639,8 @@ class BotController:
     # Always created. It does nothing for adapters that never send media capture health signals, like RTMS and native Zoom
     def create_media_capture_health_monitor(self):
         checks = []
-        # Without per-participant audio chunks there is no per-participant audio to check for, so this check would always fire
-        if self.should_capture_audio_chunks():
+        # The page only sends per-participant audio when something consumes it. Without it, captions would never be matched by audio and this check would always fire.
+        if self.get_per_participant_audio_chunk_sinks():
             checks.append(CaptionsWithoutPerParticipantAudioCheck())
 
         logger.info(f"Creating media capture health monitor with checks: {[type(check).__name__ for check in checks]}")

@@ -7,6 +7,7 @@ from django.test import SimpleTestCase, TestCase
 from accounts.models import Organization
 from bots.bot_controller.bot_controller import BotController
 from bots.bot_controller.media_capture_health_monitor import CaptionsWithoutPerParticipantAudioCheck, MediaCaptureHealthMonitor, MediaCaptureIssue, MediaCaptureIssueType
+from bots.bot_controller.pipeline_configuration import PipelineConfiguration
 from bots.media_capture_health_signals import MediaCaptureHealthSignal, MediaCaptureHealthSignalDebouncer
 from bots.models import Bot, BotLogEntry, BotLogEntryLevels, BotLogEntryTypes, Project
 from bots.web_bot_adapter import WebBotAdapter
@@ -199,6 +200,8 @@ class BotControllerMediaCaptureHealthMonitorTest(TestCase):
         self.controller = object.__new__(BotController)  # the controller's constructor connects to the outside world
         self.controller.bot_in_db = self.bot
         self.controller.should_capture_audio_chunks = MagicMock(return_value=True)
+        self.controller.per_participant_audio_input_manager = MagicMock()
+        self.controller.pipeline_configuration = PipelineConfiguration.recorder_bot()
 
     def check_names(self):
         return [type(check).__name__ for check in self.controller.create_media_capture_health_monitor().checks]
@@ -206,7 +209,19 @@ class BotControllerMediaCaptureHealthMonitorTest(TestCase):
     def test_audio_check_runs_when_per_participant_audio_chunks_are_captured(self):
         self.assertEqual(self.check_names(), ["CaptionsWithoutPerParticipantAudioCheck"])
 
-    def test_audio_check_does_not_run_when_per_participant_audio_chunks_are_not_captured(self):
+    def test_audio_check_runs_when_per_participant_audio_is_only_streamed_over_websocket(self):
+        self.controller.should_capture_audio_chunks.return_value = False
+        self.controller.pipeline_configuration = PipelineConfiguration.recorder_bot(websocket_stream_per_participant_audio=True)
+
+        self.assertEqual(self.check_names(), ["CaptionsWithoutPerParticipantAudioCheck"])
+
+    def test_audio_check_runs_when_per_participant_audio_is_only_sent_to_room_sync(self):
+        self.controller.should_capture_audio_chunks.return_value = False
+        self.controller.pipeline_configuration = PipelineConfiguration.recorder_bot(room_sync_stream_per_participant_audio=True)
+
+        self.assertEqual(self.check_names(), ["CaptionsWithoutPerParticipantAudioCheck"])
+
+    def test_audio_check_does_not_run_when_nothing_uses_per_participant_audio(self):
         self.controller.should_capture_audio_chunks.return_value = False
 
         self.assertEqual(self.check_names(), [])
