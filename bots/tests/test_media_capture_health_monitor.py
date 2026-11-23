@@ -8,7 +8,7 @@ from accounts.models import Organization
 from bots.bot_controller.bot_controller import BotController
 from bots.bot_controller.media_capture_health_monitor import CaptionsWithoutPerParticipantAudioCheck, MediaCaptureHealthMonitor, MediaCaptureIssue
 from bots.media_capture_health_signals import MediaCaptureHealthSignal, MediaCaptureHealthSignalDebouncer
-from bots.models import Bot, BotLogEntry, BotLogEntryLevels, BotLogEntryTypes, MeetingTypes, Project
+from bots.models import Bot, BotLogEntry, BotLogEntryLevels, BotLogEntryTypes, Project
 from bots.web_bot_adapter import WebBotAdapter
 
 CAPTION = MediaCaptureHealthSignal.CAPTION_ACTIVITY
@@ -154,41 +154,17 @@ class BotControllerMediaCaptureHealthMonitorTest(TestCase):
         self.controller = object.__new__(BotController)  # the controller's constructor connects to the outside world
         self.controller.bot_in_db = self.bot
         self.controller.should_capture_audio_chunks = MagicMock(return_value=True)
-        self.controller.get_meeting_type = MagicMock(return_value=MeetingTypes.GOOGLE_MEET)
 
-    def test_monitor_is_created_when_per_participant_audio_chunks_are_captured(self):
-        self.assertIsNotNone(self.controller.create_media_capture_health_monitor())
+    def check_names(self):
+        return [type(check).__name__ for check in self.controller.create_media_capture_health_monitor().checks]
 
-    def test_monitor_is_not_created_when_per_participant_audio_chunks_are_not_captured(self):
+    def test_audio_check_runs_when_per_participant_audio_chunks_are_captured(self):
+        self.assertEqual(self.check_names(), ["CaptionsWithoutPerParticipantAudioCheck"])
+
+    def test_audio_check_does_not_run_when_per_participant_audio_chunks_are_not_captured(self):
         self.controller.should_capture_audio_chunks.return_value = False
 
-        self.assertIsNone(self.controller.create_media_capture_health_monitor())
-
-    def test_monitor_is_created_for_webex(self):
-        self.controller.get_meeting_type.return_value = MeetingTypes.WEBEX
-
-        self.assertIsNotNone(self.controller.create_media_capture_health_monitor())
-
-    def test_monitor_is_not_created_for_rtms(self):
-        self.controller.get_meeting_type.return_value = MeetingTypes.ZOOM
-        self.controller.is_using_rtms = MagicMock(return_value=True)
-        self.bot.use_zoom_web_adapter = MagicMock(return_value=True)
-
-        self.assertIsNone(self.controller.create_media_capture_health_monitor())
-
-    def test_monitor_is_not_created_for_the_native_zoom_adapter(self):
-        self.controller.get_meeting_type.return_value = MeetingTypes.ZOOM
-        self.controller.is_using_rtms = MagicMock(return_value=False)
-        self.bot.use_zoom_web_adapter = MagicMock(return_value=False)
-
-        self.assertIsNone(self.controller.create_media_capture_health_monitor())
-
-    def test_monitor_is_created_for_the_zoom_web_adapter(self):
-        self.controller.get_meeting_type.return_value = MeetingTypes.ZOOM
-        self.controller.is_using_rtms = MagicMock(return_value=False)
-        self.bot.use_zoom_web_adapter = MagicMock(return_value=True)
-
-        self.assertIsNotNone(self.controller.create_media_capture_health_monitor())
+        self.assertEqual(self.check_names(), [])
 
     @patch("bots.models.trigger_webhook")
     def test_issue_creates_an_error_log_entry_and_fires_the_webhook(self, mock_trigger_webhook):
