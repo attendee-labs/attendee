@@ -2700,6 +2700,9 @@ botOutputManager = new BotOutputManager({
     turnOffScreenshare: turnOffScreenshare,
     turnOnMic: turnOnMic,
     turnOffMic: turnOffMic,
+    // At 1fps, WebRTC's bandwidth estimate never ramps up and the encoder takes ages to refine each frame,
+    // so the bot's image stays low resolution and blurry. 15fps is the max frame rate Meet requests from the camera.
+    webcamImageRedrawFps: 15,
 });
 
 window.botOutputManager = botOutputManager;

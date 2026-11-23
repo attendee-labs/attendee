@@ -8,6 +8,7 @@ class BotVideoOutputStream {
         getGainNode = () => {},
         getAudioContext = () => {},
         createSourceAudioTrack = () => {},
+        imageRedrawFps = 1,
     }) {
         this.turnOnInput = turnOnInput;
         this.turnOffInput = turnOffInput;
@@ -16,6 +17,7 @@ class BotVideoOutputStream {
         this.getGainNode = getGainNode;
         this.getAudioContext = getAudioContext;
         this.createSourceAudioTrack = createSourceAudioTrack;
+        this.imageRedrawFps = imageRedrawFps;
 
         // --- VIDEO SOURCE SETUP (single source canvas) ---
         this.canvas = document.createElement("canvas");
@@ -78,11 +80,12 @@ class BotVideoOutputStream {
             this.canvas.height = this.canvasHeightForImage;
             this.imageDrawParams = this.calculateImageDrawParamsForLetterBoxing(this.imageToDraw.width, this.imageToDraw.height);
             this.canvasCtx.drawImage(this.imageToDraw, this.imageDrawParams.offsetX, this.imageDrawParams.offsetY, this.imageDrawParams.width, this.imageDrawParams.height);
-            // Set up an interval that redraws the image every 1000ms. Needed to work in Teams.
+            // Set up an interval that keeps redrawing the image. Needed to work in Teams.
+            // The canvas stream only emits a frame when the canvas is drawn on, so this also sets the frame rate the meeting's video encoder sees.
             if (!this.imageRedrawInterval) {
                 this.imageRedrawInterval = setInterval(() => {
                     this.canvasCtx.drawImage(this.imageToDraw, this.imageDrawParams.offsetX, this.imageDrawParams.offsetY, this.imageDrawParams.width, this.imageDrawParams.height);
-                }, 1000);
+                }, 1000 / this.imageRedrawFps);
             }
             this.ensureInputOn();
 
@@ -476,6 +479,7 @@ class BotOutputManager {
      * @param {Function} [callbacks.turnOnMic]
      * @param {Function} [callbacks.turnOffMic]
      * @param {boolean} [callOriginalGetUserMedia=false]
+     * @param {number} [webcamImageRedrawFps=1] - Frame rate of the webcam stream while an image is displayed.
      */
     constructor({
         turnOnWebcam = () => {},
@@ -485,6 +489,7 @@ class BotOutputManager {
         turnOnMic = () => {},
         turnOffMic = () => {},
         callOriginalGetUserMedia = false,
+        webcamImageRedrawFps = 1,
     } = {}) {
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
             throw new Error("navigator.mediaDevices.getUserMedia is not available in this context.");
@@ -528,6 +533,7 @@ class BotOutputManager {
             getGainNode: () => this.gainNode,
             getAudioContext: () => this.audioContext,
             createSourceAudioTrack: () => this._createSourceAudioTrack(),
+            imageRedrawFps: webcamImageRedrawFps,
         });
 
         this.screenShareVideoOutputStream = new BotVideoOutputStream({
