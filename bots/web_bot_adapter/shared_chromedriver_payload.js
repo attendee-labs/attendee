@@ -945,6 +945,12 @@ class CaptionActivityReporter {
                 return;
             }
 
+            // Per-participant audio isn't sent until media sending is enabled (e.g. a Zoom web bot waiting for recording permission),
+            // so captions seen before then don't mean audio capture has failed
+            if (!window.ws?.mediaSendingEnabled) {
+                return;
+            }
+
             // The bot's own speech isn't in the per-participant audio, so its captions say nothing about whether that audio is being captured
             const user = window.userManager?.getUserByDeviceId?.(deviceId);
             if (user?.isCurrentUser) {
