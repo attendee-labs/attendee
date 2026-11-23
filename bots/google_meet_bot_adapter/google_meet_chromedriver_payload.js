@@ -934,6 +934,12 @@ class CaptionManager {
     }
 
     singleCaptionSynced(caption) {
+        window.captionActivityReporter?.captionReceived(caption.deviceId);
+
+        if (!window.initialData.collectCaptions) {
+            return;
+        }
+
         this.captions.set(caption.captionId, caption);
         this.ws.sendClosedCaptionUpdate(caption);
     }
@@ -1176,7 +1182,7 @@ class UserManager {
             return;
 
         for (const user of users) {
-            if (user.isCurrentUser && user.audioMuteRequest?.byDeviceId) {
+            if (user.isCurrentUser && user.audioMuteRequest?.byDeviceId && user.audioMuteRequest.byDeviceId !== user.deviceId) {
                 this.sentBotMediaDeviceStateChangedByOtherParticipant = true;
                 this.ws.sendJson({
                     type: 'BotMediaDeviceStateChangedByOtherParticipant',
@@ -2508,13 +2514,15 @@ new RTCInterceptor({
         });
       }
 
-       if (dataChannel.label === 'captions' && window.initialData.collectCaptions) {
+       const wantsCaptionEvents = window.initialData.collectCaptions || window.initialData.sendCaptionActivity;
+
+       if (dataChannel.label === 'captions' && wantsCaptionEvents) {
             dataChannel.addEventListener("message", (captionEvent) => {
                 handleCaptionEvent(captionEvent);
             });
         }
 
-        if (dataChannel.label === 'captions_v2' && window.initialData.collectCaptions) {
+        if (dataChannel.label === 'captions_v2' && wantsCaptionEvents) {
              dataChannel.addEventListener("message", (captionEvent) => {
                  handleCaptionEventV2(captionEvent);
              });
