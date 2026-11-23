@@ -1164,7 +1164,7 @@ class UserManager {
             return;
 
         for (const user of users) {
-            if (user.isCurrentUser && user.audioMuteRequest?.byDeviceId) {
+            if (user.isCurrentUser && user.audioMuteRequest?.byDeviceId && user.audioMuteRequest.byDeviceId !== user.deviceId) {
                 this.sentBotMediaDeviceStateChangedByOtherParticipant = true;
                 this.ws.sendJson({
                     type: 'BotMediaDeviceStateChangedByOtherParticipant',
