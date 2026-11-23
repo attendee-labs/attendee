@@ -2020,6 +2020,7 @@ new FetchInterceptor(async (response) => {
             const detected = Boolean(createDeviceResponse.detectedAsBot);
             window.ws?.sendJson({
                 type: 'DetectedAsBot',
+                responseUrl: response.url,
                 detected,
             });
         } catch (error) {
