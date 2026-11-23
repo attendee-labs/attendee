@@ -5,6 +5,8 @@ import json
 import logging
 import threading
 import time
+import urllib.error
+import urllib.request
 import uuid
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import dataclass, field
@@ -17,7 +19,6 @@ from bots.room_sync_source_participant_configuration import (
     LivekitRoomSyncSourceParticipantConfiguration,
     RoomSyncSourceParticipantConfiguration,
 )
-from bots.room_sync_utils import does_participant_name_have_bot_indicator
 
 logger = logging.getLogger(__name__)
 
@@ -165,10 +166,24 @@ class LivekitRoomSyncClient:
     Release attributes distinguish meeting departures from bot shutdowns.
     Claims require a connected watcher whose membership view has settled.
 
+    Bots never mirror each other. The controller passes this bot's own JOIN
+    (participant_is_the_bot); every control message then carries this bot's
+    meeting participant ids under "bot_participants". Other bots drop those
+    participants from their roster for good and stop any mirror of them that
+    was already connecting. Joins wait briefly for these announcements when
+    other bots are live, so a bot joining the meeting is rarely mirrored at all.
+
     Audio is pushed from the caller's thread into a bounded per-participant
     buffer, and a single pump task per mirror feeds it to the AudioSource one
     frame at a time. A watchdog thread outside the event loop logs only when
     the loop lags, audio backs up or audio is dropped.
+
+    The source participant is heard in the meeting through the bot's
+    microphone. When someone in the meeting mutes the bot, the source's audio
+    tracks are muted in the LiveKit room through the server API, so the room
+    agrees with the meeting. Only muting is mirrored: the source unmutes
+    itself to speak again, and the bot's page turns that back into an unmuted
+    microphone. This works without sync_to_room.
     """
 
     TOKEN_TTL_SECONDS = 6 * 60 * 60
@@ -179,6 +194,7 @@ class LivekitRoomSyncClient:
     SOURCE_ATTRIBUTE = "attendee.room_sync.source"
     RELEASE_LEFT_MEETING = "left_meeting"
     RELEASE_SHUTDOWN = "shutdown"
+    RELEASE_BOT_PARTICIPANT = "bot_participant"
     RELEASE_ATTRIBUTE_TIMEOUT_SECONDS = 2
     TAKEOVER_STEP_SECONDS = 2.0
     UNRELEASED_SETTLE_SECONDS = 0.5
@@ -194,6 +210,20 @@ class LivekitRoomSyncClient:
     WATCHER_RETRY_SECONDS = 5
     RECONCILE_INTERVAL_SECONDS = 30
     TAKEOVER_FLAP_WARNING_THRESHOLD = 3
+    # When other bots are live, a new meeting participant might be one of
+    # them. Wait this long for its bot_participants announcement before claiming.
+    BOT_ANNOUNCEMENT_SETTLE_SECONDS = 1.0
+    MAX_ANNOUNCED_BOT_PARTICIPANTS = 16
+
+    # Muting the source participant when the bot is muted in the meeting.
+    # Requests are bounded below SHUTDOWN_DRAIN_SECONDS so one in flight
+    # never holds up cleanup.
+    MUTE_MICROPHONE_CHANGE_TYPE = "mute_microphone"
+    PUBLISH_ON_BEHALF_ATTRIBUTE = "lk.publish_on_behalf"
+    ADMIN_TOKEN_TTL_SECONDS = 60
+    ROOM_SERVICE_TIMEOUT_SECONDS = 3.0
+    SOURCE_MUTE_ATTEMPTS = 2
+    SOURCE_MUTE_RETRY_SECONDS = 1.0
 
     # Audio: at most this much audio waits in our buffer per participant (the
     # SDK's AudioSource keeps its own ~1s queue on top of this). Each capture
@@ -225,6 +255,7 @@ class LivekitRoomSyncClient:
         self.sync_to_room = sync_to_room
         self._instance_id = uuid.uuid4().hex[:12]
         self._log_prefix = f"[LiveKit room sync {self._instance_id} room={room}]"
+        self._room_service_url = self._room_service_base_url(self.url)
 
         self._sample_frame_bytes = 2 * num_channels
         self._audio_bytes_per_second = sample_rate * self._sample_frame_bytes
@@ -240,7 +271,17 @@ class LivekitRoomSyncClient:
         self._left_meeting_releases: dict[str, float] = {}
         self._takeover_counts: dict[str, int] = {}
         self._members: dict[str, float] = {}
+        # This bot's own meeting participant ids, announced to other bots.
+        self._own_bot_participants: set[str] = set()
+        # Meeting participant ids that are room sync bots (ours included),
+        # mapped to the bot that announced them. Never mirrored; kept for the
+        # client's lifetime so a late or missed heartbeat can't re-admit them.
+        self._known_bot_participants: dict[str, str] = {}
         self._tasks: set[asyncio.Task] = set()
+        # One source-mute task at a time; a request arriving while it runs
+        # makes it go round once more. Only touched by the loop.
+        self._source_mute_running = False
+        self._source_mute_requested = False
 
         self._watcher_room: rtc.Room | None = None
         self._watcher_ready = False
@@ -281,11 +322,16 @@ class LivekitRoomSyncClient:
         self._loop.run_forever()
         self._loop.close()
 
-    def _submit(self, callback, *args):
-        """Serialize submissions with cleanup so nothing is queued after it."""
+    def _submit(self, callback, *args, requires_sync=True):
+        """Serialize submissions with cleanup so nothing is queued after it.
+
+        Mirroring work is dropped when sync_to_room is off. Work for the
+        source participant passes requires_sync=False; the loop runs either way.
+        """
         with self._submission_lock:
-            if self.sync_to_room and not self._cleanup_called:
-                self._loop.call_soon_threadsafe(callback, *args)
+            if self._cleanup_called or (requires_sync and not self.sync_to_room):
+                return
+            self._loop.call_soon_threadsafe(callback, *args)
 
     def _spawn(self, coroutine):
         task = self._loop.create_task(coroutine)
@@ -304,14 +350,21 @@ class LivekitRoomSyncClient:
             self._spawn(self._maintenance_loop())
 
     def handle_participant_event(self, event, participant=None):
-        """Accept the bot controller's JOIN/LEAVE event and optional metadata."""
+        """Accept the bot controller's JOIN/LEAVE event and optional metadata.
+
+        Pass this bot's own events too: a JOIN with participant_is_the_bot set
+        is never mirrored, and is announced so other room sync bots skip it.
+        """
         if not self.sync_to_room or self._cleanup_called:
             return
         participant_uuid = event["participant_uuid"]
+        if participant is not None and participant.get("participant_is_the_bot"):
+            if event["event_type"] == ParticipantEventTypes.JOIN:
+                self._submit(self._handle_own_join, participant_uuid)
+            return
         if event["event_type"] == ParticipantEventTypes.JOIN:
             name = participant.get("participant_full_name") if participant is not None else None
-            if not does_participant_name_have_bot_indicator(name):
-                self._submit(self._handle_join, participant_uuid, name)
+            self._submit(self._handle_join, participant_uuid, name)
         elif event["event_type"] == ParticipantEventTypes.LEAVE:
             self._submit(self._handle_leave, participant_uuid)
 
@@ -323,6 +376,130 @@ class LivekitRoomSyncClient:
         text = chat_message.get("text")
         if text:
             self._submit(self._start_chat, participant_uuid, text)
+
+    def handle_bot_media_device_state_changed_by_other_participant(self, event):
+        """Mirror a mute of the bot in the meeting onto the source participant.
+
+        Expects {"change_type": "mute_microphone", "other_participant_id": ...}.
+        Other change types are logged and ignored. Unmuting is never mirrored
+        from here: the source unmutes itself in the LiveKit room.
+        """
+        logger.info(f"{self._log_prefix} Received bot media device state change by other participant: {event}")
+        if self._cleanup_called or not self.source_participant:
+            return
+        if event.get("change_type") != self.MUTE_MICROPHONE_CHANGE_TYPE:
+            return
+        if not self.source_participant.get("identity") and not self.source_participant.get("publish_on_behalf"):
+            logger.warning(f"{self._log_prefix} Bot was muted in the meeting, but the source participant has no identity or publish_on_behalf to find it by; not muting anything")
+            return
+        self._submit(self._request_source_mute, requires_sync=False)
+
+    def _request_source_mute(self):
+        """Event-loop thread: start a source mute, or fold into the one running."""
+        if self._shutting_down:
+            return
+        self._source_mute_requested = True
+        if not self._source_mute_running:
+            self._source_mute_running = True
+            self._spawn(self._mute_source_audio())
+
+    async def _mute_source_audio(self):
+        try:
+            while self._source_mute_requested and not self._shutting_down:
+                self._source_mute_requested = False
+                for attempt in range(self.SOURCE_MUTE_ATTEMPTS):
+                    if attempt:
+                        await self._wait_for_stop(self.SOURCE_MUTE_RETRY_SECONDS)
+                    if self._shutting_down or await self._mute_source_audio_once():
+                        break
+        finally:
+            self._source_mute_running = False
+
+    async def _mute_source_audio_once(self) -> bool:
+        """Mute every unmuted audio track of the source. False means try again."""
+        try:
+            response = await self._call_room_service("ListParticipants", {"room": self.room_name})
+        except Exception as error:
+            logger.warning(f"{self._log_prefix} Failed to list participants to mute the source participant: {error!r}")
+            return False
+
+        publishers = [p for p in response.get("participants") or [] if self._is_source_publisher(p)]
+        tracks = [(p.get("identity"), track.get("sid")) for p in publishers for track in p.get("tracks") or [] if self._is_unmuted_audio_track(track)]
+        if not tracks:
+            logger.info(f"{self._log_prefix} Bot was muted in the meeting; nothing to mute in the room ({len(publishers)} source publishers, none with unmuted audio)")
+            return True
+
+        succeeded = True
+        for identity, track_sid in tracks:
+            if self._shutting_down:
+                return True
+            try:
+                await self._call_room_service("MutePublishedTrack", {"room": self.room_name, "identity": identity, "track_sid": track_sid, "muted": True})
+                logger.info(f"{self._log_prefix} Bot was muted in the meeting; muted audio track {track_sid} of source publisher {identity}")
+            except Exception as error:
+                succeeded = False
+                logger.warning(f"{self._log_prefix} Failed to mute audio track {track_sid} of source publisher {identity}: {error!r}")
+        return succeeded
+
+    def _is_source_publisher(self, participant: dict) -> bool:
+        """Same match as the bot's page: the source, or a publisher acting for it."""
+        identity = self.source_participant.get("identity")
+        if identity and participant.get("identity") == identity:
+            return True
+        publish_on_behalf = self.source_participant.get("publish_on_behalf")
+        attributes = participant.get("attributes") or {}
+        return bool(publish_on_behalf) and attributes.get(self.PUBLISH_ON_BEHALF_ATTRIBUTE) == publish_on_behalf
+
+    @staticmethod
+    def _is_unmuted_audio_track(track: dict) -> bool:
+        # The server may leave out default values, and AUDIO is the zero value
+        # of the track type enum. Enums arrive as names, or numbers.
+        return bool(track.get("sid")) and track.get("type", "AUDIO") in ("AUDIO", 0) and not track.get("muted")
+
+    @staticmethod
+    def _room_service_base_url(url: str) -> str:
+        """The server API is served from the HTTP(S) form of the WebSocket URL."""
+        url = url.rstrip("/")
+        if url.startswith("wss://"):
+            return "https://" + url[len("wss://") :]
+        if url.startswith("ws://"):
+            return "http://" + url[len("ws://") :]
+        return url
+
+    def _build_admin_token(self) -> str:
+        """Short-lived server API token for this room. It cannot join the room."""
+        now = int(time.time())
+        claims = {
+            "iss": self.api_key,
+            "nbf": now,
+            "exp": now + self.ADMIN_TOKEN_TTL_SECONDS,
+            "video": {"roomAdmin": True, "room": self.room_name},
+        }
+        return jwt.encode(claims, self.api_secret, algorithm="HS256")
+
+    async def _call_room_service(self, method: str, payload: dict) -> dict:
+        """Call LiveKit's RoomService without blocking the loop.
+
+        The outer timeout also covers what the socket timeout does not, such
+        as a slow DNS lookup; the worker thread is then left to finish alone.
+        """
+        request = self._loop.run_in_executor(None, self._post_room_service, method, payload)
+        return await asyncio.wait_for(request, timeout=self.ROOM_SERVICE_TIMEOUT_SECONDS + 1)
+
+    def _post_room_service(self, method: str, payload: dict) -> dict:
+        """Worker thread: one blocking Twirp call."""
+        request = urllib.request.Request(
+            f"{self._room_service_url}/twirp/livekit.RoomService/{method}",
+            data=json.dumps(payload).encode(),
+            headers={"Authorization": f"Bearer {self._build_admin_token()}", "Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.ROOM_SERVICE_TIMEOUT_SECONDS) as response:
+                return json.loads(response.read() or b"{}")
+        except urllib.error.HTTPError as error:
+            detail = error.read().decode(errors="replace")[:300]
+            raise RuntimeError(f"{method} returned HTTP {error.code}: {detail}") from None
 
     def _start_chat(self, participant_uuid, text):
         mirror = self._mirrors.get(participant_uuid)
@@ -568,13 +745,47 @@ class LivekitRoomSyncClient:
         )
 
     def _handle_join(self, participant_uuid, name):
+        if participant_uuid in self._known_bot_participants:
+            logger.debug(f"{self._log_prefix} Ignoring join of {participant_uuid}: room sync bot {self._known_bot_participants[participant_uuid]}")
+            return
         self._meeting_participants[participant_uuid] = name
         self._left_meeting_releases.pop(participant_uuid, None)
-        self._schedule_claim_check(participant_uuid, "join")
+        self._schedule_claim_check(participant_uuid, "join", settle=self._bot_announcement_settle())
         # If the watcher isn't ready, its initial/reconnect reconcile picks up
         # this join. No separate waiter task is needed for each participant.
 
-    def _handle_leave(self, participant_uuid):
+    def _bot_announcement_settle(self):
+        # With other bots live, an unclaimed participant may be one of them;
+        # give its announcement a moment to arrive. A lone bot claims right away.
+        return self.BOT_ANNOUNCEMENT_SETTLE_SECONDS if len(self._live_bot_ids()) > 1 else 0.0
+
+    def _handle_own_join(self, participant_uuid):
+        if participant_uuid in self._own_bot_participants:
+            return
+        self._own_bot_participants.add(participant_uuid)
+        logger.info(f"{self._log_prefix} This bot is meeting participant {participant_uuid}; announcing it so other room sync bots don't mirror it")
+        self._mark_bot_participant(participant_uuid, self._instance_id)
+        if not self._shutting_down:
+            # Announce now rather than at the next heartbeat. If the watcher
+            # isn't connected yet, its hello and heartbeats will carry it.
+            self._spawn(self._broadcast("heartbeat"))
+
+    def _record_announced_bot_participants(self, bot_id, participant_uuids):
+        if not isinstance(participant_uuids, list):
+            return
+        for participant_uuid in participant_uuids[: self.MAX_ANNOUNCED_BOT_PARTICIPANTS]:
+            if isinstance(participant_uuid, str) and participant_uuid and participant_uuid not in self._known_bot_participants:
+                logger.info(f"{self._log_prefix} Bot {bot_id} announced meeting participant {participant_uuid} as itself; it will not be mirrored")
+                self._mark_bot_participant(participant_uuid, bot_id)
+
+    def _mark_bot_participant(self, participant_uuid, bot_id):
+        """Never mirror this participant, and stop if we already started."""
+        self._known_bot_participants[participant_uuid] = bot_id
+        if self._mirrors.get(participant_uuid) is not None:
+            logger.warning(f"{self._log_prefix} Stopping mirror of {participant_uuid}: it is room sync bot {bot_id}")
+        self._handle_leave(participant_uuid, self.RELEASE_BOT_PARTICIPANT)
+
+    def _handle_leave(self, participant_uuid, release=RELEASE_LEFT_MEETING):
         self._meeting_participants.pop(participant_uuid, None)
         self._left_meeting_releases.pop(participant_uuid, None)
         self._claim_leases.pop(participant_uuid, None)
@@ -582,7 +793,7 @@ class LivekitRoomSyncClient:
         self._cancel_pending_claim(participant_uuid)
         mirror = self._mirrors.get(participant_uuid)
         if mirror is not None:
-            self._release_mirror(mirror, self.RELEASE_LEFT_MEETING)
+            self._release_mirror(mirror, release)
 
     def _release_mirror(self, mirror, release):
         self._detach_audio(mirror)
@@ -695,6 +906,7 @@ class LivekitRoomSyncClient:
             return
         if not isinstance(bot_id, str) or bot_id == self._instance_id:
             return
+        self._record_announced_bot_participants(bot_id, message.get("bot_participants"))
         if kind == "goodbye":
             if self._members.pop(bot_id, None) is not None:
                 logger.info(f"{self._log_prefix} Bot {bot_id} left the live set (goodbye)")
@@ -724,6 +936,9 @@ class LivekitRoomSyncClient:
         message = {"type": kind, "bot": self._instance_id}
         if participant_uuid is not None:
             message["participant"] = participant_uuid
+        if self._own_bot_participants:
+            # Every message repeats this, so a missed one is soon made up.
+            message["bot_participants"] = sorted(self._own_bot_participants)
         try:
             await asyncio.wait_for(
                 watcher.local_participant.publish_data(json.dumps(message).encode(), reliable=True, topic=self.CONTROL_TOPIC),
@@ -827,9 +1042,10 @@ class LivekitRoomSyncClient:
         present_elsewhere = (roster & watcher.remote_participants.keys()) - owned
         missing = roster - owned - present_elsewhere
         logger.info(f"{self._log_prefix} Ownership ({trigger}): {len(roster)} in meeting, {len(owned)} owned or connecting here, {len(present_elsewhere)} present elsewhere, {len(missing)} missing, {len(self._live_bot_ids())} live bots")
+        settle = self._bot_announcement_settle()
         for participant_uuid in self._meeting_participants:
             if participant_uuid not in self._mirrors and self._claimable(participant_uuid):
-                self._schedule_claim_check(participant_uuid, trigger)
+                self._schedule_claim_check(participant_uuid, trigger, settle=settle)
 
     async def _mirror_participant(self, participant_uuid, name, mirror):
         """Own a participant's entire lifetime, including slow connects/leaves."""

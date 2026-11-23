@@ -28,7 +28,10 @@ def default_database(ssl_require):
         raise ImproperlyConfigured("Database is not configured. Set DATABASE_URL, or set " + ", ".join(POSTGRES_ENV_VARS) + " (and optionally POSTGRES_PASSWORD, POSTGRES_PORT).")
     return dj_database_url.parse(
         url,
-        conn_max_age=600,
+        # Seconds a database connection is kept open for reuse (0 = close after each request/task).
+        # Long-running processes that do not go through request/task boundaries (bots, schedulers) keep
+        # their connections open regardless; this mostly bounds idle connections held by web and celery workers.
+        conn_max_age=int(os.getenv("DATABASE_CONN_MAX_AGE", "600")),
         conn_health_checks=True,
         ssl_require=ssl_require,
         # Set to "true" behind a transaction-pooling pooler (PgBouncer, etc.).

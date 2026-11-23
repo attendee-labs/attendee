@@ -202,7 +202,6 @@ stubs = {
         LivekitRoomSyncSourceParticipantConfiguration=Options,
         RoomSyncSourceParticipantConfiguration=Options,
     ),
-    "bots.room_sync_utils": module("bots.room_sync_utils", does_participant_name_have_bot_indicator=lambda name: name == "BOT"),
 }
 spec = importlib.util.spec_from_file_location("subject", Path(__file__).resolve().parent.parent / "bot_controller" / "livekit_room_sync_client.py")
 subject = importlib.util.module_from_spec(spec)
@@ -261,6 +260,7 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         client.RECONCILE_INTERVAL_SECONDS = 0.04
         client.SHUTDOWN_DRAIN_SECONDS = 0.01
         client.STRAGGLER_MAX_SECONDS = 0.02
+        client.BOT_ANNOUNCEMENT_SETTLE_SECONDS = 0.01
         self.clients.append(client)
         return client
 
@@ -276,6 +276,12 @@ class Tests(unittest.IsolatedAsyncioTestCase):
 
     def join(self, client, identity="p", name="Alice"):
         client.handle_participant_event({"participant_uuid": identity, "event_type": "join"}, {"participant_full_name": name})
+
+    def own_join(self, client, identity):
+        client.handle_participant_event({"participant_uuid": identity, "event_type": "join"}, {"participant_is_the_bot": True})
+
+    def connected_as(self, identity):
+        return any(r.claims and r.claims["sub"] == identity for r in self.bus.rooms_created)
 
     def leave(self, client, identity="p"):
         client.handle_participant_event({"participant_uuid": identity, "event_type": "leave"})
@@ -302,18 +308,98 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(token["attributes"], {client.OWNER_ATTRIBUTE: client._instance_id})
         self.assertEqual(token["exp"] - token["nbf"], 21600)
 
-    async def test_sync_disabled_and_bot_filter(self):
+    async def test_sync_disabled(self):
         client = self.client(sync_to_room=False)
         self.join(client)
+        self.own_join(client, "me")
         client.send_audio_chunk("p", b"\0\0")
         client.handle_chat_message({"participant_uuid": "p", "text": "hello"})
         await asyncio.sleep(0.02)
         self.assertFalse(self.bus.rooms_created)
         self.assertFalse(client._meeting_participants)
-        enabled = self.client()
-        self.join(enabled, name="BOT")
-        await self.ready(enabled)
-        self.assertFalse(enabled._meeting_participants)
+        self.assertFalse(client._own_bot_participants)
+
+    async def test_bot_like_names_are_mirrored(self):
+        client = self.client()
+        self.join(client, name="BOT")
+        await self.mirrored(client)
+
+    async def test_own_join_is_never_mirrored_and_is_announced(self):
+        client = self.client()
+        self.own_join(client, "me")
+        await self.ready(client)
+        self.join(client, "me")
+        client.handle_participant_event({"participant_uuid": "me", "event_type": "leave"}, {"participant_is_the_bot": True})
+        await asyncio.sleep(0.02)
+        self.assertFalse(client._meeting_participants)
+        self.assertFalse(self.connected_as("me"))
+        self.assertEqual(client._own_bot_participants, {"me"})
+        self.assertEqual(client._known_bot_participants, {"me": client._instance_id})
+        hello = next(m for m in self.bus.messages if m["type"] == "hello")
+        self.assertEqual(hello["bot_participants"], ["me"])
+        self.assertTrue(all(m["bot_participants"] == ["me"] for m in self.bus.messages))
+
+    async def test_announced_bot_participant_is_not_mirrored_by_other_bots(self):
+        first, second = self.client(), self.client()
+        await self.ready(first, second)
+        self.own_join(first, "first-bot")
+        await self.until(lambda: "first-bot" in second._known_bot_participants)
+        self.assertEqual(second._known_bot_participants["first-bot"], first._instance_id)
+        self.join(first, "first-bot")
+        self.join(second, "first-bot")
+        await asyncio.sleep(0.05)
+        self.assertFalse(second._meeting_participants)
+        self.assertFalse(self.connected_as("first-bot"))
+
+    async def test_malformed_bot_participant_announcements_are_ignored(self):
+        client = self.client()
+        await self.ready(client)
+        limit = client.MAX_ANNOUNCED_BOT_PARTICIPANTS
+        for announced in ["p", {"p": 1}, [1, None, "", {}], [f"b{i}" for i in range(limit + 5)]]:
+            data = json.dumps({"type": "heartbeat", "bot": "other", "bot_participants": announced}).encode()
+            client._on_control_message(client._watcher_room, Options(data=data, topic=client.CONTROL_TOPIC))
+        self.assertEqual(set(client._known_bot_participants), {f"b{i}" for i in range(limit)})
+
+    async def test_lone_bot_claims_without_announcement_settle(self):
+        client = self.client()
+        client.BOT_ANNOUNCEMENT_SETTLE_SECONDS = 0.5
+        await self.ready(client)
+        self.join(client)
+        await self.until(lambda: "p" in client._mirrors, timeout=0.25)
+
+    async def test_join_waits_for_announcement_when_other_bots_are_live(self):
+        clients = [self.client() for _ in range(2)]
+        for client in clients:
+            client.BOT_ANNOUNCEMENT_SETTLE_SECONDS = 0.1
+        await self.ready(*clients)
+        owner, other_bot = sorted(clients, key=lambda c: c._claim_delay("p", ()))
+        self.join(owner)
+        await asyncio.sleep(0.04)
+        self.assertIn("p", owner._pending_claims)
+        self.assertFalse(self.connected_as("p"))
+        self.own_join(other_bot, "p")
+        await self.until(lambda: "p" in owner._known_bot_participants)
+        self.assertNotIn("p", owner._pending_claims)
+        await asyncio.sleep(0.1)
+        self.assertFalse(self.connected_as("p"))
+
+    async def test_announcement_stops_existing_mirror_with_bot_participant_release(self):
+        clients = [self.client() for _ in range(2)]
+        await self.ready(*clients)
+        for client in clients:
+            self.join(client)
+        await self.until(lambda: "p" in self.bus.visible)
+        owner = next(c for c in clients if "p" in c._mirrors)
+        mirror = await self.mirrored(owner)
+        announcer = self.client()
+        self.own_join(announcer, "p")
+        await self.until(lambda: "p" not in self.bus.visible)
+        self.assertEqual(mirror.room.local_participant.attributes[Client.RELEASE_ATTRIBUTE], Client.RELEASE_BOT_PARTICIPANT)
+        self.assertIsNone(mirror.source)
+        await asyncio.sleep(0.05)
+        self.assertNotIn("p", self.bus.visible)
+        self.assertFalse(any(c._mirrors or c._meeting_participants for c in clients))
+        self.assertFalse(any(m["type"] == "abandoned" for m in self.bus.messages))
 
     async def test_join_before_watcher_ready_and_audio_chat(self):
         client = self.client()

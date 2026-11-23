@@ -965,8 +965,14 @@ class UserManager {
         this.currentUserId = null;
         // Track the set of parentDeviceIds (real participant deviceIds) currently screen sharing
         this.activeScreenSharerParentDeviceIds = new Set();
+        // Set once we've reported that another participant muted the bot; cleared when the bot unmutes
+        this.sentBotMediaDeviceStateChangedByOtherParticipant = false;
 
         this.ws = ws;
+    }
+
+    resetSentBotMediaDeviceStateChangedByOtherParticipant() {
+        this.sentBotMediaDeviceStateChangedByOtherParticipant = false;
     }
 
     deviceForStreamIsActive(streamId) {
@@ -1144,6 +1150,23 @@ class UserManager {
         }
 
         this.detectScreenShareChanges();
+        this.detectAudioMuteRequests(newUsersList);
+    }
+
+    detectAudioMuteRequests(users) {
+        if (this.sentBotMediaDeviceStateChangedByOtherParticipant)
+            return;
+
+        for (const user of users) {
+            if (user.isCurrentUser && user.audioMuteRequest?.byDeviceId) {
+                this.sentBotMediaDeviceStateChangedByOtherParticipant = true;
+                this.ws.sendJson({
+                    type: 'BotMediaDeviceStateChangedByOtherParticipant',
+                    other_participant_id: user.audioMuteRequest.byDeviceId,
+                    change_type: 'mute_microphone'
+                });
+            }
+        }
     }
 
     detectScreenShareChanges() {
@@ -1718,9 +1741,16 @@ const messageTypes = [
             { name: 'profilePicture', fieldNumber: 3, type: 'string' },
             { name: 'status', fieldNumber: 4, type: 'varint' }, // in meeting = 1 vs not in meeting = 6. kicked out = 7? denied from lobby = 4?
             { name: 'isCurrentUserString', fieldNumber: 7, type: 'string' }, // Presence of this string indicates that this is the current user. The string itself seems to be a random uuid
+            { name: 'audioMuteRequest', fieldNumber: 12, type: 'message', messageType: 'AudioMuteRequest' },
             { name: 'displayName', fieldNumber: 29, type: 'string' },
             { name: 'parentDeviceId', fieldNumber: 21, type: 'string' }, // if this is present, then this is a screenshare device. The parentDevice is the person that is sharing
             { name: 'isHost', fieldNumber: 34, type: 'varint' } // Presence of this varint indicates that this is the host
+        ]
+    },
+    {
+        name: 'AudioMuteRequest',
+        fields: [
+            { name: 'byDeviceId', fieldNumber: 1, type: 'string' }
         ]
     },
     {
@@ -2507,6 +2537,7 @@ function turnOnMic() {
     if (microphoneButton) {
         console.log("Clicking the microphone button to turn it on");
         microphoneButton.click();
+        window.userManager?.resetSentBotMediaDeviceStateChangedByOtherParticipant();
     } else {
         console.log("Microphone button not found");
     }
@@ -2529,6 +2560,7 @@ function turnOnMicAndCamera() {
     if (microphoneButton) {
         console.log("Clicking the microphone button to turn it on");
         microphoneButton.click();
+        window.userManager?.resetSentBotMediaDeviceStateChangedByOtherParticipant();
     } else {
         console.log("Microphone button not found");
     }
@@ -2584,6 +2616,7 @@ function turnOnMicAndScreenshare() {
     if (microphoneButton) {
         console.log("Clicking the microphone button to turn it on");
         microphoneButton.click();
+        window.userManager?.resetSentBotMediaDeviceStateChangedByOtherParticipant();
     } else {
         console.log("Microphone button not found");
     }

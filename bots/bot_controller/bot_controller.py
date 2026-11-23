@@ -198,6 +198,7 @@ class BotController:
 
         return GoogleMeetBotAdapter(
             display_name=self.bot_in_db.name,
+            bot_media_device_state_changed_by_other_participant_callback=self.on_bot_media_device_state_changed_by_other_participant,
             send_message_callback=self.on_message_from_adapter,
             add_audio_chunk_callback=self.get_per_participant_audio_chunk_callback(),
             meeting_url=self.bot_in_db.meeting_url,
@@ -271,6 +272,7 @@ class BotController:
 
         return TeamsBotAdapter(
             display_name=self.bot_in_db.name,
+            bot_media_device_state_changed_by_other_participant_callback=self.on_bot_media_device_state_changed_by_other_participant,
             send_message_callback=self.on_message_from_adapter,
             add_audio_chunk_callback=self.get_per_participant_audio_chunk_callback(),
             meeting_url=self.bot_in_db.meeting_url,
@@ -329,6 +331,7 @@ class BotController:
 
         return WebexBotAdapter(
             display_name=self.bot_in_db.name,
+            bot_media_device_state_changed_by_other_participant_callback=self.on_bot_media_device_state_changed_by_other_participant,
             send_message_callback=self.on_message_from_adapter,
             add_audio_chunk_callback=self.get_per_participant_audio_chunk_callback(),
             meeting_url=self.bot_in_db.meeting_url,
@@ -399,6 +402,7 @@ class BotController:
 
         return ZoomWebBotAdapter(
             display_name=self.bot_in_db.name,
+            bot_media_device_state_changed_by_other_participant_callback=self.on_bot_media_device_state_changed_by_other_participant,
             send_message_callback=self.on_message_from_adapter,
             add_audio_chunk_callback=self.get_per_participant_audio_chunk_callback(),
             meeting_url=self.bot_in_db.meeting_url,
@@ -706,6 +710,7 @@ class BotController:
                 region_name=external_media_storage_credentials.get("region_name"),
                 access_key_id=external_media_storage_credentials.get("access_key_id"),
                 access_key_secret=external_media_storage_credentials.get("access_key_secret"),
+                ignore_configured_endpoint_urls=True,
             )
             file_uploader.upload_file(self.get_recording_file_location())
             file_uploader.wait_for_upload()
@@ -1696,6 +1701,15 @@ class BotController:
     def on_new_chat_message(self, chat_message):
         GLib.idle_add(lambda: self.upsert_chat_message(chat_message))
 
+    def on_bot_media_device_state_changed_by_other_participant(self, event):
+        GLib.idle_add(lambda: self.handle_bot_media_device_state_changed_by_other_participant(event))
+
+    def handle_bot_media_device_state_changed_by_other_participant(self, event):
+        if self.room_sync_client is None:
+            return
+
+        self.room_sync_client.handle_bot_media_device_state_changed_by_other_participant(event)
+
     def on_message_that_webpage_streamer_connection_can_start(self):
         GLib.idle_add(lambda: self.take_action_based_on_voice_agent_settings_in_db())
 
@@ -1712,8 +1726,7 @@ class BotController:
             return
 
         # Mirror participant joins/leaves into the LiveKit room if room sync is enabled
-        # Don't sync the bot itself into the room
-        if self.room_sync_client is not None and not participant["participant_is_the_bot"]:
+        if self.room_sync_client is not None:
             self.room_sync_client.handle_participant_event(event, participant=participant)
 
         # Create participant record if it doesn't exist

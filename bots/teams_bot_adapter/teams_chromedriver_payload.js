@@ -3721,6 +3721,7 @@ class CallManager {
         this.activeCall = null;
         this.closedCaptionLanguageInterval = null;
         this.closedCaptionLanguage = null;
+        this.watchClosedCaptionsStatusInterval = null;
         this.lobbyParticipantSpeakingTicker = 0;
     }
 
@@ -4023,9 +4024,108 @@ class CallManager {
         this.setActiveCall();
         if (this.activeCall) {
             this.activeCall.startClosedCaption();
+            this.watchClosedCaptionsStatus();
             return true;
         }
         return false;
+    }
+
+    // startClosedCaption() returns nothing and does its work asynchronously; failures only show up in the call's captions status.
+    watchClosedCaptionsStatus() {
+        if (!window.initialData.collectCaptions) {
+            return;
+        }
+
+        const call = this.activeCall;
+        if (this.watchClosedCaptionsStatusInterval) {
+            return;
+        }
+
+        if (typeof call?.getClosedCaptionStatus !== 'function') {
+            window.ws?.sendJson({
+                type: 'WatchClosedCaptionsStatus',
+                error: 'getClosedCaptionStatus not available'
+            });
+            return;
+        }
+
+        // Values of call.getClosedCaptionStatus()
+        const statusStarted = 2;
+        const statusFailed = 5;
+        const maxAttempts = 4;
+        const pollIntervalMs = 1000;
+        // startClosedCaption() can leave the status in pending indefinitely, so treat an attempt as failed if it hasn't started by then
+        const attemptTimeoutMs = 60000;
+        // startClosedCaption() doesn't always reset a leftover failed status, so a failed status is only trusted once it has
+        // left failed since the attempt began, or after this long (enough for a background re-add to finish).
+        const staleFailedGracePeriodMs = 15000;
+
+        let attempt = 1;
+        let attemptStartedAt = Date.now();
+        let sawNonFailedSinceAttemptStart = false;
+
+        this.watchClosedCaptionsStatusInterval = setInterval(() => {
+            try {
+                const status = call.getClosedCaptionStatus();
+                const subStatus = call.getClosedCaptionSubStatus?.();
+                if (status !== statusFailed) {
+                    sawNonFailedSinceAttemptStart = true;
+                }
+
+                if (status === statusStarted) {
+                    window.ws?.sendJson({
+                        type: 'ClosedCaptionsEnabled',
+                        attempt: attempt,
+                        elapsedMs: Date.now() - attemptStartedAt
+                    });
+                    this.stopWatchClosedCaptionsStatus();
+                    return;
+                }
+
+                const attemptElapsedMs = Date.now() - attemptStartedAt;
+                const failed = status === statusFailed && (sawNonFailedSinceAttemptStart || attemptElapsedMs > staleFailedGracePeriodMs);
+                const timedOut = attemptElapsedMs > attemptTimeoutMs;
+                if (!failed && !timedOut) {
+                    return;
+                }
+
+                const willRetry = attempt < maxAttempts;
+                window.ws?.sendJson({
+                    type: 'ClosedCaptionsEnableAttemptFailed',
+                    attempt: attempt,
+                    status: status,
+                    subStatus: subStatus,
+                    timedOut: timedOut && !failed,
+                    runtimeErrors: call.getClosedCaptionsRuntimeError?.() || [],
+                    willRetry: willRetry
+                });
+
+                if (!willRetry) {
+                    this.stopWatchClosedCaptionsStatus();
+                    window.ws?.sendJson({
+                        type: 'ClosedCaptionStatusChange',
+                        change: 'could_not_enable_closed_captions'
+                    });
+                    return;
+                }
+
+                attempt++;
+                attemptStartedAt = Date.now();
+                sawNonFailedSinceAttemptStart = false;
+                call.startClosedCaption();
+            } catch (error) {
+                window.ws?.sendJson({
+                    type: 'WatchClosedCaptionsStatusError',
+                    error: error?.message || String(error)
+                });
+                this.stopWatchClosedCaptionsStatus();
+            }
+        }, pollIntervalMs);
+    }
+
+    stopWatchClosedCaptionsStatus() {
+        clearInterval(this.watchClosedCaptionsStatusInterval);
+        this.watchClosedCaptionsStatusInterval = null;
     }
 
     setClosedCaptionsLanguage(language) {
@@ -4108,6 +4208,7 @@ class ParticipantsPoller {
         this.lastLogAllParticipantsRawTime = 0;
         this.lastPollParticipantsTime = 0;
         this.fastPollUntilTime = 0;
+        this.previousCallId = null;
     }
 
     start() {
@@ -4142,7 +4243,32 @@ class ParticipantsPoller {
         this.fastPollUntilTime = Date.now() + ParticipantsPoller.fastPollWindowMs;
     }
 
+    // The callId can change in the middle of a meeting. When it does, tell the python side so it can update its meeting_uuid.
+    // This must run before the participants are synced, so that the python side doesn't reject them as a meeting id mismatch.
+    // Restricted to bots that are not signed in, until we are confident this is safe for signed in bots.
+    detectCallIdChange() {
+        if (window.teamsInitialData?.botIsSignedIn) {
+            return;
+        }
+
+        const currentCallId = window.callManager.getCallId();
+        if (!currentCallId) {
+            return;
+        }
+
+        if (this.previousCallId && this.previousCallId !== currentCallId) {
+            window.ws?.sendJson({
+                type: 'MeetingIdChange',
+                previousMeetingId: this.previousCallId,
+                newMeetingId: currentCallId
+            });
+        }
+        this.previousCallId = currentCallId;
+    }
+
     pollParticipants() {
+        this.detectCallIdChange();
+
         let participantsRaw = window.callManager.getRemoteParticipants();
         
         const localParticipantRaw = window.callManager.getLocalParticipant();

@@ -1,15 +1,19 @@
 import logging
+import math
 import os
 import signal
 import time
 import uuid
+from collections import deque
 
+import redis
 from django.conf import settings
 from django.core.management.base import BaseCommand
 from django.db import connection
 from kubernetes import client, config
 
 from bots.bot_pod_creator.bot_pod_creator import BotPodCreator
+from bots.bot_pod_creator.bot_runner_pod_assigner import get_bot_runner_pool_launch_counts
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +49,31 @@ class Command(BaseCommand):
             "--desired-count",
             type=int,
             default=None,
-            help="Desired number of unassigned bot runner pods (default: from BOT_RUNNER_POOL_SIZE env var or 5)",
+            help="Deprecated. Keeps the pool at a fixed size by setting both --min-size and --max-size (default: from BOT_RUNNER_POOL_SIZE env var)",
+        )
+        parser.add_argument(
+            "--min-size",
+            type=int,
+            default=None,
+            help="Smallest pool size, used when no bots have asked for a runner recently (default: from BOT_RUNNER_POOL_MIN_SIZE env var or 1)",
+        )
+        parser.add_argument(
+            "--max-size",
+            type=int,
+            default=None,
+            help="Largest pool size, also held for the first --peak-launch-lookback-seconds after startup (default: from BOT_RUNNER_POOL_MAX_SIZE env var or 5)",
+        )
+        parser.add_argument(
+            "--peak-launch-multiplier",
+            type=float,
+            default=None,
+            help="Pool pods kept for each bot launch in the poll cycle that had the most launches during the lookback (default: from BOT_RUNNER_POOL_PEAK_LAUNCH_MULTIPLIER env var or 2)",
+        )
+        parser.add_argument(
+            "--peak-launch-lookback-seconds",
+            type=int,
+            default=None,
+            help="How far back to look for the poll cycle that had the most bot launches. The pool only shrinks once a burst of launches is older than this (default: from BOT_RUNNER_POOL_PEAK_LAUNCH_LOOKBACK_SECONDS env var or 3600)",
         )
 
     # Graceful shutdown flags
@@ -61,18 +89,29 @@ class Command(BaseCommand):
         signal.signal(signal.SIGTERM, self._graceful_exit)
 
         interval = opts["interval"]
-        desired_count = opts["desired_count"] or int(os.getenv("BOT_RUNNER_POOL_SIZE", "5"))
+        desired_count = opts["desired_count"] if opts["desired_count"] is not None else os.getenv("BOT_RUNNER_POOL_SIZE")
+        self.min_size = opts["min_size"] if opts["min_size"] is not None else int(os.getenv("BOT_RUNNER_POOL_MIN_SIZE", desired_count if desired_count is not None else "1"))
+        self.max_size = opts["max_size"] if opts["max_size"] is not None else int(os.getenv("BOT_RUNNER_POOL_MAX_SIZE", desired_count if desired_count is not None else "5"))
+        self.peak_launch_multiplier = opts["peak_launch_multiplier"] if opts["peak_launch_multiplier"] is not None else float(os.getenv("BOT_RUNNER_POOL_PEAK_LAUNCH_MULTIPLIER", "2"))
+        peak_launch_lookback_seconds = opts["peak_launch_lookback_seconds"] or int(os.getenv("BOT_RUNNER_POOL_PEAK_LAUNCH_LOOKBACK_SECONDS", "3600"))
+        self._launches_per_cycle = deque(maxlen=max(1, math.ceil(peak_launch_lookback_seconds / interval)))
+        self._prev_launch_counts = None
+        # Without launch history the pool would start at min_size, e.g. right before a spike after a deploy
+        self._hold_max_size_until = time.monotonic() + peak_launch_lookback_seconds
 
         logger.info(
-            "Bot runner pool manager started, polling every %s seconds, desired pool size: %s",
+            "Bot runner pool manager started, polling every %s seconds, pool size: min %s, max %s, peak launch multiplier %s, peak launch lookback %ss",
             interval,
-            desired_count,
+            self.min_size,
+            self.max_size,
+            self.peak_launch_multiplier,
+            peak_launch_lookback_seconds,
         )
 
         while self._keep_running:
             began = time.monotonic()
             try:
-                self._maintain_bot_runner_pool(desired_count)
+                self._maintain_bot_runner_pool(self._desired_pool_size())
             except Exception:
                 logger.exception("Bot runner pool maintenance cycle failed")
             finally:
@@ -150,6 +189,62 @@ class Command(BaseCommand):
             logger.error("Failed to list stale bot runner pods: %s", e)
             return []
 
+    def _count_new_launches(self):
+        """
+        Count the bot launches that asked for a runner since the previous call, by outcome.
+        Returns None if the counts could not be read.
+
+        BotRunnerPodAssigner records these as the launches happen, so they include launches that fell
+        back to a dedicated pod because the pool was empty, and runners that were claimed and are already gone.
+        """
+        try:
+            launch_counts = get_bot_runner_pool_launch_counts()
+        except redis.RedisError as e:
+            logger.error("Failed to read bot runner pool launch counts: %s", e)
+            return None
+
+        new_launches = {}
+        if self._prev_launch_counts is not None:
+            for outcome, count in launch_counts.items():
+                prev_count = self._prev_launch_counts.get(outcome, 0)
+                # A total can only go down if the key was lost from Redis, in which case it restarted from zero
+                new_launches[outcome] = count - prev_count if count >= prev_count else count
+        self._prev_launch_counts = launch_counts
+        return new_launches
+
+    def _desired_pool_size(self) -> int:
+        """
+        Size the pool from the poll cycle that had the most launches during the lookback. A claimed runner
+        takes about a poll interval plus pod startup time to be replaced, so the pool keeps
+        peak_launch_multiplier pods for each launch in that cycle to cover the launches that arrive in the meantime.
+        Using the peak grows the pool on the cycle after a burst, and only shrinks it once the burst
+        is older than the lookback.
+
+        The pool is held at max_size on any cycle where the launch counts could not be read.
+        """
+        new_launches = self._count_new_launches()
+        if new_launches is not None:
+            self._launches_per_cycle.append(sum(new_launches.values()))
+
+        peak_launches_per_cycle = max(self._launches_per_cycle, default=0)
+        if new_launches is None:
+            # Launches can't be seen right now, so the lookback may be missing a burst
+            target = self.max_size
+        elif time.monotonic() < self._hold_max_size_until:
+            target = self.max_size
+        else:
+            target = math.ceil(peak_launches_per_cycle * self.peak_launch_multiplier)
+        desired_count = max(self.min_size, min(self.max_size, target))
+
+        logger.info(
+            "Bot runner pool sizing: new launches this cycle %s, peak launches per cycle in lookback %s, desired pool size %s, launches per cycle in lookback (oldest first): %s",
+            new_launches,
+            peak_launches_per_cycle,
+            desired_count,
+            ",".join(map(str, self._launches_per_cycle)),
+        )
+        return desired_count
+
     def _delete_pod_if_unchanged(self, pod) -> bool:
         pod_name = pod.metadata.name
         opts = client.V1DeleteOptions(
@@ -179,8 +274,9 @@ class Command(BaseCommand):
 
     def _maintain_bot_runner_pool(self, desired_count: int):
         """
-        Ensure there are at least `desired_count` unassigned bot runner pods.
-        Creates new pods if the current count is below the desired count.
+        Ensure there are exactly `desired_count` unassigned bot runner pods.
+        Creates new pods if the current count is below the desired count, and deletes
+        unassigned pods if it is above.
         Also cleans up stale unassigned pods from previous versions.
         """
         # First, clean up stale unassigned pods from previous versions
@@ -208,7 +304,19 @@ class Command(BaseCommand):
             desired_count,
         )
 
-        if current_count >= desired_count:
+        if current_count > desired_count:
+            surplus = current_count - desired_count
+            logger.info("Deleting %s unassigned bot runner pods to shrink to desired pool size", surplus)
+            # Pending pods can't be claimed yet, so give those up first.
+            # The delete precondition on resourceVersion keeps us from deleting a pod that was just claimed.
+            for pod in sorted(unassigned_pods, key=lambda p: p.status.phase != "Pending")[:surplus]:
+                if not self._keep_running:
+                    logger.info("Shutdown requested, stopping pool shrink")
+                    break
+                self._delete_pod_if_unchanged(pod)
+            return
+
+        if current_count == desired_count:
             logger.debug("Pool size is sufficient, no new pods needed")
             return
 

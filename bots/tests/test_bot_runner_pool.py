@@ -4,11 +4,14 @@ import os
 import shutil
 import signal
 import tempfile
+from collections import deque
 from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import jsonpatch
+import redis
+from django.conf import settings
 from django.core.management import call_command
 from django.test import TestCase, override_settings
 from django.utils import timezone
@@ -16,6 +19,7 @@ from kubernetes import client
 
 from bots.bot_pod_creator import BotRunnerPodAssigner
 from bots.bot_pod_creator.bot_pod_creator import POD_LABELS_VOLUME_MOUNT_PATH
+from bots.bot_pod_creator.bot_runner_pod_assigner import BOT_RUNNER_POOL_LAUNCH_COUNTS_REDIS_KEY, get_bot_runner_pool_launch_counts
 from bots.k8s_utils import find_bot_pod
 from bots.launch_bot_utils import launch_bot
 from bots.management.commands.create_bot_runner_pods import Command as CreateBotRunnerPodsCommand
@@ -205,6 +209,12 @@ class BotRunnerPoolEndToEndTest(TestCase):
         self.labels_dir = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.labels_dir)
         self.labels_file_path = os.path.join(self.labels_dir, "labels")
+
+        # Launch counts are running totals in Redis, so start every test from zero
+        self.redis_client = redis.from_url(settings.REDIS_URL_WITH_PARAMS)
+        self.addCleanup(self.redis_client.close)
+        self.redis_client.delete(BOT_RUNNER_POOL_LAUNCH_COUNTS_REDIS_KEY)
+        self.addCleanup(self.redis_client.delete, BOT_RUNNER_POOL_LAUNCH_COUNTS_REDIS_KEY)
 
         env_patcher = patch.dict(
             os.environ,
@@ -686,3 +696,119 @@ class BotRunnerPoolEndToEndTest(TestCase):
         self._maintain_pool(desired_count=3)
 
         self.assertEqual(self.fake_v1.pod_names(), pod_names)
+
+    def test_pool_manager_shrinks_pool_deleting_pending_runners_first(self):
+        self._add_runner_pod("bot-runner-running-a")
+        self._add_runner_pod("bot-runner-running-b")
+        self._add_runner_pod("bot-runner-pending", phase="Pending")
+        self._add_runner_pod("bot-runner-busy", assigned_bot_id="bot_inprogress")
+
+        self._maintain_pool(desired_count=1)
+
+        self.assertNotIn("bot-runner-pending", self.fake_v1.pod_names())
+        self.assertIn("bot-runner-busy", self.fake_v1.pod_names())
+        self.assertEqual(len(self._unassigned_runner_pods()), 1)
+
+    def test_pool_manager_does_not_delete_runner_claimed_while_shrinking(self):
+        self._add_runner_pod("bot-runner-a")
+
+        def runner_gets_claimed_before_delete(pod_name):
+            resource_version = self.fake_v1.raw_pod(pod_name)["metadata"]["resourceVersion"]
+            self.assertTrue(BotRunnerPodAssigner()._claim_pod_if_unassigned(pod_name, resource_version, self.bot.object_id))
+
+        self.fake_v1.before_delete = runner_gets_claimed_before_delete
+
+        self._maintain_pool(desired_count=0)
+
+        self.assertEqual(self._pods_assigned_to(self.bot.object_id), ["bot-runner-a"])
+
+    def _pool_sizer(self, min_size=1, max_size=10, peak_launch_multiplier=2, peak_launch_lookback_cycles=3, hold_max_size=False):
+        command = CreateBotRunnerPodsCommand()
+        command.min_size = min_size
+        command.max_size = max_size
+        command.peak_launch_multiplier = peak_launch_multiplier
+        command._launches_per_cycle = deque(maxlen=peak_launch_lookback_cycles)
+        command._prev_launch_counts = None
+        command._hold_max_size_until = float("inf") if hold_max_size else 0
+        return command
+
+    def _launch_bots(self, count):
+        for _ in range(count):
+            launch_bot(Bot.objects.create(project=self.project, meeting_url="https://meet.google.com/abc-defg-hij"))
+
+    def test_pool_size_grows_with_recent_launches_and_shrinks_after_lookback(self):
+        command = self._pool_sizer(peak_launch_lookback_cycles=3)
+
+        self.assertEqual(command._desired_pool_size(), 1)
+
+        # Only one launch gets a runner. The other two fall back to dedicated pods, but still count as demand.
+        self._add_runner_pod("bot-runner-a")
+        self._launch_bots(3)
+        self.assertEqual(get_bot_runner_pool_launch_counts(), {"assigned": 1, "not_assigned": 2})
+        self.assertEqual(command._desired_pool_size(), 3 * 2)
+
+        # The busy cycle holds the size until it is older than the lookback
+        self.assertEqual(command._desired_pool_size(), 6)
+        self.assertEqual(command._desired_pool_size(), 6)
+        self.assertEqual(command._desired_pool_size(), 1)
+
+    def test_pool_size_is_clamped_to_max(self):
+        command = self._pool_sizer(max_size=4)
+        command._desired_pool_size()
+
+        self._launch_bots(5)
+
+        self.assertEqual(command._desired_pool_size(), 4)
+
+    def test_pool_size_ignores_launches_from_before_the_manager_started(self):
+        self._launch_bots(3)
+        command = self._pool_sizer()
+
+        self.assertEqual(command._desired_pool_size(), 1)
+
+        self._launch_bots(1)
+        self.assertEqual(command._desired_pool_size(), 2)
+
+    def test_pool_size_counts_launches_after_launch_counts_are_lost(self):
+        command = self._pool_sizer()
+        self._launch_bots(3)
+        command._desired_pool_size()
+
+        self.redis_client.delete(BOT_RUNNER_POOL_LAUNCH_COUNTS_REDIS_KEY)
+        self._launch_bots(2)
+
+        self.assertEqual(command._desired_pool_size(), 4)
+
+    def test_bot_is_still_launched_when_launch_cannot_be_recorded(self):
+        self._add_runner_pod("bot-runner-a")
+
+        with patch("bots.bot_pod_creator.bot_runner_pod_assigner._get_redis_client", side_effect=redis.ConnectionError("redis is down")):
+            launch_bot(self.bot)
+
+        self.assertEqual(self._pods_assigned_to(self.bot.object_id), ["bot-runner-a"])
+
+    def test_pool_size_holds_max_size_after_startup(self):
+        command = self._pool_sizer(max_size=5, hold_max_size=True)
+
+        self.assertEqual(command._desired_pool_size(), 5)
+
+        command._hold_max_size_until = 0
+        self.assertEqual(command._desired_pool_size(), 1)
+
+    def test_pool_size_is_max_when_launch_counts_cannot_be_read(self):
+        command = self._pool_sizer(max_size=10)
+        command._desired_pool_size()
+        self._launch_bots(2)
+        self.assertEqual(command._desired_pool_size(), 4)
+
+        with patch("bots.management.commands.create_bot_runner_pods.get_bot_runner_pool_launch_counts", side_effect=redis.ConnectionError("redis is down")):
+            self.assertEqual(command._desired_pool_size(), 10)
+
+        # Once the counts can be read again, the pool goes back to being sized from the launches in the lookback
+        self.assertEqual(command._desired_pool_size(), 4)
+
+    def test_pool_size_is_max_when_launch_counts_have_never_been_read(self):
+        command = self._pool_sizer(max_size=10)
+
+        with patch("bots.management.commands.create_bot_runner_pods.get_bot_runner_pool_launch_counts", side_effect=redis.ConnectionError("redis is down")):
+            self.assertEqual(command._desired_pool_size(), 10)
