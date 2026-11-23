@@ -1,16 +1,21 @@
 import logging
+import time
 from dataclasses import dataclass
+from enum import Enum
 from typing import Callable
 
 from bots.media_capture_health_signals import MediaCaptureHealthSignal
-from bots.models import BotLogEntryTypes
 
 logger = logging.getLogger(__name__)
 
 
+class MediaCaptureIssueType(Enum):
+    CAPTIONS_WITHOUT_PER_PARTICIPANT_AUDIO = "captions_without_per_participant_audio"
+
+
 @dataclass(frozen=True)
 class MediaCaptureIssue:
-    log_entry_type: BotLogEntryTypes
+    issue_type: MediaCaptureIssueType
     message: str
 
 
@@ -23,7 +28,7 @@ class MediaCaptureCheck:
         raise NotImplementedError
 
     # Returns an issue if the check has found a failure
-    def evaluate(self, now: float) -> MediaCaptureIssue | None:
+    def evaluate(self) -> MediaCaptureIssue | None:
         raise NotImplementedError
 
 
@@ -46,7 +51,7 @@ class CaptionsWithoutPerParticipantAudioCheck(MediaCaptureCheck):
             self.caption_activity_timestamps_since_last_per_participant_audio = []
             self.per_participant_audio_was_ever_captured = True
 
-    def evaluate(self, now: float) -> MediaCaptureIssue | None:
+    def evaluate(self) -> MediaCaptureIssue | None:
         timestamps = self.caption_activity_timestamps_since_last_per_participant_audio
         if len(timestamps) < self.MIN_CAPTION_ACTIVITY_SIGNALS:
             return None
@@ -57,7 +62,7 @@ class CaptionsWithoutPerParticipantAudioCheck(MediaCaptureCheck):
         else:
             audio_history = "No per-participant audio has been captured in this meeting."
         return MediaCaptureIssue(
-            log_entry_type=BotLogEntryTypes.PER_PARTICIPANT_AUDIO_CAPTURE_FAILURE,
+            issue_type=MediaCaptureIssueType.CAPTIONS_WITHOUT_PER_PARTICIPANT_AUDIO,
             message=f"Closed captions were generated over {minutes_of_captions} minutes, but no per-participant audio was captured in that time. {audio_history}",
         )
 
@@ -69,14 +74,16 @@ class MediaCaptureHealthMonitor:
         self.checks = checks
         self.on_issue_detected = on_issue_detected
 
-    def record_signal(self, signal: MediaCaptureHealthSignal, timestamp: float):
+    # Signals are recorded as they arrive, which is close enough to when they happened for checks that work in minutes
+    def record_signal(self, signal: MediaCaptureHealthSignal):
+        timestamp = time.time()
         for check in self.checks:
             if signal in check.relevant_signals:
                 check.record_signal(signal, timestamp)
 
-    def evaluate(self, now: float):
+    def evaluate(self):
         for check in list(self.checks):
-            issue = check.evaluate(now)
+            issue = check.evaluate()
             if issue is None:
                 continue
             logger.info(f"{type(check).__name__} detected a media capture issue: {issue.message}")

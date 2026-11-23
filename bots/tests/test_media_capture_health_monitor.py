@@ -6,7 +6,7 @@ from django.test import SimpleTestCase, TestCase
 
 from accounts.models import Organization
 from bots.bot_controller.bot_controller import BotController
-from bots.bot_controller.media_capture_health_monitor import CaptionsWithoutPerParticipantAudioCheck, MediaCaptureHealthMonitor, MediaCaptureIssue
+from bots.bot_controller.media_capture_health_monitor import CaptionsWithoutPerParticipantAudioCheck, MediaCaptureHealthMonitor, MediaCaptureIssue, MediaCaptureIssueType
 from bots.media_capture_health_signals import MediaCaptureHealthSignal, MediaCaptureHealthSignalDebouncer
 from bots.models import Bot, BotLogEntry, BotLogEntryLevels, BotLogEntryTypes, Project
 from bots.web_bot_adapter import WebBotAdapter
@@ -39,25 +39,25 @@ class CaptionsWithoutPerParticipantAudioCheckTest(SimpleTestCase):
         check = CaptionsWithoutPerParticipantAudioCheck()
 
         self.record(check, (CAPTION, 0), (CAPTION, 180))
-        self.assertIsNone(check.evaluate(200))
+        self.assertIsNone(check.evaluate())
 
         self.record(check, (CAPTION, 360))
-        issue = check.evaluate(370)
+        issue = check.evaluate()
 
-        self.assertEqual(issue.log_entry_type, BotLogEntryTypes.PER_PARTICIPANT_AUDIO_CAPTURE_FAILURE)
+        self.assertEqual(issue.issue_type, MediaCaptureIssueType.CAPTIONS_WITHOUT_PER_PARTICIPANT_AUDIO)
         self.assertEqual(issue.message, "Closed captions were generated over 6 minutes, but no per-participant audio was captured in that time. No per-participant audio has been captured in this meeting.")
 
     def test_per_participant_audio_resets_the_caption_signals(self):
         check = CaptionsWithoutPerParticipantAudioCheck()
 
         self.record(check, (CAPTION, 0), (CAPTION, 180), (AUDIO, 200), (CAPTION, 360), (CAPTION, 540))
-        self.assertIsNone(check.evaluate(550))
+        self.assertIsNone(check.evaluate())
 
     def test_says_when_per_participant_audio_stopped_partway_through(self):
         check = CaptionsWithoutPerParticipantAudioCheck()
 
         self.record(check, (AUDIO, 0), (CAPTION, 180), (CAPTION, 360), (CAPTION, 540))
-        issue = check.evaluate(550)
+        issue = check.evaluate()
 
         self.assertEqual(issue.message, "Closed captions were generated over 6 minutes, but no per-participant audio was captured in that time. Per-participant audio was captured earlier in the meeting, but then stopped.")
 
@@ -66,28 +66,33 @@ class CaptionsWithoutPerParticipantAudioCheckTest(SimpleTestCase):
 
         for minute in range(0, 60, 3):
             self.record(check, (AUDIO, minute * 60), (CAPTION, minute * 60 + 1))
-            self.assertIsNone(check.evaluate(minute * 60 + 2))
+            self.assertIsNone(check.evaluate())
 
 
+@patch("bots.bot_controller.media_capture_health_monitor.time.time")
 class MediaCaptureHealthMonitorTest(SimpleTestCase):
-    def test_reports_each_issue_once(self):
+    def test_reports_each_issue_once(self, mock_time):
         on_issue_detected = MagicMock()
         monitor = MediaCaptureHealthMonitor(checks=[CaptionsWithoutPerParticipantAudioCheck()], on_issue_detected=on_issue_detected)
 
         for timestamp in (0, 180, 360, 540, 720, 900):
-            monitor.record_signal(CAPTION, timestamp)
-            monitor.evaluate(timestamp)
+            mock_time.return_value = timestamp
+            monitor.record_signal(CAPTION)
+            monitor.evaluate()
 
         on_issue_detected.assert_called_once()
-        self.assertEqual(on_issue_detected.call_args.args[0].log_entry_type, BotLogEntryTypes.PER_PARTICIPANT_AUDIO_CAPTURE_FAILURE)
+        issue = on_issue_detected.call_args.args[0]
+        self.assertEqual(issue.issue_type, MediaCaptureIssueType.CAPTIONS_WITHOUT_PER_PARTICIPANT_AUDIO)
+        self.assertIn("over 6 minutes", issue.message)
 
-    def test_only_passes_a_check_the_signals_it_cares_about(self):
+    def test_only_passes_a_check_the_signals_it_cares_about(self, mock_time):
+        mock_time.return_value = 1
         check = MagicMock(relevant_signals=frozenset({CAPTION}))
         check.evaluate.return_value = None
         monitor = MediaCaptureHealthMonitor(checks=[check], on_issue_detected=MagicMock())
 
-        monitor.record_signal(AUDIO, 0)
-        monitor.record_signal(CAPTION, 1)
+        monitor.record_signal(AUDIO)
+        monitor.record_signal(CAPTION)
 
         check.record_signal.assert_called_once_with(CAPTION, 1)
 
@@ -120,14 +125,14 @@ class WebBotAdapterMediaCaptureHealthSignalTest(SimpleTestCase):
         self.receive_at(mock_time, 1060, json_message({"type": "CaptionActivity"}))
         self.receive_at(mock_time, 1180, json_message({"type": "CaptionActivity"}))
 
-        self.assertEqual(self.adapter.media_capture_health_signal_callback.call_args_list, [((CAPTION, 1000),), ((CAPTION, 1180),)])
+        self.assertEqual(self.adapter.media_capture_health_signal_callback.call_args_list, [((CAPTION,),), ((CAPTION,),)])
 
     def test_per_participant_audio_is_sent_at_most_once_every_three_minutes(self, mock_time):
         self.receive_at(mock_time, 1000, per_participant_audio_message())
         self.receive_at(mock_time, 1001, per_participant_audio_message())
 
         self.assertEqual(self.adapter.add_audio_chunk_callback.call_count, 2)
-        self.assertEqual(self.adapter.media_capture_health_signal_callback.call_args_list, [((AUDIO, 1000),)])
+        self.assertEqual(self.adapter.media_capture_health_signal_callback.call_args_list, [((AUDIO,),)])
 
     def test_nothing_is_sent_while_recording_is_paused(self, mock_time):
         self.adapter.recording_paused = True
@@ -168,7 +173,7 @@ class BotControllerMediaCaptureHealthMonitorTest(TestCase):
 
     @patch("bots.models.trigger_webhook")
     def test_issue_creates_an_error_log_entry_and_fires_the_webhook(self, mock_trigger_webhook):
-        self.controller.on_media_capture_issue_detected(MediaCaptureIssue(log_entry_type=BotLogEntryTypes.PER_PARTICIPANT_AUDIO_CAPTURE_FAILURE, message="Something went wrong"))
+        self.controller.on_media_capture_issue_detected(MediaCaptureIssue(issue_type=MediaCaptureIssueType.CAPTIONS_WITHOUT_PER_PARTICIPANT_AUDIO, message="Something went wrong"))
 
         log_entry = BotLogEntry.objects.get(bot=self.bot)
         self.assertEqual(log_entry.level, BotLogEntryLevels.ERROR)

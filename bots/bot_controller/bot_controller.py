@@ -73,7 +73,7 @@ from .bot_resource_snapshot_taker import BotResourceSnapshotTaker
 from .closed_caption_manager import ClosedCaptionManager
 from .grouped_closed_caption_manager import GroupedClosedCaptionManager
 from .gstreamer_pipeline import GstreamerPipeline
-from .media_capture_health_monitor import CaptionsWithoutPerParticipantAudioCheck, MediaCaptureHealthMonitor, MediaCaptureIssue
+from .media_capture_health_monitor import CaptionsWithoutPerParticipantAudioCheck, MediaCaptureHealthMonitor, MediaCaptureIssue, MediaCaptureIssueType
 from .per_participant_non_streaming_audio_input_manager import PerParticipantNonStreamingAudioInputManager
 from .per_participant_streaming_audio_input_manager import PerParticipantStreamingAudioInputManager
 from .pipeline_configuration import PipelineConfiguration
@@ -642,12 +642,15 @@ class BotController:
         return MediaCaptureHealthMonitor(checks=checks, on_issue_detected=self.on_media_capture_issue_detected)
 
     # Called from the adapter's websocket thread, so hand the signal to the main thread
-    def on_media_capture_health_signal(self, signal, timestamp):
-        GLib.idle_add(lambda: self.media_capture_health_monitor.record_signal(signal, timestamp))
+    def on_media_capture_health_signal(self, signal):
+        GLib.idle_add(lambda: self.media_capture_health_monitor.record_signal(signal))
 
     def on_media_capture_issue_detected(self, issue: MediaCaptureIssue):
         logger.error(f"Media capture issue detected: {issue.message}")
-        BotLogManager.create_bot_log_entry(bot=self.bot_in_db, level=BotLogEntryLevels.ERROR, entry_type=issue.log_entry_type, message=issue.message)
+        log_entry_type = {
+            MediaCaptureIssueType.CAPTIONS_WITHOUT_PER_PARTICIPANT_AUDIO: BotLogEntryTypes.PER_PARTICIPANT_AUDIO_CAPTURE_FAILURE,
+        }[issue.issue_type]
+        BotLogManager.create_bot_log_entry(bot=self.bot_in_db, level=BotLogEntryLevels.ERROR, entry_type=log_entry_type, message=issue.message)
 
     def get_bot_adapter(self):
         meeting_type = self.get_meeting_type()
@@ -879,7 +882,6 @@ class BotController:
 
         self.main_thread_executor = MainThreadExecutor()
 
-        # Created in run()
         self.media_capture_health_monitor = None
 
     def get_pipeline_configuration(self):
@@ -1514,7 +1516,7 @@ class BotController:
             self.closed_caption_manager.process_captions()
 
             # Check that media is being captured
-            self.media_capture_health_monitor.evaluate(time.time())
+            self.media_capture_health_monitor.evaluate()
 
             # Check if auto-leave conditions are met
             self.adapter.check_auto_leave_conditions()
