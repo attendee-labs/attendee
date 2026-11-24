@@ -45,6 +45,7 @@ def create_adapter(create_guest_token_callback=lambda: "guest-token", **automati
         disable_incoming_video=False,
         record_participant_speech_start_stop_events=False,
         room_sync_source_participant_configuration=None,
+        media_capture_health_signal_callback=None,
         create_guest_token_callback=create_guest_token_callback,
         **callbacks,
     )

@@ -219,10 +219,13 @@ function startMeeting(signature) {
         if (data.level == 13)
         {
             userEnteredMeeting = true;
-            window.ws.sendJson({
-                type: 'ChatStatusChange',
-                change: 'ready_to_send'
-            });
+            // Avoids race condition where it's not actually ready to send yet
+            setTimeout(() => {
+                window.ws.sendJson({
+                    type: 'ChatStatusChange',
+                    change: 'ready_to_send'
+                });
+            }, 500);
         }
     });
 
@@ -444,6 +447,10 @@ function sendChatMessage(text, to_user_uuid ) {
         },
         error: (error) => {
             console.log('sendChatMessage error', error);
+            window.ws.sendJson({
+                type: 'sendChatMessageError',
+                error: JSON.stringify(error)
+            });
         }
     });
 }
