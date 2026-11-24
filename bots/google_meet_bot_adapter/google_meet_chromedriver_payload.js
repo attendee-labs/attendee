@@ -16,6 +16,40 @@ const hideReceiverCreateEncodedStreamsSupport = () => {
 
 hideReceiverCreateEncodedStreamsSupport();
 
+// Meet sends the webcam at half resolution with a 420kbps cap, and lets Chrome lower the resolution further while bandwidth ramps up.
+// That makes the bot's image blurry, so send it at full resolution and keep it there.
+// Meet swaps our webcam track for its own processed track, so we can't identify the webcam sender by its track.
+// Instead, we look for a video sender with a single active layer that Meet has scaled down.
+const sendWebcamAtFullResolution = () => {
+    const senderPrototype = window.RTCRtpSender?.prototype;
+    if (!senderPrototype?.setParameters) {
+        return;
+    }
+
+    const MIN_MAX_BITRATE = 1_500_000;
+    let numTimesForced = 0;
+    const originalSetParameters = senderPrototype.setParameters;
+    senderPrototype.setParameters = function (parameters, ...args) {
+        try {
+            const activeEncodings = (parameters?.encodings || []).filter((encoding) => encoding.active !== false);
+            // With several simulcast layers, forcing each one to full resolution would be wasteful, so only handle a single layer.
+            if (activeEncodings.length === 1 && activeEncodings[0].scaleResolutionDownBy > 1) {
+                activeEncodings[0].scaleResolutionDownBy = 1;
+                activeEncodings[0].maxBitrate = Math.max(activeEncodings[0].maxBitrate || 0, MIN_MAX_BITRATE);
+                parameters.degradationPreference = "maintain-resolution";
+                if (numTimesForced++ % 50 === 0) {
+                    window.ws?.sendJson({ type: "SentWebcamAtFullResolution", numTimesForced });
+                }
+            }
+        } catch (error) {
+            window.ws?.sendJson({ type: "SendWebcamAtFullResolutionError", error: error?.message });
+        }
+        return originalSetParameters.call(this, parameters, ...args);
+    };
+};
+
+sendWebcamAtFullResolution();
+
 // Google Meet uses localstorage to store its preferences. We can use this to disable incoming video.
 const disableIncomingVideoViaLocalStorage = () => {
     const MEET_PREFERENCES_LOCAL_STORAGE_KEY = "meet-preferences";
@@ -2797,6 +2831,10 @@ botOutputManager = new BotOutputManager({
     turnOffScreenshare: turnOffScreenshare,
     turnOnMic: turnOnMic,
     turnOffMic: turnOffMic,
+    // The encoder needs about 60 frames to sharpen a still image, so at 1fps the bot's image would stay blurry for about a minute.
+    // Redraw at 30fps for a while after an image is shown so it sharpens in a few seconds, then go back to 1fps to save CPU.
+    webcamImageBurstFps: 30,
+    webcamImageBurstDurationMs: 10000,
 });
 
 window.botOutputManager = botOutputManager;

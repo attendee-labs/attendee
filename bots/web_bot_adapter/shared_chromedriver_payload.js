@@ -8,6 +8,8 @@ class BotVideoOutputStream {
         getGainNode = () => {},
         getAudioContext = () => {},
         createSourceAudioTrack = () => {},
+        imageBurstFps = null,
+        imageBurstDurationMs = 0,
     }) {
         this.turnOnInput = turnOnInput;
         this.turnOffInput = turnOffInput;
@@ -16,6 +18,9 @@ class BotVideoOutputStream {
         this.getGainNode = getGainNode;
         this.getAudioContext = getAudioContext;
         this.createSourceAudioTrack = createSourceAudioTrack;
+        this.imageBurstFps = imageBurstFps;
+        this.imageBurstDurationMs = imageBurstDurationMs;
+        this.imageBurstEndTime = 0;
 
         // --- VIDEO SOURCE SETUP (single source canvas) ---
         this.canvas = document.createElement("canvas");
@@ -25,7 +30,7 @@ class BotVideoOutputStream {
         this.canvas.width = this.canvasWidthForImage;
         this.canvas.height = this.canvasHeightForImage;
         this.canvasCtx = this.canvas.getContext("2d");
-        this.imageRedrawInterval = null;
+        this.imageRedrawTimeout = null;
         this.imageToDraw = null;
         this.imageDrawParams = null;
 
@@ -78,11 +83,14 @@ class BotVideoOutputStream {
             this.canvas.height = this.canvasHeightForImage;
             this.imageDrawParams = this.calculateImageDrawParamsForLetterBoxing(this.imageToDraw.width, this.imageToDraw.height);
             this.canvasCtx.drawImage(this.imageToDraw, this.imageDrawParams.offsetX, this.imageDrawParams.offsetY, this.imageDrawParams.width, this.imageDrawParams.height);
-            // Set up an interval that redraws the image every 1000ms. Needed to work in Teams.
-            if (!this.imageRedrawInterval) {
-                this.imageRedrawInterval = setInterval(() => {
-                    this.canvasCtx.drawImage(this.imageToDraw, this.imageDrawParams.offsetX, this.imageDrawParams.offsetY, this.imageDrawParams.width, this.imageDrawParams.height);
-                }, 1000);
+            // Keep redrawing the image. Needed to work in Teams.
+            // The canvas stream only emits a frame when the canvas is drawn on, so this also sets the frame rate the meeting's video encoder sees.
+            // The encoder needs many frames to sharpen a still image, so redraw at a higher rate for a while after a new image is shown.
+            if (this.imageBurstFps) {
+                this.imageBurstEndTime = Date.now() + this.imageBurstDurationMs;
+            }
+            if (!this.imageRedrawTimeout) {
+                this._scheduleImageRedraw();
             }
             this.ensureInputOn();
 
@@ -353,10 +361,18 @@ class BotVideoOutputStream {
         }
     }
 
+    _scheduleImageRedraw() {
+        const fps = Date.now() < this.imageBurstEndTime ? this.imageBurstFps : 1;
+        this.imageRedrawTimeout = setTimeout(() => {
+            this.canvasCtx.drawImage(this.imageToDraw, this.imageDrawParams.offsetX, this.imageDrawParams.offsetY, this.imageDrawParams.width, this.imageDrawParams.height);
+            this._scheduleImageRedraw();
+        }, 1000 / fps);
+    }
+
     _stopImageRedrawInterval() {
-        if (this.imageRedrawInterval) {
-            clearInterval(this.imageRedrawInterval);
-            this.imageRedrawInterval = null;
+        if (this.imageRedrawTimeout) {
+            clearTimeout(this.imageRedrawTimeout);
+            this.imageRedrawTimeout = null;
         }
     }
 
@@ -476,6 +492,8 @@ class BotOutputManager {
      * @param {Function} [callbacks.turnOnMic]
      * @param {Function} [callbacks.turnOffMic]
      * @param {boolean} [callOriginalGetUserMedia=false]
+     * @param {number|null} [webcamImageBurstFps=null] - Frame rate of the webcam stream right after an image is displayed, so the encoder sharpens it quickly.
+     * @param {number} [webcamImageBurstDurationMs=0] - How long to use webcamImageBurstFps after an image is displayed.
      */
     constructor({
         turnOnWebcam = () => {},
@@ -485,6 +503,8 @@ class BotOutputManager {
         turnOnMic = () => {},
         turnOffMic = () => {},
         callOriginalGetUserMedia = false,
+        webcamImageBurstFps = null,
+        webcamImageBurstDurationMs = 0,
     } = {}) {
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
             throw new Error("navigator.mediaDevices.getUserMedia is not available in this context.");
@@ -528,6 +548,8 @@ class BotOutputManager {
             getGainNode: () => this.gainNode,
             getAudioContext: () => this.audioContext,
             createSourceAudioTrack: () => this._createSourceAudioTrack(),
+            imageBurstFps: webcamImageBurstFps,
+            imageBurstDurationMs: webcamImageBurstDurationMs,
         });
 
         this.screenShareVideoOutputStream = new BotVideoOutputStream({
