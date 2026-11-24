@@ -3,7 +3,7 @@ from datetime import timezone as python_timezone
 from unittest.mock import Mock, patch
 
 import requests
-from django.test import TestCase, TransactionTestCase
+from django.test import TestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 
 from accounts.models import Organization
@@ -264,6 +264,32 @@ class TestEnqueueSyncCalendarTask(TransactionTestCase):
         self.assertNotEqual(self.calendar.sync_task_enqueued_at, initial_sync_task_enqueued_at)
         self.assertEqual(self.calendar.sync_task_requested_at, None)
         mock_delay.assert_called_once_with(self.calendar.id)
+
+    @patch("bots.tasks.sync_calendar_task.sync_calendar.apply_async")
+    @patch("bots.tasks.sync_calendar_task.sync_calendar.delay")
+    def test_enqueue_sync_calendar_task_without_retries(self, mock_delay, mock_apply_async):
+        """Test that allow_retries=False enqueues the task with all of its retries already used."""
+        enqueue_sync_calendar_task(self.calendar, allow_retries=False)
+
+        self.calendar.refresh_from_db()
+        self.assertIsNotNone(self.calendar.sync_task_enqueued_at)
+        self.assertEqual(self.calendar.sync_task_requested_at, None)
+        mock_delay.assert_not_called()
+        mock_apply_async.assert_called_once_with(args=[self.calendar.id], retries=sync_calendar.max_retries)
+
+    # Eager mode only runs the retry chain when exceptions aren't propagated
+    @override_settings(CELERY_TASK_ALWAYS_EAGER=True, CELERY_TASK_EAGER_PROPAGATES=False)
+    @patch("bots.tasks.sync_calendar_task.GoogleCalendarSyncHandler.sync_events")
+    def test_failing_sync_attempt_count_with_and_without_retries(self, mock_sync_events):
+        """Test that a failing sync is attempted max_retries + 1 times normally, and only once with allow_retries=False."""
+        mock_sync_events.side_effect = requests.ConnectionError("provider is down")
+
+        enqueue_sync_calendar_task(self.calendar, allow_retries=False)
+        self.assertEqual(mock_sync_events.call_count, 1)
+
+        mock_sync_events.reset_mock()
+        enqueue_sync_calendar_task(self.calendar)
+        self.assertEqual(mock_sync_events.call_count, sync_calendar.max_retries + 1)
 
 
 class TestSyncCalendar(TestCase):

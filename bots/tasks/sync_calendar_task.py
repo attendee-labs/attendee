@@ -88,13 +88,17 @@ def sync_bots_for_calendar_event(calendar_event: CalendarEvent):
         sync_bot_with_calendar_event(bot, calendar_event)
 
 
-def enqueue_sync_calendar_task(calendar: Calendar):
-    """Enqueue a sync calendar task for a calendar."""
+def enqueue_sync_calendar_task(calendar: Calendar, allow_retries: bool = True):
+    """Enqueue a sync calendar task for a calendar. With allow_retries=False, the task gets a single attempt."""
     with transaction.atomic():
         calendar.sync_task_enqueued_at = timezone.now()
         calendar.sync_task_requested_at = None
         calendar.save()
-        sync_calendar.delay(calendar.id)
+        if allow_retries:
+            sync_calendar.delay(calendar.id)
+        else:
+            # `retries` is the number of retries already used, so starting at max_retries leaves none
+            sync_calendar.apply_async(args=[calendar.id], retries=sync_calendar.max_retries)
 
 
 @shared_task(

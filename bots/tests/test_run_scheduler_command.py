@@ -11,6 +11,7 @@ from django.utils import timezone as django_timezone
 from accounts.models import Organization
 from bots.management.commands.run_scheduler import CALENDAR_SYNC_THRESHOLD_HOURS, Command
 from bots.models import Bot, BotStates, Calendar, CalendarPlatform, CalendarStates, Project, ZoomOAuthApp, ZoomOAuthConnection, ZoomOAuthConnectionStates
+from bots.tasks.sync_calendar_task import sync_calendar
 
 
 def _build_celery_unacked_entry(bot_id, join_at_iso):
@@ -188,7 +189,7 @@ class RunSchedulerCommandTestCase(TestCase):
         """Test calendar sync with calendars exactly at the threshold boundary"""
         # Calendar synced exactly at threshold (should be included)
         exactly_at_threshold = self.now - django_timezone.timedelta(hours=CALENDAR_SYNC_THRESHOLD_HOURS)
-        calendar_boundary = Calendar.objects.create(project=self.project, platform=CalendarPlatform.GOOGLE, state=CalendarStates.CONNECTED, sync_task_enqueued_at=exactly_at_threshold, client_id="test_client_id_boundary")
+        calendar_boundary = Calendar.objects.create(project=self.project, platform=CalendarPlatform.GOOGLE, state=CalendarStates.CONNECTED, sync_task_enqueued_at=exactly_at_threshold, last_successful_sync_at=exactly_at_threshold, client_id="test_client_id_boundary")
 
         # Calendar synced just under threshold (should be excluded)
         just_under_threshold = self.now - django_timezone.timedelta(hours=CALENDAR_SYNC_THRESHOLD_HOURS, minutes=-1)
@@ -215,7 +216,7 @@ class RunSchedulerCommandTestCase(TestCase):
         # Calendar synced recently, but with a requested sync (should be included)
         exactly_five_minutes_ago = self.now - django_timezone.timedelta(minutes=5)
         exactly_24_hours_ago = self.now - django_timezone.timedelta(hours=24)
-        calendar_with_requested_sync = Calendar.objects.create(project=self.project, platform=CalendarPlatform.GOOGLE, state=CalendarStates.CONNECTED, sync_task_enqueued_at=exactly_five_minutes_ago, sync_task_requested_at=exactly_24_hours_ago, client_id="test_client_id_boundary")
+        calendar_with_requested_sync = Calendar.objects.create(project=self.project, platform=CalendarPlatform.GOOGLE, state=CalendarStates.CONNECTED, sync_task_enqueued_at=exactly_five_minutes_ago, last_successful_sync_at=exactly_five_minutes_ago, sync_task_requested_at=exactly_24_hours_ago, client_id="test_client_id_boundary")
 
         command = Command()
 
@@ -230,6 +231,30 @@ class RunSchedulerCommandTestCase(TestCase):
         calendar_with_requested_sync.refresh_from_db()
         self.assertEqual(calendar_with_requested_sync.sync_task_enqueued_at, self.now)
         self.assertEqual(calendar_with_requested_sync.sync_task_requested_at, None)
+
+    def test_run_periodic_calendar_syncs_gives_single_attempt_when_previous_sync_has_not_succeeded(self):
+        """Test that a calendar whose last enqueued sync hasn't succeeded gets a sync task with no retries"""
+        five_minutes_ago = self.now - django_timezone.timedelta(minutes=5)
+        one_hour_ago = self.now - django_timezone.timedelta(hours=1)
+
+        # Last sync enqueued 5 minutes ago, last success before that: still running, retrying or failed
+        calendar_unfinished = Calendar.objects.create(project=self.project, platform=CalendarPlatform.GOOGLE, state=CalendarStates.CONNECTED, sync_task_enqueued_at=five_minutes_ago, last_successful_sync_at=one_hour_ago, sync_task_requested_at=five_minutes_ago, client_id="test_client_id_unfinished")
+        # Last sync enqueued 5 minutes ago and has never succeeded
+        calendar_never_succeeded = Calendar.objects.create(project=self.project, platform=CalendarPlatform.GOOGLE, state=CalendarStates.CONNECTED, sync_task_enqueued_at=five_minutes_ago, sync_task_requested_at=five_minutes_ago, client_id="test_client_id_never_succeeded")
+        # Last sync enqueued 1 hour ago and succeeded after that
+        calendar_succeeded = Calendar.objects.create(project=self.project, platform=CalendarPlatform.GOOGLE, state=CalendarStates.CONNECTED, sync_task_enqueued_at=one_hour_ago, last_successful_sync_at=five_minutes_ago, sync_task_requested_at=five_minutes_ago, client_id="test_client_id_succeeded")
+        # Never had a sync enqueued
+        calendar_never_enqueued = Calendar.objects.create(project=self.project, platform=CalendarPlatform.GOOGLE, state=CalendarStates.CONNECTED, client_id="test_client_id_never_enqueued")
+
+        command = Command()
+
+        with patch("bots.tasks.sync_calendar_task.sync_calendar.delay") as mock_delay:
+            with patch("bots.tasks.sync_calendar_task.sync_calendar.apply_async") as mock_apply_async:
+                with patch("django.utils.timezone.now", return_value=self.now):
+                    command._run_periodic_calendar_syncs()
+
+        self.assertCountEqual([c.args for c in mock_delay.call_args_list], [(calendar_succeeded.id,), (calendar_never_enqueued.id,)])
+        self.assertCountEqual([c.kwargs for c in mock_apply_async.call_args_list], [{"args": [calendar_unfinished.id], "retries": sync_calendar.max_retries}, {"args": [calendar_never_succeeded.id], "retries": sync_calendar.max_retries}])
 
     def test_run_autopay_tasks_enqueues_eligible_organizations(self):
         """Test that _run_autopay_tasks finds and enqueues autopay tasks for eligible organizations"""
