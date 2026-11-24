@@ -2106,7 +2106,12 @@ function syncVirtualStreamsFromParticipant(participant) {
 }
 
 function extractCallIdFromEventDataObject(eventDataObject) {
-    return eventDataObject?.headers?.["X-Microsoft-Skype-Chain-ID"];
+    const headers = eventDataObject?.headers;
+    if (!headers) {
+        return undefined;
+    }
+    const headerKey = Object.keys(headers).find(key => key.toLowerCase() === 'x-microsoft-skype-chain-id');
+    return headerKey ? headers[headerKey] : undefined;
 }
 
 function handleRosterUpdate(eventDataObject) {
