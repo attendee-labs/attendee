@@ -21,6 +21,7 @@ from bots.models import (
 )
 from bots.tasks.sync_calendar_task import (
     CalendarAPIAuthenticationError,
+    CalendarAPIError,
     CalendarSyncHandler,
     GoogleCalendarSyncHandler,
     MicrosoftCalendarSyncHandler,
@@ -31,6 +32,15 @@ from bots.tasks.sync_calendar_task import (
     sync_calendar,
 )
 from bots.webhook_payloads import calendar_webhook_payload
+
+
+def _error_response(status_code, body):
+    """Build a real requests Response, so that .json() fails on bodies that aren't JSON like it does in production."""
+    response = requests.Response()
+    response.status_code = status_code
+    response._content = body.encode()
+    response.url = "https://example.com/"
+    return response
 
 
 class TestExtractMeetingUrlFromText(TestCase):
@@ -729,6 +739,62 @@ class TestGoogleCalendarSyncHandler(TestCase):
 
         self.assertIsNone(result)
 
+    @patch("requests.post")
+    def test_get_access_token_timeout(self, mock_post):
+        """A timeout has no response: it raises a CalendarAPIError, not an AttributeError or an authentication error."""
+        handler = GoogleCalendarSyncHandler(self.calendar.id)
+        mock_post.side_effect = requests.ReadTimeout("read timed out")
+
+        with self.assertRaises(CalendarAPIError) as ctx:
+            handler._get_access_token()
+
+        self.assertIs(type(ctx.exception), CalendarAPIError)
+
+    @patch("requests.post")
+    def test_get_access_token_error_body_not_json(self, mock_post):
+        """An error response whose body isn't JSON raises a CalendarAPIError that includes the body."""
+        handler = GoogleCalendarSyncHandler(self.calendar.id)
+        mock_post.return_value = _error_response(503, "<html>Service Unavailable</html>")
+
+        with self.assertRaises(CalendarAPIError) as ctx:
+            handler._get_access_token()
+
+        self.assertIs(type(ctx.exception), CalendarAPIError)
+        self.assertIn("<html>Service Unavailable</html>", str(ctx.exception))
+
+    @patch("requests.post")
+    def test_get_access_token_invalid_grant_message(self, mock_post):
+        """An authentication error with a JSON body keeps the parsed body in its message."""
+        handler = GoogleCalendarSyncHandler(self.calendar.id)
+        mock_post.return_value = _error_response(400, '{"error": "invalid_grant"}')
+
+        with self.assertRaises(CalendarAPIAuthenticationError) as ctx:
+            handler._get_access_token()
+
+        self.assertEqual(str(ctx.exception), "Google Authentication error: {'error': 'invalid_grant'}")
+
+    @patch("requests.Session")
+    def test_make_gcal_request_timeout(self, mock_session_class):
+        """A timeout is re-raised as is, not replaced by an error from the error handling."""
+        handler = GoogleCalendarSyncHandler(self.calendar.id)
+        mock_session = Mock()
+        mock_session.send.side_effect = requests.ReadTimeout("read timed out")
+        mock_session_class.return_value.__enter__.return_value = mock_session
+
+        with self.assertRaises(requests.ReadTimeout):
+            handler._make_gcal_request("https://www.googleapis.com/calendar/v3/calendars/primary/events", "mock_token")
+
+    @patch("requests.Session")
+    def test_make_gcal_request_error_body_not_json(self, mock_session_class):
+        """An HTTP error whose body isn't JSON is re-raised as is."""
+        handler = GoogleCalendarSyncHandler(self.calendar.id)
+        mock_session = Mock()
+        mock_session.send.return_value = _error_response(503, "<html>Service Unavailable</html>")
+        mock_session_class.return_value.__enter__.return_value = mock_session
+
+        with self.assertRaises(requests.HTTPError):
+            handler._make_gcal_request("https://www.googleapis.com/calendar/v3/calendars/primary/events", "mock_token")
+
     def test_get_event_by_id_recurring_series_master(self):
         """A single event later made recurring comes back as the series master, which is not a meeting of its own."""
         handler = GoogleCalendarSyncHandler(self.calendar.id)
@@ -929,6 +995,73 @@ class TestMicrosoftCalendarSyncHandler(TestCase):
 
         with self.assertRaises(CalendarAPIAuthenticationError):
             handler._get_access_token()
+
+    @patch("requests.post")
+    def test_get_access_token_timeout(self, mock_post):
+        """A timeout has no response: it raises a CalendarAPIError, not an AttributeError or an authentication error."""
+        handler = MicrosoftCalendarSyncHandler(self.calendar.id)
+        mock_post.side_effect = requests.ReadTimeout("read timed out")
+
+        with self.assertRaises(CalendarAPIError) as ctx:
+            handler._get_access_token()
+
+        self.assertIs(type(ctx.exception), CalendarAPIError)
+
+    @patch("requests.post")
+    def test_get_access_token_error_body_not_json(self, mock_post):
+        """An error response whose body isn't JSON raises a CalendarAPIError that includes the body."""
+        handler = MicrosoftCalendarSyncHandler(self.calendar.id)
+        mock_post.return_value = _error_response(503, "<html>Service Unavailable</html>")
+
+        with self.assertRaises(CalendarAPIError) as ctx:
+            handler._get_access_token()
+
+        self.assertIs(type(ctx.exception), CalendarAPIError)
+        self.assertIn("<html>Service Unavailable</html>", str(ctx.exception))
+
+    @patch("requests.post")
+    def test_get_access_token_invalid_grant_message(self, mock_post):
+        """An authentication error with a JSON body keeps the parsed body in its message."""
+        handler = MicrosoftCalendarSyncHandler(self.calendar.id)
+        mock_post.return_value = _error_response(400, '{"error": "invalid_grant"}')
+
+        with self.assertRaises(CalendarAPIAuthenticationError) as ctx:
+            handler._get_access_token()
+
+        self.assertEqual(str(ctx.exception), "Microsoft Authentication error: {'error': 'invalid_grant'}")
+
+    @patch("requests.post")
+    def test_get_access_token_authentication_error_substring_in_body_not_json(self, mock_post):
+        """An authentication error substring is still detected when the body isn't JSON."""
+        handler = MicrosoftCalendarSyncHandler(self.calendar.id)
+        mock_post.return_value = _error_response(403, "ErrorAccessDenied: access is denied")
+
+        with self.assertRaises(CalendarAPIAuthenticationError) as ctx:
+            handler._get_access_token()
+
+        self.assertEqual(str(ctx.exception), "Microsoft Authentication error: ErrorAccessDenied: access is denied")
+
+    @patch("requests.Session")
+    def test_make_graph_request_timeout(self, mock_session_class):
+        """A timeout is re-raised as is, not replaced by an error from the error handling."""
+        handler = MicrosoftCalendarSyncHandler(self.calendar.id)
+        mock_session = Mock()
+        mock_session.send.side_effect = requests.ReadTimeout("read timed out")
+        mock_session_class.return_value.__enter__.return_value = mock_session
+
+        with self.assertRaises(requests.ReadTimeout):
+            handler._make_graph_request("https://graph.microsoft.com/v1.0/me/calendarView", "mock_token")
+
+    @patch("requests.Session")
+    def test_make_graph_request_error_body_not_json(self, mock_session_class):
+        """An HTTP error whose body isn't JSON is re-raised as is."""
+        handler = MicrosoftCalendarSyncHandler(self.calendar.id)
+        mock_session = Mock()
+        mock_session.send.return_value = _error_response(503, "<html>Service Unavailable</html>")
+        mock_session_class.return_value.__enter__.return_value = mock_session
+
+        with self.assertRaises(requests.HTTPError):
+            handler._make_graph_request("https://graph.microsoft.com/v1.0/me/calendarView", "mock_token")
 
     @patch("requests.Session")
     def test_list_events_with_pagination(self, mock_session_class):
