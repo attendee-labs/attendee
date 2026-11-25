@@ -2137,6 +2137,7 @@ function handleRosterUpdate(eventDataObject) {
 
 const subCodeValueForDeniedRequestToJoin = 5854;
 const subCodeForAnonymousJoinDisabledForTenantByPolicy = 5723;
+const subCodeForAnonymousJoinDisabledForMeetingUseEmailOTP = 5761;
 const subCodeForRemovedFromConversationByAnotherParticipant = 5000;
 const subCodeForRemovedFromConversationByAnotherParticipantAlternate = 5300;
 const subCodeForNoNonHiddenParticipantsInTheIncomingRoster = 5020;
@@ -2219,6 +2220,17 @@ function handleConversationEnd(eventDataObject) {
         window.ws?.sendJson({
             type: 'MeetingStatusChange',
             change: 'anonymous_join_disabled_for_tenant_by_policy',
+            meetingId: meetingId
+        });
+        return;
+    }
+
+    if (subCode === subCodeForAnonymousJoinDisabledForMeetingUseEmailOTP)
+    {
+        // For now this won't do anything, but good to have it in our logs. In the future, this should probably be the source of truth for these things, instead of the UI inspection.
+        window.ws?.sendJson({
+            type: 'MeetingStatusChange',
+            change: 'anonymous_join_disabled_for_meeting_use_email_otp',
             meetingId: meetingId
         });
         return;
