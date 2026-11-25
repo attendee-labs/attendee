@@ -749,14 +749,15 @@ class GoogleMeetUIMethods:
     def stop_incoming_video_disabled_notice_watcher(self):
         self.driver.execute_script("window.incomingVideoDisabledNoticeWatcher?.stop();")
 
-    def incoming_video_disabled_notice_was_found(self, grace_period_seconds=3):
-        deadline = time.time() + grace_period_seconds
-        while True:
+    def incoming_video_disabled_notice_was_found(self):
+        num_attempts = 7
+        poll_interval_seconds = 0.5
+        for attempt in range(num_attempts):
             if self.driver.execute_script("return window.incomingVideoDisabledNoticeWatcher?.foundNotice() ?? false;") is True:
                 return True
-            if time.time() >= deadline:
-                return False
-            time.sleep(0.5)
+            if attempt < num_attempts - 1:
+                time.sleep(poll_interval_seconds)
+        return False
 
     def disable_incoming_video_in_ui(self):
         # First check if incoming video is already disabled. This is what we expect because
