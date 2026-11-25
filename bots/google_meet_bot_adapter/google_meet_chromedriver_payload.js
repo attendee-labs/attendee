@@ -1069,6 +1069,7 @@ class UserManager {
         if (!currentUser) return false;
         return currentUser.status === this.MEETING_STATUS.IN_WAITING_ROOM;
     }
+
     getCurrentUsersInMeeting() {
         return Array.from(this.currentUsersMap.values()).filter(user => user.status === this.MEETING_STATUS.IN_MEETING);
     }
