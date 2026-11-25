@@ -366,6 +366,7 @@ class TeamsUIMethods:
 
     def look_for_sign_in_required_element(self, step):
         sign_in_required_messages = [
+            "Please enter the email address that received the meeting invite.",
             "We need to verify your info before you can join",
             "To join, sign in or use Teams on the web",
             "You need to be signed in to Teams to access this meeting. Sign in with a work or school account and try joining again.",
