@@ -1962,7 +1962,7 @@ function createMessageDecoder(messageType) {
 // Stops once the notice is found or stop() is called.
 class IncomingVideoDisabledNoticeWatcher {
     static NOTICE_XPATH = '//*[contains(text(), "Incoming video is set to audio only")]';
-    static CHECK_INTERVAL_MS = 500;
+    static CHECK_INTERVAL_MS = 250;
 
     constructor() {
         this.noticeFound = false;
