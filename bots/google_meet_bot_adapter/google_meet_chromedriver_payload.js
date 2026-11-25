@@ -1959,6 +1959,56 @@ function createMessageDecoder(messageType) {
     };
 }
 
+// Polls the DOM for the notice Meet shows when incoming video is set to audio only.
+// Stops once the notice is found or stop() is called.
+class IncomingVideoDisabledNoticeWatcher {
+    static NOTICE_XPATH = '//*[contains(text(), "Incoming video is set to audio only")]';
+    static CHECK_INTERVAL_MS = 500;
+
+    constructor() {
+        this.noticeFound = false;
+        this.checkInterval = null;
+    }
+
+    start() {
+        if (this.checkInterval || this.noticeFound) return;
+        this.checkInterval = setInterval(() => this.check(), IncomingVideoDisabledNoticeWatcher.CHECK_INTERVAL_MS);
+        this.check();
+    }
+
+    stop() {
+        if (!this.checkInterval) return;
+        clearInterval(this.checkInterval);
+        this.checkInterval = null;
+    }
+
+    check() {
+        try {
+            const noticeElement = document.evaluate(
+                IncomingVideoDisabledNoticeWatcher.NOTICE_XPATH,
+                document,
+                null,
+                XPathResult.FIRST_ORDERED_NODE_TYPE,
+                null
+            ).singleNodeValue;
+
+            if (noticeElement) {
+                console.log("IncomingVideoDisabledNoticeWatcher: found incoming video disabled notice");
+                this.noticeFound = true;
+                this.stop();
+            }
+        } catch (error) {
+            console.log("IncomingVideoDisabledNoticeWatcher: error checking for notice", error);
+        }
+    }
+
+    foundNotice() {
+        return this.noticeFound;
+    }
+}
+
+window.incomingVideoDisabledNoticeWatcher = new IncomingVideoDisabledNoticeWatcher();
+
 const ws = new WebSocketClient();
 window.ws = ws;
 const userManager = new UserManager(ws);
