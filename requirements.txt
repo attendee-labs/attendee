@@ -100,7 +100,7 @@ signxml==4.5.1
 lxml==6.1.1
 jsonpatch==1.33
 jsonpointer==3.0.0
-sentry-sdk[celery,django]>=2.0.0
+sentry-sdk[celery,django]>=2.0.0,<3
 python-xlib==0.33
 django-csp==4.0
 pyotp==2.9.0
