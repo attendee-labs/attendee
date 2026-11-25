@@ -1269,8 +1269,6 @@ class GoogleMeetUIMethods:
 
         self.driver.get(self.meeting_url)
 
-        self.start_incoming_video_disabled_notice_watcher()
-
         self.driver.execute_cdp_cmd(
             "Browser.grantPermissions",
             {
@@ -1291,6 +1289,8 @@ class GoogleMeetUIMethods:
         self.turn_off_media_inputs()
 
         self.verify_expected_audio_configuration()
+
+        self.start_incoming_video_disabled_notice_watcher()
 
         logger.info("Waiting for the 'Ask to join' or 'Join now' button...")
         join_button = self.locate_element(
