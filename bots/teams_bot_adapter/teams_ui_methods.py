@@ -67,17 +67,20 @@ class TeamsUIMethods:
         if self.sent_bot_put_in_waiting_room_message:
             return
 
-        # The caller's loop turns any exception into a failed join, so this must not raise.
+        if self.is_call_state_in_lobby():
+            self.send_bot_put_in_waiting_room_message()
+
+    def is_call_state_in_lobby(self):
+        # Callers run inside join loops that turn any exception into a failed join, so this must not raise.
         try:
             call_state = self.driver.execute_script("return window.callManager?.getCallState();")
         except Exception as e:
-            logger.info(f"Unknown error occurred in check_if_in_waiting_room. Exception type = {type(e)}")
-            return
+            logger.info(f"Unknown error occurred in is_call_state_in_lobby. Exception type = {type(e)}")
+            return False
 
         # Values of callManager.getCallState() in the chromedriver payload: InLobby, NegotiatingEncryptionLobby.
         teams_lobby_call_states = (10, 15)
-        if call_state in teams_lobby_call_states:
-            self.send_bot_put_in_waiting_room_message()
+        return call_state in teams_lobby_call_states
 
     def turn_off_media_inputs(self):
         logger.info("Waiting for the microphone button...")
@@ -309,12 +312,16 @@ class TeamsUIMethods:
             # If there is more than one participant in the meeting, then the bot was just let in and we should not timeout
             if len(self.participants_info) > 1:
                 waiting_room_timeout_exceeded_by_more_than_three_minutes = time.time() - waiting_room_timeout_started_at > self.automatic_leave_configuration.waiting_room_timeout_seconds + 180
-                if waiting_room_timeout_exceeded_by_more_than_three_minutes:
+                if not waiting_room_timeout_exceeded_by_more_than_three_minutes:
+                    logger.info("Waiting room timeout exceeded, but there is more than one participant in the meeting and it has not been more than three minutes since the timeout was exceeded. Not aborting join attempt.")
+                    return
+
+                # If the call state says we're still in the lobby, the Teams client is leaking participants to lobby users, so treat this as a normal waiting room timeout.
+                if self.is_call_state_in_lobby():
+                    logger.warning("Waiting room timeout exceeded by more than three minutes and there is more than one participant in the meeting, but the call state shows we are in the lobby. Assuming the Teams client is leaking participants while in the lobby. Treating as a normal waiting room timeout.")
+                else:
                     logger.warning("Waiting room timeout exceeded, but there is more than one participant in the meeting. More than three minutes have passed since the timeout started. This is unexpected, throwing exception.")
                     raise UiWaitingRoomTransitionFailedException("Waiting room timeout exceeded, but there is more than one participant in the meeting. More than three minutes have passed since the timeout started. This is unexpected.", step)
-
-                logger.info("Waiting room timeout exceeded, but there is more than one participant in the meeting. Not aborting join attempt.")
-                return
 
             # Take a screenshot to confirm that we are in the waiting room
             self.send_screenshot_and_mhtml_file_message()
