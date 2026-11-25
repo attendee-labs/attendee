@@ -1940,7 +1940,7 @@ class TestTeamsBot(TransactionTestCase):
            bot records until auto-leave
         """
         # Use a "none" recording format to keep the test lightweight. The bot name contains
-        # "Notetaker" so the real fill_out_name_input has a keyword to cyrillicize.
+        # "Notetaker" so the real fill_out_name_input has a keyword to homoglyphize.
         self.bot.name = "Test Notetaker Bot"
         self.bot.settings = {"recording_settings": {"format": "none"}}
         self.bot.save()
@@ -2116,8 +2116,8 @@ class TestTeamsBot(TransactionTestCase):
             self.assertEqual(mock_wait_for_page_url_to_stabilize.call_count, 2, "Expected wait_for_page_url_to_stabilize to be called once per join attempt")
 
             # Verify the name typed into the prejoin name input had the "notetaker" keyword
-            # cyrillicized, with the rest of the display name left alone
-            mock_name_input.send_keys.assert_called_once_with("Test N\u043et\u0435t\u0430k\u0435r Bot")
+            # homoglyphized, with the rest of the display name left alone
+            mock_name_input.send_keys.assert_called_once_with("Test \ua4e0\u043et\u0435t\u0430k\u0435r Bot")
             typed_name = mock_name_input.send_keys.call_args[0][0]
             self.assertNotEqual(typed_name, self.bot.name, "Expected the typed display name to differ from the raw bot name")
             self.assertNotIn("notetaker", typed_name.lower(), "Expected the typed display name to no longer match a 'notetaker' keyword search")
