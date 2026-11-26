@@ -1288,7 +1288,11 @@ class BotController:
 
         chat_message_requests = self.bot_in_db.chat_message_requests.filter(state=BotChatMessageRequestStates.ENQUEUED).order_by("created_at", "id")
         for chat_message_request in chat_message_requests:
-            self.adapter.send_chat_message(text=chat_message_request.message, to_user_uuid=chat_message_request.to_user_uuid)
+            self.adapter.send_chat_message(
+                text=chat_message_request.message,
+                to_user_uuid=chat_message_request.to_user_uuid,
+                thread_id=chat_message_request.thread_id,
+            )
             BotChatMessageRequestManager.set_chat_message_request_sent(chat_message_request)
 
     def take_action_based_on_voice_agent_settings_in_db(self):

@@ -296,6 +296,7 @@ function startMeeting(signature) {
                 participant_uuid: chatMessage.senderId.toString(),
                 timestamp: Math.floor(parseInt(chatMessage.content.t) / 1000),
                 text: chatMessage.content.text,
+                additional_data: getChatMessageThreadInfo(chatMessage.content.messageId),
             });
         }
         catch (error) {
@@ -403,6 +404,45 @@ function startMeeting(signature) {
     });
 }
 
+let chatMessageThreadInfoLookupFailureCount = 0;
+
+// The SDK's onReceiveChatMsg payload doesn't include thread info, but the chat item in redux does.
+// The SDK writes the chat item to redux before firing onReceiveChatMsg, so we can look it up synchronously.
+function getChatMessageThreadInfo(messageId) {
+    try {
+        const meetingChat = window.__reduxStore?.getState()?.newChat?.meetingChat;
+        const chatItem = Array.isArray(meetingChat) && messageId ? meetingChat.find((item) => item.msgId === messageId) : null;
+        if (!chatItem) {
+            chatMessageThreadInfoLookupFailureCount++;
+            if (chatMessageThreadInfoLookupFailureCount % 50 === 1) {
+                window.ws?.sendJson({
+                    type: 'ChatMessageThreadInfoLookupFailed',
+                    reduxStoreFound: !!window.__reduxStore,
+                    failureCount: chatMessageThreadInfoLookupFailureCount,
+                });
+            }
+            return {};
+        }
+
+        // Match the native SDK: is_thread means a top-level message (one that can be replied to), is_comment means a reply,
+        // and thread_id is the id of the thread's top-level message, so a top-level message's thread_id is its own id.
+        // Note that redux's isThread means the opposite of the native SDK's IsThread: it's true for replies.
+        if (!chatItem.isThread || !chatItem.mainMsgId)
+            return { is_thread: true, is_comment: false, thread_id: chatItem.msgId };
+
+        // mainMsgId is the parent's xmppMsgId (or msgId as a fallback). Map it back to the parent's msgId,
+        // since that's what we record as the parent's message_uuid.
+        const parentItem = meetingChat.find((item) => item.xmppMsgId === chatItem.mainMsgId || item.msgId === chatItem.mainMsgId);
+        return { is_thread: false, is_comment: true, thread_id: parentItem?.msgId || chatItem.mainMsgId };
+    } catch (error) {
+        window.ws?.sendJson({
+            type: 'ChatMessageThreadInfoLookupError',
+            error: error.message,
+        });
+        return {};
+    }
+}
+
 function isGenericJoinError(code) {
     return code == 1 && !userEnteredMeeting;
 }
@@ -438,7 +478,120 @@ function leaveMeeting() {
     ZoomMtg.leaveMeeting({});
 }
 
-function sendChatMessage(text, to_user_uuid ) {
+// ZoomMtg.sendChat can't reply in a thread, but the SDK's internal chat send thunk (the one the reply box in the UI uses)
+// takes a replyTo argument. We get at it through webpack's module registry and dispatch it on the redux store.
+let zoomWebpackRequire = null;
+let zoomChatSendThunkCreator = null;
+
+function getZoomWebpackRequire() {
+    if (zoomWebpackRequire)
+        return zoomWebpackRequire;
+    const chunkGlobal = window.webpackChunk_zoom_webclientjs;
+    if (!chunkGlobal)
+        return null;
+    // Pushing a chunk with an unknown id makes the webpack runtime call our callback with __webpack_require__
+    chunkGlobal.push([['attendee_webpack_require_probe'], {}, (require) => { zoomWebpackRequire = require; }]);
+    return zoomWebpackRequire;
+}
+
+function isZoomChatSendThunkCreator(fn) {
+    if (typeof fn !== 'function' || fn.length !== 3)
+        return false;
+    const source = fn.toString();
+    return source.includes('replyTo') && source.includes('WS_CONF_CHAT_REQ');
+}
+
+function getZoomChatSendThunkCreator() {
+    if (zoomChatSendThunkCreator)
+        return zoomChatSendThunkCreator;
+    const require = getZoomWebpackRequire();
+    if (!require?.m)
+        return null;
+
+    // Fast path for the SDK version we currently pin (module 17984, export dX)
+    try {
+        if (require.m[17984] && isZoomChatSendThunkCreator(require(17984)?.dX)) {
+            zoomChatSendThunkCreator = require(17984).dX;
+            return zoomChatSendThunkCreator;
+        }
+    } catch (error) {}
+
+    // Otherwise search for it, so this keeps working if module ids / export names change in an SDK upgrade
+    for (const moduleId of Object.keys(require.m)) {
+        const factorySource = require.m[moduleId].toString();
+        if (!factorySource.includes('replyTo') || !factorySource.includes('WS_CONF_CHAT_REQ'))
+            continue;
+        try {
+            const moduleExports = require(moduleId);
+            for (const exportName of Object.keys(moduleExports)) {
+                if (isZoomChatSendThunkCreator(moduleExports[exportName])) {
+                    zoomChatSendThunkCreator = moduleExports[exportName];
+                    return zoomChatSendThunkCreator;
+                }
+            }
+        } catch (error) {}
+    }
+    return null;
+}
+
+// Built-in chat receivers (see ZoomMtg.sendChat). Zoom doesn't support thread replies to waiting room chats.
+const ZOOM_CHAT_RECEIVER_WAITING_ROOM_USERS = 4;
+const ZOOM_CHAT_RECEIVER_WAITING_ROOM_TO_HOSTS = 6;
+
+function sendThreadedChatMessage(text, threadId) {
+    const store = window.__reduxStore;
+    if (!store)
+        return 'Redux store not found';
+    const meetingChat = store.getState()?.newChat?.meetingChat;
+    if (!Array.isArray(meetingChat))
+        return 'Chat list not found in redux';
+
+    let parentItem = meetingChat.find((item) => item.msgId === threadId || item.xmppMsgId === threadId);
+    // If we were given a reply's id, reply in the thread it belongs to
+    if (parentItem?.isThread && parentItem.mainMsgId)
+        parentItem = meetingChat.find((item) => item.xmppMsgId === parentItem.mainMsgId || item.msgId === parentItem.mainMsgId);
+    if (!parentItem)
+        return 'Thread parent message not found';
+
+    // Mirrors how the Zoom UI picks the receiver for a reply: same audience as the parent message
+    if (parentItem.isSilentModeUser || parentItem.receiverId === ZOOM_CHAT_RECEIVER_WAITING_ROOM_USERS || parentItem.receiverId === ZOOM_CHAT_RECEIVER_WAITING_ROOM_TO_HOSTS)
+        return 'Thread replies are not supported for waiting room chats';
+    let receiverId = parentItem.receiverId;
+    if (parentItem.isShowPrivately && !parentItem.isMyMessage)
+        receiverId = parentItem.senderId;
+    if (receiverId === undefined || receiverId === null)
+        return 'Could not determine receiver for thread reply';
+
+    const createSendThunk = getZoomChatSendThunkCreator();
+    if (!createSendThunk)
+        return 'Zoom chat send function not found';
+
+    store.dispatch(createSendThunk(text.trimEnd(), receiverId, {
+        mainMsgId: parentItem.xmppMsgId || parentItem.msgId,
+        mainMsgTime: parentItem.t,
+        owner: parentItem.ownerRes,
+    }));
+    return null;
+}
+
+function sendChatMessage(text, to_user_uuid, thread_id) {
+    if (thread_id) {
+        let error;
+        try {
+            error = sendThreadedChatMessage(text, thread_id);
+        } catch (e) {
+            error = e.message;
+        }
+        if (!error)
+            return;
+        // Don't drop the message, send it without a thread instead
+        window.ws.sendJson({
+            type: 'sendThreadedChatMessageError',
+            error: error,
+            thread_id: thread_id,
+        });
+    }
+
     ZoomMtg.sendChat({
         message: text,
         userId: to_user_uuid ? parseInt(to_user_uuid, 10) : 0,
