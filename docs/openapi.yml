@@ -1866,10 +1866,11 @@ components:
         thread_id:
           type: string
           nullable: true
-          description: 'Reply in this chat thread: the thread_id from a chat message''s
-            additional_data. Only supported for Zoom bots; other bots send the message
-            without a thread. When set, the reply goes to the same audience as the
-            thread''s parent message and the to field is ignored by Zoom web SDK bots.'
+          description: 'Reply in a chat thread: the platform_uuid of a chat message,
+            which starts a thread on that message or adds to the thread it is in.
+            Only supported for Zoom bots; other bots send the message without a thread.
+            When set, the reply goes to the same audience as the thread''s parent
+            message and the to field is ignored by Zoom web SDK bots.'
           maxLength: 255
       required:
       - message
@@ -2066,10 +2067,17 @@ components:
         sender_user_uuid:
           type: string
           nullable: true
+        platform_uuid:
+          type: string
+          nullable: true
+          description: The meeting platform's id for the message. Pass it as thread_id
+            to send_chat_message to reply in a thread on this message (Zoom only).
+            Null for messages recorded before this field was added.
         additional_data: {}
       required:
       - additional_data
       - id
+      - platform_uuid
       - sender_name
       - sender_user_uuid
       - sender_uuid

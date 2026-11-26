@@ -1857,6 +1857,7 @@ class BotController:
                 "to": ChatMessageToOptions.ONLY_BOT if chat_message.get("to_bot") else ChatMessageToOptions.EVERYONE,
                 "text": chat_message["text"],
                 "participant": participant,
+                "platform_uuid": chat_message["message_uuid"],
                 "additional_data": chat_message.get("additional_data", {}),
             },
         )
