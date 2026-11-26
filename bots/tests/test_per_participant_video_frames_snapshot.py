@@ -266,3 +266,39 @@ class PerParticipantVideoFramesSnapshotBotTest(TestCase):
                 "frames": [stored_frame("16778240")],
             }
         )
+
+    def test_bot_controller_dispatches_all_enqueued_requests(self):
+        request_1 = PerParticipantVideoFramesSnapshotRequest.objects.create(bot=self.bot, webcam_resolution="none", screenshare_resolution="360p")
+        request_2 = PerParticipantVideoFramesSnapshotRequest.objects.create(bot=self.bot, webcam_resolution="none", screenshare_resolution="1080p")
+
+        controller = BotController(self.bot.id)
+        controller.adapter = MagicMock()
+        controller.take_action_based_on_per_participant_video_frames_snapshot_requests_in_db()
+
+        self.assertEqual(controller.adapter.capture_per_participant_video_frames_snapshot.call_count, 2)
+        request_1.refresh_from_db()
+        request_2.refresh_from_db()
+        self.assertEqual(request_1.state, PerParticipantVideoFramesSnapshotRequestStates.IN_PROGRESS)
+        self.assertEqual(request_2.state, PerParticipantVideoFramesSnapshotRequestStates.IN_PROGRESS)
+
+    def test_bot_controller_does_not_double_dispatch_in_progress_request(self):
+        snapshot_request = PerParticipantVideoFramesSnapshotRequest.objects.create(bot=self.bot, webcam_resolution="none", screenshare_resolution="360p")
+        PerParticipantVideoFramesSnapshotRequestManager.set_request_in_progress(snapshot_request)
+
+        controller = BotController(self.bot.id)
+        controller.adapter = MagicMock()
+        controller.take_action_based_on_per_participant_video_frames_snapshot_requests_in_db()
+
+        controller.adapter.capture_per_participant_video_frames_snapshot.assert_not_called()
+
+    def test_result_after_timeout_is_discarded(self):
+        snapshot_request = PerParticipantVideoFramesSnapshotRequest.objects.create(bot=self.bot, webcam_resolution="none", screenshare_resolution="360p")
+        PerParticipantVideoFramesSnapshotRequestManager.set_request_in_progress(snapshot_request)
+        PerParticipantVideoFramesSnapshotRequestManager.set_request_failed(snapshot_request, {"description": "Timed out"})
+
+        result = PerParticipantVideoFramesSnapshotRequestManager.set_request_fulfilled(snapshot_request, [stored_frame("16778240")])
+        snapshot_request.refresh_from_db()
+
+        self.assertFalse(result)
+        self.assertIsNone(snapshot_request.frames)
+        self.assertEqual(snapshot_request.state, PerParticipantVideoFramesSnapshotRequestStates.FAILED)

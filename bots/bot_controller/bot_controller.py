@@ -1299,28 +1299,23 @@ class BotController:
             BotChatMessageRequestManager.set_chat_message_request_sent(chat_message_request)
 
     def take_action_based_on_per_participant_video_frames_snapshot_requests_in_db(self):
-        if self.bot_in_db.per_participant_video_frames_snapshot_requests.filter(state=PerParticipantVideoFramesSnapshotRequestStates.IN_PROGRESS).exists():
-            return
+        snapshot_requests = self.bot_in_db.per_participant_video_frames_snapshot_requests.filter(state=PerParticipantVideoFramesSnapshotRequestStates.ENQUEUED).order_by("created_at", "id")
+        for snapshot_request in snapshot_requests:
+            if not BotEventManager.is_state_that_can_capture_per_participant_video_frames_snapshot(self.bot_in_db.state):
+                PerParticipantVideoFramesSnapshotRequestManager.set_request_failed(snapshot_request, {"description": f"Bot is in state {BotStates.state_to_api_code(self.bot_in_db.state)} and cannot capture per participant video frames"})
+                continue
 
-        snapshot_request = self.bot_in_db.per_participant_video_frames_snapshot_requests.filter(state=PerParticipantVideoFramesSnapshotRequestStates.ENQUEUED).order_by("created_at", "id").first()
-        if not snapshot_request:
-            return
+            if not PerParticipantVideoFramesSnapshotRequestManager.set_request_in_progress(snapshot_request):
+                continue
 
-        if not BotEventManager.is_state_that_can_capture_per_participant_video_frames_snapshot(self.bot_in_db.state):
-            PerParticipantVideoFramesSnapshotRequestManager.set_request_failed(snapshot_request, {"description": f"Bot is in state {BotStates.state_to_api_code(self.bot_in_db.state)} and cannot capture per participant video frames"})
-            return
-
-        if not PerParticipantVideoFramesSnapshotRequestManager.set_request_in_progress(snapshot_request):
-            return
-
-        logger.info(f"Capturing per participant video frames snapshot for request {snapshot_request.id}")
-        self.adapter.capture_per_participant_video_frames_snapshot(
-            request_id=snapshot_request.id,
-            per_participant_realtime_video_configuration=PerParticipantRealtimeVideoConfiguration(
-                webcam_configuration=PerParticipantRealtimeVideoSourceConfiguration(resolution=snapshot_request.webcam_resolution),
-                screenshare_configuration=PerParticipantRealtimeVideoSourceConfiguration(resolution=snapshot_request.screenshare_resolution),
-            ),
-        )
+            logger.info(f"Capturing per participant video frames snapshot for request {snapshot_request.id}")
+            self.adapter.capture_per_participant_video_frames_snapshot(
+                request_id=snapshot_request.id,
+                per_participant_realtime_video_configuration=PerParticipantRealtimeVideoConfiguration(
+                    webcam_configuration=PerParticipantRealtimeVideoSourceConfiguration(resolution=snapshot_request.webcam_resolution),
+                    screenshare_configuration=PerParticipantRealtimeVideoSourceConfiguration(resolution=snapshot_request.screenshare_resolution),
+                ),
+            )
 
     def handle_per_participant_video_frames_snapshot_result(self, message):
         request_id = message.get("request_id")
@@ -1337,7 +1332,7 @@ class BotController:
         frames = message.get("frames") or []
         if not PerParticipantVideoFramesSnapshotRequestManager.set_request_fulfilled(snapshot_request, frames):
             # The web server stopped waiting (timed out) before the frames arrived, so we don't store them
-            logger.info(f"Per participant video frames snapshot request {request_id} is no longer enqueued, so discarding the {len(frames)} captured frames")
+            logger.info(f"Per participant video frames snapshot request {request_id} is no longer in progress (timed out), so discarding the {len(frames)} captured frames")
             return
         logger.info(f"Fulfilled per participant video frames snapshot request {request_id} with {len(frames)} frames")
 
