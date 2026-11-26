@@ -14,6 +14,7 @@ from django.urls import reverse
 from .meeting_url_utils import meeting_type_from_url
 from .models import (
     Bot,
+    BotChatMessageReactionRequest,
     BotChatMessageRequest,
     BotEventManager,
     BotEventTypes,
@@ -119,6 +120,29 @@ def create_bot_chat_message_request(bot, chat_message_data):
         raise ValidationError(f"Error creating the bot chat message request: {error_message_first_line}.")
 
     return bot_chat_message_request
+
+
+def create_bot_chat_message_reaction_request(bot, chat_message, reaction_data):
+    """
+    Creates a BotChatMessageReactionRequest for the given bot with the provided data.
+
+    Args:
+        bot: The Bot instance
+        chat_message: The bot's ChatMessage to react to
+        reaction_data: Validated data containing emoji and action
+
+    Returns:
+        BotChatMessageReactionRequest: The created chat message reaction request
+    """
+    if not chat_message.platform_message_uuid:
+        raise ValidationError(f"Chat message {chat_message.object_id} can't be reacted to because it has no meeting platform message id.")
+
+    return BotChatMessageReactionRequest.objects.create(
+        bot=bot,
+        chat_message=chat_message,
+        emoji=reaction_data["emoji"],
+        action=reaction_data["action"],
+    )
 
 
 def create_bot_media_request_for_image(bot, image):

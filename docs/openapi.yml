@@ -989,6 +989,70 @@ paths:
           description: Invalid input
         '404':
           description: Bot not found
+  /api/v1/bots/{object_id}/send_chat_message_reaction:
+    post:
+      operationId: Send Chat Message Reaction
+      description: Causes the bot to add an emoji reaction to a chat message in the
+        meeting, or remove a reaction it added. Only supported for Zoom bots that
+        use the web SDK.
+      summary: React to a chat message
+      parameters:
+      - in: header
+        name: Authorization
+        schema:
+          type: string
+          default: Token YOUR_API_KEY_HERE
+        description: API key for authentication
+        required: true
+      - in: header
+        name: Content-Type
+        schema:
+          type: string
+          default: application/json
+        description: Should always be application/json
+        required: true
+      - in: path
+        name: object_id
+        schema:
+          type: string
+        description: Bot ID
+        required: true
+        examples:
+          BotIDExample:
+            value: bot_xxxxxxxxxxx
+            summary: Bot ID Example
+      tags:
+      - Bots
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BotChatMessageReactionRequestRequest'
+            examples:
+              AddAReaction:
+                value:
+                  message_id: msg_xxxxxxxxxxxxxxxx
+                  emoji: 👀
+                summary: Add a reaction
+                description: React to a chat message with 👀
+              RemoveAReaction:
+                value:
+                  message_id: msg_xxxxxxxxxxxxxxxx
+                  emoji: 👀
+                  action: remove
+                summary: Remove a reaction
+                description: Remove the bot's 👀 reaction from a chat message
+        required: true
+      security:
+      - {}
+      responses:
+        '200':
+          description: Chat message reaction request created successfully
+        '400':
+          description: Invalid input, the bot is not in a state that can react, or
+            the bot doesn't support chat message reactions
+        '404':
+          description: Bot or chat message not found
   /api/v1/bots/{object_id}/speech:
     post:
       operationId: Output speech
@@ -1787,6 +1851,14 @@ paths:
           description: Zoom OAuth Connection not found
 components:
   schemas:
+    ActionEnum:
+      enum:
+      - add
+      - remove
+      type: string
+      description: |-
+        * `add` - add
+        * `remove` - remove
     Bot:
       type: object
       properties:
@@ -1840,6 +1912,37 @@ components:
       - recording_state
       - state
       - transcription_state
+    BotChatMessageReactionRequestRequest:
+      type: object
+      properties:
+        message_id:
+          type: string
+          minLength: 1
+          description: The id of the chat message to react to, as returned by the
+            chat messages endpoint and the chat_messages.update webhook (for example
+            msg_xxxxxxxxxxxxxxxx).
+          maxLength: 32
+        emoji:
+          type: string
+          minLength: 1
+          description: A single Unicode emoji, for example 👀 or ✅. Skin tone, keycap,
+            flag and ZWJ sequences are allowed. Use the fully qualified form (for
+            example ❤️ rather than ❤) so the reaction matches the one Zoom's emoji
+            picker sends. Zoom accounts can restrict chat reactions to 👏 👍 😂 😮 ❤️
+            🎉; in those meetings other emoji are rejected by the bot.
+          maxLength: 10
+        action:
+          allOf:
+          - $ref: '#/components/schemas/ActionEnum'
+          default: add
+          description: |-
+            Whether to add the reaction or remove a reaction the bot added earlier. Adding a reaction the bot already added, or removing one it hasn't added, does nothing.
+
+            * `add` - add
+            * `remove` - remove
+      required:
+      - emoji
+      - message_id
     BotChatMessageRequestRequest:
       type: object
       properties:

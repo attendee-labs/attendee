@@ -25,6 +25,7 @@ from bots.meeting_url_utils import meeting_type_from_url, parse_zoom_registrant_
 from bots.models import (
     AudioChunk,
     Bot,
+    BotChatMessageReactionRequestManager,
     BotChatMessageRequestManager,
     BotChatMessageRequestStates,
     BotDebugScreenshot,
@@ -1295,6 +1296,20 @@ class BotController:
             )
             BotChatMessageRequestManager.set_chat_message_request_sent(chat_message_request)
 
+    def take_action_based_on_chat_message_reaction_requests_in_db(self):
+        if not self.adapter.is_ready_to_send_chat_messages():
+            logger.info("Bot adapter is not ready to send chat messages, so not sending chat message reaction requests")
+            return
+
+        reaction_requests = self.bot_in_db.chat_message_reaction_requests.filter(state=BotChatMessageRequestStates.ENQUEUED).select_related("chat_message").order_by("created_at", "id")
+        for reaction_request in reaction_requests:
+            self.adapter.send_chat_message_reaction(
+                message_uuid=reaction_request.chat_message.platform_message_uuid,
+                emoji=reaction_request.emoji,
+                action=reaction_request.action,
+            )
+            BotChatMessageReactionRequestManager.set_chat_message_reaction_request_sent(reaction_request)
+
     def take_action_based_on_voice_agent_settings_in_db(self):
         if self.bot_in_db.should_launch_webpage_streamer():
             self.webpage_streamer_manager.update(url=self.bot_in_db.voice_agent_url(), output_destination=self.bot_in_db.voice_agent_video_output_destination())
@@ -1402,6 +1417,10 @@ class BotController:
                 logger.info(f"Syncing chat message requests for bot {self.bot_in_db.object_id}")
                 self.bot_in_db.refresh_from_db()
                 self.take_action_based_on_chat_message_requests_in_db()
+            elif command == "sync_chat_message_reaction_requests":
+                logger.info(f"Syncing chat message reaction requests for bot {self.bot_in_db.object_id}")
+                self.bot_in_db.refresh_from_db()
+                self.take_action_based_on_chat_message_reaction_requests_in_db()
             elif command == "pause_recording":
                 logger.info(f"Pausing recording for bot {self.bot_in_db.object_id}")
                 self.bot_in_db.refresh_from_db()
@@ -2365,6 +2384,7 @@ class BotController:
         if message.get("message") == BotAdapter.Messages.READY_TO_SEND_CHAT_MESSAGE:
             logger.info("Received message that bot is ready to send chat message")
             self.take_action_based_on_chat_message_requests_in_db()
+            self.take_action_based_on_chat_message_reaction_requests_in_db()
             return
 
         if message.get("message") == BotAdapter.Messages.READY_TO_SHOW_BOT_IMAGE:

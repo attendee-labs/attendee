@@ -1505,6 +1505,9 @@ class WebBotAdapter(BotAdapter):
     def send_chat_message(self, text, to_user_uuid, thread_id=None):
         logger.info("send_chat_message not supported in web bots")
 
+    def send_chat_message_reaction(self, message_uuid, emoji, action):
+        logger.info("send_chat_message_reaction not supported in this bot")
+
     # Sub-classes can override this to add class-specific initial data code
     def subclass_specific_initial_data_code(self):
         return ""

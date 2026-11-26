@@ -119,6 +119,9 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
     def send_chat_message(self, text, to_user_uuid, thread_id=None):
         self.driver.execute_script("window?.sendChatMessage(arguments[0], arguments[1], arguments[2]);", text, to_user_uuid, thread_id)
 
+    def send_chat_message_reaction(self, message_uuid, emoji, action):
+        self.driver.execute_script("window?.sendChatMessageReaction(arguments[0], arguments[1], arguments[2]);", message_uuid, emoji, action)
+
     def get_staged_bot_join_delay_seconds(self):
         return 5
 
