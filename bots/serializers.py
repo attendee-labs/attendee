@@ -24,6 +24,7 @@ from .models import (
     AsyncTranscription,
     AsyncTranscriptionStates,
     Bot,
+    BotChatMessageReactionActions,
     BotChatMessageToOptions,
     BotEventSubTypes,
     BotEventTypes,
@@ -1169,6 +1170,37 @@ class PerParticipantVideoFrameSerializer(serializers.Serializer):
 
 class PerParticipantVideoFramesSnapshotSerializer(serializers.Serializer):
     frames = PerParticipantVideoFrameSerializer(many=True, help_text="One frame per participant video source that was visible to the bot when the snapshot was taken. Empty if nothing matching the request was visible.")
+
+
+@extend_schema_serializer(
+    examples=[
+        OpenApiExample(
+            "Add a reaction",
+            value={"message_id": "msg_xxxxxxxxxxxxxxxx", "emoji": "👀"},
+            description="React to a chat message with 👀",
+        ),
+        OpenApiExample(
+            "Remove a reaction",
+            value={"message_id": "msg_xxxxxxxxxxxxxxxx", "emoji": "👀", "action": "remove"},
+            description="Remove the bot's 👀 reaction from a chat message",
+        ),
+    ]
+)
+class BotChatMessageReactionRequestSerializer(serializers.Serializer):
+    message_id = serializers.CharField(
+        max_length=32,
+        help_text="The id of the chat message to react to, as returned by the chat messages endpoint and the chat_messages.update webhook (for example msg_xxxxxxxxxxxxxxxx).",
+    )
+    emoji = serializers.CharField(
+        max_length=100,
+        trim_whitespace=True,
+        help_text="A single Unicode emoji, for example 👀 or ✅. Skin tone, keycap, flag and ZWJ sequences are allowed. Use the fully qualified form (for example ❤️ rather than ❤) so the reaction matches the one Zoom's emoji picker sends. Zoom accounts can restrict chat reactions to 👏 👍 😂 😮 ❤️ 🎉; in those meetings other emoji are rejected by the bot.",
+    )
+    action = serializers.ChoiceField(
+        choices=BotChatMessageReactionActions.values,
+        default=BotChatMessageReactionActions.ADD,
+        help_text="Whether to add the reaction or remove a reaction the bot added earlier. Adding a reaction the bot already added, or removing one it hasn't added, does nothing.",
+    )
 
 
 @extend_schema_serializer(
