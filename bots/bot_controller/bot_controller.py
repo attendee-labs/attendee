@@ -1291,7 +1291,7 @@ class BotController:
             self.adapter.send_chat_message(
                 text=chat_message_request.message,
                 to_user_uuid=chat_message_request.to_user_uuid,
-                thread_id=(chat_message_request.additional_data or {}).get("thread_id"),
+                thread_id=chat_message_request.thread_id,
             )
             BotChatMessageRequestManager.set_chat_message_request_sent(chat_message_request)
 

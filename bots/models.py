@@ -3223,6 +3223,10 @@ class BotChatMessageRequest(models.Model):
     sent_at_timestamp_ms = models.BigIntegerField(null=True, blank=True)
     failure_data = models.JSONField(null=True, default=None)
 
+    @property
+    def thread_id(self):
+        return (self.additional_data or {}).get("thread_id")
+
 
 class BotChatMessageRequestManager:
     @classmethod
