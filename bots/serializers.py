@@ -2238,7 +2238,7 @@ class PatchBotSerializer(BotValidationMixin, serializers.Serializer):
     meeting_url = serializers.CharField(help_text="The URL of the meeting to join, e.g. https://zoom.us/j/123?pwd=456", required=False)
     metadata = serializers.JSONField(help_text="JSON object containing metadata to associate with the bot", required=False)
     bot_name = serializers.CharField(help_text="The name of the bot, e.g. 'My Bot'", required=False, allow_blank=False)
-    bot_image = BotImageSerializer(help_text="The image for the bot", required=False, default=None)
+    bot_image = BotImageSerializer(help_text="The image for the bot. Set to null to remove the image.", required=False, allow_null=True)
     recording_settings = RecordingSettingsJSONField(
         help_text="The settings for the bot's recording. The settings specified here will completely replace the existing settings.",
         required=False,
