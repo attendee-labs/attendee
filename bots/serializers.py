@@ -1090,7 +1090,7 @@ class BotChatMessageRequestSerializer(serializers.Serializer):
         required=False,
         allow_null=True,
         allow_blank=True,
-        help_text="Reply in a chat thread: the platform_uuid of a chat message, which starts a thread on that message or adds to the thread it is in. Only supported for Zoom bots; other bots send the message without a thread. When set, the reply goes to the same audience as the thread's parent message and the to field is ignored by Zoom web SDK bots.",
+        help_text="Reply in this chat thread: the thread_id from a chat message's additional_data. Only supported for Zoom bots; other bots send the message without a thread. When set, the reply goes to the same audience as the thread's parent message and the to field is ignored by Zoom web SDK bots.",
     )
 
     def validate(self, data):
@@ -2118,7 +2118,6 @@ class ChatMessageSerializer(serializers.Serializer):
     sender_name = serializers.CharField(source="participant.full_name")
     sender_uuid = serializers.CharField(source="participant.uuid")
     sender_user_uuid = serializers.CharField(source="participant.user_uuid", allow_null=True)
-    platform_uuid = serializers.CharField(allow_null=True, help_text="The meeting platform's id for the message. Pass it as thread_id to send_chat_message to reply in a thread on this message (Zoom only). Null for messages recorded before this field was added.")
     additional_data = serializers.JSONField()
 
     def get_to(self, obj):

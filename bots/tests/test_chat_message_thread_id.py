@@ -5,7 +5,7 @@ from django.test import Client, TestCase
 
 from accounts.models import Organization
 from bots.bot_controller.bot_controller import BotController
-from bots.models import ApiKey, Bot, BotChatMessageRequest, BotChatMessageRequestStates, BotChatMessageToOptions, BotStates, ChatMessage, ChatMessageToOptions, Participant, Project, Recording, RecordingStates, RecordingTypes, TranscriptionTypes
+from bots.models import ApiKey, Bot, BotChatMessageRequest, BotChatMessageRequestStates, BotChatMessageToOptions, BotStates, Project
 from bots.zoom_web_bot_adapter.zoom_web_bot_adapter import ZoomWebBotAdapter
 
 
@@ -64,44 +64,6 @@ class ChatMessageThreadIdTest(TestCase):
         for chat_message_request in [threaded_request, unthreaded_request]:
             chat_message_request.refresh_from_db()
             self.assertEqual(chat_message_request.state, BotChatMessageRequestStates.SENT)
-
-    def test_upsert_chat_message_stores_platform_uuid(self):
-        recording = Recording.objects.create(bot=self.bot, recording_type=RecordingTypes.AUDIO_AND_VIDEO, transcription_type=TranscriptionTypes.NON_REALTIME, is_default_recording=True, state=RecordingStates.IN_PROGRESS)
-
-        controller = BotController(self.bot.id)
-        controller.room_sync_client = None
-        controller.adapter = MagicMock()
-        controller.adapter.get_participant.return_value = {
-            "participant_uuid": "16778240",
-            "participant_user_uuid": None,
-            "participant_full_name": "Test User",
-            "participant_is_the_bot": False,
-            "participant_is_host": True,
-        }
-
-        controller.upsert_chat_message(
-            {
-                "message_uuid": "1-{bae0ba2b-5365-42e2-8fdf-8bd1cd56b983}",
-                "participant_uuid": "16778240",
-                "timestamp": 1795667830,
-                "text": "@Bot can you summarize the meeting?",
-                "additional_data": {"is_thread": False, "thread_id": None},
-            }
-        )
-
-        chat_message = ChatMessage.objects.get(bot=self.bot)
-        self.assertEqual(chat_message.platform_uuid, "1-{bae0ba2b-5365-42e2-8fdf-8bd1cd56b983}")
-        self.assertEqual(chat_message.source_uuid, f"{recording.object_id}-1-{{bae0ba2b-5365-42e2-8fdf-8bd1cd56b983}}")
-
-    def test_chat_messages_api_returns_platform_uuid(self):
-        participant = Participant.objects.create(bot=self.bot, uuid="16778240", full_name="Test User")
-        ChatMessage.objects.create(bot=self.bot, participant=participant, text="New message", to=ChatMessageToOptions.EVERYONE, timestamp=1795667830, platform_uuid="1-{bae0ba2b-5365-42e2-8fdf-8bd1cd56b983}")
-        ChatMessage.objects.create(bot=self.bot, participant=participant, text="Old message", to=ChatMessageToOptions.EVERYONE, timestamp=1795667831)
-
-        response = self.client.get(f"/api/v1/bots/{self.bot.object_id}/chat_messages", HTTP_AUTHORIZATION=f"Token {self.api_key_plain}")
-
-        self.assertEqual(response.status_code, 200, response.content)
-        self.assertEqual([message["platform_uuid"] for message in response.json()["results"]], ["1-{bae0ba2b-5365-42e2-8fdf-8bd1cd56b983}", None])
 
     def test_zoom_web_adapter_passes_thread_id_to_page(self):
         # Skip __init__, which sets up the browser; send_chat_message only needs the driver

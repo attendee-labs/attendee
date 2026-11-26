@@ -3439,8 +3439,6 @@ class ChatMessage(models.Model):
     OBJECT_ID_PREFIX = "msg_"
     object_id = models.CharField(max_length=32, unique=True, editable=False)
     source_uuid = models.CharField(max_length=255, null=True, unique=True)
-    # The meeting platform's id for the message. Not unique, since multiple bots can be in the same meeting.
-    platform_uuid = models.CharField(max_length=255, null=True, blank=True)
 
     def save(self, *args, **kwargs):
         if not self.object_id:
