@@ -1867,8 +1867,9 @@ components:
           type: string
           nullable: true
           description: 'Reply in this chat thread: the thread_id from a chat message''s
-            additional_data. Only supported for Zoom bots using the native SDK; other
-            bots send the message without a thread.'
+            additional_data. Only supported for Zoom bots; other bots send the message
+            without a thread. When set, the reply goes to the same audience as the
+            thread''s parent message and the to field is ignored by Zoom web SDK bots.'
           maxLength: 255
       required:
       - message
