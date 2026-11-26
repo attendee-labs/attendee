@@ -7,7 +7,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('bots', '0099_botlogentry_per_participant_audio_capture_failure'),
+        ('bots', '0100_botchatmessagereactionrequest'),
     ]
 
     operations = [
