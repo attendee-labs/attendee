@@ -296,6 +296,7 @@ function startMeeting(signature) {
                 participant_uuid: chatMessage.senderId.toString(),
                 timestamp: Math.floor(parseInt(chatMessage.content.t) / 1000),
                 text: chatMessage.content.text,
+                additional_data: getChatMessageThreadInfo(chatMessage.content.messageId),
             });
         }
         catch (error) {
@@ -401,6 +402,42 @@ function startMeeting(signature) {
             });
         }        
     });
+}
+
+let chatMessageThreadInfoLookupFailureCount = 0;
+
+// The SDK's onReceiveChatMsg payload doesn't include thread info, but the chat item in redux does.
+// The SDK writes the chat item to redux before firing onReceiveChatMsg, so we can look it up synchronously.
+function getChatMessageThreadInfo(messageId) {
+    try {
+        const meetingChat = window.__reduxStore?.getState()?.newChat?.meetingChat;
+        const chatItem = Array.isArray(meetingChat) && messageId ? meetingChat.find((item) => item.msgId === messageId) : null;
+        if (!chatItem) {
+            chatMessageThreadInfoLookupFailureCount++;
+            if (chatMessageThreadInfoLookupFailureCount % 50 === 1) {
+                window.ws?.sendJson({
+                    type: 'ChatMessageThreadInfoLookupFailed',
+                    reduxStoreFound: !!window.__reduxStore,
+                    failureCount: chatMessageThreadInfoLookupFailureCount,
+                });
+            }
+            return {};
+        }
+
+        if (!chatItem.isThread || !chatItem.mainMsgId)
+            return { is_thread: false, thread_id: null };
+
+        // mainMsgId is the parent's xmppMsgId (or msgId as a fallback). Map it back to the parent's msgId,
+        // since that's what we record as the parent's message_uuid.
+        const parentItem = meetingChat.find((item) => item.xmppMsgId === chatItem.mainMsgId || item.msgId === chatItem.mainMsgId);
+        return { is_thread: true, thread_id: parentItem?.msgId || chatItem.mainMsgId };
+    } catch (error) {
+        window.ws?.sendJson({
+            type: 'ChatMessageThreadInfoLookupError',
+            error: error.message,
+        });
+        return {};
+    }
 }
 
 function isGenericJoinError(code) {
