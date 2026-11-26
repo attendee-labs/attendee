@@ -20,13 +20,14 @@ from .templatetags.bot_filters import participant_color as compute_participant_c
 
 logger = logging.getLogger(__name__)
 
-# Latin characters that have a visually identical Cyrillic counterpart.
-LATIN_TO_CYRILLIC_HOMOGLYPHS = {
+# Latin characters mapped to visually identical characters from other scripts (mostly Cyrillic).
+LATIN_HOMOGLYPHS = {
     "a": "а",
     "c": "с",
     "e": "е",
     "i": "і",
     "j": "ј",
+    "n": "ᥒ",
     "o": "о",
     "p": "р",
     "s": "ѕ",
@@ -41,6 +42,7 @@ LATIN_TO_CYRILLIC_HOMOGLYPHS = {
     "J": "Ј",
     "K": "К",
     "M": "М",
+    "N": "ꓠ",
     "O": "О",
     "P": "Р",
     "S": "Ѕ",
@@ -50,14 +52,14 @@ LATIN_TO_CYRILLIC_HOMOGLYPHS = {
 }
 
 
-def cyrillicize_keywords_in_string(string: str, keywords: list[str]) -> str:
+def homoglyphize_keywords_in_string(string: str, keywords: list[str]) -> str:
     """
     Replace the Latin characters of any occurrence of the given keywords with visually
-    identical Cyrillic characters, so the text reads the same to a human but no longer
-    matches a keyword search.
+    identical characters from other scripts, so the text reads the same to a human but
+    no longer matches a keyword search.
 
     Keyword matching is case insensitive and the case of the original string is preserved.
-    Characters without a Cyrillic look-alike are left untouched.
+    Characters without a look-alike are left untouched.
     """
     if not string or not keywords:
         return string
@@ -69,10 +71,10 @@ def cyrillicize_keywords_in_string(string: str, keywords: list[str]) -> str:
 
     pattern = re.compile("|".join(re.escape(keyword) for keyword in sorted_keywords), re.IGNORECASE)
 
-    def cyrillicize_match(match: re.Match) -> str:
-        return "".join(LATIN_TO_CYRILLIC_HOMOGLYPHS.get(character, character) for character in match.group(0))
+    def homoglyphize_match(match: re.Match) -> str:
+        return "".join(LATIN_HOMOGLYPHS.get(character, character) for character in match.group(0))
 
-    return pattern.sub(cyrillicize_match, string)
+    return pattern.sub(homoglyphize_match, string)
 
 
 def truncate_string_with_ellipsis(string: str, max_length: int, ellipsis: str = "...") -> str:

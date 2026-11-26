@@ -638,7 +638,6 @@ class GoogleMeetUIMethods:
                 self.click_this_meeting_is_being_recorded_join_now_button("click_captions_button")
                 self.click_others_may_see_your_meeting_differently_button("click_captions_button")
                 self.check_if_in_waiting_room("click_captions_button")
-                self.look_for_incoming_video_is_disabled_element()
                 self.check_if_waiting_room_timeout_exceeded(waiting_room_timeout_started_at, "click_captions_button")
 
                 last_check_timed_out = attempt_to_look_for_captions_button_index == num_attempts_to_look_for_captions_button - 1
@@ -742,19 +741,31 @@ class GoogleMeetUIMethods:
         logger.info("Clicking the close button")
         self.click_element(close_button, "close_button")
 
-    def look_for_incoming_video_is_disabled_element(self):
-        if not self.disable_incoming_video or self.confirmed_incoming_video_is_disabled:
+    def start_incoming_video_disabled_notice_watcher(self):
+        if not self.disable_incoming_video:
             return
-        incoming_video_is_set_to_audio_only_element = self.find_element_by_selector(By.XPATH, '//*[contains(text(), "Incoming video is set to audio only")]')
-        if incoming_video_is_set_to_audio_only_element:
-            logger.info("Confirmed incoming video is disabled")
-            self.confirmed_incoming_video_is_disabled = True
+        self.driver.execute_script("window.incomingVideoDisabledNoticeWatcher?.start();")
+
+    def stop_incoming_video_disabled_notice_watcher(self):
+        self.driver.execute_script("window.incomingVideoDisabledNoticeWatcher?.stop();")
+
+    def incoming_video_disabled_notice_was_found(self):
+        num_attempts = 7
+        poll_interval_seconds = 0.5
+        for attempt in range(num_attempts):
+            if self.driver.execute_script("return window.incomingVideoDisabledNoticeWatcher?.foundNotice() ?? false;") is True:
+                return True
+            if attempt < num_attempts - 1:
+                time.sleep(poll_interval_seconds)
+        return False
 
     def disable_incoming_video_in_ui(self):
         # First check if incoming video is already disabled. This is what we expect because
         # we are disabling it via setting localstorage.
-        self.look_for_incoming_video_is_disabled_element()
-        if self.confirmed_incoming_video_is_disabled:
+        notice_found = self.incoming_video_disabled_notice_was_found()
+        self.stop_incoming_video_disabled_notice_watcher()
+
+        if notice_found:
             logger.info("No need to disable incoming video via the UI. It is already disabled.")
             return
 
@@ -1249,8 +1260,6 @@ class GoogleMeetUIMethods:
 
     # returns nothing if succeeded, raises an exception if failed
     def attempt_to_join_meeting(self):
-        self.confirmed_incoming_video_is_disabled = False
-
         if self.google_meet_bot_login_is_available and self.google_meet_bot_login_should_be_used:
             self.login_to_google_meet_account_with_retries()
 
@@ -1281,6 +1290,8 @@ class GoogleMeetUIMethods:
         self.turn_off_media_inputs()
 
         self.verify_expected_audio_configuration()
+
+        self.start_incoming_video_disabled_notice_watcher()
 
         logger.info("Waiting for the 'Ask to join' or 'Join now' button...")
         join_button = self.locate_element(
