@@ -424,13 +424,16 @@ function getChatMessageThreadInfo(messageId) {
             return {};
         }
 
+        // Match the native SDK: is_thread means a top-level message (one that can be replied to), is_comment means a reply,
+        // and thread_id is the id of the thread's top-level message, so a top-level message's thread_id is its own id.
+        // Note that redux's isThread means the opposite of the native SDK's IsThread: it's true for replies.
         if (!chatItem.isThread || !chatItem.mainMsgId)
-            return { is_thread: false, thread_id: null };
+            return { is_thread: true, is_comment: false, thread_id: chatItem.msgId };
 
         // mainMsgId is the parent's xmppMsgId (or msgId as a fallback). Map it back to the parent's msgId,
         // since that's what we record as the parent's message_uuid.
         const parentItem = meetingChat.find((item) => item.xmppMsgId === chatItem.mainMsgId || item.msgId === chatItem.mainMsgId);
-        return { is_thread: true, thread_id: parentItem?.msgId || chatItem.mainMsgId };
+        return { is_thread: false, is_comment: true, thread_id: parentItem?.msgId || chatItem.mainMsgId };
     } catch (error) {
         window.ws?.sendJson({
             type: 'ChatMessageThreadInfoLookupError',

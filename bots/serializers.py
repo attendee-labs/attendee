@@ -1090,7 +1090,7 @@ class BotChatMessageRequestSerializer(serializers.Serializer):
         required=False,
         allow_null=True,
         allow_blank=True,
-        help_text="Reply in this chat thread: the thread_id from a chat message's additional_data. Only supported for Zoom bots; other bots send the message without a thread. When set, the reply goes to the same audience as the thread's parent message and the to field is ignored by Zoom web SDK bots.",
+        help_text="Reply in a chat thread: the thread_id from a chat message's additional_data. A top-level message's thread_id is its own id, so passing it starts a thread on that message. Only supported for Zoom bots; other bots send the message without a thread. When set, the reply goes to the same audience as the thread's parent message and the to field is ignored by Zoom web SDK bots.",
     )
 
     def validate(self, data):
