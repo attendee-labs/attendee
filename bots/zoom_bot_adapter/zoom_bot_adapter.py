@@ -529,10 +529,12 @@ class ZoomBotAdapter(BotAdapter):
             self.active_sharer_source_id = new_active_sharer_source_id
             self.set_video_input_manager_based_on_state()
 
-    def send_chat_message(self, text, to_user_uuid):
-        # Send a welcome message to the chat
+    def send_chat_message(self, text, to_user_uuid, thread_id=None):
         builder = self.chat_ctrl.GetChatMessageBuilder()
         builder.SetContent(text)
+        if thread_id:
+            # Reply inside the thread of an existing message (its additional_data.thread_id).
+            builder.SetThreadId(thread_id)
         if to_user_uuid:
             builder.SetReceiver(to_user_uuid)
             builder.SetMessageType(zoom.SDKChatMessageType.To_Individual)

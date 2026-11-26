@@ -1085,6 +1085,13 @@ class BotChatMessageRequestSerializer(serializers.Serializer):
     )
     to = serializers.ChoiceField(choices=BotChatMessageToOptions.values, help_text="Who to send the message to.", default=BotChatMessageToOptions.EVERYONE)
     message = serializers.CharField(help_text="The message text to send. Does not support emojis currently. For Microsoft Teams, you can use basic HTML tags to format the message including <p>, <br>, <b>, <i>, and <a>.")
+    thread_id = serializers.CharField(
+        max_length=255,
+        required=False,
+        allow_null=True,
+        allow_blank=True,
+        help_text="Reply in this chat thread: the thread_id from a chat message's additional_data. Only supported for Zoom bots using the native SDK; other bots send the message without a thread.",
+    )
 
     def validate(self, data):
         to_value = data.get("to")
