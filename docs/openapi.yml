@@ -3559,7 +3559,8 @@ components:
         bot_image:
           allOf:
           - $ref: '#/components/schemas/BotImageRequest'
-          description: The image for the bot
+          nullable: true
+          description: The image for the bot. Set to null to remove the image.
         recording_settings:
           type: object
           properties:

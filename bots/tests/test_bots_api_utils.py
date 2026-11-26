@@ -1081,6 +1081,64 @@ class TestPatchBot(TestCase):
         )
         self.assertEqual(updated_bot.media_requests.filter(media_type=BotMediaRequestMediaTypes.IMAGE).first().media_blob.content_type, "image/jpeg")
 
+    def _create_scheduled_bot_with_image(self):
+        future_time = timezone.now() + timedelta(hours=1)
+        valid_red_pixel_png_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+        bot, error = create_bot(
+            data={
+                "meeting_url": "https://meet.google.com/abc-defg-hij",
+                "bot_name": "Original Name",
+                "join_at": future_time.isoformat(),
+                "bot_image": {"type": "image/png", "data": valid_red_pixel_png_b64},
+            },
+            source=BotCreationSource.API,
+            project=self.project,
+        )
+        self.assertIsNotNone(bot)
+        self.assertIsNone(error)
+        return bot
+
+    def test_patch_bot_with_null_image_clears_image(self):
+        """Test that patching with bot_image=null removes the existing image."""
+        from bots.models import BotMediaRequestMediaTypes, BotMediaRequestStates
+
+        bot = self._create_scheduled_bot_with_image()
+        self.assertTrue(bot.media_requests.filter(media_type=BotMediaRequestMediaTypes.IMAGE, state=BotMediaRequestStates.ENQUEUED).exists())
+
+        updated_bot, patch_error = patch_bot(bot, {"bot_image": None})
+
+        self.assertIsNotNone(updated_bot)
+        self.assertIsNone(patch_error)
+        self.assertFalse(updated_bot.media_requests.filter(media_type=BotMediaRequestMediaTypes.IMAGE).exists())
+        self.assertEqual(updated_bot.name, "Original Name")
+
+    def test_patch_bot_without_image_preserves_image(self):
+        """Test that patching without bot_image keeps the existing image."""
+        from bots.models import BotMediaRequestMediaTypes, BotMediaRequestStates
+
+        bot = self._create_scheduled_bot_with_image()
+
+        updated_bot, patch_error = patch_bot(bot, {"bot_name": "Updated Name"})
+
+        self.assertIsNotNone(updated_bot)
+        self.assertIsNone(patch_error)
+        self.assertEqual(updated_bot.media_requests.filter(media_type=BotMediaRequestMediaTypes.IMAGE, state=BotMediaRequestStates.ENQUEUED).count(), 1)
+
+    def test_patch_bot_with_null_image_not_in_scheduled_state(self):
+        """Test that clearing the image of a bot not in scheduled state fails."""
+        bot, error = create_bot(
+            data={"meeting_url": "https://meet.google.com/abc-defg-hij", "bot_name": "Test Bot"},
+            source=BotCreationSource.API,
+            project=self.project,
+        )
+        self.assertIsNotNone(bot)
+        self.assertEqual(bot.state, BotStates.JOINING)
+
+        updated_bot, patch_error = patch_bot(bot, {"bot_image": None})
+
+        self.assertIsNone(updated_bot)
+        self.assertEqual(patch_error["error"], "Bot is in state joining but join_at, meeting_url, bot_name, bot_image and recording_settings can only be updated when in the scheduled state")
+
     def test_patch_bot_without_recording_settings_preserves_them(self):
         """Test that patching a bot without specifying recording_settings does NOT change any of its recording settings."""
         future_time = timezone.now() + timedelta(hours=1)

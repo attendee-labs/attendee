@@ -437,7 +437,8 @@ def patch_bot(bot: Bot, data: dict) -> tuple[Bot | None, dict | None]:
                 bot.settings["recording_settings"] = validated_data.get("recording_settings")
 
             # join_at, meeting_url, bot_name and bot_image can only be updated when the bot is scheduled state. For updating image after the bot is in a meeting, use the output_image endpoint.
-            update_only_legal_for_scheduled_bots = bot.join_at != previous_join_at or bot.meeting_url != previous_meeting_url or bot.name != previous_bot_name or validated_data.get("bot_image") or validated_data.get("recording_settings")
+            clear_bot_image = "bot_image" in validated_data and validated_data["bot_image"] is None
+            update_only_legal_for_scheduled_bots = bot.join_at != previous_join_at or bot.meeting_url != previous_meeting_url or bot.name != previous_bot_name or validated_data.get("bot_image") or clear_bot_image or validated_data.get("recording_settings")
             if bot.state != BotStates.SCHEDULED:
                 if update_only_legal_for_scheduled_bots:
                     return None, {"error": f"Bot is in state {BotStates.state_to_api_code(bot.state)} but join_at, meeting_url, bot_name, bot_image and recording_settings can only be updated when in the scheduled state"}
@@ -451,6 +452,8 @@ def patch_bot(bot: Bot, data: dict) -> tuple[Bot | None, dict | None]:
                 # If we reached here, we successfully created a new image request for the bot. If there was an existing one, we should delete it.
                 if existing_bot_image_request:
                     existing_bot_image_request.delete()
+            elif clear_bot_image:
+                bot.media_requests.filter(media_type=BotMediaRequestMediaTypes.IMAGE, state=BotMediaRequestStates.ENQUEUED).delete()
 
             return bot, None
 
