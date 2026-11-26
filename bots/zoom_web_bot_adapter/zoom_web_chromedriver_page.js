@@ -296,6 +296,7 @@ function startMeeting(signature) {
                 participant_uuid: chatMessage.senderId.toString(),
                 timestamp: Math.floor(parseInt(chatMessage.content.t) / 1000),
                 text: chatMessage.content.text,
+                to_bot: isChatMessageToBot(chatMessage),
                 additional_data: getChatMessageThreadInfo(chatMessage.content.messageId),
             });
         }
@@ -440,6 +441,18 @@ function getChatMessageThreadInfo(messageId) {
             error: error.message,
         });
         return {};
+    }
+}
+
+// The onReceiveChatMsg payload's receiverId is the receiving user's id for a private message, and a built-in id
+// (0 is everyone, 1 is all panelists, 4 and 6 are the waiting room) otherwise. Zoom only delivers a private message
+// to its sender and receiver, so a message is to the bot exactly when its receiver is the bot.
+function isChatMessageToBot(chatMessage) {
+    try {
+        const botUserId = window.__reduxStore?.getState()?.meeting?.currentUser?.userId;
+        return botUserId !== undefined && botUserId !== null && String(chatMessage.receiverId) === String(botUserId);
+    } catch (error) {
+        return false;
     }
 }
 
