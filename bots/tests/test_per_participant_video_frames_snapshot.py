@@ -50,7 +50,10 @@ class PerParticipantVideoFramesSnapshotViewTest(TestCase):
     def _request_snapshot(self, data, bot_side_effect=None):
         def send_sync_command_side_effect(bot, command):
             if bot_side_effect:
-                bot_side_effect(PerParticipantVideoFramesSnapshotRequest.objects.get(bot=bot))
+                snapshot_request = PerParticipantVideoFramesSnapshotRequest.objects.get(bot=bot)
+                PerParticipantVideoFramesSnapshotRequestManager.set_request_in_progress(snapshot_request)
+                snapshot_request.refresh_from_db()
+                bot_side_effect(snapshot_request)
 
         with patch("bots.bots_api_views.send_sync_command", side_effect=send_sync_command_side_effect) as mock_send_sync_command, patch("bots.bots_api_views.time.sleep") as mock_sleep:
             response = self.client.post(
