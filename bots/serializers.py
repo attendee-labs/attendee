@@ -1281,13 +1281,13 @@ WEBSOCKET_SETTINGS_SCHEMA = {
                 },
                 "webcam_resolution": {
                     "type": "string",
-                    "enum": ["none", "360p", "720p", "1080p"],
+                    "enum": PER_PARTICIPANT_VIDEO_RESOLUTION_CHOICES,
                     "default": "360p",
                     "description": "Resolution for per-participant webcam video. 'none' disables webcam streaming. Framerate and JPEG quality are determined by resolution: 360p (2fps, quality 70), 720p (1fps, quality 60), 1080p (1fps, quality 50). Defaults to '360p'.",
                 },
                 "screenshare_resolution": {
                     "type": "string",
-                    "enum": ["none", "360p", "720p", "1080p"],
+                    "enum": PER_PARTICIPANT_VIDEO_RESOLUTION_CHOICES,
                     "default": "360p",
                     "description": "Resolution for per-participant screenshare video. 'none' disables screenshare streaming. Framerate and JPEG quality are determined by resolution: 360p (2fps, quality 70), 720p (1fps, quality 60), 1080p (1fps, quality 50). Defaults to '360p'.",
                 },
