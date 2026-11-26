@@ -1272,7 +1272,7 @@ class PerParticipantVideoFramesSnapshotView(APIView):
             for _ in range(round(self.POLL_TIMEOUT_SECONDS / self.POLL_INTERVAL_SECONDS)):
                 time.sleep(self.POLL_INTERVAL_SECONDS)
                 snapshot_request.refresh_from_db()
-                if snapshot_request.state != PerParticipantVideoFramesSnapshotRequestStates.ENQUEUED:
+                if snapshot_request.state in (PerParticipantVideoFramesSnapshotRequestStates.FULFILLED, PerParticipantVideoFramesSnapshotRequestStates.FAILED):
                     break
             else:
                 if PerParticipantVideoFramesSnapshotRequestManager.set_request_failed(snapshot_request, {"description": "Timed out waiting for the bot to capture the frames"}):

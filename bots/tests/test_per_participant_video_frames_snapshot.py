@@ -229,7 +229,6 @@ class PerParticipantVideoFramesSnapshotBotTest(TestCase):
         failed_request.refresh_from_db()
         self.assertEqual(failed_request.state, PerParticipantVideoFramesSnapshotRequestStates.FAILED)
         self.assertEqual(failed_request.failure_data, {"description": "Bot is not recording"})
-        self.assertEqual(controller.per_participant_video_frames_snapshot_request_ids_in_progress, set())
 
     def test_zoom_web_adapter_asks_page_for_snapshot(self):
         # Skip __init__, which sets up the browser; capture_per_participant_video_frames_snapshot only needs the driver

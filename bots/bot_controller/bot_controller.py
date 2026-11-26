@@ -890,9 +890,6 @@ class BotController:
 
         self.media_capture_health_monitor = None
 
-        # Ids of per participant video frames snapshot requests that were sent to the adapter and are waiting for a result
-        self.per_participant_video_frames_snapshot_request_ids_in_progress = set()
-
     def get_pipeline_configuration(self):
         if self.bot_in_db.rtmp_destination_url():
             return PipelineConfiguration.rtmp_streaming_bot()
@@ -1302,30 +1299,31 @@ class BotController:
             BotChatMessageRequestManager.set_chat_message_request_sent(chat_message_request)
 
     def take_action_based_on_per_participant_video_frames_snapshot_requests_in_db(self):
-        snapshot_requests = self.bot_in_db.per_participant_video_frames_snapshot_requests.filter(state=PerParticipantVideoFramesSnapshotRequestStates.ENQUEUED).exclude(id__in=self.per_participant_video_frames_snapshot_request_ids_in_progress).order_by("created_at", "id")
-        for snapshot_request in snapshot_requests:
-            if not hasattr(self.adapter, "capture_per_participant_video_frames_snapshot"):
-                PerParticipantVideoFramesSnapshotRequestManager.set_request_failed(snapshot_request, {"description": "Capturing per participant video frames snapshots is not supported for this bot"})
-                continue
+        if self.bot_in_db.per_participant_video_frames_snapshot_requests.filter(state=PerParticipantVideoFramesSnapshotRequestStates.IN_PROGRESS).exists():
+            return
 
-            if not BotEventManager.is_state_that_can_capture_per_participant_video_frames_snapshot(self.bot_in_db.state):
-                PerParticipantVideoFramesSnapshotRequestManager.set_request_failed(snapshot_request, {"description": f"Bot is in state {BotStates.state_to_api_code(self.bot_in_db.state)} and cannot capture per participant video frames"})
-                continue
+        snapshot_request = self.bot_in_db.per_participant_video_frames_snapshot_requests.filter(state=PerParticipantVideoFramesSnapshotRequestStates.ENQUEUED).order_by("created_at", "id").first()
+        if not snapshot_request:
+            return
 
-            logger.info(f"Capturing per participant video frames snapshot for request {snapshot_request.id}")
-            self.per_participant_video_frames_snapshot_request_ids_in_progress.add(snapshot_request.id)
-            self.adapter.capture_per_participant_video_frames_snapshot(
-                request_id=snapshot_request.id,
-                per_participant_realtime_video_configuration=PerParticipantRealtimeVideoConfiguration(
-                    webcam_configuration=PerParticipantRealtimeVideoSourceConfiguration(resolution=snapshot_request.webcam_resolution),
-                    screenshare_configuration=PerParticipantRealtimeVideoSourceConfiguration(resolution=snapshot_request.screenshare_resolution),
-                ),
-            )
+        if not BotEventManager.is_state_that_can_capture_per_participant_video_frames_snapshot(self.bot_in_db.state):
+            PerParticipantVideoFramesSnapshotRequestManager.set_request_failed(snapshot_request, {"description": f"Bot is in state {BotStates.state_to_api_code(self.bot_in_db.state)} and cannot capture per participant video frames"})
+            return
+
+        if not PerParticipantVideoFramesSnapshotRequestManager.set_request_in_progress(snapshot_request):
+            return
+
+        logger.info(f"Capturing per participant video frames snapshot for request {snapshot_request.id}")
+        self.adapter.capture_per_participant_video_frames_snapshot(
+            request_id=snapshot_request.id,
+            per_participant_realtime_video_configuration=PerParticipantRealtimeVideoConfiguration(
+                webcam_configuration=PerParticipantRealtimeVideoSourceConfiguration(resolution=snapshot_request.webcam_resolution),
+                screenshare_configuration=PerParticipantRealtimeVideoSourceConfiguration(resolution=snapshot_request.screenshare_resolution),
+            ),
+        )
 
     def handle_per_participant_video_frames_snapshot_result(self, message):
         request_id = message.get("request_id")
-        self.per_participant_video_frames_snapshot_request_ids_in_progress.discard(request_id)
-
         snapshot_request = self.bot_in_db.per_participant_video_frames_snapshot_requests.filter(id=request_id).first()
         if not snapshot_request:
             logger.warning(f"Received per participant video frames snapshot result for unknown request {request_id}")

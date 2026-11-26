@@ -3257,8 +3257,9 @@ class BotChatMessageRequestManager:
 
 class PerParticipantVideoFramesSnapshotRequestStates(models.IntegerChoices):
     ENQUEUED = 1, "Enqueued"
-    FULFILLED = 2, "Fulfilled"
-    FAILED = 3, "Failed"
+    IN_PROGRESS = 2, "In Progress"
+    FULFILLED = 3, "Fulfilled"
+    FAILED = 4, "Failed"
 
 
 class PerParticipantVideoFramesSnapshotRequest(models.Model):
@@ -3288,9 +3289,19 @@ class PerParticipantVideoFramesSnapshotRequestManager:
     # at the same time the bot is filling it in.
 
     @classmethod
-    def set_request_fulfilled(cls, request: PerParticipantVideoFramesSnapshotRequest, frames: list) -> bool:
+    def set_request_in_progress(cls, request: PerParticipantVideoFramesSnapshotRequest) -> bool:
         return (
             PerParticipantVideoFramesSnapshotRequest.objects.filter(id=request.id, state=PerParticipantVideoFramesSnapshotRequestStates.ENQUEUED).update(
+                state=PerParticipantVideoFramesSnapshotRequestStates.IN_PROGRESS,
+                updated_at=timezone.now(),
+            )
+            > 0
+        )
+
+    @classmethod
+    def set_request_fulfilled(cls, request: PerParticipantVideoFramesSnapshotRequest, frames: list) -> bool:
+        return (
+            PerParticipantVideoFramesSnapshotRequest.objects.filter(id=request.id, state=PerParticipantVideoFramesSnapshotRequestStates.IN_PROGRESS).update(
                 state=PerParticipantVideoFramesSnapshotRequestStates.FULFILLED,
                 frames=frames,
                 fulfilled_at_timestamp_ms=int(timezone.now().timestamp() * 1000),
@@ -3302,7 +3313,7 @@ class PerParticipantVideoFramesSnapshotRequestManager:
     @classmethod
     def set_request_failed(cls, request: PerParticipantVideoFramesSnapshotRequest, failure_data: dict) -> bool:
         return (
-            PerParticipantVideoFramesSnapshotRequest.objects.filter(id=request.id, state=PerParticipantVideoFramesSnapshotRequestStates.ENQUEUED).update(
+            PerParticipantVideoFramesSnapshotRequest.objects.filter(id=request.id, state__in=[PerParticipantVideoFramesSnapshotRequestStates.ENQUEUED, PerParticipantVideoFramesSnapshotRequestStates.IN_PROGRESS]).update(
                 state=PerParticipantVideoFramesSnapshotRequestStates.FAILED,
                 failure_data=failure_data,
                 updated_at=timezone.now(),

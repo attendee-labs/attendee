@@ -17,7 +17,7 @@ class Migration(migrations.Migration):
                 ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
                 ('webcam_resolution', models.CharField(max_length=32)),
                 ('screenshare_resolution', models.CharField(max_length=32)),
-                ('state', models.IntegerField(choices=[(1, 'Enqueued'), (2, 'Fulfilled'), (3, 'Failed')], default=1)),
+                ('state', models.IntegerField(choices=[(1, 'Enqueued'), (2, 'In Progress'), (3, 'Fulfilled'), (4, 'Failed')], default=1)),
                 ('frames', models.JSONField(default=None, null=True)),
                 ('created_at', models.DateTimeField(auto_now_add=True)),
                 ('updated_at', models.DateTimeField(auto_now=True)),

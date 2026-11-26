@@ -95,11 +95,11 @@ The response contains one frame for each participant video source the bot can cu
 }
 ```
 
-The `participant_uuid`, `frame`, `format` and `source` fields mean the same thing as in the websocket message. `participant_name` and `participant_user_uuid` are filled in from the participant list and are `null` if the bot doesn't know about the participant yet. `frames` is empty if nothing matching the request is visible, for example when nobody is sharing their screen. Which participants are included depends on which videos the bot's meeting client is currently rendering; screenshares are always rendered.
+The `participant_uuid`, `frame`, `format` and `source` fields mean the same thing as in the websocket message.
 
 The bot must be in the `joined_recording` state. If the bot does not return the frames within 5 seconds, the request fails with a 504 status code. Attendee does not keep the frames after returning them to you.
 
-Currently snapshots are only supported for Zoom bots using the web SDK (`zoom_settings.sdk` set to `"web"`). Other bots return a 400 status code.
+Currently snapshots are only supported for Zoom bots using the web SDK (`zoom_settings.sdk` set to `"web"`).
 
 ## Code Samples
 
