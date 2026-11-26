@@ -18,7 +18,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .authentication import ApiKeyAuthentication
-from .bots_api_utils import BotCreationSource, create_bot, create_bot_chat_message_request, create_bot_media_request_for_image, delete_bot, patch_bot, patch_bot_transcription_settings, patch_bot_voice_agent_settings, send_sync_command
+from .bots_api_utils import BotCreationSource, create_bot, create_bot_chat_message_reaction_request, create_bot_chat_message_request, create_bot_media_request_for_image, delete_bot, patch_bot, patch_bot_transcription_settings, patch_bot_voice_agent_settings, send_sync_command
 from .launch_bot_utils import launch_adhoc_bot_from_view
 from .meeting_url_utils import meeting_type_from_url
 from .models import (
@@ -44,6 +44,7 @@ from .models import (
 )
 from .serializers import (
     AsyncTranscriptionSerializer,
+    BotChatMessageReactionRequestSerializer,
     BotChatMessageRequestSerializer,
     BotImageSerializer,
     BotSerializer,
@@ -1199,6 +1200,77 @@ class SendChatMessageView(APIView):
             logging.error(f"Error creating chat message request for bot {bot.object_id}: {str(e)}")
             return Response(
                 {"error": "Failed to create chat message request"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+class SendChatMessageReactionView(APIView):
+    authentication_classes = [ApiKeyAuthentication]
+    throttle_classes = [ProjectPostThrottle]
+
+    @extend_schema(
+        operation_id="Send Chat Message Reaction",
+        summary="React to a chat message",
+        description="Causes the bot to add an emoji reaction to a chat message in the meeting, or remove a reaction it added. Only supported for Zoom bots that use the web SDK.",
+        request=BotChatMessageReactionRequestSerializer,
+        responses={
+            200: OpenApiResponse(description="Chat message reaction request created successfully"),
+            400: OpenApiResponse(description="Invalid input, the bot is not in a state that can react, or the bot doesn't support chat message reactions"),
+            404: OpenApiResponse(description="Bot or chat message not found"),
+        },
+        parameters=[
+            *TokenHeaderParameter,
+            OpenApiParameter(
+                name="object_id",
+                type=str,
+                location=OpenApiParameter.PATH,
+                description="Bot ID",
+                examples=[OpenApiExample("Bot ID Example", value="bot_xxxxxxxxxxx")],
+            ),
+        ],
+        tags=["Bots"],
+    )
+    def post(self, request, object_id):
+        try:
+            bot = Bot.objects.get(object_id=object_id, project=request.auth.project)
+        except Bot.DoesNotExist:
+            return Response({"error": "Bot not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = BotChatMessageReactionRequestSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        if meeting_type_from_url(bot.meeting_url) != MeetingTypes.ZOOM or not bot.use_zoom_web_adapter():
+            return Response(
+                {"error": "Chat message reactions are only supported for Zoom bots that use the web SDK"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not BotEventManager.is_state_that_can_play_media(bot.state):
+            return Response(
+                {"error": f"Bot is in state {BotStates.state_to_api_code(bot.state)} and cannot react to chat messages"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        validated_data = serializer.validated_data
+        chat_message = ChatMessage.objects.filter(bot=bot, object_id=validated_data["message_id"]).first()
+        if not chat_message:
+            return Response({"error": "Chat message not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            create_bot_chat_message_reaction_request(bot, chat_message, validated_data)
+
+            send_sync_command(bot, "sync_chat_message_reaction_requests")
+
+            return Response(status=status.HTTP_200_OK)
+
+        except ValidationError as e:
+            logging.error(f"Error creating chat message reaction request for bot {bot.object_id}: {str(e)}")
+            return Response({"error": e.messages[0]}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            logging.error(f"Error creating chat message reaction request for bot {bot.object_id}: {str(e)}")
+            return Response(
+                {"error": "Failed to create chat message reaction request"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 

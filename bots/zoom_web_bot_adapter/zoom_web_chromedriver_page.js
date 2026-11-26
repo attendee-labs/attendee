@@ -514,37 +514,39 @@ function isZoomChatSendThunkCreator(fn) {
     return source.includes('replyTo') && source.includes('WS_CONF_CHAT_REQ');
 }
 
-function getZoomChatSendThunkCreator() {
-    if (zoomChatSendThunkCreator)
-        return zoomChatSendThunkCreator;
+// Finds an export of one of the Zoom web client's webpack modules. Tries the module id and export name from the SDK version
+// we currently pin first, then searches every module whose factory source contains all of factorySourceMarkers, so this
+// keeps working if module ids / export names change in an SDK upgrade.
+function findZoomModuleExport(pinnedModuleId, pinnedExportName, factorySourceMarkers, isMatch) {
     const require = getZoomWebpackRequire();
     if (!require?.m)
         return null;
 
-    // Fast path for the SDK version we currently pin (module 17984, export dX)
     try {
-        if (require.m[17984] && isZoomChatSendThunkCreator(require(17984)?.dX)) {
-            zoomChatSendThunkCreator = require(17984).dX;
-            return zoomChatSendThunkCreator;
-        }
+        if (require.m[pinnedModuleId] && isMatch(require(pinnedModuleId)?.[pinnedExportName]))
+            return require(pinnedModuleId)[pinnedExportName];
     } catch (error) {}
 
-    // Otherwise search for it, so this keeps working if module ids / export names change in an SDK upgrade
     for (const moduleId of Object.keys(require.m)) {
         const factorySource = require.m[moduleId].toString();
-        if (!factorySource.includes('replyTo') || !factorySource.includes('WS_CONF_CHAT_REQ'))
+        if (!factorySourceMarkers.every((marker) => factorySource.includes(marker)))
             continue;
         try {
             const moduleExports = require(moduleId);
             for (const exportName of Object.keys(moduleExports)) {
-                if (isZoomChatSendThunkCreator(moduleExports[exportName])) {
-                    zoomChatSendThunkCreator = moduleExports[exportName];
-                    return zoomChatSendThunkCreator;
-                }
+                if (isMatch(moduleExports[exportName]))
+                    return moduleExports[exportName];
             }
         } catch (error) {}
     }
     return null;
+}
+
+function getZoomChatSendThunkCreator() {
+    // Pinned SDK version: module 17984, export dX
+    if (!zoomChatSendThunkCreator)
+        zoomChatSendThunkCreator = findZoomModuleExport(17984, 'dX', ['replyTo', 'WS_CONF_CHAT_REQ'], isZoomChatSendThunkCreator);
+    return zoomChatSendThunkCreator;
 }
 
 // Built-in chat receivers (see ZoomMtg.sendChat). Zoom doesn't support thread replies to waiting room chats.
@@ -679,6 +681,101 @@ function closeRequestPermissionModal() {
 }
 
 window.sendChatMessage = sendChatMessage;
+
+// ZoomMtg has no API for chat reactions. The reaction picker in the Zoom UI dispatches the SDK's internal "send vote emoji" thunk,
+// sendVoteEmoji(emoji, msgId, addToRecentEmojis), which sends the reaction as a WS_CONF_CHAT_REQ with an encoded emoji xmpp payload.
+// The thunk toggles: it removes the reaction if the current user already reacted with that emoji, otherwise it adds it.
+let zoomSendVoteEmojiThunkCreator = null;
+let zoomMeetingConfig = null;
+
+function isZoomSendVoteEmojiThunkCreator(fn) {
+    if (typeof fn !== 'function' || fn.length !== 3)
+        return false;
+    const source = fn.toString();
+    return source.includes('voteMap') && source.includes('encodedEmoji') && source.includes('WS_CONF_CHAT_REQ');
+}
+
+function getZoomSendVoteEmojiThunkCreator() {
+    // Pinned SDK version: module 90978, export D
+    if (!zoomSendVoteEmojiThunkCreator)
+        zoomSendVoteEmojiThunkCreator = findZoomModuleExport(90978, 'D', ['voteMap', 'encodedEmoji', 'WS_CONF_CHAT_REQ'], isZoomSendVoteEmojiThunkCreator);
+    return zoomSendVoteEmojiThunkCreator;
+}
+
+function getZoomMeetingOptions() {
+    // Pinned SDK version: module 67954, export Ay (the web client's MeetingConfig)
+    if (!zoomMeetingConfig)
+        zoomMeetingConfig = findZoomModuleExport(67954, 'Ay', ['isNewJoinFlow', 'MeetingConfig'], (config) => !!config && typeof config === 'object' && 'meetingOptions' in config);
+    return zoomMeetingConfig?.meetingOptions || window.MeetingConfig?.meetingOptions || null;
+}
+
+// When an account limits chat reactions, the Zoom UI only offers these (compared without skin tone or variation selector)
+const ZOOM_LIMITED_CHAT_REACTION_EMOJIS = ['\u{1F44F}', '\u{1F44D}', '\u{1F602}', '\u{1F62E}', '\u{2764}', '\u{1F389}'];
+
+function sendChatMessageReactionOrGetError(messageId, emoji, action) {
+    const store = window.__reduxStore;
+    if (!store)
+        return 'Redux store not found';
+    const meetingChat = store.getState()?.newChat?.meetingChat;
+    if (!Array.isArray(meetingChat))
+        return 'Chat list not found in redux';
+
+    const chatItem = meetingChat.find((item) => item.msgId === messageId || item.xmppMsgId === messageId);
+    if (!chatItem)
+        return 'Chat message not found';
+
+    const meetingOptions = getZoomMeetingOptions();
+    if (meetingOptions?.isEnableMeetingChatReaction === false)
+        return 'Chat reactions are disabled in this meeting';
+    if (action === 'add' && meetingOptions?.newMeetingChatExperience?.emojiScopeSelectInMeetingChat) {
+        const baseEmoji = emoji.replace(/[\u{FE0F}\u{1F3FB}-\u{1F3FF}]/gu, '');
+        if (!ZOOM_LIMITED_CHAT_REACTION_EMOJIS.includes(baseEmoji))
+            return 'This meeting only allows these chat reactions: \u{1F44F} \u{1F44D} \u{1F602} \u{1F62E} \u{2764}\u{FE0F} \u{1F389}';
+    }
+
+    // The thunk toggles, so only dispatch it when it will do what was asked. It keys voteMap by the emoji without zero width characters.
+    const voteMapKey = emoji.replace(/[\u200B-\u200D\uFEFF]/g, '');
+    const alreadyReacted = !!chatItem.voteMap?.get?.(voteMapKey)?.selfSent;
+    if ((action === 'add') === alreadyReacted)
+        return null;
+
+    const createSendVoteEmojiThunk = getZoomSendVoteEmojiThunkCreator();
+    if (!createSendVoteEmojiThunk)
+        return 'Zoom chat reaction function not found';
+
+    // The UI passes the emoji picker's emoji data; the thunk only needs content unless addToRecentEmojis is true
+    const result = store.dispatch(createSendVoteEmojiThunk({ content: emoji }, chatItem.xmppMsgId || chatItem.msgId, false));
+    // On success the thunk returns the promise for the send. Otherwise it returns nothing (message not found) or the
+    // action for the error toast it shows (no permission to chat with the message's audience, or a waiting room chat).
+    if (typeof result?.then !== 'function')
+        return 'Zoom did not send the reaction';
+    result.catch((error) => {
+        window.ws?.sendJson({
+            type: 'sendChatMessageReactionError',
+            error: error?.message || String(error),
+            message_id: messageId,
+        });
+    });
+    return null;
+}
+
+function sendChatMessageReaction(messageId, emoji, action) {
+    let error;
+    try {
+        error = sendChatMessageReactionOrGetError(messageId, emoji, action);
+    } catch (e) {
+        error = e.message;
+    }
+    if (!error)
+        return;
+    window.ws?.sendJson({
+        type: 'sendChatMessageReactionError',
+        error: error,
+        message_id: messageId,
+    });
+}
+
+window.sendChatMessageReaction = sendChatMessageReaction;
 
 function askForMediaCapturePermission() {
     madeInitialRequestForRecordingPermission = true;

@@ -185,6 +185,17 @@ For webhooks triggered by `chat_messages.update`, the `data` field contains a si
 }
 ```
 
+Zoom bots that use the web SDK can react to a chat message with an emoji. Pass the message's `id` to the [send chat message reaction endpoint](https://docs.attendee.dev/api-reference/tag/bots/post/api/v1/bots/object_id/send_chat_message_reaction):
+
+```
+curl -X POST https://app.attendee.dev/api/v1/bots/bot_xxxxxxxxxxx/send_chat_message_reaction \
+  -H "Authorization: Token YOUR_API_KEY_HERE" \
+  -H "Content-Type: application/json" \
+  -d '{"message_id": "msg_xxxxxxxxxxxxxxxx", "emoji": "👀"}'
+```
+
+`emoji` is a single Unicode emoji. Set `"action": "remove"` to remove a reaction the bot added, for example to swap 👀 for ✅ once you've handled a message. If the meeting's Zoom account limits chat reactions to 👏 👍 😂 😮 ❤️ 🎉, other emoji are not sent. The request returns once the reaction is queued; if the bot can't send it, the bot logs the error.
+
 ### Payload for participant event triggers
 
 For webhooks triggered by `participant_events.join_leave`, `participant_events.speech_start_stop`, and `participant_events.screenshare_start_stop`, the `data` field contains a single participant event:

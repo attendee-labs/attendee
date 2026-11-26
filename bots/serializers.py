@@ -24,6 +24,7 @@ from .models import (
     AsyncTranscription,
     AsyncTranscriptionStates,
     Bot,
+    BotChatMessageReactionActions,
     BotChatMessageToOptions,
     BotEventSubTypes,
     BotEventTypes,
@@ -1112,6 +1113,105 @@ class BotChatMessageRequestSerializer(serializers.Serializer):
         for char in value:
             if ord(char) > 0xFFFF:
                 raise serializers.ValidationError("Message cannot contain emojis or rare script characters.")
+        return value
+
+
+# Code point ranges that make up emoji: pictographs, symbols, dingbats, arrows, regional indicators (flags) and skin tone modifiers
+EMOJI_CODE_POINT_RANGES = [
+    (0x00A9, 0x00A9),
+    (0x00AE, 0x00AE),
+    (0x203C, 0x203C),
+    (0x2049, 0x2049),
+    (0x2122, 0x2122),
+    (0x2139, 0x2139),
+    (0x2194, 0x21FF),
+    (0x2300, 0x23FF),
+    (0x24C2, 0x24C2),
+    (0x25A0, 0x25FF),
+    (0x2600, 0x27BF),
+    (0x2934, 0x2935),
+    (0x2B00, 0x2BFF),
+    (0x3030, 0x3030),
+    (0x303D, 0x303D),
+    (0x3297, 0x3297),
+    (0x3299, 0x3299),
+    (0x1F000, 0x1FAFF),
+]
+EMOJI_ZERO_WIDTH_JOINER = 0x200D
+# Characters that only modify an emoji: variation selector 16, combining keycap, skin tones and tag characters (subdivision flags)
+EMOJI_MODIFIER_CODE_POINTS = {0xFE0F, 0x20E3, *range(0x1F3FB, 0x1F400), *range(0xE0020, 0xE0080)}
+EMOJI_REGIONAL_INDICATOR_RANGE = (0x1F1E6, 0x1F1FF)
+EMOJI_KEYCAP_BASE_CHARACTERS = set("0123456789#*")
+CHAT_MESSAGE_REACTION_MAX_CODE_POINTS = 10
+
+
+def is_single_emoji(value):
+    """Loosely checks that value is exactly one emoji, allowing skin tone, ZWJ, keycap and flag sequences."""
+    if not value or len(value) > CHAT_MESSAGE_REACTION_MAX_CODE_POINTS:
+        return False
+    emoji_count = 0
+    previous_code_point = None
+    regional_indicator_pending = False
+    for index, char in enumerate(value):
+        code_point = ord(char)
+        if code_point == EMOJI_ZERO_WIDTH_JOINER or code_point in EMOJI_MODIFIER_CODE_POINTS:
+            if previous_code_point is None:
+                return False
+        elif char in EMOJI_KEYCAP_BASE_CHARACTERS:
+            # Only allowed as the base of a keycap sequence like 1️⃣
+            if index != 0 or "\u20e3" not in value:
+                return False
+            emoji_count += 1
+        elif EMOJI_REGIONAL_INDICATOR_RANGE[0] <= code_point <= EMOJI_REGIONAL_INDICATOR_RANGE[1]:
+            # Flags are a pair of regional indicators
+            if regional_indicator_pending:
+                regional_indicator_pending = False
+            else:
+                regional_indicator_pending = True
+                emoji_count += 1
+        elif any(start <= code_point <= end for start, end in EMOJI_CODE_POINT_RANGES):
+            regional_indicator_pending = False
+            if previous_code_point != EMOJI_ZERO_WIDTH_JOINER:
+                emoji_count += 1
+        else:
+            return False
+        previous_code_point = code_point
+    return emoji_count == 1
+
+
+@extend_schema_serializer(
+    examples=[
+        OpenApiExample(
+            "Add a reaction",
+            value={"message_id": "msg_xxxxxxxxxxxxxxxx", "emoji": "👀"},
+            description="React to a chat message with 👀",
+        ),
+        OpenApiExample(
+            "Remove a reaction",
+            value={"message_id": "msg_xxxxxxxxxxxxxxxx", "emoji": "👀", "action": "remove"},
+            description="Remove the bot's 👀 reaction from a chat message",
+        ),
+    ]
+)
+class BotChatMessageReactionRequestSerializer(serializers.Serializer):
+    message_id = serializers.CharField(
+        max_length=32,
+        help_text="The id of the chat message to react to, as returned by the chat messages endpoint and the chat_messages.update webhook (for example msg_xxxxxxxxxxxxxxxx).",
+    )
+    emoji = serializers.CharField(
+        max_length=CHAT_MESSAGE_REACTION_MAX_CODE_POINTS,
+        trim_whitespace=True,
+        help_text="A single Unicode emoji, for example 👀 or ✅. Skin tone, keycap, flag and ZWJ sequences are allowed. Use the fully qualified form (for example ❤️ rather than ❤) so the reaction matches the one Zoom's emoji picker sends. Zoom accounts can restrict chat reactions to 👏 👍 😂 😮 ❤️ 🎉; in those meetings other emoji are rejected by the bot.",
+    )
+    action = serializers.ChoiceField(
+        choices=BotChatMessageReactionActions.values,
+        default=BotChatMessageReactionActions.ADD,
+        help_text="Whether to add the reaction or remove a reaction the bot added earlier. Adding a reaction the bot already added, or removing one it hasn't added, does nothing.",
+    )
+
+    def validate_emoji(self, value):
+        if not is_single_emoji(value):
+            raise serializers.ValidationError("Must be a single emoji.")
         return value
 
 
