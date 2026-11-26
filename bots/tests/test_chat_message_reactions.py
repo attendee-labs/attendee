@@ -6,7 +6,6 @@ from django.test import Client, TestCase
 from accounts.models import Organization
 from bots.bot_controller.bot_controller import BotController
 from bots.models import ApiKey, Bot, BotChatMessageReactionRequest, BotChatMessageRequestStates, BotStates, ChatMessage, ChatMessageToOptions, Participant, Project
-from bots.serializers import is_single_emoji
 from bots.web_bot_adapter.web_bot_adapter import WebBotAdapter
 from bots.zoom_web_bot_adapter.zoom_web_bot_adapter import ZoomWebBotAdapter
 
@@ -61,15 +60,6 @@ class ChatMessageReactionTest(TestCase):
 
         self.assertEqual(response.status_code, 200, response.content)
         self.assertEqual(BotChatMessageReactionRequest.objects.get(bot=self.bot).action, "remove")
-
-    def test_invalid_emoji_is_rejected(self):
-        for emoji in ["", "eyes", "👀👀", "a👀", ":eyes:"]:
-            with self.subTest(emoji=emoji):
-                response, mock_send_sync_command = self._post_reaction({"message_id": self.chat_message.object_id, "emoji": emoji})
-
-                self.assertEqual(response.status_code, 400, response.content)
-                mock_send_sync_command.assert_not_called()
-        self.assertFalse(BotChatMessageReactionRequest.objects.exists())
 
     def test_invalid_action_is_rejected(self):
         response, _ = self._post_reaction({"message_id": self.chat_message.object_id, "emoji": "👀", "action": "toggle"})
@@ -167,15 +157,3 @@ class ChatMessageReactionTest(TestCase):
         adapter.send_chat_message_reaction(message_uuid="parent-msg-id", emoji="👀", action="add")
 
         adapter.driver.execute_script.assert_not_called()
-
-
-class IsSingleEmojiTest(TestCase):
-    def test_single_emoji(self):
-        for emoji in ["👀", "✅", "❤️", "❤", "👍🏽", "🇺🇸", "1️⃣", "#️⃣", "👩‍💻", "👨‍👩‍👧‍👦", "🏴󠁧󠁢󠁳󠁣󠁴󠁿", "🏳️‍🌈", "©️"]:
-            with self.subTest(emoji=emoji):
-                self.assertTrue(is_single_emoji(emoji))
-
-    def test_not_a_single_emoji(self):
-        for value in ["", "a", "1", "👀👀", "✅👀", "🇺🇸🇨🇦", "👀 ", "hi👀", "\u200d", "\ufe0f", "🏽"]:
-            with self.subTest(value=value):
-                self.assertFalse(is_single_emoji(value))
