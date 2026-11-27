@@ -1996,11 +1996,7 @@ components:
         emoji:
           type: string
           minLength: 1
-          description: A single Unicode emoji, for example 👀 or ✅. Skin tone, keycap,
-            flag and ZWJ sequences are allowed. Use the fully qualified form (for
-            example ❤️ rather than ❤) so the reaction matches the one Zoom's emoji
-            picker sends. Zoom accounts can restrict chat reactions to 👏 👍 😂 😮 ❤️
-            🎉; in those meetings other emoji are rejected by the bot.
+          description: A single Unicode emoji, for example 👀 or ✅.
           maxLength: 10
         action:
           allOf:
