@@ -88,7 +88,7 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
         zoom_client_id = zoom_oauth_credentials["client_id"]
         zoom_client_secret = zoom_oauth_credentials["client_secret"]
 
-        self.sdk_signature = zoom_meeting_sdk_signature(self.meeting_id, 0, client_id=zoom_client_id, client_secret=zoom_client_secret)
+        self.sdk_signature = zoom_meeting_sdk_signature(self.meeting_id, 0, video_webrtc_mode=self.video_webrtc_mode(), client_id=zoom_client_id, client_secret=zoom_client_secret)
         self.zoom_closed_captions_language = zoom_closed_captions_language
         self.should_ask_for_recording_permission = should_ask_for_recording_permission
         self.zoom_tokens = zoom_tokens
@@ -209,7 +209,7 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
             zoom_oauth_credentials = self.zoom_oauth_credentials_callback()
             zoom_client_id = zoom_oauth_credentials["client_id"]
             zoom_client_secret = zoom_oauth_credentials["client_secret"]
-            self.sdk_signature = zoom_meeting_sdk_signature(self.meeting_id, 0, client_id=zoom_client_id, client_secret=zoom_client_secret)
+            self.sdk_signature = zoom_meeting_sdk_signature(self.meeting_id, 0, video_webrtc_mode=self.video_webrtc_mode(), client_id=zoom_client_id, client_secret=zoom_client_secret)
 
             time.sleep(generic_join_error_sleep_time_seconds)  # Sleep for a bit so we're not constantly retrying
 
@@ -231,6 +231,12 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
             return False
 
         return super().subclass_specific_use_disable_gpu_chrome_option()
+
+    # Without a GPU, gallery view only renders in WebRTC video mode
+    def video_webrtc_mode(self):
+        if self.recording_view == RecordingViews.GALLERY_VIEW:
+            return 1
+        return None
 
     def subclass_specific_navigation_config_filename(self):
         return "zoom_web.json"
