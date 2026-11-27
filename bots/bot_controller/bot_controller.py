@@ -1321,16 +1321,25 @@ class BotController:
             ),
         )
 
-    # Called from the adapter's websocket thread. That's fine because it only writes to Redis, using its own connection.
     def add_per_participant_video_snapshot_callback(self, request_id: str, frames: list, error: str | None):
+        # Called from the adapter's websocket thread, which also carries the meeting audio and video,
+        # so the Redis write happens on the main loop instead
+        GLib.idle_add(lambda: self.save_per_participant_video_snapshot_result(request_id, frames, error))
+
+    def save_per_participant_video_snapshot_result(self, request_id: str, frames: list, error: str | None):
         if error:
             logger.warning(f"Failed to capture per participant video snapshot for request {request_id}: {error}")
         else:
             logger.info(f"Captured per participant video snapshot for request {request_id} with {len(frames)} frames")
 
-        # If the web server already stopped waiting, the result just expires unread
-        with PerParticipantVideoSnapshotStore() as snapshot_store:
-            snapshot_store.set_result(request_id, frames=frames, error=error)
+        # If the web server already stopped waiting, the result just expires unread.
+        # If the write fails, the web server times out waiting for this snapshot; nothing else is affected.
+        try:
+            # The timeout bounds how long the main loop can be held up by this write
+            with PerParticipantVideoSnapshotStore(socket_timeout_seconds=2) as snapshot_store:
+                snapshot_store.set_result(request_id, frames=frames, error=error)
+        except Exception as e:
+            logger.warning(f"Failed to save per participant video snapshot result for request {request_id}: {e}")
 
     def take_action_based_on_chat_message_reaction_requests_in_db(self):
         if not self.adapter.is_ready_to_send_chat_messages():
