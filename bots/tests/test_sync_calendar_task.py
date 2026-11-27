@@ -20,11 +20,13 @@ from bots.models import (
     WebhookTriggerTypes,
 )
 from bots.tasks.sync_calendar_task import (
+    MAX_ERROR_RESPONSE_BODY_CHARS,
     CalendarAPIAuthenticationError,
     CalendarAPIError,
     CalendarSyncHandler,
     GoogleCalendarSyncHandler,
     MicrosoftCalendarSyncHandler,
+    _truncated_response_body,
     enqueue_sync_calendar_task,
     extract_meeting_url_from_text,
     sync_bot_with_calendar_event,
@@ -41,6 +43,22 @@ def _error_response(status_code, body):
     response._content = body.encode()
     response.url = "https://example.com/"
     return response
+
+
+class TestTruncatedResponseBody(TestCase):
+    """Test the _truncated_response_body function."""
+
+    def test_no_response(self):
+        self.assertIsNone(_truncated_response_body(requests.ReadTimeout("read timed out")))
+
+    def test_short_body_is_unchanged(self):
+        e = requests.HTTPError(response=_error_response(503, "<html>Service Unavailable</html>"))
+        self.assertEqual(_truncated_response_body(e), "<html>Service Unavailable</html>")
+
+    def test_long_body_is_truncated(self):
+        body = "x" * (MAX_ERROR_RESPONSE_BODY_CHARS + 1000)
+        e = requests.HTTPError(response=_error_response(503, body))
+        self.assertEqual(_truncated_response_body(e), "x" * MAX_ERROR_RESPONSE_BODY_CHARS + f"... (truncated, {len(body)} chars)")
 
 
 class TestExtractMeetingUrlFromText(TestCase):
@@ -741,7 +759,7 @@ class TestGoogleCalendarSyncHandler(TestCase):
 
     @patch("requests.post")
     def test_get_access_token_timeout(self, mock_post):
-        """A timeout has no response: it raises a CalendarAPIError, not an AttributeError or an authentication error."""
+        """A timeout has no response: it raises a CalendarAPIError that keeps the cause, not an AttributeError or an authentication error."""
         handler = GoogleCalendarSyncHandler(self.calendar.id)
         mock_post.side_effect = requests.ReadTimeout("read timed out")
 
@@ -749,6 +767,7 @@ class TestGoogleCalendarSyncHandler(TestCase):
             handler._get_access_token()
 
         self.assertIs(type(ctx.exception), CalendarAPIError)
+        self.assertIn("read timed out", str(ctx.exception))
 
     @patch("requests.post")
     def test_get_access_token_error_body_not_json(self, mock_post):
@@ -761,6 +780,18 @@ class TestGoogleCalendarSyncHandler(TestCase):
 
         self.assertIs(type(ctx.exception), CalendarAPIError)
         self.assertIn("<html>Service Unavailable</html>", str(ctx.exception))
+
+    @patch("requests.post")
+    def test_get_access_token_long_error_body_is_truncated(self, mock_post):
+        """A long error body is cut short in the error message."""
+        handler = GoogleCalendarSyncHandler(self.calendar.id)
+        mock_post.return_value = _error_response(503, "<html>" + "x" * 100_000 + "</html>")
+
+        with self.assertRaises(CalendarAPIError) as ctx:
+            handler._get_access_token()
+
+        self.assertIn("(truncated, 100013 chars)", str(ctx.exception))
+        self.assertLess(len(str(ctx.exception)), MAX_ERROR_RESPONSE_BODY_CHARS + 300)
 
     @patch("requests.post")
     def test_get_access_token_invalid_grant_message(self, mock_post):
@@ -998,7 +1029,7 @@ class TestMicrosoftCalendarSyncHandler(TestCase):
 
     @patch("requests.post")
     def test_get_access_token_timeout(self, mock_post):
-        """A timeout has no response: it raises a CalendarAPIError, not an AttributeError or an authentication error."""
+        """A timeout has no response: it raises a CalendarAPIError that keeps the cause, not an AttributeError or an authentication error."""
         handler = MicrosoftCalendarSyncHandler(self.calendar.id)
         mock_post.side_effect = requests.ReadTimeout("read timed out")
 
@@ -1006,6 +1037,7 @@ class TestMicrosoftCalendarSyncHandler(TestCase):
             handler._get_access_token()
 
         self.assertIs(type(ctx.exception), CalendarAPIError)
+        self.assertIn("read timed out", str(ctx.exception))
 
     @patch("requests.post")
     def test_get_access_token_error_body_not_json(self, mock_post):
@@ -1040,6 +1072,17 @@ class TestMicrosoftCalendarSyncHandler(TestCase):
             handler._get_access_token()
 
         self.assertEqual(str(ctx.exception), "Microsoft Authentication error: ErrorAccessDenied: access is denied")
+
+    @patch("requests.post")
+    def test_get_access_token_authentication_error_substring_past_truncation(self, mock_post):
+        """An authentication error substring is detected in the full body, even past the part kept in the message."""
+        handler = MicrosoftCalendarSyncHandler(self.calendar.id)
+        mock_post.return_value = _error_response(403, "x" * (MAX_ERROR_RESPONSE_BODY_CHARS + 100) + " ErrorAccessDenied")
+
+        with self.assertRaises(CalendarAPIAuthenticationError) as ctx:
+            handler._get_access_token()
+
+        self.assertIn("(truncated,", str(ctx.exception))
 
     @patch("requests.Session")
     def test_make_graph_request_timeout(self, mock_session_class):
