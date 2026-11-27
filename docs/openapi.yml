@@ -1995,7 +1995,7 @@ components:
           type: string
           minLength: 1
           description: A single Unicode emoji, for example 👀 or ✅.
-          maxLength: 10
+          maxLength: 100
         action:
           allOf:
           - $ref: '#/components/schemas/ActionEnum'
