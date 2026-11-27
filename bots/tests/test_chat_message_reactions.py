@@ -67,6 +67,23 @@ class ChatMessageReactionTest(TestCase):
         self.assertEqual(response.status_code, 400, response.content)
         self.assertIn("action", response.json())
 
+    def test_emoji_not_in_allow_list_is_rejected(self):
+        for emoji in ["🦄", "❤", "👍🏽", "not an emoji"]:
+            with self.subTest(emoji=emoji):
+                response, mock_send_sync_command = self._post_reaction({"message_id": self.chat_message.object_id, "emoji": emoji})
+
+                self.assertEqual(response.status_code, 400, response.content)
+                self.assertIn("emoji", response.json())
+                mock_send_sync_command.assert_not_called()
+        self.assertFalse(BotChatMessageReactionRequest.objects.exists())
+
+    def test_heart_emoji_is_accepted(self):
+        response, mock_send_sync_command = self._post_reaction({"message_id": self.chat_message.object_id, "emoji": "❤️"})
+
+        self.assertEqual(response.status_code, 200, response.content)
+        mock_send_sync_command.assert_called_once_with(self.bot, "sync_chat_message_reaction_requests")
+        self.assertEqual(BotChatMessageReactionRequest.objects.get(bot=self.bot).emoji, "❤️")
+
     def test_unknown_chat_message_returns_404(self):
         response, mock_send_sync_command = self._post_reaction({"message_id": "msg_doesnotexist0000", "emoji": "👀"})
 

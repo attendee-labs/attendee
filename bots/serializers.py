@@ -1091,7 +1091,7 @@ class BotChatMessageRequestSerializer(serializers.Serializer):
         required=False,
         allow_null=True,
         allow_blank=True,
-        help_text="Reply in a chat thread: the thread_id from a chat message's additional_data. A top-level message's thread_id is its own id, so passing it starts a thread on that message. Only supported for Zoom bots; other bots send the message without a thread. When set, the reply goes to the same audience as the thread's parent message and the to field is ignored by Zoom web SDK bots.",
+        help_text="The ID of the thread to reply in, taken from additional_data.thread_id on the chat message object. Only supported for Zoom.",
     )
 
     def validate(self, data):
@@ -1172,6 +1172,72 @@ class PerParticipantVideoFramesSnapshotSerializer(serializers.Serializer):
     frames = PerParticipantVideoFrameSerializer(many=True, help_text="One frame per participant video source that was visible to the bot when the snapshot was taken. Empty if nothing matching the request was visible.")
 
 
+# Fully qualified forms, so reactions match the ones Zoom's emoji picker sends.
+ALLOWED_CHAT_MESSAGE_REACTION_EMOJIS = (
+    "😂",
+    "❤️",
+    "🤣",
+    "👍",
+    "😭",
+    "🙏",
+    "😘",
+    "🥰",
+    "😍",
+    "😊",
+    "🎉",
+    "😁",
+    "💕",
+    "🥺",
+    "😅",
+    "🔥",
+    "☺️",
+    "🤦",
+    "♥️",
+    "🤷",
+    "🙄",
+    "😆",
+    "🤗",
+    "😉",
+    "🎂",
+    "🤔",
+    "👏",
+    "🙂",
+    "😳",
+    "🥳",
+    "😎",
+    "👌",
+    "💜",
+    "😔",
+    "💪",
+    "✨",
+    "💖",
+    "👀",
+    "😋",
+    "😏",
+    "😢",
+    "👉",
+    "💗",
+    "😩",
+    "💯",
+    "💙",
+    "😃",
+    "✅",
+    "😮",
+    "👎",
+    "🚀",
+    "🙌",
+    "💡",
+    "📈",
+    "🤯",
+    "🫡",
+    "🧠",
+    "🤝",
+    "💰",
+    "🐐",
+    "⚡",
+)
+
+
 @extend_schema_serializer(
     examples=[
         OpenApiExample(
@@ -1189,18 +1255,23 @@ class PerParticipantVideoFramesSnapshotSerializer(serializers.Serializer):
 class BotChatMessageReactionRequestSerializer(serializers.Serializer):
     message_id = serializers.CharField(
         max_length=32,
-        help_text="The id of the chat message to react to, as returned by the chat messages endpoint and the chat_messages.update webhook (for example msg_xxxxxxxxxxxxxxxx).",
+        help_text="The id of the chat message to react to.",
     )
     emoji = serializers.CharField(
         max_length=100,
         trim_whitespace=True,
-        help_text="A single Unicode emoji, for example 👀 or ✅. Skin tone, keycap, flag and ZWJ sequences are allowed. Use the fully qualified form (for example ❤️ rather than ❤) so the reaction matches the one Zoom's emoji picker sends. Zoom accounts can restrict chat reactions to 👏 👍 😂 😮 ❤️ 🎉; in those meetings other emoji are rejected by the bot.",
+        help_text="A single Unicode emoji, for example 👀 or ✅.",
     )
     action = serializers.ChoiceField(
         choices=BotChatMessageReactionActions.values,
         default=BotChatMessageReactionActions.ADD,
-        help_text="Whether to add the reaction or remove a reaction the bot added earlier. Adding a reaction the bot already added, or removing one it hasn't added, does nothing.",
+        help_text="Whether to add the reaction or remove a reaction the bot added earlier.",
     )
+
+    def validate_emoji(self, value):
+        if value not in ALLOWED_CHAT_MESSAGE_REACTION_EMOJIS:
+            raise serializers.ValidationError(f"Unsupported emoji. Must be one of: {' '.join(ALLOWED_CHAT_MESSAGE_REACTION_EMOJIS)}")
+        return value
 
 
 @extend_schema_serializer(

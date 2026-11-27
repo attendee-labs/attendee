@@ -1989,25 +1989,19 @@ components:
         message_id:
           type: string
           minLength: 1
-          description: The id of the chat message to react to, as returned by the
-            chat messages endpoint and the chat_messages.update webhook (for example
-            msg_xxxxxxxxxxxxxxxx).
+          description: The id of the chat message to react to.
           maxLength: 32
         emoji:
           type: string
           minLength: 1
-          description: A single Unicode emoji, for example 👀 or ✅. Skin tone, keycap,
-            flag and ZWJ sequences are allowed. Use the fully qualified form (for
-            example ❤️ rather than ❤) so the reaction matches the one Zoom's emoji
-            picker sends. Zoom accounts can restrict chat reactions to 👏 👍 😂 😮 ❤️
-            🎉; in those meetings other emoji are rejected by the bot.
-          maxLength: 10
+          description: A single Unicode emoji, for example 👀 or ✅.
+          maxLength: 100
         action:
           allOf:
           - $ref: '#/components/schemas/ActionEnum'
           default: add
           description: |-
-            Whether to add the reaction or remove a reaction the bot added earlier. Adding a reaction the bot already added, or removing one it hasn't added, does nothing.
+            Whether to add the reaction or remove a reaction the bot added earlier.
 
             * `add` - add
             * `remove` - remove
@@ -2040,12 +2034,8 @@ components:
         thread_id:
           type: string
           nullable: true
-          description: 'Reply in a chat thread: the thread_id from a chat message''s
-            additional_data. A top-level message''s thread_id is its own id, so passing
-            it starts a thread on that message. Only supported for Zoom bots; other
-            bots send the message without a thread. When set, the reply goes to the
-            same audience as the thread''s parent message and the to field is ignored
-            by Zoom web SDK bots.'
+          description: The ID of the thread to reply in, taken from additional_data.thread_id on the chat message object. Only
+            supported for Zoom.
           maxLength: 255
       required:
       - message
