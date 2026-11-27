@@ -1211,9 +1211,8 @@ class PerParticipantVideoSnapshotView(APIView):
     authentication_classes = [ApiKeyAuthentication]
     throttle_classes = [ProjectPostThrottle]
 
-    # How long we wait for the bot to fill in the snapshot request before giving up
-    POLL_INTERVAL_SECONDS = 0.2
-    POLL_TIMEOUT_SECONDS = 5
+    # How long we wait for the bot to capture the frames before giving up
+    RESULT_TIMEOUT_SECONDS = 5
 
     @extend_schema(
         operation_id="Capture Per Participant Video Snapshot",
@@ -1279,7 +1278,7 @@ class PerParticipantVideoSnapshotView(APIView):
                     # Send sync command to notify bot of new snapshot request
                     send_sync_command(bot, "sync_per_participant_video_snapshot_requests")
 
-                    result = snapshot_store.wait_for_result(snapshot_request.id, timeout_seconds=self.POLL_TIMEOUT_SECONDS, poll_interval_seconds=self.POLL_INTERVAL_SECONDS)
+                    result = snapshot_store.wait_for_result(snapshot_request.id, timeout_seconds=self.RESULT_TIMEOUT_SECONDS)
                     if result is None:
                         timed_out = True
                         logging.error(f"Timed out waiting for per participant video snapshot for bot {bot.object_id}")

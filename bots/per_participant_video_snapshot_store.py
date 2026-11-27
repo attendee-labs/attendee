@@ -7,15 +7,14 @@ so nothing about it is kept in the database:
 - The web server creates the request under a per-bot key. The key is only set if it
   doesn't already exist, so it doubles as a lock that allows one pending or active
   snapshot per bot. It expires on its own so a bot that never answers can't hold it forever.
-- The bot reads the request, captures the frames and stores the result under a
-  per-request key, which also expires on its own if nobody picks it up.
-- The web server polls for the result, then deletes both keys.
+- The bot reads the request, captures the frames and pushes the result onto a
+  per-request list, which also expires on its own if nobody picks it up.
+- The web server waits for the result with a blocking pop, then deletes the request key.
 
 Callers should not touch the keys directly; everything goes through this class.
 """
 
 import json
-import time
 import uuid
 from dataclasses import asdict, dataclass
 
@@ -93,15 +92,20 @@ class PerParticipantVideoSnapshotStore:
 
     def set_result(self, request_id: str, frames: list | None = None, error: str | None = None):
         result = PerParticipantVideoSnapshotResult(frames=None if error else (frames or []), error=error)
-        self._redis_client.set(self._result_key(request_id), json.dumps(asdict(result)), ex=self.RESULT_TTL_SECONDS)
-
-    def wait_for_result(self, request_id: str, timeout_seconds: float, poll_interval_seconds: float) -> PerParticipantVideoSnapshotResult | None:
-        """Polls for the result of the request and removes it once found. Returns None if it doesn't arrive in time."""
         result_key = self._result_key(request_id)
-        for _ in range(round(timeout_seconds / poll_interval_seconds)):
-            time.sleep(poll_interval_seconds)
-            raw_result = self._redis_client.get(result_key)
-            if raw_result is not None:
-                self._redis_client.delete(result_key)
-                return PerParticipantVideoSnapshotResult(**json.loads(raw_result))
-        return None
+        # In one transaction so the list never exists without an expiry
+        pipeline = self._redis_client.pipeline(transaction=True)
+        pipeline.rpush(result_key, json.dumps(asdict(result)))
+        pipeline.expire(result_key, self.RESULT_TTL_SECONDS)
+        pipeline.execute()
+
+    def wait_for_result(self, request_id: str, timeout_seconds: int) -> PerParticipantVideoSnapshotResult | None:
+        """Blocks until the result of the request arrives and removes it. Returns None if it doesn't arrive in time."""
+        # Redis treats a timeout of 0 as "wait forever", and versions before 6.0 only accept whole seconds
+        if not isinstance(timeout_seconds, int) or timeout_seconds < 1:
+            raise ValueError(f"timeout_seconds must be a whole number of seconds of at least 1, got {timeout_seconds}")
+        popped = self._redis_client.blpop([self._result_key(request_id)], timeout=timeout_seconds)
+        if popped is None:
+            return None
+        _, raw_result = popped
+        return PerParticipantVideoSnapshotResult(**json.loads(raw_result))
