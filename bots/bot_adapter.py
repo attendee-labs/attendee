@@ -31,7 +31,6 @@ class BotAdapter:
         COULD_NOT_ENABLE_CLOSED_CAPTIONS = "Could not enable closed captions"
         AUTO_LEAVE_SILENCE_PENDING = "Auto leave silence pending"
         SAVE_SCREENSHOT_AND_MHTML_FILE = "Save screenshot and mhtml file"
-        PER_PARTICIPANT_VIDEO_FRAMES_SNAPSHOT_RESULT = "Per participant video frames snapshot result"
 
         # App session messages
         APP_SESSION_CONNECTED = "App session connected"

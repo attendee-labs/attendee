@@ -62,9 +62,9 @@ Screenshare video is always delivered, since the client always renders the scree
 
 ## Capturing Frames at a Single Point in Time
 
-If you only need the per-participant video at a certain moment (for example, the current screenshare when someone in the meeting asks about it), you can request a snapshot over HTTP instead of keeping a websocket connection open for the whole meeting. You do not need to configure `websocket_settings.per_participant_video` to use this.
+If you only need the per-participant video at a certain moment (for example, the current screenshare when someone in the meeting asks about it), you can request a snapshot over HTTP instead of keeping a websocket connection open for the whole meeting.
 
-Call `POST /api/v1/bots/{bot_id}/per_participant_video_frames_snapshot`:
+Call `POST /api/v1/bots/{bot_id}/per_participant_video_snapshot`:
 
 ```json
 {
@@ -96,8 +96,6 @@ The response contains one frame for each participant video source the bot can cu
 ```
 
 The `participant_uuid`, `frame`, `format` and `source` fields mean the same thing as in the websocket message.
-
-The bot must be in the `joined_recording` state. If the bot does not return the frames within 5 seconds, the request fails with a 504 status code. Attendee does not keep the frames after returning them to you.
 
 Currently snapshots are only supported for Zoom bots using the web SDK (`zoom_settings.sdk` set to `"web"`).
 

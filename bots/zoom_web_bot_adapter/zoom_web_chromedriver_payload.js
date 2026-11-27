@@ -1657,9 +1657,9 @@ window.mixedAudioStreamManager = mixedAudioStreamManager;
 const perParticipantVideoCaptureManager = new PerParticipantVideoCaptureManager();
 window.perParticipantVideoCaptureManager = perParticipantVideoCaptureManager;
 
-// Called by the bot when it receives a PerParticipantVideoFramesSnapshotRequest. The frames are
-// sent back over the websocket in a PerParticipantVideoFramesSnapshotResult message.
-window.capturePerParticipantVideoFramesSnapshot = async (requestId, videoConfig) => {
+// Called by the bot when it receives a PerParticipantVideoSnapshotRequest. The frames are
+// sent back over the websocket in a PerParticipantVideoSnapshotResult message.
+window.capturePerParticipantVideoSnapshot = async (requestId, videoConfig) => {
     try {
         if (!window.ws?.mediaSendingEnabled) {
             throw new Error('Bot is not recording');
@@ -1667,14 +1667,14 @@ window.capturePerParticipantVideoFramesSnapshot = async (requestId, videoConfig)
 
         const frames = await window.perParticipantVideoCaptureManager.captureSnapshot(videoConfig);
         window.ws?.sendJson({
-            type: 'PerParticipantVideoFramesSnapshotResult',
+            type: 'PerParticipantVideoSnapshotResult',
             requestId,
             frames,
         });
     } catch (err) {
-        console.error('Error capturing per participant video frames snapshot', err);
+        console.error('Error capturing per participant video snapshot', err);
         window.ws?.sendJson({
-            type: 'PerParticipantVideoFramesSnapshotResult',
+            type: 'PerParticipantVideoSnapshotResult',
             requestId,
             frames: [],
             error: err.message || 'Unknown error',

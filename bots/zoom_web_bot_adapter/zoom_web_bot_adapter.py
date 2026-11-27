@@ -74,11 +74,13 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
         should_ask_for_recording_permission: bool,
         zoom_tokens: dict,
         modify_dom_for_video_recording: bool,
+        add_per_participant_video_snapshot_callback: Callable[[str, list, str | None], None],
         webinar_user_email: str | None = None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
         self.modify_dom_for_video_recording = modify_dom_for_video_recording
+        self.add_per_participant_video_snapshot_callback = add_per_participant_video_snapshot_callback
         self.webinar_user_email = webinar_user_email
         self.meeting_id, self.meeting_password = parse_zoom_join_url(self.meeting_url)
         self.zoom_oauth_credentials_callback = zoom_oauth_credentials_callback
@@ -120,9 +122,29 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
     def send_chat_message(self, text, to_user_uuid, thread_id=None):
         self.driver.execute_script("window?.sendChatMessage(arguments[0], arguments[1], arguments[2]);", text, to_user_uuid, thread_id)
 
-    def capture_per_participant_video_frames_snapshot(self, request_id: int, per_participant_realtime_video_configuration: PerParticipantRealtimeVideoConfiguration):
-        # The result is sent back asynchronously over the websocket as a PerParticipantVideoFramesSnapshotResult message
-        self.driver.execute_script("window?.capturePerParticipantVideoFramesSnapshot(arguments[0], arguments[1]);", request_id, per_participant_realtime_video_configuration.to_dict())
+    def capture_per_participant_video_snapshot(self, request_id: str, per_participant_realtime_video_configuration: PerParticipantRealtimeVideoConfiguration):
+        # The page sends the result back asynchronously over the websocket, and it's passed on in handle_per_participant_video_snapshot_result
+        self.driver.execute_script("window?.capturePerParticipantVideoSnapshot(arguments[0], arguments[1]);", request_id, per_participant_realtime_video_configuration.to_dict())
+
+    def handle_per_participant_video_snapshot_result(self, json_data):
+        # This runs on the websocket thread that also carries the meeting audio and video, so a bad
+        # snapshot result must not raise. The web server just times out waiting for that snapshot.
+        try:
+            frames = [
+                {
+                    "participant_uuid": frame["participantId"],
+                    "source": "screenshare" if frame["isScreenShare"] else "webcam",
+                    "frame": frame["frame"],
+                    "format": "jpeg",
+                    "width": frame["width"],
+                    "height": frame["height"],
+                    "timestamp_ms": int(frame["timestamp"]),
+                }
+                for frame in json_data.get("frames") or []
+            ]
+            self.add_per_participant_video_snapshot_callback(json_data.get("requestId"), frames, json_data.get("error"))
+        except Exception as e:
+            logger.warning(f"Failed to handle per participant video snapshot result for request {json_data.get('requestId')}: {e}")
 
     def send_chat_message_reaction(self, message_uuid, emoji, action):
         self.driver.execute_script("window?.sendChatMessageReaction(arguments[0], arguments[1], arguments[2]);", message_uuid, emoji, action)
