@@ -322,7 +322,7 @@ class PerParticipantVideoSnapshotBotTest(TestCase):
         with patch("bots.bot_controller.bot_controller.PerParticipantVideoSnapshotStore") as mock_store_class:
             controller.save_per_participant_video_snapshot_result("some-request", [], None)
 
-        mock_store_class.assert_called_once_with(socket_timeout_seconds=BotController.PER_PARTICIPANT_VIDEO_SNAPSHOT_RESULT_WRITE_TIMEOUT_SECONDS)
+        mock_store_class.assert_called_once_with(socket_timeout_seconds=2)
 
     def test_zoom_web_adapter_asks_page_for_snapshot(self):
         # Skip __init__, which sets up the browser; capture_per_participant_video_snapshot only needs the driver

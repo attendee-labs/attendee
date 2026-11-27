@@ -1321,9 +1321,6 @@ class BotController:
             ),
         )
 
-    # How long the main loop can be held up by writing a snapshot result to Redis
-    PER_PARTICIPANT_VIDEO_SNAPSHOT_RESULT_WRITE_TIMEOUT_SECONDS = 2
-
     def add_per_participant_video_snapshot_callback(self, request_id: str, frames: list, error: str | None):
         # Called from the adapter's websocket thread, which also carries the meeting audio and video,
         # so the Redis write happens on the main loop instead
@@ -1338,7 +1335,8 @@ class BotController:
         # If the web server already stopped waiting, the result just expires unread.
         # If the write fails, the web server times out waiting for this snapshot; nothing else is affected.
         try:
-            with PerParticipantVideoSnapshotStore(socket_timeout_seconds=self.PER_PARTICIPANT_VIDEO_SNAPSHOT_RESULT_WRITE_TIMEOUT_SECONDS) as snapshot_store:
+            # The timeout bounds how long the main loop can be held up by this write
+            with PerParticipantVideoSnapshotStore(socket_timeout_seconds=2) as snapshot_store:
                 snapshot_store.set_result(request_id, frames=frames, error=error)
         except Exception as e:
             logger.warning(f"Failed to save per participant video snapshot result for request {request_id}: {e}")
