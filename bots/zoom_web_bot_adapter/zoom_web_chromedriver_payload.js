@@ -176,10 +176,27 @@ class PerParticipantVideoCaptureManager {
         if (!rawNodeId) return null;
 
         const nodeId = Number.parseInt(rawNodeId, 10);
+        if (Number.isNaN(nodeId)) return null;
+
+        // node-id 1 is Zoom's virtual "active speaker" stream (used in speaker view, and in
+        // gallery view when only one remote webcam is on). Its content follows the current
+        // active speaker, so resolve the participant from the SSRC currently feeding it.
+        if (nodeId === 1) {
+            const activeSpeakerSsrc = videoPlayer.getCurrentMediaSDK?.()?.activeSpeakerSsrc;
+            if (!activeSpeakerSsrc) return null;
+
+            const participantId = (activeSpeakerSsrc >> 10 << 10).toString();
+            return {
+                nodeId,
+                participantId,
+                isScreenShare: false,
+                captureKey: this.makeCaptureKey(participantId, false),
+            };
+        }
 
         const participantIdInteger = nodeId >> 10 << 10;
         const participantId = participantIdInteger.toString();
-        const isScreenShare = nodeId !== participantIdInteger;
+        const isScreenShare = nodeId !== participantIdInteger || videoPlayer.getAttribute('media-type') === 'share';
 
         return {
             nodeId,
