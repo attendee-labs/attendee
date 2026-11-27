@@ -137,10 +137,12 @@ class Command(BaseCommand):
             last_enqueued = calendar.sync_task_enqueued_at.isoformat() if calendar.sync_task_enqueued_at else "never"
             # If the last sync enqueued for this calendar hasn't succeeded (it's still queued, running or retrying, or it failed),
             # give this one a single attempt. Otherwise, during a provider outage, every cycle starts another chain of retries
-            # for the same calendar and the tasks pile up.
+            # for the same calendar and the tasks pile up. The periodic sync, once the last one was enqueued 24 hours ago,
+            # always gets all of its retries.
             previous_sync_succeeded = calendar.sync_task_enqueued_at is None or (calendar.last_successful_sync_at is not None and calendar.last_successful_sync_at >= calendar.sync_task_enqueued_at)
-            log.info("Launching calendar sync for calendar %s (last enqueued: %s, retries allowed: %s)", calendar.object_id, last_enqueued, previous_sync_succeeded)
-            enqueue_sync_calendar_task(calendar, allow_retries=previous_sync_succeeded)
+            allow_retries = previous_sync_succeeded or calendar.sync_task_enqueued_at <= cutoff_time
+            log.info("Launching calendar sync for calendar %s (last enqueued: %s, retries allowed: %s)", calendar.object_id, last_enqueued, allow_retries)
+            enqueue_sync_calendar_task(calendar, allow_retries=allow_retries)
 
         log.info("Launched %d calendar sync tasks", len(calendars))
 
