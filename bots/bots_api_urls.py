@@ -65,9 +65,9 @@ urlpatterns = [
         name="bot-delete-data",
     ),
     path(
-        "bots/<str:object_id>/per_participant_video_frames_snapshot",
-        bots_api_views.PerParticipantVideoFramesSnapshotView.as_view(),
-        name="bot-per-participant-video-frames-snapshot",
+        "bots/<str:object_id>/per_participant_video_snapshot",
+        bots_api_views.PerParticipantVideoSnapshotView.as_view(),
+        name="bot-per-participant-video-snapshot",
     ),
     path(
         "bots/<str:object_id>/pause_recording",

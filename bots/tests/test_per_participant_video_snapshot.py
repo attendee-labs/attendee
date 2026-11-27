@@ -11,9 +11,9 @@ from bots.models import (
     Bot,
     BotStates,
     Participant,
-    PerParticipantVideoFramesSnapshotRequest,
-    PerParticipantVideoFramesSnapshotRequestManager,
-    PerParticipantVideoFramesSnapshotRequestStates,
+    PerParticipantVideoSnapshotRequest,
+    PerParticipantVideoSnapshotRequestManager,
+    PerParticipantVideoSnapshotRequestStates,
     Project,
 )
 from bots.per_participant_realtime_video_configuration import PerParticipantRealtimeVideoConfiguration, PerParticipantRealtimeVideoSourceConfiguration
@@ -32,7 +32,7 @@ def stored_frame(participant_uuid, source="screenshare"):
     }
 
 
-class PerParticipantVideoFramesSnapshotViewTest(TestCase):
+class PerParticipantVideoSnapshotViewTest(TestCase):
     def setUp(self):
         self.organization = Organization.objects.create(name="Test Org", centicredits=10000)
         self.project = Project.objects.create(name="Test Project", organization=self.organization)
@@ -50,14 +50,14 @@ class PerParticipantVideoFramesSnapshotViewTest(TestCase):
     def _request_snapshot(self, data, bot_side_effect=None):
         def send_sync_command_side_effect(bot, command):
             if bot_side_effect:
-                snapshot_request = PerParticipantVideoFramesSnapshotRequest.objects.get(bot=bot)
-                PerParticipantVideoFramesSnapshotRequestManager.set_request_in_progress(snapshot_request)
+                snapshot_request = PerParticipantVideoSnapshotRequest.objects.get(bot=bot)
+                PerParticipantVideoSnapshotRequestManager.set_request_in_progress(snapshot_request)
                 snapshot_request.refresh_from_db()
                 bot_side_effect(snapshot_request)
 
         with patch("bots.bots_api_views.send_sync_command", side_effect=send_sync_command_side_effect) as mock_send_sync_command, patch("bots.bots_api_views.time.sleep") as mock_sleep:
             response = self.client.post(
-                f"/api/v1/bots/{self.bot.object_id}/per_participant_video_frames_snapshot",
+                f"/api/v1/bots/{self.bot.object_id}/per_participant_video_snapshot",
                 data=json.dumps(data),
                 content_type="application/json",
                 HTTP_AUTHORIZATION=f"Token {self.api_key_plain}",
@@ -66,12 +66,12 @@ class PerParticipantVideoFramesSnapshotViewTest(TestCase):
 
     def test_returns_frames_filled_in_by_bot_and_clears_them(self):
         def fulfill(snapshot_request):
-            PerParticipantVideoFramesSnapshotRequestManager.set_request_fulfilled(snapshot_request, [stored_frame("16778240"), stored_frame("99999999", source="webcam")])
+            PerParticipantVideoSnapshotRequestManager.set_request_fulfilled(snapshot_request, [stored_frame("16778240"), stored_frame("99999999", source="webcam")])
 
         response, mock_send_sync_command, _ = self._request_snapshot({}, bot_side_effect=fulfill)
 
         self.assertEqual(response.status_code, 200, response.content)
-        mock_send_sync_command.assert_called_once_with(self.bot, "sync_per_participant_video_frames_snapshot_requests")
+        mock_send_sync_command.assert_called_once_with(self.bot, "sync_per_participant_video_snapshot_requests")
         self.assertEqual(
             response.json(),
             {
@@ -83,8 +83,8 @@ class PerParticipantVideoFramesSnapshotViewTest(TestCase):
             },
         )
 
-        snapshot_request = PerParticipantVideoFramesSnapshotRequest.objects.get(bot=self.bot)
-        self.assertEqual(snapshot_request.state, PerParticipantVideoFramesSnapshotRequestStates.FULFILLED)
+        snapshot_request = PerParticipantVideoSnapshotRequest.objects.get(bot=self.bot)
+        self.assertEqual(snapshot_request.state, PerParticipantVideoSnapshotRequestStates.FULFILLED)
         self.assertIsNone(snapshot_request.frames)
         # Webcams are only captured when requested
         self.assertEqual(snapshot_request.webcam_resolution, "none")
@@ -92,13 +92,13 @@ class PerParticipantVideoFramesSnapshotViewTest(TestCase):
 
     def test_stores_requested_resolutions(self):
         def fulfill(snapshot_request):
-            PerParticipantVideoFramesSnapshotRequestManager.set_request_fulfilled(snapshot_request, [])
+            PerParticipantVideoSnapshotRequestManager.set_request_fulfilled(snapshot_request, [])
 
         response, _, _ = self._request_snapshot({"webcam_resolution": "720p", "screenshare_resolution": "1080p"}, bot_side_effect=fulfill)
 
         self.assertEqual(response.status_code, 200, response.content)
         self.assertEqual(response.json(), {"frames": []})
-        snapshot_request = PerParticipantVideoFramesSnapshotRequest.objects.get(bot=self.bot)
+        snapshot_request = PerParticipantVideoSnapshotRequest.objects.get(bot=self.bot)
         self.assertEqual(snapshot_request.webcam_resolution, "720p")
         self.assertEqual(snapshot_request.screenshare_resolution, "1080p")
 
@@ -107,17 +107,17 @@ class PerParticipantVideoFramesSnapshotViewTest(TestCase):
 
         self.assertEqual(response.status_code, 504, response.content)
         self.assertEqual(mock_sleep.call_count, 25)
-        snapshot_request = PerParticipantVideoFramesSnapshotRequest.objects.get(bot=self.bot)
-        self.assertEqual(snapshot_request.state, PerParticipantVideoFramesSnapshotRequestStates.FAILED)
+        snapshot_request = PerParticipantVideoSnapshotRequest.objects.get(bot=self.bot)
+        self.assertEqual(snapshot_request.state, PerParticipantVideoSnapshotRequestStates.FAILED)
 
         # A result that arrives after the timeout is not stored
-        self.assertFalse(PerParticipantVideoFramesSnapshotRequestManager.set_request_fulfilled(snapshot_request, [stored_frame("16778240")]))
+        self.assertFalse(PerParticipantVideoSnapshotRequestManager.set_request_fulfilled(snapshot_request, [stored_frame("16778240")]))
         snapshot_request.refresh_from_db()
         self.assertIsNone(snapshot_request.frames)
 
     def test_returns_error_when_bot_fails_to_capture(self):
         def fail(snapshot_request):
-            PerParticipantVideoFramesSnapshotRequestManager.set_request_failed(snapshot_request, {"description": "Bot is not recording"})
+            PerParticipantVideoSnapshotRequestManager.set_request_failed(snapshot_request, {"description": "Bot is not recording"})
 
         response, _, _ = self._request_snapshot({}, bot_side_effect=fail)
 
@@ -137,9 +137,9 @@ class PerParticipantVideoFramesSnapshotViewTest(TestCase):
                 response, mock_send_sync_command, _ = self._request_snapshot({})
 
                 self.assertEqual(response.status_code, 400, response.content)
-                self.assertEqual(response.json(), {"error": "Capturing per participant video frames snapshots is only supported for Zoom Web SDK"})
+                self.assertEqual(response.json(), {"error": "Capturing per participant video snapshots is only supported for Zoom Web SDK"})
                 mock_send_sync_command.assert_not_called()
-                self.assertFalse(PerParticipantVideoFramesSnapshotRequest.objects.exists())
+                self.assertFalse(PerParticipantVideoSnapshotRequest.objects.exists())
 
     def test_rejects_bot_that_is_not_recording(self):
         for state in [BotStates.JOINING, BotStates.JOINED_RECORDING_PAUSED, BotStates.ENDED]:
@@ -163,7 +163,7 @@ class PerParticipantVideoFramesSnapshotViewTest(TestCase):
 
     def test_returns_404_for_unknown_bot(self):
         response = self.client.post(
-            "/api/v1/bots/bot_doesnotexist/per_participant_video_frames_snapshot",
+            "/api/v1/bots/bot_doesnotexist/per_participant_video_snapshot",
             data=json.dumps({}),
             content_type="application/json",
             HTTP_AUTHORIZATION=f"Token {self.api_key_plain}",
@@ -171,7 +171,7 @@ class PerParticipantVideoFramesSnapshotViewTest(TestCase):
         self.assertEqual(response.status_code, 404)
 
 
-class PerParticipantVideoFramesSnapshotBotTest(TestCase):
+class PerParticipantVideoSnapshotBotTest(TestCase):
     def setUp(self):
         self.organization = Organization.objects.create(name="Test Org", centicredits=10000)
         self.project = Project.objects.create(name="Test Project", organization=self.organization)
@@ -184,16 +184,16 @@ class PerParticipantVideoFramesSnapshotBotTest(TestCase):
         )
 
     def test_bot_controller_sends_enqueued_requests_to_adapter_once(self):
-        snapshot_request = PerParticipantVideoFramesSnapshotRequest.objects.create(bot=self.bot, webcam_resolution="none", screenshare_resolution="1080p")
+        snapshot_request = PerParticipantVideoSnapshotRequest.objects.create(bot=self.bot, webcam_resolution="none", screenshare_resolution="1080p")
 
         controller = BotController(self.bot.id)
         controller.adapter = MagicMock()
 
-        controller.take_action_based_on_per_participant_video_frames_snapshot_requests_in_db()
+        controller.take_action_based_on_per_participant_video_snapshot_requests_in_db()
         # A second sync while the first capture is in progress doesn't capture again
-        controller.take_action_based_on_per_participant_video_frames_snapshot_requests_in_db()
+        controller.take_action_based_on_per_participant_video_snapshot_requests_in_db()
 
-        controller.adapter.capture_per_participant_video_frames_snapshot.assert_called_once_with(
+        controller.adapter.capture_per_participant_video_snapshot.assert_called_once_with(
             request_id=snapshot_request.id,
             per_participant_realtime_video_configuration=PerParticipantRealtimeVideoConfiguration(
                 webcam_configuration=PerParticipantRealtimeVideoSourceConfiguration(resolution="none"),
@@ -204,37 +204,37 @@ class PerParticipantVideoFramesSnapshotBotTest(TestCase):
     def test_bot_controller_fails_requests_when_bot_is_not_recording(self):
         self.bot.state = BotStates.JOINED_RECORDING_PAUSED
         self.bot.save()
-        snapshot_request = PerParticipantVideoFramesSnapshotRequest.objects.create(bot=self.bot, webcam_resolution="none", screenshare_resolution="360p")
+        snapshot_request = PerParticipantVideoSnapshotRequest.objects.create(bot=self.bot, webcam_resolution="none", screenshare_resolution="360p")
 
         controller = BotController(self.bot.id)
         controller.adapter = MagicMock()
 
-        controller.take_action_based_on_per_participant_video_frames_snapshot_requests_in_db()
+        controller.take_action_based_on_per_participant_video_snapshot_requests_in_db()
 
-        controller.adapter.capture_per_participant_video_frames_snapshot.assert_not_called()
+        controller.adapter.capture_per_participant_video_snapshot.assert_not_called()
         snapshot_request.refresh_from_db()
-        self.assertEqual(snapshot_request.state, PerParticipantVideoFramesSnapshotRequestStates.FAILED)
+        self.assertEqual(snapshot_request.state, PerParticipantVideoSnapshotRequestStates.FAILED)
 
     def test_bot_controller_stores_result_from_adapter(self):
-        fulfilled_request = PerParticipantVideoFramesSnapshotRequest.objects.create(bot=self.bot, webcam_resolution="none", screenshare_resolution="360p")
-        failed_request = PerParticipantVideoFramesSnapshotRequest.objects.create(bot=self.bot, webcam_resolution="none", screenshare_resolution="360p")
+        fulfilled_request = PerParticipantVideoSnapshotRequest.objects.create(bot=self.bot, webcam_resolution="none", screenshare_resolution="360p")
+        failed_request = PerParticipantVideoSnapshotRequest.objects.create(bot=self.bot, webcam_resolution="none", screenshare_resolution="360p")
 
         controller = BotController(self.bot.id)
         controller.adapter = MagicMock()
-        controller.take_action_based_on_per_participant_video_frames_snapshot_requests_in_db()
+        controller.take_action_based_on_per_participant_video_snapshot_requests_in_db()
 
-        controller.take_action_based_on_message_from_adapter({"message": BotAdapter.Messages.PER_PARTICIPANT_VIDEO_FRAMES_SNAPSHOT_RESULT, "request_id": fulfilled_request.id, "error": None, "frames": [stored_frame("16778240")]})
-        controller.take_action_based_on_message_from_adapter({"message": BotAdapter.Messages.PER_PARTICIPANT_VIDEO_FRAMES_SNAPSHOT_RESULT, "request_id": failed_request.id, "error": "Bot is not recording", "frames": []})
+        controller.take_action_based_on_message_from_adapter({"message": BotAdapter.Messages.PER_PARTICIPANT_VIDEO_SNAPSHOT_RESULT, "request_id": fulfilled_request.id, "error": None, "frames": [stored_frame("16778240")]})
+        controller.take_action_based_on_message_from_adapter({"message": BotAdapter.Messages.PER_PARTICIPANT_VIDEO_SNAPSHOT_RESULT, "request_id": failed_request.id, "error": "Bot is not recording", "frames": []})
 
         fulfilled_request.refresh_from_db()
-        self.assertEqual(fulfilled_request.state, PerParticipantVideoFramesSnapshotRequestStates.FULFILLED)
+        self.assertEqual(fulfilled_request.state, PerParticipantVideoSnapshotRequestStates.FULFILLED)
         self.assertEqual(fulfilled_request.frames, [stored_frame("16778240")])
         failed_request.refresh_from_db()
-        self.assertEqual(failed_request.state, PerParticipantVideoFramesSnapshotRequestStates.FAILED)
+        self.assertEqual(failed_request.state, PerParticipantVideoSnapshotRequestStates.FAILED)
         self.assertEqual(failed_request.failure_data, {"description": "Bot is not recording"})
 
     def test_zoom_web_adapter_asks_page_for_snapshot(self):
-        # Skip __init__, which sets up the browser; capture_per_participant_video_frames_snapshot only needs the driver
+        # Skip __init__, which sets up the browser; capture_per_participant_video_snapshot only needs the driver
         adapter = ZoomWebBotAdapter.__new__(ZoomWebBotAdapter)
         adapter.driver = MagicMock()
         configuration = PerParticipantRealtimeVideoConfiguration(
@@ -242,17 +242,17 @@ class PerParticipantVideoFramesSnapshotBotTest(TestCase):
             screenshare_configuration=PerParticipantRealtimeVideoSourceConfiguration(resolution="720p"),
         )
 
-        adapter.capture_per_participant_video_frames_snapshot(request_id=42, per_participant_realtime_video_configuration=configuration)
+        adapter.capture_per_participant_video_snapshot(request_id=42, per_participant_realtime_video_configuration=configuration)
 
-        adapter.driver.execute_script.assert_called_once_with("window?.capturePerParticipantVideoFramesSnapshot(arguments[0], arguments[1]);", 42, configuration.to_dict())
+        adapter.driver.execute_script.assert_called_once_with("window?.capturePerParticipantVideoSnapshot(arguments[0], arguments[1]);", 42, configuration.to_dict())
 
     def test_web_adapter_converts_page_result_to_frames(self):
         adapter = ZoomWebBotAdapter.__new__(ZoomWebBotAdapter)
         adapter.send_message_callback = MagicMock()
 
-        adapter.handle_per_participant_video_frames_snapshot_result(
+        adapter.handle_per_participant_video_snapshot_result(
             {
-                "type": "PerParticipantVideoFramesSnapshotResult",
+                "type": "PerParticipantVideoSnapshotResult",
                 "requestId": 42,
                 "frames": [{"participantId": "16778240", "isScreenShare": True, "frame": "/9j/4AAQSkZJRgABAQAAAQABAAD", "width": 640, "height": 360, "timestamp": 1764177600000}],
             }
@@ -260,7 +260,7 @@ class PerParticipantVideoFramesSnapshotBotTest(TestCase):
 
         adapter.send_message_callback.assert_called_once_with(
             {
-                "message": BotAdapter.Messages.PER_PARTICIPANT_VIDEO_FRAMES_SNAPSHOT_RESULT,
+                "message": BotAdapter.Messages.PER_PARTICIPANT_VIDEO_SNAPSHOT_RESULT,
                 "request_id": 42,
                 "error": None,
                 "frames": [stored_frame("16778240")],
@@ -268,37 +268,37 @@ class PerParticipantVideoFramesSnapshotBotTest(TestCase):
         )
 
     def test_bot_controller_dispatches_all_enqueued_requests(self):
-        request_1 = PerParticipantVideoFramesSnapshotRequest.objects.create(bot=self.bot, webcam_resolution="none", screenshare_resolution="360p")
-        request_2 = PerParticipantVideoFramesSnapshotRequest.objects.create(bot=self.bot, webcam_resolution="none", screenshare_resolution="1080p")
+        request_1 = PerParticipantVideoSnapshotRequest.objects.create(bot=self.bot, webcam_resolution="none", screenshare_resolution="360p")
+        request_2 = PerParticipantVideoSnapshotRequest.objects.create(bot=self.bot, webcam_resolution="none", screenshare_resolution="1080p")
 
         controller = BotController(self.bot.id)
         controller.adapter = MagicMock()
-        controller.take_action_based_on_per_participant_video_frames_snapshot_requests_in_db()
+        controller.take_action_based_on_per_participant_video_snapshot_requests_in_db()
 
-        self.assertEqual(controller.adapter.capture_per_participant_video_frames_snapshot.call_count, 2)
+        self.assertEqual(controller.adapter.capture_per_participant_video_snapshot.call_count, 2)
         request_1.refresh_from_db()
         request_2.refresh_from_db()
-        self.assertEqual(request_1.state, PerParticipantVideoFramesSnapshotRequestStates.IN_PROGRESS)
-        self.assertEqual(request_2.state, PerParticipantVideoFramesSnapshotRequestStates.IN_PROGRESS)
+        self.assertEqual(request_1.state, PerParticipantVideoSnapshotRequestStates.IN_PROGRESS)
+        self.assertEqual(request_2.state, PerParticipantVideoSnapshotRequestStates.IN_PROGRESS)
 
     def test_bot_controller_does_not_double_dispatch_in_progress_request(self):
-        snapshot_request = PerParticipantVideoFramesSnapshotRequest.objects.create(bot=self.bot, webcam_resolution="none", screenshare_resolution="360p")
-        PerParticipantVideoFramesSnapshotRequestManager.set_request_in_progress(snapshot_request)
+        snapshot_request = PerParticipantVideoSnapshotRequest.objects.create(bot=self.bot, webcam_resolution="none", screenshare_resolution="360p")
+        PerParticipantVideoSnapshotRequestManager.set_request_in_progress(snapshot_request)
 
         controller = BotController(self.bot.id)
         controller.adapter = MagicMock()
-        controller.take_action_based_on_per_participant_video_frames_snapshot_requests_in_db()
+        controller.take_action_based_on_per_participant_video_snapshot_requests_in_db()
 
-        controller.adapter.capture_per_participant_video_frames_snapshot.assert_not_called()
+        controller.adapter.capture_per_participant_video_snapshot.assert_not_called()
 
     def test_result_after_timeout_is_discarded(self):
-        snapshot_request = PerParticipantVideoFramesSnapshotRequest.objects.create(bot=self.bot, webcam_resolution="none", screenshare_resolution="360p")
-        PerParticipantVideoFramesSnapshotRequestManager.set_request_in_progress(snapshot_request)
-        PerParticipantVideoFramesSnapshotRequestManager.set_request_failed(snapshot_request, {"description": "Timed out"})
+        snapshot_request = PerParticipantVideoSnapshotRequest.objects.create(bot=self.bot, webcam_resolution="none", screenshare_resolution="360p")
+        PerParticipantVideoSnapshotRequestManager.set_request_in_progress(snapshot_request)
+        PerParticipantVideoSnapshotRequestManager.set_request_failed(snapshot_request, {"description": "Timed out"})
 
-        result = PerParticipantVideoFramesSnapshotRequestManager.set_request_fulfilled(snapshot_request, [stored_frame("16778240")])
+        result = PerParticipantVideoSnapshotRequestManager.set_request_fulfilled(snapshot_request, [stored_frame("16778240")])
         snapshot_request.refresh_from_db()
 
         self.assertFalse(result)
         self.assertIsNone(snapshot_request.frames)
-        self.assertEqual(snapshot_request.state, PerParticipantVideoFramesSnapshotRequestStates.FAILED)
+        self.assertEqual(snapshot_request.state, PerParticipantVideoSnapshotRequestStates.FAILED)

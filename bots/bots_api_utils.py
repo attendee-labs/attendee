@@ -26,7 +26,7 @@ from .models import (
     Credentials,
     MediaBlob,
     MeetingTypes,
-    PerParticipantVideoFramesSnapshotRequest,
+    PerParticipantVideoSnapshotRequest,
     Project,
     Recording,
     TranscriptionProviders,
@@ -123,18 +123,18 @@ def create_bot_chat_message_request(bot, chat_message_data):
     return bot_chat_message_request
 
 
-def create_per_participant_video_frames_snapshot_request(bot, snapshot_request_data):
+def create_per_participant_video_snapshot_request(bot, snapshot_request_data):
     """
-    Creates a PerParticipantVideoFramesSnapshotRequest for the given bot with the provided data.
+    Creates a PerParticipantVideoSnapshotRequest for the given bot with the provided data.
 
     Args:
         bot: The Bot instance
         snapshot_request_data: Validated data containing webcam_resolution and screenshare_resolution
 
     Returns:
-        PerParticipantVideoFramesSnapshotRequest: The created snapshot request
+        PerParticipantVideoSnapshotRequest: The created snapshot request
     """
-    return PerParticipantVideoFramesSnapshotRequest.objects.create(
+    return PerParticipantVideoSnapshotRequest.objects.create(
         bot=bot,
         webcam_resolution=snapshot_request_data["webcam_resolution"],
         screenshare_resolution=snapshot_request_data["screenshare_resolution"],

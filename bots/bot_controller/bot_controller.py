@@ -48,8 +48,8 @@ from bots.models import (
     Participant,
     ParticipantEvent,
     ParticipantEventTypes,
-    PerParticipantVideoFramesSnapshotRequestManager,
-    PerParticipantVideoFramesSnapshotRequestStates,
+    PerParticipantVideoSnapshotRequestManager,
+    PerParticipantVideoSnapshotRequestStates,
     RealtimeTriggerTypes,
     Recording,
     RecordingFormats,
@@ -1298,18 +1298,18 @@ class BotController:
             )
             BotChatMessageRequestManager.set_chat_message_request_sent(chat_message_request)
 
-    def take_action_based_on_per_participant_video_frames_snapshot_requests_in_db(self):
-        snapshot_requests = self.bot_in_db.per_participant_video_frames_snapshot_requests.filter(state=PerParticipantVideoFramesSnapshotRequestStates.ENQUEUED).order_by("created_at", "id")
+    def take_action_based_on_per_participant_video_snapshot_requests_in_db(self):
+        snapshot_requests = self.bot_in_db.per_participant_video_snapshot_requests.filter(state=PerParticipantVideoSnapshotRequestStates.ENQUEUED).order_by("created_at", "id")
         for snapshot_request in snapshot_requests:
-            if not BotEventManager.is_state_that_can_capture_per_participant_video_frames_snapshot(self.bot_in_db.state):
-                PerParticipantVideoFramesSnapshotRequestManager.set_request_failed(snapshot_request, {"description": f"Bot is in state {BotStates.state_to_api_code(self.bot_in_db.state)} and cannot capture per participant video frames"})
+            if not BotEventManager.is_state_that_can_capture_per_participant_video_snapshot(self.bot_in_db.state):
+                PerParticipantVideoSnapshotRequestManager.set_request_failed(snapshot_request, {"description": f"Bot is in state {BotStates.state_to_api_code(self.bot_in_db.state)} and cannot capture per participant video frames"})
                 continue
 
-            if not PerParticipantVideoFramesSnapshotRequestManager.set_request_in_progress(snapshot_request):
+            if not PerParticipantVideoSnapshotRequestManager.set_request_in_progress(snapshot_request):
                 continue
 
-            logger.info(f"Capturing per participant video frames snapshot for request {snapshot_request.id}")
-            self.adapter.capture_per_participant_video_frames_snapshot(
+            logger.info(f"Capturing per participant video snapshot for request {snapshot_request.id}")
+            self.adapter.capture_per_participant_video_snapshot(
                 request_id=snapshot_request.id,
                 per_participant_realtime_video_configuration=PerParticipantRealtimeVideoConfiguration(
                     webcam_configuration=PerParticipantRealtimeVideoSourceConfiguration(resolution=snapshot_request.webcam_resolution),
@@ -1317,24 +1317,24 @@ class BotController:
                 ),
             )
 
-    def handle_per_participant_video_frames_snapshot_result(self, message):
+    def handle_per_participant_video_snapshot_result(self, message):
         request_id = message.get("request_id")
-        snapshot_request = self.bot_in_db.per_participant_video_frames_snapshot_requests.filter(id=request_id).first()
+        snapshot_request = self.bot_in_db.per_participant_video_snapshot_requests.filter(id=request_id).first()
         if not snapshot_request:
-            logger.warning(f"Received per participant video frames snapshot result for unknown request {request_id}")
+            logger.warning(f"Received per participant video snapshot result for unknown request {request_id}")
             return
 
         if message.get("error"):
-            logger.warning(f"Failed to capture per participant video frames snapshot for request {request_id}: {message.get('error')}")
-            PerParticipantVideoFramesSnapshotRequestManager.set_request_failed(snapshot_request, {"description": message.get("error")})
+            logger.warning(f"Failed to capture per participant video snapshot for request {request_id}: {message.get('error')}")
+            PerParticipantVideoSnapshotRequestManager.set_request_failed(snapshot_request, {"description": message.get("error")})
             return
 
         frames = message.get("frames") or []
-        if not PerParticipantVideoFramesSnapshotRequestManager.set_request_fulfilled(snapshot_request, frames):
+        if not PerParticipantVideoSnapshotRequestManager.set_request_fulfilled(snapshot_request, frames):
             # The web server stopped waiting (timed out) before the frames arrived, so we don't store them
-            logger.info(f"Per participant video frames snapshot request {request_id} is no longer in progress (timed out), so discarding the {len(frames)} captured frames")
+            logger.info(f"Per participant video snapshot request {request_id} is no longer in progress (timed out), so discarding the {len(frames)} captured frames")
             return
-        logger.info(f"Fulfilled per participant video frames snapshot request {request_id} with {len(frames)} frames")
+        logger.info(f"Fulfilled per participant video snapshot request {request_id} with {len(frames)} frames")
 
     def take_action_based_on_chat_message_reaction_requests_in_db(self):
         if not self.adapter.is_ready_to_send_chat_messages():
@@ -1457,10 +1457,10 @@ class BotController:
                 logger.info(f"Syncing chat message requests for bot {self.bot_in_db.object_id}")
                 self.bot_in_db.refresh_from_db()
                 self.take_action_based_on_chat_message_requests_in_db()
-            elif command == "sync_per_participant_video_frames_snapshot_requests":
-                logger.info(f"Syncing per participant video frames snapshot requests for bot {self.bot_in_db.object_id}")
+            elif command == "sync_per_participant_video_snapshot_requests":
+                logger.info(f"Syncing per participant video snapshot requests for bot {self.bot_in_db.object_id}")
                 self.bot_in_db.refresh_from_db()
-                self.take_action_based_on_per_participant_video_frames_snapshot_requests_in_db()
+                self.take_action_based_on_per_participant_video_snapshot_requests_in_db()
             elif command == "sync_chat_message_reaction_requests":
                 logger.info(f"Syncing chat message reaction requests for bot {self.bot_in_db.object_id}")
                 self.bot_in_db.refresh_from_db()
@@ -2095,8 +2095,8 @@ class BotController:
         return {"remover_name": participant.full_name, "remover_uuid": participant.uuid, "remover_user_uuid": participant.user_uuid, "remover_is_host": participant.is_host}
 
     def take_action_based_on_message_from_adapter(self, message):
-        if message.get("message") == BotAdapter.Messages.PER_PARTICIPANT_VIDEO_FRAMES_SNAPSHOT_RESULT:
-            self.handle_per_participant_video_frames_snapshot_result(message)
+        if message.get("message") == BotAdapter.Messages.PER_PARTICIPANT_VIDEO_SNAPSHOT_RESULT:
+            self.handle_per_participant_video_snapshot_result(message)
             return
 
         if message.get("message") == BotAdapter.Messages.SAVE_SCREENSHOT_AND_MHTML_FILE:

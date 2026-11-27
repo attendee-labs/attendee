@@ -18,7 +18,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .authentication import ApiKeyAuthentication
-from .bots_api_utils import BotCreationSource, create_bot, create_bot_chat_message_reaction_request, create_bot_chat_message_request, create_bot_media_request_for_image, create_per_participant_video_frames_snapshot_request, delete_bot, patch_bot, patch_bot_transcription_settings, patch_bot_voice_agent_settings, send_sync_command
+from .bots_api_utils import BotCreationSource, create_bot, create_bot_chat_message_reaction_request, create_bot_chat_message_request, create_bot_media_request_for_image, create_per_participant_video_snapshot_request, delete_bot, patch_bot, patch_bot_transcription_settings, patch_bot_voice_agent_settings, send_sync_command
 from .launch_bot_utils import launch_adhoc_bot_from_view
 from .meeting_url_utils import meeting_type_from_url
 from .models import (
@@ -38,8 +38,8 @@ from .models import (
     MeetingTypes,
     Participant,
     ParticipantEvent,
-    PerParticipantVideoFramesSnapshotRequestManager,
-    PerParticipantVideoFramesSnapshotRequestStates,
+    PerParticipantVideoSnapshotRequestManager,
+    PerParticipantVideoSnapshotRequestStates,
     Recording,
     RecordingViews,
     Utterance,
@@ -58,8 +58,8 @@ from .serializers import (
     ParticipantSerializer,
     PatchBotSerializer,
     PatchBotVoiceAgentSettingsSerializer,
-    PerParticipantVideoFramesSnapshotRequestSerializer,
-    PerParticipantVideoFramesSnapshotSerializer,
+    PerParticipantVideoSnapshotRequestSerializer,
+    PerParticipantVideoSnapshotSerializer,
     RecordingSerializer,
     SpeechSerializer,
     TranscriptUtteranceSerializer,
@@ -1208,7 +1208,7 @@ class SendChatMessageView(APIView):
             )
 
 
-class PerParticipantVideoFramesSnapshotView(APIView):
+class PerParticipantVideoSnapshotView(APIView):
     authentication_classes = [ApiKeyAuthentication]
     throttle_classes = [ProjectPostThrottle]
 
@@ -1217,13 +1217,13 @@ class PerParticipantVideoFramesSnapshotView(APIView):
     POLL_TIMEOUT_SECONDS = 5
 
     @extend_schema(
-        operation_id="Capture Per Participant Video Frames Snapshot",
+        operation_id="Capture Per Participant Video Snapshot",
         summary="Capture the current per-participant video frames",
         description="Returns the current video frame of each participant's webcam and/or screenshare, as base64-encoded JPEG images. This is the same data as the per-participant video websocket (see https://docs.attendee.dev/guides/realtimevideo), but for a single point in time. Currently only supported for Zoom bots using the web SDK. The bot must be in the joined_recording state.",
-        request=PerParticipantVideoFramesSnapshotRequestSerializer,
+        request=PerParticipantVideoSnapshotRequestSerializer,
         responses={
             200: OpenApiResponse(
-                response=PerParticipantVideoFramesSnapshotSerializer,
+                response=PerParticipantVideoSnapshotSerializer,
                 description="Frames captured successfully",
             ),
             400: OpenApiResponse(description="Invalid input, the bot type does not support this, the bot is not in a valid state, or the bot failed to capture the frames"),
@@ -1248,14 +1248,14 @@ class PerParticipantVideoFramesSnapshotView(APIView):
         except Bot.DoesNotExist:
             return Response({"error": "Bot not found"}, status=status.HTTP_404_NOT_FOUND)
 
-        serializer = PerParticipantVideoFramesSnapshotRequestSerializer(data=request.data)
+        serializer = PerParticipantVideoSnapshotRequestSerializer(data=request.data)
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
         if meeting_type_from_url(bot.meeting_url) != MeetingTypes.ZOOM or not bot.use_zoom_web_adapter():
-            return Response({"error": "Capturing per participant video frames snapshots is only supported for Zoom Web SDK"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"error": "Capturing per participant video snapshots is only supported for Zoom Web SDK"}, status=status.HTTP_400_BAD_REQUEST)
 
-        if not BotEventManager.is_state_that_can_capture_per_participant_video_frames_snapshot(bot.state):
+        if not BotEventManager.is_state_that_can_capture_per_participant_video_snapshot(bot.state):
             return Response(
                 {"error": f"Bot is in state {BotStates.state_to_api_code(bot.state)} and cannot capture per participant video frames"},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -1263,25 +1263,25 @@ class PerParticipantVideoFramesSnapshotView(APIView):
 
         snapshot_request = None
         try:
-            snapshot_request = create_per_participant_video_frames_snapshot_request(bot, serializer.validated_data)
+            snapshot_request = create_per_participant_video_snapshot_request(bot, serializer.validated_data)
 
             # Send sync command to notify bot of new snapshot request
-            send_sync_command(bot, "sync_per_participant_video_frames_snapshot_requests")
+            send_sync_command(bot, "sync_per_participant_video_snapshot_requests")
 
             # Poll the request until the bot fills it in. If it takes too long, mark it as failed so the bot doesn't fill it in later.
             for _ in range(round(self.POLL_TIMEOUT_SECONDS / self.POLL_INTERVAL_SECONDS)):
                 time.sleep(self.POLL_INTERVAL_SECONDS)
                 snapshot_request.refresh_from_db()
-                if snapshot_request.state in (PerParticipantVideoFramesSnapshotRequestStates.FULFILLED, PerParticipantVideoFramesSnapshotRequestStates.FAILED):
+                if snapshot_request.state in (PerParticipantVideoSnapshotRequestStates.FULFILLED, PerParticipantVideoSnapshotRequestStates.FAILED):
                     break
             else:
-                if PerParticipantVideoFramesSnapshotRequestManager.set_request_failed(snapshot_request, {"description": "Timed out waiting for the bot to capture the frames"}):
-                    logging.error(f"Timed out waiting for per participant video frames snapshot for bot {bot.object_id}")
+                if PerParticipantVideoSnapshotRequestManager.set_request_failed(snapshot_request, {"description": "Timed out waiting for the bot to capture the frames"}):
+                    logging.error(f"Timed out waiting for per participant video snapshot for bot {bot.object_id}")
                     return Response({"error": "Timed out waiting for the bot to capture the frames"}, status=status.HTTP_504_GATEWAY_TIMEOUT)
                 # The bot filled in the request right as we timed out
                 snapshot_request.refresh_from_db()
 
-            if snapshot_request.state != PerParticipantVideoFramesSnapshotRequestStates.FULFILLED:
+            if snapshot_request.state != PerParticipantVideoSnapshotRequestStates.FULFILLED:
                 failure_description = (snapshot_request.failure_data or {}).get("description", "Unknown error")
                 return Response({"error": f"Failed to capture per participant video frames: {failure_description}"}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -1297,10 +1297,10 @@ class PerParticipantVideoFramesSnapshotView(APIView):
                         "participant_name": participant.full_name if participant else None,
                     }
                 )
-            return Response(PerParticipantVideoFramesSnapshotSerializer({"frames": response_frames}).data, status=status.HTTP_200_OK)
+            return Response(PerParticipantVideoSnapshotSerializer({"frames": response_frames}).data, status=status.HTTP_200_OK)
 
         except Exception as e:
-            logging.error(f"Error capturing per participant video frames snapshot for bot {bot.object_id}: {str(e)}")
+            logging.error(f"Error capturing per participant video snapshot for bot {bot.object_id}: {str(e)}")
             return Response(
                 {"error": "Failed to capture per participant video frames"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1308,7 +1308,7 @@ class PerParticipantVideoFramesSnapshotView(APIView):
         finally:
             # The frames have been copied into the response, so we don't need to keep them around
             if snapshot_request:
-                PerParticipantVideoFramesSnapshotRequestManager.clear_frames(snapshot_request)
+                PerParticipantVideoSnapshotRequestManager.clear_frames(snapshot_request)
 
 
 class SendChatMessageReactionView(APIView):

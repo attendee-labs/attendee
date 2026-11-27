@@ -1138,7 +1138,7 @@ PER_PARTICIPANT_VIDEO_RESOLUTION_CHOICES = ["none", "360p", "720p", "1080p"]
         ),
     ]
 )
-class PerParticipantVideoFramesSnapshotRequestSerializer(serializers.Serializer):
+class PerParticipantVideoSnapshotRequestSerializer(serializers.Serializer):
     webcam_resolution = serializers.ChoiceField(
         choices=PER_PARTICIPANT_VIDEO_RESOLUTION_CHOICES,
         default="none",
@@ -1168,7 +1168,7 @@ class PerParticipantVideoFrameSerializer(serializers.Serializer):
     timestamp_ms = serializers.IntegerField(help_text="When the frame was captured, in milliseconds since the Unix epoch")
 
 
-class PerParticipantVideoFramesSnapshotSerializer(serializers.Serializer):
+class PerParticipantVideoSnapshotSerializer(serializers.Serializer):
     frames = PerParticipantVideoFrameSerializer(many=True, help_text="One frame per participant video source that was visible to the bot when the snapshot was taken. Empty if nothing matching the request was visible.")
 
 

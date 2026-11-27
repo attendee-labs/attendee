@@ -64,7 +64,7 @@ Screenshare video is always delivered, since the client always renders the scree
 
 If you only need the per-participant video at a certain moment (for example, the current screenshare when someone in the meeting asks about it), you can request a snapshot over HTTP instead of keeping a websocket connection open for the whole meeting. You do not need to configure `websocket_settings.per_participant_video` to use this.
 
-Call `POST /api/v1/bots/{bot_id}/per_participant_video_frames_snapshot`:
+Call `POST /api/v1/bots/{bot_id}/per_participant_video_snapshot`:
 
 ```json
 {
