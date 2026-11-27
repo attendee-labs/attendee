@@ -26,6 +26,7 @@ from .models import (
     Credentials,
     MediaBlob,
     MeetingTypes,
+    PerParticipantVideoFramesSnapshotRequest,
     Project,
     Recording,
     TranscriptionProviders,
@@ -120,6 +121,24 @@ def create_bot_chat_message_request(bot, chat_message_data):
         raise ValidationError(f"Error creating the bot chat message request: {error_message_first_line}.")
 
     return bot_chat_message_request
+
+
+def create_per_participant_video_frames_snapshot_request(bot, snapshot_request_data):
+    """
+    Creates a PerParticipantVideoFramesSnapshotRequest for the given bot with the provided data.
+
+    Args:
+        bot: The Bot instance
+        snapshot_request_data: Validated data containing webcam_resolution and screenshare_resolution
+
+    Returns:
+        PerParticipantVideoFramesSnapshotRequest: The created snapshot request
+    """
+    return PerParticipantVideoFramesSnapshotRequest.objects.create(
+        bot=bot,
+        webcam_resolution=snapshot_request_data["webcam_resolution"],
+        screenshare_resolution=snapshot_request_data["screenshare_resolution"],
+    )
 
 
 def create_bot_chat_message_reaction_request(bot, chat_message, reaction_data):

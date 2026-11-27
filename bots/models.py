@@ -1971,6 +1971,11 @@ class BotEventManager:
         return state == BotStates.JOINED_RECORDING or state == BotStates.JOINED_NOT_RECORDING or state == BotStates.JOINED_RECORDING_PERMISSION_DENIED or state == BotStates.JOINED_RECORDING_PAUSED
 
     @classmethod
+    def is_state_that_can_capture_per_participant_video_frames_snapshot(cls, state: int):
+        # Frames are only captured while the bot is actively recording, same as the per participant video websocket
+        return state == BotStates.JOINED_RECORDING
+
+    @classmethod
     def is_state_that_can_pause_recording(cls, state: int):
         valid_from_states = cls.VALID_TRANSITIONS[BotEventTypes.RECORDING_PAUSED]["from"]
         if not isinstance(valid_from_states, (list, tuple)):
@@ -3248,6 +3253,77 @@ class BotChatMessageRequestManager:
             raise ValueError(f"Invalid state transition. Chat message request {chat_message_request.id} is in state {chat_message_request.get_state_display()}")
         chat_message_request.state = BotChatMessageRequestStates.FAILED
         chat_message_request.save()
+
+
+class PerParticipantVideoFramesSnapshotRequestStates(models.IntegerChoices):
+    ENQUEUED = 1, "Enqueued"
+    IN_PROGRESS = 2, "In Progress"
+    FULFILLED = 3, "Fulfilled"
+    FAILED = 4, "Failed"
+
+
+class PerParticipantVideoFramesSnapshotRequest(models.Model):
+    bot = models.ForeignKey(Bot, on_delete=models.CASCADE, related_name="per_participant_video_frames_snapshot_requests")
+
+    # Same values as websocket_settings.per_participant_video.webcam_resolution / screenshare_resolution
+    webcam_resolution = models.CharField(max_length=32, null=False)
+    screenshare_resolution = models.CharField(max_length=32, null=False)
+
+    state = models.IntegerField(
+        choices=PerParticipantVideoFramesSnapshotRequestStates.choices,
+        default=PerParticipantVideoFramesSnapshotRequestStates.ENQUEUED,
+        null=False,
+    )
+
+    # List of base64 encoded frames filled in by the bot. Cleared once they have been returned to the user.
+    frames = models.JSONField(null=True, default=None)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    fulfilled_at_timestamp_ms = models.BigIntegerField(null=True, blank=True)
+    failure_data = models.JSONField(null=True, default=None)
+
+
+class PerParticipantVideoFramesSnapshotRequestManager:
+    # These use conditional updates because the web server may mark the request failed (timed out)
+    # at the same time the bot is filling it in.
+
+    @classmethod
+    def set_request_in_progress(cls, request: PerParticipantVideoFramesSnapshotRequest) -> bool:
+        return (
+            PerParticipantVideoFramesSnapshotRequest.objects.filter(id=request.id, state=PerParticipantVideoFramesSnapshotRequestStates.ENQUEUED).update(
+                state=PerParticipantVideoFramesSnapshotRequestStates.IN_PROGRESS,
+                updated_at=timezone.now(),
+            )
+            > 0
+        )
+
+    @classmethod
+    def set_request_fulfilled(cls, request: PerParticipantVideoFramesSnapshotRequest, frames: list) -> bool:
+        return (
+            PerParticipantVideoFramesSnapshotRequest.objects.filter(id=request.id, state=PerParticipantVideoFramesSnapshotRequestStates.IN_PROGRESS).update(
+                state=PerParticipantVideoFramesSnapshotRequestStates.FULFILLED,
+                frames=frames,
+                fulfilled_at_timestamp_ms=int(timezone.now().timestamp() * 1000),
+                updated_at=timezone.now(),
+            )
+            > 0
+        )
+
+    @classmethod
+    def set_request_failed(cls, request: PerParticipantVideoFramesSnapshotRequest, failure_data: dict) -> bool:
+        return (
+            PerParticipantVideoFramesSnapshotRequest.objects.filter(id=request.id, state__in=[PerParticipantVideoFramesSnapshotRequestStates.ENQUEUED, PerParticipantVideoFramesSnapshotRequestStates.IN_PROGRESS]).update(
+                state=PerParticipantVideoFramesSnapshotRequestStates.FAILED,
+                failure_data=failure_data,
+                updated_at=timezone.now(),
+            )
+            > 0
+        )
+
+    @classmethod
+    def clear_frames(cls, request: PerParticipantVideoFramesSnapshotRequest):
+        PerParticipantVideoFramesSnapshotRequest.objects.filter(id=request.id).update(frames=None, updated_at=timezone.now())
 
 
 class BotChatMessageReactionActions(models.TextChoices):

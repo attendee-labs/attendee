@@ -60,6 +60,47 @@ On Google Meet and Teams, Attendee captures the video tracks that the meeting cl
 
 Screenshare video is always delivered, since the client always renders the screenshare video.
 
+## Capturing Frames at a Single Point in Time
+
+If you only need the per-participant video at a certain moment (for example, the current screenshare when someone in the meeting asks about it), you can request a snapshot over HTTP instead of keeping a websocket connection open for the whole meeting. You do not need to configure `websocket_settings.per_participant_video` to use this.
+
+Call `POST /api/v1/bots/{bot_id}/per_participant_video_frames_snapshot`:
+
+```json
+{
+  "webcam_resolution": "none",
+  "screenshare_resolution": "1080p"
+}
+```
+
+`webcam_resolution` and `screenshare_resolution` accept the same values as the websocket settings (`"360p"`, `"720p"`, `"1080p"`, and `"none"` to skip that source). `webcam_resolution` defaults to `"none"` and `screenshare_resolution` defaults to `"360p"`, so only screenshares are captured unless you ask for webcams.
+
+The response contains one frame for each participant video source the bot can currently see:
+
+```json
+{
+  "frames": [
+    {
+      "participant_uuid": "16778240",
+      "participant_user_uuid": null,
+      "participant_name": "Alice",
+      "source": "screenshare",
+      "frame": "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQ...",
+      "format": "jpeg",
+      "width": 1920,
+      "height": 1080,
+      "timestamp_ms": 1764177600000
+    }
+  ]
+}
+```
+
+The `participant_uuid`, `frame`, `format` and `source` fields mean the same thing as in the websocket message.
+
+The bot must be in the `joined_recording` state. If the bot does not return the frames within 5 seconds, the request fails with a 504 status code. Attendee does not keep the frames after returning them to you.
+
+Currently snapshots are only supported for Zoom bots using the web SDK (`zoom_settings.sdk` set to `"web"`).
+
 ## Code Samples
 
 See [here](https://github.com/attendee-labs/realtime-per-participant-video-and-audio-example) for an example program showing how use this feature.

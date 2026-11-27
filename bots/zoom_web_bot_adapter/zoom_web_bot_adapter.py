@@ -10,6 +10,7 @@ from django.conf import settings
 
 from bots.meeting_url_utils import parse_zoom_join_url
 from bots.models import RecordingViews
+from bots.per_participant_realtime_video_configuration import PerParticipantRealtimeVideoConfiguration
 from bots.utils import select_from_comma_separated_list_with_wrapping_index
 from bots.web_bot_adapter import WebBotAdapter
 from bots.zoom_web_bot_adapter.zoom_web_ui_methods import UiZoomWebGenericJoinErrorException, ZoomWebUIMethods
@@ -118,6 +119,10 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
 
     def send_chat_message(self, text, to_user_uuid, thread_id=None):
         self.driver.execute_script("window?.sendChatMessage(arguments[0], arguments[1], arguments[2]);", text, to_user_uuid, thread_id)
+
+    def capture_per_participant_video_frames_snapshot(self, request_id: int, per_participant_realtime_video_configuration: PerParticipantRealtimeVideoConfiguration):
+        # The result is sent back asynchronously over the websocket as a PerParticipantVideoFramesSnapshotResult message
+        self.driver.execute_script("window?.capturePerParticipantVideoFramesSnapshot(arguments[0], arguments[1]);", request_id, per_participant_realtime_video_configuration.to_dict())
 
     def send_chat_message_reaction(self, message_uuid, emoji, action):
         self.driver.execute_script("window?.sendChatMessageReaction(arguments[0], arguments[1], arguments[2]);", message_uuid, emoji, action)
