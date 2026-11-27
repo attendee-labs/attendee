@@ -106,6 +106,8 @@ For more details, follow [this guide](https://developers.zoom.us/docs/meeting-sd
 
 ## Running in development mode
 
+For an experimental native Apple Silicon/ARM64 web-adapter image and optional local S3 storage without AWS credentials, see [Local ARM64 and FakeCloud development](docs/local-arm64.md). The default setup below is unchanged.
+
 - Build the Docker image: `docker compose -f dev.docker-compose.yaml build` (Takes about 5 minutes)
 - Create local environment variables
   - **Linux/Mac**: `docker compose -f dev.docker-compose.yaml run --rm attendee-app-local python init_env.py > .env`
