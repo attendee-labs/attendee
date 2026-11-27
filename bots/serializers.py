@@ -1172,6 +1172,72 @@ class PerParticipantVideoFramesSnapshotSerializer(serializers.Serializer):
     frames = PerParticipantVideoFrameSerializer(many=True, help_text="One frame per participant video source that was visible to the bot when the snapshot was taken. Empty if nothing matching the request was visible.")
 
 
+# Fully qualified forms, so reactions match the ones Zoom's emoji picker sends.
+ALLOWED_CHAT_MESSAGE_REACTION_EMOJIS = (
+    "😂",
+    "❤️",
+    "🤣",
+    "👍",
+    "😭",
+    "🙏",
+    "😘",
+    "🥰",
+    "😍",
+    "😊",
+    "🎉",
+    "😁",
+    "💕",
+    "🥺",
+    "😅",
+    "🔥",
+    "☺️",
+    "🤦",
+    "♥️",
+    "🤷",
+    "🙄",
+    "😆",
+    "🤗",
+    "😉",
+    "🎂",
+    "🤔",
+    "👏",
+    "🙂",
+    "😳",
+    "🥳",
+    "😎",
+    "👌",
+    "💜",
+    "😔",
+    "💪",
+    "✨",
+    "💖",
+    "👀",
+    "😋",
+    "😏",
+    "😢",
+    "👉",
+    "💗",
+    "😩",
+    "💯",
+    "💙",
+    "😃",
+    "✅",
+    "😮",
+    "👎",
+    "🚀",
+    "🙌",
+    "💡",
+    "📈",
+    "🤯",
+    "🫡",
+    "🧠",
+    "🤝",
+    "💰",
+    "🐐",
+    "⚡"
+)
+
+
 @extend_schema_serializer(
     examples=[
         OpenApiExample(
@@ -1194,13 +1260,18 @@ class BotChatMessageReactionRequestSerializer(serializers.Serializer):
     emoji = serializers.CharField(
         max_length=100,
         trim_whitespace=True,
-        help_text="A single Unicode emoji, for example 👀 or ✅. Skin tone, keycap, flag and ZWJ sequences are allowed. Use the fully qualified form (for example ❤️ rather than ❤) so the reaction matches the one Zoom's emoji picker sends. Zoom accounts can restrict chat reactions to 👏 👍 😂 😮 ❤️ 🎉; in those meetings other emoji are rejected by the bot.",
+        help_text=f"The emoji to react with. Must be one of: {' '.join(ALLOWED_CHAT_MESSAGE_REACTION_EMOJIS)}. Zoom accounts can restrict chat reactions to 👏 👍 😂 😮 ❤️ 🎉; in those meetings other emoji are rejected by the bot.",
     )
     action = serializers.ChoiceField(
         choices=BotChatMessageReactionActions.values,
         default=BotChatMessageReactionActions.ADD,
         help_text="Whether to add the reaction or remove a reaction the bot added earlier. Adding a reaction the bot already added, or removing one it hasn't added, does nothing.",
     )
+
+    def validate_emoji(self, value):
+        if value not in ALLOWED_CHAT_MESSAGE_REACTION_EMOJIS:
+            raise serializers.ValidationError(f"Unsupported emoji. Must be one of: {' '.join(ALLOWED_CHAT_MESSAGE_REACTION_EMOJIS)}")
+        return value
 
 
 @extend_schema_serializer(
