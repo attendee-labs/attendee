@@ -2001,7 +2001,7 @@ components:
           - $ref: '#/components/schemas/ActionEnum'
           default: add
           description: |-
-            Whether to add the reaction or remove a reaction the bot added earlier. Adding a reaction the bot already added, or removing one it hasn't added, does nothing.
+            Whether to add the reaction or remove a reaction the bot added earlier.
 
             * `add` - add
             * `remove` - remove
