@@ -442,6 +442,10 @@ class WebBotAdapter(BotAdapter):
 
         self.upsert_chat_message_callback(json_data)
 
+    def handle_per_participant_video_snapshot_result(self, json_data):
+        # Overridden by adapters that support per participant video snapshots
+        logger.warning("Received per participant video snapshot result for request %s, but this adapter does not support snapshots", json_data.get("requestId"))
+
     def handle_bot_media_device_state_changed_by_other_participant(self, json_data):
         if not self.bot_media_device_state_changed_by_other_participant_callback:
             return
@@ -488,6 +492,9 @@ class WebBotAdapter(BotAdapter):
                     if json_data_is_dict:
                         if json_data.get("type") == "CaptionUpdate":
                             logger.info("Received JSON message: %s", self.mask_transcript_if_required(json_data))
+                        elif json_data.get("type") == "PerParticipantVideoSnapshotResult":
+                            # Don't log the frames themselves
+                            logger.info("Received JSON message: PerParticipantVideoSnapshotResult for request %s with %s frames", json_data.get("requestId"), len(json_data.get("frames") or []))
                         else:
                             logger.info("Received JSON message: %s", json_data)
 
@@ -503,6 +510,9 @@ class WebBotAdapter(BotAdapter):
 
                         elif json_data.get("type") == "ChatMessage":
                             self.handle_chat_message(json_data)
+
+                        elif json_data.get("type") == "PerParticipantVideoSnapshotResult":
+                            self.handle_per_participant_video_snapshot_result(json_data)
 
                         elif json_data.get("type") == "BotMediaDeviceStateChangedByOtherParticipant":
                             self.handle_bot_media_device_state_changed_by_other_participant(json_data)
@@ -1502,8 +1512,11 @@ class WebBotAdapter(BotAdapter):
         # Call the JavaScript function to enqueue the PCM chunk
         self.driver.execute_script("window.botOutputManager.playPCMAudio(arguments[0], arguments[1]);", audio_data, sample_rate)
 
-    def send_chat_message(self, text, to_user_uuid):
+    def send_chat_message(self, text, to_user_uuid, thread_id=None):
         logger.info("send_chat_message not supported in web bots")
+
+    def send_chat_message_reaction(self, message_uuid, emoji, action):
+        logger.info("send_chat_message_reaction not supported in this bot")
 
     # Sub-classes can override this to add class-specific initial data code
     def subclass_specific_initial_data_code(self):

@@ -1697,6 +1697,138 @@ class TestTeamsBot(TransactionTestCase):
             # Close the database connection since we're in a thread
             connection.close()
 
+    @override_settings(ENABLE_WAITING_ROOM_STATE_FOR_WEB_BOTS=True, MONITOR_DOMAIN_ALLOWLIST_IN_CHROME=False, ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME=False)
+    @patch("bots.bot_controller.bot_controller.BotController.save_debug_recording", return_value=None)
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
+    def test_waiting_room_timeout_with_participants_leaked_to_lobby_is_treated_as_normal_timeout(
+        self,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+        MockSaveDebugRecording,
+    ):
+        """Test that when the Teams client leaks meeting participants to a bot that is still in the lobby,
+        exceeding the waiting room timeout by more than three minutes is treated as a normal waiting room
+        timeout instead of a failed transition out of the waiting room.
+
+        The real click_show_more_button loop, check_if_in_waiting_room and check_if_waiting_room_timeout_exceeded
+        run unmocked — only WebDriverWait, find_element_by_selector, the value returned by callManager.getCallState
+        and the time the waiting room timeout started are controlled.
+
+        Flow:
+        1. WebDriverWait always times out in click_show_more_button because the bot is never admitted
+        2. getCallState returns InLobby (10) -> BOT_PUT_IN_WAITING_ROOM is sent
+        3. The Teams client reports another participant while the bot is still in the lobby
+        4. The waiting room timeout was exceeded by more than three minutes, but the call state is still InLobby
+           -> UiCouldNotJoinMeetingWaitingRoomTimeoutException instead of UiWaitingRoomTransitionFailedException
+        5. The bot gives up without retrying and records COULD_NOT_JOIN with the waiting room timeout subtype
+        """
+        self.bot.settings = {"recording_settings": {"format": "none"}}
+        self.bot.save()
+
+        # Configure the mock uploader
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        # Mock the Chrome driver
+        mock_driver = create_mock_teams_driver()
+        MockChromeDriver.return_value = mock_driver
+
+        teams_in_lobby_call_state = 10
+        get_call_state_queries = []
+
+        def mock_execute_script(script, *args):
+            if "getCallState" in script:
+                get_call_state_queries.append(script)
+                return teams_in_lobby_call_state
+            if "getDidMeetingEndButShouldRetryJoin" in script:
+                return False
+            if "disableRetryJoinOnMeetingEnd" in script:
+                return None
+            return "test_result"
+
+        mock_driver.execute_script.side_effect = mock_execute_script
+
+        # Mock virtual display
+        mock_display = MagicMock()
+        MockDisplay.return_value = mock_display
+
+        # The bot is never admitted, so the show more button never appears
+        def create_mock_webdriverwait(*args, **kwargs):
+            mock_wait = MagicMock()
+            mock_wait.until.side_effect = TimeoutException("Mocked timeout")
+            return mock_wait
+
+        # Simulate the Teams client leaking participants to the lobby, and the waiting room timeout
+        # having started long enough ago that it was exceeded by more than three minutes
+        real_check_if_waiting_room_timeout_exceeded = TeamsUIMethods.check_if_waiting_room_timeout_exceeded
+
+        def check_if_waiting_room_timeout_exceeded_with_leaked_participants(ui_methods, waiting_room_timeout_started_at, step):
+            ui_methods.participants_info["bot"] = {"deviceId": "bot", "fullName": "Test Teams Bot", "active": True, "isCurrentUser": True}
+            ui_methods.participants_info["user1"] = {"deviceId": "user1", "fullName": "Test User", "active": True, "isCurrentUser": False}
+            seconds_past_timeout_and_grace_period = ui_methods.automatic_leave_configuration.waiting_room_timeout_seconds + 180 + 1
+            return real_check_if_waiting_room_timeout_exceeded(ui_methods, waiting_room_timeout_started_at - seconds_past_timeout_and_grace_period, step)
+
+        with (
+            patch.object(TeamsUIMethods, "attempt_to_join_meeting", autospec=True, side_effect=TeamsUIMethods.attempt_to_join_meeting) as mock_attempt_to_join,
+            patch.object(TeamsUIMethods, "check_if_waiting_room_timeout_exceeded", autospec=True, side_effect=check_if_waiting_room_timeout_exceeded_with_leaked_participants) as mock_check_waiting_room_timeout,
+            patch.object(TeamsUIMethods, "fill_out_name_input", return_value=None),
+            patch.object(TeamsUIMethods, "wiggle_mouse", return_value=None),
+            patch.object(TeamsUIMethods, "turn_off_media_inputs", return_value=None),
+            patch.object(TeamsUIMethods, "locate_element", return_value=MagicMock()),
+            patch.object(TeamsUIMethods, "click_element", return_value=None),
+            patch("bots.teams_bot_adapter.teams_ui_methods.WebDriverWait", side_effect=create_mock_webdriverwait),
+            patch.object(TeamsUIMethods, "find_element_by_selector", return_value=None),
+            patch("bots.web_bot_adapter.web_bot_adapter.WebBotAdapter.ready_to_show_bot_image", return_value=None),
+            self.assertLogs("bots.teams_bot_adapter.teams_ui_methods", level="WARNING") as teams_ui_logs,
+        ):
+            # Create bot controller
+            controller = BotController(self.bot.id)
+
+            # Run the bot in a separate thread since it has an event loop
+            bot_thread = threading.Thread(target=controller.run)
+            bot_thread.daemon = True
+            bot_thread.start()
+
+            # Give the bot some time to process
+            bot_thread.join(timeout=10)
+
+            # The lobby call state was checked when deciding how to handle the leaked participants
+            self.assertGreaterEqual(len(get_call_state_queries), 2)
+            self.assertEqual(mock_check_waiting_room_timeout.call_count, 1)
+            self.assertTrue(
+                any("Assuming the Teams client is leaking participants while in the lobby" in line for line in teams_ui_logs.output),
+                "The leaked participants should be attributed to the Teams client while the call state shows we are in the lobby",
+            )
+            self.assertFalse(
+                any("This is unexpected, throwing exception" in line for line in teams_ui_logs.output),
+                "A failed waiting room transition should not be reported while the call state shows we are in the lobby",
+            )
+
+            # A waiting room timeout gives up on joining instead of retrying
+            self.assertEqual(mock_attempt_to_join.call_count, 1)
+
+            # Refresh the bot from the database
+            self.bot.refresh_from_db()
+
+            # The bot entered the waiting room, was never admitted, and could not join due to the waiting room timeout
+            self.assertEqual(self.bot.state, BotStates.FATAL_ERROR)
+            self.assertTrue(self.bot.bot_events.filter(event_type=BotEventTypes.BOT_PUT_IN_WAITING_ROOM).exists())
+            self.assertFalse(self.bot.bot_events.filter(event_type=BotEventTypes.BOT_JOINED_MEETING).exists())
+
+            could_not_join_event = self.bot.bot_events.get(event_type=BotEventTypes.COULD_NOT_JOIN)
+            self.assertEqual(could_not_join_event.event_sub_type, BotEventSubTypes.COULD_NOT_JOIN_MEETING_WAITING_ROOM_TIMEOUT_EXCEEDED)
+            self.assertEqual(could_not_join_event.old_state, BotStates.WAITING_ROOM)
+
+            # Cleanup
+            controller.cleanup()
+            bot_thread.join(timeout=5)
+
+            # Close the database connection since we're in a thread
+            connection.close()
+
     def test_get_teams_signed_in_bot_uses_named_login_group(self):
         first_group = BotLoginGroup.objects.create(project=self.project, platform=BotLoginPlatform.TEAMS, name="Primary Group")
         first_group_login = BotLogin.objects.create(group=first_group, email="primary@example.com")
@@ -1808,7 +1940,7 @@ class TestTeamsBot(TransactionTestCase):
            bot records until auto-leave
         """
         # Use a "none" recording format to keep the test lightweight. The bot name contains
-        # "Notetaker" so the real fill_out_name_input has a keyword to cyrillicize.
+        # "Notetaker" so the real fill_out_name_input has a keyword to homoglyphize.
         self.bot.name = "Test Notetaker Bot"
         self.bot.settings = {"recording_settings": {"format": "none"}}
         self.bot.save()
@@ -1984,8 +2116,8 @@ class TestTeamsBot(TransactionTestCase):
             self.assertEqual(mock_wait_for_page_url_to_stabilize.call_count, 2, "Expected wait_for_page_url_to_stabilize to be called once per join attempt")
 
             # Verify the name typed into the prejoin name input had the "notetaker" keyword
-            # cyrillicized, with the rest of the display name left alone
-            mock_name_input.send_keys.assert_called_once_with("Test N\u043et\u0435t\u0430k\u0435r Bot")
+            # homoglyphized, with the rest of the display name left alone
+            mock_name_input.send_keys.assert_called_once_with("Test \ua4e0\u043et\u0435t\u0430k\u0435r Bot")
             typed_name = mock_name_input.send_keys.call_args[0][0]
             self.assertNotEqual(typed_name, self.bot.name, "Expected the typed display name to differ from the raw bot name")
             self.assertNotIn("notetaker", typed_name.lower(), "Expected the typed display name to no longer match a 'notetaker' keyword search")

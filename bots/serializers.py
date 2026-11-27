@@ -24,6 +24,7 @@ from .models import (
     AsyncTranscription,
     AsyncTranscriptionStates,
     Bot,
+    BotChatMessageReactionActions,
     BotChatMessageToOptions,
     BotEventSubTypes,
     BotEventTypes,
@@ -1085,6 +1086,13 @@ class BotChatMessageRequestSerializer(serializers.Serializer):
     )
     to = serializers.ChoiceField(choices=BotChatMessageToOptions.values, help_text="Who to send the message to.", default=BotChatMessageToOptions.EVERYONE)
     message = serializers.CharField(help_text="The message text to send. Does not support emojis currently. For Microsoft Teams, you can use basic HTML tags to format the message including <p>, <br>, <b>, <i>, and <a>.")
+    thread_id = serializers.CharField(
+        max_length=255,
+        required=False,
+        allow_null=True,
+        allow_blank=True,
+        help_text="The ID of the thread to reply in, taken from additional_data.thread_id on the chat message object. Only supported for Zoom.",
+    )
 
     def validate(self, data):
         to_value = data.get("to")
@@ -1105,6 +1113,164 @@ class BotChatMessageRequestSerializer(serializers.Serializer):
         for char in value:
             if ord(char) > 0xFFFF:
                 raise serializers.ValidationError("Message cannot contain emojis or rare script characters.")
+        return value
+
+
+PER_PARTICIPANT_VIDEO_RESOLUTION_CHOICES = ["none", "360p", "720p", "1080p"]
+
+
+@extend_schema_serializer(
+    examples=[
+        OpenApiExample(
+            "Current screenshare frame",
+            value={
+                "screenshare_resolution": "1080p",
+            },
+            description="Capture the current screenshare frame at 1080p. Webcams are not captured.",
+        ),
+        OpenApiExample(
+            "Webcams and screenshare",
+            value={
+                "webcam_resolution": "360p",
+                "screenshare_resolution": "720p",
+            },
+            description="Capture the current frame of every participant's webcam and screenshare",
+        ),
+    ]
+)
+class PerParticipantVideoSnapshotRequestSerializer(serializers.Serializer):
+    webcam_resolution = serializers.ChoiceField(
+        choices=PER_PARTICIPANT_VIDEO_RESOLUTION_CHOICES,
+        default="none",
+        help_text="Resolution for per-participant webcam frames. 'none' skips webcams. JPEG quality is determined by resolution: 360p (quality 70), 720p (quality 60), 1080p (quality 50). Defaults to 'none'.",
+    )
+    screenshare_resolution = serializers.ChoiceField(
+        choices=PER_PARTICIPANT_VIDEO_RESOLUTION_CHOICES,
+        default="360p",
+        help_text="Resolution for per-participant screenshare frames. 'none' skips screenshares. JPEG quality is determined by resolution: 360p (quality 70), 720p (quality 60), 1080p (quality 50). Defaults to '360p'.",
+    )
+
+    def validate(self, data):
+        if data.get("webcam_resolution") == "none" and data.get("screenshare_resolution") == "none":
+            raise serializers.ValidationError("At least one of webcam_resolution or screenshare_resolution must be set to a non-none value.")
+        return data
+
+
+class PerParticipantVideoFrameSerializer(serializers.Serializer):
+    participant_uuid = serializers.CharField(help_text="The UUID of the participant whose video this frame is from")
+    participant_user_uuid = serializers.CharField(allow_null=True, help_text="The user UUID of the participant, if available")
+    participant_name = serializers.CharField(allow_null=True, help_text="The name of the participant, if available")
+    source = serializers.ChoiceField(choices=["webcam", "screenshare"], help_text="Whether the frame is from the participant's webcam or screenshare")
+    frame = serializers.CharField(help_text="The base64-encoded image")
+    format = serializers.CharField(help_text="The image format of the frame. Always 'jpeg'.")
+    width = serializers.IntegerField(help_text="Width of the frame in pixels. The video is letterboxed to fit the requested resolution.")
+    height = serializers.IntegerField(help_text="Height of the frame in pixels")
+    timestamp_ms = serializers.IntegerField(help_text="When the frame was captured, in milliseconds since the Unix epoch")
+
+
+class PerParticipantVideoSnapshotSerializer(serializers.Serializer):
+    frames = PerParticipantVideoFrameSerializer(many=True, help_text="One frame per participant video source that was visible to the bot when the snapshot was taken. Empty if nothing matching the request was visible.")
+
+
+# Fully qualified forms, so reactions match the ones Zoom's emoji picker sends.
+ALLOWED_CHAT_MESSAGE_REACTION_EMOJIS = (
+    "😂",
+    "❤️",
+    "🤣",
+    "👍",
+    "😭",
+    "🙏",
+    "😘",
+    "🥰",
+    "😍",
+    "😊",
+    "🎉",
+    "😁",
+    "💕",
+    "🥺",
+    "😅",
+    "🔥",
+    "☺️",
+    "🤦",
+    "♥️",
+    "🤷",
+    "🙄",
+    "😆",
+    "🤗",
+    "😉",
+    "🎂",
+    "🤔",
+    "👏",
+    "🙂",
+    "😳",
+    "🥳",
+    "😎",
+    "👌",
+    "💜",
+    "😔",
+    "💪",
+    "✨",
+    "💖",
+    "👀",
+    "😋",
+    "😏",
+    "😢",
+    "👉",
+    "💗",
+    "😩",
+    "💯",
+    "💙",
+    "😃",
+    "✅",
+    "😮",
+    "👎",
+    "🚀",
+    "🙌",
+    "💡",
+    "📈",
+    "🤯",
+    "🫡",
+    "🧠",
+    "🤝",
+    "💰",
+    "🐐",
+    "⚡",
+)
+
+
+@extend_schema_serializer(
+    examples=[
+        OpenApiExample(
+            "Add a reaction",
+            value={"message_id": "msg_xxxxxxxxxxxxxxxx", "emoji": "👀"},
+            description="React to a chat message with 👀",
+        ),
+        OpenApiExample(
+            "Remove a reaction",
+            value={"message_id": "msg_xxxxxxxxxxxxxxxx", "emoji": "👀", "action": "remove"},
+            description="Remove the bot's 👀 reaction from a chat message",
+        ),
+    ]
+)
+class BotChatMessageReactionRequestSerializer(serializers.Serializer):
+    message_id = serializers.CharField(
+        max_length=32,
+        help_text="The id of the chat message to react to.",
+    )
+    emoji = serializers.CharField(
+        max_length=100,
+        trim_whitespace=True,
+        help_text="A single Unicode emoji, for example 👀 or ✅.",
+    )
+    action = serializers.ChoiceField(
+        choices=BotChatMessageReactionActions.values,
+        default=BotChatMessageReactionActions.ADD,
+        help_text="Whether to add the reaction or remove a reaction the bot added earlier.",
+    )
+
+    def validate_emoji(self, value):
+        if value not in ALLOWED_CHAT_MESSAGE_REACTION_EMOJIS:
+            raise serializers.ValidationError(f"Unsupported emoji. Must be one of: {' '.join(ALLOWED_CHAT_MESSAGE_REACTION_EMOJIS)}")
         return value
 
 
@@ -1186,13 +1352,13 @@ WEBSOCKET_SETTINGS_SCHEMA = {
                 },
                 "webcam_resolution": {
                     "type": "string",
-                    "enum": ["none", "360p", "720p", "1080p"],
+                    "enum": PER_PARTICIPANT_VIDEO_RESOLUTION_CHOICES,
                     "default": "360p",
                     "description": "Resolution for per-participant webcam video. 'none' disables webcam streaming. Framerate and JPEG quality are determined by resolution: 360p (2fps, quality 70), 720p (1fps, quality 60), 1080p (1fps, quality 50). Defaults to '360p'.",
                 },
                 "screenshare_resolution": {
                     "type": "string",
-                    "enum": ["none", "360p", "720p", "1080p"],
+                    "enum": PER_PARTICIPANT_VIDEO_RESOLUTION_CHOICES,
                     "default": "360p",
                     "description": "Resolution for per-participant screenshare video. 'none' disables screenshare streaming. Framerate and JPEG quality are determined by resolution: 360p (2fps, quality 70), 720p (1fps, quality 60), 1080p (1fps, quality 50). Defaults to '360p'.",
                 },

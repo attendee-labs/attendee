@@ -1971,6 +1971,11 @@ class BotEventManager:
         return state == BotStates.JOINED_RECORDING or state == BotStates.JOINED_NOT_RECORDING or state == BotStates.JOINED_RECORDING_PERMISSION_DENIED or state == BotStates.JOINED_RECORDING_PAUSED
 
     @classmethod
+    def is_state_that_can_capture_per_participant_video_snapshot(cls, state: int):
+        # Frames are only captured while the bot is actively recording, same as the per participant video websocket
+        return state == BotStates.JOINED_RECORDING
+
+    @classmethod
     def is_state_that_can_pause_recording(cls, state: int):
         valid_from_states = cls.VALID_TRANSITIONS[BotEventTypes.RECORDING_PAUSED]["from"]
         if not isinstance(valid_from_states, (list, tuple)):
@@ -3223,6 +3228,10 @@ class BotChatMessageRequest(models.Model):
     sent_at_timestamp_ms = models.BigIntegerField(null=True, blank=True)
     failure_data = models.JSONField(null=True, default=None)
 
+    @property
+    def thread_id(self):
+        return (self.additional_data or {}).get("thread_id")
+
 
 class BotChatMessageRequestManager:
     @classmethod
@@ -3244,6 +3253,43 @@ class BotChatMessageRequestManager:
             raise ValueError(f"Invalid state transition. Chat message request {chat_message_request.id} is in state {chat_message_request.get_state_display()}")
         chat_message_request.state = BotChatMessageRequestStates.FAILED
         chat_message_request.save()
+
+
+class BotChatMessageReactionActions(models.TextChoices):
+    ADD = "add"
+    REMOVE = "remove"
+
+
+class BotChatMessageReactionRequest(models.Model):
+    bot = models.ForeignKey(Bot, on_delete=models.CASCADE, related_name="chat_message_reaction_requests")
+    chat_message = models.ForeignKey("ChatMessage", on_delete=models.CASCADE, related_name="reaction_requests")
+
+    emoji = models.CharField(max_length=64, null=False)
+    action = models.CharField(choices=BotChatMessageReactionActions.choices, default=BotChatMessageReactionActions.ADD, null=False)
+
+    state = models.IntegerField(
+        choices=BotChatMessageRequestStates.choices,
+        default=BotChatMessageRequestStates.ENQUEUED,
+        null=False,
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    sent_at_timestamp_ms = models.BigIntegerField(null=True, blank=True)
+    failure_data = models.JSONField(null=True, default=None)
+
+
+class BotChatMessageReactionRequestManager:
+    @classmethod
+    def set_chat_message_reaction_request_sent(cls, reaction_request: BotChatMessageReactionRequest):
+        if reaction_request.state == BotChatMessageRequestStates.SENT:
+            return
+        if reaction_request.state != BotChatMessageRequestStates.ENQUEUED:
+            raise ValueError(f"Invalid state transition. Chat message reaction request {reaction_request.id} is in state {reaction_request.get_state_display()}")
+
+        reaction_request.state = BotChatMessageRequestStates.SENT
+        reaction_request.sent_at_timestamp_ms = int(timezone.now().timestamp() * 1000)
+        reaction_request.save()
 
 
 class BotDebugScreenshotStorage(Storage):
@@ -3435,6 +3481,13 @@ class ChatMessage(models.Model):
     OBJECT_ID_PREFIX = "msg_"
     object_id = models.CharField(max_length=32, unique=True, editable=False)
     source_uuid = models.CharField(max_length=255, null=True, unique=True)
+
+    @property
+    def platform_message_uuid(self):
+        # source_uuid is "<recording object_id>-<the meeting platform's message id>" and recording object_ids don't contain dashes
+        if not self.source_uuid or "-" not in self.source_uuid:
+            return None
+        return self.source_uuid.split("-", 1)[1]
 
     def save(self, *args, **kwargs):
         if not self.object_id:

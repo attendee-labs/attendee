@@ -18,7 +18,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .authentication import ApiKeyAuthentication
-from .bots_api_utils import BotCreationSource, create_bot, create_bot_chat_message_request, create_bot_media_request_for_image, delete_bot, patch_bot, patch_bot_transcription_settings, patch_bot_voice_agent_settings, send_sync_command
+from .bots_api_utils import BotCreationSource, create_bot, create_bot_chat_message_reaction_request, create_bot_chat_message_request, create_bot_media_request_for_image, delete_bot, patch_bot, patch_bot_transcription_settings, patch_bot_voice_agent_settings, send_sync_command
 from .launch_bot_utils import launch_adhoc_bot_from_view
 from .meeting_url_utils import meeting_type_from_url
 from .models import (
@@ -42,8 +42,10 @@ from .models import (
     RecordingViews,
     Utterance,
 )
+from .per_participant_video_snapshot_store import PerParticipantVideoSnapshotStore
 from .serializers import (
     AsyncTranscriptionSerializer,
+    BotChatMessageReactionRequestSerializer,
     BotChatMessageRequestSerializer,
     BotImageSerializer,
     BotSerializer,
@@ -55,6 +57,8 @@ from .serializers import (
     ParticipantSerializer,
     PatchBotSerializer,
     PatchBotVoiceAgentSettingsSerializer,
+    PerParticipantVideoSnapshotRequestSerializer,
+    PerParticipantVideoSnapshotSerializer,
     RecordingSerializer,
     SpeechSerializer,
     TranscriptUtteranceSerializer,
@@ -1199,6 +1203,184 @@ class SendChatMessageView(APIView):
             logging.error(f"Error creating chat message request for bot {bot.object_id}: {str(e)}")
             return Response(
                 {"error": "Failed to create chat message request"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+class PerParticipantVideoSnapshotView(APIView):
+    authentication_classes = [ApiKeyAuthentication]
+    throttle_classes = [ProjectPostThrottle]
+
+    # How long we wait for the bot to capture the frames before giving up
+    RESULT_TIMEOUT_SECONDS = 5
+
+    @extend_schema(
+        operation_id="Capture Per Participant Video Snapshot",
+        summary="Capture the current per-participant video frames",
+        description="Returns the current video frame of each participant's webcam and/or screenshare, as base64-encoded JPEG images. Currently only supported for Zoom bots using the web SDK.",
+        request=PerParticipantVideoSnapshotRequestSerializer,
+        responses={
+            200: OpenApiResponse(
+                response=PerParticipantVideoSnapshotSerializer,
+                description="Frames captured successfully",
+            ),
+            400: OpenApiResponse(description="Invalid input, the bot type does not support this, the bot is not in a valid state, or the bot failed to capture the frames"),
+            403: OpenApiResponse(description="The bot is already capturing a snapshot"),
+            404: OpenApiResponse(description="Bot not found"),
+            504: OpenApiResponse(description="The bot did not capture the frames in time"),
+        },
+        parameters=[
+            *TokenHeaderParameter,
+            OpenApiParameter(
+                name="object_id",
+                type=str,
+                location=OpenApiParameter.PATH,
+                description="Bot ID",
+                examples=[OpenApiExample("Bot ID Example", value="bot_xxxxxxxxxxx")],
+            ),
+        ],
+        tags=["Bots"],
+    )
+    def post(self, request, object_id):
+        try:
+            bot = Bot.objects.get(object_id=object_id, project=request.auth.project)
+        except Bot.DoesNotExist:
+            return Response({"error": "Bot not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = PerParticipantVideoSnapshotRequestSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        if meeting_type_from_url(bot.meeting_url) != MeetingTypes.ZOOM or not bot.use_zoom_web_adapter():
+            return Response({"error": "Capturing per participant video snapshots is only supported for Zoom Web SDK"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not BotEventManager.is_state_that_can_capture_per_participant_video_snapshot(bot.state):
+            return Response(
+                {"error": f"Bot is in state {BotStates.state_to_api_code(bot.state)} and cannot capture per participant video frames"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            with PerParticipantVideoSnapshotStore() as snapshot_store:
+                snapshot_request = snapshot_store.create_request(
+                    bot.id,
+                    webcam_resolution=serializer.validated_data["webcam_resolution"],
+                    screenshare_resolution=serializer.validated_data["screenshare_resolution"],
+                )
+                if snapshot_request is None:
+                    return Response(
+                        {"error": "The bot is already capturing a per participant video snapshot. Wait for it to finish before requesting another."},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
+
+                timed_out = False
+                try:
+                    # Send sync command to notify bot of new snapshot request
+                    send_sync_command(bot, "sync_per_participant_video_snapshot_requests")
+
+                    result = snapshot_store.wait_for_result(snapshot_request.id, timeout_seconds=self.RESULT_TIMEOUT_SECONDS)
+                    if result is None:
+                        timed_out = True
+                        logging.error(f"Timed out waiting for per participant video snapshot for bot {bot.object_id}")
+                        return Response({"error": "Timed out waiting for the bot to capture the frames"}, status=status.HTTP_504_GATEWAY_TIMEOUT)
+                finally:
+                    # If we timed out, the bot may still be capturing, so we leave the request to expire on its own
+                    # rather than letting a new snapshot overlap with it.
+                    if not timed_out:
+                        snapshot_store.delete_request(bot.id, snapshot_request.id)
+
+            if result.error:
+                return Response({"error": f"Failed to capture per participant video frames: {result.error}"}, status=status.HTTP_400_BAD_REQUEST)
+
+            frames = result.frames or []
+            participants_by_uuid = {participant.uuid: participant for participant in bot.participants.filter(uuid__in=[frame["participant_uuid"] for frame in frames])}
+            response_frames = []
+            for frame in frames:
+                participant = participants_by_uuid.get(frame["participant_uuid"])
+                response_frames.append(
+                    {
+                        **frame,
+                        "participant_user_uuid": participant.user_uuid if participant else None,
+                        "participant_name": participant.full_name if participant else None,
+                    }
+                )
+            return Response(PerParticipantVideoSnapshotSerializer({"frames": response_frames}).data, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            logging.error(f"Error capturing per participant video snapshot for bot {bot.object_id}: {str(e)}")
+            return Response(
+                {"error": "Failed to capture per participant video frames"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+class SendChatMessageReactionView(APIView):
+    authentication_classes = [ApiKeyAuthentication]
+    throttle_classes = [ProjectPostThrottle]
+
+    @extend_schema(
+        operation_id="Send Chat Message Reaction",
+        summary="React to a chat message",
+        description="Causes the bot to add an emoji reaction to a chat message in the meeting, or remove a reaction it added. Only supported for Zoom bots that use the web SDK.",
+        request=BotChatMessageReactionRequestSerializer,
+        responses={
+            200: OpenApiResponse(description="Chat message reaction request created successfully"),
+            400: OpenApiResponse(description="Invalid input, the bot is not in a state that can react, or the bot doesn't support chat message reactions"),
+            404: OpenApiResponse(description="Bot or chat message not found"),
+        },
+        parameters=[
+            *TokenHeaderParameter,
+            OpenApiParameter(
+                name="object_id",
+                type=str,
+                location=OpenApiParameter.PATH,
+                description="Bot ID",
+                examples=[OpenApiExample("Bot ID Example", value="bot_xxxxxxxxxxx")],
+            ),
+        ],
+        tags=["Bots"],
+    )
+    def post(self, request, object_id):
+        try:
+            bot = Bot.objects.get(object_id=object_id, project=request.auth.project)
+        except Bot.DoesNotExist:
+            return Response({"error": "Bot not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = BotChatMessageReactionRequestSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        if meeting_type_from_url(bot.meeting_url) != MeetingTypes.ZOOM or not bot.use_zoom_web_adapter():
+            return Response(
+                {"error": "Chat message reactions are only supported for Zoom bots that use the web SDK"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not BotEventManager.is_state_that_can_play_media(bot.state):
+            return Response(
+                {"error": f"Bot is in state {BotStates.state_to_api_code(bot.state)} and cannot react to chat messages"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        validated_data = serializer.validated_data
+        chat_message = ChatMessage.objects.filter(bot=bot, object_id=validated_data["message_id"]).first()
+        if not chat_message:
+            return Response({"error": "Chat message not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            create_bot_chat_message_reaction_request(bot, chat_message, validated_data)
+
+            send_sync_command(bot, "sync_chat_message_reaction_requests")
+
+            return Response(status=status.HTTP_200_OK)
+
+        except ValidationError as e:
+            logging.error(f"Error creating chat message reaction request for bot {bot.object_id}: {str(e)}")
+            return Response({"error": e.messages[0]}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            logging.error(f"Error creating chat message reaction request for bot {bot.object_id}: {str(e)}")
+            return Response(
+                {"error": "Failed to create chat message reaction request"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 

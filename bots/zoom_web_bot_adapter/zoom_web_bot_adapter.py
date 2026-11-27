@@ -10,6 +10,7 @@ from django.conf import settings
 
 from bots.meeting_url_utils import parse_zoom_join_url
 from bots.models import RecordingViews
+from bots.per_participant_realtime_video_configuration import PerParticipantRealtimeVideoConfiguration
 from bots.utils import select_from_comma_separated_list_with_wrapping_index
 from bots.web_bot_adapter import WebBotAdapter
 from bots.zoom_web_bot_adapter.zoom_web_ui_methods import UiZoomWebGenericJoinErrorException, ZoomWebUIMethods
@@ -73,11 +74,13 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
         should_ask_for_recording_permission: bool,
         zoom_tokens: dict,
         modify_dom_for_video_recording: bool,
+        add_per_participant_video_snapshot_callback: Callable[[str, list, str | None], None],
         webinar_user_email: str | None = None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
         self.modify_dom_for_video_recording = modify_dom_for_video_recording
+        self.add_per_participant_video_snapshot_callback = add_per_participant_video_snapshot_callback
         self.webinar_user_email = webinar_user_email
         self.meeting_id, self.meeting_password = parse_zoom_join_url(self.meeting_url)
         self.zoom_oauth_credentials_callback = zoom_oauth_credentials_callback
@@ -87,7 +90,7 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
         zoom_client_id = zoom_oauth_credentials["client_id"]
         zoom_client_secret = zoom_oauth_credentials["client_secret"]
 
-        self.sdk_signature = zoom_meeting_sdk_signature(self.meeting_id, 0, client_id=zoom_client_id, client_secret=zoom_client_secret)
+        self.sdk_signature = zoom_meeting_sdk_signature(self.meeting_id, 0, video_webrtc_mode=self.video_webrtc_mode(), client_id=zoom_client_id, client_secret=zoom_client_secret)
         self.zoom_closed_captions_language = zoom_closed_captions_language
         self.should_ask_for_recording_permission = should_ask_for_recording_permission
         self.zoom_tokens = zoom_tokens
@@ -116,8 +119,35 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
     def change_gallery_view_page(self, next_page: bool):
         self.driver.execute_script(f"window?.changeGalleryViewPage({json.dumps(next_page)})")
 
-    def send_chat_message(self, text, to_user_uuid):
-        self.driver.execute_script("window?.sendChatMessage(arguments[0], arguments[1]);", text, to_user_uuid)
+    def send_chat_message(self, text, to_user_uuid, thread_id=None):
+        self.driver.execute_script("window?.sendChatMessage(arguments[0], arguments[1], arguments[2]);", text, to_user_uuid, thread_id)
+
+    def capture_per_participant_video_snapshot(self, request_id: str, per_participant_realtime_video_configuration: PerParticipantRealtimeVideoConfiguration):
+        # The page sends the result back asynchronously over the websocket, and it's passed on in handle_per_participant_video_snapshot_result
+        self.driver.execute_script("window?.capturePerParticipantVideoSnapshot(arguments[0], arguments[1]);", request_id, per_participant_realtime_video_configuration.to_dict())
+
+    def handle_per_participant_video_snapshot_result(self, json_data):
+        # This runs on the websocket thread that also carries the meeting audio and video, so a bad
+        # snapshot result must not raise. The web server just times out waiting for that snapshot.
+        try:
+            frames = [
+                {
+                    "participant_uuid": frame["participantId"],
+                    "source": "screenshare" if frame["isScreenShare"] else "webcam",
+                    "frame": frame["frame"],
+                    "format": "jpeg",
+                    "width": frame["width"],
+                    "height": frame["height"],
+                    "timestamp_ms": int(frame["timestamp"]),
+                }
+                for frame in json_data.get("frames") or []
+            ]
+            self.add_per_participant_video_snapshot_callback(json_data.get("requestId"), frames, json_data.get("error"))
+        except Exception as e:
+            logger.warning(f"Failed to handle per participant video snapshot result for request {json_data.get('requestId')}: {e}")
+
+    def send_chat_message_reaction(self, message_uuid, emoji, action):
+        self.driver.execute_script("window?.sendChatMessageReaction(arguments[0], arguments[1], arguments[2]);", message_uuid, emoji, action)
 
     def get_staged_bot_join_delay_seconds(self):
         return 5
@@ -201,7 +231,7 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
             zoom_oauth_credentials = self.zoom_oauth_credentials_callback()
             zoom_client_id = zoom_oauth_credentials["client_id"]
             zoom_client_secret = zoom_oauth_credentials["client_secret"]
-            self.sdk_signature = zoom_meeting_sdk_signature(self.meeting_id, 0, client_id=zoom_client_id, client_secret=zoom_client_secret)
+            self.sdk_signature = zoom_meeting_sdk_signature(self.meeting_id, 0, video_webrtc_mode=self.video_webrtc_mode(), client_id=zoom_client_id, client_secret=zoom_client_secret)
 
             time.sleep(generic_join_error_sleep_time_seconds)  # Sleep for a bit so we're not constantly retrying
 
@@ -223,6 +253,12 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
             return False
 
         return super().subclass_specific_use_disable_gpu_chrome_option()
+
+    # Without a GPU, gallery view only renders in WebRTC video mode
+    def video_webrtc_mode(self):
+        if self.recording_view == RecordingViews.GALLERY_VIEW:
+            return 1
+        return None
 
     def subclass_specific_navigation_config_filename(self):
         return "zoom_web.json"
