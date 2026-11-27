@@ -443,25 +443,8 @@ class WebBotAdapter(BotAdapter):
         self.upsert_chat_message_callback(json_data)
 
     def handle_per_participant_video_snapshot_result(self, json_data):
-        self.send_message_callback(
-            {
-                "message": self.Messages.PER_PARTICIPANT_VIDEO_SNAPSHOT_RESULT,
-                "request_id": json_data.get("requestId"),
-                "error": json_data.get("error"),
-                "frames": [
-                    {
-                        "participant_uuid": frame["participantId"],
-                        "source": "screenshare" if frame["isScreenShare"] else "webcam",
-                        "frame": frame["frame"],
-                        "format": "jpeg",
-                        "width": frame["width"],
-                        "height": frame["height"],
-                        "timestamp_ms": int(frame["timestamp"]),
-                    }
-                    for frame in json_data.get("frames") or []
-                ],
-            }
-        )
+        # Overridden by adapters that support per participant video snapshots
+        logger.warning("Received per participant video snapshot result for request %s, but this adapter does not support snapshots", json_data.get("requestId"))
 
     def handle_bot_media_device_state_changed_by_other_participant(self, json_data):
         if not self.bot_media_device_state_changed_by_other_participant_callback:

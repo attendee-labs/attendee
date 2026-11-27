@@ -442,6 +442,7 @@ class BotController:
             modify_dom_for_video_recording=self.should_modify_dom_for_video_recording_for_web_bots(),
             record_participant_speech_start_stop_events=self.bot_in_db.record_participant_speech_start_stop_events(),
             zoom_tokens=zoom_tokens,
+            add_per_participant_video_snapshot_callback=self.add_per_participant_video_snapshot_callback,
             media_capture_health_signal_callback=self.on_media_capture_health_signal,
         )
 
@@ -1320,10 +1321,8 @@ class BotController:
             ),
         )
 
-    def handle_per_participant_video_snapshot_result(self, message):
-        request_id = message.get("request_id")
-        error = message.get("error")
-        frames = message.get("frames") or []
+    # Called from the adapter's websocket thread. That's fine because it only writes to Redis, using its own connection.
+    def add_per_participant_video_snapshot_callback(self, request_id: str, frames: list, error: str | None):
         if error:
             logger.warning(f"Failed to capture per participant video snapshot for request {request_id}: {error}")
         else:
@@ -2092,10 +2091,6 @@ class BotController:
         return {"remover_name": participant.full_name, "remover_uuid": participant.uuid, "remover_user_uuid": participant.user_uuid, "remover_is_host": participant.is_host}
 
     def take_action_based_on_message_from_adapter(self, message):
-        if message.get("message") == BotAdapter.Messages.PER_PARTICIPANT_VIDEO_SNAPSHOT_RESULT:
-            self.handle_per_participant_video_snapshot_result(message)
-            return
-
         if message.get("message") == BotAdapter.Messages.SAVE_SCREENSHOT_AND_MHTML_FILE:
             logger.info("Received message to save screenshot and mhtml file")
             self.save_debug_artifacts(message, self.bot_in_db.last_bot_event())

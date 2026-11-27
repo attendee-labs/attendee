@@ -5,7 +5,6 @@ from unittest.mock import MagicMock, patch
 from django.test import Client, TestCase
 
 from accounts.models import Organization
-from bots.bot_adapter import BotAdapter
 from bots.bot_controller.bot_controller import BotController
 from bots.models import (
     ApiKey,
@@ -294,8 +293,8 @@ class PerParticipantVideoSnapshotBotTest(TestCase):
         controller = BotController(self.bot.id)
         controller.adapter = MagicMock()
 
-        controller.take_action_based_on_message_from_adapter({"message": BotAdapter.Messages.PER_PARTICIPANT_VIDEO_SNAPSHOT_RESULT, "request_id": "fulfilled-request", "error": None, "frames": [stored_frame("16778240")]})
-        controller.take_action_based_on_message_from_adapter({"message": BotAdapter.Messages.PER_PARTICIPANT_VIDEO_SNAPSHOT_RESULT, "request_id": "failed-request", "error": "Bot is not recording", "frames": []})
+        controller.add_per_participant_video_snapshot_callback("fulfilled-request", [stored_frame("16778240")], None)
+        controller.add_per_participant_video_snapshot_callback("failed-request", [], "Bot is not recording")
 
         self.assertEqual(self._wait_for_result("fulfilled-request"), PerParticipantVideoSnapshotResult(frames=[stored_frame("16778240")], error=None))
         self.assertEqual(self._wait_for_result("failed-request"), PerParticipantVideoSnapshotResult(frames=None, error="Bot is not recording"))
@@ -315,24 +314,28 @@ class PerParticipantVideoSnapshotBotTest(TestCase):
 
     def test_web_adapter_converts_page_result_to_frames(self):
         adapter = ZoomWebBotAdapter.__new__(ZoomWebBotAdapter)
+        adapter.add_per_participant_video_snapshot_callback = MagicMock()
         adapter.send_message_callback = MagicMock()
 
         adapter.handle_per_participant_video_snapshot_result(
             {
                 "type": "PerParticipantVideoSnapshotResult",
-                "requestId": 42,
+                "requestId": "abc123",
                 "frames": [{"participantId": "16778240", "isScreenShare": True, "frame": "/9j/4AAQSkZJRgABAQAAAQABAAD", "width": 640, "height": 360, "timestamp": 1764177600000}],
             }
         )
 
-        adapter.send_message_callback.assert_called_once_with(
-            {
-                "message": BotAdapter.Messages.PER_PARTICIPANT_VIDEO_SNAPSHOT_RESULT,
-                "request_id": 42,
-                "error": None,
-                "frames": [stored_frame("16778240")],
-            }
-        )
+        # Frames go through the dedicated callback, not the adapter's message channel
+        adapter.add_per_participant_video_snapshot_callback.assert_called_once_with("abc123", [stored_frame("16778240")], None)
+        adapter.send_message_callback.assert_not_called()
+
+    def test_web_adapter_passes_page_error_to_callback(self):
+        adapter = ZoomWebBotAdapter.__new__(ZoomWebBotAdapter)
+        adapter.add_per_participant_video_snapshot_callback = MagicMock()
+
+        adapter.handle_per_participant_video_snapshot_result({"type": "PerParticipantVideoSnapshotResult", "requestId": "abc123", "frames": [], "error": "Bot is not recording"})
+
+        adapter.add_per_participant_video_snapshot_callback.assert_called_once_with("abc123", [], "Bot is not recording")
 
 
 class PerParticipantVideoSnapshotStoreTest(TestCase):
