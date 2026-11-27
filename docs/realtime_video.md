@@ -97,7 +97,7 @@ The response contains one frame for each participant video source the bot can cu
 
 The `participant_uuid`, `frame`, `format` and `source` fields mean the same thing as in the websocket message.
 
-The bot must be in the `joined_recording` state. If the bot does not return the frames within 5 seconds, the request fails with a 504 status code. Attendee does not keep the frames after returning them to you.
+The bot must be in the `joined_recording` state. If the bot does not return the frames within 5 seconds, the request fails with a 504 status code. A bot captures one snapshot at a time: if you request a snapshot while the previous one is still being captured, the request fails with a 403 status code. After a 504, the timed out request keeps blocking new snapshots until 10 seconds after it was made. Attendee does not keep the frames after returning them to you.
 
 Currently snapshots are only supported for Zoom bots using the web SDK (`zoom_settings.sdk` set to `"web"`).
 

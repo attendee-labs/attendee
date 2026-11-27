@@ -841,7 +841,8 @@ paths:
         screenshare, as base64-encoded JPEG images. This is the same data as the per-participant
         video websocket (see https://docs.attendee.dev/guides/realtimevideo), but
         for a single point in time. Currently only supported for Zoom bots using the
-        web SDK. The bot must be in the joined_recording state.
+        web SDK. The bot must be in the joined_recording state. A bot can only capture
+        one snapshot at a time.
       summary: Capture the current per-participant video frames
       parameters:
       - in: header
@@ -901,6 +902,8 @@ paths:
         '400':
           description: Invalid input, the bot type does not support this, the bot
             is not in a valid state, or the bot failed to capture the frames
+        '403':
+          description: The bot is already capturing a snapshot
         '404':
           description: Bot not found
         '504':

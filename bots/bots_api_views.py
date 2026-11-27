@@ -18,7 +18,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .authentication import ApiKeyAuthentication
-from .bots_api_utils import BotCreationSource, create_bot, create_bot_chat_message_reaction_request, create_bot_chat_message_request, create_bot_media_request_for_image, create_per_participant_video_snapshot_request, delete_bot, patch_bot, patch_bot_transcription_settings, patch_bot_voice_agent_settings, send_sync_command
+from .bots_api_utils import BotCreationSource, create_bot, create_bot_chat_message_reaction_request, create_bot_chat_message_request, create_bot_media_request_for_image, delete_bot, patch_bot, patch_bot_transcription_settings, patch_bot_voice_agent_settings, send_sync_command
 from .launch_bot_utils import launch_adhoc_bot_from_view
 from .meeting_url_utils import meeting_type_from_url
 from .models import (
@@ -38,12 +38,11 @@ from .models import (
     MeetingTypes,
     Participant,
     ParticipantEvent,
-    PerParticipantVideoSnapshotRequestManager,
-    PerParticipantVideoSnapshotRequestStates,
     Recording,
     RecordingViews,
     Utterance,
 )
+from .per_participant_video_snapshot_store import PerParticipantVideoSnapshotStore
 from .serializers import (
     AsyncTranscriptionSerializer,
     BotChatMessageReactionRequestSerializer,
@@ -1219,7 +1218,7 @@ class PerParticipantVideoSnapshotView(APIView):
     @extend_schema(
         operation_id="Capture Per Participant Video Snapshot",
         summary="Capture the current per-participant video frames",
-        description="Returns the current video frame of each participant's webcam and/or screenshare, as base64-encoded JPEG images. This is the same data as the per-participant video websocket (see https://docs.attendee.dev/guides/realtimevideo), but for a single point in time. Currently only supported for Zoom bots using the web SDK. The bot must be in the joined_recording state.",
+        description="Returns the current video frame of each participant's webcam and/or screenshare, as base64-encoded JPEG images. This is the same data as the per-participant video websocket (see https://docs.attendee.dev/guides/realtimevideo), but for a single point in time. Currently only supported for Zoom bots using the web SDK. The bot must be in the joined_recording state. A bot can only capture one snapshot at a time.",
         request=PerParticipantVideoSnapshotRequestSerializer,
         responses={
             200: OpenApiResponse(
@@ -1227,6 +1226,7 @@ class PerParticipantVideoSnapshotView(APIView):
                 description="Frames captured successfully",
             ),
             400: OpenApiResponse(description="Invalid input, the bot type does not support this, the bot is not in a valid state, or the bot failed to capture the frames"),
+            403: OpenApiResponse(description="The bot is already capturing a snapshot"),
             404: OpenApiResponse(description="Bot not found"),
             504: OpenApiResponse(description="The bot did not capture the frames in time"),
         },
@@ -1261,31 +1261,39 @@ class PerParticipantVideoSnapshotView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        snapshot_request = None
         try:
-            snapshot_request = create_per_participant_video_snapshot_request(bot, serializer.validated_data)
+            with PerParticipantVideoSnapshotStore() as snapshot_store:
+                snapshot_request = snapshot_store.create_request(
+                    bot.id,
+                    webcam_resolution=serializer.validated_data["webcam_resolution"],
+                    screenshare_resolution=serializer.validated_data["screenshare_resolution"],
+                )
+                if snapshot_request is None:
+                    return Response(
+                        {"error": "The bot is already capturing a per participant video snapshot. Wait for it to finish before requesting another."},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
 
-            # Send sync command to notify bot of new snapshot request
-            send_sync_command(bot, "sync_per_participant_video_snapshot_requests")
+                timed_out = False
+                try:
+                    # Send sync command to notify bot of new snapshot request
+                    send_sync_command(bot, "sync_per_participant_video_snapshot_requests")
 
-            # Poll the request until the bot fills it in. If it takes too long, mark it as failed so the bot doesn't fill it in later.
-            for _ in range(round(self.POLL_TIMEOUT_SECONDS / self.POLL_INTERVAL_SECONDS)):
-                time.sleep(self.POLL_INTERVAL_SECONDS)
-                snapshot_request.refresh_from_db()
-                if snapshot_request.state in (PerParticipantVideoSnapshotRequestStates.FULFILLED, PerParticipantVideoSnapshotRequestStates.FAILED):
-                    break
-            else:
-                if PerParticipantVideoSnapshotRequestManager.set_request_failed(snapshot_request, {"description": "Timed out waiting for the bot to capture the frames"}):
-                    logging.error(f"Timed out waiting for per participant video snapshot for bot {bot.object_id}")
-                    return Response({"error": "Timed out waiting for the bot to capture the frames"}, status=status.HTTP_504_GATEWAY_TIMEOUT)
-                # The bot filled in the request right as we timed out
-                snapshot_request.refresh_from_db()
+                    result = snapshot_store.wait_for_result(snapshot_request.id, timeout_seconds=self.POLL_TIMEOUT_SECONDS, poll_interval_seconds=self.POLL_INTERVAL_SECONDS)
+                    if result is None:
+                        timed_out = True
+                        logging.error(f"Timed out waiting for per participant video snapshot for bot {bot.object_id}")
+                        return Response({"error": "Timed out waiting for the bot to capture the frames"}, status=status.HTTP_504_GATEWAY_TIMEOUT)
+                finally:
+                    # If we timed out, the bot may still be capturing, so we leave the request to expire on its own
+                    # rather than letting a new snapshot overlap with it.
+                    if not timed_out:
+                        snapshot_store.delete_request(bot.id, snapshot_request.id)
 
-            if snapshot_request.state != PerParticipantVideoSnapshotRequestStates.FULFILLED:
-                failure_description = (snapshot_request.failure_data or {}).get("description", "Unknown error")
-                return Response({"error": f"Failed to capture per participant video frames: {failure_description}"}, status=status.HTTP_400_BAD_REQUEST)
+            if result.error:
+                return Response({"error": f"Failed to capture per participant video frames: {result.error}"}, status=status.HTTP_400_BAD_REQUEST)
 
-            frames = snapshot_request.frames or []
+            frames = result.frames or []
             participants_by_uuid = {participant.uuid: participant for participant in bot.participants.filter(uuid__in=[frame["participant_uuid"] for frame in frames])}
             response_frames = []
             for frame in frames:
@@ -1305,10 +1313,6 @@ class PerParticipantVideoSnapshotView(APIView):
                 {"error": "Failed to capture per participant video frames"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
-        finally:
-            # The frames have been copied into the response, so we don't need to keep them around
-            if snapshot_request:
-                PerParticipantVideoSnapshotRequestManager.clear_frames(snapshot_request)
 
 
 class SendChatMessageReactionView(APIView):

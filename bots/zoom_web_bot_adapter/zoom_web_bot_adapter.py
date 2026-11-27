@@ -120,7 +120,7 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
     def send_chat_message(self, text, to_user_uuid, thread_id=None):
         self.driver.execute_script("window?.sendChatMessage(arguments[0], arguments[1], arguments[2]);", text, to_user_uuid, thread_id)
 
-    def capture_per_participant_video_snapshot(self, request_id: int, per_participant_realtime_video_configuration: PerParticipantRealtimeVideoConfiguration):
+    def capture_per_participant_video_snapshot(self, request_id: str, per_participant_realtime_video_configuration: PerParticipantRealtimeVideoConfiguration):
         # The result is sent back asynchronously over the websocket as a PerParticipantVideoSnapshotResult message
         self.driver.execute_script("window?.capturePerParticipantVideoSnapshot(arguments[0], arguments[1]);", request_id, per_participant_realtime_video_configuration.to_dict())
 
