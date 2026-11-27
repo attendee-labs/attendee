@@ -834,6 +834,77 @@ paths:
           description: Bot is not in a valid state to pause recording
         '404':
           description: Bot not found
+  /api/v1/bots/{object_id}/per_participant_video_frames_snapshot:
+    post:
+      operationId: Capture Per Participant Video Frames Snapshot
+      description: Returns the current video frame of each participant's webcam and/or
+        screenshare, as base64-encoded JPEG images. This is the same data as the per-participant
+        video websocket (see https://docs.attendee.dev/guides/realtimevideo), but
+        for a single point in time. Currently only supported for Zoom bots using the
+        web SDK. The bot must be in the joined_recording state.
+      summary: Capture the current per-participant video frames
+      parameters:
+      - in: header
+        name: Authorization
+        schema:
+          type: string
+          default: Token YOUR_API_KEY_HERE
+        description: API key for authentication
+        required: true
+      - in: header
+        name: Content-Type
+        schema:
+          type: string
+          default: application/json
+        description: Should always be application/json
+        required: true
+      - in: path
+        name: object_id
+        schema:
+          type: string
+        description: Bot ID
+        required: true
+        examples:
+          BotIDExample:
+            value: bot_xxxxxxxxxxx
+            summary: Bot ID Example
+      tags:
+      - Bots
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PerParticipantVideoFramesSnapshotRequestRequest'
+            examples:
+              CurrentScreenshareFrame:
+                value:
+                  screenshare_resolution: 1080p
+                summary: Current screenshare frame
+                description: Capture the current screenshare frame at 1080p. Webcams
+                  are not captured.
+              WebcamsAndScreenshare:
+                value:
+                  webcam_resolution: 360p
+                  screenshare_resolution: 720p
+                summary: Webcams and screenshare
+                description: Capture the current frame of every participant's webcam
+                  and screenshare
+      security:
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PerParticipantVideoFramesSnapshot'
+          description: Frames captured successfully
+        '400':
+          description: Invalid input, the bot type does not support this, the bot
+            is not in a valid state, or the bot failed to capture the frames
+        '404':
+          description: Bot not found
+        '504':
+          description: The bot did not capture the frames in time
   /api/v1/bots/{object_id}/recording:
     get:
       operationId: Get Bot Recording
@@ -3731,6 +3802,92 @@ components:
           description: The refresh token for accessing the calendar platform
         metadata:
           description: JSON object containing metadata to associate with the calendar
+    PerParticipantVideoFrame:
+      type: object
+      properties:
+        participant_uuid:
+          type: string
+          description: The UUID of the participant whose video this frame is from
+        participant_user_uuid:
+          type: string
+          nullable: true
+          description: The user UUID of the participant, if available
+        participant_name:
+          type: string
+          nullable: true
+          description: The name of the participant, if available
+        source:
+          allOf:
+          - $ref: '#/components/schemas/SourceEnum'
+          description: |-
+            Whether the frame is from the participant's webcam or screenshare
+
+            * `webcam` - webcam
+            * `screenshare` - screenshare
+        frame:
+          type: string
+          description: The base64-encoded image
+        format:
+          type: string
+          description: The image format of the frame. Always 'jpeg'.
+        width:
+          type: integer
+          description: Width of the frame in pixels. The video is letterboxed to fit
+            the requested resolution.
+        height:
+          type: integer
+          description: Height of the frame in pixels
+        timestamp_ms:
+          type: integer
+          description: When the frame was captured, in milliseconds since the Unix
+            epoch
+      required:
+      - format
+      - frame
+      - height
+      - participant_name
+      - participant_user_uuid
+      - participant_uuid
+      - source
+      - timestamp_ms
+      - width
+    PerParticipantVideoFramesSnapshot:
+      type: object
+      properties:
+        frames:
+          type: array
+          items:
+            $ref: '#/components/schemas/PerParticipantVideoFrame'
+          description: One frame per participant video source that was visible to
+            the bot when the snapshot was taken. Empty if nothing matching the request
+            was visible.
+      required:
+      - frames
+    PerParticipantVideoFramesSnapshotRequestRequest:
+      type: object
+      properties:
+        webcam_resolution:
+          allOf:
+          - $ref: '#/components/schemas/WebcamResolutionEnum'
+          default: none
+          description: |-
+            Resolution for per-participant webcam frames. 'none' skips webcams. JPEG quality is determined by resolution: 360p (quality 70), 720p (quality 60), 1080p (quality 50). Defaults to 'none'.
+
+            * `none` - none
+            * `360p` - 360p
+            * `720p` - 720p
+            * `1080p` - 1080p
+        screenshare_resolution:
+          allOf:
+          - $ref: '#/components/schemas/ScreenshareResolutionEnum'
+          default: 360p
+          description: |-
+            Resolution for per-participant screenshare frames. 'none' skips screenshares. JPEG quality is determined by resolution: 360p (quality 70), 720p (quality 60), 1080p (quality 50). Defaults to '360p'.
+
+            * `none` - none
+            * `360p` - 360p
+            * `720p` - 720p
+            * `1080p` - 1080p
     PlatformEnum:
       enum:
       - google
@@ -3758,6 +3915,26 @@ components:
       - complete
       - failed
       - paused
+    ScreenshareResolutionEnum:
+      enum:
+      - none
+      - 360p
+      - 720p
+      - 1080p
+      type: string
+      description: |-
+        * `none` - none
+        * `360p` - 360p
+        * `720p` - 720p
+        * `1080p` - 1080p
+    SourceEnum:
+      enum:
+      - webcam
+      - screenshare
+      type: string
+      description: |-
+        * `webcam` - webcam
+        * `screenshare` - screenshare
     SpeechRequest:
       type: object
       properties:
@@ -3832,6 +4009,18 @@ components:
       description: '* `image/png` - PNG Image
 
         * `image/jpeg` - JPEG Image'
+    WebcamResolutionEnum:
+      enum:
+      - none
+      - 360p
+      - 720p
+      - 1080p
+      type: string
+      description: |-
+        * `none` - none
+        * `360p` - 360p
+        * `720p` - 720p
+        * `1080p` - 1080p
     ZoomOAuthConnection:
       type: object
       properties:

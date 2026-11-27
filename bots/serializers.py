@@ -1116,6 +1116,62 @@ class BotChatMessageRequestSerializer(serializers.Serializer):
         return value
 
 
+PER_PARTICIPANT_VIDEO_RESOLUTION_CHOICES = ["none", "360p", "720p", "1080p"]
+
+
+@extend_schema_serializer(
+    examples=[
+        OpenApiExample(
+            "Current screenshare frame",
+            value={
+                "screenshare_resolution": "1080p",
+            },
+            description="Capture the current screenshare frame at 1080p. Webcams are not captured.",
+        ),
+        OpenApiExample(
+            "Webcams and screenshare",
+            value={
+                "webcam_resolution": "360p",
+                "screenshare_resolution": "720p",
+            },
+            description="Capture the current frame of every participant's webcam and screenshare",
+        ),
+    ]
+)
+class PerParticipantVideoFramesSnapshotRequestSerializer(serializers.Serializer):
+    webcam_resolution = serializers.ChoiceField(
+        choices=PER_PARTICIPANT_VIDEO_RESOLUTION_CHOICES,
+        default="none",
+        help_text="Resolution for per-participant webcam frames. 'none' skips webcams. JPEG quality is determined by resolution: 360p (quality 70), 720p (quality 60), 1080p (quality 50). Defaults to 'none'.",
+    )
+    screenshare_resolution = serializers.ChoiceField(
+        choices=PER_PARTICIPANT_VIDEO_RESOLUTION_CHOICES,
+        default="360p",
+        help_text="Resolution for per-participant screenshare frames. 'none' skips screenshares. JPEG quality is determined by resolution: 360p (quality 70), 720p (quality 60), 1080p (quality 50). Defaults to '360p'.",
+    )
+
+    def validate(self, data):
+        if data.get("webcam_resolution") == "none" and data.get("screenshare_resolution") == "none":
+            raise serializers.ValidationError("At least one of webcam_resolution or screenshare_resolution must be set to a non-none value.")
+        return data
+
+
+class PerParticipantVideoFrameSerializer(serializers.Serializer):
+    participant_uuid = serializers.CharField(help_text="The UUID of the participant whose video this frame is from")
+    participant_user_uuid = serializers.CharField(allow_null=True, help_text="The user UUID of the participant, if available")
+    participant_name = serializers.CharField(allow_null=True, help_text="The name of the participant, if available")
+    source = serializers.ChoiceField(choices=["webcam", "screenshare"], help_text="Whether the frame is from the participant's webcam or screenshare")
+    frame = serializers.CharField(help_text="The base64-encoded image")
+    format = serializers.CharField(help_text="The image format of the frame. Always 'jpeg'.")
+    width = serializers.IntegerField(help_text="Width of the frame in pixels. The video is letterboxed to fit the requested resolution.")
+    height = serializers.IntegerField(help_text="Height of the frame in pixels")
+    timestamp_ms = serializers.IntegerField(help_text="When the frame was captured, in milliseconds since the Unix epoch")
+
+
+class PerParticipantVideoFramesSnapshotSerializer(serializers.Serializer):
+    frames = PerParticipantVideoFrameSerializer(many=True, help_text="One frame per participant video source that was visible to the bot when the snapshot was taken. Empty if nothing matching the request was visible.")
+
+
 @extend_schema_serializer(
     examples=[
         OpenApiExample(
@@ -1225,13 +1281,13 @@ WEBSOCKET_SETTINGS_SCHEMA = {
                 },
                 "webcam_resolution": {
                     "type": "string",
-                    "enum": ["none", "360p", "720p", "1080p"],
+                    "enum": PER_PARTICIPANT_VIDEO_RESOLUTION_CHOICES,
                     "default": "360p",
                     "description": "Resolution for per-participant webcam video. 'none' disables webcam streaming. Framerate and JPEG quality are determined by resolution: 360p (2fps, quality 70), 720p (1fps, quality 60), 1080p (1fps, quality 50). Defaults to '360p'.",
                 },
                 "screenshare_resolution": {
                     "type": "string",
-                    "enum": ["none", "360p", "720p", "1080p"],
+                    "enum": PER_PARTICIPANT_VIDEO_RESOLUTION_CHOICES,
                     "default": "360p",
                     "description": "Resolution for per-participant screenshare video. 'none' disables screenshare streaming. Framerate and JPEG quality are determined by resolution: 360p (2fps, quality 70), 720p (1fps, quality 60), 1080p (1fps, quality 50). Defaults to '360p'.",
                 },

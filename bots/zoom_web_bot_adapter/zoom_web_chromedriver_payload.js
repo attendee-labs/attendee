@@ -398,6 +398,109 @@ class PerParticipantVideoCaptureManager {
         });
     }
 
+    // Draws the current frame of a <video-player> into ctx, letterboxed to the target size.
+    // Returns true if a frame was drawn.
+    async drawVideoPlayerFrameLetterboxed({
+        videoPlayer,
+        isScreenShare,
+        sourceCanvas,
+        sourceVideo,
+        ctx,
+        targetWidth,
+        targetHeight,
+    }) {
+        if (sourceCanvas?.isConnected) {
+            return await this.drawSdkScreenshotLetterboxed({
+                videoPlayer,
+                isScreenShare,
+                ctx,
+                targetWidth,
+                targetHeight,
+            });
+        }
+
+        if (sourceVideo?.isConnected) {
+            return this.drawVideoElementLetterboxed({
+                sourceVideo,
+                ctx,
+                targetWidth,
+                targetHeight,
+            });
+        }
+
+        return false;
+    }
+
+    createTargetCanvas(targetWidth, targetHeight) {
+        const targetCanvas = document.createElement('canvas');
+        targetCanvas.width = targetWidth;
+        targetCanvas.height = targetHeight;
+
+        const ctx = targetCanvas.getContext('2d', { alpha: false });
+        if (ctx) {
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = 'high';
+        }
+
+        return { targetCanvas, ctx };
+    }
+
+    // Captures a single frame from each eligible <video-player> right now, instead of streaming them.
+    // videoConfig has the same shape as initialData.perParticipantRealtimeVideoConfiguration.
+    async captureSnapshot(videoConfig) {
+        const frames = [];
+
+        for (const candidate of this.getEligibleCaptureCandidates().values()) {
+            const { participantId, isScreenShare, videoPlayer } = candidate;
+            const sourceConfig = isScreenShare
+                ? videoConfig?.screenshare_configuration
+                : videoConfig?.webcam_configuration;
+
+            if (!sourceConfig?.enabled) continue;
+
+            try {
+                const targetWidth = sourceConfig.width;
+                const targetHeight = sourceConfig.height;
+                const { targetCanvas, ctx } = this.createTargetCanvas(targetWidth, targetHeight);
+                if (!ctx) continue;
+
+                const { sourceCanvas, sourceVideo } = this.getSourceElements(videoPlayer);
+                const didDraw = await this.drawVideoPlayerFrameLetterboxed({
+                    videoPlayer,
+                    isScreenShare,
+                    sourceCanvas,
+                    sourceVideo,
+                    ctx,
+                    targetWidth,
+                    targetHeight,
+                });
+                if (!didDraw) continue;
+
+                const jpegQuality = (sourceConfig.jpeg_quality ?? 80) / 100;
+                const base64 = targetCanvas.toDataURL('image/jpeg', jpegQuality).split(',', 2)[1];
+                if (!base64) continue;
+
+                frames.push({
+                    participantId,
+                    isScreenShare,
+                    frame: base64,
+                    width: targetWidth,
+                    height: targetHeight,
+                    timestamp: Date.now(),
+                });
+            } catch (err) {
+                this.throttledLogAndSend({
+                    type: 'PerParticipantVideoCaptureManagerCaptureSnapshotFrameError',
+                    participantId,
+                    isScreenShare,
+                    error: err.message,
+                });
+            }
+        }
+
+        return frames;
+    }
+
     startCapture({ captureKey, participantId, isScreenShare, videoPlayer, sourceType }) {
         const sourceConfig = this.getSourceConfig(isScreenShare);
 
@@ -422,11 +525,7 @@ class PerParticipantVideoCaptureManager {
             return;
         }
 
-        const targetCanvas = document.createElement('canvas');
-        targetCanvas.width = targetWidth;
-        targetCanvas.height = targetHeight;
-
-        const ctx = targetCanvas.getContext('2d', { alpha: false });
+        const { targetCanvas, ctx } = this.createTargetCanvas(targetWidth, targetHeight);
         if (!ctx) {
             this.throttledLogAndSend({
                 type: 'PerParticipantVideoCaptureManagerNoCanvasContext',
@@ -435,9 +534,6 @@ class PerParticipantVideoCaptureManager {
             });
             return;
         }
-
-        ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = 'high';
 
         const capture = {
             participantId,
@@ -464,24 +560,15 @@ class PerParticipantVideoCaptureManager {
 
                 capture.inFlight = true;
 
-                let didDraw = false;
-
-                if (sourceCanvas?.isConnected) {
-                    didDraw = await this.drawSdkScreenshotLetterboxed({
-                        videoPlayer: capture.videoPlayer,
-                        isScreenShare: capture.isScreenShare,
-                        ctx,
-                        targetWidth,
-                        targetHeight,
-                    });
-                } else if (sourceVideo?.isConnected) {
-                    didDraw = this.drawVideoElementLetterboxed({
-                        sourceVideo,
-                        ctx,
-                        targetWidth,
-                        targetHeight,
-                    });
-                }
+                const didDraw = await this.drawVideoPlayerFrameLetterboxed({
+                    videoPlayer: capture.videoPlayer,
+                    isScreenShare: capture.isScreenShare,
+                    sourceCanvas,
+                    sourceVideo,
+                    ctx,
+                    targetWidth,
+                    targetHeight,
+                });
 
                 if (!didDraw) return;
 
@@ -1552,6 +1639,31 @@ const mixedAudioStreamManager = new MixedAudioStreamManager();
 window.mixedAudioStreamManager = mixedAudioStreamManager;
 const perParticipantVideoCaptureManager = new PerParticipantVideoCaptureManager();
 window.perParticipantVideoCaptureManager = perParticipantVideoCaptureManager;
+
+// Called by the bot when it receives a PerParticipantVideoFramesSnapshotRequest. The frames are
+// sent back over the websocket in a PerParticipantVideoFramesSnapshotResult message.
+window.capturePerParticipantVideoFramesSnapshot = async (requestId, videoConfig) => {
+    try {
+        if (!window.ws?.mediaSendingEnabled) {
+            throw new Error('Bot is not recording');
+        }
+
+        const frames = await window.perParticipantVideoCaptureManager.captureSnapshot(videoConfig);
+        window.ws?.sendJson({
+            type: 'PerParticipantVideoFramesSnapshotResult',
+            requestId,
+            frames,
+        });
+    } catch (err) {
+        console.error('Error capturing per participant video frames snapshot', err);
+        window.ws?.sendJson({
+            type: 'PerParticipantVideoFramesSnapshotResult',
+            requestId,
+            frames: [],
+            error: err.message || 'Unknown error',
+        });
+    }
+};
 
 const turnOnCameraArialLabel = "start my video"
 const turnOffCameraArialLabel = "stop my video"
