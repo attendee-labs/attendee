@@ -52,10 +52,14 @@ class PerParticipantVideoSnapshotStore:
     # Results the web server stopped waiting for are dropped after this long
     RESULT_TTL_SECONDS = 30
 
-    def __init__(self):
+    CONNECT_TIMEOUT_SECONDS = 2
+
+    def __init__(self, socket_timeout_seconds: float | None = None):
         # A short-lived client rather than a pooled one, because bot pods try to keep their Redis connection count low.
         # Use the store as a context manager so the connection is closed when you're done.
-        self._redis_client = redis.from_url(settings.REDIS_URL_WITH_PARAMS)
+        # socket_timeout_seconds bounds how long a single command can take. Leave it unset when you need wait_for_result,
+        # since a socket timeout shorter than the BLPOP timeout would cut the wait short.
+        self._redis_client = redis.from_url(settings.REDIS_URL_WITH_PARAMS, socket_connect_timeout=self.CONNECT_TIMEOUT_SECONDS, socket_timeout=socket_timeout_seconds)
 
     def __enter__(self):
         return self

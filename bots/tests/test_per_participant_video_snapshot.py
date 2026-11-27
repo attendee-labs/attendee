@@ -2,6 +2,7 @@ import json
 import time
 from unittest.mock import MagicMock, patch
 
+import redis
 from django.test import Client, TestCase
 
 from accounts.models import Organization
@@ -293,11 +294,35 @@ class PerParticipantVideoSnapshotBotTest(TestCase):
         controller = BotController(self.bot.id)
         controller.adapter = MagicMock()
 
-        controller.add_per_participant_video_snapshot_callback("fulfilled-request", [stored_frame("16778240")], None)
-        controller.add_per_participant_video_snapshot_callback("failed-request", [], "Bot is not recording")
+        with patch("bots.bot_controller.bot_controller.GLib.idle_add") as mock_idle_add:
+            controller.add_per_participant_video_snapshot_callback("fulfilled-request", [stored_frame("16778240")], None)
+            controller.add_per_participant_video_snapshot_callback("failed-request", [], "Bot is not recording")
+
+        # The callback runs on the adapter's websocket thread, so it only schedules the Redis write on the main loop
+        self.assertFalse(PerParticipantVideoSnapshotStore()._redis_client.exists(PerParticipantVideoSnapshotStore._result_key("fulfilled-request")))
+        self.assertEqual(mock_idle_add.call_count, 2)
+        for call in mock_idle_add.call_args_list:
+            call.args[0]()
 
         self.assertEqual(self._wait_for_result("fulfilled-request"), PerParticipantVideoSnapshotResult(frames=[stored_frame("16778240")], error=None))
         self.assertEqual(self._wait_for_result("failed-request"), PerParticipantVideoSnapshotResult(frames=None, error="Bot is not recording"))
+
+    def test_bot_controller_survives_failed_redis_write(self):
+        controller = BotController(self.bot.id)
+        controller.adapter = MagicMock()
+
+        with patch.object(PerParticipantVideoSnapshotStore, "set_result", side_effect=redis.ConnectionError("Redis is down")):
+            # Doesn't raise; the web server just times out waiting for this snapshot
+            controller.save_per_participant_video_snapshot_result("some-request", [stored_frame("16778240")], None)
+
+    def test_bot_controller_bounds_redis_write_time(self):
+        controller = BotController(self.bot.id)
+        controller.adapter = MagicMock()
+
+        with patch("bots.bot_controller.bot_controller.PerParticipantVideoSnapshotStore") as mock_store_class:
+            controller.save_per_participant_video_snapshot_result("some-request", [], None)
+
+        mock_store_class.assert_called_once_with(socket_timeout_seconds=BotController.PER_PARTICIPANT_VIDEO_SNAPSHOT_RESULT_WRITE_TIMEOUT_SECONDS)
 
     def test_zoom_web_adapter_asks_page_for_snapshot(self):
         # Skip __init__, which sets up the browser; capture_per_participant_video_snapshot only needs the driver
@@ -336,6 +361,28 @@ class PerParticipantVideoSnapshotBotTest(TestCase):
         adapter.handle_per_participant_video_snapshot_result({"type": "PerParticipantVideoSnapshotResult", "requestId": "abc123", "frames": [], "error": "Bot is not recording"})
 
         adapter.add_per_participant_video_snapshot_callback.assert_called_once_with("abc123", [], "Bot is not recording")
+
+    def test_web_adapter_ignores_malformed_page_result(self):
+        adapter = ZoomWebBotAdapter.__new__(ZoomWebBotAdapter)
+        adapter.add_per_participant_video_snapshot_callback = MagicMock()
+
+        # Missing every frame field
+        adapter.handle_per_participant_video_snapshot_result({"type": "PerParticipantVideoSnapshotResult", "requestId": "abc123", "frames": [{}]})
+
+        adapter.add_per_participant_video_snapshot_callback.assert_not_called()
+
+    def test_failed_snapshot_does_not_interrupt_media_on_websocket(self):
+        adapter = ZoomWebBotAdapter.__new__(ZoomWebBotAdapter)
+        adapter.add_per_participant_video_snapshot_callback = MagicMock(side_effect=redis.ConnectionError("Redis is down"))
+        adapter.process_mixed_audio_frame = MagicMock()
+
+        snapshot_message = (1).to_bytes(4, byteorder="little") + json.dumps({"type": "PerParticipantVideoSnapshotResult", "requestId": "abc123", "frames": []}).encode("utf-8")
+        audio_message = (3).to_bytes(4, byteorder="little") + b"\x00" * 16
+
+        adapter.handle_websocket([snapshot_message, audio_message])
+
+        # The audio frame after the failed snapshot is still processed
+        adapter.process_mixed_audio_frame.assert_called_once_with(audio_message)
 
 
 class PerParticipantVideoSnapshotStoreTest(TestCase):

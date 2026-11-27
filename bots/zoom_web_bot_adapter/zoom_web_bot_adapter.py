@@ -127,19 +127,24 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
         self.driver.execute_script("window?.capturePerParticipantVideoSnapshot(arguments[0], arguments[1]);", request_id, per_participant_realtime_video_configuration.to_dict())
 
     def handle_per_participant_video_snapshot_result(self, json_data):
-        frames = [
-            {
-                "participant_uuid": frame["participantId"],
-                "source": "screenshare" if frame["isScreenShare"] else "webcam",
-                "frame": frame["frame"],
-                "format": "jpeg",
-                "width": frame["width"],
-                "height": frame["height"],
-                "timestamp_ms": int(frame["timestamp"]),
-            }
-            for frame in json_data.get("frames") or []
-        ]
-        self.add_per_participant_video_snapshot_callback(json_data.get("requestId"), frames, json_data.get("error"))
+        # This runs on the websocket thread that also carries the meeting audio and video, so a bad
+        # snapshot result must not raise. The web server just times out waiting for that snapshot.
+        try:
+            frames = [
+                {
+                    "participant_uuid": frame["participantId"],
+                    "source": "screenshare" if frame["isScreenShare"] else "webcam",
+                    "frame": frame["frame"],
+                    "format": "jpeg",
+                    "width": frame["width"],
+                    "height": frame["height"],
+                    "timestamp_ms": int(frame["timestamp"]),
+                }
+                for frame in json_data.get("frames") or []
+            ]
+            self.add_per_participant_video_snapshot_callback(json_data.get("requestId"), frames, json_data.get("error"))
+        except Exception as e:
+            logger.warning(f"Failed to handle per participant video snapshot result for request {json_data.get('requestId')}: {e}")
 
     def send_chat_message_reaction(self, message_uuid, emoji, action):
         self.driver.execute_script("window?.sendChatMessageReaction(arguments[0], arguments[1], arguments[2]);", message_uuid, emoji, action)
