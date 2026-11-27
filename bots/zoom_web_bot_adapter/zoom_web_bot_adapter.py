@@ -227,6 +227,11 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
 
         return super().subclass_specific_use_disable_gpu_chrome_option()
 
+    def add_subclass_specific_chrome_options(self, options):
+        # Gallery view needs WebGL, which newer Chrome only falls back to in software with this flag
+        if self.recording_view == RecordingViews.GALLERY_VIEW:
+            options.add_argument("--enable-unsafe-swiftshader")
+
     def subclass_specific_navigation_config_filename(self):
         return "zoom_web.json"
 
