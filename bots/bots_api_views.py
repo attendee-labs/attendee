@@ -1217,7 +1217,7 @@ class PerParticipantVideoSnapshotView(APIView):
     @extend_schema(
         operation_id="Capture Per Participant Video Snapshot",
         summary="Capture the current per-participant video frames",
-        description="Returns the current video frame of each participant's webcam and/or screenshare, as base64-encoded JPEG images. This is the same data as the per-participant video websocket (see https://docs.attendee.dev/guides/realtimevideo), but for a single point in time. Currently only supported for Zoom bots using the web SDK. The bot must be in the joined_recording state. A bot can only capture one snapshot at a time.",
+        description="Returns the current video frame of each participant's webcam and/or screenshare, as base64-encoded JPEG images. Currently only supported for Zoom bots using the web SDK.",
         request=PerParticipantVideoSnapshotRequestSerializer,
         responses={
             200: OpenApiResponse(
