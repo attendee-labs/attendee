@@ -460,6 +460,12 @@ class BotPodCreator:
                     volumes=self.get_webpage_streamer_volumes(),
                 )
             )
+            # A JSON6902 patch for the streamer pod, as BOT_POD_SPEC_* is for the
+            # bot pod, e.g. to give it the bot node pool's toleration and selector.
+            webpage_streamer_pod = apply_json6902_patch(
+                self.api_client.sanitize_for_serialization(webpage_streamer_pod),
+                os.getenv("WEBPAGE_STREAMER_POD_SPEC", ""),
+            )
 
         try:
             bot_pod_api_response = self._create_namespaced_pod_with_retry(

@@ -170,6 +170,7 @@ This document lists all supported environment variables for the Attendee applica
 | `WEBEX_INTEGRATION_CLIENT_ID` | String | (None) | Client ID of the Webex Integration that issues the tokens of the projects' Webex Service Apps. Required for Webex bots. See [Webex Bots](webex.md#additional-setup-for-self-hosting). |
 | `WEBEX_INTEGRATION_CLIENT_SECRET` | String | (None) | Client secret of that Webex Integration. Required for Webex bots. |
 | `WEBPAGE_STREAMER_POD_NAMESPACE` | String | `attendee-webpage-streamer` | Kubernetes namespace for webpage streamer pods. |
+| `WEBPAGE_STREAMER_POD_SPEC` | String | (Empty) | JSON Patch (RFC 6902) applied to each webpage streamer pod before it is created, as `BOT_POD_SPEC_*` is applied to bot pods. Use it to add tolerations, a `nodeSelector` or affinity, e.g. `[{"op": "add", "path": "/spec/nodeSelector", "value": {"workload": "bots"}}]`. Empty leaves the pod unchanged. |
 | `CHARGE_CREDITS_FOR_BOTS` | Boolean | `false` | Enable credit charging for bot operations. |
 | `CUSTOM_BOT_POD_SPEC_TYPES` | String | (Empty) | Comma-separated list of custom bot pod specification types. |
 | `ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME` | Boolean | `false` | Enforce domain allowlist in Chrome web bot. |
