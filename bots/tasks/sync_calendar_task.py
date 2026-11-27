@@ -47,15 +47,13 @@ def _exception_is_404(e: Exception) -> bool:
     return False
 
 
-MAX_ERROR_RESPONSE_BODY_CHARS = 500
-
-
 def _truncated_response_body(e: requests.RequestException) -> str | None:
     """The response body of a failed request, cut short for logs and error messages. None if there was no response (e.g. a timeout)."""
+    max_chars = 500
     text = getattr(e.response, "text", None)
-    if text is None or len(text) <= MAX_ERROR_RESPONSE_BODY_CHARS:
+    if text is None or len(text) <= max_chars:
         return text
-    return text[:MAX_ERROR_RESPONSE_BODY_CHARS] + f"... (truncated, {len(text)} chars)"
+    return text[:max_chars] + f"... (truncated, {len(text)} chars)"
 
 
 def sync_bot_with_calendar_event(bot: Bot, calendar_event: CalendarEvent):

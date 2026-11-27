@@ -20,7 +20,6 @@ from bots.models import (
     WebhookTriggerTypes,
 )
 from bots.tasks.sync_calendar_task import (
-    MAX_ERROR_RESPONSE_BODY_CHARS,
     CalendarAPIAuthenticationError,
     CalendarAPIError,
     CalendarSyncHandler,
@@ -56,9 +55,9 @@ class TestTruncatedResponseBody(TestCase):
         self.assertEqual(_truncated_response_body(e), "<html>Service Unavailable</html>")
 
     def test_long_body_is_truncated(self):
-        body = "x" * (MAX_ERROR_RESPONSE_BODY_CHARS + 1000)
+        body = "x" * 1500
         e = requests.HTTPError(response=_error_response(503, body))
-        self.assertEqual(_truncated_response_body(e), "x" * MAX_ERROR_RESPONSE_BODY_CHARS + f"... (truncated, {len(body)} chars)")
+        self.assertEqual(_truncated_response_body(e), "x" * 500 + "... (truncated, 1500 chars)")
 
 
 class TestExtractMeetingUrlFromText(TestCase):
@@ -791,7 +790,7 @@ class TestGoogleCalendarSyncHandler(TestCase):
             handler._get_access_token()
 
         self.assertIn("(truncated, 100013 chars)", str(ctx.exception))
-        self.assertLess(len(str(ctx.exception)), MAX_ERROR_RESPONSE_BODY_CHARS + 300)
+        self.assertLess(len(str(ctx.exception)), 800)
 
     @patch("requests.post")
     def test_get_access_token_invalid_grant_message(self, mock_post):
@@ -1077,7 +1076,7 @@ class TestMicrosoftCalendarSyncHandler(TestCase):
     def test_get_access_token_authentication_error_substring_past_truncation(self, mock_post):
         """An authentication error substring is detected in the full body, even past the part kept in the message."""
         handler = MicrosoftCalendarSyncHandler(self.calendar.id)
-        mock_post.return_value = _error_response(403, "x" * (MAX_ERROR_RESPONSE_BODY_CHARS + 100) + " ErrorAccessDenied")
+        mock_post.return_value = _error_response(403, "x" * 600 + " ErrorAccessDenied")
 
         with self.assertRaises(CalendarAPIAuthenticationError) as ctx:
             handler._get_access_token()
