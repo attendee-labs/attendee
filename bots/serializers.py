@@ -1255,7 +1255,7 @@ ALLOWED_CHAT_MESSAGE_REACTION_EMOJIS = (
 class BotChatMessageReactionRequestSerializer(serializers.Serializer):
     message_id = serializers.CharField(
         max_length=32,
-        help_text="The id of the chat message to react to, as returned by the chat messages endpoint and the chat_messages.update webhook (for example msg_xxxxxxxxxxxxxxxx).",
+        help_text="The id of the chat message to react to.",
     )
     emoji = serializers.CharField(
         max_length=100,
@@ -1265,7 +1265,7 @@ class BotChatMessageReactionRequestSerializer(serializers.Serializer):
     action = serializers.ChoiceField(
         choices=BotChatMessageReactionActions.values,
         default=BotChatMessageReactionActions.ADD,
-        help_text="Whether to add the reaction or remove a reaction the bot added earlier. Adding a reaction the bot already added, or removing one it hasn't added, does nothing.",
+        help_text="Whether to add the reaction or remove a reaction the bot added earlier.",
     )
 
     def validate_emoji(self, value):

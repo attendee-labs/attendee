@@ -1989,9 +1989,7 @@ components:
         message_id:
           type: string
           minLength: 1
-          description: The id of the chat message to react to, as returned by the
-            chat messages endpoint and the chat_messages.update webhook (for example
-            msg_xxxxxxxxxxxxxxxx).
+          description: The id of the chat message to react to.
           maxLength: 32
         emoji:
           type: string
