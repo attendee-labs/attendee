@@ -47,6 +47,15 @@ def _exception_is_404(e: Exception) -> bool:
     return False
 
 
+def _truncated_response_body(e: requests.RequestException) -> str | None:
+    """The response body of a failed request, cut short for logs and error messages. None if there was no response (e.g. a timeout)."""
+    max_chars = 500
+    text = getattr(e.response, "text", None)
+    if text is None or len(text) <= max_chars:
+        return text
+    return text[:max_chars] + f"... (truncated, {len(text)} chars)"
+
+
 def sync_bot_with_calendar_event(bot: Bot, calendar_event: CalendarEvent):
     """Sync a bot with a calendar event."""
     # If the calendar event is deleted, delete the bot
@@ -88,13 +97,17 @@ def sync_bots_for_calendar_event(calendar_event: CalendarEvent):
         sync_bot_with_calendar_event(bot, calendar_event)
 
 
-def enqueue_sync_calendar_task(calendar: Calendar):
-    """Enqueue a sync calendar task for a calendar."""
+def enqueue_sync_calendar_task(calendar: Calendar, allow_retries: bool = True):
+    """Enqueue a sync calendar task for a calendar. With allow_retries=False, the task gets a single attempt."""
     with transaction.atomic():
         calendar.sync_task_enqueued_at = timezone.now()
         calendar.sync_task_requested_at = None
         calendar.save()
-        sync_calendar.delay(calendar.id)
+        if allow_retries:
+            sync_calendar.delay(calendar.id)
+        else:
+            # `retries` is the number of retries already used, so starting at max_retries leaves none
+            sync_calendar.apply_async(args=[calendar.id], retries=sync_calendar.max_retries)
 
 
 @shared_task(
@@ -386,13 +399,23 @@ class GoogleCalendarSyncHandler(CalendarSyncHandler):
         expired_notification_channels.delete()
 
     def _raise_if_error_is_authentication_error(self, e: requests.RequestException):
-        error_code = e.response.json().get("error")
-        if error_code == "invalid_grant" or error_code == "invalid_client" or error_code == "deleted_client":
-            raise CalendarAPIAuthenticationError(f"Google Authentication error: {e.response.json()}")
+        # Connection errors and timeouts have no response, so they can't be authentication errors
+        if e.response is None:
+            return
+        try:
+            body = e.response.json()
+        except ValueError:
+            body = None
+        # A body that isn't a JSON object (e.g. an HTML 503 page) is treated as a transient error, not an authentication error
+        if not isinstance(body, dict):
+            return
+        error_code = body.get("error")
+        if error_code == "invalid_grant" or error_code == "invalid_client" or error_code == "deleted_client" or error_code == "unauthorized_client":
+            raise CalendarAPIAuthenticationError(f"Google Authentication error: {body}")
         if "ACCESS_TOKEN_SCOPE_INSUFFICIENT" in e.response.text:
-            raise CalendarAPIAuthenticationError(f"Google Authentication error: {e.response.json()}")
+            raise CalendarAPIAuthenticationError(f"Google Authentication error: {body}")
         if "PERMISSION_DENIED" in e.response.text:
-            raise CalendarAPIAuthenticationError(f"Google Authentication error: {e.response.json()}")
+            raise CalendarAPIAuthenticationError(f"Google Authentication error: {body}")
 
         return
 
@@ -428,7 +451,7 @@ class GoogleCalendarSyncHandler(CalendarSyncHandler):
 
         except requests.RequestException as e:
             self._raise_if_error_is_authentication_error(e)
-            raise CalendarAPIError(f"Failed to refresh Google access token. Response body: {e.response.json()}")
+            raise CalendarAPIError(f"Failed to refresh Google access token. Error: {e}. Response body: {_truncated_response_body(e)}")
 
     def _make_gcal_request(self, url: str, access_token: str, params: dict = None, method: str = "GET", body: dict = None) -> dict:
         headers = {"Authorization": f"Bearer {access_token}"}
@@ -444,7 +467,7 @@ class GoogleCalendarSyncHandler(CalendarSyncHandler):
             return resp.json()
         except requests.RequestException as e:
             self._raise_if_error_is_authentication_error(e)
-            logger.exception(f"Failed to make Google Calendar request. Response body: {e.response.json()}")
+            logger.exception(f"Failed to make Google Calendar request. Response body: {_truncated_response_body(e)}")
             raise e
 
     def _list_events(self, access_token: str) -> List[dict]:
@@ -665,8 +688,19 @@ class MicrosoftCalendarSyncHandler(CalendarSyncHandler):
         logger.info(f"Calendar {self.calendar.object_id}: Created Microsoft Calendar notification channel in database. Platform UUID: {calendar_notification_channel.platform_uuid}")
 
     def _raise_if_error_is_authentication_error(self, e: requests.RequestException):
-        if e.response.json().get("error") == "invalid_grant" or e.response.json().get("error") == "invalid_client":
-            raise CalendarAPIAuthenticationError(f"Microsoft Authentication error: {e.response.json()}")
+        # Connection errors and timeouts have no response, so they can't be authentication errors
+        if e.response is None:
+            return
+        try:
+            body = e.response.json()
+        except ValueError:
+            body = None
+        # A body that isn't a JSON object (e.g. an HTML 503 page) is treated as a transient error, not an authentication error
+        if not isinstance(body, dict):
+            return
+        error_code = body.get("error")
+        if error_code == "invalid_grant" or error_code == "invalid_client":
+            raise CalendarAPIAuthenticationError(f"Microsoft Authentication error: {body}")
 
         authentication_error_substrings = [
             "ErrorAccessDenied",
@@ -677,7 +711,7 @@ class MicrosoftCalendarSyncHandler(CalendarSyncHandler):
 
         for substring in authentication_error_substrings:
             if substring in e.response.text:
-                raise CalendarAPIAuthenticationError(f"Microsoft Authentication error: {e.response.json()}")
+                raise CalendarAPIAuthenticationError(f"Microsoft Authentication error: {body}")
         return
 
     # ---------------------------
@@ -725,7 +759,7 @@ class MicrosoftCalendarSyncHandler(CalendarSyncHandler):
 
         except requests.RequestException as e:
             self._raise_if_error_is_authentication_error(e)
-            raise CalendarAPIError(f"Failed to refresh Microsoft access token. Response body: {e.response.json()}")
+            raise CalendarAPIError(f"Failed to refresh Microsoft access token. Error: {e}. Response body: {_truncated_response_body(e)}")
 
     # ---------------------------
     # HTTP helpers
@@ -761,7 +795,7 @@ class MicrosoftCalendarSyncHandler(CalendarSyncHandler):
             return resp.json()
         except requests.RequestException as e:
             self._raise_if_error_is_authentication_error(e)
-            logger.exception(f"Failed to make Microsoft Graph request. Response body: {e.response.json()}")
+            logger.exception(f"Failed to make Microsoft Graph request. Response body: {_truncated_response_body(e)}")
             raise e
 
     # ---------------------------
