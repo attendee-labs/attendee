@@ -823,6 +823,15 @@ class TestGoogleCalendarSyncHandler(TestCase):
 
         self.assertEqual(str(ctx.exception), "Google Authentication error: {'error': 'invalid_grant'}")
 
+    @patch("requests.post")
+    def test_get_access_token_unauthorized_client(self, mock_post):
+        """An unauthorized_client error is an authentication error."""
+        handler = GoogleCalendarSyncHandler(self.calendar.id)
+        mock_post.return_value = _error_response(401, '{"error": "unauthorized_client", "error_description": "Unauthorized"}')
+
+        with self.assertRaises(CalendarAPIAuthenticationError):
+            handler._get_access_token()
+
     @patch("requests.Session")
     def test_make_gcal_request_timeout(self, mock_session_class):
         """A timeout is re-raised as is, not replaced by an error from the error handling."""

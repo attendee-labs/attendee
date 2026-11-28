@@ -410,7 +410,7 @@ class GoogleCalendarSyncHandler(CalendarSyncHandler):
         if not isinstance(body, dict):
             return
         error_code = body.get("error")
-        if error_code == "invalid_grant" or error_code == "invalid_client" or error_code == "deleted_client":
+        if error_code == "invalid_grant" or error_code == "invalid_client" or error_code == "deleted_client" or error_code == "unauthorized_client":
             raise CalendarAPIAuthenticationError(f"Google Authentication error: {body}")
         if "ACCESS_TOKEN_SCOPE_INSUFFICIENT" in e.response.text:
             raise CalendarAPIAuthenticationError(f"Google Authentication error: {body}")
