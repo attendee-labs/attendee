@@ -793,6 +793,26 @@ class TestGoogleCalendarSyncHandler(TestCase):
         self.assertLess(len(str(ctx.exception)), 800)
 
     @patch("requests.post")
+    def test_get_access_token_authentication_error_substring_in_body_not_json(self, mock_post):
+        """A body that isn't JSON is not treated as an authentication error, even if it contains an authentication error substring."""
+        handler = GoogleCalendarSyncHandler(self.calendar.id)
+        mock_post.return_value = _error_response(503, "<html>Service Unavailable PERMISSION_DENIED</html>")
+
+        with self.assertRaises(CalendarAPIError) as ctx:
+            handler._get_access_token()
+
+        self.assertIs(type(ctx.exception), CalendarAPIError)
+
+    @patch("requests.post")
+    def test_get_access_token_authentication_error_substring_in_json_server_error(self, mock_post):
+        """A JSON body with an authentication error substring is an authentication error, even with a 5xx status."""
+        handler = GoogleCalendarSyncHandler(self.calendar.id)
+        mock_post.return_value = _error_response(503, '{"error": {"code": 403, "status": "PERMISSION_DENIED"}}')
+
+        with self.assertRaises(CalendarAPIAuthenticationError):
+            handler._get_access_token()
+
+    @patch("requests.post")
     def test_get_access_token_invalid_grant_message(self, mock_post):
         """An authentication error with a JSON body keeps the parsed body in its message."""
         handler = GoogleCalendarSyncHandler(self.calendar.id)
@@ -1063,25 +1083,23 @@ class TestMicrosoftCalendarSyncHandler(TestCase):
 
     @patch("requests.post")
     def test_get_access_token_authentication_error_substring_in_body_not_json(self, mock_post):
-        """An authentication error substring is still detected when the body isn't JSON."""
+        """A body that isn't JSON is not treated as an authentication error, even if it contains an authentication error substring."""
         handler = MicrosoftCalendarSyncHandler(self.calendar.id)
-        mock_post.return_value = _error_response(403, "ErrorAccessDenied: access is denied")
+        mock_post.return_value = _error_response(503, "<html>Service Unavailable ErrorAccessDenied</html>")
 
-        with self.assertRaises(CalendarAPIAuthenticationError) as ctx:
+        with self.assertRaises(CalendarAPIError) as ctx:
             handler._get_access_token()
 
-        self.assertEqual(str(ctx.exception), "Microsoft Authentication error: ErrorAccessDenied: access is denied")
+        self.assertIs(type(ctx.exception), CalendarAPIError)
 
     @patch("requests.post")
-    def test_get_access_token_authentication_error_substring_past_truncation(self, mock_post):
-        """An authentication error substring is detected in the full body, even past the part kept in the message."""
+    def test_get_access_token_authentication_error_substring_in_json_server_error(self, mock_post):
+        """A JSON body with an authentication error substring is an authentication error, even with a 5xx status."""
         handler = MicrosoftCalendarSyncHandler(self.calendar.id)
-        mock_post.return_value = _error_response(403, "x" * 600 + " ErrorAccessDenied")
+        mock_post.return_value = _error_response(503, '{"error": {"code": "ErrorAccessDenied", "message": "Access is denied."}}')
 
-        with self.assertRaises(CalendarAPIAuthenticationError) as ctx:
+        with self.assertRaises(CalendarAPIAuthenticationError):
             handler._get_access_token()
-
-        self.assertIn("(truncated,", str(ctx.exception))
 
     @patch("requests.Session")
     def test_make_graph_request_timeout(self, mock_session_class):

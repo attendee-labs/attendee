@@ -405,9 +405,11 @@ class GoogleCalendarSyncHandler(CalendarSyncHandler):
         try:
             body = e.response.json()
         except ValueError:
-            # The body isn't JSON (e.g. an HTML 503 page)
-            body = _truncated_response_body(e)
-        error_code = body.get("error") if isinstance(body, dict) else None
+            body = None
+        # A body that isn't a JSON object (e.g. an HTML 503 page) is treated as a transient error, not an authentication error
+        if not isinstance(body, dict):
+            return
+        error_code = body.get("error")
         if error_code == "invalid_grant" or error_code == "invalid_client" or error_code == "deleted_client":
             raise CalendarAPIAuthenticationError(f"Google Authentication error: {body}")
         if "ACCESS_TOKEN_SCOPE_INSUFFICIENT" in e.response.text:
@@ -692,9 +694,11 @@ class MicrosoftCalendarSyncHandler(CalendarSyncHandler):
         try:
             body = e.response.json()
         except ValueError:
-            # The body isn't JSON (e.g. an HTML 503 page)
-            body = _truncated_response_body(e)
-        error_code = body.get("error") if isinstance(body, dict) else None
+            body = None
+        # A body that isn't a JSON object (e.g. an HTML 503 page) is treated as a transient error, not an authentication error
+        if not isinstance(body, dict):
+            return
+        error_code = body.get("error")
         if error_code == "invalid_grant" or error_code == "invalid_client":
             raise CalendarAPIAuthenticationError(f"Microsoft Authentication error: {body}")
 
